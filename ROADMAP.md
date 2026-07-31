@@ -1,6 +1,6 @@
 # Roadmap
 
-Genome ships in layers. Each layer must be usable on its own before the next
+Regenic ships in layers. Each layer must be usable on its own before the next
 starts — the same progressive iteration gate described in the Regenic book.
 
 ## Phase 0 — Architecture (now)
@@ -8,7 +8,7 @@ starts — the same progressive iteration gate described in the Regenic book.
 - [ ] RFC: data model for standards (definition, scope, version, lifecycle)
 - [ ] RFC: context graph (entities, relationships, provenance, access)
 - [ ] RFC: human + agent API surface
-- [ ] Align public schemas with `regenic-ai/regenic/content/*/standards/`
+- [ ] Align public schemas with `regenic-ai/regenic-book/content/*/standards/`
 
 **Exit criteria:** Accepted RFCs, no production code required.
 
@@ -44,7 +44,7 @@ The default management surface for AI-native organizations:
 - [ ] Agent-native interfaces alongside human UI
 - [ ] Integration adapters (identity, notifications, existing tools) — last, not first
 
-**Exit criteria:** bioby.ai runs a real workflow end-to-end on Genome.
+**Exit criteria:** bioby.ai runs a real workflow end-to-end on Regenic.
 
 ---
 
@@ -56,4 +56,4 @@ The default management surface for AI-native organizations:
 
 ## Tracking
 
-Milestones and issues: [github.com/regenic-ai/genome/issues](https://github.com/regenic-ai/genome/issues)
+Milestones and issues: [github.com/regenic-ai/regenic/issues](https://github.com/regenic-ai/regenic/issues)
