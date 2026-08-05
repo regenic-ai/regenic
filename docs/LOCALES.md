@@ -1,97 +1,51 @@
 # Documentation locales
 
-This document defines how Regenic manages multilingual docs. It follows
-patterns used by Kubernetes (`content/<lang>/`), VitePress / Mintlify
-(locale directories + mirrored paths), Hugo Docsy, and this org’s
-[regenic-book](https://github.com/regenic-ai/regenic-book) (`content/en`,
-`content/zh`).
+Rules for English and Chinese docs in this repository.
 
-## Principles
+## Rules
 
-1. **English is canonical** for product semantics (RFCs, APIs, enums, schemas).
-2. **Locale folders mirror paths and filenames** so missing translations are
-   obvious and automation stays simple.
-3. **One locale per PR** when changing translated prose (Kubernetes rule);
-   English semantic changes may land first, translations follow.
-4. **Identifiers stay English** everywhere: field names, HTTP paths, status
-   enums, SQL, code samples.
-5. **Fix upstream (English) first** when the issue is factual; then sync locales.
+1. English under `docs/en/` is the source for product semantics.
+2. `docs/zh/` mirrors the same relative paths and filenames.
+3. Prefer one locale per translation PR.
+4. Field names, HTTP paths, enums, SQL, and code samples stay English.
+5. Fix factual errors in English first, then sync Chinese.
 
-## Locale codes
+## Codes
 
-| Folder code | BCP 47 / HTML `lang` | hreflang | Notes |
-| --- | --- | --- | --- |
-| `en` | `en` | `en` | Default / canonical |
-| `zh` | `zh-CN` | `zh-CN` | Simplified Chinese; folder code matches `regenic-book` |
+| Folder | HTML `lang` / hreflang |
+| --- | --- |
+| `en` | `en` |
+| `zh` | `zh-CN` |
 
-Do **not** mix `zh`, `zh-CN`, and `zh-Hans` as *folder* names. Use `zh` on
-disk; use `zh-CN` only where HTML/SEO needs a region tag.
+Folder name is `zh` (same as `regenic-book`). Use `zh-CN` only for HTML/SEO tags.
 
 ## Layout
 
 ```text
-README.md                 # English GitHub entry (required by GitHub)
-README.zh-CN.md           # Chinese GitHub entry (GitHub README locale suffix)
+README.md
+README.zh-CN.md           # GitHub root locale README only
 
 docs/
-  LOCALES.md              # this file (English)
-  en/                     # canonical docs tree
+  LOCALES.md
+  en/
+    TECH_STACK.md
     ROADMAP.md
     rfcs/
-      README.md
-      0001-….md
-      sketch/             # non-translated helpers (SQL, diagrams source)
-  zh/                     # Simplified Chinese — same relative paths
+  zh/
+    TECH_STACK.md
     ROADMAP.md
     rfcs/
-      README.md
-      0001-….md
 ```
 
-### Why root README uses a suffix
+Root uses `README.<locale>.md` because GitHub only detects that pattern at repo root. All other docs use `docs/<locale>/`.
 
-GitHub only auto-surfaces locale READMEs at the **repository root** via the
-`README.<locale>.md` convention (e.g. `README.zh-CN.md`). All other docs use
-**folder locales** (`docs/en/…`, `docs/zh/…`), not filename suffixes.
+Language-neutral files (e.g. SQL sketches) live under `docs/en/rfcs/sketch/`; other locales link to them.
 
-### Shared / non-translated artifacts
+## Sync
 
-Put language-neutral sketches (SQL, machine schemas) under `docs/en/rfcs/sketch/`
-(or a future `docs/shared/`). Locale copies **link** to them; do not diverge
-the bytes per language.
-
-## Sync rules
-
-| Change type | Order |
+| Change | Order |
 | --- | --- |
-| New RFC / roadmap item | Write `docs/en/…` → translate to `docs/zh/…` in a follow-up (or same PR if ready) |
-| Semantic edit | Edit English first; mark ZH stale or update in the same change |
-| Translation-only polish | PR touches only `docs/zh/` (and root `README.zh-CN.md` if needed) |
-| Conflict EN vs ZH | English wins |
+| New or semantic edit | `docs/en/` then `docs/zh/` |
+| Translation only | `docs/zh/` (and `README.zh-CN.md` if needed) |
 
-Do **not** put locale policy or “English wins” narration into reader-facing
-pages. A single quiet alternate link is enough, e.g. `[简体中文](…)` /
-`[English](…)`. Keep process rules in this file only.
-
-## Completeness checklist
-
-For each English path under `docs/en/`, a file with the **same relative path**
-should exist under `docs/zh/` (except `sketch/` and other shared assets).
-
-Optional front matter later (when a docs site is added):
-
-```yaml
----
-locale: zh
-canonical_path: /docs/en/rfcs/0001-standards-data-model.md
-translation_status: current   # current | stale | wip
----
-```
-
-## References
-
-- [Kubernetes — Localizing documentation](https://kubernetes.io/docs/contribute/localization/)
-- [VitePress — Internationalization](https://vitepress.dev/guide/i18n)
-- [Mintlify — Internationalization](https://www.mintlify.com/docs/guides/internationalization)
-- [Hugo — Multilingual mode](https://gohugo.io/content-management/multilingual/)
-- [MkDocs static i18n — folder vs suffix](https://ultrabug.github.io/mkdocs-static-i18n/setup/choosing-the-structure/)
+Reader pages: language switch link only (`[简体中文](…)` / `[English](…)`). Keep process text in this file.

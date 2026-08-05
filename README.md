@@ -32,6 +32,20 @@ methodology in `regenic-book`.
 | Daily distillation | Weighted daily intake into standards machine (D0 rules → D1 LLM) | RFC Draft ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
 | Org management | AI-native operations on standards and context—not hierarchy and approvals as the information layer | Planned |
 
+## Technology stack
+
+[docs/en/TECH_STACK.md](docs/en/TECH_STACK.md)
+
+| Layer | Choice |
+| --- | --- |
+| API / workers | NestJS + BullMQ + Redis |
+| Data | PostgreSQL + pluggable BlobStore / SearchIndex |
+| Ingest | ChannelConnector (Feishu / WeCom / Slack / …) |
+| Models / IdP / Notify | ModelProvider · IdentityProvider · Notifier · SecretStore |
+| PC | Electron + Next.js |
+| Mobile | Expo |
+| Contract | OpenAPI |
+
 ## Architecture RFCs
 
 Phase 0 drafts under [`docs/en/rfcs/`](docs/en/rfcs/README.md):
@@ -46,7 +60,7 @@ Phase 0 drafts under [`docs/en/rfcs/`](docs/en/rfcs/README.md):
 
 ## Roadmap
 
-[docs/en/ROADMAP.md](docs/en/ROADMAP.md)
+[docs/en/ROADMAP.md](docs/en/ROADMAP.md) · [TECH_STACK.md](docs/en/TECH_STACK.md)
 
 ## Contributing
 

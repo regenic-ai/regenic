@@ -38,7 +38,7 @@ auditable.
 
 | Layer | Holds | Store | Lifetime |
 | --- | --- | --- | --- |
-| L0 Blob | Raw bytes (message body, attachment, transcript) | Object storage (MinIO/S3) + zstd | Per GC policy |
+| L0 Blob | Raw bytes (message body, attachment, transcript) | Object storage via `BlobStore` driver (MinIO / S3 / OSS, …) + zstd | Per GC policy |
 | L1 Event | Thin operational atom + pointer | PostgreSQL (time-partitioned) | Long metadata; body via L0 |
 | L2 Index | Hot-window search / optional vectors | pgvector or OpenSearch | Hot window only |
 | L3 Digest | Thread / daily-direction distillates | PostgreSQL | Long; small |
@@ -65,6 +65,10 @@ Optional at extreme scale: ClickHouse (or Parquet in object storage) as an
 
 Identical content is stored once. Blobs have **no** standalone ACL; access is
 always via an Event or Digest (`via_event_id` / `via_digest_id`).
+
+Physical bytes are read/written only through a `BlobStore` port (put/get/delete/exists).
+Drivers (MinIO, AWS S3, Aliyun OSS, …) are deployment config. `content_hash` is the
+stable address; `storage_uri` may record driver-specific location for operations.
 
 ### 5.2 `Event`
 

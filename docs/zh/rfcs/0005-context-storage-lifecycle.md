@@ -35,7 +35,7 @@ RFC 0002 定义了**逻辑**上下文图谱（Entity / Claim / Snapshot）。
 
 | 层 | 存放 | 存储 | 寿命 |
 | --- | --- | --- | --- |
-| L0 Blob | 原文字节（消息正文、附件、转写） | 对象存储（MinIO/S3）+ zstd | 按 GC 策略 |
+| L0 Blob | 原文字节（消息正文、附件、转写） | 对象存储经 `BlobStore` 驱动（MinIO / S3 / OSS 等）+ zstd | 按 GC 策略 |
 | L1 Event | 瘦运营原子 + 指针 | PostgreSQL（按时间分区） | 元数据长留；正文经 L0 |
 | L2 Index | 热窗检索 / 可选向量 | pgvector 或 OpenSearch | 仅热窗 |
 | L3 Digest | 线程 / 日方向蒸馏物 | PostgreSQL | 长留；体积小 |
@@ -62,6 +62,10 @@ RFC 0002 定义了**逻辑**上下文图谱（Entity / Claim / Snapshot）。
 
 相同内容只存一份。Blob **没有**独立 ACL；访问始终经由 Event 或 Digest
 （`via_event_id` / `via_digest_id`）。
+
+字节读写只经 `BlobStore` 端口（put/get/delete/exists）。
+驱动（MinIO、AWS S3、阿里云 OSS 等）由部署配置决定。稳定寻址键是 `content_hash`；
+`storage_uri` 可记录驱动侧位置供运维使用。
 
 ### 5.2 `Event`
 

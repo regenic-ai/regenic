@@ -16,7 +16,7 @@
 1. 每个 org-日 × `direction`，产出 ≤N 条带证据的类型化 item。
 2. 模型可以**提案**；代码拥有分数、冲突、ACL、配额。
 3. 输出是标准机器进料（`item_kind`），不是聊天摘要。
-4. 先交付 **D0**（纯规则、无 LLM），再 D1（LLM 提案）。
+4. 先交付 **D0**（纯规则，`ModelProvider = none`），再 D1（`ModelProvider.complete`）。
 
 ## 3. 非目标
 

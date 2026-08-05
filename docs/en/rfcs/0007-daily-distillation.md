@@ -18,7 +18,7 @@ report literature.”
 1. Per org-day × `direction`, emit ≤N typed items with evidence.
 2. Model may **propose**; code owns score, conflict, ACL, quotas.
 3. Outputs are standards-machine feed (`item_kind`), not chat summaries.
-4. Ship **D0** (rules only, no LLM) before D1 (LLM propose).
+4. Ship **D0** (rules only, `ModelProvider = none`) before D1 (`ModelProvider.complete`).
 
 ## 3. Non-goals
 

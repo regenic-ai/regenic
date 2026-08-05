@@ -30,6 +30,20 @@ Regenic 实现《重写基因》中的[双能力模型](https://regenic.ai/zh/me
 | 日蒸馏 | 加权日进料进标准机器（D0 规则 → D1 LLM） | RFC Draft（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
 | 组织管理 | 基于标准与上下文的 AI 原生运营——而非以层级与审批作信息层 | Planned |
 
+## 技术栈
+
+[docs/zh/TECH_STACK.md](docs/zh/TECH_STACK.md)
+
+| 层 | 技术 |
+| --- | --- |
+| API / worker | NestJS + BullMQ + Redis |
+| 数据 | PostgreSQL + 可插拔 BlobStore / SearchIndex |
+| 接入 | ChannelConnector（飞书 / 企微 / Slack / …） |
+| 模型 / 身份 / 通知 | ModelProvider · IdentityProvider · Notifier · SecretStore |
+| PC | Electron + Next.js |
+| 手机 | Expo |
+| 契约 | OpenAPI |
+
 ## 架构 RFC
 
 Phase 0 草案见 [`docs/zh/rfcs/`](docs/zh/rfcs/README.md)：
@@ -44,7 +58,7 @@ Phase 0 草案见 [`docs/zh/rfcs/`](docs/zh/rfcs/README.md)：
 
 ## 路线图
 
-[docs/zh/ROADMAP.md](docs/zh/ROADMAP.md)
+[docs/zh/ROADMAP.md](docs/zh/ROADMAP.md) · [技术栈](docs/zh/TECH_STACK.md)
 
 ## 贡献
 

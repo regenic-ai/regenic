@@ -21,12 +21,13 @@ starts — the same progressive iteration gate described in the Regenic book.
   [rfc/0006](rfcs/0006-acl-agent-identity.md)
 - [x] RFC: daily distillation (incl. D0 rules path) —
   [rfc/0007](rfcs/0007-daily-distillation.md)
+- [x] Technology stack — [TECH_STACK.md](TECH_STACK.md)
 - [ ] Align public schemas with `regenic-ai/regenic-book/content/*/standards/`
 - [ ] Accept RFCs (Draft → Accepted) via Issues review
 
 **Exit criteria:** Accepted RFCs, no production code required.
 
-Index: [rfcs/README.md](rfcs/README.md).
+Index: [rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md).
 
 ## Phase 1 — Judgment standards
 

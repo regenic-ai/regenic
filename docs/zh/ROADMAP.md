@@ -20,12 +20,13 @@ Regenic 分层交付。每一层须可独立使用后再开下一层——与《
   [中文](rfcs/0006-acl-agent-identity.md) / [EN](../en/rfcs/0006-acl-agent-identity.md)
 - [x] RFC：日蒸馏（含 D0 规则路径）—
   [中文](rfcs/0007-daily-distillation.md) / [EN](../en/rfcs/0007-daily-distillation.md)
+- [x] 技术栈 — [TECH_STACK.md](TECH_STACK.md)
 - [ ] 与 `regenic-ai/regenic-book/content/*/standards/` 公开 schema 对齐
 - [ ] 经 Issues 评审将 RFC 从 Draft → Accepted
 
 **退出标准：** RFC 已 Accepted；本阶段不要求生产代码。
 
-索引：[rfcs/README.md](rfcs/README.md)。
+索引：[rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md)。
 
 ## Phase 1 — 统一判断标准
 
