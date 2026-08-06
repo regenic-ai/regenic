@@ -7,19 +7,23 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 
 | RFC | Title | Status |
 | --- | --- | --- |
-| [0001](0001-standards-data-model.md) | Standards data model | Draft |
-| [0002](0002-context-graph.md) | Context graph | Draft |
-| [0003](0003-collaboration-objects.md) | Collaboration objects | Draft |
-| [0004](0004-human-agent-api.md) | Human + Agent API surface | Draft |
-| [0005](0005-context-storage-lifecycle.md) | Context storage & lifecycle | Draft |
-| [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Draft |
-| [0007](0007-daily-distillation.md) | Daily distillation | Draft |
+| [0001](0001-standards-data-model.md) | Standards data model | Accepted |
+| [0002](0002-context-graph.md) | Context graph | Accepted |
+| [0003](0003-collaboration-objects.md) | Collaboration objects | Accepted |
+| [0004](0004-human-agent-api.md) | Human + Agent API surface | Accepted |
+| [0005](0005-context-storage-lifecycle.md) | Context storage & lifecycle | Accepted |
+| [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Accepted |
+| [0007](0007-daily-distillation.md) | Daily distillation | Accepted |
 
-Sketches:
+Phase 0 closeout:
 
 | Path | Related |
 | --- | --- |
+| [accept-checklists.md](accept-checklists.md) | Wave A–D Accept checklists |
+| [book-schema-map.md](book-schema-map.md) | Book ↔ RFC 0001 SoftGate map |
 | [sketch/d0-daily-distill.sql](sketch/d0-daily-distill.sql) | RFC 0007 D0 |
+
+Milestone: [Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1).
 
 ## Conventions
 
@@ -45,4 +49,5 @@ Sketches:
 ## Review
 
 Discussion: [GitHub Issues](https://github.com/regenic-ai/regenic/issues).
-Do not open feature PRs until RFCs are Accepted (see root README).
+Phase 0 HardGate met — all RFCs Accepted. Feature PRs may cite these RFCs
+(see root README).

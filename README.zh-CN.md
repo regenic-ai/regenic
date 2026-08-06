@@ -18,16 +18,17 @@ Regenic 实现《重写基因》中的[双能力模型](https://regenic.ai/zh/me
 
 ## 状态
 
-**早期。** 先架构 RFC，再按 `regenic-book` 公开方法实现。
+**Phase 0 HardGate 已满足。** 架构 RFC 0001–0007 均已 Accepted；Phase 1 按
+`regenic-book` 公开方法实现。
 
 | 能力 | 说明 | 状态 |
 | --- | --- | --- |
-| 判断标准 | 定义、版本、应用、修订组织级标准 | RFC Draft（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |
-| 共享上下文 | 人、团队与 Agent 共用同一上下文层 | RFC Draft（[0002](docs/zh/rfcs/0002-context-graph.md)、[0005](docs/zh/rfcs/0005-context-storage-lifecycle.md)） |
-| 人机协作 | 共享对象上的 Proposal / Decision / Review / Handoff | RFC Draft（[0003](docs/zh/rfcs/0003-collaboration-objects.md)） |
-| 对称 API | 人机 UI 与 Agent 读写同一表面 | RFC Draft（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
-| ACL + Agent 身份 | 人机同一 `visible()`；蒸馏不升权 | RFC Draft（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |
-| 日蒸馏 | 加权日进料进标准机器（D0 规则 → D1 LLM） | RFC Draft（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
+| 判断标准 | 定义、版本、应用、修订组织级标准 | RFC Accepted（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |
+| 共享上下文 | 人、团队与 Agent 共用同一上下文层 | RFC Accepted（[0002](docs/zh/rfcs/0002-context-graph.md)、[0005](docs/zh/rfcs/0005-context-storage-lifecycle.md)） |
+| 人机协作 | 共享对象上的 Proposal / Decision / Review / Handoff | RFC Accepted（[0003](docs/zh/rfcs/0003-collaboration-objects.md)） |
+| 对称 API | 人机 UI 与 Agent 读写同一表面 | RFC Accepted（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
+| ACL + Agent 身份 | 人机同一 `visible()`；蒸馏不升权 | RFC Accepted（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |
+| 日蒸馏 | 加权日进料进标准机器（D0 规则 → D1 LLM） | RFC Accepted（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
 | 组织管理 | 基于标准与上下文的 AI 原生运营——而非以层级与审批作信息层 | Planned |
 
 ## 技术栈
@@ -56,14 +57,34 @@ Phase 0 草案见 [`docs/zh/rfcs/`](docs/zh/rfcs/README.md)：
 6. [ACL 与 Agent 身份](docs/zh/rfcs/0006-acl-agent-identity.md) — scope、绑定、`visible()`
 7. [日蒸馏](docs/zh/rfcs/0007-daily-distillation.md) — 标准机器进料（+ D0 草图）
 
+## Spike 脚手架（无产品逻辑）
+
+Phase 0 monorepo 骨架 — 仅 health / 连通性，无标准 CRUD。
+
+```text
+apps/api          NestJS + GET /health
+apps/worker       NestJS + Postgres / Redis / BullMQ 探测
+packages/domain   不稳定类型占位
+packages/config   共享 env schema
+```
+
+```bash
+pnpm install
+docker compose up --build
+curl -s http://localhost:3000/health
+```
+
 ## 路线图
 
 [docs/zh/ROADMAP.md](docs/zh/ROADMAP.md) · [技术栈](docs/zh/TECH_STACK.md)
+· [Accept 清单](docs/zh/rfcs/accept-checklists.md)
+· [Book schema 对照](docs/zh/rfcs/book-schema-map.md)
 
 ## 贡献
 
-初始架构 RFC 未 Accepted 前不接受功能 PR。讨论欢迎开
-[Issues](https://github.com/regenic-ai/regenic/issues)。
+**欢迎功能 PR**（表面须由已 Accepted 的 RFC 0001–0007 定义；见
+[docs/zh/ROADMAP.md](docs/zh/ROADMAP.md)）。优先小 PR，并引用所属 RFC。
+讨论欢迎开 [Issues](https://github.com/regenic-ai/regenic/issues)。
 
 遵守组织 [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md)。
 安全报告：[private advisory](https://github.com/regenic-ai/regenic/security/advisories/new)。

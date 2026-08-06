@@ -1,6 +1,6 @@
 # RFC 0003 — 协作对象
 
-- **状态：** Draft
+- **状态：** Accepted
 - **English:** [../../en/rfcs/0003-collaboration-objects.md](../../en/rfcs/0003-collaboration-objects.md)
 - **依赖：** RFC 0001（标准）、RFC 0002（上下文 snapshot）
 - **相关：** RFC 0004（API）
@@ -109,6 +109,7 @@ Proposal 上保留已审计原因。
 | `summary` | string | 决定了什么 |
 | `rationale` | string | |
 | `decided_by` | `ActorRef` | |
+| `co_deciders` | `ActorRef[]` | `rights_level = negotiate` 时必须非空；否则为空 |
 | `rights_level` | `DecisionRightsLevel` | |
 | `context_snapshot_id` | string | 必需 |
 | `standard_bindings` | `StandardBinding[]` | 运营决策必需且非空 |
@@ -200,8 +201,9 @@ Proposal 上保留已审计原因。
 一个人与一个 agent 能仅用 `Handoff` 对象完成
 Proposal → 绑定标准 → 执行 → Review → 修订。
 
-## 9. 待决问题
+## 9. 已裁定（#3 — 已批准）
 
-- `negotiate` 是否需要双方 `decided_by` 签名（提案：是，
-  `co_deciders: ActorRef[]`）。
-- 每种 Proposal kind 的最低证据数。
+- [x] **`negotiate` 需要共同决策者。** 当 `rights_level = negotiate` 时，
+  `Decision.co_deciders` 必须非空（与 `decided_by` 双侧承诺）。
+- [x] **提交所需最低证据。** 默认 ≥1 条非 `other` 的 `EvidenceRef`
+  （已见 §5.1）。按 kind 提高下限推迟到 Phase 2 实现配置。

@@ -1,6 +1,6 @@
 # RFC 0003 — Collaboration objects
 
-- **Status:** Draft
+- **Status:** Accepted
 - **中文:** [../../zh/rfcs/0003-collaboration-objects.md](../../zh/rfcs/0003-collaboration-objects.md)
 - **Depends on:** RFC 0001 (standards), RFC 0002 (context snapshots)
 - **Related:** RFC 0004 (API)
@@ -113,6 +113,7 @@ A recorded judgment under pinned standards + context.
 | `summary` | string | What was decided |
 | `rationale` | string | |
 | `decided_by` | `ActorRef` | |
+| `co_deciders` | `ActorRef[]` | Required non-empty when `rights_level = negotiate`; otherwise empty |
 | `rights_level` | `DecisionRightsLevel` | |
 | `context_snapshot_id` | string | Required |
 | `standard_bindings` | `StandardBinding[]` | Required, non-empty for operational decisions |
@@ -207,8 +208,9 @@ alignment chat. A human and an agent can complete
 Proposal → bound standard → execute → Review → revise using `Handoff` objects
 only.
 
-## 9. Open questions
+## 9. Decisions (#3 — approved)
 
-- Whether `negotiate` requires dual `decided_by` signatures (proposal: yes,
-  `co_deciders: ActorRef[]`).
-- Minimum evidence count per Proposal kind.
+- [x] **`negotiate` requires co-deciders.** When `rights_level = negotiate`,
+  `Decision.co_deciders` MUST be non-empty (dual commitment with `decided_by`).
+- [x] **Minimum evidence to submit.** Default ≥1 non-`other` `EvidenceRef`
+  (already §5.1). Kind-specific higher minimums defer to Phase 2 impl config.
