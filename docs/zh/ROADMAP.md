@@ -24,7 +24,7 @@ Regenic 分层交付。每一层须可独立使用后再开下一层——与《
 - [x] 与 `regenic-ai/regenic-book/content/*/standards/` 公开 schema 对齐 —
   见 [book-schema-map.md](rfcs/book-schema-map.md)（#8）
 - [ ] 经 Issues 评审将 RFC 从 Draft → Accepted（按下方收口顺序）—
-  0001–0003、0005 已 Accepted；0004/0006/0007 待审
+  0001–0006 已 Accepted；0007 待审
 - [x] Spike：monorepo 脚手架（无业务语义；见仓库根目录）
 
 **退出标准（HardGate）：** 七份 RFC 均已 Accepted，且 book schema 对齐完成。

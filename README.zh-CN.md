@@ -25,8 +25,8 @@ Regenic 实现《重写基因》中的[双能力模型](https://regenic.ai/zh/me
 | 判断标准 | 定义、版本、应用、修订组织级标准 | RFC Accepted（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |
 | 共享上下文 | 人、团队与 Agent 共用同一上下文层 | RFC Accepted（[0002](docs/zh/rfcs/0002-context-graph.md)、[0005](docs/zh/rfcs/0005-context-storage-lifecycle.md)） |
 | 人机协作 | 共享对象上的 Proposal / Decision / Review / Handoff | RFC Accepted（[0003](docs/zh/rfcs/0003-collaboration-objects.md)） |
-| 对称 API | 人机 UI 与 Agent 读写同一表面 | RFC Draft（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
-| ACL + Agent 身份 | 人机同一 `visible()`；蒸馏不升权 | RFC Draft（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |
+| 对称 API | 人机 UI 与 Agent 读写同一表面 | RFC Accepted（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
+| ACL + Agent 身份 | 人机同一 `visible()`；蒸馏不升权 | RFC Accepted（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |
 | 日蒸馏 | 加权日进料进标准机器（D0 规则 → D1 LLM） | RFC Draft（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
 | 组织管理 | 基于标准与上下文的 AI 原生运营——而非以层级与审批作信息层 | Planned |
 

@@ -10,9 +10,9 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 | [0001](0001-standards-data-model.md) | Standards data model | Accepted |
 | [0002](0002-context-graph.md) | Context graph | Accepted |
 | [0003](0003-collaboration-objects.md) | Collaboration objects | Accepted |
-| [0004](0004-human-agent-api.md) | Human + Agent API surface | Draft |
+| [0004](0004-human-agent-api.md) | Human + Agent API surface | Accepted |
 | [0005](0005-context-storage-lifecycle.md) | Context storage & lifecycle | Accepted |
-| [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Draft |
+| [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Accepted |
 | [0007](0007-daily-distillation.md) | Daily distillation | Draft |
 
 Phase 0 closeout:

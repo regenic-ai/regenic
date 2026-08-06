@@ -69,20 +69,20 @@ Issue: [#4](https://github.com/regenic-ai/regenic/issues/4)
 
 Issue: [#5](https://github.com/regenic-ai/regenic/issues/5)
 
-- [ ] 中英一致
-- [ ] `/v1/orgs/{org_id}/...` 资源图覆盖标准、上下文、协作、runs
-- [ ] ActorRef + `on_behalf_of` 规则清晰
-- [ ] apply/run 钉死 standard + snapshot
-- [ ] 与 0006 无冲突
+- [x] 中英一致
+- [x] `/v1/orgs/{org_id}/...` 资源图覆盖标准、上下文、协作、runs
+- [x] ActorRef + `on_behalf_of` 规则清晰
+- [x] apply/run 钉死 standard + snapshot
+- [x] 与 0006 无冲突
 
 ### RFC 0006 — ACL 与 Agent 身份
 
 Issue: [#6](https://github.com/regenic-ai/regenic/issues/6)
 
-- [ ] 中英一致
-- [ ] `visible()` 与蒸馏不升权清晰
-- [ ] Principal ↔ ActorRef 映射清晰
-- [ ] 权重 ≠ ACL 绕过（0007）
+- [x] 中英一致
+- [x] `visible()` 与蒸馏不升权清晰
+- [x] Principal ↔ ActorRef 映射清晰
+- [x] 权重 ≠ ACL 绕过（0007）
 
 ## Wave D
 

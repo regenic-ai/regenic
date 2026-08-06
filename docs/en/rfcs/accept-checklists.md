@@ -70,20 +70,20 @@ Issue: [#4](https://github.com/regenic-ai/regenic/issues/4)
 
 Issue: [#5](https://github.com/regenic-ai/regenic/issues/5)
 
-- [ ] EN/ZH consistent
-- [ ] `/v1/orgs/{org_id}/...` resource graph covers standards, context, collab, runs
-- [ ] ActorRef + `on_behalf_of` rules clear
-- [ ] Apply/run pin standard + snapshot
-- [ ] No conflict with 0006
+- [x] EN/ZH consistent
+- [x] `/v1/orgs/{org_id}/...` resource graph covers standards, context, collab, runs
+- [x] ActorRef + `on_behalf_of` rules clear
+- [x] Apply/run pin standard + snapshot
+- [x] No conflict with 0006
 
 ### RFC 0006 — ACL & Agent identity
 
 Issue: [#6](https://github.com/regenic-ai/regenic/issues/6)
 
-- [ ] EN/ZH consistent
-- [ ] `visible()` and distill non-escalation clear
-- [ ] Principal ↔ ActorRef mapping clear
-- [ ] Weight ≠ ACL bypass (0007)
+- [x] EN/ZH consistent
+- [x] `visible()` and distill non-escalation clear
+- [x] Principal ↔ ActorRef mapping clear
+- [x] Weight ≠ ACL bypass (0007)
 
 ## Wave D
 
