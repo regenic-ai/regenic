@@ -8,7 +8,7 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 | RFC | Title | Status |
 | --- | --- | --- |
 | [0001](0001-standards-data-model.md) | Standards data model | Accepted |
-| [0002](0002-context-graph.md) | Context graph | Draft |
+| [0002](0002-context-graph.md) | Context graph | Accepted |
 | [0003](0003-collaboration-objects.md) | Collaboration objects | Draft |
 | [0004](0004-human-agent-api.md) | Human + Agent API surface | Draft |
 | [0005](0005-context-storage-lifecycle.md) | Context storage & lifecycle | Draft |

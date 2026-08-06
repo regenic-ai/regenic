@@ -8,7 +8,7 @@ Phase 0 在生产代码之前以 Accepted RFC 落地。
 | RFC | 标题 | 状态 |
 | --- | --- | --- |
 | [0001](0001-standards-data-model.md) | 标准数据模型 | Accepted |
-| [0002](0002-context-graph.md) | 上下文图谱 | Draft |
+| [0002](0002-context-graph.md) | 上下文图谱 | Accepted |
 | [0003](0003-collaboration-objects.md) | 协作对象 | Draft |
 | [0004](0004-human-agent-api.md) | 人机对称 API | Draft |
 | [0005](0005-context-storage-lifecycle.md) | 上下文存储与生命周期 | Draft |

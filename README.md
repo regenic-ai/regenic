@@ -25,7 +25,7 @@ methodology in `regenic-book`.
 | Capability | Description | Status |
 | --- | --- | --- |
 | Judgment standards | Define, version, apply, and revise org-wide standards | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
-| Shared context | Single context layer for people, teams, and agents | RFC Draft ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
+| Shared context | Single context layer for people, teams, and agents | RFC 0002 Accepted; 0005 Draft ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
 | Human + agent collaboration | Proposal / Decision / Review / Handoff on shared objects | RFC Draft ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
 | Symmetric API | Human UI and agents read/write the same surface | RFC Draft ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
 | ACL + Agent identity | Same visible() for humans and agents; no privilege escalation via distill | RFC Draft ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |

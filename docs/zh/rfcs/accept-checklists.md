@@ -30,12 +30,12 @@ Issue: [#1](https://github.com/regenic-ai/regenic/issues/1)
 
 Issue: [#2](https://github.com/regenic-ai/regenic/issues/2)
 
-- [ ] 中英字段名与枚举一致
-- [ ] `Entity.kind=standard` 引用 RFC 0001 `standard_id`，不复制正文
-- [ ] Claim `fact` / `hypothesis` / `opinion` 规则清晰；hypothesis 需验证窗
-- [ ] Claim/Edge 上具备 `Provenance` + `AccessPolicy`
-- [ ] Snapshot / ContextBundle 不可变与重放规则清晰
-- [ ] 与 0001 / 0003 / 0004 无冲突；方向兼容 0005/0006
+- [x] 中英字段名与枚举一致
+- [x] `Entity.kind=standard` 引用 RFC 0001 `standard_id`，不复制正文
+- [x] Claim `fact` / `hypothesis` / `opinion` 规则清晰；hypothesis 需验证窗
+- [x] Claim/Edge 上具备 `Provenance` + `AccessPolicy`
+- [x] Snapshot / ContextBundle 不可变与重放规则清晰
+- [x] 与 0001 / 0003 / 0004 无冲突；方向兼容 0005/0006
 
 **强制核对契约点：**
 

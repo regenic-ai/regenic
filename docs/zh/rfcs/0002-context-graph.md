@@ -1,6 +1,6 @@
 # RFC 0002 — 上下文图谱
 
-- **状态：** Draft
+- **状态：** Accepted
 - **English:** [../../en/rfcs/0002-context-graph.md](../../en/rfcs/0002-context-graph.md)
 - **依赖：** RFC 0001（用于链接的标准身份）
 - **相关：** RFC 0003（协作）、RFC 0004（API）
@@ -178,8 +178,7 @@
 两个团队与一个 Agent 能为同一决策共享同一上下文 snapshot，而无需从 Slack
 复制粘贴。越权内容不可见，且不污染决策哈希。
 
-## 7. 待决问题
+## 7. 已裁定（#2 — 已批准）
 
-- `predicate` / `rel_type` 受控词表的治理。
-- v1 中文档是一等实体还是仅出处源（提案：两者都要 —
-  `document` 实体 + provenance 指针）。
+- [x] **`predicate` / `rel_type` 词表推迟到实现。** Phase 2 先用文档化 allow-list，后续再扩；本 RFC 不冻结完整词表治理流程。
+- [x] **文档既是实体也是出处。** v1 同时保留 `document` 实体与 provenance 指针，不只做其中一种。

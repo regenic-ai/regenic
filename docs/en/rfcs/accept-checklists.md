@@ -31,12 +31,12 @@ Issue: [#1](https://github.com/regenic-ai/regenic/issues/1)
 
 Issue: [#2](https://github.com/regenic-ai/regenic/issues/2)
 
-- [ ] EN/ZH field names and enums match
-- [ ] `Entity.kind=standard` references RFC 0001 `standard_id` without copying body
-- [ ] Claim `fact` / `hypothesis` / `opinion` rules clear; hypothesis needs validation window
-- [ ] `Provenance` + `AccessPolicy` present on Claim/Edge
-- [ ] Snapshot / ContextBundle immutability and replay rules clear
-- [ ] No conflict with 0001 / 0003 / 0004; direction compatible with 0005/0006
+- [x] EN/ZH field names and enums match
+- [x] `Entity.kind=standard` references RFC 0001 `standard_id` without copying body
+- [x] Claim `fact` / `hypothesis` / `opinion` rules clear; hypothesis needs validation window
+- [x] `Provenance` + `AccessPolicy` present on Claim/Edge
+- [x] Snapshot / ContextBundle immutability and replay rules clear
+- [x] No conflict with 0001 / 0003 / 0004; direction compatible with 0005/0006
 
 **Contract points (must verify):**
 
