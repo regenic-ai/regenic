@@ -1,6 +1,6 @@
 # RFC 0001 — Standards data model
 
-- **Status:** Draft
+- **Status:** Accepted
 - **中文:** [../../zh/rfcs/0001-standards-data-model.md](../../zh/rfcs/0001-standards-data-model.md)
 - **Depends on:** —
 - **Related:** RFC 0002 (context), RFC 0003 (collaboration), RFC 0004 (API)
@@ -191,12 +191,12 @@ chat thread per team. Agents and humans cite the same `standard_version_id`.
 
 ## 9. Open questions
 
-Resolved or deferred in Wave A review (Issues #1 / #8):
+Resolved or deferred in Wave A review (Issues #1 / #8 — approved):
 
-| Topic | Proposed resolution | Status |
+| Topic | Resolution | Status |
 | --- | --- | --- |
-| Book gate numbering vs product five gates | Keep product five gates; book rules are commentary + segment enum | Pending confirm |
-| `UpgradeEvidence` vs book headings | Productization; no 1:1 book headings required | Pending confirm |
-| `layer` enum | Product-only; not from public book markdown | Pending confirm |
+| Book gate numbering vs product five gates | Keep product five gates; book rules are commentary + segment enum | Confirmed |
+| `UpgradeEvidence` vs book headings | Productization; no 1:1 book headings required | Confirmed |
+| `layer` enum | Product-only; not from public book markdown | Confirmed |
 | Semver vs monotonic integer for org-private standards | **Defer to Phase 1 impl** — default semver string; migrate later if needed | Deferred |
-| Whether `layer` is mutable without a new version | **No** — layer change requires new `StandardVersion` | Pending confirm |
+| Whether `layer` is mutable without a new version | **No** — layer change requires new `StandardVersion` | Confirmed |

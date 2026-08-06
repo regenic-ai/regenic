@@ -11,13 +11,13 @@
 
 Issue: [#1](https://github.com/regenic-ai/regenic/issues/1)
 
-- [ ] 中英字段名、枚举与生命周期图一致
-- [ ] `Standard` / `StandardVersion` / `Scope` / `IterationGate` / `UpgradeEvidence` /
+- [x] 中英字段名、枚举与生命周期图一致
+- [x] `Standard` / `StandardVersion` / `Scope` / `IterationGate` / `UpgradeEvidence` /
       `TrialConfig` / `ActorRef` / `StandardGap` 对 Phase 1 完整
-- [ ] 五闸门可机检（非仅散文）
-- [ ] [book-schema-map.md](book-schema-map.md) SoftGate 项已裁定或在 §9 推迟
-- [ ] 与 0002（standard 实体 id）、0003（缺口→提案）、0004（引用钉死）无冲突
-- [ ] §9 待决问题已关闭或显式推迟并指定负责人
+- [x] 五闸门可机检（非仅散文）
+- [x] [book-schema-map.md](book-schema-map.md) SoftGate 项已裁定或在 §9 推迟
+- [x] 与 0002（standard 实体 id）、0003（缺口→提案）、0004（引用钉死）无冲突
+- [x] §9 待决问题已关闭或显式推迟并指定负责人
 
 **强制核对契约点：**
 

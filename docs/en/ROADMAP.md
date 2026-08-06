@@ -22,9 +22,10 @@ starts — the same progressive iteration gate described in the Regenic book.
 - [x] RFC: daily distillation (incl. D0 rules path) —
   [rfc/0007](rfcs/0007-daily-distillation.md)
 - [x] Technology stack — [TECH_STACK.md](TECH_STACK.md)
-- [ ] Align public schemas with `regenic-ai/regenic-book/content/*/standards/` —
-  see [book-schema-map.md](rfcs/book-schema-map.md)
-- [ ] Accept RFCs (Draft → Accepted) via Issues review (order below)
+- [x] Align public schemas with `regenic-ai/regenic-book/content/*/standards/` —
+  see [book-schema-map.md](rfcs/book-schema-map.md) (#8)
+- [ ] Accept RFCs (Draft → Accepted) via Issues review (order below) —
+  0001 Accepted; 0002–0007 remaining
 - [x] Spike: monorepo scaffold (no product semantics; see repo root)
 
 **Exit criteria (HardGate):** All seven RFCs Accepted and book schema alignment

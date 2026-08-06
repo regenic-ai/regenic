@@ -12,13 +12,13 @@ locale RFC headers say `Accepted`.
 
 Issue: [#1](https://github.com/regenic-ai/regenic/issues/1)
 
-- [ ] EN/ZH field names, enums, and lifecycle graph match
-- [ ] `Standard` / `StandardVersion` / `Scope` / `IterationGate` / `UpgradeEvidence` /
+- [x] EN/ZH field names, enums, and lifecycle graph match
+- [x] `Standard` / `StandardVersion` / `Scope` / `IterationGate` / `UpgradeEvidence` /
       `TrialConfig` / `ActorRef` / `StandardGap` complete for Phase 1
-- [ ] Five gates are machine-checkable (not prose-only)
-- [ ] [book-schema-map.md](book-schema-map.md) SoftGate items resolved or deferred in §9
-- [ ] No conflict with 0002 (standard entity id), 0003 (gaps→proposals), 0004 (cite pins)
-- [ ] §9 open questions closed or explicitly deferred with owner
+- [x] Five gates are machine-checkable (not prose-only)
+- [x] [book-schema-map.md](book-schema-map.md) SoftGate items resolved or deferred in §9
+- [x] No conflict with 0002 (standard entity id), 0003 (gaps→proposals), 0004 (cite pins)
+- [x] §9 open questions closed or explicitly deferred with owner
 
 **Contract points (must verify):**
 
