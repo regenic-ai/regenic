@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -16,3 +16,19 @@ Icon
 .Trashes
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
+
+### Node / monorepo spike
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.turbo/
+.pnpm-store/
+
+# Never emit build artifacts next to TypeScript sources
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map

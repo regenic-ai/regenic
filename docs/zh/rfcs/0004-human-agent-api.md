@@ -1,6 +1,6 @@
 # RFC 0004 — 人机对称 API
 
-- **状态：** Draft
+- **状态：** Accepted
 - **English:** [../../en/rfcs/0004-human-agent-api.md](../../en/rfcs/0004-human-agent-api.md)
 - **依赖：** RFC 0001、RFC 0002、RFC 0003
 - **方法论：** 双能力模型 — 人拥有共识与下一条标准；Agent 执行标准已覆盖的部分
@@ -212,7 +212,7 @@ StandardGap or human intent
 一个人与一个 agent 仅使用本 API（人机 UI 作为同一 API 的客户端）完成
 Proposal → 引用标准 → Run → Review → 修订，而无需把私聊记录当作系统真相源。
 
-## 14. 待决问题
+## 14. 已裁定（#5 — 已批准）
 
-- v1 handoff 通知用 webhook 还是轮询（提案：轮询 + Phase 3 可选 webhook）。
-- `runs` 是内联执行还是始终异步（提案：始终异步，立即 `202` + `run_id`）。
+- [x] **v1 handoff 通知用轮询。** 可选 webhook 放到 Phase 3。
+- [x] **runs 始终异步。** 创建立即返回 `202` + `run_id`。

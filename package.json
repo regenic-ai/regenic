@@ -1,0 +1,16 @@
+{
+  "name": "regenic",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev:api": "pnpm --filter @regenic/api start:dev",
+    "dev:worker": "pnpm --filter @regenic/worker start:dev",
+    "start:api": "pnpm --filter @regenic/api start",
+    "start:worker": "pnpm --filter @regenic/worker start",
+    "typecheck": "pnpm -r run typecheck"
+  }
+}

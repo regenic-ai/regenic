@@ -1,6 +1,6 @@
 # RFC 0001 — 标准数据模型
 
-- **状态：** Draft
+- **状态：** Accepted
 - **English:** [../../en/rfcs/0001-standards-data-model.md](../../en/rfcs/0001-standards-data-model.md)
 - **依赖：** —
 - **相关：** RFC 0002（上下文）、RFC 0003（协作）、RFC 0004（API）
@@ -184,5 +184,12 @@ Agent 与人引用同一 `standard_version_id`。
 
 ## 9. 待决问题
 
-- 组织私有标准用 semver 还是单调整数。
-- `layer` 是否可不发新版本而变更（提案：否）。
+Wave A 评审裁定或推迟（Issues #1 / #8 — 已批准）：
+
+| 议题 | 裁定 | 状态 |
+| --- | --- | --- |
+| Book 闸门编号 vs 产品五闸门 | 保留产品五闸门；book 规则为解说 + 分段枚举 | 已确认 |
+| `UpgradeEvidence` vs book 标题 | 产品化；不要求 1:1 book 标题 | 已确认 |
+| `layer` 枚举 | 仅产品侧；不来自公开 book markdown | 已确认 |
+| 组织私有标准 semver vs 单调整数 | **推迟到 Phase 1 实现** — 默认 semver 字符串；必要时再迁 | 已推迟 |
+| `layer` 是否可不发新版本而变更 | **否** — 变更 `layer` 须新 `StandardVersion` | 已确认 |

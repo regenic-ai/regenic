@@ -1,6 +1,6 @@
 # RFC 0005 — 上下文存储与生命周期
 
-- **状态：** Draft
+- **状态：** Accepted
 - **English:** [../../en/rfcs/0005-context-storage-lifecycle.md](../../en/rfcs/0005-context-storage-lifecycle.md)
 - **依赖：** RFC 0002（上下文图谱语义）、RFC 0001（标准身份）
 - **相关：** RFC 0006（ACL）、RFC 0007（日蒸馏）
@@ -190,8 +190,11 @@ recount refs → candidate expired∧unreferenced∧no hold
 2. 在策略窗口后删除未引用 blob，且不破坏已接受 Digest 的溯源。
 3. Snapshot/决策路径默认从不需要加载全频道历史。
 
-## 9. 待决问题
+## 9. 已裁定（#4 — 已批准）
 
-- 按日分区用 org 时区还是 UTC。
-- body GC 后 `text_preview` 是否作为审计粉尘保留。
-- 多租户分区键优先：`org_id` 还是 `ts`。
+- [x] **UTC 存储，org 本地 Digest 日界。** Event `ts` 以 UTC 存储/分区；
+  日 Digest 窗口使用 org 时区配置。
+- [x] **body GC 后仍保留 `text_preview`**，至少与薄 Event 行同寿命（审计粉尘）；
+  敏感级与正文相同 — 不得借 preview 扩权。
+- [x] **按 `ts` 分区，始终按 `org_id` 作用域过滤。** 时间分区 + 含 `org_id`
+  的复合索引；极端规模下才可选 `org_id` hash 子分区。

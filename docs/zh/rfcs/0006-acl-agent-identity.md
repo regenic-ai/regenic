@@ -1,6 +1,6 @@
 # RFC 0006 — ACL 权限域与 Agent 身份
 
-- **状态：** Draft
+- **状态：** Accepted
 - **English:** [../../en/rfcs/0006-acl-agent-identity.md](../../en/rfcs/0006-acl-agent-identity.md)
 - **依赖：** RFC 0002（`AccessPolicy`）、RFC 0004（API 主体）、RFC 0005（Event/Digest 挂载点）
 - **相关：** RFC 0007（蒸馏不得升权）
@@ -177,8 +177,8 @@ Blob 下载：针对 **via** 资源鉴权，而非裸 hash。
    （除非存在脱敏兄弟版）。
 3. 关闭 ACL filter 的向量搜索会使 CI 失败。
 
-## 14. 待决问题
+## 14. 已裁定（#6 — 已批准）
 
-- 客服频道中的外部客户 principal（建议：是，仅 channel）。
-- 多 Agent 线程：优先每 Agent `as_user`，而非共享 service scope。
-- 脱敏 Digest 是否默认可进入组织级日包（默认：否）。
+- [x] **客服频道允许外部客户 principal** — 仅 channel 作用域（无组织级成员资格）。
+- [x] **多 Agent 线程优先每 Agent `as_user`**，而非共享 service scope。
+- [x] **脱敏 Digest 默认不进入组织级日包。**

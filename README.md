@@ -19,17 +19,17 @@ The book, [regenic.ai](https://regenic.ai), and public standards live in
 
 ## Status
 
-**Early stage.** Architecture RFCs first; implementation follows the public
-methodology in `regenic-book`.
+**Phase 0 HardGate met.** Architecture RFCs 0001–0007 are Accepted; Phase 1
+implementation follows the public methodology in `regenic-book`.
 
 | Capability | Description | Status |
 | --- | --- | --- |
-| Judgment standards | Define, version, apply, and revise org-wide standards | RFC Draft ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
-| Shared context | Single context layer for people, teams, and agents | RFC Draft ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
-| Human + agent collaboration | Proposal / Decision / Review / Handoff on shared objects | RFC Draft ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
-| Symmetric API | Human UI and agents read/write the same surface | RFC Draft ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
-| ACL + Agent identity | Same visible() for humans and agents; no privilege escalation via distill | RFC Draft ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |
-| Daily distillation | Weighted daily intake into standards machine (D0 rules → D1 LLM) | RFC Draft ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
+| Judgment standards | Define, version, apply, and revise org-wide standards | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
+| Shared context | Single context layer for people, teams, and agents | RFC Accepted ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
+| Human + agent collaboration | Proposal / Decision / Review / Handoff on shared objects | RFC Accepted ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
+| Symmetric API | Human UI and agents read/write the same surface | RFC Accepted ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
+| ACL + Agent identity | Same visible() for humans and agents; no privilege escalation via distill | RFC Accepted ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |
+| Daily distillation | Weighted daily intake into standards machine (D0 rules → D1 LLM) | RFC Accepted ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
 | Org management | AI-native operations on standards and context—not hierarchy and approvals as the information layer | Planned |
 
 ## Technology stack
@@ -58,14 +58,35 @@ Phase 0 drafts under [`docs/en/rfcs/`](docs/en/rfcs/README.md):
 6. [ACL & Agent identity](docs/en/rfcs/0006-acl-agent-identity.md) — scopes, bindings, `visible()`
 7. [Daily distillation](docs/en/rfcs/0007-daily-distillation.md) — standards-machine intake (+ D0 sketch)
 
+## Spike scaffold (no product logic)
+
+Phase 0 monorepo skeleton only — health / connectivity, not standards CRUD.
+
+```text
+apps/api          NestJS + GET /health
+apps/worker       NestJS + Postgres / Redis / BullMQ probe
+packages/domain   Unstable type placeholders
+packages/config   Shared env schema
+```
+
+```bash
+pnpm install
+docker compose up --build
+curl -s http://localhost:3000/health
+```
+
 ## Roadmap
 
 [docs/en/ROADMAP.md](docs/en/ROADMAP.md) · [TECH_STACK.md](docs/en/TECH_STACK.md)
+· [Accept checklists](docs/en/rfcs/accept-checklists.md)
+· [Book schema map](docs/en/rfcs/book-schema-map.md)
 
 ## Contributing
 
-Regenic is not accepting feature PRs until the initial architecture RFCs are
-Accepted. Discussion welcome via [Issues](https://github.com/regenic-ai/regenic/issues).
+**Feature PRs are welcome** on surfaces defined by Accepted RFCs (0001–0007;
+see [docs/en/ROADMAP.md](docs/en/ROADMAP.md)). Prefer small PRs that cite the
+owning RFC. Discussion welcome via
+[Issues](https://github.com/regenic-ai/regenic/issues).
 
 Follow the org [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md).
 Security reports: [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new).

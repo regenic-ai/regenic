@@ -7,16 +7,23 @@ Phase 0 在生产代码之前以 Accepted RFC 落地。
 
 | RFC | 标题 | 状态 |
 | --- | --- | --- |
-| [0001](0001-standards-data-model.md) | 标准数据模型 | Draft |
-| [0002](0002-context-graph.md) | 上下文图谱 | Draft |
-| [0003](0003-collaboration-objects.md) | 协作对象 | Draft |
-| [0004](0004-human-agent-api.md) | 人机对称 API | Draft |
-| [0005](0005-context-storage-lifecycle.md) | 上下文存储与生命周期 | Draft |
-| [0006](0006-acl-agent-identity.md) | ACL 权限域与 Agent 身份 | Draft |
-| [0007](0007-daily-distillation.md) | 日蒸馏 | Draft |
+| [0001](0001-standards-data-model.md) | 标准数据模型 | Accepted |
+| [0002](0002-context-graph.md) | 上下文图谱 | Accepted |
+| [0003](0003-collaboration-objects.md) | 协作对象 | Accepted |
+| [0004](0004-human-agent-api.md) | 人机对称 API | Accepted |
+| [0005](0005-context-storage-lifecycle.md) | 上下文存储与生命周期 | Accepted |
+| [0006](0006-acl-agent-identity.md) | ACL 权限域与 Agent 身份 | Accepted |
+| [0007](0007-daily-distillation.md) | 日蒸馏 | Accepted |
 
-草图（SQL 注释为英文）：
-[d0-daily-distill.sql](../../en/rfcs/sketch/d0-daily-distill.sql)
+Phase 0 收口：
+
+| 路径 | 说明 |
+| --- | --- |
+| [accept-checklists.md](accept-checklists.md) | Wave A–D Accept 清单 |
+| [book-schema-map.md](book-schema-map.md) | Book ↔ RFC 0001 SoftGate 对照 |
+| [d0-daily-distill.sql](../../en/rfcs/sketch/d0-daily-distill.sql) | RFC 0007 D0 草图（SQL 注释为英文） |
+
+里程碑：[Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1)。
 
 ## 约定
 
@@ -36,4 +43,4 @@ Phase 0 在生产代码之前以 Accepted RFC 落地。
 ## 评审
 
 讨论：[GitHub Issues](https://github.com/regenic-ai/regenic/issues)。
-RFC Accepted 前不接受功能 PR（见根 README）。
+Phase 0 HardGate 已满足 — 全部 RFC Accepted。功能 PR 可引用这些 RFC（见根 README）。

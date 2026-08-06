@@ -1,6 +1,6 @@
 # RFC 0005 — Context storage & lifecycle
 
-- **Status:** Draft
+- **Status:** Accepted
 - **中文:** [../../zh/rfcs/0005-context-storage-lifecycle.md](../../zh/rfcs/0005-context-storage-lifecycle.md)
 - **Depends on:** RFC 0002 (context graph semantics), RFC 0001 (standards identity)
 - **Related:** RFC 0006 (ACL), RFC 0007 (daily distillation)
@@ -193,8 +193,12 @@ Rising storage + flat coverage ⇒ distillation not working; do not only scale d
 2. Delete unreferenced blobs after policy window without breaking accepted Digest provenance.
 3. Snapshot/decision path never requires loading full-channel history by default.
 
-## 9. Open questions
+## 9. Decisions (#4 — approved)
 
-- Org timezone for day partitions vs UTC.
-- Whether `text_preview` survives body GC for audit dust.
-- Multi-tenant partition key priority: `org_id` vs `ts`.
+- [x] **UTC storage, org-local Digest days.** Event `ts` stored/partitioned in
+  UTC; daily Digest windows use org timezone config.
+- [x] **`text_preview` survives body GC** for at least the thin Event row
+  retention window (audit dust); same sensitivity as body — never widens ACL.
+- [x] **Partition by `ts`, always scope by `org_id`.** Time-partition on `ts`
+  with composite indexes including `org_id`; optional `org_id` hash
+  subpartition only at extreme scale.

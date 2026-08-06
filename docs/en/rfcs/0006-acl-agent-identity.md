@@ -1,6 +1,6 @@
 # RFC 0006 — ACL scopes & Agent identity
 
-- **Status:** Draft
+- **Status:** Accepted
 - **中文:** [../../zh/rfcs/0006-acl-agent-identity.md](../../zh/rfcs/0006-acl-agent-identity.md)
 - **Depends on:** RFC 0002 (`AccessPolicy`), RFC 0004 (API principals), RFC 0005 (Event/Digest attach points)
 - **Related:** RFC 0007 (distillation must not escalate privilege)
@@ -178,8 +178,10 @@ Claim mint from Event SHOULD copy effective sensitivity upward (never downward).
    missing that scope (unless redacted sibling exists).
 3. Vector search with ACL filter disabled fails CI.
 
-## 14. Open questions
+## 14. Decisions (#6 — approved)
 
-- Customer-external principals in CS channels (recommended: yes, channel-only).
-- Multi-agent threads: prefer per-agent `as_user` over shared service scope.
-- Whether redacted Digests may enter org-wide daily packs by default (default: no).
+- [x] **Customer-external principals allowed in CS channels** — channel-scope
+  only (no org-wide membership).
+- [x] **Multi-agent threads prefer per-agent `as_user`** over a shared service
+  scope.
+- [x] **Redacted Digests do not enter org-wide daily packs by default.**

@@ -1,6 +1,6 @@
 # RFC 0007 — Daily distillation
 
-- **Status:** Draft
+- **Status:** Accepted
 - **中文:** [../../zh/rfcs/0007-daily-distillation.md](../../zh/rfcs/0007-daily-distillation.md)
 - **Depends on:** RFC 0005 (Event/Digest/Blob), RFC 0006 (ACL), RFC 0001 (standards), RFC 0003 (proposals)
 - **Related:** RFC 0002 (optional Claim promotion)
@@ -136,8 +136,11 @@ Pseudocode / SQL: [`sketch/d0-daily-distill.sql`](sketch/d0-daily-distill.sql).
 3. Re-run same period is idempotent for `proposed` (supersede old proposed;
    never mutate `accepted`).
 
-## 13. Open questions
+## 13. Decisions (#7 — approved)
 
-- Org-local timezone for `period_*`.
-- Per-unit sub-quotas for very large orgs.
-- Lexicon source for D0 bad-news (org-configurable list).
+- [x] **`period_*` uses org-local day windows** (aligned with RFC 0005: Event
+  `ts` in UTC; Digest day buckets use org timezone config).
+- [x] **Per-unit sub-quotas defer to D3/D4.** v1 uses Top-N per direction first;
+  unit quotas are later config.
+- [x] **D0 bad-news lexicon is org-configurable** (ship a starter list; customer
+  edits).

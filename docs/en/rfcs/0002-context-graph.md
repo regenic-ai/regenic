@@ -1,6 +1,6 @@
 # RFC 0002 — Context graph
 
-- **Status:** Draft
+- **Status:** Accepted
 - **中文:** [../../zh/rfcs/0002-context-graph.md](../../zh/rfcs/0002-context-graph.md)
 - **Depends on:** RFC 0001 (standards identity for links)
 - **Related:** RFC 0003 (collaboration), RFC 0004 (API)
@@ -184,8 +184,7 @@ Two teams and one agent share the same context snapshot for a decision without
 copy-pasting from Slack. Out-of-policy content is invisible and does not
 contaminate the decision hash.
 
-## 7. Open questions
+## 7. Decisions (#2 — approved)
 
-- Controlled vocabulary governance for `predicate` / `rel_type`.
-- Whether documents are first-class entities or only provenance sources in v1
-  (proposal: both — `document` entity + provenance pointer).
+- [x] **Defer `predicate` / `rel_type` vocabulary governance to impl.** Phase 2 starts with a documented allow-list and expands later; this RFC does not freeze a full governance process.
+- [x] **Documents are both entities and provenance.** v1 keeps a `document` entity and a provenance pointer — not only one of the two.

@@ -1,6 +1,6 @@
 # RFC 0004 — Human + Agent API surface
 
-- **Status:** Draft
+- **Status:** Accepted
 - **中文:** [../../zh/rfcs/0004-human-agent-api.md](../../zh/rfcs/0004-human-agent-api.md)
 - **Depends on:** RFC 0001, RFC 0002, RFC 0003
 - **Methodology:** Dual-capability model — humans own consensus and the next
@@ -223,9 +223,7 @@ Proposal → cite standard → Run → Review → revise
 using only this API (plus Human UI as a client of the same API), without
 exchanging private chat transcripts as the system of record.
 
-## 14. Open questions
+## 14. Decisions (#5 — approved)
 
-- Webhook vs poll for handoff notification in v1 (proposal: poll + optional
-  webhook in Phase 3).
-- Whether `runs` execute inline or always async (proposal: always async with
-  immediate `202` + `run_id`).
+- [x] **Handoff notification in v1 is poll.** Optional webhook lands in Phase 3.
+- [x] **Runs are always async.** Create returns immediate `202` + `run_id`.
