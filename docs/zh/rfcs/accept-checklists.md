@@ -49,19 +49,19 @@ Issue: [#2](https://github.com/regenic-ai/regenic/issues/2)
 
 Issue: [#3](https://github.com/regenic-ai/regenic/issues/3)
 
-- [ ] 中英一致
-- [ ] Proposal / Decision / Review / Handoff 的证据与 snapshot 规则清晰
-- [ ] Agent 不能独自激活标准（保留人类 accept 路径）
-- [ ] 与 0001/0002/0004 无冲突
+- [x] 中英一致
+- [x] Proposal / Decision / Review / Handoff 的证据与 snapshot 规则清晰
+- [x] Agent 不能独自激活标准（保留人类 accept 路径）
+- [x] 与 0001/0002/0004 无冲突
 
 ### RFC 0005 — 上下文存储与生命周期
 
 Issue: [#4](https://github.com/regenic-ai/regenic/issues/4)
 
-- [ ] 中英一致
-- [ ] Event / Blob / Digest / GC 耐久分层清晰
-- [ ] Event 喂给 Claim；不取代 0002 图谱语义
-- [ ] 与 0006/0007 无冲突
+- [x] 中英一致
+- [x] Event / Blob / Digest / GC 耐久分层清晰
+- [x] Event 喂给 Claim；不取代 0002 图谱语义
+- [x] 与 0006/0007 无冲突
 
 ## Wave C
 

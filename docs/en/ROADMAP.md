@@ -25,7 +25,7 @@ starts — the same progressive iteration gate described in the Regenic book.
 - [x] Align public schemas with `regenic-ai/regenic-book/content/*/standards/` —
   see [book-schema-map.md](rfcs/book-schema-map.md) (#8)
 - [ ] Accept RFCs (Draft → Accepted) via Issues review (order below) —
-  0001–0002 Accepted; 0003–0007 remaining
+  0001–0003, 0005 Accepted; 0004/0006/0007 remaining
 - [x] Spike: monorepo scaffold (no product semantics; see repo root)
 
 **Exit criteria (HardGate):** All seven RFCs Accepted and book schema alignment

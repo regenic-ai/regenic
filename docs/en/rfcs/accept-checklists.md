@@ -50,19 +50,19 @@ Issue: [#2](https://github.com/regenic-ai/regenic/issues/2)
 
 Issue: [#3](https://github.com/regenic-ai/regenic/issues/3)
 
-- [ ] EN/ZH consistent
-- [ ] Proposal / Decision / Review / Handoff evidence + snapshot rules clear
-- [ ] Agent cannot activate standards alone (human accept path preserved)
-- [ ] No conflict with 0001/0002/0004
+- [x] EN/ZH consistent
+- [x] Proposal / Decision / Review / Handoff evidence + snapshot rules clear
+- [x] Agent cannot activate standards alone (human accept path preserved)
+- [x] No conflict with 0001/0002/0004
 
 ### RFC 0005 — Context storage & lifecycle
 
 Issue: [#4](https://github.com/regenic-ai/regenic/issues/4)
 
-- [ ] EN/ZH consistent
-- [ ] Event / Blob / Digest / GC durability tiers clear
-- [ ] Event feeds Claim; does not replace 0002 graph semantics
-- [ ] No conflict with 0006/0007
+- [x] EN/ZH consistent
+- [x] Event / Blob / Digest / GC durability tiers clear
+- [x] Event feeds Claim; does not replace 0002 graph semantics
+- [x] No conflict with 0006/0007
 
 ## Wave C
 
