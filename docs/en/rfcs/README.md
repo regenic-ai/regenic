@@ -15,11 +15,15 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 | [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Draft |
 | [0007](0007-daily-distillation.md) | Daily distillation | Draft |
 
-Sketches:
+Phase 0 closeout:
 
 | Path | Related |
 | --- | --- |
+| [accept-checklists.md](accept-checklists.md) | Wave A–D Accept checklists |
+| [book-schema-map.md](book-schema-map.md) | Book ↔ RFC 0001 SoftGate map |
 | [sketch/d0-daily-distill.sql](sketch/d0-daily-distill.sql) | RFC 0007 D0 |
+
+Milestone: [Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1).
 
 ## Conventions
 
@@ -45,4 +49,4 @@ Sketches:
 ## Review
 
 Discussion: [GitHub Issues](https://github.com/regenic-ai/regenic/issues).
-Do not open feature PRs until RFCs are Accepted (see root README).
+Scaffold/spike PRs are OK; feature PRs wait for Accepted RFCs (see root README).

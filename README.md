@@ -58,14 +58,38 @@ Phase 0 drafts under [`docs/en/rfcs/`](docs/en/rfcs/README.md):
 6. [ACL & Agent identity](docs/en/rfcs/0006-acl-agent-identity.md) — scopes, bindings, `visible()`
 7. [Daily distillation](docs/en/rfcs/0007-daily-distillation.md) — standards-machine intake (+ D0 sketch)
 
+## Spike scaffold (no product logic)
+
+Phase 0 monorepo skeleton only — health / connectivity, not standards CRUD.
+
+```text
+apps/api          NestJS + GET /health
+apps/worker       NestJS + Postgres / Redis / BullMQ probe
+packages/domain   Unstable type placeholders
+packages/config   Shared env schema
+```
+
+```bash
+pnpm install
+docker compose up --build
+curl -s http://localhost:3000/health
+```
+
 ## Roadmap
 
 [docs/en/ROADMAP.md](docs/en/ROADMAP.md) · [TECH_STACK.md](docs/en/TECH_STACK.md)
+· [Accept checklists](docs/en/rfcs/accept-checklists.md)
+· [Book schema map](docs/en/rfcs/book-schema-map.md)
 
 ## Contributing
 
-Regenic is not accepting feature PRs until the initial architecture RFCs are
-Accepted. Discussion welcome via [Issues](https://github.com/regenic-ai/regenic/issues).
+**Scaffold / spike PRs are welcome** (monorepo layout, health endpoints, Compose
+wiring) while Phase 0 RFCs are still Draft — they must not encode product
+semantics.
+
+**Feature PRs are not accepted** until the RFC(s) that define that surface are
+Accepted (see SoftGate / HardGate in [docs/en/ROADMAP.md](docs/en/ROADMAP.md)).
+Discussion welcome via [Issues](https://github.com/regenic-ai/regenic/issues).
 
 Follow the org [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md).
 Security reports: [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new).

@@ -22,10 +22,33 @@ starts — the same progressive iteration gate described in the Regenic book.
 - [x] RFC: daily distillation (incl. D0 rules path) —
   [rfc/0007](rfcs/0007-daily-distillation.md)
 - [x] Technology stack — [TECH_STACK.md](TECH_STACK.md)
-- [ ] Align public schemas with `regenic-ai/regenic-book/content/*/standards/`
-- [ ] Accept RFCs (Draft → Accepted) via Issues review
+- [ ] Align public schemas with `regenic-ai/regenic-book/content/*/standards/` —
+  see [book-schema-map.md](rfcs/book-schema-map.md)
+- [ ] Accept RFCs (Draft → Accepted) via Issues review (order below)
+- [x] Spike: monorepo scaffold (no product semantics; see repo root)
 
-**Exit criteria:** Accepted RFCs, no production code required.
+**Exit criteria (HardGate):** All seven RFCs Accepted and book schema alignment
+done. No production business code required in this phase; non-semantic scaffold
+is allowed.
+
+### Closeout order
+
+Review in four waves by RFC dependency. On Accept, update both locale RFC
+headers and [rfcs/README.md](rfcs/README.md).
+
+| Wave | RFCs | Focus | Unlocks |
+| --- | --- | --- | --- |
+| A | 0001, 0002 | Standards model; Claim/Snapshot | SoftGate; `packages/domain` types |
+| B | 0003, 0005 | Collaboration objects; Event/Blob/Digest | Collab + physical storage schema |
+| C | 0004, 0006 | `/v1` API; ACL / Agent identity | OpenAPI + auth freeze |
+| D | 0007 | Daily distill D0→accept | Worker distill jobs |
+
+**SoftGate (Phase 1 product code allowed):** RFC **0001 Accepted** and book
+schema alignment complete. All seven Accepted is not required.
+
+**Spike (parallel with review):** `apps/api`, `apps/worker`, `packages/domain`,
+`packages/config` + Docker Compose; health/connectivity only — no standards
+CRUD, distillation, or ACL implementation.
 
 Index: [rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md).
 

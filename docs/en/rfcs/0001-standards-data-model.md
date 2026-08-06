@@ -191,5 +191,12 @@ chat thread per team. Agents and humans cite the same `standard_version_id`.
 
 ## 9. Open questions
 
-- Semver vs monotonic integer for org-private standards.
-- Whether `layer` is mutable without a new version (proposal: no).
+Resolved or deferred in Wave A review (Issues #1 / #8):
+
+| Topic | Proposed resolution | Status |
+| --- | --- | --- |
+| Book gate numbering vs product five gates | Keep product five gates; book rules are commentary + segment enum | Pending confirm |
+| `UpgradeEvidence` vs book headings | Productization; no 1:1 book headings required | Pending confirm |
+| `layer` enum | Product-only; not from public book markdown | Pending confirm |
+| Semver vs monotonic integer for org-private standards | **Defer to Phase 1 impl** — default semver string; migrate later if needed | Deferred |
+| Whether `layer` is mutable without a new version | **No** — layer change requires new `StandardVersion` | Pending confirm |

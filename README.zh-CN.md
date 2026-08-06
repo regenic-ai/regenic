@@ -56,14 +56,37 @@ Phase 0 草案见 [`docs/zh/rfcs/`](docs/zh/rfcs/README.md)：
 6. [ACL 与 Agent 身份](docs/zh/rfcs/0006-acl-agent-identity.md) — scope、绑定、`visible()`
 7. [日蒸馏](docs/zh/rfcs/0007-daily-distillation.md) — 标准机器进料（+ D0 草图）
 
+## Spike 脚手架（无产品逻辑）
+
+Phase 0 monorepo 骨架 — 仅 health / 连通性，无标准 CRUD。
+
+```text
+apps/api          NestJS + GET /health
+apps/worker       NestJS + Postgres / Redis / BullMQ 探测
+packages/domain   不稳定类型占位
+packages/config   共享 env schema
+```
+
+```bash
+pnpm install
+docker compose up --build
+curl -s http://localhost:3000/health
+```
+
 ## 路线图
 
 [docs/zh/ROADMAP.md](docs/zh/ROADMAP.md) · [技术栈](docs/zh/TECH_STACK.md)
+· [Accept 清单](docs/zh/rfcs/accept-checklists.md)
+· [Book schema 对照](docs/zh/rfcs/book-schema-map.md)
 
 ## 贡献
 
-初始架构 RFC 未 Accepted 前不接受功能 PR。讨论欢迎开
-[Issues](https://github.com/regenic-ai/regenic/issues)。
+**欢迎脚手架 / spike PR**（monorepo 布局、health、Compose 连通）——即便 Phase 0
+RFC 仍为 Draft；但不得写入产品业务语义。
+
+**不接受功能 PR**，直至定义该表面的 RFC 已 Accepted（见
+[docs/zh/ROADMAP.md](docs/zh/ROADMAP.md) 的 SoftGate / HardGate）。
+讨论欢迎开 [Issues](https://github.com/regenic-ai/regenic/issues)。
 
 遵守组织 [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md)。
 安全报告：[private advisory](https://github.com/regenic-ai/regenic/security/advisories/new)。

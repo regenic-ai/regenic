@@ -21,10 +21,31 @@ Regenic 分层交付。每一层须可独立使用后再开下一层——与《
 - [x] RFC：日蒸馏（含 D0 规则路径）—
   [中文](rfcs/0007-daily-distillation.md) / [EN](../en/rfcs/0007-daily-distillation.md)
 - [x] 技术栈 — [TECH_STACK.md](TECH_STACK.md)
-- [ ] 与 `regenic-ai/regenic-book/content/*/standards/` 公开 schema 对齐
-- [ ] 经 Issues 评审将 RFC 从 Draft → Accepted
+- [ ] 与 `regenic-ai/regenic-book/content/*/standards/` 公开 schema 对齐 —
+  见 [book-schema-map.md](rfcs/book-schema-map.md)
+- [ ] 经 Issues 评审将 RFC 从 Draft → Accepted（按下方收口顺序）
+- [x] Spike：monorepo 脚手架（无业务语义；见仓库根目录）
 
-**退出标准：** RFC 已 Accepted；本阶段不要求生产代码。
+**退出标准（HardGate）：** 七份 RFC 均已 Accepted，且 book schema 对齐完成。
+本阶段不要求生产业务代码；允许无语义脚手架。
+
+### 收口顺序
+
+按 RFC 依赖分四波评审；Accept 时同步改中英文 RFC 头与 [rfcs/README.md](rfcs/README.md)。
+
+| 波次 | RFC | 焦点 | 通过后解锁 |
+| --- | --- | --- | --- |
+| A | 0001、0002 | 标准模型；Claim/Snapshot | SoftGate；`packages/domain` 类型可固化 |
+| B | 0003、0005 | 协作对象；Event/Blob/Digest | 协作与物理存储 schema |
+| C | 0004、0006 | `/v1` API；ACL / Agent 身份 | OpenAPI 与鉴权可固化 |
+| D | 0007 | 日蒸馏 D0→accept | Worker 蒸馏任务可开写 |
+
+**SoftGate（可开写 Phase 1 业务代码）：** RFC **0001 Accepted** + book schema 对齐完成。
+不要求七份全部 Accepted。
+
+**Spike（可与评审并行）：** `apps/api`、`apps/worker`、`packages/domain`、
+`packages/config` + Docker Compose；仅 health / 连通性，禁止 standards CRUD、
+蒸馏、ACL 等业务实现。
 
 索引：[rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md)。
 
