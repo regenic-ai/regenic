@@ -91,14 +91,14 @@ Issue: [#6](https://github.com/regenic-ai/regenic/issues/6)
 
 Issue: [#7](https://github.com/regenic-ai/regenic/issues/7)
 
-- [ ] EN/ZH consistent
-- [ ] D0 rules path vs D1 LLM boundary clear
-- [ ] Human accept → Proposal / Standard feed clear
-- [ ] ACL non-escalation preserved
+- [x] EN/ZH consistent
+- [x] D0 rules path vs D1 LLM boundary clear
+- [x] Human accept → Proposal / Standard feed clear
+- [x] ACL non-escalation preserved
 
 ## Related issues
 
-| Issue | Title |
-| --- | --- |
-| [#8](https://github.com/regenic-ai/regenic/issues/8) | Align public schemas with regenic-book |
-| [#9](https://github.com/regenic-ai/regenic/issues/9) | Spike: monorepo scaffold (no product logic) |
+| Issue | Title | State |
+| --- | --- | --- |
+| [#8](https://github.com/regenic-ai/regenic/issues/8) | Align public schemas with regenic-book | Closed (SoftGate) |
+| [#9](https://github.com/regenic-ai/regenic/issues/9) | Spike: monorepo scaffold (no product logic) | Open until PR merge |

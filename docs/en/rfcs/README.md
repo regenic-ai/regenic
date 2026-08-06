@@ -13,7 +13,7 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 | [0004](0004-human-agent-api.md) | Human + Agent API surface | Accepted |
 | [0005](0005-context-storage-lifecycle.md) | Context storage & lifecycle | Accepted |
 | [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Accepted |
-| [0007](0007-daily-distillation.md) | Daily distillation | Draft |
+| [0007](0007-daily-distillation.md) | Daily distillation | Accepted |
 
 Phase 0 closeout:
 
@@ -49,4 +49,5 @@ Milestone: [Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/mi
 ## Review
 
 Discussion: [GitHub Issues](https://github.com/regenic-ai/regenic/issues).
-Scaffold/spike PRs are OK; feature PRs wait for Accepted RFCs (see root README).
+Phase 0 HardGate met — all RFCs Accepted. Feature PRs may cite these RFCs
+(see root README).

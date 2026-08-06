@@ -13,7 +13,7 @@ Phase 0 在生产代码之前以 Accepted RFC 落地。
 | [0004](0004-human-agent-api.md) | 人机对称 API | Accepted |
 | [0005](0005-context-storage-lifecycle.md) | 上下文存储与生命周期 | Accepted |
 | [0006](0006-acl-agent-identity.md) | ACL 权限域与 Agent 身份 | Accepted |
-| [0007](0007-daily-distillation.md) | 日蒸馏 | Draft |
+| [0007](0007-daily-distillation.md) | 日蒸馏 | Accepted |
 
 Phase 0 收口：
 
@@ -43,4 +43,4 @@ Phase 0 收口：
 ## 评审
 
 讨论：[GitHub Issues](https://github.com/regenic-ai/regenic/issues)。
-允许脚手架/spike PR；功能 PR 须等对应 RFC Accepted（见根 README）。
+Phase 0 HardGate 已满足 — 全部 RFC Accepted。功能 PR 可引用这些 RFC（见根 README）。

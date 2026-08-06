@@ -5,32 +5,30 @@
 Regenic ships in layers. Each layer must be usable on its own before the next
 starts — the same progressive iteration gate described in the Regenic book.
 
-## Phase 0 — Architecture (now)
+## Phase 0 — Architecture (HardGate met)
 
 - [x] RFC: data model for standards (definition, scope, version, lifecycle) —
-  [rfc/0001](rfcs/0001-standards-data-model.md)
+  [rfc/0001](rfcs/0001-standards-data-model.md) — **Accepted**
 - [x] RFC: context graph (entities, relationships, provenance, access) —
-  [rfc/0002](rfcs/0002-context-graph.md)
+  [rfc/0002](rfcs/0002-context-graph.md) — **Accepted**
 - [x] RFC: collaboration objects (Proposal / Decision / Review / Handoff) —
-  [rfc/0003](rfcs/0003-collaboration-objects.md)
+  [rfc/0003](rfcs/0003-collaboration-objects.md) — **Accepted**
 - [x] RFC: human + agent API surface —
-  [rfc/0004](rfcs/0004-human-agent-api.md)
+  [rfc/0004](rfcs/0004-human-agent-api.md) — **Accepted**
 - [x] RFC: context storage & lifecycle (Event / Blob / Digest / GC) —
-  [rfc/0005](rfcs/0005-context-storage-lifecycle.md)
+  [rfc/0005](rfcs/0005-context-storage-lifecycle.md) — **Accepted**
 - [x] RFC: ACL scopes & Agent identity —
-  [rfc/0006](rfcs/0006-acl-agent-identity.md)
+  [rfc/0006](rfcs/0006-acl-agent-identity.md) — **Accepted**
 - [x] RFC: daily distillation (incl. D0 rules path) —
-  [rfc/0007](rfcs/0007-daily-distillation.md)
+  [rfc/0007](rfcs/0007-daily-distillation.md) — **Accepted**
 - [x] Technology stack — [TECH_STACK.md](TECH_STACK.md)
 - [x] Align public schemas with `regenic-ai/regenic-book/content/*/standards/` —
   see [book-schema-map.md](rfcs/book-schema-map.md) (#8)
-- [ ] Accept RFCs (Draft → Accepted) via Issues review (order below) —
-  0001–0006 Accepted; 0007 remaining
+- [x] Accept RFCs (Draft → Accepted) via Issues review — **0001–0007 Accepted**
 - [x] Spike: monorepo scaffold (no product semantics; see repo root)
 
-**Exit criteria (HardGate):** All seven RFCs Accepted and book schema alignment
-done. No production business code required in this phase; non-semantic scaffold
-is allowed.
+**Exit criteria (HardGate):** Met — all seven RFCs Accepted and book schema
+alignment done. Phase 1 product code may proceed on Accepted surfaces.
 
 ### Closeout order
 

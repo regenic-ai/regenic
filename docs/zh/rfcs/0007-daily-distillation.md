@@ -1,6 +1,6 @@
 # RFC 0007 — 日蒸馏
 
-- **状态：** Draft
+- **状态：** Accepted
 - **English:** [../../en/rfcs/0007-daily-distillation.md](../../en/rfcs/0007-daily-distillation.md)
 - **依赖：** RFC 0005（Event/Digest/Blob）、RFC 0006（ACL）、RFC 0001（标准）、RFC 0003（提案）
 - **相关：** RFC 0002（可选 Claim 提升）
@@ -133,8 +133,9 @@ item.score = Σ(weight_e) × novelty × actionability
 3. 同一 period 重跑对 `proposed` 幂等（supersede 旧 proposed；
    永不改动 `accepted`）。
 
-## 13. 待决问题
+## 13. 已裁定（#7 — 已批准）
 
-- `period_*` 使用 org 本地时区。
-- 超大 org 的 per-unit 子配额。
-- D0 bad-news 词表来源（org 可配置列表）。
+- [x] **`period_*` 使用 org 本地日界**（与 RFC 0005 对齐：Event `ts` 用 UTC；
+  Digest 日桶用 org 时区配置）。
+- [x] **per-unit 子配额推迟到 D3/D4。** v1 先按 direction Top-N；单位配额后续配置。
+- [x] **D0 bad-news 词表 org 可配置**（附带 starter 列表，客户可改）。

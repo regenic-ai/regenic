@@ -90,14 +90,14 @@ Issue: [#6](https://github.com/regenic-ai/regenic/issues/6)
 
 Issue: [#7](https://github.com/regenic-ai/regenic/issues/7)
 
-- [ ] 中英一致
-- [ ] D0 规则路径与 D1 LLM 边界清晰
-- [ ] 人审 accept → Proposal / Standard 进料清晰
-- [ ] ACL 不升权得以保持
+- [x] 中英一致
+- [x] D0 规则路径与 D1 LLM 边界清晰
+- [x] 人审 accept → Proposal / Standard 进料清晰
+- [x] ACL 不升权得以保持
 
 ## 相关 Issues
 
-| Issue | 标题 |
-| --- | --- |
-| [#8](https://github.com/regenic-ai/regenic/issues/8) | 与 regenic-book 公开 schema 对齐 |
-| [#9](https://github.com/regenic-ai/regenic/issues/9) | Spike：monorepo 脚手架（无产品逻辑） |
+| Issue | 标题 | 状态 |
+| --- | --- | --- |
+| [#8](https://github.com/regenic-ai/regenic/issues/8) | 与 regenic-book 公开 schema 对齐 | 已关闭（SoftGate） |
+| [#9](https://github.com/regenic-ai/regenic/issues/9) | Spike：monorepo 脚手架（无产品逻辑） | PR 合并前保持打开 |

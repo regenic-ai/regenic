@@ -4,31 +4,30 @@
 
 Regenic 分层交付。每一层须可独立使用后再开下一层——与《重写基因》中的渐进式迭代闸门一致。
 
-## Phase 0 — 架构（当前）
+## Phase 0 — 架构（HardGate 已满足）
 
 - [x] RFC：标准数据模型（定义、范围、版本、生命周期）—
-  [中文](rfcs/0001-standards-data-model.md) / [EN](../en/rfcs/0001-standards-data-model.md)
+  [中文](rfcs/0001-standards-data-model.md) / [EN](../en/rfcs/0001-standards-data-model.md) — **Accepted**
 - [x] RFC：上下文图谱（实体、关系、出处、访问）—
-  [中文](rfcs/0002-context-graph.md) / [EN](../en/rfcs/0002-context-graph.md)
+  [中文](rfcs/0002-context-graph.md) / [EN](../en/rfcs/0002-context-graph.md) — **Accepted**
 - [x] RFC：协作对象（Proposal / Decision / Review / Handoff）—
-  [中文](rfcs/0003-collaboration-objects.md) / [EN](../en/rfcs/0003-collaboration-objects.md)
+  [中文](rfcs/0003-collaboration-objects.md) / [EN](../en/rfcs/0003-collaboration-objects.md) — **Accepted**
 - [x] RFC：人机对称 API —
-  [中文](rfcs/0004-human-agent-api.md) / [EN](../en/rfcs/0004-human-agent-api.md)
+  [中文](rfcs/0004-human-agent-api.md) / [EN](../en/rfcs/0004-human-agent-api.md) — **Accepted**
 - [x] RFC：上下文存储与生命周期（Event / Blob / Digest / GC）—
-  [中文](rfcs/0005-context-storage-lifecycle.md) / [EN](../en/rfcs/0005-context-storage-lifecycle.md)
+  [中文](rfcs/0005-context-storage-lifecycle.md) / [EN](../en/rfcs/0005-context-storage-lifecycle.md) — **Accepted**
 - [x] RFC：ACL 权限域与 Agent 身份 —
-  [中文](rfcs/0006-acl-agent-identity.md) / [EN](../en/rfcs/0006-acl-agent-identity.md)
+  [中文](rfcs/0006-acl-agent-identity.md) / [EN](../en/rfcs/0006-acl-agent-identity.md) — **Accepted**
 - [x] RFC：日蒸馏（含 D0 规则路径）—
-  [中文](rfcs/0007-daily-distillation.md) / [EN](../en/rfcs/0007-daily-distillation.md)
+  [中文](rfcs/0007-daily-distillation.md) / [EN](../en/rfcs/0007-daily-distillation.md) — **Accepted**
 - [x] 技术栈 — [TECH_STACK.md](TECH_STACK.md)
 - [x] 与 `regenic-ai/regenic-book/content/*/standards/` 公开 schema 对齐 —
   见 [book-schema-map.md](rfcs/book-schema-map.md)（#8）
-- [ ] 经 Issues 评审将 RFC 从 Draft → Accepted（按下方收口顺序）—
-  0001–0006 已 Accepted；0007 待审
+- [x] 经 Issues 评审将 RFC 从 Draft → Accepted — **0001–0007 均已 Accepted**
 - [x] Spike：monorepo 脚手架（无业务语义；见仓库根目录）
 
-**退出标准（HardGate）：** 七份 RFC 均已 Accepted，且 book schema 对齐完成。
-本阶段不要求生产业务代码；允许无语义脚手架。
+**退出标准（HardGate）：** 已满足 — 七份 RFC 均 Accepted，且 book schema 对齐完成。
+可在 Accepted 表面上推进 Phase 1 产品代码。
 
 ### 收口顺序
 

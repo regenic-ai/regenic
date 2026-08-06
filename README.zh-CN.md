@@ -18,7 +18,8 @@ Regenic 实现《重写基因》中的[双能力模型](https://regenic.ai/zh/me
 
 ## 状态
 
-**早期。** 先架构 RFC，再按 `regenic-book` 公开方法实现。
+**Phase 0 HardGate 已满足。** 架构 RFC 0001–0007 均已 Accepted；Phase 1 按
+`regenic-book` 公开方法实现。
 
 | 能力 | 说明 | 状态 |
 | --- | --- | --- |
@@ -27,7 +28,7 @@ Regenic 实现《重写基因》中的[双能力模型](https://regenic.ai/zh/me
 | 人机协作 | 共享对象上的 Proposal / Decision / Review / Handoff | RFC Accepted（[0003](docs/zh/rfcs/0003-collaboration-objects.md)） |
 | 对称 API | 人机 UI 与 Agent 读写同一表面 | RFC Accepted（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
 | ACL + Agent 身份 | 人机同一 `visible()`；蒸馏不升权 | RFC Accepted（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |
-| 日蒸馏 | 加权日进料进标准机器（D0 规则 → D1 LLM） | RFC Draft（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
+| 日蒸馏 | 加权日进料进标准机器（D0 规则 → D1 LLM） | RFC Accepted（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
 | 组织管理 | 基于标准与上下文的 AI 原生运营——而非以层级与审批作信息层 | Planned |
 
 ## 技术栈
@@ -81,11 +82,8 @@ curl -s http://localhost:3000/health
 
 ## 贡献
 
-**欢迎脚手架 / spike PR**（monorepo 布局、health、Compose 连通）——即便 Phase 0
-RFC 仍为 Draft；但不得写入产品业务语义。
-
-**不接受功能 PR**，直至定义该表面的 RFC 已 Accepted（见
-[docs/zh/ROADMAP.md](docs/zh/ROADMAP.md) 的 SoftGate / HardGate）。
+**欢迎功能 PR**（表面须由已 Accepted 的 RFC 0001–0007 定义；见
+[docs/zh/ROADMAP.md](docs/zh/ROADMAP.md)）。优先小 PR，并引用所属 RFC。
 讨论欢迎开 [Issues](https://github.com/regenic-ai/regenic/issues)。
 
 遵守组织 [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md)。

@@ -19,8 +19,8 @@ The book, [regenic.ai](https://regenic.ai), and public standards live in
 
 ## Status
 
-**Early stage.** Architecture RFCs first; implementation follows the public
-methodology in `regenic-book`.
+**Phase 0 HardGate met.** Architecture RFCs 0001–0007 are Accepted; Phase 1
+implementation follows the public methodology in `regenic-book`.
 
 | Capability | Description | Status |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ methodology in `regenic-book`.
 | Human + agent collaboration | Proposal / Decision / Review / Handoff on shared objects | RFC Accepted ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
 | Symmetric API | Human UI and agents read/write the same surface | RFC Accepted ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
 | ACL + Agent identity | Same visible() for humans and agents; no privilege escalation via distill | RFC Accepted ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |
-| Daily distillation | Weighted daily intake into standards machine (D0 rules → D1 LLM) | RFC Draft ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
+| Daily distillation | Weighted daily intake into standards machine (D0 rules → D1 LLM) | RFC Accepted ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
 | Org management | AI-native operations on standards and context—not hierarchy and approvals as the information layer | Planned |
 
 ## Technology stack
@@ -83,13 +83,10 @@ curl -s http://localhost:3000/health
 
 ## Contributing
 
-**Scaffold / spike PRs are welcome** (monorepo layout, health endpoints, Compose
-wiring) while Phase 0 RFCs are still Draft — they must not encode product
-semantics.
-
-**Feature PRs are not accepted** until the RFC(s) that define that surface are
-Accepted (see SoftGate / HardGate in [docs/en/ROADMAP.md](docs/en/ROADMAP.md)).
-Discussion welcome via [Issues](https://github.com/regenic-ai/regenic/issues).
+**Feature PRs are welcome** on surfaces defined by Accepted RFCs (0001–0007;
+see [docs/en/ROADMAP.md](docs/en/ROADMAP.md)). Prefer small PRs that cite the
+owning RFC. Discussion welcome via
+[Issues](https://github.com/regenic-ai/regenic/issues).
 
 Follow the org [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md).
 Security reports: [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new).
