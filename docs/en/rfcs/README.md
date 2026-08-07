@@ -15,15 +15,17 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 | [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Accepted |
 | [0007](0007-daily-distillation.md) | Daily distillation | Accepted |
 
-Phase 0 closeout:
+Phase 0 closeout + product path:
 
 | Path | Related |
 | --- | --- |
 | [accept-checklists.md](accept-checklists.md) | Wave A–D Accept checklists |
 | [book-schema-map.md](book-schema-map.md) | Book ↔ RFC 0001 SoftGate map |
+| [personal-to-org.md](personal-to-org.md) | Personal store → org canonical |
 | [sketch/d0-daily-distill.sql](sketch/d0-daily-distill.sql) | RFC 0007 D0 |
+| [../PRODUCT.md](../PRODUCT.md) | Information processing positioning |
 
-Milestone: [Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1).
+Milestone: [Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1) (closed; HardGate met).
 
 ## Conventions
 

@@ -15,15 +15,17 @@ Phase 0 在生产代码之前以 Accepted RFC 落地。
 | [0006](0006-acl-agent-identity.md) | ACL 权限域与 Agent 身份 | Accepted |
 | [0007](0007-daily-distillation.md) | 日蒸馏 | Accepted |
 
-Phase 0 收口：
+Phase 0 收口 + 产品路径：
 
 | 路径 | 说明 |
 | --- | --- |
 | [accept-checklists.md](accept-checklists.md) | Wave A–D Accept 清单 |
 | [book-schema-map.md](book-schema-map.md) | Book ↔ RFC 0001 SoftGate 对照 |
+| [personal-to-org.md](personal-to-org.md) | 个人库 → 组织 canonical |
 | [d0-daily-distill.sql](../../en/rfcs/sketch/d0-daily-distill.sql) | RFC 0007 D0 草图（SQL 注释为英文） |
+| [../PRODUCT.md](../PRODUCT.md) | 信息加工层定位 |
 
-里程碑：[Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1)。
+里程碑：[Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1)（已关闭；HardGate 已满足）。
 
 ## 约定
 
