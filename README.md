@@ -68,7 +68,8 @@ curl -s http://localhost:3000/health
 ## Roadmap
 
 [ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·
-[TECH_STACK](docs/en/TECH_STACK.md)
+[TECH_STACK](docs/en/TECH_STACK.md) ·
+[Ingestion architecture](docs/en/INGESTION_ARCHITECTURE.md)
 
 ## Contributing
 
