@@ -6,7 +6,7 @@ Regenic 分层交付。每一层须可独立使用后再开下一层——与《
 
 **产品命题：** Regenic 是**信息加工层**（接入 → 过滤 → 分层 → 提炼事实 → 迭代标准）。
 它不生产渠道一手内容。交付顺序为**个人（本地优先）→ 组织**。
-个人版与组织版均开源。见 [PRODUCT.md](PRODUCT.md)。
+见 [PRODUCT.md](PRODUCT.md)。
 
 ## Phase 0 — 架构（HardGate 已满足）
 
@@ -37,7 +37,7 @@ Regenic 分层交付。每一层须可独立使用后再开下一层——与《
 
 ## Phase 1 — 个人信息加工（当前）
 
-交付开源、**本地优先**、面向单一 principal 的加工闭环。Push 与 pull 接入同等；
+交付**本地优先**、面向单一 principal 的加工闭环。Push 与 pull 接入同等；
 产品加工信息 — 不生产渠道内容。
 
 - [ ] 本地权威库（SQLite 或单机 Postgres）+ 本地 Blob
@@ -66,7 +66,7 @@ Regenic 分层交付。每一层须可独立使用后再开下一层——与《
 
 ## Phase 3 — 组织叠加层
 
-将获同意的个人流拼成组织共享真相（开源）。
+将获同意的个人流拼成组织共享真相。
 
 - [ ] Canonical Event + Projection 模型（[个人 → 组织](rfcs/personal-to-org.md)）
 - [ ] 身份映射；work-scope 同意；不升权（RFC 0006）
