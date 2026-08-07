@@ -36,14 +36,10 @@ Regenic turns channel traffic into inputs for those two capabilities.
 
 ## 3. Delivery sequence: Personal → Org
 
-| Edition | Scope | Availability |
-| --- | --- | --- |
-| **Personal (now)** | One principal; local-first processing | Open source |
-| **Org (later)** | Canonical events + projections across people | Open source |
-
-Both editions are open source. A few optional modules for large-organization
-deployments may live outside this repository; the core path here is
-self-hostable without them.
+| Edition | Scope |
+| --- | --- |
+| **Personal (now)** | One principal; local-first processing |
+| **Org (later)** | Canonical events + projections across people |
 
 Personal ships first so one person can run the full loop. Org builds on the
 same object model with identity, policy, and multi-person canonicalization
