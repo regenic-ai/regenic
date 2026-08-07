@@ -59,7 +59,8 @@ curl -s http://localhost:3000/health
 
 ## 路线图
 
-[路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) · [技术栈](docs/zh/TECH_STACK.md)
+[路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) ·
+[技术栈](docs/zh/TECH_STACK.md) · [采集架构](docs/zh/INGESTION_ARCHITECTURE.md)
 
 ## 贡献
 
