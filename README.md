@@ -43,26 +43,21 @@ processing — not org ERP.
 
 ## Technology stack
 
-[docs/en/TECH_STACK.md](docs/en/TECH_STACK.md)
-
-| Layer | Choice |
-| --- | --- |
-| API / workers | NestJS + BullMQ + Redis |
-| Data | PostgreSQL + pluggable BlobStore / SearchIndex (Personal may use SQLite) |
-| Ingest | ChannelConnector (push and pull) |
-| Models / IdP / Notify | ModelProvider · IdentityProvider · Notifier · SecretStore |
-| PC | Electron + React |
-| Mobile | Expo |
-| Contract | OpenAPI |
+See [TECH_STACK.md](docs/en/TECH_STACK.md). Personal defaults: SQLite, local
+Blob, in-process jobs, Electron. Org adds PostgreSQL, object storage, Redis,
+and Compose. Connectors, models, identity, and similar stay behind swappable
+ports.
 
 ## Architecture RFCs
 
-Accepted RFCs under [`docs/en/rfcs/`](docs/en/rfcs/README.md) — target schema for
-Personal shapes now and Org overlay later.
+Accepted RFCs live under [`docs/en/rfcs/`](docs/en/rfcs/README.md). Personal and
+Org share the same target model.
 
-## Spike scaffold
+## Scaffold
 
-Monorepo skeleton (health / connectivity). Product processing lands in Phase 1.
+The repo is a runnable skeleton (health checks, basic wiring). Real processing
+starts in Phase 1. Compose below is for local/dev wiring; the Personal product
+defaults to on-machine / desktop-embedded, not this cloud-shaped stack.
 
 ```bash
 pnpm install
@@ -72,17 +67,16 @@ curl -s http://localhost:3000/health
 
 ## Roadmap
 
-[docs/en/ROADMAP.md](docs/en/ROADMAP.md) · [PRODUCT.md](docs/en/PRODUCT.md) ·
-[TECH_STACK.md](docs/en/TECH_STACK.md)
+[ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·
+[TECH_STACK](docs/en/TECH_STACK.md)
 
 ## Contributing
 
-Feature PRs should cite the owning RFC and align with
-[PRODUCT.md](docs/en/PRODUCT.md) (processing layer; Personal before Org
-aggregate). Discussion:
-[Issues](https://github.com/regenic-ai/regenic/issues).
+Cite the owning RFC on feature PRs, and keep changes aligned with
+[PRODUCT.md](docs/en/PRODUCT.md): information processing, Personal before Org.
+Discussion: [Issues](https://github.com/regenic-ai/regenic/issues).
 
-Follow the org [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md).
+Please follow the [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md).
 Security reports: [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new).
 
 ## License
