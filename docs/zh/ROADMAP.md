@@ -2,101 +2,99 @@
 
 [English](../en/ROADMAP.md)
 
-Regenic 分层交付。每一层须可独立使用后再开下一层——与《重写基因》中的渐进式迭代闸门一致。
+Regenic 按层交付：一层能独立用起来，再开下一层——与《重写基因》里的渐进闸门一致。
 
-## Phase 0 — 架构（HardGate 已满足）
+**产品要点：** Regenic 是信息加工层（接入 → 过滤 → 分层 → 提炼事实 → 修订标准），
+不生产渠道里的原始内容。交付顺序是**先个人（本地优先），后组织**。
+详见 [产品定位](PRODUCT.md)。
 
-- [x] RFC：标准数据模型（定义、范围、版本、生命周期）—
-  [中文](rfcs/0001-standards-data-model.md) / [EN](../en/rfcs/0001-standards-data-model.md) — **Accepted**
-- [x] RFC：上下文图谱（实体、关系、出处、访问）—
-  [中文](rfcs/0002-context-graph.md) / [EN](../en/rfcs/0002-context-graph.md) — **Accepted**
+## Phase 0 — 架构（已完成）
+
+- [x] RFC：标准数据模型 —
+  [中文](rfcs/0001-standards-data-model.md) / [EN](../en/rfcs/0001-standards-data-model.md) — **已接纳**
+- [x] RFC：上下文图谱 —
+  [中文](rfcs/0002-context-graph.md) / [EN](../en/rfcs/0002-context-graph.md) — **已接纳**
 - [x] RFC：协作对象（Proposal / Decision / Review / Handoff）—
-  [中文](rfcs/0003-collaboration-objects.md) / [EN](../en/rfcs/0003-collaboration-objects.md) — **Accepted**
+  [中文](rfcs/0003-collaboration-objects.md) / [EN](../en/rfcs/0003-collaboration-objects.md) — **已接纳**
 - [x] RFC：人机对称 API —
-  [中文](rfcs/0004-human-agent-api.md) / [EN](../en/rfcs/0004-human-agent-api.md) — **Accepted**
+  [中文](rfcs/0004-human-agent-api.md) / [EN](../en/rfcs/0004-human-agent-api.md) — **已接纳**
 - [x] RFC：上下文存储与生命周期（Event / Blob / Digest / GC）—
-  [中文](rfcs/0005-context-storage-lifecycle.md) / [EN](../en/rfcs/0005-context-storage-lifecycle.md) — **Accepted**
-- [x] RFC：ACL 权限域与 Agent 身份 —
-  [中文](rfcs/0006-acl-agent-identity.md) / [EN](../en/rfcs/0006-acl-agent-identity.md) — **Accepted**
+  [中文](rfcs/0005-context-storage-lifecycle.md) / [EN](../en/rfcs/0005-context-storage-lifecycle.md) — **已接纳**
+- [x] RFC：ACL 与 Agent 身份 —
+  [中文](rfcs/0006-acl-agent-identity.md) / [EN](../en/rfcs/0006-acl-agent-identity.md) — **已接纳**
 - [x] RFC：日蒸馏（含 D0 规则路径）—
-  [中文](rfcs/0007-daily-distillation.md) / [EN](../en/rfcs/0007-daily-distillation.md) — **Accepted**
+  [中文](rfcs/0007-daily-distillation.md) / [EN](../en/rfcs/0007-daily-distillation.md) — **已接纳**
 - [x] 技术栈 — [TECH_STACK.md](TECH_STACK.md)
-- [x] 与 `regenic-ai/regenic-book/content/*/standards/` 公开 schema 对齐 —
-  见 [book-schema-map.md](rfcs/book-schema-map.md)（#8）
-- [x] 经 Issues 评审将 RFC 从 Draft → Accepted — **0001–0007 均已 Accepted**
-- [x] Spike：monorepo 脚手架（无业务语义；见仓库根目录）
+- [x] 与 `regenic-book` 公开标准 schema 对齐 — [对照表](rfcs/book-schema-map.md)（#8）
+- [x] 经 Issues 评审，RFC 全部从 Draft → Accepted（0001–0007）
+- [x] 仓库脚手架（无业务语义；见仓库根目录）
 
-**退出标准（HardGate）：** 已满足 — 七份 RFC 均 Accepted，且 book schema 对齐完成。
-可在 Accepted 表面上推进 Phase 1 产品代码。
+**完成标准：** 七份 RFC 均已接纳，并与书稿公开 schema 对齐。
 
-### 收口顺序
+相关索引：[RFC](rfcs/README.md) · [技术栈](TECH_STACK.md) ·
+[产品定位](PRODUCT.md) · [从个人到组织](rfcs/personal-to-org.md)。
 
-按 RFC 依赖分四波评审；Accept 时同步改中英文 RFC 头与 [rfcs/README.md](rfcs/README.md)。
+## Phase 1 — 个人信息加工（当前）
 
-| 波次 | RFC | 焦点 | 通过后解锁 |
-| --- | --- | --- | --- |
-| A | 0001、0002 | 标准模型；Claim/Snapshot | SoftGate；`packages/domain` 类型可固化 |
-| B | 0003、0005 | 协作对象；Event/Blob/Digest | 协作与物理存储 schema |
-| C | 0004、0006 | `/v1` API；ACL / Agent 身份 | OpenAPI 与鉴权可固化 |
-| D | 0007 | 日蒸馏 D0→accept | Worker 蒸馏任务可开写 |
+先做出一个人能在本机跑通的加工闭环。拉取、推送都算正式接入；
+Regenic 只加工信息，不生产渠道里的内容。
 
-**SoftGate（可开写 Phase 1 业务代码）：** RFC **0001 Accepted** + book schema 对齐完成。
-不要求七份全部 Accepted。
+- [ ] 本机权威库（默认 SQLite）+ 本地 Blob 目录；任务用进程内队列
+- [ ] 至少一个真实渠道的连接器（拉或推都行）
+- [ ] 过滤、分层，写入 Event / Blob（形状跟 RFC 0005 对齐，范围限个人）
+- [ ] 在管道上给出加工结果入口：优先级、「该知道」、跟进（如未回复）等——
+      这些是输出，不是产品定义本身
+- [ ] 开放导出（Markdown / JSONL）
+- [ ] 可选远端历史（默认关；用户自己开；不是组织库）
+- [ ] 个人规则 / 轻量标准钩子（为 RFC 0001 铺路）
 
-**Spike（可与评审并行）：** `apps/api`、`apps/worker`、`packages/domain`、
-`packages/config` + Docker Compose；仅 health / 连通性，禁止 standards CRUD、
-蒸馏、ACL 等业务实现。
+**完成标准：** 一个人能在本地接上真实渠道，走完 过滤 → 分层 → 提炼 → 行动，
+不依赖厂商云，并能导出自己的数据。
 
-索引：[rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md)。
+**本阶段不做：** 大纲笔记 / 通用笔记库、组织侧权威事件合并、多租户 ACL。
 
-## Phase 1 — 统一判断标准
+## Phase 2 — 加深个人加工，接上标准
 
-编码书中的**标准机器**（standards machine）：
+- [ ] 更强的个人 Digest（合适处可用 D0 类规则）
+- [ ] 个人规则/标准的修订（RFC 0001 生命周期的子集）
+- [ ] 规则写了什么、实际跟进做得怎样——漂移提示
+- [ ] 更多连接器；模型调用可插拔（只负责提出建议）
 
-- [ ] 标准定义格式（机读 + 人读）
-- [ ] 版本与修订历史
-- [ ] 应用钩子 — Agent 与人如何引用 / 应用标准
-- [ ] 校验 — 检测「声称的标准」与「观察到的行为」漂移
-- [ ] 渐进生命周期 — draft → trial → active，含五闸门
-      （RFC 0001）
+**完成标准：** 个人流程里已有带证据的提炼，并能修订至少一条个人规则/标准；
+不以聊天记录当系统真相源。
 
-**退出标准：** 一个团队能发布、应用并修订一条组织级标准，而不必为每个团队另开聊天线程。
+## Phase 3 — 组织层
 
-## Phase 2 — 统一上下文
+在当事人同意的前提下，把多条个人数据流合成为组织共享的事实。
 
-编码书中的**共识机器**（consensus machine）：
+- [ ] 权威 Event + 各人视角（[从个人到组织](rfcs/personal-to-org.md)）
+- [ ] 身份映射、工作范围同意、蒸馏不抬权（RFC 0006）
+- [ ] 组织 Digest / Claim / Snapshot（RFC 0002、0007）— 由组织任务重算，
+      不照搬个人标签
+- [ ] 共享 Snapshot 上的协作闭环（RFC 0003）
+- [ ] 组织级完整标准机器（RFC 0001）
 
-- [ ] 组织级上下文层（非按应用割裂的孤岛）
-- [ ] 出处 — 每条上下文 claim 从何而来
-- [ ] 访问边界 — 谁与哪些 Agent 能看见什么（RFC 0006）
-- [ ] 物理接入路径 — Event / Blob + 热窗索引（RFC 0005）
-- [ ] D0 日蒸馏 → 人审 accept → Proposal/Standard 进料（RFC 0007）
-- [ ] Snapshot / Bundle — 同一决策 → 同一事实集（RFC 0002）
-- [ ] 与标准同步 — 实质上下文变更触发标准复审
-- [ ] 协作闭环 — 在共享 Snapshot 上的 Proposal → Decision → Review
-      （RFC 0003）
+**完成标准：** 两人接入同一条源消息 → 一条权威 Event、两条视角；
+组织 Digest 引用证据，且不扩大权限。
 
-**退出标准：** 两个团队与一个 Agent 能为同一决策共享同一上下文 Snapshot，而无需从 Slack 复制粘贴；日 Digest 遵守 ACL 并引用证据 Event。
+## Phase 4 — 组织管理界面
 
-## Phase 3 — 组织管理产品
+- [ ] 建在标准与上下文之上的运营流程（不是表单优先的 ERP）
+- [ ] 人机界面与 Agent 共用同一套 API（RFC 0004）
+- [ ] 企业侧适配（身份、通知、合规）放后面，不抢主线
 
-AI 原生组织的默认管理界面：
-
-- [ ] 建立在标准 + 上下文上的运营工作流（非表单优先的 ERP）
-- [ ] 与人机 UI 并列的 Agent 原生界面（同一 API，RFC 0004）
-- [ ] 集成适配器（身份、通知、既有工具）— 靠后，不靠前
-
-**退出标准：** bioby.ai 在 Regenic 上跑通一条真实端到端工作流。
+**完成标准：** bioby.ai 在 Regenic 上跑通一条真实的组织端到端流程。
 
 ---
 
-## 当前非目标
+## 当前不做
 
-- 重建通用 ERP 模块（人事、财务、库存）
-- 以「替换各团队聊天」为**主**产品叙事（先接入 + 蒸馏；可选的 Regenic 原生沟通壳后置）
+- 通用 ERP 模块（人事、财务、库存）
+- 以「替代团队聊天」或「第二大脑」当主叙事
 - 引入 `regenic-internal` 私有材料
-- 无标准 / 上下文绑定的无界 Agent 编排
+- 没有标准与上下文约束的无界 Agent 编排
+- 个人 AI 标签不经组织加工就写成组织事实
 
 ## 跟踪
 
-里程碑与议题：[github.com/regenic-ai/regenic/issues](https://github.com/regenic-ai/regenic/issues)
+议题与里程碑：[github.com/regenic-ai/regenic/issues](https://github.com/regenic-ai/regenic/issues)
