@@ -7,8 +7,8 @@ starts — the same progressive iteration gate described in the Regenic book.
 
 **Product thesis:** Regenic is an **information processing layer** (ingest →
 filter → layer → distill facts → iterate standards). It does not produce
-primary channel content. Delivery is **Personal (open, local-first) → Org
-(aggregate)**. See [PRODUCT.md](PRODUCT.md).
+primary channel content. Delivery is **Personal (local-first) → Org**.
+Both editions are open source. See [PRODUCT.md](PRODUCT.md).
 
 ## Phase 0 — Architecture (HardGate met)
 
@@ -56,8 +56,8 @@ originate channel content.
 **Exit criteria:** One person can ingest real channel traffic locally, run
 filter→layer→distill→act without a vendor cloud, and export their store.
 
-**Non-goals for Phase 1:** second-brain / outliner, Notion clone, org
-canonical aggregation, multi-tenant ACL.
+**Non-goals for Phase 1:** outliner / general note suite, org canonical
+aggregation, multi-tenant ACL.
 
 ## Phase 2 — Deepen personal processing + standards path
 
@@ -69,9 +69,9 @@ canonical aggregation, multi-tenant ACL.
 **Exit criteria:** Personal loop includes evidence-backed distill and at least
 one revised personal rule/standard without chat as system of record.
 
-## Phase 3 — Org overlay (aggregate)
+## Phase 3 — Org overlay
 
-Closed/commercial path: stitch consented personal streams into org truth.
+Stitch consented personal streams into org-shared truth (open source).
 
 - [ ] Canonical Event + Projection model ([personal → org](rfcs/personal-to-org.md))
 - [ ] Identity mapping; work-scope consent; no privilege escalation (RFC 0006)
