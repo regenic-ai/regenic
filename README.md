@@ -13,8 +13,8 @@ Implements the [dual-capability model](https://regenic.ai/en/method) from
 1. **Unified judgment standards** — encode, apply, and revise standards
 2. **Unified context** — one fact set for a decision, with provenance
 
-Delivery order: **Personal (open, local-first) → Org (aggregate)**.
-See [docs/en/PRODUCT.md](docs/en/PRODUCT.md).
+Delivery order: **Personal (local-first) → Org**. Both editions are open
+source. See [docs/en/PRODUCT.md](docs/en/PRODUCT.md).
 
 [简体中文](README.zh-CN.md)
 

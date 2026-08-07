@@ -25,41 +25,45 @@ Processing includes (non-exhaustive):
 Inbox triage, “should know,” and unreplied ranking are **surfaces** of this
 pipeline — not the product definition.
 
-## 2. Dual-capability model (unchanged)
+## 2. Dual-capability model
 
 From the Regenic book:
 
 1. **Judgment standards** — encode / apply / revise shared standards  
 2. **Shared context** — same fact set for the same decision, with provenance  
 
-Regenic turns raw channel traffic into those two machines. It is not another
-chat app, second brain, or Notion clone.
+Regenic turns channel traffic into inputs for those two capabilities.
 
 ## 3. Delivery sequence: Personal → Org
 
-| Track | Scope | License intent |
+| Edition | Scope | Availability |
 | --- | --- | --- |
-| **Personal (now)** | One principal; local-first processing | Open source in this repo |
-| **Org (later)** | Canonical events + projections across people | Closed / commercial aggregation |
+| **Personal (now)** | One principal; local-first processing | Open source |
+| **Org (later)** | Canonical events + projections across people | Open source |
 
-Personal proves the processing loop end-to-end for one human. Org reuses the
-same object model and adds identity, policy, and multi-person canonicalization
+Both editions are open source. A few optional modules for large-organization
+deployments may live outside this repository; the core path here is
+self-hostable without them.
+
+Personal ships first so one person can run the full loop. Org builds on the
+same object model with identity, policy, and multi-person canonicalization
 ([personal → org](rfcs/personal-to-org.md)).
 
 ## 4. Personal principles
 
-1. **Local authority** — device (or self-hosted) store is source of truth.  
-2. **Optional cloud history** — user-controlled cold copy; off by default; not
-   the org database.  
-3. **Open export** — Markdown / JSON(L) migration; no lock-in.  
-4. **Pluggable ingest** — ChannelConnector for push and pull alike.  
-5. **Not a second brain** — no outliner / bi-directional note graph as v1 core.
+1. **Local authority** — device or self-hosted store is source of truth.  
+2. **Optional remote history** — user-controlled cold copy; off by default;
+   not the org database.  
+3. **Open export** — Markdown / JSON(L); data stays portable.  
+4. **Pluggable ingest** — ChannelConnector for push and pull.  
+5. **Not a note-taking product** — no outliner or bi-directional note graph
+   as the Phase 1 core.
 
 ## 5. Non-goals (near term)
 
 - Replacing Feishu / Slack / email as the message transport  
-- Full-stack Notion / Obsidian competitor  
-- Org-wide ERP modules  
+- Building a general knowledge-base or docs suite  
+- Generic ERP modules  
 - Treating personal AI labels as org ground truth without an org distill job  
 
 ## 6. Mapping to Accepted RFCs
@@ -73,5 +77,5 @@ same object model and adds identity, policy, and multi-person canonicalization
 | Symmetric API | 0004 |
 | ACL / non-escalation | 0006 |
 
-Phase order in [ROADMAP.md](ROADMAP.md) ships **Personal processing first**,
-then org overlay — RFCs remain the target schema, not a discarded design.
+[ROADMAP.md](ROADMAP.md) delivers Personal processing first, then Org.
+Accepted RFCs define the shared target schema for both.

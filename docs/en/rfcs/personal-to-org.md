@@ -64,12 +64,11 @@ provenance.
 - Unreplied state stays per-person unless the source system owns a shared
   status (e.g. ticket state).
 
-## 7. Open source vs closed
+## 7. Source availability
 
-| Surface | Intent |
-| --- | --- |
-| Personal runtime, local store, export, connectors (reference) | Open (this repo) |
-| Multi-person aggregate, enterprise IdP wiring, compliance holds | Closed / commercial |
+Personal and Org processing in this document are open source. Optional
+large-organization modules may live outside this repository; they are not
+required for the canonical + projection path.
 
 ## 8. Acceptance (org overlay)
 
