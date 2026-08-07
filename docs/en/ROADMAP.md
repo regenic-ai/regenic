@@ -40,24 +40,25 @@ Index: [rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md) ·
 
 ## Phase 1 — Personal information processing (now)
 
-Ship a **local-first** processing loop for one principal. Push and pull ingest
-are equal citizens; the product transforms information — it does not originate
+Get a local-first processing loop working for one person. Push and pull both
+count as real ingest. Regenic transforms information; it does not create the
 channel content.
 
-- [ ] Local authority store (SQLite or single-node Postgres) + local Blob
-- [ ] ChannelConnector ingest (push and/or pull) for ≥1 real channel
-- [ ] Filter + layer into Event / Blob (RFC 0005 shapes, personal scope)
-- [ ] Processing surfaces on that pipeline: priority / “need to know” /
-      follow-up (e.g. unreplied) — as **outputs of processing**, not the definition
+- [ ] On-disk authority store (SQLite by default) + local Blob directory;
+      in-process job queue
+- [ ] At least one real ChannelConnector (pull and/or push)
+- [ ] Filter and layer into Event / Blob (RFC 0005 shapes, personal scope)
+- [ ] Surfaces on that pipeline: priority, “need to know”, follow-up
+      (e.g. unreplied) — outputs of processing, not the product definition
 - [ ] Open export (Markdown / JSONL)
-- [ ] Optional cloud history (off by default; user-controlled; not org DB)
-- [ ] Personal rules / lightweight standards hooks (path to RFC 0001)
+- [ ] Optional remote history (off by default; user-controlled; not org DB)
+- [ ] Personal rules / light standards hooks (path toward RFC 0001)
 
-**Exit criteria:** One person can ingest real channel traffic locally, run
-filter→layer→distill→act without a vendor cloud, and export their store.
+**Done when:** one person can ingest a real channel locally, run
+filter → layer → distill → act without a vendor cloud, and export their data.
 
-**Non-goals for Phase 1:** outliner / general note suite, org canonical
-aggregation, multi-tenant ACL.
+**Not in Phase 1:** outliner / general note suite, org canonical aggregation,
+multi-tenant ACL.
 
 ## Phase 2 — Deepen personal processing + standards path
 

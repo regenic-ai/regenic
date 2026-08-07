@@ -39,25 +39,17 @@ Regenic 不负责产生聊天、邮件、工单或文档本身。它把已有信
 
 ## 技术栈
 
-[docs/zh/TECH_STACK.md](docs/zh/TECH_STACK.md)
-
-| 层 | 选型 |
-| --- | --- |
-| API / 后台任务 | NestJS + BullMQ + Redis |
-| 数据 | PostgreSQL + 可替换的对象存储 / 检索（个人也可用 SQLite） |
-| 接入 | ChannelConnector（拉取与推送） |
-| 模型 / 身份 / 通知 | ModelProvider · IdentityProvider · Notifier · SecretStore |
-| 桌面 | Electron + React |
-| 手机 | Expo |
-| 契约 | OpenAPI |
+详见 [技术栈](docs/zh/TECH_STACK.md)。个人阶段默认 SQLite、本地 Blob、进程内队列和 Electron；
+组织阶段再上 PostgreSQL、对象存储、Redis 和 Compose。渠道接入、模型、身份等走可换端口。
 
 ## 架构 RFC
 
-已接纳的 RFC 在 [`docs/zh/rfcs/`](docs/zh/rfcs/README.md)。它们是个人阶段与组织阶段共用的目标模型。
+已接纳的 RFC 在 [`docs/zh/rfcs/`](docs/zh/rfcs/README.md)。个人和组织共用同一套目标模型。
 
 ## 脚手架
 
-目前仓库是可跑通的骨架（健康检查与基础连通）。业务加工从 Phase 1 起落地。
+仓库里目前是能跑通的骨架（健康检查、基础连通）。真正的加工逻辑从 Phase 1 开始写。
+下面的 Compose 方便开发联调；个人产品默认是本机 / 桌面内嵌，不依赖这套云形态。
 
 ```bash
 pnpm install
@@ -71,14 +63,14 @@ curl -s http://localhost:3000/health
 
 ## 贡献
 
-提功能请标明对应 RFC，并符合 [产品定位](docs/zh/PRODUCT.md)（信息加工；先个人后组织）。
-讨论请开 [Issues](https://github.com/regenic-ai/regenic/issues)。
+提 PR 时请标明对应 RFC，并对照 [产品定位](docs/zh/PRODUCT.md)：我们做信息加工，先个人后组织。
+讨论开 [Issues](https://github.com/regenic-ai/regenic/issues)。
 
-请遵守组织 [行为准则](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md)。
+请遵守 [行为准则](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md)。
 安全问题请走 [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new)。
 
 ## 许可
 
-MIT — 见 [LICENSE](LICENSE)。
+MIT，见 [LICENSE](LICENSE)。
 
-`regenic-ai/regenic-book` 中的方法论内容，在适用范围内仍为 CC BY-NC 4.0。
+`regenic-ai/regenic-book` 里的方法论内容，在适用范围内仍为 CC BY-NC 4.0。
