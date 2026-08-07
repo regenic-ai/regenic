@@ -5,6 +5,11 @@
 Regenic ships in layers. Each layer must be usable on its own before the next
 starts — the same progressive iteration gate described in the Regenic book.
 
+**Product thesis:** Regenic is an **information processing layer** (ingest →
+filter → layer → distill facts → iterate standards). It does not produce
+primary channel content. Delivery is **Personal (local-first) → Org**.
+See [PRODUCT.md](PRODUCT.md).
+
 ## Phase 0 — Architecture (HardGate met)
 
 - [x] RFC: data model for standards (definition, scope, version, lifecycle) —
@@ -28,80 +33,74 @@ starts — the same progressive iteration gate described in the Regenic book.
 - [x] Spike: monorepo scaffold (no product semantics; see repo root)
 
 **Exit criteria (HardGate):** Met — all seven RFCs Accepted and book schema
-alignment done. Phase 1 product code may proceed on Accepted surfaces.
+alignment done.
 
-### Closeout order
+Index: [rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md) ·
+[PRODUCT.md](PRODUCT.md) · [personal → org](rfcs/personal-to-org.md).
 
-Review in four waves by RFC dependency. On Accept, update both locale RFC
-headers and [rfcs/README.md](rfcs/README.md).
+## Phase 1 — Personal information processing (now)
 
-| Wave | RFCs | Focus | Unlocks |
-| --- | --- | --- | --- |
-| A | 0001, 0002 | Standards model; Claim/Snapshot | SoftGate; `packages/domain` types |
-| B | 0003, 0005 | Collaboration objects; Event/Blob/Digest | Collab + physical storage schema |
-| C | 0004, 0006 | `/v1` API; ACL / Agent identity | OpenAPI + auth freeze |
-| D | 0007 | Daily distill D0→accept | Worker distill jobs |
+Get a local-first processing loop working for one person. Push and pull both
+count as real ingest. Regenic transforms information; it does not create the
+channel content.
 
-**SoftGate (Phase 1 product code allowed):** RFC **0001 Accepted** and book
-schema alignment complete. All seven Accepted is not required.
+- [ ] On-disk authority store (SQLite by default) + local Blob directory;
+      in-process job queue
+- [ ] At least one real ChannelConnector (pull and/or push)
+- [ ] Filter and layer into Event / Blob (RFC 0005 shapes, personal scope)
+- [ ] Surfaces on that pipeline: priority, “need to know”, follow-up
+      (e.g. unreplied) — outputs of processing, not the product definition
+- [ ] Open export (Markdown / JSONL)
+- [ ] Optional remote history (off by default; user-controlled; not org DB)
+- [ ] Personal rules / light standards hooks (path toward RFC 0001)
 
-**Spike (parallel with review):** `apps/api`, `apps/worker`, `packages/domain`,
-`packages/config` + Docker Compose; health/connectivity only — no standards
-CRUD, distillation, or ACL implementation.
+**Done when:** one person can ingest a real channel locally, run
+filter → layer → distill → act without a vendor cloud, and export their data.
 
-Index: [rfcs/README.md](rfcs/README.md) · [TECH_STACK.md](TECH_STACK.md).
+**Not in Phase 1:** outliner / general note suite, org canonical aggregation,
+multi-tenant ACL.
 
-## Phase 1 — Judgment standards
+## Phase 2 — Deepen personal processing + standards path
 
-Encode the book's **标准机器** (standards machine):
+- [ ] Stronger distill (personal Digest; D0-style rules where useful)
+- [ ] Personal standard / rule iteration (subset of RFC 0001 lifecycle)
+- [ ] Drift signals between stated rules and observed follow-through
+- [ ] More connectors; pluggable ModelProvider for propose-only steps
 
-- [ ] Standard definition format (machine-readable + human-readable)
-- [ ] Versioning and revision history
-- [ ] Application hooks — how agents and humans cite / apply a standard
-- [ ] Validation — detect drift between stated standard and observed behavior
-- [ ] Progressive lifecycle — draft → trial → active with five gates
-      (RFC 0001)
+**Exit criteria:** Personal loop includes evidence-backed distill and at least
+one revised personal rule/standard without chat as system of record.
 
-**Exit criteria:** A team can publish, apply, and revise one org-wide standard
-without a separate chat thread per team.
+## Phase 3 — Org overlay
 
-## Phase 2 — Shared context
+Stitch consented personal streams into org-shared truth.
 
-Encode the book's **共识机器** (consensus machine):
+- [ ] Canonical Event + Projection model ([personal → org](rfcs/personal-to-org.md))
+- [ ] Identity mapping; work-scope consent; no privilege escalation (RFC 0006)
+- [ ] Org Digest / Claim / Snapshot (RFC 0002, 0007) — org job re-derives,
+      does not blindly copy personal labels
+- [ ] Collaboration loop on shared snapshots (RFC 0003)
+- [ ] Full standards machine for org-wide standards (RFC 0001)
 
-- [ ] Organizational context layer (not per-app silos)
-- [ ] Provenance — where each context claim came from
-- [ ] Access boundaries — who and which agents see what (RFC 0006)
-- [ ] Physical ingest path — Event / Blob + hot-window index (RFC 0005)
-- [ ] D0 daily distillation → human accept → Proposal/Standard feed (RFC 0007)
-- [ ] Snapshots / bundles — same decision → same fact set (RFC 0002)
-- [ ] Sync with standards — context updates trigger standard review when needed
-- [ ] Collaboration loop — Proposal → Decision → Review on shared snapshots
-      (RFC 0003)
+**Exit criteria:** Two people ingest the same source message → one canonical
+Event + two projections; org Digest cites evidence without elevating ACL.
 
-**Exit criteria:** Two teams and one agent can share the same context snapshot
-for a decision without copy-pasting from Slack; daily Digest respects ACL and
-cites evidence Events.
+## Phase 4 — Org management product
 
-## Phase 3 — Org management product
+- [ ] Operations workflows on standards + context (not forms-first ERP)
+- [ ] Agent-native UI beside human UI (same API, RFC 0004)
+- [ ] Enterprise adapters (IdP, notify, compliance) — last, not first
 
-The default management surface for AI-native organizations:
-
-- [ ] Operations workflows built on standards + context (not forms-first ERP)
-- [ ] Agent-native interfaces alongside human UI (same API, RFC 0004)
-- [ ] Integration adapters (identity, notifications, existing tools) — last, not first
-
-**Exit criteria:** bioby.ai runs a real workflow end-to-end on Regenic.
+**Exit criteria:** bioby.ai runs a real org workflow end-to-end on Regenic.
 
 ---
 
 ## Non-goals (for now)
 
 - Rebuilding generic ERP modules (HR, finance, inventory)
-- Per-team chat replacement as the **primary** product story (ingest + distill
-  first; optional Regenic-native comms shell is later)
+- Chat replacement or second-brain as the **primary** product story
 - Importing private material from `regenic-internal`
 - Unbounded agent orchestration without standard + context bindings
+- Promoting personal AI labels to org truth without an org distill job
 
 ## Tracking
 
