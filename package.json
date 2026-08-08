@@ -11,6 +11,7 @@
     "dev:worker": "pnpm --filter @regenic/worker start:dev",
     "start:api": "pnpm --filter @regenic/api start",
     "start:worker": "pnpm --filter @regenic/worker start",
+    "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r run typecheck"
   }
 }

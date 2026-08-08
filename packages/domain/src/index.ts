@@ -3,6 +3,9 @@
  * Do not treat shapes as Accepted until the owning RFC is Accepted.
  */
 
+export * from "./ingestion";
+export * from "./ingestion-schema";
+
 /** @unstable RFC 0001 */
 export type ActorType = "human" | "agent" | "system";
 
