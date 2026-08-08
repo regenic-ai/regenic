@@ -5,6 +5,9 @@
 
 export * from "./ingestion";
 export * from "./ingestion-schema";
+export * from "./canonicalization";
+export * from "./ingestion-service";
+export * from "./memory-ingestion-stores";
 
 /** @unstable RFC 0001 */
 export type ActorType = "human" | "agent" | "system";
