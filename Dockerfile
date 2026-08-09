@@ -1,11 +1,15 @@
 FROM node:20-bookworm-slim AS base
 WORKDIR /app
+ARG COREPACK_NPM_REGISTRY=https://registry.npmjs.org
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
 FROM base AS deps
+ARG npm_config_registry=https://registry.npmjs.org
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
+COPY packages/authority-store/package.json packages/authority-store/
+COPY packages/blob-store/package.json packages/blob-store/
 COPY packages/config/package.json packages/config/
 COPY packages/domain/package.json packages/domain/
 # Optional native accel for BullMQ; JS fallback is fine for the spike.
@@ -18,7 +22,9 @@ COPY packages ./packages
 COPY apps ./apps
 RUN pnpm --filter @regenic/domain build \
   && pnpm --filter @regenic/config build \
-  && ls -la packages/config/dist packages/domain/dist \
+  && pnpm --filter @regenic/blob-store build \
+  && pnpm --filter @regenic/authority-store build \
+  && ls -la packages/authority-store/dist packages/blob-store/dist packages/config/dist packages/domain/dist \
   && test -f packages/config/dist/index.d.ts \
   && test -f packages/domain/dist/index.d.ts \
   && pnpm --filter @regenic/api build \
