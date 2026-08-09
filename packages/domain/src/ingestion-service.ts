@@ -12,6 +12,7 @@ import type {
   IngestRecordResult,
   SourceIdentity,
 } from "./ingestion";
+import { AuthorityConflictError } from "./ingestion";
 import {
   validateIngestBatch,
   type IngestValidationIssue,
@@ -119,32 +120,46 @@ export class IngestionService {
       canonical.media_type,
     );
 
-    if (record.operation === "revise" && current) {
-      const event = await this.authorityStore.appendRevision({
+    try {
+      if (record.operation === "revise" && current) {
+        const event = await this.authorityStore.appendRevision({
+          ...identity,
+          content_hash: canonical.hash,
+          content_media_type: canonical.media_type,
+          content_byte_size: canonical.bytes.byteLength,
+          occurred_at: record.occurred_at,
+          expected_head_id: current.id,
+          parent_event_id: current.id,
+          revision_id: record.revision_id,
+        });
+        return this.accepted(record, event);
+      }
+
+      const event = await this.authorityStore.append({
         ...identity,
         content_hash: canonical.hash,
+        content_media_type: canonical.media_type,
+        content_byte_size: canonical.bytes.byteLength,
         occurred_at: record.occurred_at,
-        parent_event_id: current.id,
-        revision_id: record.revision_id,
+        expected_head_id: current?.id ?? null,
       });
+
+      if (current?.operation === "tombstone") {
+        const tombstone = await this.authorityStore.markTombstone({
+          ...identity,
+          occurred_at: current.occurred_at,
+          expected_head_id: event.id,
+        });
+        return this.accepted(record, tombstone);
+      }
+
       return this.accepted(record, event);
+    } catch (error) {
+      if (error instanceof AuthorityConflictError) {
+        return this.concurrentUpdate(record);
+      }
+      throw error;
     }
-
-    const event = await this.authorityStore.append({
-      ...identity,
-      content_hash: canonical.hash,
-      occurred_at: record.occurred_at,
-    });
-
-    if (current?.operation === "tombstone") {
-      const tombstone = await this.authorityStore.markTombstone({
-        ...identity,
-        occurred_at: current.occurred_at,
-      });
-      return this.accepted(record, tombstone);
-    }
-
-    return this.accepted(record, event);
   }
 
   private async ingestTombstone(
@@ -160,11 +175,19 @@ export class IngestionService {
       };
     }
 
-    const event = await this.authorityStore.markTombstone({
-      ...identity,
-      occurred_at: record.occurred_at,
-    });
-    return this.accepted(record, event);
+    try {
+      const event = await this.authorityStore.markTombstone({
+        ...identity,
+        occurred_at: record.occurred_at,
+        expected_head_id: current?.id ?? null,
+      });
+      return this.accepted(record, event);
+    } catch (error) {
+      if (error instanceof AuthorityConflictError) {
+        return this.concurrentUpdate(record);
+      }
+      throw error;
+    }
   }
 
   private accepted(
@@ -175,6 +198,14 @@ export class IngestionService {
       external_id: record.external_id,
       status: "accepted",
       event_id: event.id,
+    };
+  }
+
+  private concurrentUpdate(record: IngestRecord): IngestRecordResult {
+    return {
+      external_id: record.external_id,
+      status: "retryable_failure",
+      error_code: "concurrent_source_update",
     };
   }
 }

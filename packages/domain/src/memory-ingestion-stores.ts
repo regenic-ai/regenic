@@ -1,5 +1,6 @@
 import type {
   AuthorityStore,
+  BlobRecord,
   BlobStore,
   EventRecord,
   EventRevision,
@@ -7,6 +8,7 @@ import type {
   SourceIdentity,
   TombstoneEvent,
 } from "./ingestion";
+import { AuthorityConflictError } from "./ingestion";
 
 function sourceKey(identity: SourceIdentity): string {
   return JSON.stringify([identity.org_id, identity.source, identity.external_id]);
@@ -56,7 +58,13 @@ export class MemoryBlobStore implements BlobStore {
 export class MemoryAuthorityStore implements AuthorityStore {
   private readonly currentBySource = new Map<string, EventRecord>();
   private readonly events: EventRecord[] = [];
+  private readonly blobs = new Map<string, BlobRecord>();
   private nextId = 1;
+
+  async findBlob(contentHash: string): Promise<BlobRecord | null> {
+    const blob = this.blobs.get(contentHash);
+    return blob ? { ...blob } : null;
+  }
 
   async findBySourceIdentity(
     identity: SourceIdentity,
@@ -65,16 +73,17 @@ export class MemoryAuthorityStore implements AuthorityStore {
   }
 
   async append(input: NewEvent): Promise<EventRecord> {
-    return this.add({ ...input, operation: "create" });
+    return this.addContentEvent(input, "create");
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
-    return this.add({ ...input, operation: "revise" });
+    return this.addContentEvent(input, "revise");
   }
 
   async markTombstone(input: TombstoneEvent): Promise<EventRecord> {
     const current = await this.findBySourceIdentity(input);
-    return this.add({
+    this.assertExpectedHead(input.expected_head_id, current);
+    return this.addEvent({
       ...input,
       operation: "tombstone",
       content_hash: current?.content_hash,
@@ -86,18 +95,55 @@ export class MemoryAuthorityStore implements AuthorityStore {
     return this.events.map((event) => ({ ...event }));
   }
 
-  private add(
+  private addContentEvent(
+    input: NewEvent | EventRevision,
+    operation: "create" | "revise",
+  ): EventRecord {
+    const current = this.currentBySource.get(sourceKey(input)) ?? null;
+    this.assertExpectedHead(input.expected_head_id, current);
+    if (!this.blobs.has(input.content_hash)) {
+      this.blobs.set(input.content_hash, {
+        content_hash: input.content_hash,
+        media_type: input.content_media_type,
+        byte_size: input.content_byte_size,
+        created_at: new Date().toISOString(),
+      });
+    }
+    return this.addEvent({
+      ...input,
+      operation,
+      parent_event_id:
+        operation === "revise" ? (input as EventRevision).parent_event_id : undefined,
+    });
+  }
+
+  private addEvent(
     input: SourceIdentity &
       Pick<EventRecord, "operation" | "occurred_at"> &
       Partial<Pick<EventRecord, "content_hash" | "parent_event_id">>,
   ): EventRecord {
     const event: EventRecord = {
-      ...input,
       id: `event-${this.nextId++}`,
+      org_id: input.org_id,
+      source: input.source,
+      external_id: input.external_id,
+      operation: input.operation,
+      content_hash: input.content_hash,
+      parent_event_id: input.parent_event_id,
+      occurred_at: input.occurred_at,
       ingested_at: new Date().toISOString(),
     };
     this.events.push(event);
     this.currentBySource.set(sourceKey(input), event);
     return event;
+  }
+
+  private assertExpectedHead(
+    expectedHeadId: string | null,
+    current: EventRecord | null,
+  ): void {
+    if ((current?.id ?? null) !== expectedHeadId) {
+      throw new AuthorityConflictError();
+    }
   }
 }

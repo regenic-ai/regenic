@@ -73,7 +73,11 @@ export interface IngestBatch {
   received_at: string;
 }
 
-export type IngestRecordStatus = "accepted" | "duplicate" | "quarantined";
+export type IngestRecordStatus =
+  | "accepted"
+  | "duplicate"
+  | "quarantined"
+  | "retryable_failure";
 
 export type IngestErrorCode =
   | "invalid_envelope"
@@ -84,6 +88,7 @@ export type IngestErrorCode =
   | "scope_unresolved"
   | "content_unavailable"
   | "source_identity_conflict"
+  | "concurrent_source_update"
   | "unsupported_record_type";
 
 export interface IngestRecordResult {
@@ -163,6 +168,20 @@ export interface SourceIdentity {
   external_id: string;
 }
 
+export class AuthorityConflictError extends Error {
+  constructor() {
+    super("Source head changed during ingestion");
+    this.name = "AuthorityConflictError";
+  }
+}
+
+export interface BlobRecord {
+  content_hash: string;
+  media_type: string;
+  byte_size: number;
+  created_at: string;
+}
+
 export interface EventRecord extends SourceIdentity {
   id: string;
   operation: IngestOperation;
@@ -174,7 +193,10 @@ export interface EventRecord extends SourceIdentity {
 
 export interface NewEvent extends SourceIdentity {
   content_hash: string;
+  content_media_type: string;
+  content_byte_size: number;
   occurred_at: string;
+  expected_head_id: string | null;
 }
 
 export interface EventRevision extends NewEvent {
@@ -184,9 +206,11 @@ export interface EventRevision extends NewEvent {
 
 export interface TombstoneEvent extends SourceIdentity {
   occurred_at: string;
+  expected_head_id: string | null;
 }
 
 export interface AuthorityStore {
+  findBlob(contentHash: string): Promise<BlobRecord | null>;
   findBySourceIdentity(identity: SourceIdentity): Promise<EventRecord | null>;
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
