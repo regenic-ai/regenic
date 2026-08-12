@@ -58,9 +58,20 @@ export class ConnectorRunner {
       };
     }
 
-    const pollResult = await this.connector.poll(
-      lease.cursor ? { value: lease.cursor } : null,
-    );
+    let pollResult;
+    try {
+      pollResult = await this.connector.poll(
+        lease.cursor ? { value: lease.cursor } : null,
+      );
+    } catch (error) {
+      await this.runtimeStore.releaseLease({
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        lease_owner: input.lease_owner,
+        now: this.now(),
+      });
+      throw error;
+    }
     const attemptId = randomUUID();
     await this.runtimeStore.beginAttempt({
       id: attemptId,

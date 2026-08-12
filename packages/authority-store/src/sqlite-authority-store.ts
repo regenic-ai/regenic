@@ -17,6 +17,7 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  ReleaseConnectorLease,
   SettleIngestAttempt,
   SourceIdentity,
   TombstoneEvent,
@@ -260,6 +261,24 @@ export class SqliteAuthorityStore
       );
     });
     return transaction.immediate();
+  }
+
+  async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
+    const released = this.database
+      .prepare(
+        `
+          UPDATE connector_cursors
+          SET lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+          WHERE installation_id = ? AND stream_key = ? AND lease_owner = ?
+        `,
+      )
+      .run(
+        input.now,
+        input.installation_id,
+        input.stream_key,
+        input.lease_owner,
+      );
+    return released.changes === 1;
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
