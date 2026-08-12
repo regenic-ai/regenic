@@ -7,6 +7,7 @@ import type {
   IngestAttempt,
   NewConnectorInstallation,
   NewIngestAttempt,
+  ReleaseConnectorLease,
   SettleIngestAttempt,
 } from "./ingestion";
 
@@ -68,6 +69,21 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     };
     this.cursors.set(key, lease);
     return this.copyLease(lease);
+  }
+
+  async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
+    const key = cursorKey(input.installation_id, input.stream_key);
+    const cursor = this.cursors.get(key);
+    if (!cursor || cursor.lease_owner !== input.lease_owner) {
+      return false;
+    }
+    this.cursors.set(key, {
+      ...cursor,
+      lease_owner: undefined,
+      lease_expires_at: undefined,
+      updated_at: input.now,
+    });
+    return true;
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
