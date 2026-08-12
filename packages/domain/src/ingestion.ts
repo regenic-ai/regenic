@@ -307,6 +307,12 @@ export interface NewIngestQuarantine {
   created_at: string;
 }
 
+export interface IngestQuarantine extends NewIngestQuarantine {
+  attempt_id: string;
+  connector_installation_id: string;
+  stream_key: string;
+}
+
 export interface SettleIngestAttempt {
   attempt_id: string;
   installation_id: string;
@@ -325,10 +331,13 @@ export interface SettleIngestAttempt {
 export interface ConnectorRuntimeStore {
   createInstallation(input: NewConnectorInstallation): Promise<ConnectorInstallation>;
   findInstallation(id: string): Promise<ConnectorInstallation | null>;
+  listInstallations(orgId: string): Promise<ConnectorInstallation[]>;
   acquireLease(input: AcquireConnectorLease): Promise<ConnectorLease | null>;
   releaseLease(input: ReleaseConnectorLease): Promise<boolean>;
   beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt>;
   settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt>;
+  listAttempts(installationId: string): Promise<IngestAttempt[]>;
+  listQuarantines(installationId: string): Promise<IngestQuarantine[]>;
   getCursor(
     installationId: string,
     streamKey: string,

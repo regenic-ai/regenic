@@ -13,6 +13,7 @@ import type {
   EventRecord,
   EventRevision,
   IngestAttempt,
+  IngestQuarantine,
   IngestOperation,
   NewConnectorInstallation,
   NewEvent,
@@ -78,6 +79,17 @@ interface AttemptRow {
   quarantined_count: number;
   retryable_failure_count: number;
   error_code: string | null;
+}
+
+interface QuarantineRow {
+  id: string;
+  attempt_id: string;
+  connector_installation_id: string;
+  stream_key: string;
+  record_external_id: string;
+  reason_code: IngestQuarantine["reason_code"];
+  safe_metadata_json: string;
+  created_at: string;
 }
 
 interface InsertEventInput extends SourceIdentity {
@@ -188,6 +200,19 @@ export class SqliteAuthorityStore
       )
       .get(id) as InstallationRow | undefined;
     return row ? this.toInstallation(row) : null;
+  }
+
+  async listInstallations(orgId: string): Promise<ConnectorInstallation[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT id, org_id, connector_type, status, config_json, credentials_ref,
+                 created_at, updated_at
+          FROM connector_installations WHERE org_id = ? ORDER BY created_at DESC
+        `,
+      )
+      .all(orgId) as InstallationRow[];
+    return rows.map((row) => this.toInstallation(row));
   }
 
   async acquireLease(input: {
@@ -369,6 +394,36 @@ export class SqliteAuthorityStore
       return this.findAttempt(input.attempt_id)!;
     });
     return transaction.immediate();
+  }
+
+  async listAttempts(installationId: string): Promise<IngestAttempt[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
+                 started_at, finished_at, status, accepted_count, duplicate_count,
+                 quarantined_count, retryable_failure_count, error_code
+          FROM ingest_attempts
+          WHERE connector_installation_id = ? ORDER BY started_at DESC
+        `,
+      )
+      .all(installationId) as AttemptRow[];
+    return rows.map((row) => this.toAttempt(row));
+  }
+
+  async listQuarantines(installationId: string): Promise<IngestQuarantine[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT q.id, q.attempt_id, a.connector_installation_id, a.stream_key,
+                 q.record_external_id, q.reason_code, q.safe_metadata_json, q.created_at
+          FROM ingest_quarantines q
+          JOIN ingest_attempts a ON a.id = q.attempt_id
+          WHERE a.connector_installation_id = ? ORDER BY q.created_at DESC
+        `,
+      )
+      .all(installationId) as QuarantineRow[];
+    return rows.map((row) => this.toQuarantine(row));
   }
 
   async getCursor(
@@ -613,6 +668,19 @@ export class SqliteAuthorityStore
       quarantined_count: row.quarantined_count,
       retryable_failure_count: row.retryable_failure_count,
       error_code: row.error_code ?? undefined,
+    };
+  }
+
+  private toQuarantine(row: QuarantineRow): IngestQuarantine {
+    return {
+      id: row.id,
+      attempt_id: row.attempt_id,
+      connector_installation_id: row.connector_installation_id,
+      stream_key: row.stream_key,
+      record_external_id: row.record_external_id,
+      reason_code: row.reason_code,
+      safe_metadata: JSON.parse(row.safe_metadata_json) as IngestQuarantine["safe_metadata"],
+      created_at: row.created_at,
     };
   }
 }
