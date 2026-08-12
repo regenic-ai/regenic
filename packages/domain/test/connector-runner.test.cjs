@@ -159,4 +159,23 @@ describe("ConnectorRunner", () => {
     assert.equal(nextLease.lease_owner, "worker-b");
     assert.equal(cursor.cursor, undefined);
   });
+
+  it("releases the lease when polling throws before an attempt begins", async () => {
+    const runtime = await createRuntime();
+    const runner = new ConnectorRunner(
+      { async poll() { throw new Error("Slack unavailable"); } },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+
+    await assert.rejects(() => runner.poll(input), /Slack unavailable/);
+    const nextLease = await runtime.acquireLease({
+      ...input,
+      lease_owner: "worker-b",
+      now: "2026-08-12T00:00:01.000Z",
+    });
+
+    assert.equal(nextLease.lease_owner, "worker-b");
+  });
 });
