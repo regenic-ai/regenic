@@ -156,4 +156,34 @@ describe("SQLite connector runtime", () => {
     assert.equal(expired.lease_owner, "worker-b");
     store.close();
   });
+
+  it("releases a lease only for its current owner", async () => {
+    const root = await createRoot();
+    const store = await createStore(root);
+    await store.acquireLease(leaseInput);
+
+    assert.equal(
+      await store.releaseLease({
+        ...leaseInput,
+        lease_owner: "worker-b",
+        now: "2026-08-12T00:00:01.000Z",
+      }),
+      false,
+    );
+    assert.equal(
+      await store.releaseLease({
+        ...leaseInput,
+        now: "2026-08-12T00:00:01.000Z",
+      }),
+      true,
+    );
+    const nextLease = await store.acquireLease({
+      ...leaseInput,
+      lease_owner: "worker-b",
+      now: "2026-08-12T00:00:02.000Z",
+    });
+
+    assert.equal(nextLease.lease_owner, "worker-b");
+    store.close();
+  });
 });
