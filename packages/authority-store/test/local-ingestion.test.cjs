@@ -63,7 +63,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 1);
+    assert.equal(authorityStore.schemaVersion, 2);
     authorityStore.close();
   });
 
@@ -196,12 +196,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 2");
+    database.pragma("user_version = 3");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 2 is newer than supported 1/,
+      /schema 3 is newer than supported 2/,
     );
   });
 });

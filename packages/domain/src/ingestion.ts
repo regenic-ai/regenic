@@ -89,6 +89,7 @@ export type IngestErrorCode =
   | "content_unavailable"
   | "source_identity_conflict"
   | "concurrent_source_update"
+  | "internal_error"
   | "unsupported_record_type";
 
 export interface IngestRecordResult {
@@ -215,4 +216,113 @@ export interface AuthorityStore {
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
+}
+
+export type ConnectorInstallationStatus =
+  | "enabled"
+  | "disabled"
+  | "needs_attention";
+
+export interface ConnectorInstallation {
+  id: string;
+  org_id: string;
+  connector_type: string;
+  status: ConnectorInstallationStatus;
+  config: Record<string, JsonValue>;
+  credentials_ref?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewConnectorInstallation {
+  id: string;
+  org_id: string;
+  connector_type: string;
+  status: ConnectorInstallationStatus;
+  config: Record<string, JsonValue>;
+  credentials_ref?: string;
+  created_at: string;
+}
+
+export interface ConnectorStreamCursor {
+  installation_id: string;
+  stream_key: string;
+  cursor?: string;
+  cursor_version: number;
+  updated_at: string;
+}
+
+export interface ConnectorLease extends ConnectorStreamCursor {
+  lease_owner: string;
+  lease_expires_at: string;
+}
+
+export interface AcquireConnectorLease {
+  installation_id: string;
+  stream_key: string;
+  lease_owner: string;
+  now: string;
+  lease_duration_ms: number;
+}
+
+export type IngestAttemptStatus = "running" | "succeeded" | "failed";
+
+export interface IngestAttempt {
+  id: string;
+  org_id: string;
+  connector_installation_id: string;
+  stream_key: string;
+  delivery_id: string;
+  started_at: string;
+  finished_at?: string;
+  status: IngestAttemptStatus;
+  accepted_count: number;
+  duplicate_count: number;
+  quarantined_count: number;
+  retryable_failure_count: number;
+  error_code?: string;
+}
+
+export interface NewIngestAttempt {
+  id: string;
+  org_id: string;
+  connector_installation_id: string;
+  stream_key: string;
+  delivery_id: string;
+  started_at: string;
+}
+
+export interface NewIngestQuarantine {
+  id: string;
+  record_external_id: string;
+  reason_code: IngestErrorCode;
+  safe_metadata: Record<string, JsonValue>;
+  created_at: string;
+}
+
+export interface SettleIngestAttempt {
+  attempt_id: string;
+  installation_id: string;
+  stream_key: string;
+  lease_owner: string;
+  finished_at: string;
+  accepted_count: number;
+  duplicate_count: number;
+  quarantined_count: number;
+  retryable_failure_count: number;
+  error_code?: string;
+  next_cursor?: string;
+  quarantines: NewIngestQuarantine[];
+}
+
+export interface ConnectorRuntimeStore {
+  createInstallation(input: NewConnectorInstallation): Promise<ConnectorInstallation>;
+  findInstallation(id: string): Promise<ConnectorInstallation | null>;
+  acquireLease(input: AcquireConnectorLease): Promise<ConnectorLease | null>;
+  beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt>;
+  settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt>;
+  getCursor(
+    installationId: string,
+    streamKey: string,
+  ): Promise<ConnectorStreamCursor | null>;
 }
