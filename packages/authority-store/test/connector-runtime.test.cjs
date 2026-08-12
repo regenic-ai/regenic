@@ -80,7 +80,6 @@ describe("SQLite connector runtime", () => {
     const cursor = await store.getCursor(installation.id, "personal");
     assert.equal(cursor.cursor, "cursor-2");
     assert.equal(cursor.cursor_version, 2);
-    store.close();
 
     const database = new Database(join(root, "authority.db"), { readonly: true });
     const quarantine = database
@@ -95,6 +94,25 @@ describe("SQLite connector runtime", () => {
       reason_code: "content_unavailable",
       safe_metadata_json: '{"locator_kind":"external"}',
     });
+
+    const quarantines = await store.listQuarantines(installation.id);
+    const attempts = await store.listAttempts(installation.id);
+    const installations = await store.listInstallations(installation.org_id);
+    assert.deepEqual(quarantines, [
+      {
+        id: "quarantine-1",
+        attempt_id: "attempt-1",
+        connector_installation_id: installation.id,
+        stream_key: "personal",
+        record_external_id: "bad-message",
+        reason_code: "content_unavailable",
+        safe_metadata: { locator_kind: "external" },
+        created_at: "2026-08-12T00:00:01.000Z",
+      },
+    ]);
+    assert.equal(attempts[0].id, "attempt-1");
+    assert.equal(installations[0].id, installation.id);
+    store.close();
   });
 
   it("keeps the cursor unchanged for retryable failures and releases its lease", async () => {

@@ -5,6 +5,7 @@ import type {
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
   IngestAttempt,
+  IngestQuarantine,
   NewConnectorInstallation,
   NewIngestAttempt,
   ReleaseConnectorLease,
@@ -24,6 +25,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   private readonly installations = new Map<string, ConnectorInstallation>();
   private readonly cursors = new Map<string, StoredCursor>();
   private readonly attempts = new Map<string, IngestAttempt>();
+  private readonly quarantines: IngestQuarantine[] = [];
 
   async createInstallation(
     input: NewConnectorInstallation,
@@ -41,6 +43,12 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   async findInstallation(id: string): Promise<ConnectorInstallation | null> {
     const installation = this.installations.get(id);
     return installation ? this.copyInstallation(installation) : null;
+  }
+
+  async listInstallations(orgId: string): Promise<ConnectorInstallation[]> {
+    return [...this.installations.values()]
+      .filter((installation) => installation.org_id === orgId)
+      .map((installation) => this.copyInstallation(installation));
   }
 
   async acquireLease(
@@ -121,6 +129,15 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       error_code: input.error_code,
     };
     this.attempts.set(settled.id, settled);
+    this.quarantines.push(
+      ...input.quarantines.map((quarantine) => ({
+        ...quarantine,
+        safe_metadata: { ...quarantine.safe_metadata },
+        attempt_id: input.attempt_id,
+        connector_installation_id: input.installation_id,
+        stream_key: input.stream_key,
+      })),
+    );
 
     this.cursors.set(key, {
       ...cursor,
@@ -137,6 +154,21 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       lease_expires_at: undefined,
     });
     return { ...settled };
+  }
+
+  async listAttempts(installationId: string): Promise<IngestAttempt[]> {
+    return [...this.attempts.values()]
+      .filter((attempt) => attempt.connector_installation_id === installationId)
+      .map((attempt) => ({ ...attempt }));
+  }
+
+  async listQuarantines(installationId: string): Promise<IngestQuarantine[]> {
+    return this.quarantines
+      .filter((quarantine) => quarantine.connector_installation_id === installationId)
+      .map((quarantine) => ({
+        ...quarantine,
+        safe_metadata: { ...quarantine.safe_metadata },
+      }));
   }
 
   async getCursor(
