@@ -6,10 +6,18 @@ import { AuthorityConflictError } from "@regenic/domain";
 import type {
   AuthorityStore,
   BlobRecord,
+  ConnectorInstallation,
+  ConnectorLease,
+  ConnectorRuntimeStore,
+  ConnectorStreamCursor,
   EventRecord,
   EventRevision,
+  IngestAttempt,
   IngestOperation,
+  NewConnectorInstallation,
   NewEvent,
+  NewIngestAttempt,
+  SettleIngestAttempt,
   SourceIdentity,
   TombstoneEvent,
 } from "@regenic/domain";
@@ -34,6 +42,43 @@ interface BlobRow {
   created_at: string;
 }
 
+interface InstallationRow {
+  id: string;
+  org_id: string;
+  connector_type: string;
+  status: ConnectorInstallation["status"];
+  config_json: string;
+  credentials_ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CursorRow {
+  installation_id: string;
+  stream_key: string;
+  cursor_value: string | null;
+  cursor_version: number;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  updated_at: string;
+}
+
+interface AttemptRow {
+  id: string;
+  org_id: string;
+  connector_installation_id: string;
+  stream_key: string;
+  delivery_id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: IngestAttempt["status"];
+  accepted_count: number;
+  duplicate_count: number;
+  quarantined_count: number;
+  retryable_failure_count: number;
+  error_code: string | null;
+}
+
 interface InsertEventInput extends SourceIdentity {
   operation: IngestOperation;
   content_hash?: string;
@@ -45,7 +90,9 @@ interface InsertEventInput extends SourceIdentity {
   expected_head_id: string | null;
 }
 
-export class SqliteAuthorityStore implements AuthorityStore {
+export class SqliteAuthorityStore
+  implements AuthorityStore, ConnectorRuntimeStore
+{
   private readonly database: Database.Database;
 
   constructor(path: string) {
@@ -99,6 +146,220 @@ export class SqliteAuthorityStore implements AuthorityStore {
     return transaction.immediate();
   }
 
+  async createInstallation(
+    input: NewConnectorInstallation,
+  ): Promise<ConnectorInstallation> {
+    const installation: ConnectorInstallation = {
+      ...input,
+      config: { ...input.config },
+      updated_at: input.created_at,
+    };
+    this.database
+      .prepare(
+        `
+          INSERT INTO connector_installations (
+            id, org_id, connector_type, status, config_json, credentials_ref,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        installation.id,
+        installation.org_id,
+        installation.connector_type,
+        installation.status,
+        JSON.stringify(installation.config),
+        installation.credentials_ref ?? null,
+        installation.created_at,
+        installation.updated_at,
+      );
+    return installation;
+  }
+
+  async findInstallation(id: string): Promise<ConnectorInstallation | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, org_id, connector_type, status, config_json, credentials_ref,
+                 created_at, updated_at
+          FROM connector_installations WHERE id = ?
+        `,
+      )
+      .get(id) as InstallationRow | undefined;
+    return row ? this.toInstallation(row) : null;
+  }
+
+  async acquireLease(input: {
+    installation_id: string;
+    stream_key: string;
+    lease_owner: string;
+    now: string;
+    lease_duration_ms: number;
+  }): Promise<ConnectorLease | null> {
+    const transaction = this.database.transaction(() => {
+      const installation = this.database
+        .prepare(`SELECT status FROM connector_installations WHERE id = ?`)
+        .get(input.installation_id) as
+        | { status: ConnectorInstallation["status"] }
+        | undefined;
+      if (!installation || installation.status !== "enabled") {
+        return null;
+      }
+
+      const current = this.findCursorRow(
+        input.installation_id,
+        input.stream_key,
+      );
+      if (
+        current?.lease_expires_at &&
+        current.lease_expires_at > input.now &&
+        current.lease_owner !== input.lease_owner
+      ) {
+        return null;
+      }
+
+      const leaseExpiresAt = new Date(
+        new Date(input.now).getTime() + input.lease_duration_ms,
+      ).toISOString();
+      if (current) {
+        this.database
+          .prepare(
+            `
+              UPDATE connector_cursors
+              SET lease_owner = ?, lease_expires_at = ?, updated_at = ?
+              WHERE installation_id = ? AND stream_key = ?
+            `,
+          )
+          .run(
+            input.lease_owner,
+            leaseExpiresAt,
+            input.now,
+            input.installation_id,
+            input.stream_key,
+          );
+      } else {
+        this.database
+          .prepare(
+            `
+              INSERT INTO connector_cursors (
+                installation_id, stream_key, cursor_value, cursor_version,
+                lease_owner, lease_expires_at, updated_at
+              ) VALUES (?, ?, NULL, 1, ?, ?, ?)
+            `,
+          )
+          .run(
+            input.installation_id,
+            input.stream_key,
+            input.lease_owner,
+            leaseExpiresAt,
+            input.now,
+          );
+      }
+      return this.toLease(
+        this.findCursorRow(input.installation_id, input.stream_key)!,
+      );
+    });
+    return transaction.immediate();
+  }
+
+  async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
+    this.database
+      .prepare(
+        `
+          INSERT INTO ingest_attempts (
+            id, org_id, connector_installation_id, stream_key, delivery_id,
+            started_at, status
+          ) VALUES (?, ?, ?, ?, ?, ?, 'running')
+        `,
+      )
+      .run(
+        input.id,
+        input.org_id,
+        input.connector_installation_id,
+        input.stream_key,
+        input.delivery_id,
+        input.started_at,
+      );
+    return this.findAttempt(input.id)!;
+  }
+
+  async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
+    const transaction = this.database.transaction(() => {
+      const cursor = this.findCursorRow(input.installation_id, input.stream_key);
+      if (!cursor || cursor.lease_owner !== input.lease_owner) {
+        throw new Error("Connector lease is not held by the attempt owner");
+      }
+      const status =
+        input.retryable_failure_count === 0 ? "succeeded" : "failed";
+      this.database
+        .prepare(
+          `
+            UPDATE ingest_attempts
+            SET finished_at = ?, status = ?, accepted_count = ?, duplicate_count = ?,
+                quarantined_count = ?, retryable_failure_count = ?, error_code = ?
+            WHERE id = ?
+          `,
+        )
+        .run(
+          input.finished_at,
+          status,
+          input.accepted_count,
+          input.duplicate_count,
+          input.quarantined_count,
+          input.retryable_failure_count,
+          input.error_code ?? null,
+          input.attempt_id,
+        );
+      for (const quarantine of input.quarantines) {
+        this.database
+          .prepare(
+            `
+              INSERT INTO ingest_quarantines (
+                id, attempt_id, record_external_id, reason_code,
+                safe_metadata_json, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?)
+            `,
+          )
+          .run(
+            quarantine.id,
+            input.attempt_id,
+            quarantine.record_external_id,
+            quarantine.reason_code,
+            JSON.stringify(quarantine.safe_metadata),
+            quarantine.created_at,
+          );
+      }
+      const advancesCursor =
+        input.retryable_failure_count === 0 && input.next_cursor !== undefined;
+      this.database
+        .prepare(
+          `
+            UPDATE connector_cursors
+            SET cursor_value = ?, cursor_version = ?, lease_owner = NULL,
+                lease_expires_at = NULL, updated_at = ?
+            WHERE installation_id = ? AND stream_key = ?
+          `,
+        )
+        .run(
+          advancesCursor ? input.next_cursor : cursor.cursor_value,
+          advancesCursor ? cursor.cursor_version + 1 : cursor.cursor_version,
+          input.finished_at,
+          input.installation_id,
+          input.stream_key,
+        );
+      return this.findAttempt(input.attempt_id)!;
+    });
+    return transaction.immediate();
+  }
+
+  async getCursor(
+    installationId: string,
+    streamKey: string,
+  ): Promise<ConnectorStreamCursor | null> {
+    const row = this.findCursorRow(installationId, streamKey);
+    return row ? this.toCursor(row) : null;
+  }
+
   close(): void {
     this.database.close();
   }
@@ -150,6 +411,38 @@ export class SqliteAuthorityStore implements AuthorityStore {
       | EventRow
       | undefined;
     return row ? this.toEvent(row) : null;
+  }
+
+  private findCursorRow(
+    installationId: string,
+    streamKey: string,
+  ): CursorRow | null {
+    return (
+      (this.database
+        .prepare(
+          `
+            SELECT installation_id, stream_key, cursor_value, cursor_version,
+                   lease_owner, lease_expires_at, updated_at
+            FROM connector_cursors
+            WHERE installation_id = ? AND stream_key = ?
+          `,
+        )
+        .get(installationId, streamKey) as CursorRow | undefined) ?? null
+    );
+  }
+
+  private findAttempt(id: string): IngestAttempt | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
+                 started_at, finished_at, status, accepted_count, duplicate_count,
+                 quarantined_count, retryable_failure_count, error_code
+          FROM ingest_attempts WHERE id = ?
+        `,
+      )
+      .get(id) as AttemptRow | undefined;
+    return row ? this.toAttempt(row) : null;
   }
 
   private insert(input: InsertEventInput): EventRecord {
@@ -252,6 +545,55 @@ export class SqliteAuthorityStore implements AuthorityStore {
       parent_event_id: row.parent_event_id ?? undefined,
       occurred_at: row.occurred_at,
       ingested_at: row.ingested_at,
+    };
+  }
+
+  private toInstallation(row: InstallationRow): ConnectorInstallation {
+    return {
+      id: row.id,
+      org_id: row.org_id,
+      connector_type: row.connector_type,
+      status: row.status,
+      config: JSON.parse(row.config_json) as ConnectorInstallation["config"],
+      credentials_ref: row.credentials_ref ?? undefined,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private toCursor(row: CursorRow): ConnectorStreamCursor {
+    return {
+      installation_id: row.installation_id,
+      stream_key: row.stream_key,
+      cursor: row.cursor_value ?? undefined,
+      cursor_version: row.cursor_version,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private toLease(row: CursorRow): ConnectorLease {
+    return {
+      ...this.toCursor(row),
+      lease_owner: row.lease_owner!,
+      lease_expires_at: row.lease_expires_at!,
+    };
+  }
+
+  private toAttempt(row: AttemptRow): IngestAttempt {
+    return {
+      id: row.id,
+      org_id: row.org_id,
+      connector_installation_id: row.connector_installation_id,
+      stream_key: row.stream_key,
+      delivery_id: row.delivery_id,
+      started_at: row.started_at,
+      finished_at: row.finished_at ?? undefined,
+      status: row.status,
+      accepted_count: row.accepted_count,
+      duplicate_count: row.duplicate_count,
+      quarantined_count: row.quarantined_count,
+      retryable_failure_count: row.retryable_failure_count,
+      error_code: row.error_code ?? undefined,
     };
   }
 }
