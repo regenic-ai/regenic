@@ -7,7 +7,9 @@ export * from "./ingestion";
 export * from "./ingestion-schema";
 export * from "./canonicalization";
 export * from "./ingestion-service";
+export * from "./connector-runner";
 export * from "./memory-ingestion-stores";
+export * from "./memory-connector-runtime-store";
 
 /** @unstable RFC 0001 */
 export type ActorType = "human" | "agent" | "system";
