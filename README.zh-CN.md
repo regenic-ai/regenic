@@ -57,6 +57,21 @@ docker compose up --build
 curl -s http://localhost:3000/health
 ```
 
+## 本地 Slack 连接器
+
+本地 CLI 使用 SQLite 和文件系统 BlobStore 配置并运行单个 Slack 频道。它不会把 access token 写入数据库；同步时仅通过所引用的环境变量提供 token。
+
+```bash
+pnpm local slack-install --database ./regenic.db --org local-owner \
+	--channel C123 --channel-name engineering --id slack-engineering
+
+REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
+	--database ./regenic.db --blob-root ./blobs --installation slack-engineering
+
+pnpm local status --database ./regenic.db --org local-owner
+pnpm local quarantines --database ./regenic.db --installation slack-engineering
+```
+
 ## 路线图
 
 [路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) ·
