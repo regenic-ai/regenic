@@ -65,6 +65,23 @@ docker compose up --build
 curl -s http://localhost:3000/health
 ```
 
+## Local Slack Connector
+
+The local CLI configures and runs a single Slack channel against the SQLite and
+filesystem stores. It never writes an access token to the database; provide the
+token only through the referenced environment variable when synchronizing.
+
+```bash
+pnpm local slack-install --database ./regenic.db --org local-owner \
+	--channel C123 --channel-name engineering --id slack-engineering
+
+REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
+	--database ./regenic.db --blob-root ./blobs --installation slack-engineering
+
+pnpm local status --database ./regenic.db --org local-owner
+pnpm local quarantines --database ./regenic.db --installation slack-engineering
+```
+
 ## Roadmap
 
 [ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·

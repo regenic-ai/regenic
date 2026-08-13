@@ -152,6 +152,28 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/local-cli:
+    dependencies:
+      '@regenic/authority-store':
+        specifier: workspace:*
+        version: link:../authority-store
+      '@regenic/blob-store':
+        specifier: workspace:*
+        version: link:../blob-store
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/slack-connector':
+        specifier: workspace:*
+        version: link:../slack-connector
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/slack-connector:
     dependencies:
       '@regenic/domain':
