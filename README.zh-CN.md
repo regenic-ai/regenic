@@ -72,6 +72,32 @@ pnpm local status --database ./regenic.db --org local-owner
 pnpm local quarantines --database ./regenic.db --installation slack-engineering
 ```
 
+## 本地文件导入
+
+通过显式 JSON 映射文件导入 CSV 或 JSONL。坏行会被报告，合法行仍沿同一 canonical 采集路径写入。
+
+```json
+{
+	"mapping": {
+		"external_id": "id",
+		"occurred_at": "timestamp",
+		"text": "body",
+		"actor_id": "author"
+	},
+	"defaults": {
+		"actor_id": "local-owner",
+		"scope_id": "personal",
+		"type": "text"
+	}
+}
+```
+
+```bash
+pnpm local import-file --database ./regenic.db --blob-root ./blobs \
+	--file ./messages.csv --mapping ./mapping.json --format csv \
+	--org local-owner --source local-file
+```
+
 ## 路线图
 
 [路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) ·

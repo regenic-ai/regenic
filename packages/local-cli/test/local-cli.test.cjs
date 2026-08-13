@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { mkdtemp, rm } = require("node:fs/promises");
+const { mkdtemp, rm, writeFile } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
@@ -119,5 +119,58 @@ describe("regenic-local", () => {
       reason_code: "content_unavailable", safe_metadata: { source_kind: "message" },
       created_at: now(),
     }]);
+  });
+
+  it("imports valid CSV rows, isolates invalid rows, and converges on replay", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "messages.csv");
+    const mapping = join(root, "mapping.json");
+    await writeFile(file, [
+      "id,timestamp,body,author",
+      "message-1,2026-08-12T23:00:00.000Z,First,U123",
+      "message-2,not-a-timestamp,Bad,U456",
+    ].join("\n"));
+    await writeFile(mapping, JSON.stringify({
+      mapping: { external_id: "id", occurred_at: "timestamp", text: "body", actor_id: "author" },
+      defaults: { actor_id: "local-owner", scope_id: "personal", type: "text" },
+    }));
+    const args = [
+      "import-file", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--mapping", mapping, "--format", "csv",
+      "--org", "local-owner", "--source", "fixture-csv",
+    ];
+
+    const first = await run(args);
+    const replay = await run(args);
+
+    assert.equal(first.batches[0].records[0].status, "accepted");
+    assert.equal(replay.batches[0].records[0].status, "duplicate");
+    assert.deepEqual(first.errors, [{
+      line: 3, code: "invalid_row", message: "Invalid datetime",
+    }]);
+  });
+
+  it("imports JSONL through the same explicit mapping contract", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "messages.jsonl");
+    const mapping = join(root, "mapping.json");
+    await writeFile(file, '{"id":"message-1","timestamp":"2026-08-12T23:00:00.000Z","body":"First"}\n');
+    await writeFile(mapping, JSON.stringify({
+      mapping: { external_id: "id", occurred_at: "timestamp", text: "body" },
+      defaults: { actor_id: "local-owner", scope_id: "personal", type: "text" },
+    }));
+
+    const imported = await run([
+      "import-file", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--mapping", mapping, "--format", "jsonl",
+      "--org", "local-owner", "--source", "fixture-jsonl",
+    ]);
+
+    assert.equal(imported.batches[0].records[0].status, "accepted");
+    assert.deepEqual(imported.errors, []);
   });
 });
