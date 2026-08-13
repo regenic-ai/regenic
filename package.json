@@ -9,6 +9,7 @@
     "build": "pnpm -r run build",
     "dev:api": "pnpm --filter @regenic/api start:dev",
     "dev:worker": "pnpm --filter @regenic/worker start:dev",
+    "local": "pnpm --filter @regenic/local-cli build && pnpm --filter @regenic/local-cli start",
     "start:api": "pnpm --filter @regenic/api start",
     "start:worker": "pnpm --filter @regenic/worker start",
     "test": "pnpm -r --if-present run test",
