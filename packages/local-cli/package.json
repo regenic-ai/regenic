@@ -1,0 +1,26 @@
+{
+  "name": "@regenic/local-cli",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./dist/main.js",
+  "types": "./dist/main.d.ts",
+  "bin": {
+    "regenic-local": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "pnpm --filter @regenic/domain build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/slack-connector build && pnpm run build && node --test test/*.test.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@regenic/authority-store": "workspace:*",
+    "@regenic/blob-store": "workspace:*",
+    "@regenic/domain": "workspace:*",
+    "@regenic/slack-connector": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
