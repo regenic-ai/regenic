@@ -82,6 +82,33 @@ pnpm local status --database ./regenic.db --org local-owner
 pnpm local quarantines --database ./regenic.db --installation slack-engineering
 ```
 
+## Local File Import
+
+Import CSV or JSONL through an explicit JSON mapping file. Invalid rows are
+reported while valid rows are ingested through the same canonical path.
+
+```json
+{
+	"mapping": {
+		"external_id": "id",
+		"occurred_at": "timestamp",
+		"text": "body",
+		"actor_id": "author"
+	},
+	"defaults": {
+		"actor_id": "local-owner",
+		"scope_id": "personal",
+		"type": "text"
+	}
+}
+```
+
+```bash
+pnpm local import-file --database ./regenic.db --blob-root ./blobs \
+	--file ./messages.csv --mapping ./mapping.json --format csv \
+	--org local-owner --source local-file
+```
+
 ## Roadmap
 
 [ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·

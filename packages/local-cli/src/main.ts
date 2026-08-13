@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { FsBlobStore } from "@regenic/blob-store";
 import {
   ConnectorRunner,
+  createGenericImport,
+  type GenericImportDefaults,
+  type GenericImportFormat,
+  type GenericImportMapping,
   IngestionService,
   type JsonValue,
 } from "@regenic/domain";
@@ -52,8 +57,11 @@ export async function runLocalCli(
     case "quarantines":
       await showQuarantines(commandOptions, stdout);
       return;
+    case "import-file":
+      await importFile(commandOptions, stdout, now);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines");
+      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file");
   }
 }
 
@@ -165,6 +173,48 @@ async function showQuarantines(options: CommandOptions, stdout: CliOutput): Prom
   }
 }
 
+async function importFile(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+): Promise<void> {
+  const database = requireOption(options, "database");
+  const blobRoot = requireOption(options, "blob-root");
+  const file = requireOption(options, "file");
+  const mappingPath = requireOption(options, "mapping");
+  const format = requireFormat(options);
+  const mapping = await readImportMapping(mappingPath);
+  const imported = createGenericImport({
+    format,
+    data: await readFile(file),
+    connector_id: "generic-file-import",
+    org_id: requireOption(options, "org"),
+    source: requireOption(options, "source"),
+    received_at: now(),
+    mapping: mapping.mapping,
+    defaults: mapping.defaults,
+  });
+  const store = new SqliteAuthorityStore(database);
+  try {
+    const service = new IngestionService(new FsBlobStore(blobRoot), store);
+    const batches = [];
+    for (const batch of imported.batches) {
+      const result = await service.ingest(batch);
+      if (!result.valid) {
+        throw new Error(`Generated import batch was rejected: ${result.error_code}`);
+      }
+      batches.push(result);
+    }
+    writeJson(stdout, {
+      file_hash: imported.file_hash,
+      batches,
+      errors: imported.errors,
+    });
+  } finally {
+    store.close();
+  }
+}
+
 function parseOptions(args: string[]): CommandOptions {
   const options: CommandOptions = {};
   for (let index = 0; index < args.length; index += 1) {
@@ -217,6 +267,71 @@ function slackConfig(
   channelName: string | undefined,
 ): Record<string, JsonValue> {
   return channelName ? { channel_id: channelId, channel_name: channelName } : { channel_id: channelId };
+}
+
+function requireFormat(options: CommandOptions): GenericImportFormat {
+  const format = requireOption(options, "format");
+  if (format !== "csv" && format !== "jsonl") {
+    throw new Error("--format must be csv or jsonl");
+  }
+  return format;
+}
+
+async function readImportMapping(path: string): Promise<{
+  mapping: GenericImportMapping;
+  defaults: GenericImportDefaults;
+}> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    throw new Error(`Import mapping file is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isObject(parsed) || !isObject(parsed.mapping) || !isObject(parsed.defaults)) {
+    throw new Error("Import mapping file must contain mapping and defaults objects");
+  }
+  const mapping = parsed.mapping;
+  const defaults = parsed.defaults;
+  const requiredMapping = ["external_id", "occurred_at", "text"] as const;
+  const requiredDefaults = ["actor_id", "scope_id", "type"] as const;
+  if (
+    requiredMapping.some((name) => typeof mapping[name] !== "string") ||
+    requiredDefaults.some((name) => typeof defaults[name] !== "string")
+  ) {
+    throw new Error("Import mapping file is missing required string mapping/default fields");
+  }
+  return {
+    mapping: {
+      external_id: requireString(mapping.external_id),
+      occurred_at: requireString(mapping.occurred_at),
+      text: requireString(mapping.text),
+      actor_id: optionalString(mapping.actor_id),
+      actor_display_name: optionalString(mapping.actor_display_name),
+      scope_id: optionalString(mapping.scope_id),
+      scope_name: optionalString(mapping.scope_name),
+      type: optionalString(mapping.type),
+    },
+    defaults: {
+      actor_id: requireString(defaults.actor_id),
+      scope_id: requireString(defaults.scope_id),
+      type: requireString(defaults.type),
+    },
+  };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function requireString(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Expected a string value");
+  }
+  return value;
 }
 
 function writeJson(stdout: CliOutput, value: unknown): void {
