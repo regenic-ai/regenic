@@ -128,6 +128,19 @@ export class SqliteAuthorityStore
     return this.findCurrent(identity);
   }
 
+  async listEvents(orgId: string): Promise<EventRecord[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT id, org_id, source, external_id, operation, content_hash,
+                 parent_event_id, occurred_at, ingested_at
+          FROM events WHERE org_id = ? ORDER BY sequence ASC
+        `,
+      )
+      .all(orgId) as EventRow[];
+    return rows.map((row) => this.toEvent(row));
+  }
+
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
     const row = this.database
       .prepare(

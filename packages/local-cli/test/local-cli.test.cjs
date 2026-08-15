@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { mkdtemp, rm, writeFile } = require("node:fs/promises");
+const { mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
@@ -172,5 +172,36 @@ describe("regenic-local", () => {
 
     assert.equal(imported.batches[0].records[0].status, "accepted");
     assert.deepEqual(imported.errors, []);
+  });
+
+  it("exports append-only Event metadata as JSONL without content bodies", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "messages.jsonl");
+    const mapping = join(root, "mapping.json");
+    const output = join(root, "events.jsonl");
+    await writeFile(file, '{"id":"message-1","timestamp":"2026-08-12T23:00:00.000Z","body":"Private body"}\n');
+    await writeFile(mapping, JSON.stringify({
+      mapping: { external_id: "id", occurred_at: "timestamp", text: "body" },
+      defaults: { actor_id: "local-owner", scope_id: "personal", type: "text" },
+    }));
+    await run([
+      "import-file", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--mapping", mapping, "--format", "jsonl",
+      "--org", "local-owner", "--source", "fixture-jsonl",
+    ]);
+
+    const exported = await run([
+      "export-jsonl", "--database", database, "--org", "local-owner", "--output", output,
+    ]);
+    const line = JSON.parse((await readFile(output, "utf8")).trim());
+
+    assert.equal(exported.exported_event_count, 1);
+    assert.equal(line.schema_version, "1.0");
+    assert.equal(line.kind, "event");
+    assert.equal(line.event.external_id, "message-1");
+    assert.match(line.event.content_hash, /^[a-f0-9]{64}$/);
+    assert.equal(JSON.stringify(line).includes("Private body"), false);
   });
 });
