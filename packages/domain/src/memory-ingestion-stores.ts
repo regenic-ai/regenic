@@ -72,6 +72,12 @@ export class MemoryAuthorityStore implements AuthorityStore {
     return this.currentBySource.get(sourceKey(identity)) ?? null;
   }
 
+  async listEvents(orgId: string): Promise<EventRecord[]> {
+    return this.events
+      .filter((event) => event.org_id === orgId)
+      .map((event) => ({ ...event }));
+  }
+
   async append(input: NewEvent): Promise<EventRecord> {
     return this.addContentEvent(input, "create");
   }
