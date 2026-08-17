@@ -130,7 +130,8 @@ pnpm local export-jsonl --database ./regenic.db --org local-owner \
 ## Local Markdown Digest
 
 Render a date-grouped Markdown view of append-only text Events. Every entry
-keeps Event and Blob evidence references.
+keeps Event and Blob evidence references, with deterministic operation and
+quarantine status counts.
 
 ```bash
 pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
