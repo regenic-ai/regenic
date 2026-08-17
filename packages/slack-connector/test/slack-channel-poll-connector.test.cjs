@@ -6,6 +6,7 @@ const {
   MemoryAuthorityStore,
   MemoryBlobStore,
   MemoryConnectorRuntimeStore,
+  verifyPollConnectorConformance,
 } = require("@regenic/domain");
 const {
   SlackApiError,
@@ -141,5 +142,30 @@ describe("SlackChannelPollConnector", () => {
     });
     assert.equal(page.messages[0].text, "Message");
     assert.equal(page.response_metadata.next_cursor, "cursor-2");
+  });
+
+  it("passes the reusable poll connector conformance suite", async () => {
+    const connector = createConnector({
+      async conversationsHistory() {
+        return {
+          ok: true,
+          messages: [{ ts: "1723420800.000001", user: "U123", text: "Message" }],
+          response_metadata: { next_cursor: "cursor-2" },
+        };
+      },
+    });
+
+    const report = await verifyPollConnectorConformance({
+      connector,
+      cursor: null,
+      connector_id: "slack-channel",
+      source: "slack",
+    });
+
+    assert.deepEqual(report, {
+      delivery_id: report.delivery_id,
+      record_count: 1,
+      next_cursor: "cursor-2",
+    });
   });
 });
