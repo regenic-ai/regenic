@@ -77,10 +77,85 @@ describe("regenic-local", () => {
     });
     const status = await run(["status", "--database", database, "--org", "local-owner"]);
 
-    assert.equal(synced.status, "completed");
-    assert.equal(synced.result.records[0].status, "accepted");
+    assert.equal(synced.pages_attempted, 1);
+    assert.equal(synced.runs[0].status, "completed");
+    assert.equal(synced.runs[0].result.records[0].status, "accepted");
     assert.equal(status[0].attempts[0].status, "succeeded");
     assert.equal(JSON.stringify(status).includes("runtime-only-token"), false);
+  });
+
+  it("syncs bounded Slack pages until the remote cursor is exhausted", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await run([
+      "slack-install", "--database", database, "--org", "local-owner",
+      "--channel", "C123", "--id", "slack-1",
+    ]);
+    const cursors = [];
+    const synced = await run([
+      "slack-sync", "--database", database, "--blob-root", blobRoot,
+      "--installation", "slack-1", "--max-pages", "3",
+    ], {
+      env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
+      async fetch(url) {
+        const cursor = new URL(url).searchParams.get("cursor");
+        cursors.push(cursor);
+        return {
+          ok: true,
+          async json() {
+            return cursor
+              ? {
+                  ok: true,
+                  messages: [{ ts: "1723420860.000001", user: "U123", text: "Second" }],
+                  response_metadata: {},
+                }
+              : {
+                  ok: true,
+                  messages: [{ ts: "1723420800.000001", user: "U123", text: "First" }],
+                  response_metadata: { next_cursor: "cursor-2" },
+                };
+          },
+        };
+      },
+    });
+    const status = await run(["status", "--database", database, "--org", "local-owner"]);
+
+    assert.deepEqual(cursors, [null, "cursor-2"]);
+    assert.equal(synced.pages_attempted, 2);
+    assert.equal(synced.stopped_at_page_limit, false);
+    assert.deepEqual(status[0].attempts.map((attempt) => attempt.status), ["succeeded", "succeeded"]);
+  });
+
+  it("stops at the configured Slack page limit", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await run([
+      "slack-install", "--database", database, "--org", "local-owner",
+      "--channel", "C123", "--id", "slack-1",
+    ]);
+    const synced = await run([
+      "slack-sync", "--database", database, "--blob-root", blobRoot,
+      "--installation", "slack-1", "--max-pages", "1",
+    ], {
+      env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
+      async fetch() {
+        return {
+          ok: true,
+          async json() {
+            return {
+              ok: true,
+              messages: [{ ts: "1723420800.000001", user: "U123", text: "First" }],
+              response_metadata: { next_cursor: "cursor-2" },
+            };
+          },
+        };
+      },
+    });
+
+    assert.equal(synced.pages_attempted, 1);
+    assert.equal(synced.stopped_at_page_limit, true);
   });
 
   it("reports quarantine diagnostics without content bodies", async () => {
