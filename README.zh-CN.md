@@ -107,6 +107,15 @@ pnpm local export-jsonl --database ./regenic.db --org local-owner \
 	--output ./events.jsonl
 ```
 
+## 本地 Markdown Digest
+
+按日期渲染 append-only 文本 Event 的 Markdown 视图。每条内容都保留 Event 与 Blob 证据引用。
+
+```bash
+pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --output ./digest.md
+```
+
 ## 路线图
 
 [路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) ·
