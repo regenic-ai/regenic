@@ -119,6 +119,16 @@ pnpm local export-jsonl --database ./regenic.db --org local-owner \
 	--output ./events.jsonl
 ```
 
+## Local Markdown Digest
+
+Render a date-grouped Markdown view of append-only text Events. Every entry
+keeps Event and Blob evidence references.
+
+```bash
+pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --output ./digest.md
+```
+
 ## Roadmap
 
 [ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·
