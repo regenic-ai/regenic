@@ -63,8 +63,11 @@ export async function runLocalCli(
     case "export-jsonl":
       await exportJsonl(commandOptions, stdout);
       return;
+    case "render-digest":
+      await renderDigest(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl");
+      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest");
   }
 }
 
@@ -235,6 +238,25 @@ async function exportJsonl(
   }
 }
 
+async function renderDigest(
+  options: CommandOptions,
+  stdout: CliOutput,
+): Promise<void> {
+  const store = new SqliteAuthorityStore(requireOption(options, "database"));
+  const blobStore = new FsBlobStore(requireOption(options, "blob-root"));
+  try {
+    const events = await store.listEvents(requireOption(options, "org"));
+    const entries = await Promise.all(events.map(async (event) => ({
+      event,
+      text: await readEventText(event.content_hash, store, blobStore),
+    })));
+    await writeFile(requireOption(options, "output"), renderMarkdownDigest(entries), "utf8");
+    writeJson(stdout, { rendered_event_count: entries.length });
+  } finally {
+    store.close();
+  }
+}
+
 function parseOptions(args: string[]): CommandOptions {
   const options: CommandOptions = {};
   for (let index = 0; index < args.length; index += 1) {
@@ -352,6 +374,51 @@ function requireString(value: unknown): string {
     throw new Error("Expected a string value");
   }
   return value;
+}
+
+async function readEventText(
+  contentHash: string | undefined,
+  store: SqliteAuthorityStore,
+  blobStore: FsBlobStore,
+): Promise<string | undefined> {
+  if (!contentHash) {
+    return undefined;
+  }
+  const blob = await store.findBlob(contentHash);
+  if (!blob || blob.media_type !== "text/plain") {
+    return undefined;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(await blobStore.get(contentHash));
+}
+
+function renderMarkdownDigest(entries: Array<{
+  event: { id: string; source: string; external_id: string; operation: string; occurred_at: string; content_hash?: string };
+  text?: string;
+}>): string {
+  const byDate = new Map<string, typeof entries>();
+  for (const entry of entries) {
+    const date = entry.event.occurred_at.slice(0, 10);
+    const group = byDate.get(date) ?? [];
+    group.push(entry);
+    byDate.set(date, group);
+  }
+  const lines = ["# Regenic Digest", ""];
+  for (const [date, group] of byDate) {
+    lines.push(`## ${date}`, "");
+    for (const { event, text } of group) {
+      const label = `${event.source}:${event.external_id}`;
+      lines.push(`- **${event.operation}** ${label}`);
+      if (text !== undefined) {
+        lines.push(`  ${text.replace(/\r?\n/g, " ")}`);
+      }
+      const evidence = [`Event: \`${event.id}\``];
+      if (event.content_hash) {
+        evidence.push(`Blob: \`${event.content_hash}\``);
+      }
+      lines.push(`  Evidence: ${evidence.join("; ")}`, "");
+    }
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function writeJson(stdout: CliOutput, value: unknown): void {
