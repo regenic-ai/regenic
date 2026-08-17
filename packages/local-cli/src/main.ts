@@ -276,12 +276,23 @@ async function renderDigest(
   const blobStore = new FsBlobStore(requireOption(options, "blob-root"));
   try {
     const events = await store.listEvents(requireOption(options, "org"));
+    const installations = await store.listInstallations(requireOption(options, "org"));
+    const quarantines = (await Promise.all(
+      installations.map((installation) => store.listQuarantines(installation.id)),
+    )).flat();
     const entries = await Promise.all(events.map(async (event) => ({
       event,
       text: await readEventText(event.content_hash, store, blobStore),
     })));
-    await writeFile(requireOption(options, "output"), renderMarkdownDigest(entries), "utf8");
-    writeJson(stdout, { rendered_event_count: entries.length });
+    await writeFile(
+      requireOption(options, "output"),
+      renderMarkdownDigest(entries, quarantines),
+      "utf8",
+    );
+    writeJson(stdout, {
+      rendered_event_count: entries.length,
+      open_quarantine_count: quarantines.length,
+    });
   } finally {
     store.close();
   }
@@ -473,6 +484,10 @@ async function readEventText(
 function renderMarkdownDigest(entries: Array<{
   event: { id: string; source: string; external_id: string; operation: string; occurred_at: string; content_hash?: string };
   text?: string;
+}>, quarantines: Array<{
+  connector_installation_id: string;
+  record_external_id: string;
+  reason_code: string;
 }>): string {
   const byDate = new Map<string, typeof entries>();
   for (const entry of entries) {
@@ -481,7 +496,31 @@ function renderMarkdownDigest(entries: Array<{
     group.push(entry);
     byDate.set(date, group);
   }
-  const lines = ["# Regenic Digest", ""];
+  const operations = entries.reduce(
+    (counts, { event }) => ({ ...counts, [event.operation]: (counts[event.operation] ?? 0) + 1 }),
+    {} as Record<string, number>,
+  );
+  const lines = [
+    "# Regenic Digest",
+    "",
+    "## Processing Status",
+    "",
+    `- Events: ${entries.length}`,
+    `- Creates: ${operations.create ?? 0}`,
+    `- Revisions: ${operations.revise ?? 0}`,
+    `- Tombstones: ${operations.tombstone ?? 0}`,
+    `- Open quarantines: ${quarantines.length}`,
+    "",
+  ];
+  if (quarantines.length > 0) {
+    lines.push("## Quarantines", "");
+    for (const quarantine of quarantines) {
+      lines.push(
+        `- **${quarantine.reason_code}** ${quarantine.record_external_id} (Installation: \`${quarantine.connector_installation_id}\`)`,
+      );
+    }
+    lines.push("");
+  }
   for (const [date, group] of byDate) {
     lines.push(`## ${date}`, "");
     for (const { event, text } of group) {
