@@ -142,13 +142,34 @@ async function syncSlack(
       store,
       now,
     );
-    const run = await runner.poll({
-      installation_id: installation.id,
-      stream_key: `channel:${channelId}`,
-      lease_owner: `local-cli:${createId()}`,
-      lease_duration_ms: 60_000,
+    const maxPages = requirePositiveInteger(options, "max-pages", 1);
+    const runs = [];
+    const seenCursors = new Set<string>();
+    for (let page = 0; page < maxPages; page += 1) {
+      const run = await runner.poll({
+        installation_id: installation.id,
+        stream_key: `channel:${channelId}`,
+        lease_owner: `local-cli:${createId()}`,
+        lease_duration_ms: 60_000,
+      });
+      runs.push(run);
+      if (run.status !== "completed" || !run.next_cursor) {
+        break;
+      }
+      if (seenCursors.has(run.next_cursor)) {
+        throw new Error("Slack cursor repeated before synchronization completed");
+      }
+      seenCursors.add(run.next_cursor);
+    }
+    const lastRun = runs.at(-1);
+    writeJson(stdout, {
+      pages_attempted: runs.length,
+      stopped_at_page_limit:
+        runs.length === maxPages &&
+        lastRun?.status === "completed" &&
+        lastRun.next_cursor !== undefined,
+      runs,
     });
-    writeJson(stdout, run);
   } finally {
     store.close();
   }
@@ -430,4 +451,20 @@ if (require.main === module) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   });
+}
+
+function requirePositiveInteger(
+  options: CommandOptions,
+  name: string,
+  defaultValue: number,
+): number {
+  const option = optionString(options, name);
+  if (option === undefined) {
+    return defaultValue;
+  }
+  const value = Number(option);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`--${name} must be a positive integer`);
+  }
+  return value;
 }

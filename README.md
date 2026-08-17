@@ -76,7 +76,8 @@ pnpm local slack-install --database ./regenic.db --org local-owner \
 	--channel C123 --channel-name engineering --id slack-engineering
 
 REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
-	--database ./regenic.db --blob-root ./blobs --installation slack-engineering
+	--database ./regenic.db --blob-root ./blobs --installation slack-engineering \
+	--max-pages 20
 
 pnpm local status --database ./regenic.db --org local-owner
 pnpm local quarantines --database ./regenic.db --installation slack-engineering
