@@ -158,6 +158,51 @@ describe("regenic-local", () => {
     assert.equal(synced.stopped_at_page_limit, true);
   });
 
+  it("manages connector status and resets a committed cursor within its organization", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await run([
+      "slack-install", "--database", database, "--org", "local-owner",
+      "--channel", "C123", "--id", "slack-1",
+    ]);
+    await run([
+      "slack-sync", "--database", database, "--blob-root", blobRoot,
+      "--installation", "slack-1",
+    ], {
+      env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
+      async fetch() {
+        return {
+          ok: true,
+          async json() {
+            return {
+              ok: true,
+              messages: [{ ts: "1723420800.000001", user: "U123", text: "First" }],
+              response_metadata: { next_cursor: "cursor-2" },
+            };
+          },
+        };
+      },
+    });
+    const disabled = await run([
+      "connector-disable", "--database", database, "--org", "local-owner",
+      "--installation", "slack-1",
+    ]);
+    const enabled = await run([
+      "connector-enable", "--database", database, "--org", "local-owner",
+      "--installation", "slack-1",
+    ]);
+    const reset = await run([
+      "reset-cursor", "--database", database, "--org", "local-owner",
+      "--installation", "slack-1", "--stream", "channel:C123",
+    ]);
+
+    assert.equal(disabled.status, "disabled");
+    assert.equal(enabled.status, "enabled");
+    assert.equal(reset.cursor, undefined);
+    assert.equal(reset.cursor_version, 3);
+  });
+
   it("reports quarantine diagnostics without content bodies", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

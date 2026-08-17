@@ -18,7 +18,9 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  ResetConnectorCursor,
   ReleaseConnectorLease,
+  SetConnectorInstallationStatus,
   SettleIngestAttempt,
   SourceIdentity,
   TombstoneEvent,
@@ -228,6 +230,20 @@ export class SqliteAuthorityStore
     return rows.map((row) => this.toInstallation(row));
   }
 
+  async setInstallationStatus(
+    input: SetConnectorInstallationStatus,
+  ): Promise<ConnectorInstallation | null> {
+    const updated = this.database
+      .prepare(
+        `
+          UPDATE connector_installations SET status = ?, updated_at = ?
+          WHERE id = ? AND org_id = ?
+        `,
+      )
+      .run(input.status, input.updated_at, input.id, input.org_id);
+    return updated.changes === 1 ? this.findInstallation(input.id) : null;
+  }
+
   async acquireLease(input: {
     installation_id: string;
     stream_key: string;
@@ -317,6 +333,37 @@ export class SqliteAuthorityStore
         input.lease_owner,
       );
     return released.changes === 1;
+  }
+
+  async resetCursor(
+    input: ResetConnectorCursor,
+  ): Promise<ConnectorStreamCursor | null> {
+    const transaction = this.database.transaction(() => {
+      const cursor = this.findCursorRow(input.installation_id, input.stream_key);
+      if (!cursor) {
+        return null;
+      }
+      if (cursor.lease_expires_at && cursor.lease_expires_at > input.now) {
+        throw new Error("Connector cursor is leased and cannot be reset");
+      }
+      this.database
+        .prepare(
+          `
+            UPDATE connector_cursors
+            SET cursor_value = NULL, cursor_version = ?, lease_owner = NULL,
+                lease_expires_at = NULL, updated_at = ?
+            WHERE installation_id = ? AND stream_key = ?
+          `,
+        )
+        .run(
+          cursor.cursor_version + 1,
+          input.now,
+          input.installation_id,
+          input.stream_key,
+        );
+      return this.toCursor(this.findCursorRow(input.installation_id, input.stream_key)!);
+    });
+    return transaction.immediate();
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {

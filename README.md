@@ -81,6 +81,13 @@ REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
 
 pnpm local status --database ./regenic.db --org local-owner
 pnpm local quarantines --database ./regenic.db --installation slack-engineering
+
+pnpm local connector-disable --database ./regenic.db --org local-owner \
+	--installation slack-engineering
+pnpm local connector-enable --database ./regenic.db --org local-owner \
+	--installation slack-engineering
+pnpm local reset-cursor --database ./regenic.db --org local-owner \
+	--installation slack-engineering --stream channel:C123
 ```
 
 ## Local File Import
