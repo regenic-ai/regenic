@@ -8,7 +8,9 @@ import type {
   IngestQuarantine,
   NewConnectorInstallation,
   NewIngestAttempt,
+  ResetConnectorCursor,
   ReleaseConnectorLease,
+  SetConnectorInstallationStatus,
   SettleIngestAttempt,
 } from "./ingestion";
 
@@ -49,6 +51,22 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return [...this.installations.values()]
       .filter((installation) => installation.org_id === orgId)
       .map((installation) => this.copyInstallation(installation));
+  }
+
+  async setInstallationStatus(
+    input: SetConnectorInstallationStatus,
+  ): Promise<ConnectorInstallation | null> {
+    const installation = this.installations.get(input.id);
+    if (!installation || installation.org_id !== input.org_id) {
+      return null;
+    }
+    const updated = {
+      ...installation,
+      status: input.status,
+      updated_at: input.updated_at,
+    };
+    this.installations.set(updated.id, updated);
+    return this.copyInstallation(updated);
   }
 
   async acquireLease(
@@ -92,6 +110,29 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       updated_at: input.now,
     });
     return true;
+  }
+
+  async resetCursor(
+    input: ResetConnectorCursor,
+  ): Promise<ConnectorStreamCursor | null> {
+    const key = cursorKey(input.installation_id, input.stream_key);
+    const cursor = this.cursors.get(key);
+    if (!cursor) {
+      return null;
+    }
+    if (cursor.lease_expires_at && cursor.lease_expires_at > input.now) {
+      throw new Error("Connector cursor is leased and cannot be reset");
+    }
+    const reset = {
+      ...cursor,
+      cursor: undefined,
+      cursor_version: cursor.cursor_version + 1,
+      lease_owner: undefined,
+      lease_expires_at: undefined,
+      updated_at: input.now,
+    };
+    this.cursors.set(key, reset);
+    return this.copyCursor(reset);
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {

@@ -273,6 +273,19 @@ export interface ReleaseConnectorLease {
   now: string;
 }
 
+export interface SetConnectorInstallationStatus {
+  id: string;
+  org_id: string;
+  status: ConnectorInstallationStatus;
+  updated_at: string;
+}
+
+export interface ResetConnectorCursor {
+  installation_id: string;
+  stream_key: string;
+  now: string;
+}
+
 export type IngestAttemptStatus = "running" | "succeeded" | "failed";
 
 export interface IngestAttempt {
@@ -333,8 +346,10 @@ export interface ConnectorRuntimeStore {
   createInstallation(input: NewConnectorInstallation): Promise<ConnectorInstallation>;
   findInstallation(id: string): Promise<ConnectorInstallation | null>;
   listInstallations(orgId: string): Promise<ConnectorInstallation[]>;
+  setInstallationStatus(input: SetConnectorInstallationStatus): Promise<ConnectorInstallation | null>;
   acquireLease(input: AcquireConnectorLease): Promise<ConnectorLease | null>;
   releaseLease(input: ReleaseConnectorLease): Promise<boolean>;
+  resetCursor(input: ResetConnectorCursor): Promise<ConnectorStreamCursor | null>;
   beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt>;
   settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt>;
   listAttempts(installationId: string): Promise<IngestAttempt[]>;

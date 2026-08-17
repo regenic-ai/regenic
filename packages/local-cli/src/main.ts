@@ -66,8 +66,17 @@ export async function runLocalCli(
     case "render-digest":
       await renderDigest(commandOptions, stdout);
       return;
+    case "connector-enable":
+      await setConnectorStatus(commandOptions, stdout, now, "enabled");
+      return;
+    case "connector-disable":
+      await setConnectorStatus(commandOptions, stdout, now, "disabled");
+      return;
+    case "reset-cursor":
+      await resetConnectorCursor(commandOptions, stdout, now);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest");
+      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor");
   }
 }
 
@@ -273,6 +282,55 @@ async function renderDigest(
     })));
     await writeFile(requireOption(options, "output"), renderMarkdownDigest(entries), "utf8");
     writeJson(stdout, { rendered_event_count: entries.length });
+  } finally {
+    store.close();
+  }
+}
+
+async function setConnectorStatus(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+  status: "enabled" | "disabled",
+): Promise<void> {
+  const store = new SqliteAuthorityStore(requireOption(options, "database"));
+  try {
+    const installation = await store.setInstallationStatus({
+      id: requireOption(options, "installation"),
+      org_id: requireOption(options, "org"),
+      status,
+      updated_at: now(),
+    });
+    if (!installation) {
+      throw new Error("Connector installation was not found in this organization");
+    }
+    writeJson(stdout, installation);
+  } finally {
+    store.close();
+  }
+}
+
+async function resetConnectorCursor(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+): Promise<void> {
+  const store = new SqliteAuthorityStore(requireOption(options, "database"));
+  try {
+    const installationId = requireOption(options, "installation");
+    const installation = await store.findInstallation(installationId);
+    if (!installation || installation.org_id !== requireOption(options, "org")) {
+      throw new Error("Connector installation was not found in this organization");
+    }
+    const cursor = await store.resetCursor({
+      installation_id: installationId,
+      stream_key: requireOption(options, "stream"),
+      now: now(),
+    });
+    if (!cursor) {
+      throw new Error("Connector stream cursor was not found");
+    }
+    writeJson(stdout, cursor);
   } finally {
     store.close();
   }
