@@ -31,6 +31,7 @@ export type ConnectorPollRunResult =
       stream_key: string;
       attempt_id: string;
       result: IngestBatchResult;
+      next_cursor?: string;
     };
 
 export class ConnectorRunner {
@@ -132,6 +133,7 @@ export class ConnectorRunner {
       stream_key: input.stream_key,
       attempt_id: attemptId,
       result,
+      next_cursor: nextCursor,
     };
   }
 
