@@ -204,4 +204,36 @@ describe("SQLite connector runtime", () => {
     assert.equal(nextLease.lease_owner, "worker-b");
     store.close();
   });
+
+  it("disables installations and resets only inactive stream cursors", async () => {
+    const root = await createRoot();
+    const store = await createStore(root);
+    await store.acquireLease(leaseInput);
+    const disabled = await store.setInstallationStatus({
+      id: installation.id,
+      org_id: installation.org_id,
+      status: "disabled",
+      updated_at: "2026-08-12T00:00:01.000Z",
+    });
+
+    assert.equal(disabled.status, "disabled");
+    assert.equal(await store.acquireLease({ ...leaseInput, now: "2026-08-12T00:00:02.000Z" }), null);
+    await assert.rejects(
+      () => store.resetCursor({
+        installation_id: installation.id,
+        stream_key: "personal",
+        now: "2026-08-12T00:00:02.000Z",
+      }),
+      /leased/,
+    );
+    const reset = await store.resetCursor({
+      installation_id: installation.id,
+      stream_key: "personal",
+      now: "2026-08-12T00:01:00.000Z",
+    });
+
+    assert.equal(reset.cursor, undefined);
+    assert.equal(reset.cursor_version, 2);
+    store.close();
+  });
 });
