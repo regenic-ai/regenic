@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { FsBlobStore } from "@regenic/blob-store";
 import {
   ConnectorRunner,
@@ -60,8 +60,11 @@ export async function runLocalCli(
     case "import-file":
       await importFile(commandOptions, stdout, now);
       return;
+    case "export-jsonl":
+      await exportJsonl(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file");
+      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl");
   }
 }
 
@@ -210,6 +213,23 @@ async function importFile(
       batches,
       errors: imported.errors,
     });
+  } finally {
+    store.close();
+  }
+}
+
+async function exportJsonl(
+  options: CommandOptions,
+  stdout: CliOutput,
+): Promise<void> {
+  const store = new SqliteAuthorityStore(requireOption(options, "database"));
+  try {
+    const events = await store.listEvents(requireOption(options, "org"));
+    const output = events
+      .map((event) => JSON.stringify({ schema_version: "1.0", kind: "event", event }))
+      .join("\n");
+    await writeFile(requireOption(options, "output"), output ? `${output}\n` : "", "utf8");
+    writeJson(stdout, { exported_event_count: events.length });
   } finally {
     store.close();
   }

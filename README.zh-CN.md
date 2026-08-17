@@ -98,6 +98,15 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source local-file
 ```
 
+## 本地 JSONL 导出
+
+将 append-only Event 元数据导出为 JSONL。每行包含 provenance 和内容 hash 引用，绝不内联 Blob 字节。
+
+```bash
+pnpm local export-jsonl --database ./regenic.db --org local-owner \
+	--output ./events.jsonl
+```
+
 ## 路线图
 
 [路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) ·

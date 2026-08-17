@@ -92,6 +92,25 @@ describe("local ingestion persistence", () => {
     harness.authorityStore.close();
   });
 
+  it("lists append-only Event history in insertion order for one authority", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest(createBatch());
+    await service.ingest(createBatch({
+      operation: "revise",
+      revision_id: "revision-1",
+      content: [{ role: "body", media_type: "text/plain", text: "Revision." }],
+    }));
+    await service.ingest(createBatch({ operation: "tombstone", content: undefined }));
+
+    const events = await authorityStore.listEvents("local-owner");
+
+    assert.deepEqual(events.map((event) => event.operation), ["create", "revise", "tombstone"]);
+    assert.equal(events[1].parent_event_id, events[0].id);
+    assert.equal(events[2].parent_event_id, events[1].id);
+    authorityStore.close();
+  });
+
   it("allows only one concurrent revision to advance the source head", async () => {
     const root = await createRoot();
     const firstHarness = await createHarness(root);
