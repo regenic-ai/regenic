@@ -109,6 +109,16 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source local-file
 ```
 
+## Local JSONL Export
+
+Export append-only Event metadata as JSONL. Each line includes provenance and a
+content hash reference, never inline Blob bytes.
+
+```bash
+pnpm local export-jsonl --database ./regenic.db --org local-owner \
+	--output ./events.jsonl
+```
+
 ## Roadmap
 
 [ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·

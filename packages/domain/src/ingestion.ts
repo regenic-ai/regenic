@@ -213,6 +213,7 @@ export interface TombstoneEvent extends SourceIdentity {
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
   findBySourceIdentity(identity: SourceIdentity): Promise<EventRecord | null>;
+  listEvents(orgId: string): Promise<EventRecord[]>;
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
