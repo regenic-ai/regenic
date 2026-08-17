@@ -204,4 +204,36 @@ describe("regenic-local", () => {
     assert.match(line.event.content_hash, /^[a-f0-9]{64}$/);
     assert.equal(JSON.stringify(line).includes("Private body"), false);
   });
+
+  it("renders a Markdown digest with Event and Blob evidence", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "messages.jsonl");
+    const mapping = join(root, "mapping.json");
+    const output = join(root, "digest.md");
+    await writeFile(file, '{"id":"message-1","timestamp":"2026-08-12T23:00:00.000Z","body":"Digest body"}\n');
+    await writeFile(mapping, JSON.stringify({
+      mapping: { external_id: "id", occurred_at: "timestamp", text: "body" },
+      defaults: { actor_id: "local-owner", scope_id: "personal", type: "text" },
+    }));
+    await run([
+      "import-file", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--mapping", mapping, "--format", "jsonl",
+      "--org", "local-owner", "--source", "fixture-jsonl",
+    ]);
+
+    const rendered = await run([
+      "render-digest", "--database", database, "--blob-root", blobRoot,
+      "--org", "local-owner", "--output", output,
+    ]);
+    const digest = await readFile(output, "utf8");
+
+    assert.equal(rendered.rendered_event_count, 1);
+    assert.match(digest, /# Regenic Digest/);
+    assert.match(digest, /## 2026-08-12/);
+    assert.match(digest, /Digest body/);
+    assert.match(digest, /Event: `[-a-f0-9]+`/);
+    assert.match(digest, /Blob: `[a-f0-9]{64}`/);
+  });
 });
