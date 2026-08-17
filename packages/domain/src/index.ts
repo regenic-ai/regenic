@@ -8,6 +8,7 @@ export * from "./ingestion-schema";
 export * from "./canonicalization";
 export * from "./ingestion-service";
 export * from "./connector-runner";
+export * from "./connector-conformance";
 export * from "./generic-import";
 export * from "./memory-ingestion-stores";
 export * from "./memory-connector-runtime-store";
