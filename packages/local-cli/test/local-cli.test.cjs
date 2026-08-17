@@ -206,6 +206,8 @@ describe("regenic-local", () => {
   it("reports quarantine diagnostics without content bodies", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const digestOutput = join(root, "digest.md");
     await run([
       "slack-install", "--database", database, "--org", "local-owner",
       "--channel", "C123", "--id", "slack-1",
@@ -232,6 +234,11 @@ describe("regenic-local", () => {
     const quarantines = await run([
       "quarantines", "--database", database, "--installation", "slack-1",
     ]);
+    const rendered = await run([
+      "render-digest", "--database", database, "--blob-root", blobRoot,
+      "--org", "local-owner", "--output", digestOutput,
+    ]);
+    const digest = await readFile(digestOutput, "utf8");
 
     assert.deepEqual(quarantines, [{
       id: "quarantine-1", attempt_id: "attempt-1", connector_installation_id: "slack-1",
@@ -239,6 +246,11 @@ describe("regenic-local", () => {
       reason_code: "content_unavailable", safe_metadata: { source_kind: "message" },
       created_at: now(),
     }]);
+    assert.equal(rendered.open_quarantine_count, 1);
+    assert.match(digest, /## Quarantines/);
+    assert.match(digest, /content_unavailable/);
+    assert.match(digest, /C123:bad/);
+    assert.equal(digest.includes("source_kind"), false);
   });
 
   it("imports valid CSV rows, isolates invalid rows, and converges on replay", async () => {
@@ -351,6 +363,10 @@ describe("regenic-local", () => {
 
     assert.equal(rendered.rendered_event_count, 1);
     assert.match(digest, /# Regenic Digest/);
+    assert.match(digest, /## Processing Status/);
+    assert.match(digest, /Events: 1/);
+    assert.match(digest, /Creates: 1/);
+    assert.match(digest, /Open quarantines: 0/);
     assert.match(digest, /## 2026-08-12/);
     assert.match(digest, /Digest body/);
     assert.match(digest, /Event: `[-a-f0-9]+`/);

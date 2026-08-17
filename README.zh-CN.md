@@ -117,7 +117,7 @@ pnpm local export-jsonl --database ./regenic.db --org local-owner \
 
 ## 本地 Markdown Digest
 
-按日期渲染 append-only 文本 Event 的 Markdown 视图。每条内容都保留 Event 与 Blob 证据引用。
+按日期渲染 append-only 文本 Event 的 Markdown 视图。每条内容都保留 Event 与 Blob 证据引用，并给出确定性的操作与 quarantine 状态计数。
 
 ```bash
 pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
