@@ -138,6 +138,17 @@ pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --output ./digest.md
 ```
 
+## Evidence Bundle Publication
+
+Publish bounded committed Event references for a declared consumer and purpose.
+The local JSONL driver never includes Blob bodies or connector credentials.
+
+```bash
+pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
+	--consumer teamily-workspace --purpose research-context --max-events 100 \
+	--output ./evidence-bundles.jsonl
+```
+
 ## Roadmap
 
 [ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·
