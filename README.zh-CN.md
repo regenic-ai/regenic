@@ -124,6 +124,17 @@ pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --output ./digest.md
 ```
 
+## Evidence Bundle 发布
+
+为声明了身份和用途的 consumer 发布有限的已提交 Event 引用。本地 JSONL driver
+绝不包含 Blob 正文或连接器凭据。
+
+```bash
+pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
+	--consumer teamily-workspace --purpose research-context --max-events 100 \
+	--output ./evidence-bundles.jsonl
+```
+
 ## 路线图
 
 [路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) ·
