@@ -11,6 +11,10 @@ It does **not** produce primary information (chat, tickets, mail, docs, metrics)
 It **ingests** information (push or pull), then **processes** it so humans and
 agents can judge and act under shared standards and shared context.
 
+It is the evidence and processing layer beneath collaboration and Agent
+Operating System products, not a replacement messenger, studio, or agent
+marketplace. See [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md).
+
 Processing includes (non-exhaustive):
 
 | Stage | Meaning |
@@ -61,6 +65,7 @@ same object model with identity, policy, and multi-person canonicalization
 - Building a general knowledge-base or docs suite  
 - Generic ERP modules  
 - Treating personal AI labels as org ground truth without an org distill job  
+- Rebuilding a collaboration platform's messenger, studio, public feed, or model router
 
 ## 6. Mapping to Accepted RFCs
 
