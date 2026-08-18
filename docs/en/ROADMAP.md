@@ -53,6 +53,8 @@ channel content.
 - [ ] Open export (Markdown / JSONL)
 - [ ] Optional remote history (off by default; user-controlled; not org DB)
 - [ ] Personal rules / light standards hooks (path toward RFC 0001)
+- [ ] Collaboration-platform source contract discovery and export adapter fixtures
+  before any vendor-specific connector (see [integration architecture](CONTEXT_PLATFORM_INTEGRATION.md))
 
 **Done when:** one person can ingest a real channel locally, run
 filter → layer → distill → act without a vendor cloud, and export their data.
@@ -66,6 +68,7 @@ multi-tenant ACL.
 - [ ] Personal standard / rule iteration (subset of RFC 0001 lifecycle)
 - [ ] Drift signals between stated rules and observed follow-through
 - [ ] More connectors; pluggable ModelProvider for propose-only steps
+- [ ] Policy-filtered Evidence Bundle publication for collaboration and Agent OS consumers
 
 **Exit criteria:** Personal loop includes evidence-backed distill and at least
 one revised personal rule/standard without chat as system of record.

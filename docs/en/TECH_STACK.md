@@ -36,6 +36,7 @@ into — not the authority store, and not the org database.
 | Authority DB | `AuthorityStore`: SQLite or PostgreSQL |
 | Object storage | `BlobStore` |
 | Channel ingest | `ChannelConnector` |
+| Context publication | `ContextConsumer` (future; evidence bundles only) |
 | Models | `ModelProvider` |
 | Identity | `IdentityProvider` |
 | Authz | In-app ACL (RFC 0006) |

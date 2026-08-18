@@ -14,6 +14,9 @@ The central design rule is:
 
 A connector never writes Event, Blob, identity, or access-policy records directly. Source-specific behavior remains outside product invariants, so adding a source does not duplicate boundary, storage, or reliability logic.
 
+For collaboration and Agent OS sources, agent turns are provenance-bearing source
+records, not authority. See [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md).
+
 ## 2. Scope
 
 ### 2.1 Goals

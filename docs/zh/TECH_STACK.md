@@ -35,6 +35,7 @@ Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 提炼
 | 权威库 | `AuthorityStore`：SQLite 或 PostgreSQL |
 | 对象存储 | `BlobStore` |
 | 渠道接入 | `ChannelConnector` |
+| 上下文发布 | `ContextConsumer`（未来；仅 Evidence Bundle） |
 | 模型 | `ModelProvider` |
 | 身份 | `IdentityProvider` |
 | 权限 | 应用内 ACL（RFC 0006） |
