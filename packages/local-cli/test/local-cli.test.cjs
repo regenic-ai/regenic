@@ -337,6 +337,43 @@ describe("regenic-local", () => {
     assert.equal(JSON.stringify(line).includes("Private body"), false);
   });
 
+  it("publishes a bounded evidence bundle without Blob bodies", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "messages.jsonl");
+    const mapping = join(root, "mapping.json");
+    const output = join(root, "bundles.jsonl");
+    await writeFile(file, [
+      '{"id":"message-1","timestamp":"2026-08-12T23:00:00.000Z","body":"Private body"}',
+      '{"id":"message-2","timestamp":"2026-08-12T23:01:00.000Z","body":"Second body"}',
+    ].join("\n"));
+    await writeFile(mapping, JSON.stringify({
+      mapping: { external_id: "id", occurred_at: "timestamp", text: "body" },
+      defaults: { actor_id: "local-owner", scope_id: "personal", type: "text" },
+    }));
+    await run([
+      "import-file", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--mapping", mapping, "--format", "jsonl",
+      "--org", "local-owner", "--source", "fixture-jsonl",
+    ]);
+
+    const published = await run([
+      "publish-evidence-bundle", "--database", database, "--org", "local-owner",
+      "--consumer", "teamily-workspace", "--purpose", "research-context",
+      "--max-events", "1", "--output", output,
+    ]);
+    const bundle = JSON.parse((await readFile(output, "utf8")).trim());
+
+    assert.equal(published.published_event_count, 1);
+    assert.equal(bundle.consumer_id, "teamily-workspace");
+    assert.equal(bundle.purpose, "research-context");
+    assert.equal(bundle.evidence[0].external_id, "message-2");
+    assert.match(bundle.evidence[0].content_hash, /^[a-f0-9]{64}$/);
+    assert.equal(JSON.stringify(bundle).includes("Private body"), false);
+    assert.equal(JSON.stringify(bundle).includes("Second body"), false);
+  });
+
   it("renders a Markdown digest with Event and Blob evidence", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
