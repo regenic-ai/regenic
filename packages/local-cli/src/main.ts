@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { FsBlobStore } from "@regenic/blob-store";
 import {
   ConnectorRunner,
+  type ContextConsumer,
   createGenericImport,
+  EVIDENCE_BUNDLE_SCHEMA_VERSION,
+  type EvidenceBundle,
   type GenericImportDefaults,
   type GenericImportFormat,
   type GenericImportMapping,
@@ -31,6 +34,14 @@ export interface LocalCliOptions {
 
 interface CommandOptions {
   [name: string]: string | boolean;
+}
+
+class JsonlContextConsumer implements ContextConsumer {
+  constructor(private readonly output: string) {}
+
+  async publish(bundle: EvidenceBundle): Promise<void> {
+    await appendFile(this.output, `${JSON.stringify(bundle)}\n`, "utf8");
+  }
 }
 
 export async function runLocalCli(
@@ -75,8 +86,11 @@ export async function runLocalCli(
     case "reset-cursor":
       await resetConnectorCursor(commandOptions, stdout, now);
       return;
+    case "publish-evidence-bundle":
+      await publishEvidenceBundle(commandOptions, stdout, now, createId);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor");
+      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle");
   }
 }
 
@@ -342,6 +356,41 @@ async function resetConnectorCursor(
       throw new Error("Connector stream cursor was not found");
     }
     writeJson(stdout, cursor);
+  } finally {
+    store.close();
+  }
+}
+
+async function publishEvidenceBundle(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+  createId: () => string,
+): Promise<void> {
+  const store = new SqliteAuthorityStore(requireOption(options, "database"));
+  try {
+    const events = await store.listEvents(requireOption(options, "org"));
+    const evidence = events
+      .slice(-requirePositiveInteger(options, "max-events", 100))
+      .map((event) => ({
+        event_id: event.id,
+        source: event.source,
+        external_id: event.external_id,
+        operation: event.operation,
+        occurred_at: event.occurred_at,
+        content_hash: event.content_hash,
+      }));
+    const bundle: EvidenceBundle = {
+      schema_version: EVIDENCE_BUNDLE_SCHEMA_VERSION,
+      id: createId(),
+      org_id: requireOption(options, "org"),
+      consumer_id: requireOption(options, "consumer"),
+      purpose: requireOption(options, "purpose"),
+      created_at: now(),
+      evidence,
+    };
+    await new JsonlContextConsumer(requireOption(options, "output")).publish(bundle);
+    writeJson(stdout, { bundle_id: bundle.id, published_event_count: evidence.length });
   } finally {
     store.close();
   }
