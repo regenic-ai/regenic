@@ -83,8 +83,11 @@ export async function runLocalCli(
     case "publish-evidence-bundle":
       await publishEvidenceBundle(commandOptions, stdout, now, createId);
       return;
+    case "inbox":
+      await showInbox(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle");
+      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox");
   }
 }
 
@@ -183,6 +186,12 @@ async function syncSlack(
         lastRun.next_cursor !== undefined,
       runs,
     });
+  });
+}
+
+async function showInbox(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    writeJson(stdout, await host.get("authority").listInbox(requireOption(options, "org")));
   });
 }
 

@@ -1,3 +1,4 @@
+import { ArrangementService } from "./arrangement-service";
 import {
   canonicalizeRecordContent,
   ContentUnavailableError,
@@ -27,10 +28,14 @@ export type IngestSubmissionResult =
     };
 
 export class IngestionService {
+  private readonly arrangement: ArrangementService;
+
   constructor(
     private readonly blobStore: BlobStore,
     private readonly authorityStore: AuthorityStore,
-  ) {}
+  ) {
+    this.arrangement = new ArrangementService(authorityStore);
+  }
 
   async ingest(input: unknown): Promise<IngestSubmissionResult> {
     const validation = validateIngestBatch(input);
@@ -190,10 +195,11 @@ export class IngestionService {
     }
   }
 
-  private accepted(
+  private async accepted(
     record: IngestRecord,
     event: EventRecord,
-  ): IngestRecordResult {
+  ): Promise<IngestRecordResult> {
+    await this.arrangement.remember(event, record);
     return {
       external_id: record.external_id,
       status: "accepted",

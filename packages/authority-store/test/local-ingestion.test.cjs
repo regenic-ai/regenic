@@ -63,7 +63,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 2);
+    assert.equal(authorityStore.schemaVersion, 3);
     authorityStore.close();
   });
 
@@ -215,12 +215,45 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 3");
+    database.pragma("user_version = 4");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 3 is newer than supported 2/,
+      /schema 4 is newer than supported 3/,
     );
+  });
+
+  it("persists inbox decisions across restart", async () => {
+    const root = await createRoot();
+    let harness = await createHarness(root);
+    const ingested = await harness.service.ingest(
+      createBatch({
+        content: [
+          { role: "body", media_type: "text/plain", text: "Please confirm the release." },
+        ],
+      }),
+    );
+    harness.authorityStore.close();
+
+    harness = await createHarness(root);
+    const inbox = await harness.authorityStore.listInbox("local-owner");
+    const decision = await harness.authorityStore.getDisposition(
+      ingested.records[0].event_id,
+    );
+
+    assert.equal(inbox.length, 1);
+    assert.equal(inbox[0].event.external_id, "source-event-1");
+    assert.equal(decision.disposition, "current_work");
+    assert.deepEqual(decision.reason_codes, ["actionable"]);
+
+    await harness.service.ingest(
+      createBatch({ operation: "tombstone", content: undefined }),
+    );
+    harness.authorityStore.close();
+    harness = await createHarness(root);
+
+    assert.equal((await harness.authorityStore.listInbox("local-owner")).length, 0);
+    harness.authorityStore.close();
   });
 });

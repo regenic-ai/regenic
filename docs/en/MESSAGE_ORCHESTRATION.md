@@ -65,6 +65,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 - Message format and idempotency
 - AuthorityStore / BlobStore writes
 - ACL `visible()` and authority boundaries
+- D0 filter and layer: `current_work` / `outside_current_work` / `pending`; the Event stays; never auto-defer
 - Standards application and revision hooks
 - Dispatch: outside current work vs pending
 - Audit of reads and sends
