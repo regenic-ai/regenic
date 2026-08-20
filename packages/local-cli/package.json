@@ -10,13 +10,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "test": "pnpm --filter @regenic/domain build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/slack-connector build && pnpm run build && node --test test/*.test.cjs",
+    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/domain build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/slack-connector build && pnpm run build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@regenic/authority-store": "workspace:*",
     "@regenic/blob-store": "workspace:*",
     "@regenic/domain": "workspace:*",
+    "@regenic/plugin-host": "workspace:*",
     "@regenic/slack-connector": "workspace:*"
   },
   "devDependencies": {

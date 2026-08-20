@@ -49,13 +49,23 @@ Conversations do not live in the console. Replies go back to the original channe
 
 ## Plugins
 
-Connectors, models, and stores attach as **plugins** (a port plus a driver). The kernel stays small. New channel or model support is added by mounting a plugin, not by patching a privileged core. Unloading a plugin unwinds its effects: no leftover writes, no leftover grants.
+Connectors, models, and stores attach as **plugins** (a port plus a driver). A running process is a plugin tree assembled by `@regenic/plugin-host`. New channel or model support is added by mounting a plugin, not by patching a privileged core. Unloading a plugin disposes its fiber: registry rows, listeners, and open stores unwind with it. No leftover writes, no leftover grants.
+
+Capabilities are looked up by `ctx` key, not by importing a driver:
+
+| `ctx` key | Port |
+| --- | --- |
+| `authority` | `AuthorityStore` plus connector runtime |
+| `blobs` | `BlobStore` |
+| `ingest` | Ingest service (the only Event / Blob writer) |
+| `connectors` | Registry of mounted `ChannelConnector`s |
 
 **Kernel**
 
 - Message format and idempotency
 - AuthorityStore / BlobStore writes
 - ACL `visible()` and authority boundaries
+- D0 filter and layer: `current_work` / `outside_current_work` / `pending`; the Event stays; never auto-defer
 - Standards application and revision hooks
 - Dispatch: outside current work vs pending
 - Audit of reads and sends
@@ -66,7 +76,7 @@ Connectors, models, and stores attach as **plugins** (a port plus a driver). The
 | --- | --- | --- |
 | Connector (`ChannelConnector`) | Read a source into `IngestBatch` | Write Event, Blob, ACL, or identity |
 | Send (`EgressAdapter`) | Write a reply to the original channel | Mint extra privileges or skip approval |
-| Ranker / layer | Score durability, sensitivity, “need to know” | Promote personal labels to org truth |
+| Ranker / layer | Scoring after D0 (durability, sensitivity, “need to know”). D0 filter/layer is kernel | Promote personal labels to org truth |
 | Dispatcher policy | Map rank + standard + habits → outside current work \| pending \| defer | Send without a send grant |
 | Model | Propose only | Own scoring, quota, or ACL |
 | Identity / secrets / search / notify | Fill a capability seam | Change the message format |

@@ -133,6 +133,7 @@ The ingestion service is the only application boundary allowed to create or chan
 - content hashing and Blob writes;
 - Event idempotency and revision handling;
 - tombstones and quarantine decisions;
+- kernel disposition after accept (filter / layer); the Event remains as evidence;
 - audit records and durable post-ingest job creation.
 
 ### 5.4 Boundary Resolver
@@ -177,8 +178,13 @@ interface AuthorityStore {
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
+  putDisposition(decision: ArrangementDecision): Promise<void>;
+  getDisposition(eventId: string): Promise<ArrangementDecision | null>;
+  listInbox(orgId: string): Promise<InboxItem[]>;
 }
 ```
+
+`listInbox` returns only current source heads whose disposition is `current_work`. Tombstoned or later-noise Events stay in the store and stay out of the inbox. A current head with no disposition is arranged on the next ingest of that source identity, including a duplicate replay.
 
 ## 6. Canonical Input Contract
 
@@ -368,6 +374,7 @@ validate IngestBatch
   -> compute SHA-256
   -> idempotent BlobStore.put
   -> append Event or revision in AuthorityStore
+  -> kernel writes disposition (filter / layer)
   -> append audit and durable job rows
   -> return accepted | duplicate | quarantined
 ```

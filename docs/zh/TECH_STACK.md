@@ -6,7 +6,7 @@
 个人版默认**本地优先**，随后是组织层。领域模型和接口形状尽量共用；
 换的是各阶段的**默认实现**，不是另起一套产品。
 
-连接器、模型、存储做成**插件**（端口加驱动）。内核语义固定：
+连接器、模型、存储做成**插件**（端口加驱动）。插件宿主是 `@regenic/plugin-host`（内部用 [Cordis](https://github.com/cordiverse/cordis) 做可逆装卸）。业务包只依赖这层 API，不直接依赖 `cordis`。内核语义固定：
 消息格式（`IngestBatch`）、Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 调度。
 详见[消息编排](MESSAGE_ORCHESTRATION.md)。
 
@@ -62,6 +62,7 @@ packages/
   domain/
   ui/
   config/
+  plugin-host/      插件宿主（Cordis 的唯一入口）
   authority-store/  AuthorityStore + 驱动
   blob-store/       BlobStore + 驱动
   job-queue/        JobQueue + 驱动

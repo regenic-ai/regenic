@@ -14,9 +14,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm run build && node --test test/*.test.cjs"
+    "test": "pnpm --filter @regenic/plugin-host build && pnpm run build && node --test test/*.test.cjs"
   },
   "dependencies": {
+    "@regenic/plugin-host": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {

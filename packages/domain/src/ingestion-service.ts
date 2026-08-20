@@ -1,3 +1,4 @@
+import { ArrangementService } from "./arrangement-service";
 import {
   canonicalizeRecordContent,
   ContentUnavailableError,
@@ -27,10 +28,14 @@ export type IngestSubmissionResult =
     };
 
 export class IngestionService {
+  private readonly arrangement: ArrangementService;
+
   constructor(
     private readonly blobStore: BlobStore,
     private readonly authorityStore: AuthorityStore,
-  ) {}
+  ) {
+    this.arrangement = new ArrangementService(authorityStore);
+  }
 
   async ingest(input: unknown): Promise<IngestSubmissionResult> {
     const validation = validateIngestBatch(input);
@@ -87,11 +92,7 @@ export class IngestionService {
     }
 
     if (current?.content_hash === canonical.hash) {
-      return {
-        external_id: record.external_id,
-        status: "duplicate",
-        event_id: current.id,
-      };
+      return this.replayed(record, current);
     }
 
     if (
@@ -168,11 +169,7 @@ export class IngestionService {
     current: EventRecord | null,
   ): Promise<IngestRecordResult> {
     if (current?.operation === "tombstone") {
-      return {
-        external_id: record.external_id,
-        status: "duplicate",
-        event_id: current.id,
-      };
+      return this.replayed(record, current);
     }
 
     try {
@@ -190,13 +187,28 @@ export class IngestionService {
     }
   }
 
-  private accepted(
+  private async accepted(
     record: IngestRecord,
     event: EventRecord,
-  ): IngestRecordResult {
+  ): Promise<IngestRecordResult> {
+    await this.arrangement.remember(event, record);
     return {
       external_id: record.external_id,
       status: "accepted",
+      event_id: event.id,
+    };
+  }
+
+  private async replayed(
+    record: IngestRecord,
+    event: EventRecord,
+  ): Promise<IngestRecordResult> {
+    if (!(await this.authorityStore.getDisposition(event.id))) {
+      await this.arrangement.remember(event, record);
+    }
+    return {
+      external_id: record.external_id,
+      status: "duplicate",
       event_id: event.id,
     };
   }

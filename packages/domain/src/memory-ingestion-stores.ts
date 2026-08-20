@@ -1,3 +1,4 @@
+import type { ArrangementDecision, InboxItem } from "./arrangement";
 import type {
   AuthorityStore,
   BlobRecord,
@@ -59,6 +60,7 @@ export class MemoryAuthorityStore implements AuthorityStore {
   private readonly currentBySource = new Map<string, EventRecord>();
   private readonly events: EventRecord[] = [];
   private readonly blobs = new Map<string, BlobRecord>();
+  private readonly dispositions = new Map<string, ArrangementDecision>();
   private nextId = 1;
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
@@ -76,6 +78,34 @@ export class MemoryAuthorityStore implements AuthorityStore {
     return this.events
       .filter((event) => event.org_id === orgId)
       .map((event) => ({ ...event }));
+  }
+
+  async putDisposition(decision: ArrangementDecision): Promise<void> {
+    this.dispositions.set(decision.event_id, { ...decision, reason_codes: [...decision.reason_codes] });
+  }
+
+  async getDisposition(eventId: string): Promise<ArrangementDecision | null> {
+    const decision = this.dispositions.get(eventId);
+    return decision
+      ? { ...decision, reason_codes: [...decision.reason_codes] }
+      : null;
+  }
+
+  async listInbox(orgId: string): Promise<InboxItem[]> {
+    return [...this.currentBySource.values()]
+      .flatMap((event) => {
+        const decision = this.dispositions.get(event.id);
+        if (event.org_id !== orgId || decision?.disposition !== "current_work") {
+          return [];
+        }
+        return [{
+          decision: { ...decision, reason_codes: [...decision.reason_codes] },
+          event: { ...event },
+        }];
+      })
+      .sort((left, right) =>
+        right.event.occurred_at.localeCompare(left.event.occurred_at),
+      );
   }
 
   async append(input: NewEvent): Promise<EventRecord> {
