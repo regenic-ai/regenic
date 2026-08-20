@@ -15,6 +15,7 @@ export interface Plugin<C = unknown> {
 }
 
 export interface PluginHandle {
+  /** Resolves once inject is satisfied and apply() has run. Safe to await again. */
   ready(): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -24,6 +25,11 @@ export interface HostContext {
   provide(name: string, value: unknown): Disposer;
   get<K extends keyof Services>(name: K): Services[K];
   get(name: string): unknown;
+  /**
+   * Mounts a plugin and waits on ready() once. If inject is still unmet,
+   * that wait can finish before apply(); await the handle again after
+   * providing the missing services.
+   */
   plugin<C>(plugin: Plugin<C>, config?: C): Promise<PluginHandle>;
   effect(setup: () => Disposer | void): void;
   on(event: string, handler: (...args: unknown[]) => unknown): Disposer;

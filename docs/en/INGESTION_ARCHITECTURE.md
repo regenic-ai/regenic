@@ -184,7 +184,7 @@ interface AuthorityStore {
 }
 ```
 
-`listInbox` returns only current source heads whose disposition is `current_work`. Tombstoned or later-noise Events stay in the store and stay out of the inbox.
+`listInbox` returns only current source heads whose disposition is `current_work`. Tombstoned or later-noise Events stay in the store and stay out of the inbox. A current head with no disposition is arranged on the next ingest of that source identity, including a duplicate replay.
 
 ## 6. Canonical Input Contract
 

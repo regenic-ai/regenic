@@ -152,19 +152,6 @@ export class SqliteAuthorityStore
     return this.findCurrent(identity);
   }
 
-  async findEvent(id: string): Promise<EventRecord | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT id, org_id, source, external_id, operation, content_hash,
-                 parent_event_id, occurred_at, ingested_at
-          FROM events WHERE id = ?
-        `,
-      )
-      .get(id) as EventRow | undefined;
-    return row ? this.toEvent(row) : null;
-  }
-
   async listEvents(orgId: string): Promise<EventRecord[]> {
     const rows = this.database
       .prepare(

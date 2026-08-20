@@ -74,10 +74,6 @@ export class MemoryAuthorityStore implements AuthorityStore {
     return this.currentBySource.get(sourceKey(identity)) ?? null;
   }
 
-  async findEvent(id: string): Promise<EventRecord | null> {
-    return this.events.find((event) => event.id === id) ?? null;
-  }
-
   async listEvents(orgId: string): Promise<EventRecord[]> {
     return this.events
       .filter((event) => event.org_id === orgId)

@@ -76,7 +76,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 | --- | --- | --- |
 | Connector (`ChannelConnector`) | Read a source into `IngestBatch` | Write Event, Blob, ACL, or identity |
 | Send (`EgressAdapter`) | Write a reply to the original channel | Mint extra privileges or skip approval |
-| Ranker / layer | Score durability, sensitivity, “need to know” | Promote personal labels to org truth |
+| Ranker / layer | Scoring after D0 (durability, sensitivity, “need to know”). D0 filter/layer is kernel | Promote personal labels to org truth |
 | Dispatcher policy | Map rank + standard + habits → outside current work \| pending \| defer | Send without a send grant |
 | Model | Propose only | Own scoring, quota, or ACL |
 | Identity / secrets / search / notify | Fill a capability seam | Change the message format |

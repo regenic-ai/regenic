@@ -1,6 +1,13 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { arrangeMessage, IngestionService, MemoryAuthorityStore, MemoryBlobStore, INGEST_SCHEMA_VERSION } = require("../dist");
+const {
+  arrangeMessage,
+  canonicalizeRecordContent,
+  IngestionService,
+  MemoryAuthorityStore,
+  MemoryBlobStore,
+  INGEST_SCHEMA_VERSION,
+} = require("../dist");
 
 function event(overrides = {}) {
   return {
@@ -173,5 +180,49 @@ describe("IngestionService arrangement", () => {
       (await authorityStore.getDisposition(revised.records[0].event_id)).disposition,
       "outside_current_work",
     );
+  });
+
+  it("arranges a duplicate replay when the current head has no disposition", async () => {
+    const authorityStore = new MemoryAuthorityStore();
+    const blobStore = new MemoryBlobStore();
+    const service = new IngestionService(blobStore, authorityStore);
+    const record = {
+      operation: "create",
+      source: "regenic",
+      external_id: "ask-1",
+      occurred_at: "2026-08-21T00:00:00.000Z",
+      actor: { id: "local-owner" },
+      scope: { id: "personal" },
+      type: "message",
+      content: [{ role: "body", media_type: "text/plain", text: "Please confirm the release." }],
+    };
+    const canonical = canonicalizeRecordContent(record);
+    await blobStore.put(canonical.hash, canonical.bytes, canonical.media_type);
+    const event = await authorityStore.append({
+      org_id: "local-owner",
+      source: record.source,
+      external_id: record.external_id,
+      content_hash: canonical.hash,
+      content_media_type: canonical.media_type,
+      content_byte_size: canonical.bytes.byteLength,
+      occurred_at: record.occurred_at,
+      expected_head_id: null,
+    });
+
+    const replayed = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "delivery-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [record],
+    });
+
+    assert.equal(replayed.valid, true);
+    assert.equal(replayed.records[0].status, "duplicate");
+    assert.equal(replayed.records[0].event_id, event.id);
+    const inbox = await authorityStore.listInbox("local-owner");
+    assert.equal(inbox.length, 1);
+    assert.deepEqual(inbox[0].decision.reason_codes, ["actionable"]);
   });
 });
