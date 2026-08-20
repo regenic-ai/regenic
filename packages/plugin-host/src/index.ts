@@ -15,7 +15,7 @@ export interface Plugin<C = unknown> {
 }
 
 export interface PluginHandle {
-  /** Resolves once inject is satisfied and apply() has run. Safe to await again. */
+  /** May resolve before apply() if inject is still unmet. Safe to await again. */
   ready(): Promise<void>;
   dispose(): Promise<void>;
 }
