@@ -23,7 +23,8 @@ Phase 0 先以已接纳的 RFC 定模型，再写业务代码。
 | [book-schema-map.md](book-schema-map.md) | 与书稿公开标准的字段对照 |
 | [personal-to-org.md](personal-to-org.md) | 从个人库到组织权威事件 |
 | [d0-daily-distill.sql](../../en/rfcs/sketch/d0-daily-distill.sql) | RFC 0007 D0 草图（SQL 注释为英文） |
-| [../PRODUCT.md](../PRODUCT.md) | 产品定位 |
+| [../PRODUCT.md](../PRODUCT.md) | 产品（消息编排） |
+| [../MESSAGE_ORCHESTRATION.md](../MESSAGE_ORCHESTRATION.md) | 消息路径与插件组装 |
 
 里程碑：[Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/milestone/1)（已关闭）。
 

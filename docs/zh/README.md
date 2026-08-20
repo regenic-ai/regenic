@@ -1,6 +1,7 @@
 # 文档
 
-- [产品定位](PRODUCT.md)
+- [产品](PRODUCT.md)
+- [消息编排](MESSAGE_ORCHESTRATION.md)
 - [技术栈](TECH_STACK.md)
 - [采集架构](INGESTION_ARCHITECTURE.md)
 - [协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)

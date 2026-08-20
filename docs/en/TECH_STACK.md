@@ -1,14 +1,16 @@
 # Technology stack
 
-- **中文:** [../zh/TECH_STACK.md](../zh/TECH_STACK.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [ROADMAP.md](ROADMAP.md) · RFC 0004, 0005, 0006, 0007
+- **简体中文:** [../zh/TECH_STACK.md](../zh/TECH_STACK.md)
+- **Related:** [PRODUCT.md](PRODUCT.md) · [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md) · [ROADMAP.md](ROADMAP.md) · RFC 0004, 0005, 0006, 0007
 
-We ship **local-first Personal** first, then Org. Same domain model and API
-shapes; what changes by phase is the **default drivers**, not a second product.
+The Personal edition is **local-first**; Org follows. The domain model and API
+shapes stay shared; what changes by phase is the **default drivers**, not a
+second product.
 
-Anything that depends on a vendor or deploy shape is a port. The processing
-semantics stay fixed: Event / Blob / Digest / Standard, ACL, and
-ingest → filter → layer → distill.
+Connectors, models, and stores are **plugins** (a port plus a driver). The kernel
+stays fixed: message format (`IngestBatch`), Event / Blob / Digest / Standard,
+ACL, and connect → filter → layer → dispatch. See
+[MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md).
 
 ## 1. Defaults by phase
 
@@ -21,12 +23,12 @@ ingest → filter → layer → distill.
 | Search | noop first; SQLite FTS if needed | pgvector / OpenSearch (optional) |
 | Secrets | OS keychain / local file | Vault or cloud KMS (optional) |
 | Clients | Electron | Desktop first; Web for admin; mobile later |
-| How you run it | On the machine, or embedded in the desktop app | Docker Compose |
+| Runtime | On the machine, or embedded in the desktop app | Docker Compose |
 
 Optional remote history is off by default. It is a cold backup the user opts
 into — not the authority store, and not the org database.
 
-## 2. What we use
+## 2. Components
 
 | Layer | Choice |
 | --- | --- |
@@ -35,7 +37,8 @@ into — not the authority store, and not the org database.
 | Contract | OpenAPI 3 (`@nestjs/swagger`) |
 | Authority DB | `AuthorityStore`: SQLite or PostgreSQL |
 | Object storage | `BlobStore` |
-| Channel ingest | `ChannelConnector` |
+| Channel ingest | `ChannelConnector` (connector) |
+| Channel send | `EgressAdapter` (send path; Phase 2) |
 | Context publication | `ContextConsumer` (future; evidence bundles only) |
 | Models | `ModelProvider` |
 | Identity | `IdentityProvider` |
@@ -64,7 +67,8 @@ packages/
   authority-store/  AuthorityStore + drivers
   blob-store/       BlobStore + drivers
   job-queue/        JobQueue + drivers
-  connectors/       ChannelConnector + drivers
+  connectors/       ChannelConnector
+  egress/           EgressAdapter (Phase 2)
   model-provider/   ModelProvider + drivers
   identity/         IdentityProvider + drivers
   search-index/     SearchIndex + drivers
@@ -72,8 +76,8 @@ packages/
   secret-store/     SecretStore + drivers
 ```
 
-For Phase 1, land `api` (with an in-process worker), `desktop`, and the packages
-you need. Do not require every app up front.
+Phase 1 lands `api` (with an in-process worker), `desktop`, and the packages
+required to run them. Not every app is required up front.
 
 ## 4. Backend
 
@@ -183,7 +187,7 @@ sync_members(channel_ref) → membership diffs
 | `wecom` | WeCom |
 | `slack` | Slack |
 | `email` | mail (often pull) |
-| `regenic` | our own clients |
+| `regenic` | native clients |
 | `ticket` | ticket systems |
 | `cs` | customer-service systems |
 
@@ -199,6 +203,27 @@ connectors:
 - Idempotency: `Event.source` + `Event.external_id`
 - One failing connector must not stall the others
 - Personal focuses on push/pull ingest; `member_sync` matters mainly for Org
+- Connectors translate only; they never write Event or Blob (see
+  [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md))
+
+## 9.1 Channel send (`EgressAdapter`)
+
+Phase 2. Same channel identity as the connector. Distillation does not
+imply send privilege.
+
+```text
+capabilities() → { reply, edit, tombstone }
+send(intent) → DeliveryReceipt
+```
+
+| Driver (examples) | Destination |
+| --- | --- |
+| `slack` | Slack reply / post |
+| `email` | mail provider API |
+| `feishu` | Feishu message |
+
+The kernel emits a send request (target Event, body hash, actor, approval).
+The connector talks to the channel. Failure to send must not rewrite history.
 
 ## 10. Models (`ModelProvider`)
 
@@ -229,7 +254,7 @@ model_provider:
     api_key_ref: ...
 ```
 
-Scoring, quotas, ACL, and conflict handling live in our code (RFC 0007), not
+Scoring, quotas, ACL, and conflict handling live in the kernel (RFC 0007), not
 inside the model driver. Personal can default to `none`, or talk to local
 Ollama.
 
@@ -317,7 +342,8 @@ goes through `Notifier`.
 | `AuthorityStore` | SQLite / PostgreSQL | domain tables and query semantics |
 | `JobQueue` | in-process / BullMQ | job types and idempotency keys |
 | `BlobStore` | fs / MinIO / S3 / OSS | `content_hash` addressing |
-| `ChannelConnector` | Feishu / WeCom / Slack / email / … | writes Event + Blob |
+| `ChannelConnector` | Feishu / WeCom / Slack / email / … | writes `IngestBatch` only |
+| `EgressAdapter` | same sources, send | reply → channel; no extra grants |
 | `ModelProvider` | OpenAI / Azure / 通义 / vLLM / none | complete / embed |
 | `IdentityProvider` | local / OIDC / Feishu SSO / … | Principal mapping (RFC 0006) |
 | `SearchIndex` | noop / sqlite_fts / pgvector / … | visibility-filtered query |

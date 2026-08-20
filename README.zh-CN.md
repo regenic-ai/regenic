@@ -1,55 +1,37 @@
 # Regenic
 
-**个人与组织的信息加工层。**
+个人与组织的消息编排层。
 
-Regenic 不负责产生聊天、邮件、工单或文档本身。它把已有信息接进来（拉取或推送），
-再过滤、分层、提炼事实，并支撑判断标准的修订，让人和 Agent 能在同一套标准、
-同一份上下文里做事。
+Regenic 是开源的消息编排层。它接入已经在用的聊天、邮件、工单和文档。判断标准和各人习惯决定哪些消息需要现在处理：这些消息进入人与 Agent 共用的控制台，其余的不进入当前工作。回复发回原来的渠道。
 
-对应《重写基因》里的[双能力模型](https://regenic.ai/zh/method)：
+权限与判断标准留在小内核里。
 
-1. **统一判断标准** — 写清楚、用起来、改得动  
-2. **统一上下文** — 同一决策看到同一组事实，并知道出处  
-
-交付顺序：**先个人（本地优先），后组织**。详见 [产品定位](docs/zh/PRODUCT.md)。
+交付顺序是**先个人（本地优先），后组织**。见[产品](docs/zh/PRODUCT.md)与[消息编排](docs/zh/MESSAGE_ORCHESTRATION.md)。
 
 [English](README.md)
 
-## 方法论从哪来
+## 状态
 
-书稿、[regenic.ai](https://regenic.ai) 与公开标准在
-[**regenic-ai/regenic-book**](https://github.com/regenic-ai/regenic-book)。
-
-## 当前状态
-
-**Phase 0 架构闸门已过；Phase 1 做个人加工。** RFC 0001–0007 均已接纳。
-眼下优先把本地优先的个人接入与加工做出来，而不是组织 ERP。
+Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本地优先的连接器和内核。
 
 | 能力 | 说明 | 状态 |
 | --- | --- | --- |
-| 信息加工 | 接入 → 过滤 → 分层 → 提炼 → 标准 | 产品定位见 [PRODUCT](docs/zh/PRODUCT.md) |
-| 个人（本地优先） | 单人使用；可导出；远端历史可选 | Phase 1（进行中） |
-| 组织层 | 多人权威事件与各人视角 | Phase 3（[从个人到组织](docs/zh/rfcs/personal-to-org.md)） |
+| 消息编排 | 接入渠道 → 统一成消息 → 排序 → 调度 → 可选回复 | [PRODUCT](docs/zh/PRODUCT.md) · [架构](docs/zh/MESSAGE_ORCHESTRATION.md) |
+| 连接器 | Slack、文件导入；更多渠道随后 | Phase 1（进行中） |
+| 个人 | 单人；可导出；远端历史可选 | Phase 1（进行中） |
+| 组织 | 多人权威事件与各人视角 | Phase 3（[从个人到组织](docs/zh/rfcs/personal-to-org.md)） |
 | 判断标准 | 可版本化的共用标准 | RFC 已接纳（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |
-| 共享上下文 | Claim、Snapshot、Event/Blob | RFC 已接纳（[0002](docs/zh/rfcs/0002-context-graph.md)、[0005](docs/zh/rfcs/0005-context-storage-lifecycle.md)） |
+| 上下文 | Claim、Snapshot、Event/Blob | RFC 已接纳（[0002](docs/zh/rfcs/0002-context-graph.md)、[0005](docs/zh/rfcs/0005-context-storage-lifecycle.md)） |
 | 协作 | Proposal / Decision / Review / Handoff | RFC 已接纳（[0003](docs/zh/rfcs/0003-collaboration-objects.md)） |
-| 人机 API | 同一套 `/v1` | RFC 已接纳（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
-| ACL 与 Agent | `visible()`；蒸馏不抬权 | RFC 已接纳（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |
-| 日蒸馏 | 向标准机器进料 | RFC 已接纳（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
+| API | 人与 Agent 使用同一套 `/v1` | RFC 已接纳（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
+| ACL | `visible()`；蒸馏不抬权；发送是授权 | RFC 已接纳（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |
+| 蒸馏 | 向标准机器进料 | RFC 已接纳（[0007](docs/zh/rfcs/0007-daily-distillation.md)） |
 
-## 技术栈
+方法、站点与公开标准：[regenic-ai/regenic-book](https://github.com/regenic-ai/regenic-book)。存储与运行时默认：[技术栈](docs/zh/TECH_STACK.md)。
 
-详见 [技术栈](docs/zh/TECH_STACK.md)。个人阶段默认 SQLite、本地 Blob、进程内队列和 Electron；
-组织阶段再上 PostgreSQL、对象存储、Redis 和 Compose。渠道接入、模型、身份等走可换端口。
+## 开始使用
 
-## 架构 RFC
-
-已接纳的 RFC 在 [`docs/zh/rfcs/`](docs/zh/rfcs/README.md)。个人和组织共用同一套目标模型。
-
-## 脚手架
-
-仓库里目前是能跑通的骨架（健康检查、基础连通）。真正的加工逻辑从 Phase 1 开始写。
-下面的 Compose 方便开发联调；个人产品默认是本机 / 桌面内嵌，不依赖这套云形态。
+本仓库目前是能跑通的骨架（健康检查和连通）。加工逻辑从 Phase 1 开始。Compose 用于本地开发。个人产品跑在本机。
 
 ```bash
 pnpm install
@@ -57,9 +39,11 @@ docker compose up --build
 curl -s http://localhost:3000/health
 ```
 
-## 本地 Slack 连接器
+## 本地 CLI
 
-本地 CLI 使用 SQLite 和文件系统 BlobStore 配置并运行单个 Slack 频道。它不会把 access token 写入数据库；同步时仅通过所引用的环境变量提供 token。
+本地 CLI 用 SQLite 和文件系统 BlobStore 同步连接器。access token 不会写入数据库。同步时通过所引用的环境变量传入 token。
+
+### Slack 连接器
 
 ```bash
 pnpm local slack-install --database ./regenic.db --org local-owner \
@@ -80,9 +64,9 @@ pnpm local reset-cursor --database ./regenic.db --org local-owner \
 	--installation slack-engineering --stream channel:C123
 ```
 
-## 本地文件导入
+### 文件导入
 
-通过显式 JSON 映射文件导入 CSV 或 JSONL。坏行会被报告，合法行仍沿同一 canonical 采集路径写入。
+通过显式 JSON 映射文件导入 CSV 或 JSONL。坏行会被报告，合法行与渠道同步写成同一种消息。
 
 ```json
 {
@@ -106,28 +90,27 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source local-file
 ```
 
-## 本地 JSONL 导出
+### JSONL 导出
 
-将 append-only Event 元数据导出为 JSONL。每行包含 provenance 和内容 hash 引用，绝不内联 Blob 字节。
+将 append-only Event 元数据导出为 JSONL。每行包含 provenance 和内容 hash，不内联 Blob 字节。
 
 ```bash
 pnpm local export-jsonl --database ./regenic.db --org local-owner \
 	--output ./events.jsonl
 ```
 
-## 本地 Markdown Digest
+### Markdown Digest
 
-按日期渲染 append-only 文本 Event 的 Markdown 视图。每条内容都保留 Event 与 Blob 证据引用，并给出确定性的操作与 quarantine 状态计数。
+按日期渲染 append-only 文本 Event 的 Markdown 视图。每条保留 Event 与 Blob 证据引用。
 
 ```bash
 pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --output ./digest.md
 ```
 
-## Evidence Bundle 发布
+### Evidence Bundle
 
-为声明了身份和用途的 consumer 发布有限的已提交 Event 引用。本地 JSONL driver
-绝不包含 Blob 正文或连接器凭据。
+为声明了身份和用途的 consumer 发布有限的已提交 Event 引用。本地 JSONL driver 不包含 Blob 正文或连接器凭据。
 
 ```bash
 pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
@@ -135,21 +118,21 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 	--output ./evidence-bundles.jsonl
 ```
 
-## 路线图
+## 文档
 
-[路线图](docs/zh/ROADMAP.md) · [产品定位](docs/zh/PRODUCT.md) ·
+[消息编排](docs/zh/MESSAGE_ORCHESTRATION.md) ·
+[产品](docs/zh/PRODUCT.md) · [路线图](docs/zh/ROADMAP.md) ·
 [技术栈](docs/zh/TECH_STACK.md) · [采集架构](docs/zh/INGESTION_ARCHITECTURE.md)
 
 ## 贡献
 
-提 PR 时请标明对应 RFC，并对照 [产品定位](docs/zh/PRODUCT.md)：我们做信息加工，先个人后组织。
-讨论开 [Issues](https://github.com/regenic-ai/regenic/issues)。
+提 PR 时请标明对应 RFC，并对照[产品](docs/zh/PRODUCT.md)。讨论开 [Issues](https://github.com/regenic-ai/regenic/issues)。
 
-请遵守 [行为准则](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md)。
+请遵守[行为准则](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md)。
 安全问题请走 [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new)。
 
 ## 许可
 
-MIT，见 [LICENSE](LICENSE)。
+[MIT](LICENSE)。
 
 `regenic-ai/regenic-book` 里的方法论内容，在适用范围内仍为 CC BY-NC 4.0。
