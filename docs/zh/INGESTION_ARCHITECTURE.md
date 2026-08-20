@@ -184,7 +184,7 @@ interface AuthorityStore {
 }
 ```
 
-`listInbox` 只返回各来源身份当前 head 且 disposition 为 `current_work` 的项。被 tombstone 或改成噪音的旧 Event 仍留在库里，但不进入 inbox。
+`listInbox` 只返回各来源身份当前 head 且 disposition 为 `current_work` 的项。被 tombstone 或改成噪音的旧 Event 仍留在库里，但不进入 inbox。当前 head 若还没有 disposition，下一次采集该来源身份时补写，包括 duplicate 重放。
 
 ## 6. 规范输入契约
 

@@ -92,11 +92,7 @@ export class IngestionService {
     }
 
     if (current?.content_hash === canonical.hash) {
-      return {
-        external_id: record.external_id,
-        status: "duplicate",
-        event_id: current.id,
-      };
+      return this.replayed(record, current);
     }
 
     if (
@@ -173,11 +169,7 @@ export class IngestionService {
     current: EventRecord | null,
   ): Promise<IngestRecordResult> {
     if (current?.operation === "tombstone") {
-      return {
-        external_id: record.external_id,
-        status: "duplicate",
-        event_id: current.id,
-      };
+      return this.replayed(record, current);
     }
 
     try {
@@ -203,6 +195,20 @@ export class IngestionService {
     return {
       external_id: record.external_id,
       status: "accepted",
+      event_id: event.id,
+    };
+  }
+
+  private async replayed(
+    record: IngestRecord,
+    event: EventRecord,
+  ): Promise<IngestRecordResult> {
+    if (!(await this.authorityStore.getDisposition(event.id))) {
+      await this.arrangement.remember(event, record);
+    }
+    return {
+      external_id: record.external_id,
+      status: "duplicate",
       event_id: event.id,
     };
   }
