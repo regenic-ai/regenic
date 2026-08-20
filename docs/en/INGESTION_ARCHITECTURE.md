@@ -2,20 +2,21 @@
 
 - **简体中文：** [../zh/INGESTION_ARCHITECTURE.md](../zh/INGESTION_ARCHITECTURE.md)
 - **Status:** Phase 1 implementation architecture
-- **Related:** RFC 0005, RFC 0006, RFC 0007, and [Technology stack](TECH_STACK.md)
+- **Related:** RFC 0005, RFC 0006, RFC 0007, [Technology stack](TECH_STACK.md), and [Message orchestration](MESSAGE_ORCHESTRATION.md)
 
 ## 1. Purpose
 
-Phase 1 starts with a local-first ingestion foundation for one person. It accepts native input and external connector data, converts every source into one canonical contract, and persists RFC-shaped Blob and Event records. The same contract later supports the Org overlay without replacing the Personal pipeline.
+Phase 1 is a local-first ingestion foundation for one person. Native input and connectors are converted into `IngestBatch` records and persisted as RFC-shaped Blob and Event records. The Org overlay later uses the same contract without replacing the Personal pipeline.
 
-The central design rule is:
+Connectors are the receive half of [message orchestration](MESSAGE_ORCHESTRATION.md). Send (`EgressAdapter`) comes later. It is not part of this ingest core.
 
-> Source adapters translate. The ingestion core validates, authorizes, deduplicates, stores, and audits.
+The design rule:
 
-A connector never writes Event, Blob, identity, or access-policy records directly. Source-specific behavior remains outside product invariants, so adding a source does not duplicate boundary, storage, or reliability logic.
+> Adapters translate. The ingestion core validates, authorizes, deduplicates, stores, and audits.
 
-For collaboration and Agent OS sources, agent turns are provenance-bearing source
-records, not authority. See [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md).
+A connector never writes Event, Blob, identity, or access-policy records directly. Source-specific behavior stays outside product invariants, so adding a source does not duplicate boundary, storage, or reliability logic.
+
+For collaboration sources, agent turns are provenance-bearing records, not authority. See [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md).
 
 ## 2. Scope
 
@@ -31,7 +32,7 @@ records, not authority. See [Context platform integration architecture](CONTEXT_
 - Produce auditable Event records suitable for later distillation.
 - Keep connector and storage implementations replaceable behind stable ports.
 
-### 2.2 Non-goals
+### 2.2 Out of scope
 
 - Digest generation or daily distillation.
 - Claim extraction, context snapshots, or knowledge graph construction.
@@ -358,7 +359,7 @@ Backfill reuses polling with a fixed time range, smaller concurrency, and lower 
 ### 8.5 Per-record Flow
 
 ```text
-validate envelope
+validate IngestBatch
   -> validate connector and authority boundary
   -> resolve local owner or Org principal
   -> resolve personal source scope or Org ACL scope

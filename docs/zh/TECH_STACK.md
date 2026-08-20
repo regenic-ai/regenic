@@ -1,13 +1,14 @@
 # 技术栈
 
 - **English:** [../en/TECH_STACK.md](../en/TECH_STACK.md)
-- **相关：** [产品定位](PRODUCT.md) · [路线图](ROADMAP.md) · RFC 0004、0005、0006、0007
+- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [路线图](ROADMAP.md) · RFC 0004、0005、0006、0007
 
-我们先做**本地优先的个人版**，再做组织层。领域模型和接口形状尽量共用；
+个人版默认**本地优先**，随后是组织层。领域模型和接口形状尽量共用；
 换的是各阶段的**默认实现**，不是另起一套产品。
 
-厂商相关、部署相关的能力做成端口（可换驱动）。加工语义本身固定：
-Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 提炼。
+连接器、模型、存储做成**插件**（端口加驱动）。内核语义固定：
+消息格式（`IngestBatch`）、Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 调度。
+详见[消息编排](MESSAGE_ORCHESTRATION.md)。
 
 ## 1. 各阶段默认
 
@@ -19,13 +20,13 @@ Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 提炼
 | 身份 | 本机一个用户 | OIDC / 渠道 SSO |
 | 检索 | 先 noop；需要时用 SQLite FTS | pgvector / OpenSearch（可选） |
 | 密钥 | 系统钥匙串 / 本地文件 | Vault 或云 KMS（可选） |
-| 客户端 | Electron | 桌面为主；Web 管配置；手机后续再说 |
-| 怎么跑 | 本机，或嵌在桌面应用里 | Docker Compose |
+| 客户端 | Electron | 桌面为主；Web 管配置；手机稍后 |
+| 运行方式 | 本机，或嵌在桌面应用里 | Docker Compose |
 
 用户可选的「远端历史」默认关闭，只是冷备份。权威数据仍在本地，
 也不是组织库。
 
-## 2. 用什么
+## 2. 组件
 
 | 层 | 选择 |
 | --- | --- |
@@ -34,7 +35,8 @@ Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 提炼
 | API 契约 | OpenAPI 3（`@nestjs/swagger`） |
 | 权威库 | `AuthorityStore`：SQLite 或 PostgreSQL |
 | 对象存储 | `BlobStore` |
-| 渠道接入 | `ChannelConnector` |
+| 渠道接入 | `ChannelConnector`（连接器） |
+| 渠道发送 | `EgressAdapter`（发送路径；Phase 2） |
 | 上下文发布 | `ContextConsumer`（未来；仅 Evidence Bundle） |
 | 模型 | `ModelProvider` |
 | 身份 | `IdentityProvider` |
@@ -46,7 +48,7 @@ Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 提炼
 | Web | Next.js（组织管理、浏览器访问；个人阶段不做） |
 | 手机 | Expo（捕获 / 推送；个人阶段不做） |
 
-## 3. 仓库长什么样
+## 3. 仓库结构
 
 ```text
 apps/
@@ -63,7 +65,8 @@ packages/
   authority-store/  AuthorityStore + 驱动
   blob-store/       BlobStore + 驱动
   job-queue/        JobQueue + 驱动
-  connectors/       ChannelConnector + 驱动
+  connectors/       ChannelConnector
+  egress/           EgressAdapter（Phase 2）
   model-provider/   ModelProvider + 驱动
   identity/         IdentityProvider + 驱动
   search-index/     SearchIndex + 驱动
@@ -71,8 +74,8 @@ packages/
   secret-store/     SecretStore + 驱动
 ```
 
-个人阶段先把 `api`（带进程内 worker）、`desktop` 和必要的 packages 做起来即可，
-不必一次铺齐所有 app。
+Phase 1 落地 `api`（带进程内 worker）、`desktop` 以及运行所需的 packages。
+不必预先创建全部应用。
 
 ## 4. 后端
 
@@ -83,20 +86,20 @@ packages/
 - 后台任务：连接器同步、蒸馏、GC、通知
 - 调模型只走 `ModelProvider`
 
-| 存哪儿 | 存什么 |
+| 存储 | 内容 |
 | --- | --- |
 | AuthorityStore | Event 瘦行、Digest、Standard、ACL、Claim、Snapshot |
 | BlobStore | Blob 正文 |
-| JobQueue | 异步活；个人阶段不单独起 Redis |
+| JobQueue | 异步任务；个人阶段不单独起 Redis |
 | SearchIndex | 可选的全文 / 向量 |
 
 ## 5. 客户端
 
-| 应用 | 技术 | 何时做 | 干什么 |
+| 应用 | 技术 | 阶段 | 职责 |
 | --- | --- | --- | --- |
 | Desktop | Electron + React | Phase 1 | 工作台、托盘、系统通知、本机库 |
 | Web | Next.js | Phase 3+ | 管理、连接器、SSO |
-| Mobile | Expo | 更后 | 捕获、推送、确认类操作 |
+| Mobile | Expo | 稍后 | 捕获、推送、确认类操作 |
 
 | 能力 | 桌面 | Web | 手机 |
 | --- | --- | --- | --- |
@@ -126,7 +129,7 @@ process(handler) → void
 
 | 驱动 | 用途 |
 | --- | --- |
-| `sqlite` | 个人默认：单文件，好备份、好跟着应用走 |
+| `sqlite` | 个人默认：单文件，便于备份与随应用迁移 |
 | `postgres` | 组织或多用户自托管 |
 
 - 个人阶段没有多租户分区；组织侧按 RFC 0005 给 `org_id`、时间建索引。
@@ -193,8 +196,27 @@ connectors:
 ```
 
 - 幂等键：`Event.source` + `Event.external_id`
-- 某个连接器挂了，别拖垮别的队列
+- 某个连接器失败时，不得阻塞其他连接器
 - 个人阶段先把拉取 / 推送接进来；成员同步（`member_sync`）主要在组织阶段用
+- 连接器只翻译，绝不直写 Event 或 Blob（见[采集架构](INGESTION_ARCHITECTURE.md)）
+
+## 9.1 渠道发送（`EgressAdapter`）
+
+Phase 2。与连接器同一渠道身份。蒸馏不等于发送权。
+
+```text
+capabilities() → { reply, edit, tombstone }
+send(intent) → DeliveryReceipt
+```
+
+| 驱动（举例） | 去向 |
+| --- | --- |
+| `slack` | Slack 回复 / 发帖 |
+| `email` | 邮件厂商 API |
+| `feishu` | 飞书消息 |
+
+内核发出发送请求（目标 Event、正文 hash、actor、审批）。连接器对接渠道。
+发送失败不得改写历史。
 
 ## 10. 模型（`ModelProvider`）
 
@@ -225,8 +247,8 @@ model_provider:
     api_key_ref: ...
 ```
 
-打分、配额、权限、冲突处理写在我们自己的代码里（见 RFC 0007），
-不要塞进模型驱动。个人阶段可以默认 `none`，或接本机 Ollama。
+打分、配额、权限、冲突处理写在内核里（见 RFC 0007），
+不放入模型驱动。个人阶段可以默认 `none`，或接本机 Ollama。
 
 ## 11. 身份（`IdentityProvider`）
 
@@ -244,7 +266,7 @@ map_to_principal(identity) → Principal id
 | `feishu_sso` | 飞书登录 |
 | `wecom_sso` | 企业微信登录 |
 
-谁能看见什么，由 Regenic 自己的 ACL 管（RFC 0006）。
+可见性由 Regenic ACL 控制（RFC 0006）。
 IdP 只负责认证，以及外部账号 / 组的提示。组同步成 AclScope 是可选配置，
 不等于自动给管理员。
 
@@ -258,7 +280,7 @@ query(q, principal) → hits   # 先按可见性过滤，再排序
 
 | 驱动 | 用途 |
 | --- | --- |
-| `noop` | 先不做外部索引 |
+| `noop` | 暂不启用外部索引 |
 | `sqlite_fts` | 个人阶段要全文时 |
 | `pgvector` | 组织侧开向量时 |
 | `opensearch` | 更大规模 |
@@ -304,12 +326,13 @@ Nest 上开 WebSocket 或 SSE。要弹到系统托盘 / 锁屏的，走 `Notifie
 
 ## 16. 端口一览
 
-| 端口 | 可以换成 | 换了也不能变的 |
+| 端口 | 可替换实现 | 不变量 |
 | --- | --- | --- |
 | `AuthorityStore` | SQLite / PostgreSQL | 领域表与查询语义 |
 | `JobQueue` | 进程内 / BullMQ | 任务类型与幂等键 |
 | `BlobStore` | fs / MinIO / S3 / OSS | 按 `content_hash` 寻址 |
-| `ChannelConnector` | 飞书 / 企微 / Slack / 邮件 / … | 写出 Event + Blob |
+| `ChannelConnector` | 飞书 / 企微 / Slack / 邮件 / … | 只写出 `IngestBatch` |
+| `EgressAdapter` | 同一批来源的发送 | 回复 → 渠道；不得自授权 |
 | `ModelProvider` | OpenAI / Azure / 通义 / vLLM / none | complete / embed 接口 |
 | `IdentityProvider` | local / OIDC / 飞书 SSO / … | 映射成 RFC 0006 的 Principal |
 | `SearchIndex` | noop / sqlite_fts / pgvector / … | 带可见性过滤的查询 |
