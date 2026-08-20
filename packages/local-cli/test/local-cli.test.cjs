@@ -318,6 +318,34 @@ describe("regenic-local", () => {
     assert.deepEqual(imported.errors, []);
   });
 
+  it("lists only current-work messages in the inbox", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "messages.jsonl");
+    const mapping = join(root, "mapping.json");
+    await writeFile(file, [
+      '{"id":"ask-1","timestamp":"2026-08-12T23:00:00.000Z","body":"Please confirm the release."}',
+      '{"id":"ack-1","timestamp":"2026-08-12T23:01:00.000Z","body":"ok"}',
+    ].join("\n"));
+    await writeFile(mapping, JSON.stringify({
+      mapping: { external_id: "id", occurred_at: "timestamp", text: "body" },
+      defaults: { actor_id: "local-owner", scope_id: "personal", type: "text" },
+    }));
+    await run([
+      "import-file", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--mapping", mapping, "--format", "jsonl",
+      "--org", "local-owner", "--source", "fixture-jsonl",
+    ]);
+
+    const inbox = await run(["inbox", "--database", database, "--org", "local-owner"]);
+
+    assert.equal(inbox.length, 1);
+    assert.equal(inbox[0].event.external_id, "ask-1");
+    assert.equal(inbox[0].decision.disposition, "current_work");
+    assert.deepEqual(inbox[0].decision.reason_codes, ["actionable"]);
+  });
+
   it("exports append-only Event metadata as JSONL without content bodies", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

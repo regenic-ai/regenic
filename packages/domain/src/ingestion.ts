@@ -1,3 +1,5 @@
+import type { ArrangementDecision, InboxItem } from "./arrangement";
+
 export const INGEST_SCHEMA_VERSION = "1.0" as const;
 
 export type JsonPrimitive = boolean | number | string | null;
@@ -213,10 +215,14 @@ export interface TombstoneEvent extends SourceIdentity {
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
   findBySourceIdentity(identity: SourceIdentity): Promise<EventRecord | null>;
+  findEvent(id: string): Promise<EventRecord | null>;
   listEvents(orgId: string): Promise<EventRecord[]>;
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
+  putDisposition(decision: ArrangementDecision): Promise<void>;
+  getDisposition(eventId: string): Promise<ArrangementDecision | null>;
+  listInbox(orgId: string): Promise<InboxItem[]>;
 }
 
 export type ConnectorInstallationStatus =

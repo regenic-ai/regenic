@@ -133,6 +133,7 @@ interface ConnectorCapabilities {
 - 内容哈希与 Blob 写入；
 - Event 幂等与 revision 处理；
 - tombstone 与隔离区决策；
+- 接受后由内核写入 disposition（过滤 / 分层）；Event 仍作为证据留下；
 - 审计记录与持久化采集后任务创建。
 
 ### 5.4 边界解析器
@@ -177,8 +178,13 @@ interface AuthorityStore {
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
+  putDisposition(decision: ArrangementDecision): Promise<void>;
+  getDisposition(eventId: string): Promise<ArrangementDecision | null>;
+  listInbox(orgId: string): Promise<InboxItem[]>;
 }
 ```
+
+`listInbox` 只返回各来源身份当前 head 且 disposition 为 `current_work` 的项。被 tombstone 或改成噪音的旧 Event 仍留在库里，但不进入 inbox。
 
 ## 6. 规范输入契约
 
@@ -368,6 +374,7 @@ attempt_count
   -> 计算 SHA-256
   -> 幂等 BlobStore.put
   -> 在 AuthorityStore 中追加 Event 或 revision
+  -> 内核写入 disposition（过滤 / 分层）
   -> 追加审计与持久任务记录
   -> 返回 accepted | duplicate | quarantined
 ```

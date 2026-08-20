@@ -65,6 +65,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 - 消息格式与幂等
 - AuthorityStore / BlobStore 写入
 - ACL `visible()` 与权威边界
+- D0 过滤与分层：`current_work` / `outside_current_work` / `pending`；Event 仍留下；从不自动 defer
 - 标准的应用与修订钩子
 - 调度：不进入当前工作 vs pending
 - 读与发的审计

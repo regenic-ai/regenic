@@ -4,9 +4,11 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { AuthorityConflictError } from "@regenic/domain";
 import type {
+  ArrangementDecision,
   AuthorityStore,
   BlobRecord,
   ConnectorInstallation,
+  InboxItem,
   ConnectorLease,
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
@@ -37,6 +39,26 @@ interface EventRow {
   parent_event_id: string | null;
   occurred_at: string;
   ingested_at: string;
+}
+
+interface DispositionRow {
+  event_id: string;
+  org_id: string;
+  disposition: ArrangementDecision["disposition"];
+  layer: ArrangementDecision["layer"];
+  reason_codes_json: string;
+  score: number;
+  decided_at: string;
+}
+
+interface InboxRow extends EventRow {
+  event_id: string;
+  disposition_org_id: string;
+  disposition: ArrangementDecision["disposition"];
+  layer: ArrangementDecision["layer"];
+  reason_codes_json: string;
+  score: number;
+  decided_at: string;
 }
 
 interface BlobRow {
@@ -130,6 +152,19 @@ export class SqliteAuthorityStore
     return this.findCurrent(identity);
   }
 
+  async findEvent(id: string): Promise<EventRecord | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, org_id, source, external_id, operation, content_hash,
+                 parent_event_id, occurred_at, ingested_at
+          FROM events WHERE id = ?
+        `,
+      )
+      .get(id) as EventRow | undefined;
+    return row ? this.toEvent(row) : null;
+  }
+
   async listEvents(orgId: string): Promise<EventRecord[]> {
     const rows = this.database
       .prepare(
@@ -141,6 +176,86 @@ export class SqliteAuthorityStore
       )
       .all(orgId) as EventRow[];
     return rows.map((row) => this.toEvent(row));
+  }
+
+  async putDisposition(decision: ArrangementDecision): Promise<void> {
+    this.database
+      .prepare(
+        `
+          INSERT INTO message_dispositions (
+            event_id, org_id, disposition, layer, reason_codes_json, score, decided_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(event_id) DO UPDATE SET
+            org_id = excluded.org_id,
+            disposition = excluded.disposition,
+            layer = excluded.layer,
+            reason_codes_json = excluded.reason_codes_json,
+            score = excluded.score,
+            decided_at = excluded.decided_at
+        `,
+      )
+      .run(
+        decision.event_id,
+        decision.org_id,
+        decision.disposition,
+        decision.layer,
+        JSON.stringify(decision.reason_codes),
+        decision.score,
+        decision.decided_at,
+      );
+  }
+
+  async getDisposition(eventId: string): Promise<ArrangementDecision | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT event_id, org_id, disposition, layer, reason_codes_json, score, decided_at
+          FROM message_dispositions WHERE event_id = ?
+        `,
+      )
+      .get(eventId) as DispositionRow | undefined;
+    return row ? this.toDisposition(row) : null;
+  }
+
+  async listInbox(orgId: string): Promise<InboxItem[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT
+            d.event_id, d.org_id AS disposition_org_id, d.disposition, d.layer,
+            d.reason_codes_json, d.score, d.decided_at,
+            e.id, e.source, e.external_id, e.operation, e.content_hash,
+            e.parent_event_id, e.occurred_at, e.ingested_at
+          FROM message_dispositions d
+          JOIN events e ON e.id = d.event_id
+          JOIN source_heads h ON h.current_event_id = e.id
+          WHERE d.org_id = ? AND d.disposition = 'current_work'
+          ORDER BY e.occurred_at DESC
+        `,
+      )
+      .all(orgId) as InboxRow[];
+    return rows.map((row) => ({
+      decision: this.toDisposition({
+        event_id: row.event_id,
+        org_id: row.disposition_org_id,
+        disposition: row.disposition,
+        layer: row.layer,
+        reason_codes_json: row.reason_codes_json,
+        score: row.score,
+        decided_at: row.decided_at,
+      }),
+      event: this.toEvent({
+        id: row.id,
+        org_id: row.disposition_org_id,
+        source: row.source,
+        external_id: row.external_id,
+        operation: row.operation,
+        content_hash: row.content_hash,
+        parent_event_id: row.parent_event_id,
+        occurred_at: row.occurred_at,
+        ingested_at: row.ingested_at,
+      }),
+    }));
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
@@ -679,6 +794,18 @@ export class SqliteAuthorityStore
       parent_event_id: row.parent_event_id ?? undefined,
       occurred_at: row.occurred_at,
       ingested_at: row.ingested_at,
+    };
+  }
+
+  private toDisposition(row: DispositionRow): ArrangementDecision {
+    return {
+      event_id: row.event_id,
+      org_id: row.org_id,
+      disposition: row.disposition,
+      layer: row.layer,
+      reason_codes: JSON.parse(row.reason_codes_json) as string[],
+      score: row.score,
+      decided_at: row.decided_at,
     };
   }
 
