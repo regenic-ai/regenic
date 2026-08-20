@@ -1,16 +1,16 @@
 # 协作平台集成架构
 
 - **English:** [../en/CONTEXT_PLATFORM_INTEGRATION.md](../en/CONTEXT_PLATFORM_INTEGRATION.md)
-- **相关：** [产品定位](PRODUCT.md) · [采集架构](INGESTION_ARCHITECTURE.md) · RFC 0005、RFC 0006、RFC 0007
+- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [采集架构](INGESTION_ARCHITECTURE.md) · RFC 0005、RFC 0006、RFC 0007
 - **状态：** Phase 1 和 Phase 2 的交付方向
 
-## 1. 决策
+## 1. 概述
 
-Regenic 不做第二个即时通信工具、协作 Studio、Agent 市场或通用 Agent Operating System。它是这些产品之下的**有证据的上下文加工层**。
+Regenic 在已有协作与消息工具之下编排消息。插件翻译渠道流量。内核负责证据、出处与调度。
 
-像 Teamily 一类的人机协作平台可以同时是对话、Agent 回合、文档和工作流结果的上游来源，以及接收有边界、有证据输出的下游上下文消费者。
+协作平台可以同时是上游来源（对话、Agent 回合、文档、工作流结果），以及有边界、有证据输出的下游消费者。
 
-它们负责对话体验和 Agent 编排。Regenic 负责证据采集、版本、provenance、边界控制、处理状态和可迁移输出。
+对话体验和 Agent 循环由协作平台负责。Regenic 负责消息编排：证据采集、版本、provenance、边界、处理状态和可迁移输出。详见[消息编排](MESSAGE_ORCHESTRATION.md)。
 
 ## 2. 边界
 
@@ -61,7 +61,7 @@ Canonical Event + Blob + revision/tombstone + quarantine
 4. **Evidence Bundle 端口：** 定义 consumer identity、用途、证据列表和按策略过滤的发布。先实现本地 JSONL driver，再考虑直连 Teamily API driver。
 5. **提案返回路径：** 将 Agent 创建的建议映射为 proposal 类待处理对象；必须由人或受治理的 distill job 接受。
 
-## 5. 不做
+## 5. 范围外
 
 - 重做 Teamily 的聊天、Studio、公共 feed、Agent 市场、模型路由或多 Agent 编排。
 - 没有 Event 证据与生命周期控制时，把 Agent 记忆或生成摘要视为权威。

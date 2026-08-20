@@ -1,16 +1,16 @@
 # Context Platform Integration Architecture
 
-- **Chinese:** [../zh/CONTEXT_PLATFORM_INTEGRATION.md](../zh/CONTEXT_PLATFORM_INTEGRATION.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · RFC 0005, RFC 0006, RFC 0007
+- **简体中文:** [../zh/CONTEXT_PLATFORM_INTEGRATION.md](../zh/CONTEXT_PLATFORM_INTEGRATION.md)
+- **Related:** [PRODUCT.md](PRODUCT.md) · [Message orchestration](MESSAGE_ORCHESTRATION.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · RFC 0005, RFC 0006, RFC 0007
 - **Status:** Direction for Phase 1 and Phase 2 delivery
 
-## 1. Decision
+## 1. Overview
 
-Regenic is not a second messenger, collaborative studio, agent marketplace, or general Agent Operating System. It is the **evidence-backed context processing layer** beneath those products.
+Regenic orchestrates messages under existing collaboration and messaging tools. Plugins translate channel traffic. The kernel keeps evidence, provenance, and dispatch.
 
-Human-AI collaboration platforms such as Teamily can be both an upstream source of conversations, agent turns, documents, and workflow outcomes, and a downstream context consumer that receives bounded, evidence-backed outputs.
+A collaboration platform can be an upstream source (conversations, agent turns, documents, workflow outcomes) and a downstream consumer of bounded, evidence-backed output.
 
-Their conversational UX and agent orchestration remain their responsibility. Regenic owns evidence ingestion, versioning, provenance, boundary enforcement, processing state, and portable outputs.
+That platform owns conversation UX and agent loops. Regenic owns message orchestration: evidence ingest, versioning, provenance, boundaries, processing state, and portable output. See [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md).
 
 ## 2. Boundary
 
@@ -61,7 +61,7 @@ The current local digest is a deterministic evidence index. It may expose Event 
 4. **Evidence Bundle port:** define consumer identity, purpose, evidence list, and policy-filtered publication. Implement a local JSONL driver before any direct Teamily API driver.
 5. **Proposal return path:** map agent-created suggestions to proposal-like pending objects; require a human or governed distill job to accept them.
 
-## 5. Non-goals
+## 5. Out of scope
 
 - Reimplementing Teamily chat, studios, public feed, agent marketplace, model routing, or multi-agent orchestration.
 - Treating an agent's memory or generated summary as authority without Event evidence and lifecycle controls.
