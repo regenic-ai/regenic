@@ -49,7 +49,16 @@ Conversations do not live in the console. Replies go back to the original channe
 
 ## Plugins
 
-Connectors, models, and stores attach as **plugins** (a port plus a driver). The kernel stays small. New channel or model support is added by mounting a plugin, not by patching a privileged core. Unloading a plugin unwinds its effects: no leftover writes, no leftover grants.
+Connectors, models, and stores attach as **plugins** (a port plus a driver). A running process is a plugin tree assembled by `@regenic/plugin-host`. New channel or model support is added by mounting a plugin, not by patching a privileged core. Unloading a plugin disposes its fiber: registry rows, listeners, and open stores unwind with it. No leftover writes, no leftover grants.
+
+Capabilities are looked up by `ctx` key, not by importing a driver:
+
+| `ctx` key | Port |
+| --- | --- |
+| `authority` | `AuthorityStore` plus connector runtime |
+| `blobs` | `BlobStore` |
+| `ingest` | Ingest service (the only Event / Blob writer) |
+| `connectors` | Registry of mounted `ChannelConnector`s |
 
 **Kernel**
 

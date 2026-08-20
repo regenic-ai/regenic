@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
-import { FsBlobStore } from "@regenic/blob-store";
 import {
   ConnectorRunner,
   type ContextConsumer,
@@ -10,15 +9,10 @@ import {
   type GenericImportDefaults,
   type GenericImportFormat,
   type GenericImportMapping,
-  IngestionService,
   type JsonValue,
 } from "@regenic/domain";
-import { SqliteAuthorityStore } from "@regenic/authority-store";
-import {
-  SlackChannelPollConnector,
-  SlackWebApiHistoryClient,
-  type SlackFetch,
-} from "@regenic/slack-connector";
+import { slackChannelPlugin, type SlackFetch } from "@regenic/slack-connector";
+import { withLocalHost } from "./host";
 
 interface CliOutput {
   write(chunk: string): boolean;
@@ -100,13 +94,11 @@ async function installSlack(
   now: () => string,
   createId: () => string,
 ): Promise<void> {
-  const database = requireOption(options, "database");
   const orgId = requireOption(options, "org");
   const channelId = requireOption(options, "channel");
   const tokenEnv = optionString(options, "token-env") ?? "REGENIC_SLACK_TOKEN";
-  const store = new SqliteAuthorityStore(database);
-  try {
-    const installation = await store.createInstallation({
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    writeJson(stdout, await host.get("authority").createInstallation({
       id: optionString(options, "id") ?? createId(),
       org_id: orgId,
       connector_type: "slack-channel",
@@ -114,11 +106,8 @@ async function installSlack(
       config: slackConfig(channelId, optionString(options, "channel-name")),
       credentials_ref: `env:${tokenEnv}`,
       created_at: now(),
-    });
-    writeJson(stdout, installation);
-  } finally {
-    store.close();
-  }
+    }));
+  });
 }
 
 async function syncSlack(
@@ -129,14 +118,18 @@ async function syncSlack(
   createId: () => string,
   fetchOverride?: SlackFetch,
 ): Promise<void> {
-  const database = requireOption(options, "database");
-  const blobRoot = requireOption(options, "blob-root");
   const installationId = requireOption(options, "installation");
-  const store = new SqliteAuthorityStore(database);
-  try {
+  await withLocalHost({
+    database: requireOption(options, "database"),
+    blobRoot: requireOption(options, "blob-root"),
+  }, async (host) => {
+    const store = host.get("authority");
     const installation = await store.findInstallation(installationId);
     if (!installation || installation.connector_type !== "slack-channel") {
       throw new Error(`Slack installation not found: ${installationId}`);
+    }
+    if (installation.status !== "enabled") {
+      throw new Error(`Slack installation is disabled: ${installationId}`);
     }
     const channelId = configString(installation.config, "channel_id");
     if (!channelId) {
@@ -147,24 +140,21 @@ async function syncSlack(
     if (!token) {
       throw new Error(`Slack access token is missing from environment variable ${tokenEnv}`);
     }
-    const client = new SlackWebApiHistoryClient({
-      access_token: token,
-      endpoint: env.REGENIC_SLACK_API_ENDPOINT,
-      fetch: fetchOverride,
-    });
-    const connector = new SlackChannelPollConnector(client, {
-      connector_id: installation.id,
+    await host.plugin(slackChannelPlugin, {
+      installation_id: installation.id,
       org_id: installation.org_id,
       channel_id: channelId,
       channel_name: configString(installation.config, "channel_name"),
+      access_token: token,
+      endpoint: env.REGENIC_SLACK_API_ENDPOINT,
+      fetch: fetchOverride,
       now,
     });
-    const runner = new ConnectorRunner(
-      connector,
-      new IngestionService(new FsBlobStore(blobRoot), store),
-      store,
-      now,
-    );
+    const connector = host.get("connectors").get(installation.id);
+    if (!connector) {
+      throw new Error(`Slack connector failed to mount: ${installationId}`);
+    }
+    const runner = new ConnectorRunner(connector, host.get("ingest"), store, now);
     const maxPages = requirePositiveInteger(options, "max-pages", 1);
     const runs = [];
     const seenCursors = new Set<string>();
@@ -193,34 +183,25 @@ async function syncSlack(
         lastRun.next_cursor !== undefined,
       runs,
     });
-  } finally {
-    store.close();
-  }
+  });
 }
 
 async function showStatus(options: CommandOptions, stdout: CliOutput): Promise<void> {
-  const store = new SqliteAuthorityStore(requireOption(options, "database"));
-  try {
-    const installations = await store.listInstallations(requireOption(options, "org"));
-    const status = await Promise.all(
-      installations.map(async (installation) => ({
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    const store = host.get("authority");
+    writeJson(stdout, await Promise.all(
+      (await store.listInstallations(requireOption(options, "org"))).map(async (installation) => ({
         installation,
         attempts: await store.listAttempts(installation.id),
       })),
-    );
-    writeJson(stdout, status);
-  } finally {
-    store.close();
-  }
+    ));
+  });
 }
 
 async function showQuarantines(options: CommandOptions, stdout: CliOutput): Promise<void> {
-  const store = new SqliteAuthorityStore(requireOption(options, "database"));
-  try {
-    writeJson(stdout, await store.listQuarantines(requireOption(options, "installation")));
-  } finally {
-    store.close();
-  }
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    writeJson(stdout, await host.get("authority").listQuarantines(requireOption(options, "installation")));
+  });
 }
 
 async function importFile(
@@ -244,12 +225,10 @@ async function importFile(
     mapping: mapping.mapping,
     defaults: mapping.defaults,
   });
-  const store = new SqliteAuthorityStore(database);
-  try {
-    const service = new IngestionService(new FsBlobStore(blobRoot), store);
+  await withLocalHost({ database, blobRoot }, async (host) => {
     const batches = [];
     for (const batch of imported.batches) {
-      const result = await service.ingest(batch);
+      const result = await host.get("ingest").ingest(batch);
       if (!result.valid) {
         throw new Error(`Generated import batch was rejected: ${result.error_code}`);
       }
@@ -260,35 +239,33 @@ async function importFile(
       batches,
       errors: imported.errors,
     });
-  } finally {
-    store.close();
-  }
+  });
 }
 
 async function exportJsonl(
   options: CommandOptions,
   stdout: CliOutput,
 ): Promise<void> {
-  const store = new SqliteAuthorityStore(requireOption(options, "database"));
-  try {
-    const events = await store.listEvents(requireOption(options, "org"));
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    const events = await host.get("authority").listEvents(requireOption(options, "org"));
     const output = events
       .map((event) => JSON.stringify({ schema_version: "1.0", kind: "event", event }))
       .join("\n");
     await writeFile(requireOption(options, "output"), output ? `${output}\n` : "", "utf8");
     writeJson(stdout, { exported_event_count: events.length });
-  } finally {
-    store.close();
-  }
+  });
 }
 
 async function renderDigest(
   options: CommandOptions,
   stdout: CliOutput,
 ): Promise<void> {
-  const store = new SqliteAuthorityStore(requireOption(options, "database"));
-  const blobStore = new FsBlobStore(requireOption(options, "blob-root"));
-  try {
+  await withLocalHost({
+    database: requireOption(options, "database"),
+    blobRoot: requireOption(options, "blob-root"),
+  }, async (host) => {
+    const store = host.get("authority");
+    const blobStore = host.get("blobs");
     const events = await store.listEvents(requireOption(options, "org"));
     const installations = await store.listInstallations(requireOption(options, "org"));
     const quarantines = (await Promise.all(
@@ -307,9 +284,7 @@ async function renderDigest(
       rendered_event_count: entries.length,
       open_quarantine_count: quarantines.length,
     });
-  } finally {
-    store.close();
-  }
+  });
 }
 
 async function setConnectorStatus(
@@ -318,9 +293,8 @@ async function setConnectorStatus(
   now: () => string,
   status: "enabled" | "disabled",
 ): Promise<void> {
-  const store = new SqliteAuthorityStore(requireOption(options, "database"));
-  try {
-    const installation = await store.setInstallationStatus({
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    const installation = await host.get("authority").setInstallationStatus({
       id: requireOption(options, "installation"),
       org_id: requireOption(options, "org"),
       status,
@@ -330,9 +304,7 @@ async function setConnectorStatus(
       throw new Error("Connector installation was not found in this organization");
     }
     writeJson(stdout, installation);
-  } finally {
-    store.close();
-  }
+  });
 }
 
 async function resetConnectorCursor(
@@ -340,8 +312,8 @@ async function resetConnectorCursor(
   stdout: CliOutput,
   now: () => string,
 ): Promise<void> {
-  const store = new SqliteAuthorityStore(requireOption(options, "database"));
-  try {
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    const store = host.get("authority");
     const installationId = requireOption(options, "installation");
     const installation = await store.findInstallation(installationId);
     if (!installation || installation.org_id !== requireOption(options, "org")) {
@@ -356,9 +328,7 @@ async function resetConnectorCursor(
       throw new Error("Connector stream cursor was not found");
     }
     writeJson(stdout, cursor);
-  } finally {
-    store.close();
-  }
+  });
 }
 
 async function publishEvidenceBundle(
@@ -367,9 +337,8 @@ async function publishEvidenceBundle(
   now: () => string,
   createId: () => string,
 ): Promise<void> {
-  const store = new SqliteAuthorityStore(requireOption(options, "database"));
-  try {
-    const events = await store.listEvents(requireOption(options, "org"));
+  await withLocalHost({ database: requireOption(options, "database") }, async (host) => {
+    const events = await host.get("authority").listEvents(requireOption(options, "org"));
     const evidence = events
       .slice(-requirePositiveInteger(options, "max-events", 100))
       .map((event) => ({
@@ -391,9 +360,7 @@ async function publishEvidenceBundle(
     };
     await new JsonlContextConsumer(requireOption(options, "output")).publish(bundle);
     writeJson(stdout, { bundle_id: bundle.id, published_event_count: evidence.length });
-  } finally {
-    store.close();
-  }
+  });
 }
 
 function parseOptions(args: string[]): CommandOptions {
@@ -517,8 +484,8 @@ function requireString(value: unknown): string {
 
 async function readEventText(
   contentHash: string | undefined,
-  store: SqliteAuthorityStore,
-  blobStore: FsBlobStore,
+  store: { findBlob(contentHash: string): Promise<{ media_type: string } | null> },
+  blobStore: { get(hash: string): Promise<Uint8Array> },
 ): Promise<string | undefined> {
   if (!contentHash) {
     return undefined;

@@ -188,6 +188,18 @@ describe("regenic-local", () => {
       "connector-disable", "--database", database, "--org", "local-owner",
       "--installation", "slack-1",
     ]);
+    await assert.rejects(
+      () => run([
+        "slack-sync", "--database", database, "--blob-root", blobRoot,
+        "--installation", "slack-1",
+      ], {
+        env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
+        async fetch() {
+          throw new Error("disabled connector must not poll Slack");
+        },
+      }),
+      /Slack installation is disabled/,
+    );
     const enabled = await run([
       "connector-enable", "--database", database, "--org", "local-owner",
       "--installation", "slack-1",

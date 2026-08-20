@@ -12,11 +12,12 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm --filter @regenic/domain build && pnpm run build && node --test test/*.test.cjs",
+    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/domain build && pnpm run build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@regenic/domain": "workspace:*"
+    "@regenic/domain": "workspace:*",
+    "@regenic/plugin-host": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
