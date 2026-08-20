@@ -1,6 +1,6 @@
 # Collaboration Platform Source Intake
 
-- **Chinese:** [../zh/COLLABORATION_PLATFORM_SOURCE_INTAKE.md](../zh/COLLABORATION_PLATFORM_SOURCE_INTAKE.md)
+- **简体中文:** [../zh/COLLABORATION_PLATFORM_SOURCE_INTAKE.md](../zh/COLLABORATION_PLATFORM_SOURCE_INTAKE.md)
 - **Related:** [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md)
 - **Status:** Required input before a vendor-specific adapter
 

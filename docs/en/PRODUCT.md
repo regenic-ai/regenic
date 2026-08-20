@@ -1,82 +1,71 @@
-# Product positioning
+# Product
 
-- **中文:** [../zh/PRODUCT.md](../zh/PRODUCT.md)
-- **Related:** [ROADMAP.md](ROADMAP.md) · [personal → org](rfcs/personal-to-org.md) · RFCs 0001–0007
+- **简体中文:** [../zh/PRODUCT.md](../zh/PRODUCT.md)
+- **Related:** [message orchestration](MESSAGE_ORCHESTRATION.md) · [ROADMAP.md](ROADMAP.md) · [personal → org](rfcs/personal-to-org.md) · RFCs 0001–0007
 
-## 1. What Regenic is
+## Overview
 
-Regenic is an **information processing layer** for people and organizations.
+Regenic is a message orchestration layer for people and organizations.
 
-It does **not** produce primary information (chat, tickets, mail, docs, metrics).
-It **ingests** information (push or pull), then **processes** it so humans and
-agents can judge and act under shared standards and shared context.
+It does not produce chat, mail, tickets, docs, or posts. Those remain in the channels where they were written. Regenic connects to that traffic. A workday in many groups can mean thousands of messages. Shared judgment standards and personal habits put the ones that need handling into a **message console** shared by humans and agents, and leave the rest outside the current work. A serious anomaly, or a message that has entered the current workflow, still reaches the console. Replies go back to the original channel.
 
-It is the evidence and processing layer beneath collaboration and Agent
-Operating System products, not a replacement messenger, studio, or agent
-marketplace. See [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md).
+Access control and judgment standards stay in the kernel.
 
-Processing includes (non-exhaustive):
+Regenic sits under existing conversation and agent tools as an evidence and processing layer. See [Context platform integration](CONTEXT_PLATFORM_INTEGRATION.md).
 
 | Stage | Meaning |
 | --- | --- |
-| Ingest | Connectors: webhook push, poll/pull, file import, agent turns |
+| Connect | Slack, mail, tickets, files, agent turns → one message format |
 | Filter | Drop noise; respect ACL / personal boundaries |
-| Layer | Durability and sensitivity tiers (Event / Blob / Digest / Standard) |
-| Distill facts | Claims, digests, “what you need to know” — evidence-backed |
+| Rank | Durability, sensitivity, “need to know” (Event / Blob / Digest / Standard) |
+| Distill | Evidence-backed claims, digests, follow-up signals |
+| Dispatch | Against a versioned standard and personal habits: what needs handling goes to the console; the rest stay outside the current work |
+| Send | Reply back to the original channel |
 | Iterate standards | Gaps → proposals → versioned judgment standards (RFC 0001) |
-| Act / follow-up | Queues, handoffs, unreplied threads — **applications** of processing |
 
-Inbox triage, “should know,” and unreplied ranking are **surfaces** of this
-pipeline — not the product definition.
+## Capabilities
 
-## 2. Dual-capability model
+1. **Judgment standards** — encode, apply, and revise ranking and dispatch rules
+2. **Shared context** — the same decision sees the same facts, with provenance
 
-From the Regenic book:
+Channel traffic feeds these two. Method source: [regenic-ai/regenic-book](https://github.com/regenic-ai/regenic-book).
 
-1. **Judgment standards** — encode / apply / revise shared standards  
-2. **Shared context** — same fact set for the same decision, with provenance  
-
-Regenic turns channel traffic into inputs for those two capabilities.
-
-## 3. Delivery sequence: Personal → Org
+## Personal, then Org
 
 | Edition | Scope |
 | --- | --- |
-| **Personal (now)** | One principal; local-first processing |
+| **Personal (now)** | One principal; authority on the machine |
 | **Org (later)** | Canonical events + projections across people |
 
-Personal ships first so one person can run the full loop. Org builds on the
-same object model with identity, policy, and multi-person canonicalization
-([personal → org](rfcs/personal-to-org.md)).
+Personal ships first so one person can connect a channel, dispatch work, and optionally reply. Org uses the same message format ([personal → org](rfcs/personal-to-org.md)).
 
-## 4. Personal principles
+## Personal edition
 
-1. **Local authority** — device or self-hosted store is source of truth.  
-2. **Optional remote history** — user-controlled cold copy; off by default;
-   not the org database.  
-3. **Open export** — Markdown / JSON(L); data stays portable.  
-4. **Pluggable ingest** — ChannelConnector for push and pull.  
-5. **Not a note-taking product** — no outliner or bi-directional note graph
-   as the Phase 1 core.
+1. **Local authority** — the device or self-hosted store is source of truth.
+2. **Optional remote history** — off by default; a user-controlled cold copy; not the org database.
+3. **Open export** — Markdown / JSON(L); data stays portable.
+4. **Existing channels** — Slack stays Slack. Regenic reads from and writes back to those apps; it does not replace them.
+5. **Not a notes product** — no outliner or bi-directional note graph in Phase 1.
+6. **Console is a workbench** — the default view is what needs handling now, not every channel’s firehose.
 
-## 5. Non-goals (near term)
+## Out of scope
 
-- Replacing Feishu / Slack / email as the message transport  
-- Building a general knowledge-base or docs suite  
-- Generic ERP modules  
-- Treating personal AI labels as org ground truth without an org distill job  
-- Rebuilding a collaboration platform's messenger, studio, public feed, or model router
+- Replacing the apps where messages are already written
+- A general knowledge base or docs suite
+- Generic ERP modules
+- Treating personal AI labels as org truth without an org distill job
+- Rebuilding another product’s messenger, studio, public feed, or model router
+- Unbounded agent loops without standards and context
 
-## 6. Mapping to Accepted RFCs
+## RFC map
 
-| Processing idea | Primary RFCs |
+| Idea | Primary RFCs |
 | --- | --- |
-| Ingest + layer + GC | 0005 |
+| Connect + layer + GC | 0005 |
 | Facts / snapshots | 0002 |
-| Standards iteration | 0001, 0007 |
+| Standards / dispatch rules | 0001, 0007 |
 | Collaboration / handoff | 0003 |
-| Symmetric API | 0004 |
-| ACL / non-escalation | 0006 |
+| Console + agents, same API | 0004 |
+| ACL / non-escalation / send privilege | 0006 |
 
-[ROADMAP.md](ROADMAP.md) delivers Personal processing first, then Org.
-Accepted RFCs define the shared target schema for both.
+Personal orchestration ships first, then Org. See [ROADMAP.md](ROADMAP.md). Accepted RFCs are the shared target schema.

@@ -1,63 +1,37 @@
 # Regenic
 
-**Information processing layer for people and organizations.**
+Message orchestration for people and organizations.
 
-Regenic does **not** produce primary channel content (chat, mail, tickets, docs).
-It **ingests** information (push or pull) and **processes** it — filter, layer,
-distill facts, iterate judgment standards — so humans and agents can act under
-shared standards and shared context.
+Regenic is an open-source message orchestration layer. It connects to chat, mail, tickets, and documents already in use. Judgment standards and personal habits decide which messages need handling now; those land in a console shared by humans and agents. The rest stay outside the current work. Replies go back to the original channel.
 
-Implements the [dual-capability model](https://regenic.ai/en/method) from
-*Rewrite the DNA* / 《重写基因》:
+Access control and judgment standards stay in a small kernel.
 
-1. **Unified judgment standards** — encode, apply, and revise standards
-2. **Unified context** — one fact set for a decision, with provenance
-
-Delivery order: **Personal (local-first) → Org**.
-See [docs/en/PRODUCT.md](docs/en/PRODUCT.md).
+Delivery order is **Personal (local-first)**, then Org. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
 
 [简体中文](README.zh-CN.md)
 
-## Methodology source
-
-The book, [regenic.ai](https://regenic.ai), and public standards live in
-[**regenic-ai/regenic-book**](https://github.com/regenic-ai/regenic-book).
-
 ## Status
 
-**Phase 0 HardGate met; Phase 1 = Personal processing.** Architecture RFCs
-0001–0007 are Accepted. Current build focus is local-first personal ingest and
-processing — not org ERP.
+Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is local-first connectors and the kernel.
 
 | Capability | Description | Status |
 | --- | --- | --- |
-| Information processing | Ingest → filter → layer → distill → standards (push/pull) | Product thesis ([PRODUCT](docs/en/PRODUCT.md)) |
-| Personal (local-first) | One principal; open export; optional cloud history | Phase 1 (now) |
-| Org overlay | Canonical Event + projections across people | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
-| Judgment standards | Versioned shared standards | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
-| Shared context | Claims, snapshots, Event/Blob | RFC Accepted ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
+| Message orchestration | Connect sources → unify messages → rank → dispatch → optional reply | [PRODUCT](docs/en/PRODUCT.md) · [architecture](docs/en/MESSAGE_ORCHESTRATION.md) |
+| Connectors | Slack, file import; more channels later | Phase 1 (now) |
+| Personal | One principal; open export; optional remote history | Phase 1 (now) |
+| Org | Canonical Event + projections across people | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
+| Standards | Versioned shared standards | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
+| Context | Claims, snapshots, Event/Blob | RFC Accepted ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
 | Collaboration | Proposal / Decision / Review / Handoff | RFC Accepted ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
-| Symmetric API | Human UI and agents, same `/v1` | RFC Accepted ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
-| ACL + Agent identity | `visible()`; no distill escalation | RFC Accepted ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |
-| Daily distillation | Standards-machine intake | RFC Accepted ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
+| API | Humans and agents use the same `/v1` | RFC Accepted ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
+| ACL | `visible()`; distill does not raise privilege; send is a grant | RFC Accepted ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |
+| Distillation | Intake for the standards machine | RFC Accepted ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
 
-## Technology stack
+Method, site, and public standards: [regenic-ai/regenic-book](https://github.com/regenic-ai/regenic-book). Store and runtime defaults: [TECH_STACK.md](docs/en/TECH_STACK.md).
 
-See [TECH_STACK.md](docs/en/TECH_STACK.md). Personal defaults: SQLite, local
-Blob, in-process jobs, Electron. Org adds PostgreSQL, object storage, Redis,
-and Compose. Connectors, models, identity, and similar stay behind swappable
-ports.
+## Getting started
 
-## Architecture RFCs
-
-Accepted RFCs live under [`docs/en/rfcs/`](docs/en/rfcs/README.md). Personal and
-Org share the same target model.
-
-## Scaffold
-
-The repo is a runnable skeleton (health checks, basic wiring). Real processing
-starts in Phase 1. Compose below is for local/dev wiring; the Personal product
-defaults to on-machine / desktop-embedded, not this cloud-shaped stack.
+The repository is a runnable skeleton (health checks and wiring). Processing logic starts in Phase 1. Compose is for local development. The Personal product runs on the machine.
 
 ```bash
 pnpm install
@@ -65,11 +39,11 @@ docker compose up --build
 curl -s http://localhost:3000/health
 ```
 
-## Local Slack Connector
+## Local CLI
 
-The local CLI configures and runs a single Slack channel against the SQLite and
-filesystem stores. It never writes an access token to the database; provide the
-token only through the referenced environment variable when synchronizing.
+The local CLI syncs connectors against SQLite and a filesystem Blob store. Access tokens are not written to the database. Pass the token through the referenced environment variable when synchronizing.
+
+### Slack connector
 
 ```bash
 pnpm local slack-install --database ./regenic.db --org local-owner \
@@ -90,10 +64,9 @@ pnpm local reset-cursor --database ./regenic.db --org local-owner \
 	--installation slack-engineering --stream channel:C123
 ```
 
-## Local File Import
+### File import
 
-Import CSV or JSONL through an explicit JSON mapping file. Invalid rows are
-reported while valid rows are ingested through the same canonical path.
+Import CSV or JSONL through an explicit JSON mapping file. Invalid rows are reported; valid rows become the same kind of message as a channel sync.
 
 ```json
 {
@@ -117,31 +90,27 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source local-file
 ```
 
-## Local JSONL Export
+### JSONL export
 
-Export append-only Event metadata as JSONL. Each line includes provenance and a
-content hash reference, never inline Blob bytes.
+Export append-only Event metadata as JSONL. Each line includes provenance and a content hash, never inline Blob bytes.
 
 ```bash
 pnpm local export-jsonl --database ./regenic.db --org local-owner \
 	--output ./events.jsonl
 ```
 
-## Local Markdown Digest
+### Markdown digest
 
-Render a date-grouped Markdown view of append-only text Events. Every entry
-keeps Event and Blob evidence references, with deterministic operation and
-quarantine status counts.
+Render a date-grouped Markdown view of append-only text Events. Every entry keeps Event and Blob evidence references.
 
 ```bash
 pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --output ./digest.md
 ```
 
-## Evidence Bundle Publication
+### Evidence bundle
 
-Publish bounded committed Event references for a declared consumer and purpose.
-The local JSONL driver never includes Blob bodies or connector credentials.
+Publish bounded committed Event references for a declared consumer and purpose. The local JSONL driver never includes Blob bodies or connector credentials.
 
 ```bash
 pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
@@ -149,23 +118,22 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 	--output ./evidence-bundles.jsonl
 ```
 
-## Roadmap
+## Documentation
 
-[ROADMAP](docs/en/ROADMAP.md) · [PRODUCT](docs/en/PRODUCT.md) ·
+[Message orchestration](docs/en/MESSAGE_ORCHESTRATION.md) ·
+[PRODUCT](docs/en/PRODUCT.md) · [ROADMAP](docs/en/ROADMAP.md) ·
 [TECH_STACK](docs/en/TECH_STACK.md) ·
-[Ingestion architecture](docs/en/INGESTION_ARCHITECTURE.md)
+[Ingestion](docs/en/INGESTION_ARCHITECTURE.md)
 
 ## Contributing
 
-Cite the owning RFC on feature PRs, and keep changes aligned with
-[PRODUCT.md](docs/en/PRODUCT.md): information processing, Personal before Org.
-Discussion: [Issues](https://github.com/regenic-ai/regenic/issues).
+Pull requests should cite the owning RFC and stay aligned with [PRODUCT.md](docs/en/PRODUCT.md). Discussion: [Issues](https://github.com/regenic-ai/regenic/issues).
 
-Please follow the [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md).
-Security reports: [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new).
+Follow the [Code of Conduct](https://github.com/regenic-ai/regenic-book/blob/main/CODE_OF_CONDUCT.md).
+Report security issues with a [private advisory](https://github.com/regenic-ai/regenic/security/advisories/new).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE).
 
-Methodology content in `regenic-ai/regenic-book` remains under CC BY-NC 4.0 where applicable.
+Methodology in `regenic-ai/regenic-book` remains CC BY-NC 4.0 where that license applies.

@@ -2,19 +2,21 @@
 
 - **English:** [../en/INGESTION_ARCHITECTURE.md](../en/INGESTION_ARCHITECTURE.md)
 - **状态：** Phase 1 实现架构
-- **相关：** RFC 0005、RFC 0006、RFC 0007 与[技术栈](TECH_STACK.md)
+- **相关：** RFC 0005、RFC 0006、RFC 0007、[技术栈](TECH_STACK.md) 与[消息编排](MESSAGE_ORCHESTRATION.md)
 
 ## 1. 目的
 
-Phase 1 从面向单人的本地优先采集基础开始。它接收原生输入和外部连接器数据，将每种来源转换为同一份规范契约，并持久化符合 RFC 形状的 Blob 与 Event 记录。后续组织层继续使用同一份契约，无需替换个人采集管线。
+Phase 1 是面向单人的本地优先采集基础。原生输入和连接器被译成 `IngestBatch`，并持久化为符合 RFC 形状的 Blob 与 Event。组织层随后使用同一份契约，不替换个人采集管线。
 
-核心设计规则是：
+连接器是[消息编排](MESSAGE_ORCHESTRATION.md)的接收半边。发送（`EgressAdapter`）更晚，不属于本采集核心。
 
-> 来源适配器只做翻译。采集核心负责校验、鉴权、去重、存储与审计。
+设计规则：
+
+> 适配器只翻译。采集核心负责校验、鉴权、去重、存储与审计。
 
 连接器不得直接写入 Event、Blob、身份或访问策略记录。来源特有行为留在产品不变量之外，因此增加新来源时，无需复制边界、存储或可靠性逻辑。
 
-对于协作平台和 Agent OS 来源，Agent 回合是带 provenance 的来源记录，不是权威事实。详见[协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)。
+对协作来源，Agent 回合是带 provenance 的来源记录，不是权威事实。详见[协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)。
 
 ## 2. 范围
 
@@ -30,7 +32,7 @@ Phase 1 从面向单人的本地优先采集基础开始。它接收原生输入
 - 产出可审计、可供后续蒸馏使用的 Event 记录。
 - 通过稳定端口保持连接器与存储实现可替换。
 
-### 2.2 非目标
+### 2.2 范围外
 
 - Digest 生成或日蒸馏。
 - Claim 抽取、上下文 Snapshot 或知识图谱构建。
@@ -357,7 +359,7 @@ attempt_count
 ### 8.5 单条记录流程
 
 ```text
-校验 envelope
+校验 IngestBatch
   -> 校验连接器与权威边界
   -> 解析本地 owner 或组织 Principal
   -> 解析个人来源 scope 或组织 ACL scope
