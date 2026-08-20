@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   createGenericImport,
+  createGenericImportFromProfile,
   IngestionService,
   MemoryAuthorityStore,
   MemoryBlobStore,
@@ -123,5 +124,25 @@ describe("createGenericImport", () => {
     assert.deepEqual(result.errors, [
       { code: "file_too_large", message: "File exceeds 1 byte limit" },
     ]);
+  });
+
+  it("uses a source import profile without duplicating canonical mapping", () => {
+    const result = createGenericImportFromProfile({
+      profile: {
+        id: "collaboration-export-v1",
+        connector_id: "collaboration-export",
+        source: "collaboration",
+        mapping: { external_id: "id", occurred_at: "timestamp", text: "body" },
+        defaults: { actor_id: "local-owner", scope_id: "personal", type: "message" },
+      },
+      format: "jsonl",
+      data: '{"id":"message-1","timestamp":"2026-08-11T23:00:00.000Z","body":"First"}',
+      org_id: "local-owner",
+      received_at: "2026-08-12T00:00:00.000Z",
+    });
+
+    assert.equal(result.batches[0].connector_id, "collaboration-export");
+    assert.equal(result.batches[0].records[0].source, "collaboration");
+    assert.equal(result.batches[0].records[0].type, "message");
   });
 });
