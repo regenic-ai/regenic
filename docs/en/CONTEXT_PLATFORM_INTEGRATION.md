@@ -55,7 +55,7 @@ The current local digest is a deterministic evidence index. It may expose Event 
 
 ## 4. Delivery Tasks
 
-1. **Source contract discovery:** obtain a representative Teamily export or API payload, permission model, pagination behavior, edits/deletes, and agent-turn identifiers. This is a hard input; do not infer a private protocol from product marketing material.
+1. **Source contract discovery:** complete the [source intake](COLLABORATION_PLATFORM_SOURCE_INTAKE.md) with a representative Teamily export or API payload, permission model, pagination behavior, edits/deletes, and agent-turn identifiers. This is a hard input; do not infer a private protocol from product marketing material.
 2. **Teamily export adapter:** add canonical fixtures and an import profile for the approved payload. Cover chat, thread, human/agent actor, document/workflow output, edit, delete, replay, and bad-record quarantine.
 3. **Teamily incremental connector:** only after stable API access exists, add bounded poll or webhook support and pass the conformance suite.
 4. **Evidence Bundle port:** define consumer identity, purpose, evidence list, and policy-filtered publication. Implement a local JSONL driver before any direct Teamily API driver.
