@@ -24,6 +24,14 @@ export interface GenericImportDefaults {
   type: string;
 }
 
+export interface SourceImportProfile {
+  id: string;
+  connector_id: string;
+  source: string;
+  mapping: GenericImportMapping;
+  defaults: GenericImportDefaults;
+}
+
 export interface GenericImportInput {
   format: GenericImportFormat;
   data: string | Uint8Array;
@@ -109,6 +117,29 @@ export function createGenericImport(input: GenericImportInput): GenericImportRes
     batches,
     errors,
   };
+}
+
+export function createGenericImportFromProfile(input: {
+  profile: SourceImportProfile;
+  format: GenericImportFormat;
+  data: string | Uint8Array;
+  org_id: string;
+  received_at: string;
+  max_bytes?: number;
+  max_records_per_batch?: number;
+}): GenericImportResult {
+  return createGenericImport({
+    format: input.format,
+    data: input.data,
+    connector_id: input.profile.connector_id,
+    org_id: input.org_id,
+    source: input.profile.source,
+    received_at: input.received_at,
+    mapping: input.profile.mapping,
+    defaults: input.profile.defaults,
+    max_bytes: input.max_bytes,
+    max_records_per_batch: input.max_records_per_batch,
+  });
 }
 
 function mapRecord(
