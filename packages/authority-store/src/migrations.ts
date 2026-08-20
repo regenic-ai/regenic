@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 2;
+export const LATEST_SCHEMA_VERSION = 3;
 
 export const MIGRATIONS = [
   {
@@ -102,6 +102,25 @@ export const MIGRATIONS = [
 
       CREATE INDEX ingest_quarantines_attempt_idx
         ON ingest_quarantines (attempt_id, created_at);
+    `,
+  },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE message_dispositions (
+        event_id TEXT PRIMARY KEY REFERENCES events(id),
+        org_id TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK (
+          disposition IN ('current_work', 'outside_current_work', 'pending')
+        ),
+        layer TEXT NOT NULL CHECK (layer IN ('L1_event')),
+        reason_codes_json TEXT NOT NULL,
+        score REAL NOT NULL,
+        decided_at TEXT NOT NULL
+      );
+
+      CREATE INDEX message_dispositions_inbox_idx
+        ON message_dispositions (org_id, disposition, decided_at);
     `,
   },
 ] as const;

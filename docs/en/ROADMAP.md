@@ -41,12 +41,12 @@ Local-first orchestration for one person. Sync and webhook both count as real
 connectors. Regenic orchestrates messages; it does not create the
 channel content.
 
-- [ ] Connector host: connectors mount beside the kernel; unload leaves no
+- [x] Connector host: connectors mount beside the kernel; unload leaves no
       leftover writes or grants
 - [ ] On-disk authority store (SQLite by default) + local Blob directory;
       in-process job queue
 - [ ] At least one real channel connector (`ChannelConnector`, pull and/or push)
-- [ ] Filter and layer into Event / Blob (RFC 0005 shapes, personal scope)
+- [x] Filter and layer into Event / Blob (RFC 0005 shapes, personal scope)
 - [ ] Message console: what needs handling now (priority, “need to know”,
       follow-up such as unreplied)
 - [ ] Open export (Markdown / JSONL)

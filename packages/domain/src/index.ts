@@ -6,13 +6,18 @@
 export * from "./ingestion";
 export * from "./ingestion-schema";
 export * from "./canonicalization";
+export * from "./arrangement";
+export * from "./arrangement-service";
 export * from "./ingestion-service";
 export * from "./connector-runner";
+export * from "./connector-registry";
 export * from "./connector-conformance";
 export * from "./context-consumer";
 export * from "./generic-import";
 export * from "./memory-ingestion-stores";
 export * from "./memory-connector-runtime-store";
+export * from "./plugin-services";
+export * from "./plugin";
 
 /** @unstable RFC 0001 */
 export type ActorType = "human" | "agent" | "system";

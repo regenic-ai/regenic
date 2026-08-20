@@ -54,6 +54,7 @@ REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
 	--max-pages 20
 
 pnpm local status --database ./regenic.db --org local-owner
+pnpm local inbox --database ./regenic.db --org local-owner
 pnpm local quarantines --database ./regenic.db --installation slack-engineering
 
 pnpm local connector-disable --database ./regenic.db --org local-owner \
@@ -88,6 +89,14 @@ pnpm local reset-cursor --database ./regenic.db --org local-owner \
 pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--file ./messages.csv --mapping ./mapping.json --format csv \
 	--org local-owner --source local-file
+```
+
+### Inbox
+
+列出经过内核过滤 / 分层后进入当前工作的消息。致谢、tombstone 和普通跟帖仍作为 Event 留下，但不出现在这份列表里。
+
+```bash
+pnpm local inbox --database ./regenic.db --org local-owner
 ```
 
 ### JSONL 导出

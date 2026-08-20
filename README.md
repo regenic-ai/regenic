@@ -54,6 +54,7 @@ REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
 	--max-pages 20
 
 pnpm local status --database ./regenic.db --org local-owner
+pnpm local inbox --database ./regenic.db --org local-owner
 pnpm local quarantines --database ./regenic.db --installation slack-engineering
 
 pnpm local connector-disable --database ./regenic.db --org local-owner \
@@ -88,6 +89,14 @@ Import CSV or JSONL through an explicit JSON mapping file. Invalid rows are repo
 pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--file ./messages.csv --mapping ./mapping.json --format csv \
 	--org local-owner --source local-file
+```
+
+### Inbox
+
+List current-work messages after kernel filter and layer. Acknowledgements, tombstones, and ordinary thread replies stay stored as Events and stay out of this list.
+
+```bash
+pnpm local inbox --database ./regenic.db --org local-owner
 ```
 
 ### JSONL export
