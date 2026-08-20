@@ -7,7 +7,9 @@ The Personal edition is **local-first**; Org follows. The domain model and API
 shapes stay shared; what changes by phase is the **default drivers**, not a
 second product.
 
-Connectors, models, and stores are **plugins** (a port plus a driver). The kernel
+Connectors, models, and stores are **plugins** (a port plus a driver). The plugin
+host is `@regenic/plugin-host` (Cordis underneath, for reversible mount/unmount).
+Capability packages depend on that API, never on `cordis` directly. The kernel
 stays fixed: message format (`IngestBatch`), Event / Blob / Digest / Standard,
 ACL, and connect → filter → layer → dispatch. See
 [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md).
@@ -64,6 +66,7 @@ packages/
   domain/
   ui/
   config/
+  plugin-host/      plugin host (the only Cordis import)
   authority-store/  AuthorityStore + drivers
   blob-store/       BlobStore + drivers
   job-queue/        JobQueue + drivers

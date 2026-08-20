@@ -1,5 +1,5 @@
 {
-  "name": "@regenic/authority-store",
+  "name": "@regenic/plugin-host",
   "version": "0.0.0",
   "private": true,
   "main": "./dist/index.js",
@@ -12,17 +12,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/domain build && pnpm --filter @regenic/blob-store build && pnpm run build && node --test test/*.test.cjs",
+    "test": "pnpm run build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@regenic/domain": "workspace:*",
-    "@regenic/plugin-host": "workspace:*",
-    "better-sqlite3": "11.10.0"
+    "cordis": "4.0.0-rc.8"
   },
   "devDependencies": {
-    "@regenic/blob-store": "workspace:*",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   }

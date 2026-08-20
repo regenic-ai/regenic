@@ -16,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@regenic/domain": "workspace:*"
+    "@regenic/domain": "workspace:*",
+    "@regenic/plugin-host": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
