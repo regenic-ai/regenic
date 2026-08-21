@@ -17,7 +17,7 @@ Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is local-first conne
 | Capability | Description | Status |
 | --- | --- | --- |
 | Message orchestration | Connect sources → unify messages → rank → dispatch → optional reply | [PRODUCT](docs/en/PRODUCT.md) · [architecture](docs/en/MESSAGE_ORCHESTRATION.md) |
-| Connectors | Slack, file import; more channels later | Phase 1 (now) |
+| Connectors | Slack, DSH, file import; more channels later | Phase 1 (now) |
 | Personal | One principal; open export; optional remote history | Phase 1 (now) |
 | Org | Canonical Event + projections across people | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
 | Standards | Versioned shared standards | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
@@ -61,9 +61,46 @@ pnpm local connector-disable --database ./regenic.db --org local-owner \
 	--installation slack-engineering
 pnpm local connector-enable --database ./regenic.db --org local-owner \
 	--installation slack-engineering
-pnpm local reset-cursor --database ./regenic.db --org local-owner \
-	--installation slack-engineering --stream channel:C123
+	pnpm local reset-cursor --database ./regenic.db --org local-owner \
+		--installation slack-engineering --stream channel:C123
 ```
+
+### DSH connector
+
+Choose the transport at install time: `cli` (no port) or `web` (real DSH session).
+
+**CLI** runs `dsh --profile headless "<text>"`. No `dsh web`. Each send is a new DSH session; Regenic journals those turns. Official headless has no `--resume` — that flag belongs to the TUI app.
+
+```bash
+pnpm local dsh-install --database ./regenic.db --org local-owner \
+	--transport cli --mailbox dsh-main --id dsh-main
+```
+
+**Web** talks to a running `dsh web` over HTTP (`session.history` / `session.prompt`). Same `session_id` can continue.
+
+```bash
+pnpm local dsh-install --database ./regenic.db --org local-owner \
+	--transport web --session <sessionId> --base-url http://127.0.0.1:3080 \
+	--id dsh-main
+```
+
+```bash
+pnpm local dsh-sync --database ./regenic.db --blob-root ./blobs \
+	--installation dsh-main --max-pages 20
+
+pnpm local dsh-send --database ./regenic.db --installation dsh-main \
+	--text "Follow up on the last turn"
+```
+
+Regenic still exposes the same HTTP methods. The envelope matches DSH web (`client-request` / `server-response`, `rpcId` echoed). The backend follows the installation's `transport`. For `web`, set `REGENIC_DSH_TOKEN` if the DSH host requires a bearer token.
+
+```http
+POST /v1/dsh/api/session.history
+POST /v1/dsh/api/session.prompt
+POST /v1/dsh/api/session.list
+```
+
+Set `REGENIC_DATABASE` and `REGENIC_BLOB_ROOT` on the API process. When `REGENIC_DSH_API_TOKEN` is set, callers must send `Authorization: Bearer`.
 
 ### File import
 

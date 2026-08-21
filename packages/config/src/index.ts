@@ -9,6 +9,12 @@ const envSchema = z.object({
     .string()
     .default("postgres://regenic:regenic@localhost:5432/regenic"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
+  LISTEN_HOST: z.string().default("127.0.0.1"),
+  REGENIC_DATABASE: z.string().optional(),
+  REGENIC_BLOB_ROOT: z.string().optional(),
+  REGENIC_ORG: z.string().default("local-owner"),
+  REGENIC_DSH_API_TOKEN: z.string().optional(),
+  REGENIC_DSH_TOKEN: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
