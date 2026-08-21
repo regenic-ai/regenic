@@ -13,7 +13,10 @@ COPY packages/blob-store/package.json packages/blob-store/
 COPY packages/config/package.json packages/config/
 COPY packages/domain/package.json packages/domain/
 COPY packages/dsh-connector/package.json packages/dsh-connector/
+COPY packages/local-cli/package.json packages/local-cli/
 COPY packages/plugin-host/package.json packages/plugin-host/
+COPY packages/slack-connector/package.json packages/slack-connector/
+COPY packages/whatsapp-personal/package.json packages/whatsapp-personal/
 # Optional native accel for BullMQ; JS fallback is fine for the spike.
 ENV npm_config_build_from_source=false
 RUN pnpm install --frozen-lockfile
