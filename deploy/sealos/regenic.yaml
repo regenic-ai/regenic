@@ -1,0 +1,171 @@
+# Sealos: Regenic API + dsh web sidecar (same Pod, share 127.0.0.1).
+# Only expose Regenic :3000. Do not publish 3080.
+#
+# Secrets stay out of git. Once:
+#   cp deploy/sealos/secret.yaml.example deploy/sealos/secret.yaml
+# Then:
+#   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/regenic.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: regenic-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regenic
+  labels:
+    app: regenic
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: regenic
+  template:
+    metadata:
+      labels:
+        app: regenic
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: jesonli/regenic-core:main
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: LISTEN_HOST
+              value: "0.0.0.0"
+            - name: REGENIC_DATABASE
+              value: /data/regenic.db
+            - name: REGENIC_BLOB_ROOT
+              value: /data/blobs
+            - name: REGENIC_ORG
+              value: local-owner
+            - name: REGENIC_DSH_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: regenic-secrets
+                  key: REGENIC_DSH_API_TOKEN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: dsh
+          image: jesonli/dsh:main
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          command: ["bash", "-lc"]
+          args:
+            - mkdir -p "$HOME" "$TMPDIR" "$DSH_HOME" && exec dsh web --no-open --port 3080
+          env:
+            - name: HOME
+              value: /data/home
+            - name: TMPDIR
+              value: /data/tmp
+            - name: DSH_HOME
+              value: /data/dsh
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=1024
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: regenic-secrets
+                  key: DEEPSEEK_API_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: regenic-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: regenic
+  labels:
+    app: regenic
+spec:
+  selector:
+    app: regenic
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+# Public HTTPS for API :3000 only. Do not add a rule for dsh :3080.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: regenic
+  labels:
+    app: regenic
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  tls:
+    - hosts:
+        - api.example.site
+      secretName: wildcard-cert
+  rules:
+    - host: api.example.site
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: regenic
+                port:
+                  number: 3000
