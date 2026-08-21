@@ -3,7 +3,10 @@ import type { Host } from "@regenic/plugin-host";
 import { DshApiError, type DshSpawn } from "./dsh-cli-client";
 import type { DshFetch } from "./dsh-rpc-client";
 import type { DshListedSession, DshRpcServices } from "./dsh-rpc-handler";
-import { DshSessionPollConnector } from "./dsh-session-poll-connector";
+import {
+  DshSessionPollConnector,
+  type DshHistoryQuery,
+} from "./dsh-session-poll-connector";
 import {
   dshSessionKey,
   dshSessionPlugin,
@@ -39,18 +42,28 @@ export function createDshHostRpcServices(
           installationId: installation.id,
         }));
     },
-    async receive(sessionId) {
+    async receive(sessionId, query: DshHistoryQuery = {}) {
       const installation = await requireDshInstallation(host, options.org_id, sessionId);
       const connector = await mountDshSession(host, installation, options);
+      const page = await connector.historyPage(query);
       const key = dshSessionKey(installation.config, installation.id);
       const runner = new ConnectorRunner(connector, host.get("ingest"), store, now);
-      await runner.poll({
-        installation_id: installation.id,
-        stream_key: `session:${key}`,
-        lease_owner: options.lease_owner ?? `dsh-api:${createId()}`,
-        lease_duration_ms: 60_000,
-      });
-      return connector.lastSurfacePage;
+      try {
+        const run = await runner.poll({
+          installation_id: installation.id,
+          stream_key: `session:${key}`,
+          lease_owner: options.lease_owner ?? `dsh-api:${createId()}`,
+          lease_duration_ms: 60_000,
+        });
+        if (run.status === "lease_unavailable") {
+          throw new DshApiError("DSH session is already being synced", "agent-busy");
+        }
+      } catch (error) {
+        if (error instanceof DshApiError && error.code === "agent-busy") {
+          throw error;
+        }
+      }
+      return page;
     },
     async send(sessionId, text) {
       const installation = await requireDshInstallation(host, options.org_id, sessionId);

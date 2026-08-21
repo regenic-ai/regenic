@@ -6,14 +6,25 @@ const {
   MemoryConnectorRuntimeStore,
 } = require("../dist");
 
-function batch() {
+function batch(records) {
   return {
     schema_version: INGEST_SCHEMA_VERSION,
     connector_id: "fake-poll",
     org_id: "local-owner",
     delivery_id: "page-1",
     received_at: "2026-08-12T00:00:00.000Z",
-    records: [],
+    records: records ?? [
+      {
+        operation: "create",
+        source: "fake",
+        external_id: "message-1",
+        occurred_at: "2026-08-12T00:00:00.000Z",
+        actor: { id: "user" },
+        scope: { id: "personal" },
+        type: "message",
+        content: [{ role: "body", media_type: "text/plain", text: "hi" }],
+      },
+    ],
   };
 }
 
@@ -177,5 +188,30 @@ describe("ConnectorRunner", () => {
     });
 
     assert.equal(nextLease.lease_owner, "worker-b");
+  });
+
+  it("completes a caught-up poll without calling ingest", async () => {
+    const runtime = await createRuntime();
+    const ingested = [];
+    const runner = new ConnectorRunner(
+      {
+        async poll() {
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      {
+        async ingest(input) {
+          ingested.push(input);
+          return validResult([]);
+        },
+      },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+
+    const run = await runner.poll(input);
+    assert.equal(run.status, "completed");
+    assert.deepEqual(run.result.records, []);
+    assert.deepEqual(ingested, []);
   });
 });

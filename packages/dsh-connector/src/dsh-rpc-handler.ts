@@ -1,4 +1,4 @@
-import type { DshSurfaceEvent } from "./dsh-session-poll-connector";
+import type { DshHistoryQuery, DshSurfaceEvent } from "./dsh-session-poll-connector";
 
 export const DSH_PUBLIC_METHODS = [
   "session.history",
@@ -35,7 +35,7 @@ export interface DshListedSession {
 
 export interface DshRpcServices {
   listSessions(): Promise<DshListedSession[]>;
-  receive(sessionId: string): Promise<{
+  receive(sessionId: string, query?: DshHistoryQuery): Promise<{
     events: DshSurfaceEvent[];
     hasMore: boolean;
   }>;
@@ -106,7 +106,7 @@ async function dispatch(
   }
   const sessionId = requiredSessionId(payload);
   if (method === "session.history") {
-    return services.receive(sessionId);
+    return services.receive(sessionId, historyQuery(payload));
   }
   return services.send(sessionId, textFromPromptPayload(payload));
 }
@@ -177,6 +177,39 @@ function parseClientRequest(
     rpcId: body.rpcId,
     payload: isObject(body.payload) ? body.payload : {},
   };
+}
+
+function historyQuery(payload: Record<string, unknown>): DshHistoryQuery {
+  const query: DshHistoryQuery = {};
+  if (payload.maxMessages !== undefined) {
+    query.maxMessages = requireBoundedInt(payload.maxMessages, "maxMessages", 1, 100);
+  }
+  if (payload.beforeSeq !== undefined) {
+    query.beforeSeq = requireBoundedInt(payload.beforeSeq, "beforeSeq", 0);
+  }
+  return query;
+}
+
+function requireBoundedInt(
+  value: unknown,
+  name: string,
+  min: number,
+  max?: number,
+): number {
+  if (
+    typeof value !== "number"
+    || !Number.isInteger(value)
+    || value < min
+    || (max !== undefined && value > max)
+  ) {
+    throw publicException(
+      "bad-request",
+      max === undefined
+        ? `${name} must be an integer >= ${min}`
+        : `${name} must be an integer from ${min} through ${max}`,
+    );
+  }
+  return value;
 }
 
 function requiredSessionId(payload: Record<string, unknown>): string {
