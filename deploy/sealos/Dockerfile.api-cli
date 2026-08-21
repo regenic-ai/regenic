@@ -1,0 +1,17 @@
+# Sealos-only overlay: CLI transport needs `dsh` on PATH and Node >= 22.
+# Keep this out of the root API image.
+#
+#   docker build --platform linux/amd64 -t jesonli/regenic-core:cli \
+#     -f deploy/sealos/Dockerfile.api-cli deploy/sealos
+ARG API_IMAGE=jesonli/regenic-core:main
+FROM ${API_IMAGE} AS app
+
+FROM node:22-bookworm-slim
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+COPY --from=app /app /app
+RUN npm install -g @deepseek-ai/dsh \
+  && dsh --help >/dev/null
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["pnpm", "--filter", "@regenic/api", "start"]
