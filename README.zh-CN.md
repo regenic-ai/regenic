@@ -180,7 +180,7 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 
 [消息编排](docs/zh/MESSAGE_ORCHESTRATION.md) ·
 [产品](docs/zh/PRODUCT.md) · [路线图](docs/zh/ROADMAP.md) ·
-[技术栈](docs/zh/TECH_STACK.md) · [采集架构](docs/zh/INGESTION_ARCHITECTURE.md)
+[技术栈](docs/zh/TECH_STACK.md) · [桌面端](docs/zh/DESKTOP.md) · [采集架构](docs/zh/INGESTION_ARCHITECTURE.md)
 
 ## 贡献
 

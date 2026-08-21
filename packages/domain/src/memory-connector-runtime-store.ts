@@ -69,6 +69,31 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return this.copyInstallation(updated);
   }
 
+  async deleteInstallation(id: string, orgId: string): Promise<boolean> {
+    const installation = this.installations.get(id);
+    if (!installation || installation.org_id !== orgId) {
+      return false;
+    }
+    this.installations.delete(id);
+    for (const key of [...this.cursors.keys()]) {
+      const cursor = this.cursors.get(key);
+      if (cursor?.installation_id === id) {
+        this.cursors.delete(key);
+      }
+    }
+    for (const [attemptId, attempt] of [...this.attempts.entries()]) {
+      if (attempt.connector_installation_id === id) {
+        this.attempts.delete(attemptId);
+      }
+    }
+    for (let index = this.quarantines.length - 1; index >= 0; index -= 1) {
+      if (this.quarantines[index]?.connector_installation_id === id) {
+        this.quarantines.splice(index, 1);
+      }
+    }
+    return true;
+  }
+
   async acquireLease(
     input: AcquireConnectorLease,
   ): Promise<ConnectorLease | null> {
