@@ -8,15 +8,27 @@ export interface PersonalHostOptions {
   blobRoot: string;
 }
 
-export async function withPersonalHost<T>(
+export async function createPersonalHost(
   options: PersonalHostOptions,
-  run: (host: Host) => Promise<T>,
-): Promise<T> {
+): Promise<Host> {
   const host = await createHost();
   try {
     await host.plugin(sqliteAuthorityPlugin, { path: options.database });
     await host.plugin(fsBlobPlugin, { root: options.blobRoot });
     await host.plugin(ingestPlugin);
+    return host;
+  } catch (error) {
+    await host.dispose();
+    throw error;
+  }
+}
+
+export async function withPersonalHost<T>(
+  options: PersonalHostOptions,
+  run: (host: Host) => Promise<T>,
+): Promise<T> {
+  const host = await createPersonalHost(options);
+  try {
     return await run(host);
   } finally {
     await host.dispose();

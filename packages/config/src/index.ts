@@ -15,10 +15,31 @@ const envSchema = z.object({
   REGENIC_ORG: z.string().default("local-owner"),
   REGENIC_DSH_API_TOKEN: z.string().optional(),
   REGENIC_DSH_TOKEN: z.string().optional(),
+  REGENIC_PERSONAL_API: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
 export function loadEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
   return envSchema.parse(env);
+}
+
+export function isLoopbackListenHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(host.trim().toLowerCase());
+}
+
+/** /v1/me is loopback-only. REGENIC_PERSONAL_API=0 disables it even on loopback. */
+export function isPersonalApiEnabled(env: AppEnv | NodeJS.ProcessEnv = process.env): boolean {
+  const parsed = isLoadedEnv(env) ? env : loadEnv(env);
+  const flag = parsed.REGENIC_PERSONAL_API?.trim().toLowerCase();
+  if (flag === "0" || flag === "false") {
+    return false;
+  }
+  return isLoopbackListenHost(parsed.LISTEN_HOST);
+}
+
+function isLoadedEnv(env: AppEnv | NodeJS.ProcessEnv): env is AppEnv {
+  return typeof (env as AppEnv).PORT === "number";
 }

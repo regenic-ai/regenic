@@ -5,7 +5,7 @@ import {
   handleDshPublicRpc,
   type DshRpcHttpResult,
 } from "@regenic/dsh-connector";
-import { withPersonalHost } from "./personal-host";
+import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export interface DshApiRequest {
   contentType: string | undefined;
@@ -15,6 +15,8 @@ export interface DshApiRequest {
 
 @Injectable()
 export class DshApiService {
+  constructor(private readonly runtime: PersonalRuntimeService) {}
+
   async handle(method: string, input: DshApiRequest): Promise<DshRpcHttpResult> {
     const env = loadEnv();
     if (env.REGENIC_DSH_API_TOKEN) {
@@ -28,7 +30,8 @@ export class DshApiService {
         };
       }
     }
-    if (!env.REGENIC_DATABASE || !env.REGENIC_BLOB_ROOT) {
+    const host = this.runtime.getHost();
+    if (!host) {
       return {
         status: 503,
         body: {
@@ -39,17 +42,13 @@ export class DshApiService {
         },
       };
     }
-    return withPersonalHost(
-      { database: env.REGENIC_DATABASE, blobRoot: env.REGENIC_BLOB_ROOT },
-      async (host) =>
-        handleDshPublicRpc(
-          method,
-          { contentType: input.contentType, body: input.body },
-          createDshHostRpcServices(host, {
-            org_id: env.REGENIC_ORG,
-            access_token: env.REGENIC_DSH_TOKEN,
-          }),
-        ),
+    return handleDshPublicRpc(
+      method,
+      { contentType: input.contentType, body: input.body },
+      createDshHostRpcServices(host, {
+        org_id: env.REGENIC_ORG,
+        access_token: env.REGENIC_DSH_TOKEN,
+      }),
     );
   }
 }

@@ -1,7 +1,7 @@
 # 技术栈
 
 - **English:** [../en/TECH_STACK.md](../en/TECH_STACK.md)
-- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [路线图](ROADMAP.md) · RFC 0004、0005、0006、0007
+- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [路线图](ROADMAP.md) · [桌面端](DESKTOP.md) · RFC 0004、0005、0006、0007
 
 个人版默认**本地优先**，随后是组织层。领域模型和接口形状尽量共用；
 换的是各阶段的**默认实现**，不是另起一套产品。
@@ -98,7 +98,7 @@ Phase 1 落地 `api`（带进程内 worker）、`desktop` 以及运行所需的 
 
 | 应用 | 技术 | 阶段 | 职责 |
 | --- | --- | --- | --- |
-| Desktop | Electron + React | Phase 1 | 工作台、托盘、系统通知、本机库 |
+| Desktop | Electron + React | Phase 1 | 工作台、托盘、系统通知、本机库（[桌面端](DESKTOP.md)） |
 | Web | Next.js | Phase 3+ | 管理、连接器、SSO |
 | Mobile | Expo | 稍后 | 捕获、推送、确认类操作 |
 

@@ -352,6 +352,7 @@ export interface ConnectorRuntimeStore {
   findInstallation(id: string): Promise<ConnectorInstallation | null>;
   listInstallations(orgId: string): Promise<ConnectorInstallation[]>;
   setInstallationStatus(input: SetConnectorInstallationStatus): Promise<ConnectorInstallation | null>;
+  deleteInstallation(id: string, orgId: string): Promise<boolean>;
   acquireLease(input: AcquireConnectorLease): Promise<ConnectorLease | null>;
   releaseLease(input: ReleaseConnectorLease): Promise<boolean>;
   resetCursor(input: ResetConnectorCursor): Promise<ConnectorStreamCursor | null>;

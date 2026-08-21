@@ -1,0 +1,92 @@
+export type NavId = "inbox" | "engine" | "settings";
+
+export interface ArrangementDecision {
+  event_id: string;
+  org_id: string;
+  disposition: "current_work" | "outside_current_work" | "pending";
+  layer: string;
+  reason_codes: string[];
+  score: number;
+  decided_at: string;
+}
+
+export interface EventRecord {
+  id: string;
+  org_id: string;
+  source: string;
+  external_id: string;
+  operation: string;
+  content_hash?: string;
+  parent_event_id?: string;
+  occurred_at: string;
+  ingested_at: string;
+}
+
+export interface InboxViewItem {
+  decision: ArrangementDecision;
+  event: EventRecord;
+  body_text?: string;
+  media_type?: string;
+}
+
+export interface IngestAttempt {
+  id: string;
+  status: "running" | "succeeded" | "failed";
+  accepted_count: number;
+  duplicate_count: number;
+  quarantined_count: number;
+  retryable_failure_count: number;
+  started_at: string;
+  finished_at?: string;
+  error_code?: string;
+}
+
+export interface ConnectorField {
+  key: string;
+  label: string;
+  required: boolean;
+  placeholder?: string;
+  default?: string;
+  options?: { value: string; label: string }[];
+}
+
+export interface ConnectorCatalogItem {
+  connector_type: string;
+  title: string;
+  description: string;
+  credential_hint: string;
+  installed: boolean;
+  instance_count: number;
+  fields: ConnectorField[];
+}
+
+export interface EngineInstallationView {
+  id: string;
+  connector_type: string;
+  status: "enabled" | "disabled" | "needs_attention";
+  label: string;
+  detail: string | null;
+  syncable: boolean;
+  last_attempt: IngestAttempt | null;
+}
+
+export interface ConnectorSyncView {
+  installation_id: string;
+  pages_attempted: number;
+  accepted_count: number;
+  duplicate_count: number;
+  quarantined_count: number;
+  last_run_status: "completed" | "retryable_failure" | "lease_unavailable" | "idle";
+  installation: EngineInstallationView;
+}
+
+export interface PersonalEngineView {
+  kernel: "running" | "stopped";
+  org_id: string;
+  database_path: string | null;
+  inbox_count: number;
+  installations: EngineInstallationView[];
+  catalog: ConnectorCatalogItem[];
+}
+
+export type EngineChipState = "running" | "syncing" | "stopped";

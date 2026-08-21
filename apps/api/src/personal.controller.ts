@@ -1,0 +1,124 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpException,
+  HttpStatus,
+  NotFoundException,
+  Param,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
+import { PersonalApiGuard } from "./personal-api.guard";
+import {
+  PersonalConnectorError,
+  PersonalConnectorService,
+} from "./personal-connector.service";
+import {
+  PersonalInboxService,
+  PersonalKernelStoppedError,
+} from "./personal-inbox.service";
+
+@Controller("v1/me")
+@UseGuards(PersonalApiGuard)
+export class PersonalController {
+  constructor(
+    private readonly inbox: PersonalInboxService,
+    private readonly connectors: PersonalConnectorService,
+  ) {}
+
+  @Get("inbox")
+  listInbox() {
+    return this.guard(() => this.inbox.listInbox());
+  }
+
+  @Get("inbox/:event_id")
+  async getInboxItem(@Param("event_id") eventId: string) {
+    const item = await this.guard(() => this.inbox.getInboxItem(eventId));
+    if (!item) {
+      throw new NotFoundException({
+        error: { code: "not_found", message: "Inbox item not found" },
+      });
+    }
+    return item;
+  }
+
+  @Get("engine")
+  getEngine() {
+    return this.inbox.getEngine();
+  }
+
+  @Post("connectors")
+  installConnector(
+    @Body()
+    body: { connector_type?: string; config?: Record<string, unknown> },
+  ) {
+    const connectorType = body?.connector_type?.trim();
+    if (!connectorType) {
+      throw new HttpException(
+        {
+          error: {
+            code: "invalid_config",
+            message: "connector_type is required",
+          },
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    return this.guard(() =>
+      this.connectors.install({
+        connector_type: connectorType,
+        config: body.config,
+      }),
+    );
+  }
+
+  @Delete("connectors/:id")
+  uninstallConnector(@Param("id") id: string) {
+    return this.guard(() => this.connectors.uninstall(id));
+  }
+
+  @Post("connectors/:id/sync")
+  syncConnector(
+    @Param("id") id: string,
+    @Body() body: { max_pages?: number } | undefined,
+  ) {
+    return this.guard(() => this.connectors.sync(id, body?.max_pages));
+  }
+
+  @Post("connectors/:id/enable")
+  enableConnector(@Param("id") id: string) {
+    return this.guard(() => this.connectors.setStatus(id, "enabled"));
+  }
+
+  @Post("connectors/:id/disable")
+  disableConnector(@Param("id") id: string) {
+    return this.guard(() => this.connectors.setStatus(id, "disabled"));
+  }
+
+  private async guard<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof PersonalKernelStoppedError) {
+        throw new HttpException(
+          {
+            error: {
+              code: "not_configured",
+              message: "REGENIC_DATABASE and REGENIC_BLOB_ROOT are required",
+            },
+          },
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
+      }
+      if (error instanceof PersonalConnectorError) {
+        throw new HttpException(
+          { error: { code: error.code, message: error.message } },
+          error.httpStatus,
+        );
+      }
+      throw error;
+    }
+  }
+}
