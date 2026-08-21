@@ -189,6 +189,7 @@ sync_members(channel_ref) → membership diffs
 | `feishu` | Feishu |
 | `wecom` | WeCom |
 | `slack` | Slack |
+| `dsh` | DeepSeek Harness: `cli` (headless) or `web` (HTTP session) |
 | `email` | mail (often pull) |
 | `regenic` | native clients |
 | `ticket` | ticket systems |
@@ -222,6 +223,7 @@ send(intent) → DeliveryReceipt
 | Driver (examples) | Destination |
 | --- | --- |
 | `slack` | Slack reply / post |
+| `dsh` | CLI headless, or web `session.prompt` |
 | `email` | mail provider API |
 | `feishu` | Feishu message |
 
@@ -345,7 +347,7 @@ goes through `Notifier`.
 | `AuthorityStore` | SQLite / PostgreSQL | domain tables and query semantics |
 | `JobQueue` | in-process / BullMQ | job types and idempotency keys |
 | `BlobStore` | fs / MinIO / S3 / OSS | `content_hash` addressing |
-| `ChannelConnector` | Feishu / WeCom / Slack / email / … | writes `IngestBatch` only |
+| `ChannelConnector` | Feishu / WeCom / Slack / DSH / email / … | writes `IngestBatch` only |
 | `EgressAdapter` | same sources, send | reply → channel; no extra grants |
 | `ModelProvider` | OpenAI / Azure / 通义 / vLLM / none | complete / embed |
 | `IdentityProvider` | local / OIDC / Feishu SSO / … | Principal mapping (RFC 0006) |

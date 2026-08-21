@@ -11,6 +11,7 @@ export * from "./arrangement-service";
 export * from "./ingestion-service";
 export * from "./connector-runner";
 export * from "./connector-registry";
+export * from "./egress";
 export * from "./connector-conformance";
 export * from "./context-consumer";
 export * from "./generic-import";
