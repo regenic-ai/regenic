@@ -115,6 +115,21 @@ async function pickKernelPort(): Promise<{ reuse: string } | { port: number; ori
   throw new Error("No free local port for the personal kernel");
 }
 
+function sidecarEnv(
+  port: number,
+  database: string,
+  blobRoot: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  env.REGENIC_DATABASE = database;
+  env.REGENIC_BLOB_ROOT = blobRoot;
+  env.REGENIC_ORG = process.env.REGENIC_ORG ?? "local-owner";
+  env.PORT = String(port);
+  env.LISTEN_HOST = "127.0.0.1";
+  delete env.REGENIC_PERSONAL_API;
+  return env;
+}
+
 function spawnSidecar(port: number): void {
   const { database, blobRoot } = resolveDataPaths();
   const apiEntry = join(repoRoot(), "apps/api/dist/main.js");
@@ -122,14 +137,7 @@ function spawnSidecar(port: number): void {
     throw new Error(`API sidecar is not built: ${apiEntry}`);
   }
   sidecar = spawn(nodeBinary(), [apiEntry], {
-    env: {
-      ...process.env,
-      REGENIC_DATABASE: database,
-      REGENIC_BLOB_ROOT: blobRoot,
-      REGENIC_ORG: process.env.REGENIC_ORG ?? "local-owner",
-      PORT: String(port),
-      LISTEN_HOST: "127.0.0.1",
-    },
+    env: sidecarEnv(port, database, blobRoot),
     stdio: ["ignore", "pipe", "pipe"],
   });
   sidecar.stdout?.on("data", (chunk) => {

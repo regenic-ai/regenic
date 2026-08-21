@@ -36,7 +36,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 
 Electron 主进程拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`，默认端口 `4370`）。渲染进程只打 HTTP，不直连 SQLite。人与 Agent 共用 `/v1`。
 
-`/v1/me` 只在回环监听时开放（`LISTEN_HOST` 为 `127.0.0.1` / `localhost` / `::1`）。Sealos 等 `0.0.0.0` 部署不会注册这条个人面；`REGENIC_PERSONAL_API=0` 可在本机也关掉。安装 DSH 时不接收 `command` / `workdir`，`base_url` 必须是本机 URL。
+`/v1/me` 只在回环监听时开放（`LISTEN_HOST` 为 `127.0.0.1` / `localhost` / `::1`）。Sealos 等 `0.0.0.0` 部署不会注册这条个人面；`REGENIC_PERSONAL_API=0` 可在本机也关掉。桌面 sidecar 会丢掉父进程里的 `REGENIC_PERSONAL_API`，以免外壳 `=0` 把内核个人面关掉。个人模式 CORS 只回显 `file://`、`null` 和本机 Origin，不回显任意网站。安装 DSH 时不接收 `command` / `workdir`，`base_url` 必须是本机 URL。
 
 默认数据：若仓库里已有 `regenic.db` 则开发时用它；否则 `~/.regenic/regenic.db` 与 `~/.regenic/blobs`。
 
