@@ -27,6 +27,8 @@ coverage/
 .turbo/
 .pnpm-store/
 
+apps/desktop/out/
+
 # Never emit build artifacts next to TypeScript sources
 packages/*/src/**/*.js
 packages/*/src/**/*.js.map
