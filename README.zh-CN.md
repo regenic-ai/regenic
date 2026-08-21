@@ -17,7 +17,7 @@ Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本地优先的连
 | 能力 | 说明 | 状态 |
 | --- | --- | --- |
 | 消息编排 | 接入渠道 → 统一成消息 → 排序 → 调度 → 可选回复 | [PRODUCT](docs/zh/PRODUCT.md) · [架构](docs/zh/MESSAGE_ORCHESTRATION.md) |
-| 连接器 | Slack、文件导入；更多渠道随后 | Phase 1（进行中） |
+| 连接器 | Slack、DSH、文件导入；更多渠道随后 | Phase 1（进行中） |
 | 个人 | 单人；可导出；远端历史可选 | Phase 1（进行中） |
 | 组织 | 多人权威事件与各人视角 | Phase 3（[从个人到组织](docs/zh/rfcs/personal-to-org.md)） |
 | 判断标准 | 可版本化的共用标准 | RFC 已接纳（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |
@@ -61,9 +61,46 @@ pnpm local connector-disable --database ./regenic.db --org local-owner \
 	--installation slack-engineering
 pnpm local connector-enable --database ./regenic.db --org local-owner \
 	--installation slack-engineering
-pnpm local reset-cursor --database ./regenic.db --org local-owner \
-	--installation slack-engineering --stream channel:C123
+	pnpm local reset-cursor --database ./regenic.db --org local-owner \
+		--installation slack-engineering --stream channel:C123
 ```
+
+### DSH 连接器
+
+安装时选择传输方式：`cli`（不占端口）或 `web`（真正的 DSH session）。
+
+**CLI** 执行 `dsh --profile headless "<text>"`。不启动 `dsh web`。每次发送都是新的 DSH 会话，Regenic 只在本地 journal 里拼轮次。官方 headless 没有 `--resume`，那个 flag 属于 TUI 应用。
+
+```bash
+pnpm local dsh-install --database ./regenic.db --org local-owner \
+	--transport cli --mailbox dsh-main --id dsh-main
+```
+
+**Web** 通过 HTTP 对接已启动的 `dsh web`（`session.history` / `session.prompt`）。同一个 `session_id` 可以续聊。
+
+```bash
+pnpm local dsh-install --database ./regenic.db --org local-owner \
+	--transport web --session <sessionId> --base-url http://127.0.0.1:3080 \
+	--id dsh-main
+```
+
+```bash
+pnpm local dsh-sync --database ./regenic.db --blob-root ./blobs \
+	--installation dsh-main --max-pages 20
+
+pnpm local dsh-send --database ./regenic.db --installation dsh-main \
+	--text "Follow up on the last turn"
+```
+
+Regenic 仍对外提供同一组 HTTP 方法。信封与 DSH web 一致（`client-request` / `server-response`，回显 `rpcId`）。后端按安装记录的 `transport` 走。`web` 若 DSH 要求鉴权，设置 `REGENIC_DSH_TOKEN`。
+
+```http
+POST /v1/dsh/api/session.history
+POST /v1/dsh/api/session.prompt
+POST /v1/dsh/api/session.list
+```
+
+API 进程需要 `REGENIC_DATABASE` 与 `REGENIC_BLOB_ROOT`。若设置了 `REGENIC_DSH_API_TOKEN`，调用方必须带 `Authorization: Bearer`。
 
 ### 文件导入
 
