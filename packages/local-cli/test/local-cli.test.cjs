@@ -318,6 +318,31 @@ describe("regenic-local", () => {
     assert.deepEqual(imported.errors, []);
   });
 
+  it("imports an explicit WhatsApp Personal Export v1 file without browser credentials", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "whatsapp.jsonl");
+    await writeFile(file, JSON.stringify({
+      schema_version: "1.0",
+      kind: "whatsapp_personal_message",
+      message_id: "message-1",
+      chat_id: "chat-1",
+      sender_id: "15550001",
+      direction: "incoming",
+      sent_at: "2026-08-21T00:00:00.000Z",
+      text: "Please confirm the plan.",
+    }));
+
+    const imported = await run([
+      "whatsapp-import", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--org", "local-owner", "--local-principal", "local-user",
+    ]);
+
+    assert.equal(imported.batches[0].records[0].status, "accepted");
+    assert.deepEqual(imported.errors, []);
+  });
+
   it("lists only current-work messages in the inbox", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

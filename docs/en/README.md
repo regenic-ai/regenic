@@ -2,6 +2,7 @@
 
 - [Product](PRODUCT.md)
 - [Message orchestration](MESSAGE_ORCHESTRATION.md)
+- [Personal WhatsApp Bridge](WHATSAPP_PERSONAL.md)
 - [Technology stack](TECH_STACK.md)
 - [Ingestion architecture](INGESTION_ARCHITECTURE.md)
 - [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md)
