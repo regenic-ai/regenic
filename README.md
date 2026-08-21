@@ -91,6 +91,18 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source local-file
 ```
 
+### Personal WhatsApp export
+
+Personal WhatsApp uses a user-triggered, read-only JSONL export. The first
+bridge does not receive browser cookies, scan chats in the background, or send
+messages. Each exported message has stable `chat_id` and `message_id` values.
+
+```bash
+pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
+	--file ./whatsapp-personal.jsonl --org local-owner \
+	--local-principal local-user
+```
+
 ### Inbox
 
 List current-work messages after kernel filter and layer. Acknowledgements, tombstones, and ordinary thread replies stay stored as Events and stay out of this list.

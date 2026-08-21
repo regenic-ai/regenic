@@ -2,6 +2,7 @@
 
 - [产品](PRODUCT.md)
 - [消息编排](MESSAGE_ORCHESTRATION.md)
+- [个人 WhatsApp Bridge](WHATSAPP_PERSONAL.md)
 - [技术栈](TECH_STACK.md)
 - [采集架构](INGESTION_ARCHITECTURE.md)
 - [协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)
