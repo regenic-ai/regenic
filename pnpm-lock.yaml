@@ -178,6 +178,9 @@ importers:
       '@regenic/slack-connector':
         specifier: workspace:*
         version: link:../slack-connector
+      '@regenic/whatsapp-personal':
+        specifier: workspace:*
+        version: link:../whatsapp-personal
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -207,6 +210,19 @@ importers:
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/whatsapp-personal:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
     devDependencies:
       '@types/node':
         specifier: ^22.10.2

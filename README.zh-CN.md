@@ -91,6 +91,18 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source local-file
 ```
 
+### 个人 WhatsApp 导出
+
+个人 WhatsApp 使用用户明确触发的只读 JSONL 导出。第一个 bridge 不接收浏览器
+Cookie、不在后台扫描聊天，也不发送消息。每条导出消息都有稳定的 `chat_id` 与
+`message_id`。
+
+```bash
+pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
+	--file ./whatsapp-personal.jsonl --org local-owner \
+	--local-principal local-user
+```
+
 ### Inbox
 
 列出经过内核过滤 / 分层后进入当前工作的消息。致谢、tombstone 和普通跟帖仍作为 Event 留下，但不出现在这份列表里。

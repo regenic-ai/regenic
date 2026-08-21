@@ -12,6 +12,7 @@ import {
   type JsonValue,
 } from "@regenic/domain";
 import { slackChannelPlugin, type SlackFetch } from "@regenic/slack-connector";
+import { createWhatsAppPersonalImport } from "@regenic/whatsapp-personal";
 import { withLocalHost } from "./host";
 
 interface CliOutput {
@@ -65,6 +66,9 @@ export async function runLocalCli(
     case "import-file":
       await importFile(commandOptions, stdout, now);
       return;
+    case "whatsapp-import":
+      await importWhatsAppPersonal(commandOptions, stdout, now);
+      return;
     case "export-jsonl":
       await exportJsonl(commandOptions, stdout);
       return;
@@ -87,7 +91,7 @@ export async function runLocalCli(
       await showInbox(commandOptions, stdout);
       return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox");
+      throw new Error("Command must be one of: slack-install, slack-sync, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox");
   }
 }
 
@@ -240,6 +244,36 @@ async function importFile(
       const result = await host.get("ingest").ingest(batch);
       if (!result.valid) {
         throw new Error(`Generated import batch was rejected: ${result.error_code}`);
+      }
+      batches.push(result);
+    }
+    writeJson(stdout, {
+      file_hash: imported.file_hash,
+      batches,
+      errors: imported.errors,
+    });
+  });
+}
+
+async function importWhatsAppPersonal(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+): Promise<void> {
+  const database = requireOption(options, "database");
+  const blobRoot = requireOption(options, "blob-root");
+  const imported = createWhatsAppPersonalImport({
+    data: await readFile(requireOption(options, "file")),
+    org_id: requireOption(options, "org"),
+    local_principal_id: requireOption(options, "local-principal"),
+    received_at: now(),
+  });
+  await withLocalHost({ database, blobRoot }, async (host) => {
+    const batches = [];
+    for (const batch of imported.batches) {
+      const result = await host.get("ingest").ingest(batch);
+      if (!result.valid) {
+        throw new Error(`Generated WhatsApp batch was rejected: ${result.error_code}`);
       }
       batches.push(result);
     }
