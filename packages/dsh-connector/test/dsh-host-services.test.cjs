@@ -90,6 +90,59 @@ describe("createDshHostRpcServices", () => {
       );
     });
   });
+
+  it("returns the history page when ingest poll fails", async () => {
+    await withMemoryHost(async (host) => {
+      await host.get("authority").createInstallation({
+        id: "dsh-1",
+        org_id: "local-owner",
+        connector_type: "dsh-session",
+        status: "enabled",
+        config: {
+          transport: "web",
+          session_id: "dsh-main",
+          base_url: "http://127.0.0.1:3080",
+        },
+        created_at: "2026-08-21T00:00:00.000Z",
+      });
+      let calls = 0;
+      const services = createDshHostRpcServices(host, {
+        org_id: "local-owner",
+        now: () => "2026-08-21T00:00:00.000Z",
+        fetch: async (_url, init) => {
+          calls += 1;
+          if (calls > 1) {
+            throw new Error("DSH walk failed");
+          }
+          const body = JSON.parse(init.body);
+          return {
+            ok: true,
+            status: 200,
+            async json() {
+              return {
+                type: "server-response",
+                rpcId: body.rpcId,
+                result: {
+                  ok: true,
+                  value: {
+                    events: [
+                      { ...HISTORY_EVENTS[0], seq: 100 },
+                      { ...HISTORY_EVENTS[1], seq: 101 },
+                    ],
+                    hasMore: true,
+                  },
+                },
+              };
+            },
+          };
+        },
+      });
+
+      const page = await services.receive("dsh-main");
+      assert.deepEqual(page.events.map((event) => event.seq), [100, 101]);
+      assert.equal(page.hasMore, true);
+    });
+  });
 });
 
 function historyFetch(events, hasMore = false) {

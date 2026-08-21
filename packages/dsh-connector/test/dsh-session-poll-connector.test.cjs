@@ -117,6 +117,36 @@ describe("DshSessionPollConnector", () => {
     assert.equal(second.next_cursor, "3");
   });
 
+  it("resumes a bounded history walk instead of stalling past the page cap", async () => {
+    const client = pagingHistoryClient(6, 2);
+    const connector = new DshSessionPollConnector(client, {
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      session_id: "dsh-main",
+      page_size: 2,
+      max_history_pages: 2,
+      now: () => "2026-08-21T00:00:00.000Z",
+    });
+
+    const first = await connector.poll(null);
+    assert.deepEqual(first.batch.records, []);
+    assert.equal(first.next_cursor, "-1:2");
+    assert.deepEqual(client.calls, [
+      { sessionId: "dsh-main", maxMessages: 2, beforeSeq: undefined },
+      { sessionId: "dsh-main", maxMessages: 2, beforeSeq: 4 },
+    ]);
+
+    const second = await connector.poll({ value: "-1:2" });
+    assert.deepEqual(second.batch.records.map((record) => record.external_id), [
+      "dsh-main:0",
+      "dsh-main:1",
+    ]);
+    assert.equal(second.next_cursor, "1");
+    assert.deepEqual(client.calls.slice(2), [
+      { sessionId: "dsh-main", maxMessages: 2, beforeSeq: 2 },
+    ]);
+  });
+
   it("returns the requested DSH history page without using the ingest cursor", async () => {
     const client = pagingHistoryClient(6, 2);
     const connector = new DshSessionPollConnector(client, {
