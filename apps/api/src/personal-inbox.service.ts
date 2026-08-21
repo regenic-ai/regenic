@@ -48,8 +48,18 @@ export class PersonalInboxService {
   }
 
   async getInboxItem(eventId: string): Promise<InboxViewItem | null> {
-    const items = await this.listInbox();
-    return items.find((item) => item.event.id === eventId) ?? null;
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const blobs = host.get("blobs");
+    const items = await authority.listInbox(this.runtime.orgId());
+    const item = items.find((entry) => entry.event.id === eventId);
+    if (!item) {
+      return null;
+    }
+    return {
+      ...item,
+      ...(await resolveInboxBody(authority, blobs, item.event.content_hash)),
+    };
   }
 
   async getEngine(): Promise<PersonalEngineView> {

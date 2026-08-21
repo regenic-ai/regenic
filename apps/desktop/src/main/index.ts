@@ -100,6 +100,21 @@ async function waitForPersonal(origin: string, timeoutMs = 15000): Promise<void>
   throw new Error("Personal kernel did not become ready");
 }
 
+async function pickKernelPort(): Promise<{ reuse: string } | { port: number; origin: string }> {
+  for (let offset = 0; offset < 10; offset += 1) {
+    const port = DEFAULT_PORT + offset;
+    const origin = `http://127.0.0.1:${port}`;
+    const existing = await probe(origin);
+    if (existing === "personal") {
+      return { reuse: origin };
+    }
+    if (existing === "none") {
+      return { port, origin };
+    }
+  }
+  throw new Error("No free local port for the personal kernel");
+}
+
 function spawnSidecar(port: number): void {
   const { database, blobRoot } = resolveDataPaths();
   const apiEntry = join(repoRoot(), "apps/api/dist/main.js");
@@ -132,17 +147,20 @@ function spawnSidecar(port: number): void {
 }
 
 async function startKernel(): Promise<void> {
-  const preferred = DEFAULT_PORT;
-  const preferredOrigin = `http://127.0.0.1:${preferred}`;
-  const existing = await probe(preferredOrigin);
-  if (existing === "personal") {
-    apiOrigin = preferredOrigin;
+  const picked = await pickKernelPort();
+  if ("reuse" in picked) {
+    apiOrigin = picked.reuse;
     return;
   }
-  const port = existing === "none" ? preferred : preferred + 1;
-  apiOrigin = `http://127.0.0.1:${port}`;
-  spawnSidecar(port);
-  await waitForPersonal(apiOrigin);
+  apiOrigin = picked.origin;
+  spawnSidecar(picked.port);
+  try {
+    await waitForPersonal(apiOrigin);
+  } catch (error) {
+    sidecar?.kill();
+    sidecar = null;
+    throw error;
+  }
 }
 
 function applyAppIcon(): void {

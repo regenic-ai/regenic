@@ -216,7 +216,6 @@ export class PersonalConnectorService {
         );
       }
       const channelName = configString(input.config ?? {}, "channel_name");
-      const tokenEnv = configString(input.config ?? {}, "token_env");
       const config: Record<string, JsonValue> = { channel_id: channelId };
       if (channelName) {
         config.channel_name = channelName;
@@ -227,7 +226,7 @@ export class PersonalConnectorService {
         connector_type: "slack-channel",
         status: "enabled",
         config,
-        credentials_ref: `env:${resolveSlackTokenEnv(tokenEnv)}`,
+        credentials_ref: "env:REGENIC_SLACK_TOKEN",
         created_at: now,
       };
     }
@@ -302,10 +301,18 @@ async function mountConnector(
   if (!host.get("connectors").get(installation.id)) {
     await host.plugin(
       dshSessionPlugin,
-      dshSessionPluginConfigFromInstallation(installation, {
-        env: process.env,
-        access_token: process.env.REGENIC_DSH_TOKEN,
-      }),
+      {
+        ...dshSessionPluginConfigFromInstallation(installation, {
+          env: process.env,
+          access_token: process.env.REGENIC_DSH_TOKEN,
+        }),
+        command: "dsh",
+        workdir: undefined,
+        base_url: loopbackHttpUrl(
+          configString(installation.config, "base_url") ??
+            "http://127.0.0.1:3080",
+        ),
+      },
     );
   }
   return `session:${dshSessionKey(installation.config, installation.id)}`;
@@ -320,31 +327,14 @@ async function viewOf(
 }
 
 function slackTokenEnv(credentialsRef: string | undefined): string {
-  if (!credentialsRef) {
+  if (!credentialsRef || credentialsRef === "env:REGENIC_SLACK_TOKEN") {
     return "REGENIC_SLACK_TOKEN";
   }
-  if (!credentialsRef.startsWith("env:")) {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "Slack credentials_ref must reference an environment variable",
-      400,
-    );
-  }
-  return credentialsRef.slice("env:".length);
-}
-
-function resolveSlackTokenEnv(tokenEnv: string | undefined): string {
-  if (!tokenEnv) {
-    return "REGENIC_SLACK_TOKEN";
-  }
-  if (!/^[A-Z][A-Z0-9_]*$/.test(tokenEnv)) {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "token_env must be an environment variable name",
-      400,
-    );
-  }
-  return tokenEnv;
+  throw new PersonalConnectorError(
+    "invalid_config",
+    "Slack credentials_ref must be env:REGENIC_SLACK_TOKEN",
+    400,
+  );
 }
 
 function dshInstallConfig(
@@ -371,20 +361,42 @@ function dshInstallConfig(
     return {
       transport,
       session_id: sessionId,
-      base_url: configString(input, "base_url") ?? "http://127.0.0.1:3080",
+      base_url: loopbackHttpUrl(
+        configString(input, "base_url") ?? "http://127.0.0.1:3080",
+      ),
     };
   }
-  const config: Record<string, JsonValue> = {
+  return {
     transport,
     mailbox: configString(input, "mailbox") ?? id,
-    command: configString(input, "command") ?? "dsh",
-    profile: configString(input, "profile") ?? "headless",
   };
-  const workdir = configString(input, "workdir");
-  if (workdir) {
-    config.workdir = workdir;
+}
+
+function loopbackHttpUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new PersonalConnectorError(
+      "invalid_config",
+      "DSH base_url must be a loopback http(s) URL",
+      400,
+    );
   }
-  return config;
+  const host = parsed.hostname.toLowerCase();
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username ||
+    parsed.password ||
+    (host !== "127.0.0.1" && host !== "localhost" && host !== "::1")
+  ) {
+    throw new PersonalConnectorError(
+      "invalid_config",
+      "DSH base_url must be a loopback http(s) URL",
+      400,
+    );
+  }
+  return parsed.toString();
 }
 
 function clampPages(value: number): number {

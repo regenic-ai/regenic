@@ -309,6 +309,94 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("hides /v1/me when the process is not loopback-bound", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      LISTEN_HOST: "0.0.0.0",
+    });
+    try {
+      const inbox = await fetch(`${origin}/v1/me/inbox`);
+      const engine = await fetch(`${origin}/v1/me/engine`);
+      const health = await (await fetch(`${origin}/health`)).json();
+      assert.equal(inbox.status, 404);
+      assert.equal(engine.status, 404);
+      assert.equal(health.mode, "service");
+      assert.equal(health.sqlite, "up");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects DSH remote URLs and does not persist command or token_env", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const remote = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: {
+            transport: "web",
+            session_id: "desk-1",
+            base_url: "https://example.com",
+          },
+        }),
+      });
+      assert.equal(remote.status, 400);
+
+      const cli = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: {
+            transport: "cli",
+            command: "curl",
+            workdir: "/tmp",
+            mailbox: "box-1",
+          },
+        }),
+      });
+      assert.equal(cli.status, 201);
+
+      const slack = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "slack-channel",
+          config: { channel_id: "C999", token_env: "DEEPSEEK_API_KEY" },
+        }),
+      });
+      assert.equal(slack.status, 201);
+
+      const store = new SqliteAuthorityStore(database);
+      try {
+        const installations = await store.listInstallations("local-owner");
+        const dsh = installations.find(
+          (item) => item.config.mailbox === "box-1",
+        );
+        const installedSlack = installations.find(
+          (item) => item.config.channel_id === "C999",
+        );
+        assert.equal(dsh.connector_type, "dsh-session");
+        assert.equal(dsh.config.command, undefined);
+        assert.equal(dsh.config.workdir, undefined);
+        assert.equal(installedSlack.credentials_ref, "env:REGENIC_SLACK_TOKEN");
+      } finally {
+        store.close();
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it("returns 503 for inbox when the personal kernel is not configured", async () => {
     setEnv({
       REGENIC_DATABASE: undefined,

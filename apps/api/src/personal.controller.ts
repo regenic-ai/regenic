@@ -8,7 +8,9 @@ import {
   NotFoundException,
   Param,
   Post,
+  UseGuards,
 } from "@nestjs/common";
+import { PersonalApiGuard } from "./personal-api.guard";
 import {
   PersonalConnectorError,
   PersonalConnectorService,
@@ -19,6 +21,7 @@ import {
 } from "./personal-inbox.service";
 
 @Controller("v1/me")
+@UseGuards(PersonalApiGuard)
 export class PersonalController {
   constructor(
     private readonly inbox: PersonalInboxService,

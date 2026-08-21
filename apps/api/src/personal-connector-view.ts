@@ -76,6 +76,7 @@ const CATALOG: Omit<
         label: "Base URL",
         required: false,
         default: "http://127.0.0.1:3080",
+        placeholder: "仅本机 127.0.0.1 / localhost",
       },
       {
         key: "mailbox",
