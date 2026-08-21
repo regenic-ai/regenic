@@ -1,7 +1,7 @@
 # Technology stack
 
 - **简体中文:** [../zh/TECH_STACK.md](../zh/TECH_STACK.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md) · [ROADMAP.md](ROADMAP.md) · RFC 0004, 0005, 0006, 0007
+- **Related:** [PRODUCT.md](PRODUCT.md) · [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md) · [ROADMAP.md](ROADMAP.md) · [Desktop](../zh/DESKTOP.md) · RFC 0004, 0005, 0006, 0007
 
 The Personal edition is **local-first**; Org follows. The domain model and API
 shapes stay shared; what changes by phase is the **default drivers**, not a
@@ -103,7 +103,7 @@ required to run them. Not every app is required up front.
 
 | App | Stack | When | Role |
 | --- | --- | --- | --- |
-| Desktop | Electron + React | Phase 1 | workbench, tray, OS notify, local store |
+| Desktop | Electron + React | Phase 1 | workbench, tray, OS notify, local store ([desktop](../zh/DESKTOP.md)) |
 | Web | Next.js | Phase 3+ | admin, connectors, SSO |
 | Mobile | Expo | later | capture, push, confirmations |
 
