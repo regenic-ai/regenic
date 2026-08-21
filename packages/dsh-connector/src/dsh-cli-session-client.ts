@@ -7,8 +7,12 @@ export class DshCliSessionClient {
     private readonly client?: Pick<DshCliClient, "run">,
   ) {}
 
-  async sessionHistory(): Promise<DshHistoryPage> {
-    return runsToHistoryPage(await this.runLog.list());
+  async sessionHistory(input: {
+    sessionId?: string;
+    maxMessages?: number;
+    beforeSeq?: number;
+  } = {}): Promise<DshHistoryPage> {
+    return runsToHistoryPage(await this.runLog.list(), input);
   }
 
   async sessionPrompt(input: { sessionId?: string; text: string }): Promise<{

@@ -176,4 +176,71 @@ describe("handleDshPublicRpc", () => {
     assert.deepEqual(result.body.result.value, { accepted: true });
     assert.deepEqual(await authority.listEvents("local-owner"), []);
   });
+
+  it("forwards maxMessages and beforeSeq to session.history", async () => {
+    const seen = [];
+    const result = await handleDshPublicRpc(
+      "session.history",
+      {
+        contentType: "application/json",
+        body: {
+          type: "client-request",
+          rpcId: "rpc-page",
+          method: "session.history",
+          payload: { sessionId: "dsh-main", maxMessages: 20, beforeSeq: 8 },
+        },
+      },
+      services({
+        async receive(sessionId, query) {
+          seen.push({ sessionId, query });
+          return { events: [], hasMore: true };
+        },
+      }),
+    );
+    assert.equal(result.body.result.ok, true);
+    assert.deepEqual(seen, [{ sessionId: "dsh-main", query: { maxMessages: 20, beforeSeq: 8 } }]);
+  });
+
+  it("rejects an out-of-range maxMessages", async () => {
+    const result = await handleDshPublicRpc(
+      "session.history",
+      {
+        contentType: "application/json",
+        body: {
+          type: "client-request",
+          rpcId: "rpc-bad",
+          method: "session.history",
+          payload: { sessionId: "dsh-main", maxMessages: 0 },
+        },
+      },
+      services(),
+    );
+    assert.equal(result.body.result.ok, false);
+    assert.equal(result.body.result.error.code, "bad-request");
+  });
+
+  it("returns agent-busy when receive reports a held lease", async () => {
+    const result = await handleDshPublicRpc(
+      "session.history",
+      {
+        contentType: "application/json",
+        body: {
+          type: "client-request",
+          rpcId: "rpc-busy",
+          method: "session.history",
+          payload: { sessionId: "dsh-main" },
+        },
+      },
+      services({
+        async receive() {
+          const error = new Error("DSH session is already being synced");
+          error.code = "agent-busy";
+          throw error;
+        },
+      }),
+    );
+    assert.equal(result.status, 200);
+    assert.equal(result.body.result.ok, false);
+    assert.equal(result.body.result.error.code, "agent-busy");
+  });
 });

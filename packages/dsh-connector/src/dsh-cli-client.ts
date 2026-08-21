@@ -124,7 +124,10 @@ export function resolveDshCommand(configured?: string): string {
   return command;
 }
 
-export function runsToHistoryPage(runs: DshCliRun[]): DshHistoryPage {
+export function runsToHistoryPage(
+  runs: DshCliRun[],
+  input: { maxMessages?: number; beforeSeq?: number } = {},
+): DshHistoryPage {
   const events: DshHistoryEvent[] = [];
   for (const run of runs) {
     const started = Date.parse(run.started_at);
@@ -149,7 +152,32 @@ export function runsToHistoryPage(runs: DshCliRun[]): DshHistoryPage {
       });
     }
   }
-  return { events, hasMore: false };
+  return pageHistoryEvents(events, input);
+}
+
+export function pageHistoryEvents(
+  events: DshHistoryEvent[],
+  input: { maxMessages?: number; beforeSeq?: number } = {},
+): DshHistoryPage {
+  if (input.maxMessages !== undefined && (!Number.isInteger(input.maxMessages) || input.maxMessages < 1)) {
+    throw new DshApiError("DSH maxMessages must be a positive integer", "bad-request");
+  }
+  if (input.beforeSeq !== undefined && (!Number.isInteger(input.beforeSeq) || input.beforeSeq < 0)) {
+    throw new DshApiError("DSH beforeSeq must be a non-negative integer", "bad-request");
+  }
+  const ordered = [...events].sort((left, right) => left.seq - right.seq);
+  const beforeSeq = input.beforeSeq;
+  const older = beforeSeq === undefined
+    ? ordered
+    : ordered.filter((event) => event.seq < beforeSeq);
+  const cap = input.maxMessages;
+  if (cap === undefined) {
+    return { events: older, hasMore: false };
+  }
+  return {
+    events: older.slice(-cap),
+    hasMore: older.length > cap,
+  };
 }
 
 function randomId(): string {
