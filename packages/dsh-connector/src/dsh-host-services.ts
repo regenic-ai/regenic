@@ -48,17 +48,20 @@ export function createDshHostRpcServices(
       const page = await connector.historyPage(query);
       const key = dshSessionKey(installation.config, installation.id);
       const runner = new ConnectorRunner(connector, host.get("ingest"), store, now);
-      const run = await runner.poll({
-        installation_id: installation.id,
-        stream_key: `session:${key}`,
-        lease_owner: options.lease_owner ?? `dsh-api:${createId()}`,
-        lease_duration_ms: 60_000,
-      });
-      if (run.status === "lease_unavailable") {
-        throw new DshApiError("DSH session is already being synced", "agent-busy");
-      }
-      if (run.status === "retryable_failure") {
-        throw new DshApiError("DSH ingest failed", "internal");
+      try {
+        const run = await runner.poll({
+          installation_id: installation.id,
+          stream_key: `session:${key}`,
+          lease_owner: options.lease_owner ?? `dsh-api:${createId()}`,
+          lease_duration_ms: 60_000,
+        });
+        if (run.status === "lease_unavailable") {
+          throw new DshApiError("DSH session is already being synced", "agent-busy");
+        }
+      } catch (error) {
+        if (error instanceof DshApiError && error.code === "agent-busy") {
+          throw error;
+        }
       }
       return page;
     },

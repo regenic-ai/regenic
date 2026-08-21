@@ -29,6 +29,7 @@ export interface DshSessionPollConnectorOptions {
   org_id: string;
   session_id: string;
   page_size?: number;
+  max_history_pages?: number;
   now?: () => string;
 }
 
@@ -47,6 +48,7 @@ export class DshSessionPollConnector {
     hasMore: false,
   };
   private readonly pageSize: number;
+  private readonly maxHistoryPages: number;
   private readonly now: () => string;
 
   constructor(
@@ -56,6 +58,10 @@ export class DshSessionPollConnector {
     this.pageSize = options.page_size ?? 20;
     if (!Number.isInteger(this.pageSize) || this.pageSize < 1 || this.pageSize > 100) {
       throw new Error("DSH page_size must be an integer from 1 through 100");
+    }
+    this.maxHistoryPages = options.max_history_pages ?? DSH_MAX_HISTORY_PAGES;
+    if (!Number.isInteger(this.maxHistoryPages) || this.maxHistoryPages < 1) {
+      throw new Error("DSH max_history_pages must be a positive integer");
     }
     this.now = options.now ?? (() => new Date().toISOString());
   }
@@ -81,31 +87,35 @@ export class DshSessionPollConnector {
   }
 
   async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
-    const afterSeq = parseCursor(cursor);
-    const collected = await this.collectHistoryAfter(afterSeq);
-    const surface = toSurfaceEvents(collected).filter((event) => event.seq > afterSeq);
+    const { afterSeq, resumeBefore } = parseCursor(cursor);
+    const collected = await this.collectHistoryAfter(afterSeq, resumeBefore);
+    if (!collected.reached) {
+      const nextCursor = formatResumeCursor(afterSeq, collected.resumeBefore);
+      this.lastSurfacePage = { events: [], hasMore: true };
+      return this.toPollResult(cursor?.value, nextCursor, []);
+    }
+    const surface = toSurfaceEvents(collected.events).filter((event) => event.seq > afterSeq);
     const window = surface.slice(0, this.pageSize);
-    const nextCursor = window.length > 0 ? String(window[window.length - 1].seq) : undefined;
+    const nextCursor = window.length > 0
+      ? String(window[window.length - 1].seq)
+      : afterSeq >= 0 ? String(afterSeq) : undefined;
     this.lastSurfacePage = {
       events: window,
       hasMore: surface.length > window.length,
     };
-    const batch: IngestBatch = {
-      schema_version: INGEST_SCHEMA_VERSION,
-      connector_id: this.options.connector_id,
-      org_id: this.options.org_id,
-      delivery_id: this.deliveryId(cursor?.value, nextCursor),
-      received_at: this.now(),
-      next_cursor: nextCursor,
-      records: window.map((event) => this.toRecord(event)),
-    };
-    return { batch, next_cursor: nextCursor };
+    return this.toPollResult(cursor?.value, nextCursor, window);
   }
 
-  private async collectHistoryAfter(afterSeq: number): Promise<DshHistoryEvent[]> {
+  private async collectHistoryAfter(
+    afterSeq: number,
+    resumeBefore: number | undefined,
+  ): Promise<
+    | { reached: true; events: DshHistoryEvent[] }
+    | { reached: false; resumeBefore: number }
+  > {
     const collected: DshHistoryEvent[] = [];
-    let beforeSeq: number | undefined;
-    for (let hop = 0; hop < DSH_MAX_HISTORY_PAGES; hop += 1) {
+    let beforeSeq = resumeBefore;
+    for (let hop = 0; hop < this.maxHistoryPages; hop += 1) {
       const page = await this.client.sessionHistory({
         sessionId: this.options.session_id,
         maxMessages: this.pageSize,
@@ -117,10 +127,10 @@ export class DshSessionPollConnector {
         .filter((seq) => Number.isInteger(seq));
       const minSeq = seqs.length > 0 ? Math.min(...seqs) : undefined;
       if (page.events.length === 0 || page.hasMore !== true) {
-        return dedupeHistoryEvents(collected);
+        return { reached: true, events: dedupeHistoryEvents(collected) };
       }
       if (minSeq !== undefined && minSeq <= afterSeq + 1) {
-        return dedupeHistoryEvents(collected);
+        return { reached: true, events: dedupeHistoryEvents(collected) };
       }
       if (minSeq === undefined) {
         throw new DshApiError("DSH history page has no valid seq", "internal");
@@ -130,10 +140,27 @@ export class DshSessionPollConnector {
       }
       beforeSeq = minSeq;
     }
-    throw new DshApiError(
-      "DSH history is longer than the poll window; raise page_size or retry",
-      "internal",
-    );
+    if (beforeSeq === undefined) {
+      throw new DshApiError("DSH history page has no valid seq", "internal");
+    }
+    return { reached: false, resumeBefore: beforeSeq };
+  }
+
+  private toPollResult(
+    cursor: string | undefined,
+    nextCursor: string | undefined,
+    window: DshSurfaceEvent[],
+  ): PollResult {
+    const batch: IngestBatch = {
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: this.options.connector_id,
+      org_id: this.options.org_id,
+      delivery_id: this.deliveryId(cursor, nextCursor),
+      received_at: this.now(),
+      next_cursor: nextCursor,
+      records: window.map((event) => this.toRecord(event)),
+    };
+    return { batch, next_cursor: nextCursor };
   }
 
   private toRecord(event: DshSurfaceEvent): IngestRecord {
@@ -224,15 +251,26 @@ export function toSurfaceEvent(event: DshHistoryEvent): DshSurfaceEvent[] {
   ];
 }
 
-function parseCursor(cursor: ConnectorCursor | null): number {
+function parseCursor(cursor: ConnectorCursor | null): {
+  afterSeq: number;
+  resumeBefore?: number;
+} {
   if (!cursor?.value) {
-    return -1;
+    return { afterSeq: -1 };
   }
-  const seq = Number(cursor.value);
-  if (!Number.isInteger(seq) || seq < 0) {
-    throw new DshApiError(`DSH cursor is invalid: ${cursor.value}`);
+  const exact = /^(-1|\d+)$/.exec(cursor.value);
+  if (exact) {
+    return { afterSeq: Number(exact[1]) };
   }
-  return seq;
+  const resume = /^(-1|\d+):(\d+)$/.exec(cursor.value);
+  if (resume) {
+    return { afterSeq: Number(resume[1]), resumeBefore: Number(resume[2]) };
+  }
+  throw new DshApiError(`DSH cursor is invalid: ${cursor.value}`);
+}
+
+function formatResumeCursor(afterSeq: number, resumeBefore: number): string {
+  return `${afterSeq}:${resumeBefore}`;
 }
 
 function extractText(

@@ -92,7 +92,7 @@ pnpm local dsh-send --database ./regenic.db --installation dsh-main \
 	--text "Follow up on the last turn"
 ```
 
-Regenic 仍对外提供同一组 HTTP 方法。信封与 DSH web 一致（`client-request` / `server-response`，回显 `rpcId`）。`session.history` 接受与 DSH web 相同的 `sessionId`、`maxMessages`、`beforeSeq`，返回的是该请求对应的历史页，而不是刚入库的增量。新消息会在一侧入库。若另一路同步占用了租约，返回 `ok: false`，错误码 `agent-busy`。后端按安装记录的 `transport` 走。`web` 若 DSH 要求鉴权，设置 `REGENIC_DSH_TOKEN`。
+Regenic 仍对外提供同一组 HTTP 方法。信封与 DSH web 一致（`client-request` / `server-response`，回显 `rpcId`）。`session.history` 接受与 DSH web 相同的 `sessionId`、`maxMessages`、`beforeSeq`，返回的是该请求对应的历史页，而不是刚入库的增量。新消息会在一侧入库；入库失败时历史页仍返回。若另一路同步占用了租约，返回 `ok: false`，错误码 `agent-busy`。后端按安装记录的 `transport` 走。`web` 若 DSH 要求鉴权，设置 `REGENIC_DSH_TOKEN`。
 
 ```http
 POST /v1/dsh/api/session.history
