@@ -6,6 +6,8 @@ import { AppModule } from "./app.module";
 async function bootstrap() {
   const env = loadEnv();
   const app = await NestFactory.create(AppModule);
+  app.enableCors({ origin: true });
+  app.enableShutdownHooks();
   await app.listen(env.PORT, env.LISTEN_HOST);
   console.log(`api listening on ${env.LISTEN_HOST}:${env.PORT}`);
 }

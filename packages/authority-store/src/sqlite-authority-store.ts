@@ -346,6 +346,40 @@ export class SqliteAuthorityStore
     return updated.changes === 1 ? this.findInstallation(input.id) : null;
   }
 
+  async deleteInstallation(id: string, orgId: string): Promise<boolean> {
+    const removed = this.database.transaction(() => {
+      const row = this.database
+        .prepare(
+          `SELECT id FROM connector_installations WHERE id = ? AND org_id = ?`,
+        )
+        .get(id, orgId) as { id: string } | undefined;
+      if (!row) {
+        return false;
+      }
+      this.database
+        .prepare(
+          `
+            DELETE FROM ingest_quarantines
+            WHERE attempt_id IN (
+              SELECT id FROM ingest_attempts WHERE connector_installation_id = ?
+            )
+          `,
+        )
+        .run(id);
+      this.database
+        .prepare(`DELETE FROM ingest_attempts WHERE connector_installation_id = ?`)
+        .run(id);
+      this.database
+        .prepare(`DELETE FROM connector_cursors WHERE installation_id = ?`)
+        .run(id);
+      this.database
+        .prepare(`DELETE FROM connector_installations WHERE id = ? AND org_id = ?`)
+        .run(id, orgId);
+      return true;
+    });
+    return removed();
+  }
+
   async acquireLease(input: {
     installation_id: string;
     stream_key: string;
