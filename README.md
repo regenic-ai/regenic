@@ -92,7 +92,7 @@ pnpm local dsh-send --database ./regenic.db --installation dsh-main \
 	--text "Follow up on the last turn"
 ```
 
-Regenic still exposes the same HTTP methods. The envelope matches DSH web (`client-request` / `server-response`, `rpcId` echoed). The backend follows the installation's `transport`. For `web`, set `REGENIC_DSH_TOKEN` if the DSH host requires a bearer token.
+Regenic still exposes the same HTTP methods. The envelope matches DSH web (`client-request` / `server-response`, `rpcId` echoed). `session.history` accepts the same `sessionId`, `maxMessages`, and `beforeSeq` as DSH web and returns that history page — not only the increment just ingested. New messages are ingested on the side; if ingest fails, the history page is still returned. If another sync holds the lease, the response is `ok: false` with `agent-busy`. The backend follows the installation's `transport`. For `web`, set `REGENIC_DSH_TOKEN` if the DSH host requires a bearer token.
 
 ```http
 POST /v1/dsh/api/session.history

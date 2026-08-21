@@ -83,6 +83,35 @@ export class ConnectorRunner {
       started_at: startedAt,
     });
 
+    if (pollResult.batch.records.length === 0) {
+      const nextCursor = pollResult.next_cursor ?? pollResult.batch.next_cursor;
+      await this.runtimeStore.settleAttempt({
+        attempt_id: attemptId,
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        lease_owner: input.lease_owner,
+        finished_at: this.now(),
+        accepted_count: 0,
+        duplicate_count: 0,
+        quarantined_count: 0,
+        retryable_failure_count: 0,
+        next_cursor: nextCursor,
+        quarantines: [],
+      });
+      return {
+        status: "completed",
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        attempt_id: attemptId,
+        result: {
+          connector_id: pollResult.batch.connector_id,
+          delivery_id: pollResult.batch.delivery_id,
+          records: [],
+        },
+        next_cursor: nextCursor,
+      };
+    }
+
     let result: IngestBatchResult;
     try {
       const submission = await this.processor.ingest(pollResult.batch);
