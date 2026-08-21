@@ -86,6 +86,57 @@ describe("DshSessionPollConnector", () => {
     assert.equal(cursor.cursor, "1");
   });
 
+  it("walks older DSH pages so the cursor does not skip the gap", async () => {
+    const client = pagingHistoryClient(6, 2);
+    const connector = new DshSessionPollConnector(client, {
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      session_id: "dsh-main",
+      page_size: 2,
+      now: () => "2026-08-21T00:00:00.000Z",
+    });
+
+    const first = await connector.poll(null);
+    assert.deepEqual(client.calls, [
+      { sessionId: "dsh-main", maxMessages: 2, beforeSeq: undefined },
+      { sessionId: "dsh-main", maxMessages: 2, beforeSeq: 4 },
+      { sessionId: "dsh-main", maxMessages: 2, beforeSeq: 2 },
+    ]);
+    assert.deepEqual(first.batch.records.map((record) => record.external_id), [
+      "dsh-main:0",
+      "dsh-main:1",
+    ]);
+    assert.equal(first.next_cursor, "1");
+    assert.equal(connector.lastSurfacePage.hasMore, true);
+
+    const second = await connector.poll({ value: "1" });
+    assert.deepEqual(second.batch.records.map((record) => record.external_id), [
+      "dsh-main:2",
+      "dsh-main:3",
+    ]);
+    assert.equal(second.next_cursor, "3");
+  });
+
+  it("returns the requested DSH history page without using the ingest cursor", async () => {
+    const client = pagingHistoryClient(6, 2);
+    const connector = new DshSessionPollConnector(client, {
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      session_id: "dsh-main",
+      page_size: 2,
+      now: () => "2026-08-21T00:00:00.000Z",
+    });
+
+    await connector.poll(null);
+    const tail = await connector.historyPage();
+    const older = await connector.historyPage({ beforeSeq: 4, maxMessages: 2 });
+
+    assert.deepEqual(tail.events.map((event) => event.seq), [4, 5]);
+    assert.equal(tail.hasMore, true);
+    assert.deepEqual(older.events.map((event) => event.seq), [2, 3]);
+    assert.equal(older.hasMore, true);
+  });
+
   it("passes the reusable poll connector conformance suite", async () => {
     const connector = createConnector(new MemoryDshRunLog([run(0, "Hello", "Hi")]));
     const report = await verifyPollConnectorConformance({
@@ -101,3 +152,38 @@ describe("DshSessionPollConnector", () => {
     });
   });
 });
+
+function pagingHistoryClient(count, pageSize) {
+  const events = Array.from({ length: count }, (_, seq) => historyEvent(seq));
+  const calls = [];
+  return {
+    calls,
+    async sessionHistory(input) {
+      calls.push({
+        sessionId: input.sessionId,
+        maxMessages: input.maxMessages,
+        beforeSeq: input.beforeSeq,
+      });
+      const older = input.beforeSeq === undefined
+        ? events
+        : events.filter((event) => event.seq < input.beforeSeq);
+      const cap = input.maxMessages ?? pageSize;
+      return {
+        events: older.slice(-cap),
+        hasMore: older.length > cap,
+      };
+    },
+  };
+}
+
+function historyEvent(seq) {
+  const inbound = seq % 2 === 1;
+  return {
+    type: inbound ? "assistant/message" : "user/message",
+    seq,
+    time: 1_724_208_000_000 + seq,
+    data: inbound
+      ? { message: { content: [{ type: "text", text: `a${seq}` }] } }
+      : { content: [{ type: "text", text: `u${seq}` }], source: { kind: "user" } },
+  };
+}
