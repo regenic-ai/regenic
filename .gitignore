@@ -32,3 +32,11 @@ packages/*/src/**/*.js
 packages/*/src/**/*.js.map
 packages/*/src/**/*.d.ts
 packages/*/src/**/*.d.ts.map
+
+# Local CLI / connector runtime
+*.db
+*.db-shm
+*.db-wal
+blobs/
+blobs-web/
+dsh-runs/

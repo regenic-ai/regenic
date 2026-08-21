@@ -182,6 +182,7 @@ sync_members(channel_ref) → membership diffs
 | `feishu` | 飞书 |
 | `wecom` | 企业微信 |
 | `slack` | Slack |
+| `dsh` | DeepSeek Harness：`cli`（headless）或 `web`（HTTP session） |
 | `email` | 邮件（多为拉取） |
 | `regenic` | 自有客户端 |
 | `ticket` | 工单 |
@@ -213,6 +214,7 @@ send(intent) → DeliveryReceipt
 | 驱动（举例） | 去向 |
 | --- | --- |
 | `slack` | Slack 回复 / 发帖 |
+| `dsh` | CLI headless，或 web `session.prompt` |
 | `email` | 邮件厂商 API |
 | `feishu` | 飞书消息 |
 
@@ -332,7 +334,7 @@ Nest 上开 WebSocket 或 SSE。要弹到系统托盘 / 锁屏的，走 `Notifie
 | `AuthorityStore` | SQLite / PostgreSQL | 领域表与查询语义 |
 | `JobQueue` | 进程内 / BullMQ | 任务类型与幂等键 |
 | `BlobStore` | fs / MinIO / S3 / OSS | 按 `content_hash` 寻址 |
-| `ChannelConnector` | 飞书 / 企微 / Slack / 邮件 / … | 只写出 `IngestBatch` |
+| `ChannelConnector` | 飞书 / 企微 / Slack / DSH / 邮件 / … | 只写出 `IngestBatch` |
 | `EgressAdapter` | 同一批来源的发送 | 回复 → 渠道；不得自授权 |
 | `ModelProvider` | OpenAI / Azure / 通义 / vLLM / none | complete / embed 接口 |
 | `IdentityProvider` | local / OIDC / 飞书 SSO / … | 映射成 RFC 0006 的 Principal |

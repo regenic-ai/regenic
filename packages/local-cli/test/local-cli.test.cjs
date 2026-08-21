@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
-const { mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
+const { access } = require("node:fs/promises");
+const { mkdir, mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
@@ -473,5 +474,152 @@ describe("regenic-local", () => {
     assert.match(digest, /Digest body/);
     assert.match(digest, /Event: `[-a-f0-9]+`/);
     assert.match(digest, /Blob: `[a-f0-9]{64}`/);
+  });
+
+  it("installs DSH without persisting a token and reports safe status", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const installation = await run([
+      "dsh-install", "--database", database, "--org", "local-owner",
+      "--transport", "cli", "--mailbox", "dsh-main", "--id", "dsh-1",
+    ]);
+    const status = await run(["status", "--database", database, "--org", "local-owner"]);
+
+    assert.equal(installation.id, "dsh-1");
+    assert.deepEqual(installation.config, {
+      transport: "cli",
+      mailbox: "dsh-main",
+      command: "dsh",
+      profile: "headless",
+      run_log: join(root, "dsh-runs", "dsh-1.jsonl"),
+    });
+    assert.equal(installation.credentials_ref, undefined);
+    assert.equal(JSON.stringify(status).includes("token"), false);
+  });
+
+  it("syncs journaled DSH CLI runs without starting dsh web", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await run([
+      "dsh-install", "--database", database, "--org", "local-owner",
+      "--transport", "cli", "--mailbox", "dsh-main", "--id", "dsh-1",
+    ]);
+    const runLog = join(root, "dsh-runs", "dsh-1.jsonl");
+    await mkdir(join(root, "dsh-runs"), { recursive: true });
+    await writeFile(runLog, `${JSON.stringify({
+      run_id: "run-1",
+      seq: 0,
+      task: "Hello",
+      stdout: "Hi",
+      started_at: "2026-08-21T00:00:00.000Z",
+      finished_at: "2026-08-21T00:00:01.000Z",
+    })}\n`);
+    const synced = await run([
+      "dsh-sync", "--database", database, "--blob-root", blobRoot,
+      "--installation", "dsh-1",
+    ]);
+    const status = await run(["status", "--database", database, "--org", "local-owner"]);
+
+    assert.equal(synced.pages_attempted, 1);
+    assert.equal(synced.runs[0].status, "completed");
+    assert.equal(synced.runs[0].result.records[0].status, "accepted");
+    assert.equal(status[0].attempts[0].status, "succeeded");
+  });
+
+  it("sends a DSH prompt through the headless CLI", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    await run([
+      "dsh-install", "--database", database, "--org", "local-owner",
+      "--transport", "cli", "--mailbox", "dsh-main", "--id", "dsh-1",
+    ]);
+    const calls = [];
+    const sent = await run([
+      "dsh-send", "--database", database, "--installation", "dsh-1",
+      "--text", "Follow up",
+    ], {
+      async spawn(input) {
+        calls.push(input.command);
+        return { stdout: "On it", stderr: "", exit_code: 0 };
+      },
+    });
+
+    assert.deepEqual(calls, [["dsh", "--profile", "headless", "Follow up"]]);
+    assert.equal(sent.accepted, true);
+    assert.equal(typeof sent.rpc_id, "string");
+  });
+
+  it("installs and syncs DSH through web HTTP when transport is web", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const installation = await run([
+      "dsh-install", "--database", database, "--org", "local-owner",
+      "--transport", "web", "--session", "sess-1", "--id", "dsh-1",
+    ]);
+    const synced = await run([
+      "dsh-sync", "--database", database, "--blob-root", blobRoot,
+      "--installation", "dsh-1",
+    ], {
+      async fetch(url, init) {
+        assert.equal(url, "http://127.0.0.1:3080/api/session.history");
+        const body = JSON.parse(init.body);
+        assert.equal(body.payload.sessionId, "sess-1");
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              type: "server-response",
+              rpcId: body.rpcId,
+              result: {
+                ok: true,
+                value: {
+                  hasMore: false,
+                  events: [{
+                    type: "user/message",
+                    seq: 2,
+                    time: 1_724_208_000_000,
+                    data: {
+                      content: [{ type: "text", text: "Hello" }],
+                      source: { kind: "user" },
+                    },
+                  }],
+                },
+              },
+            };
+          },
+        };
+      },
+    });
+
+    assert.deepEqual(installation.config, {
+      transport: "web",
+      session_id: "sess-1",
+      base_url: "http://127.0.0.1:3080",
+    });
+    assert.equal(synced.runs[0].status, "completed");
+    assert.equal(synced.runs[0].result.records[0].status, "accepted");
+  });
+
+  it("resolves relative --database against INIT_CWD", async () => {
+    const root = await createRoot();
+    const previous = process.env.INIT_CWD;
+    process.env.INIT_CWD = root;
+    try {
+      const installation = await run([
+        "dsh-install", "--database", "from-shell.db", "--org", "local-owner",
+        "--transport", "cli", "--id", "dsh-cwd",
+      ]);
+      assert.equal(installation.config.run_log, join(root, "dsh-runs", "dsh-cwd.jsonl"));
+      await access(join(root, "from-shell.db"));
+    } finally {
+      if (previous === undefined) {
+        delete process.env.INIT_CWD;
+      } else {
+        process.env.INIT_CWD = previous;
+      }
+    }
   });
 });

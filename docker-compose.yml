@@ -30,6 +30,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      LISTEN_HOST: "0.0.0.0"
       DATABASE_URL: postgres://regenic:regenic@postgres:5432/regenic
       REDIS_URL: redis://redis:6379
     ports:
