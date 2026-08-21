@@ -1,6 +1,6 @@
 import { Controller, Get } from "@nestjs/common";
 import { Client } from "pg";
-import { loadEnv } from "@regenic/config";
+import { isPersonalApiEnabled, loadEnv } from "@regenic/config";
 import type { StandardPlaceholder } from "@regenic/domain";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
@@ -19,7 +19,7 @@ export class HealthController {
       return {
         status: sqlite === "up" ? "ok" : "degraded",
         service: "api",
-        mode: "personal",
+        mode: isPersonalApiEnabled(env) ? "personal" : "service",
         sqlite,
         domain: "@regenic/domain",
       };
