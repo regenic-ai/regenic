@@ -181,6 +181,7 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 [Message orchestration](docs/en/MESSAGE_ORCHESTRATION.md) ·
 [PRODUCT](docs/en/PRODUCT.md) · [ROADMAP](docs/en/ROADMAP.md) ·
 [TECH_STACK](docs/en/TECH_STACK.md) ·
+[Desktop](docs/zh/DESKTOP.md) ·
 [Ingestion](docs/en/INGESTION_ARCHITECTURE.md)
 
 ## Contributing

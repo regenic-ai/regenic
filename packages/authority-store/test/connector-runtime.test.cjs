@@ -236,4 +236,31 @@ describe("SQLite connector runtime", () => {
     assert.equal(reset.cursor_version, 2);
     store.close();
   });
+
+  it("uninstalls an installation and its runtime rows", async () => {
+    const root = await createRoot();
+    const store = await createStore(root);
+    await store.acquireLease(leaseInput);
+    await store.beginAttempt({
+      id: "attempt-uninstall",
+      org_id: installation.org_id,
+      connector_installation_id: installation.id,
+      stream_key: "personal",
+      delivery_id: "page-1",
+      started_at: leaseInput.now,
+    });
+
+    assert.equal(
+      await store.deleteInstallation(installation.id, "other-org"),
+      false,
+    );
+    assert.equal(
+      await store.deleteInstallation(installation.id, installation.org_id),
+      true,
+    );
+    assert.equal(await store.findInstallation(installation.id), null);
+    assert.equal((await store.listAttempts(installation.id)).length, 0);
+    assert.equal(await store.getCursor(installation.id, "personal"), null);
+    store.close();
+  });
 });

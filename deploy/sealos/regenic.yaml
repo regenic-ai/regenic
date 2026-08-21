@@ -1,5 +1,7 @@
 # Sealos: Regenic API + dsh web sidecar (same Pod, share 127.0.0.1).
 # Only expose Regenic :3000. Do not publish 3080.
+# LISTEN_HOST=0.0.0.0 keeps /v1/me off this public ingress. Do not set
+# REGENIC_PERSONAL_API.
 #
 # Secrets stay out of git. Once:
 #   cp deploy/sealos/secret.yaml.example deploy/sealos/secret.yaml
