@@ -8,6 +8,7 @@ const { NestFactory } = require("@nestjs/core");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService } = require("@regenic/domain");
+const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
 const { AppModule } = require("../dist/app.module");
 const { decodeBodyText } = require("../dist/inbox-body");
 
@@ -439,5 +440,17 @@ describe("inbox body decode", () => {
       decodeBodyText(envelope, "application/vnd.regenic.content-parts+json"),
       "Please confirm",
     );
+  });
+});
+
+describe("personal CORS origins", () => {
+  it("allows file, null, and loopback, and rejects public sites", () => {
+    assert.equal(isAllowedPersonalCorsOrigin("null"), true);
+    assert.equal(isAllowedPersonalCorsOrigin("file:///Users/local/index.html"), true);
+    assert.equal(isAllowedPersonalCorsOrigin("http://localhost:5173"), true);
+    assert.equal(isAllowedPersonalCorsOrigin("http://127.0.0.1:4370"), true);
+    assert.equal(isAllowedPersonalCorsOrigin("https://example.com"), false);
+    assert.equal(isAllowedPersonalCorsOrigin("http://127.0.0.1.evil.com"), false);
+    assert.equal(isAllowedPersonalCorsOrigin("http://user@127.0.0.1"), false);
   });
 });
