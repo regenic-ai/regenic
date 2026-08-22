@@ -92,7 +92,7 @@ const CATALOG: CatalogDefinition[] = [
     connector_type: "dsh-session",
     title: "DSH",
     description:
-      "One install talks to local dsh web. The kernel pulls every session after install; set a Session ID to follow only that one.",
+      "One install talks to dsh web (local loopback, or REGENIC_DSH_BASE_URL on a hosted API). The kernel pulls every session after install; set a Session ID to follow only that one.",
     credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
     fields: [
       {
@@ -155,11 +155,12 @@ export function connectorCatalog(
 ): ConnectorCatalogItem[] {
   const env = readiness.env ?? process.env;
   return CATALOG.map((item) => {
+    const definition = catalogDefinitionForEnv(item, env);
     const instanceCount = installations.filter(
       (installation) => installation.connector_type === item.connector_type,
     ).length;
-    const defaults = defaultFieldValues(item.fields);
-    const prerequisites = item.prerequisites.map((prerequisite) => ({
+    const defaults = defaultFieldValues(definition.fields);
+    const prerequisites = definition.prerequisites.map((prerequisite) => ({
       ...prerequisite,
       ready: prerequisiteReady(prerequisite, env, readiness.services),
     }));
@@ -169,7 +170,7 @@ export function connectorCatalog(
         matchesWhen(prerequisite.visible_when, defaults),
     );
     return {
-      ...item,
+      ...definition,
       installed: instanceCount > 0,
       instance_count: instanceCount,
       setup_ready: requiredVisible.every((prerequisite) => prerequisite.ready),
@@ -225,7 +226,8 @@ function connectorPresentation(installation: ConnectorInstallation): {
     };
   }
   if (installation.connector_type === "dsh-session") {
-    const transport = configString(config, "transport");
+    const hosted = Boolean(process.env.REGENIC_DSH_BASE_URL?.trim());
+    const transport = hosted ? "web" : configString(config, "transport");
     if (transport === "cli") {
       return {
         label: configString(config, "mailbox") ?? installation.id,
@@ -235,7 +237,7 @@ function connectorPresentation(installation: ConnectorInstallation): {
     const sessionId = configString(config, "session_id");
     return {
       label: sessionId ?? "All sessions",
-      detail: transport === "web" ? "web" : null,
+      detail: transport === "web" || hosted ? "web" : null,
     };
   }
   return { label: installation.id, detail: null };
@@ -259,6 +261,44 @@ export function matchesWhen(
     return true;
   }
   return (values[when.field] ?? "") === when.value;
+}
+
+function catalogDefinitionForEnv(
+  item: CatalogDefinition,
+  env: NodeJS.ProcessEnv,
+): CatalogDefinition {
+  if (item.connector_type !== "dsh-session" || !env.REGENIC_DSH_BASE_URL?.trim()) {
+    return item;
+  }
+  return {
+    ...item,
+    description:
+      "Hosted kernel talks to DSH over the cluster Service (REGENIC_DSH_BASE_URL). Leave Session ID empty to follow every session. Do not paste a public DSH URL.",
+    fields: [
+      {
+        key: "session_id",
+        label: "Session ID",
+        required: false,
+        placeholder: "Leave empty to sync all sessions",
+      },
+    ],
+    prerequisites: [
+      {
+        kind: "local_service",
+        key: "dsh-web",
+        label: "Cluster DSH",
+        required: true,
+        hint: "Uses REGENIC_DSH_BASE_URL (cluster DNS, not a public URL)",
+      },
+      {
+        kind: "env",
+        key: "REGENIC_DSH_TOKEN",
+        label: "DSH web token",
+        required: false,
+        hint: "Only if dsh web requires a Bearer token",
+      },
+    ],
+  };
 }
 
 function defaultFieldValues(fields: ConnectorField[]): Record<string, string> {

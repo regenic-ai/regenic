@@ -14,5 +14,6 @@ RUN npm install -g @deepseek-ai/dsh \
 USER node
 WORKDIR /home/node
 
-# Official dsh web binds 127.0.0.1 only. Keep it off the Service.
+# Official dsh refuses --host 0.0.0.0. The Sealos Service reaches it through
+# deploy/sealos/dsh-proxy.js (0.0.0.0:3081 -> 127.0.0.1:3080).
 CMD ["dsh", "web", "--no-open", "--port", "3080"]

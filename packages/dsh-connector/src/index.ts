@@ -8,3 +8,4 @@ export * from "./dsh-session-egress";
 export * from "./dsh-session-poll-connector";
 export * from "./plugin";
 export * from "./dsh-session-driver";
+export * from "./dsh-url";

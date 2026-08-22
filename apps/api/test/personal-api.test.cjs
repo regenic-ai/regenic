@@ -274,6 +274,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     PORT: "4370",
     LISTEN_HOST: "127.0.0.1",
     REGENIC_CONNECTOR_PULL_MS: "0",
+    REGENIC_PERSONAL_API: undefined,
     ...extraEnv,
   });
   const app = await NestFactory.create(AppModule, { logger: false });
@@ -738,6 +739,95 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("lets a hosted kernel reply to DSH sessions through a stored cli install", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-hosted",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-hosted:1",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "user",
+          scope_id: "session-hosted",
+          text: "只用一个英文单词回复：pong",
+        }),
+      ],
+    });
+    await authority.createInstallation({
+      id: "dsh-main",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "cli", mailbox: "dsh-main" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    });
+    authority.close();
+    const dsh = await startDshWebStub();
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_DSH_BASE_URL: dsh.origin,
+    });
+    try {
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const item = inbox.find((row) => row.event.source === "dsh");
+      assert.equal(Boolean(item), true);
+      assert.equal(item.can_send, true);
+
+      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      const catalog = engine.catalog.find(
+        (entry) => entry.connector_type === "dsh-session",
+      );
+      assert.equal(
+        catalog.fields.some((field) => field.key === "base_url"),
+        false,
+      );
+      assert.equal(
+        engine.installations.find((entry) => entry.id === "dsh-main").detail,
+        "web",
+      );
+
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: {
+            transport: "web",
+            base_url: "https://regenic-dsh.sealosbja.site",
+          },
+        }),
+      });
+      const installation = await created.json();
+      assert.equal(created.status, 201, JSON.stringify(installation));
+      assert.equal(installation.detail, "web");
+
+      const replied = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-hosted",
+          text: "pong",
+        }),
+      });
+      const body = await replied.json();
+      assert.equal(replied.status, 201, JSON.stringify(body));
+      assert.equal(dsh.prompts[0].payload.sessionId, "session-hosted");
+    } finally {
+      await app.close();
+      await dsh.close();
+    }
+  });
+
   it("hides /v1/me when the process is not loopback-bound", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
@@ -753,6 +843,28 @@ describe("personal /v1/me", () => {
       assert.equal(inbox.status, 404);
       assert.equal(engine.status, 404);
       assert.equal(health.mode, "service");
+      assert.equal(health.sqlite, "up");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("exposes /v1/me on a public bind when REGENIC_PERSONAL_API=1", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      LISTEN_HOST: "0.0.0.0",
+      REGENIC_PERSONAL_API: "1",
+    });
+    try {
+      const inbox = await fetch(`${origin}/v1/me/inbox`);
+      const engine = await fetch(`${origin}/v1/me/engine`);
+      const health = await (await fetch(`${origin}/health`)).json();
+      assert.equal(inbox.status, 200);
+      assert.equal(engine.status, 200);
+      assert.equal(health.mode, "personal");
       assert.equal(health.sqlite, "up");
     } finally {
       await app.close();

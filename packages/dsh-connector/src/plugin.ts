@@ -6,6 +6,7 @@ import { FileDshRunLog, MemoryDshRunLog, type DshRunLog } from "./dsh-run-log";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
 import { DshSessionEgress } from "./dsh-session-egress";
 import { DshSessionPollConnector } from "./dsh-session-poll-connector";
+import { resolveOperatorDshBaseUrl } from "./dsh-url";
 
 export type DshTransport = "web" | "cli";
 
@@ -44,6 +45,16 @@ export function resolveDshTransport(
     : "cli";
 }
 
+export function resolveEffectiveDshTransport(
+  config: Record<string, unknown> | DshSessionPluginConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): DshTransport {
+  if (resolveOperatorDshBaseUrl(env)) {
+    return "web";
+  }
+  return resolveDshTransport(config);
+}
+
 export function dshSessionKey(
   config: Record<string, unknown> | DshSessionPluginConfig,
   fallbackId: string,
@@ -59,13 +70,15 @@ export function dshSessionPluginConfigFromInstallation(
   installation: { id: string; org_id: string; config: Record<string, unknown> },
   extras: Partial<DshSessionPluginConfig> = {},
 ): DshSessionPluginConfig {
+  const env = extras.env ?? process.env;
+  const operatorUrl = resolveOperatorDshBaseUrl(env);
   return {
     installation_id: installation.id,
     org_id: installation.org_id,
-    transport: resolveDshTransport(installation.config),
+    transport: resolveEffectiveDshTransport(installation.config, env),
     mailbox: stringConfig(installation.config, "mailbox"),
     session_id: stringConfig(installation.config, "session_id"),
-    base_url: stringConfig(installation.config, "base_url"),
+    base_url: operatorUrl ?? stringConfig(installation.config, "base_url"),
     command: stringConfig(installation.config, "command"),
     profile: stringConfig(installation.config, "profile"),
     workdir: stringConfig(installation.config, "workdir"),
@@ -73,6 +86,7 @@ export function dshSessionPluginConfigFromInstallation(
     run_log: stringConfig(installation.config, "run_log"),
     timeout_ms: numberConfig(installation.config, "timeout_ms"),
     ...extras,
+    ...(operatorUrl ? { transport: "web" as const, base_url: operatorUrl } : {}),
   };
 }
 

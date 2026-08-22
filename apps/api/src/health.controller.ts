@@ -4,6 +4,19 @@ import { isPersonalApiEnabled, loadEnv } from "@regenic/config";
 import type { StandardPlaceholder } from "@regenic/domain";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
+async function probeDsh(baseUrl: string | undefined): Promise<"up" | "down" | undefined> {
+  const url = baseUrl?.trim();
+  if (!url) {
+    return undefined;
+  }
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+    return response.ok ? "up" : "down";
+  } catch {
+    return "down";
+  }
+}
+
 @Controller()
 export class HealthController {
   constructor(private readonly runtime: PersonalRuntimeService) {}
@@ -16,11 +29,14 @@ export class HealthController {
 
     if (env.REGENIC_DATABASE) {
       const sqlite = this.runtime.isReady() ? "up" : "down";
+      const dsh = await probeDsh(env.REGENIC_DSH_BASE_URL);
+      const status = sqlite === "up" && dsh !== "down" ? "ok" : "degraded";
       return {
-        status: sqlite === "up" ? "ok" : "degraded",
+        status,
         service: "api",
         mode: isPersonalApiEnabled(env) ? "personal" : "service",
         sqlite,
+        ...(dsh ? { dsh } : {}),
         domain: "@regenic/domain",
       };
     }
