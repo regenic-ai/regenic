@@ -2,13 +2,51 @@ import type {
   ConnectorSyncView,
   EngineInstallationView,
   InboxViewItem,
+  KernelSettingsView,
   PersonalEngineView,
   ReplyAttachmentInput,
   ReplyView,
 } from "./types";
 
+let currentOrigin = window.regenic?.apiOrigin ?? "http://127.0.0.1:4370";
+
+if (window.regenic?.onApiOriginChanged) {
+  window.regenic.onApiOriginChanged((origin) => {
+    currentOrigin = origin;
+  });
+}
+
 function origin(): string {
-  return window.regenic?.apiOrigin ?? "http://127.0.0.1:4370";
+  return currentOrigin;
+}
+
+export function currentApiOrigin(): string {
+  return currentOrigin;
+}
+
+export async function fetchKernelSettings(): Promise<KernelSettingsView> {
+  if (!window.regenic?.getKernelSettings) {
+    return {
+      mode: "local",
+      customOrigin: currentOrigin,
+      activeOrigin: currentOrigin,
+    };
+  }
+  const settings = await window.regenic.getKernelSettings();
+  currentOrigin = settings.activeOrigin;
+  return settings;
+}
+
+export async function applyKernelSettings(input: {
+  mode: "local" | "custom";
+  origin?: string;
+}): Promise<KernelSettingsView> {
+  if (!window.regenic?.setKernelSettings) {
+    throw new Error("Desktop settings are not available");
+  }
+  const settings = await window.regenic.setKernelSettings(input);
+  currentOrigin = settings.activeOrigin;
+  return settings;
 }
 
 export async function fetchInbox(): Promise<InboxViewItem[]> {
