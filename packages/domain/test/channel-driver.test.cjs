@@ -50,7 +50,12 @@ describe("channel driver registry", () => {
           connector_type: "dsh-session",
           source: "dsh",
           matchesThread: (installation, thread) =>
-            thread.source === "dsh" && installation.status === "enabled",
+            thread.source === "dsh" &&
+            installation.status === "enabled" &&
+            (!installation.config.session_id ||
+              installation.config.session_id === thread.target),
+          ownsThread: (installation, thread) =>
+            installation.config.session_id === thread.target,
           canReply: (installation) => installation.status === "enabled",
         }),
       )
@@ -60,6 +65,8 @@ describe("channel driver registry", () => {
           source: "slack",
           matchesThread: (installation, thread) =>
             thread.source === "slack" &&
+            installation.config.channel_id === thread.target,
+          ownsThread: (installation, thread) =>
             installation.config.channel_id === thread.target,
           canReply: () => false,
         }),
@@ -81,8 +88,24 @@ describe("channel driver registry", () => {
       created_at: "2026-08-21T00:00:00.000Z",
     };
 
+    const pinned = {
+      ...dsh,
+      id: "dsh-pinned",
+      config: { transport: "web", session_id: "sess-a" },
+    };
+
     assert.equal(drivers.canSend([dsh, slack], { source: "dsh", target: "sess-a" }), true);
     assert.equal(drivers.canSend([dsh, slack], { source: "slack", target: "C123" }), false);
     assert.equal(drivers.findForThread([dsh], { source: "slack", target: "C123" }), undefined);
+    assert.equal(
+      drivers.findForThread([dsh, pinned], { source: "dsh", target: "sess-a" })
+        .installation.id,
+      "dsh-pinned",
+    );
+    assert.equal(
+      drivers.findForThread([dsh, pinned], { source: "dsh", target: "sess-b" })
+        .installation.id,
+      "dsh-1",
+    );
   });
 });
