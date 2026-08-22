@@ -149,17 +149,33 @@ export async function sendReply(input: {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  const body = (await response.json()) as
-    | ReplyView
-    | { error?: { message?: string } };
+  const raw = await response.text();
+  let body: ReplyView | { error?: { message?: string }; message?: string } = {};
+  try {
+    body = raw ? (JSON.parse(raw) as typeof body) : {};
+  } catch {
+    body = {};
+  }
   if (!response.ok) {
-    throw new Error(
-      "error" in body && body.error?.message
-        ? body.error.message
-        : `reply ${response.status}`,
-    );
+    throw new Error(replyErrorMessage(response.status, body));
   }
   return body as ReplyView;
+}
+
+function replyErrorMessage(
+  status: number,
+  body: { error?: { message?: string }; message?: string },
+): string {
+  if (body.error?.message) {
+    return body.error.message;
+  }
+  if (typeof body.message === "string" && body.message.length > 0) {
+    return body.message;
+  }
+  if (status === 413) {
+    return "This reply is too large. Use a smaller image or fewer attachments.";
+  }
+  return `reply ${status}`;
 }
 
 export async function setConnectorStatus(

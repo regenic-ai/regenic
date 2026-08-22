@@ -1,15 +1,14 @@
 import "reflect-metadata";
-import { NestFactory } from "@nestjs/core";
 import {
   isAllowedPersonalCorsOrigin,
   isPersonalApiEnabled,
   loadEnv,
 } from "@regenic/config";
-import { AppModule } from "./app.module";
+import { createHttpApp } from "./http-app";
 
 async function bootstrap() {
   const env = loadEnv();
-  const app = await NestFactory.create(AppModule);
+  const app = await createHttpApp();
   if (isPersonalApiEnabled(env)) {
     app.enableCors({
       origin: (requestOrigin, callback) => {

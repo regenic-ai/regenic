@@ -12,7 +12,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 | 飞书桌面端 | 三栏工作面、图标栏、线程、关窗进托盘 | 频道瀑布流、聊天身份、紫/蓝品牌铬 |
 | Docker Desktop | 托盘引擎层、内核 Running/Syncing/Stopped、本机 sidecar | 容器/镜像列表、引擎设置向导 |
 
-默认只显示**当前工作**。渠道仍在原处；回复发回原渠道。线程能不能发由内核 `can_send` 决定（连接器 `ChannelDriver` 声明），桌面不按「是不是 DSH」开关输入框。能发的线程用飞书式输入框（Markdown、图片、文件）；Slack 驱动目前 `canReply: false`，回写 501。发送走 `installation + thread → egress.send(ContentPart[])`。发送后内核按该线程 follow/pull，把 Agent 回复拉进权威库，不必再去引擎页点 Sync。引擎 Sync 只负责追平其他会话或首次拉齐。同一句本地出站与渠道 history 回声只保留一条 Event。
+默认只显示**当前工作**。渠道仍在原处；回复发回原渠道。线程能不能发由内核 `can_send` 决定（连接器 `ChannelDriver` 声明），桌面不按「是不是 DSH」开关输入框。能发的线程用 Composer 回写（所见即所得格式、图片、文件）；Slack 驱动目前 `canReply: false`，回写 501。发送走 `installation + thread → egress.send(ContentPart[])`。发送后内核按该线程 follow/pull，把 Agent 回复拉进权威库，不必再去引擎页点 Sync。引擎 Sync 只负责追平其他会话或首次拉齐。同一句本地出站与渠道 history 回声只保留一条 Event。
 
 ## 视觉
 
@@ -30,7 +30,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 ## 双层表面
 
 - **主窗口：** 左图标栏（Inbox / Engine / Settings），中列表，右线程。顶栏是引擎芯片与 Inbox 计数。关窗不退出。
-- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`），聚合只发生在桌面表面。列表和标题醒目标出**来源渠道**。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按飞书阅读流：头像+名字（You / Agent / Runtime）、少气泡、引用条、runtime 居中折叠。底部输入是「Send to …」加格式/附件/发送图标；Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。
+- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`），聚合只发生在桌面表面。列表和标题醒目标出**来源渠道**。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按飞书阅读流：头像+名字（You / Agent / Runtime）、少气泡、引用条、runtime 居中折叠。底部是 Cursor 式 Composer：多行编辑、图片缩略图、拖入/粘贴附件，以及飞书常用的加粗/斜体/删除线/行内代码/列表（⌘B / ⌘I / ⌘⇧X）。Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。
 - **托盘：** 点击打开小窗，显示内核状态、计数、最近 3 个会话；可「打开控制台」。退出只在托盘菜单。
 
 ## 进程

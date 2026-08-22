@@ -35,7 +35,9 @@ export function firstLine(text: string | undefined, max = 80): string {
   let clean = line
     .replace(/^#{1,6}\s*/, "")
     .replace(/\*\*/g, "")
+    .replace(/~~/g, "")
     .replace(/`/g, "")
+    .replace(/\*/g, "")
     .replace(/\s+/g, " ")
     .trim();
   if (clean.length > max) {
