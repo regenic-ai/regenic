@@ -193,6 +193,7 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 ## Documentation
 
 [Message orchestration](docs/en/MESSAGE_ORCHESTRATION.md) ·
+[Connectors](docs/en/CONNECTOR.md) ·
 [PRODUCT](docs/en/PRODUCT.md) · [ROADMAP](docs/en/ROADMAP.md) ·
 [TECH_STACK](docs/en/TECH_STACK.md) ·
 [Desktop](docs/zh/DESKTOP.md) ·

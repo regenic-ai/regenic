@@ -102,12 +102,14 @@ docs/
   en/
     PRODUCT.md
     MESSAGE_ORCHESTRATION.md
+    CONNECTOR.md
     TECH_STACK.md
     ROADMAP.md
     rfcs/
   zh/
     PRODUCT.md
     MESSAGE_ORCHESTRATION.md
+    CONNECTOR.md
     TECH_STACK.md
     ROADMAP.md
     rfcs/

@@ -1,7 +1,7 @@
 # 技术栈
 
 - **English:** [../en/TECH_STACK.md](../en/TECH_STACK.md)
-- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [路线图](ROADMAP.md) · [桌面端](DESKTOP.md) · RFC 0004、0005、0006、0007
+- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [连接器](CONNECTOR.md) · [路线图](ROADMAP.md) · [桌面端](DESKTOP.md) · RFC 0004、0005、0006、0007
 
 个人版默认**本地优先**，随后是组织层。领域模型和接口形状尽量共用；
 换的是各阶段的**默认实现**，不是另起一套产品。
@@ -167,6 +167,8 @@ blob_store:
 业务代码（含 GC、蒸馏）只调端口，不直连某个云 SDK。
 
 ## 9. 渠道接入（`ChannelConnector`）
+
+实现合同：[连接器](CONNECTOR.md)。
 
 ```text
 capabilities() → { webhook, poll, backfill, member_sync }

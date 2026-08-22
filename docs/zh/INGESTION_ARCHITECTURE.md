@@ -2,7 +2,7 @@
 
 - **English:** [../en/INGESTION_ARCHITECTURE.md](../en/INGESTION_ARCHITECTURE.md)
 - **状态：** Phase 1 实现架构
-- **相关：** RFC 0005、RFC 0006、RFC 0007、[技术栈](TECH_STACK.md) 与[消息编排](MESSAGE_ORCHESTRATION.md)
+- **相关：** RFC 0005、RFC 0006、RFC 0007、[连接器](CONNECTOR.md)、[技术栈](TECH_STACK.md) 与[消息编排](MESSAGE_ORCHESTRATION.md)
 
 ## 1. 目的
 
@@ -91,7 +91,7 @@ Phase 1 是面向单人的本地优先采集基础。原生输入和连接器被
 
 ### 5.1 ChannelConnector
 
-驱动负责理解一种来源协议。它可以校验签名、调用来源 API、规范化记录并报告能力，但不负责持久化或鉴权决策。
+驱动负责理解一种来源协议。它可以校验签名、调用来源 API、规范化记录并报告能力，但不负责持久化或鉴权决策。实现规则见[连接器](CONNECTOR.md)。
 
 ```ts
 interface ChannelConnector {
