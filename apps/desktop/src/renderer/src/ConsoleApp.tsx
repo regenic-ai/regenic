@@ -11,6 +11,7 @@ import {
   setConnectorStatus,
   syncConnector,
   uninstallConnector,
+  updateConversationPrefs,
 } from "./api";
 import { Composer, type ComposerDraft } from "./Composer";
 import {
@@ -22,7 +23,18 @@ import {
   formatChatTime,
   installationStatusLabel,
 } from "./format";
-import { groupInboxThreads, latestMessage, type InboxThread } from "./inbox";
+import {
+  applyPrefOverlay,
+  filterInboxThreads,
+  groupInboxThreads,
+  latestMessage,
+  prunePrefOverlay,
+  sortInboxThreads,
+  threadChannels,
+  type ConversationPrefOverlay,
+  type InboxThread,
+  type PinFilter,
+} from "./inbox";
 import { MessageBody } from "./MessageBody";
 import {
   firstLine,
@@ -33,7 +45,7 @@ import {
   type MessageRole,
 } from "./message-view";
 import { BrandBadge, BrandLockup } from "./Brand";
-import { EngineIcon, InboxIcon, SettingsIcon } from "./Icons";
+import { EngineIcon, InboxIcon, PencilIcon, PinIcon, SettingsIcon } from "./Icons";
 import type {
   ConnectorCatalogItem,
   CreatedConversation,
@@ -55,6 +67,9 @@ export function ConsoleApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [prefOverlay, setPrefOverlay] = useState<Record<string, ConversationPrefOverlay>>(
+    {},
+  );
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
 
@@ -68,6 +83,7 @@ export function ConsoleApp() {
       setEngine(nextEngine);
       setError(null);
       const synced = groupInboxThreads(nextInbox);
+      setPrefOverlay((current) => prunePrefOverlay(current, synced));
       const nextDrafts = draftsRef.current.filter(
         (draft) => !synced.some((thread) => thread.id === draft.thread_id),
       );
@@ -95,7 +111,9 @@ export function ConsoleApp() {
     };
   }, []);
 
-  const threads = mergeDraftThreads(groupInboxThreads(inbox), drafts);
+  const threads = sortInboxThreads(
+    applyPrefOverlay(mergeDraftThreads(groupInboxThreads(inbox), drafts), prefOverlay),
+  );
   const selected = threads.find((thread) => thread.id === selectedId) ?? null;
   const chip = engineChip(engine);
   const canCreate = engine?.installations.some((item) => item.can_create) === true;
@@ -117,6 +135,46 @@ export function ConsoleApp() {
       setError(caught instanceof Error ? caught.message : "Cannot create a conversation");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const persistPrefs = async (
+    thread: InboxThread,
+    patch: { title?: string | null; pinned?: boolean },
+  ) => {
+    const previous = prefOverlay[thread.id];
+    const optimistic: ConversationPrefOverlay = {
+      title: patch.title !== undefined ? patch.title : thread.title,
+      pinned: patch.pinned !== undefined ? patch.pinned : thread.pinned,
+      updated_at: new Date().toISOString(),
+    };
+    setPrefOverlay((current) => ({ ...current, [thread.id]: optimistic }));
+    try {
+      const saved = await updateConversationPrefs({
+        thread_id: thread.id,
+        ...patch,
+      });
+      setPrefOverlay((current) => ({
+        ...current,
+        [thread.id]: {
+          title: saved.title,
+          pinned: saved.pinned,
+          updated_at: saved.updated_at,
+        },
+      }));
+      setError(null);
+    } catch (caught) {
+      setPrefOverlay((current) => {
+        const next = { ...current };
+        if (previous) {
+          next[thread.id] = previous;
+        } else {
+          delete next[thread.id];
+        }
+        return next;
+      });
+      setError(caught instanceof Error ? caught.message : "Cannot update conversation");
+      throw caught;
     }
   };
 
@@ -169,6 +227,8 @@ export function ConsoleApp() {
             onCreate={startConversation}
             onSelect={setSelectedId}
             onRefresh={refresh}
+            onRename={(thread, title) => persistPrefs(thread, { title })}
+            onPin={(thread, pinned) => persistPrefs(thread, { pinned })}
           />
         ) : null}
         {nav === "engine" ? (
@@ -227,6 +287,8 @@ function mergeDraftThreads(
       channel_label: draft.channel_label,
       label: "New conversation",
       can_send: draft.can_send,
+      title: draft.title ?? null,
+      pinned: draft.pinned === true,
       messages: [],
     }));
   return [...extras, ...threads];
@@ -241,6 +303,8 @@ function InboxWorkspace({
   onCreate,
   onSelect,
   onRefresh,
+  onRename,
+  onPin,
 }: {
   threads: InboxThread[];
   selected: InboxThread | null;
@@ -250,7 +314,15 @@ function InboxWorkspace({
   onCreate: () => Promise<void>;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
+  onRename: (thread: InboxThread, title: string | null) => Promise<void>;
+  onPin: (thread: InboxThread, pinned: boolean) => Promise<void>;
 }) {
+  const [pinFilter, setPinFilter] = useState<PinFilter>("all");
+  const [channelFilter, setChannelFilter] = useState("all");
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const channels = threadChannels(threads);
+  const visible = filterInboxThreads(threads, pinFilter, channelFilter);
+
   return (
     <div className="columns">
       <aside className="list">
@@ -269,6 +341,31 @@ function InboxWorkspace({
             </button>
           ) : null}
         </div>
+        {threads.length > 0 ? (
+          <div className="list-filters">
+            <FilterRow
+              label="Pin"
+              options={[
+                { id: "all", label: "All" },
+                { id: "pinned", label: "Pinned" },
+                { id: "unpinned", label: "Unpinned" },
+              ]}
+              value={pinFilter}
+              onChange={(id) => setPinFilter(id as PinFilter)}
+            />
+            {channels.length > 1 ? (
+              <FilterRow
+                label="Channel"
+                options={[
+                  { id: "all", label: "All" },
+                  ...channels,
+                ]}
+                value={channelFilter}
+                onChange={setChannelFilter}
+              />
+            ) : null}
+          </div>
+        ) : null}
         {error ? <div className="page-empty">{error}</div> : null}
         {!error && threads.length === 0 ? (
           <div className="page-empty">
@@ -277,36 +374,94 @@ function InboxWorkspace({
               : "Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own."}
           </div>
         ) : null}
-        {threads.map((thread) => {
+        {!error && threads.length > 0 && visible.length === 0 ? (
+          <div className="page-empty">No conversations match these filters.</div>
+        ) : null}
+        {visible.map((thread) => {
           const latest = latestMessage(thread);
           return (
-            <button
+            <div
               key={thread.id}
-              type="button"
-              className={`item${selected?.id === thread.id ? " selected" : ""}`}
-              onClick={() => onSelect(thread.id)}
+              className={`item${selected?.id === thread.id ? " selected" : ""}${
+                thread.pinned ? " pinned" : ""
+              }`}
             >
-              <div className="item-copy">
-                <div className="item-top">
-                  <span className={`channel-tag channel-${thread.channel}`}>
-                    {thread.channel_label}
-                  </span>
-                  <span className="item-time">
-                    {latest ? formatChatTime(latest.event.occurred_at) : ""}
-                  </span>
-                </div>
-                <div className="item-title">{threadTitle(thread)}</div>
-                <div className="item-reasons">
-                  {firstLine(latest?.body_text, 96) || thread.label}
+              <div
+                className="item-main"
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  onSelect(thread.id);
+                  if (renamingId && renamingId !== thread.id) {
+                    setRenamingId(null);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && event.target === event.currentTarget) {
+                    onSelect(thread.id);
+                  }
+                }}
+              >
+                <div className="item-copy">
+                  <div className="item-top">
+                    <span className={`channel-tag channel-${thread.channel}`}>
+                      {thread.channel_label}
+                    </span>
+                    <span className="item-time">
+                      {latest ? formatChatTime(latest.event.occurred_at) : ""}
+                    </span>
+                  </div>
+                  <ThreadTitleField
+                    className="item-title"
+                    value={threadTitle(thread)}
+                    editing={renamingId === thread.id}
+                    onEditingChange={(editing) =>
+                      setRenamingId(editing ? thread.id : null)
+                    }
+                    onSave={(title) => onRename(thread, title)}
+                  />
+                  <div className="item-reasons">
+                    {firstLine(latest?.body_text, 96) || thread.label}
+                  </div>
                 </div>
               </div>
-            </button>
+              <div className="item-tools">
+                <button
+                  type="button"
+                  className={`item-tool${thread.pinned ? " is-on" : ""}`}
+                  aria-label={thread.pinned ? "Unpin" : "Pin"}
+                  title={thread.pinned ? "Unpin" : "Pin"}
+                  onClick={() => {
+                    void onPin(thread, !thread.pinned);
+                  }}
+                >
+                  <PinIcon filled={thread.pinned} />
+                </button>
+                <button
+                  type="button"
+                  className="item-tool"
+                  aria-label="Rename"
+                  title="Rename"
+                  onClick={() => {
+                    onSelect(thread.id);
+                    setRenamingId(thread.id);
+                  }}
+                >
+                  <PencilIcon />
+                </button>
+              </div>
+            </div>
           );
         })}
       </aside>
       <section className="thread">
         {selected ? (
-          <ThreadPane thread={selected} onRefresh={onRefresh} />
+          <ThreadPane
+            thread={selected}
+            onRefresh={onRefresh}
+            onRename={(title) => onRename(selected, title)}
+            onPin={(pinned) => onPin(selected, pinned)}
+          />
         ) : (
           <div className="thread-empty">Select a conversation on the left.</div>
         )}
@@ -315,12 +470,132 @@ function InboxWorkspace({
   );
 }
 
+function FilterRow({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: Array<{ id: string; label: string }>;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="filter-row" role="group" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          className={`filter-chip${value === option.id ? " active" : ""}`}
+          aria-pressed={value === option.id}
+          onClick={() => onChange(option.id)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ThreadTitleField({
+  value,
+  className,
+  editing: editingProp,
+  onEditingChange,
+  onSave,
+}: {
+  value: string;
+  className: string;
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
+  onSave: (title: string | null) => Promise<void>;
+}) {
+  const [internalEditing, setInternalEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const editing = editingProp ?? internalEditing;
+  const setEditing = (next: boolean) => {
+    onEditingChange?.(next);
+    if (editingProp === undefined) {
+      setInternalEditing(next);
+    }
+  };
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(value);
+    }
+  }, [value, editing]);
+
+  const commit = async () => {
+    const next = draft.replace(/\s+/g, " ").trim();
+    setEditing(false);
+    if (next === value.trim()) {
+      setDraft(value);
+      return;
+    }
+    try {
+      await onSave(next.length > 0 ? next : null);
+    } catch {
+      setDraft(value);
+    }
+  };
+
+  if (editing) {
+    return (
+      <input
+        className={`${className} is-editing`}
+        value={draft}
+        maxLength={120}
+        autoFocus
+        aria-label="Conversation title"
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          void commit();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.stopPropagation();
+            void commit();
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <span
+      className={className}
+      title="Double-click to rename"
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setEditing(true);
+      }}
+    >
+      {value}
+    </span>
+  );
+}
+
 function ThreadPane({
   thread,
   onRefresh,
+  onRename,
+  onPin,
 }: {
   thread: InboxThread;
   onRefresh: () => Promise<void>;
+  onRename: (title: string | null) => Promise<void>;
+  onPin: (pinned: boolean) => Promise<void>;
 }) {
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
@@ -383,7 +658,24 @@ function ThreadPane({
             <span className={`channel-tag channel-lg channel-${thread.channel}`}>
               {thread.channel_label}
             </span>
-            <h1>{threadTitle(thread)}</h1>
+            <h1>
+              <ThreadTitleField
+                className="thread-title"
+                value={threadTitle(thread)}
+                onSave={onRename}
+              />
+            </h1>
+            <button
+              type="button"
+              className={`item-tool thread-pin${thread.pinned ? " is-on" : ""}`}
+              aria-label={thread.pinned ? "Unpin" : "Pin"}
+              title={thread.pinned ? "Unpin" : "Pin"}
+              onClick={() => {
+                void onPin(!thread.pinned);
+              }}
+            >
+              <PinIcon filled={thread.pinned} />
+            </button>
           </div>
           <p className="thread-sub">
             {thread.messages.length} messages · {thread.label}

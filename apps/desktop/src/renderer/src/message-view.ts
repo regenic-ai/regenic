@@ -53,6 +53,10 @@ export function firstLine(text: string | undefined, max = 80): string {
 }
 
 export function threadTitle(thread: InboxThread): string {
+  const custom = thread.title?.replace(/\s+/g, " ").trim();
+  if (custom) {
+    return custom;
+  }
   if (thread.messages.length === 0) {
     return thread.label;
   }

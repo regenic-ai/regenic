@@ -6,8 +6,19 @@ export interface InboxThread {
   channel: string;
   channel_label: string;
   label: string;
+  title: string | null;
+  pinned: boolean;
+  pref_updated_at?: string;
   can_send: boolean;
   messages: InboxViewItem[];
+}
+
+export type PinFilter = "all" | "pinned" | "unpinned";
+
+export interface ConversationPrefOverlay {
+  title: string | null;
+  pinned: boolean;
+  updated_at: string;
 }
 
 export function workThreadId(
@@ -27,7 +38,9 @@ export function workThreadId(
 export function groupInboxThreads(items: InboxViewItem[]): InboxThread[] {
   const groups = new Map<string, InboxViewItem[]>();
   for (const item of items) {
-    const id = workThreadId(item.event.source, item.event.external_id, item.event.id);
+    const id =
+      item.thread_id ??
+      workThreadId(item.event.source, item.event.external_id, item.event.id);
     const bucket = groups.get(id);
     if (bucket) {
       bucket.push(item);
@@ -39,25 +52,125 @@ export function groupInboxThreads(items: InboxViewItem[]): InboxThread[] {
     .map(([id, messages]) => {
       const ordered = [...messages].sort(byOccurredAt);
       const latest = ordered[ordered.length - 1];
+      const pref = latestPref(ordered);
       return {
         id,
         source: latest.event.source,
         channel: latest.channel ?? latest.event.source,
         channel_label: latest.channel_label ?? latest.event.source.toUpperCase(),
         label: threadLabel(id, latest),
+        title: pref.title,
+        pinned: pref.pinned,
+        pref_updated_at: pref.updated_at,
         can_send: ordered.some((item) => item.can_send),
         messages: ordered,
       };
     })
-    .sort((left, right) => {
-      const leftAt = left.messages[left.messages.length - 1]?.event.occurred_at ?? "";
-      const rightAt = right.messages[right.messages.length - 1]?.event.occurred_at ?? "";
-      return rightAt.localeCompare(leftAt);
-    });
+    .sort(byRecentActivity);
+}
+
+export function applyPrefOverlay(
+  threads: InboxThread[],
+  overlay: Record<string, ConversationPrefOverlay>,
+): InboxThread[] {
+  return threads.map((thread) => {
+    const local = overlay[thread.id];
+    if (!local) {
+      return thread;
+    }
+    if (thread.pref_updated_at && thread.pref_updated_at > local.updated_at) {
+      return thread;
+    }
+    return {
+      ...thread,
+      title: local.title,
+      pinned: local.pinned,
+      pref_updated_at: local.updated_at,
+    };
+  });
+}
+
+export function prunePrefOverlay(
+  overlay: Record<string, ConversationPrefOverlay>,
+  threads: InboxThread[],
+): Record<string, ConversationPrefOverlay> {
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  let changed = false;
+  const next = { ...overlay };
+  for (const [id, local] of Object.entries(overlay)) {
+    const thread = byId.get(id);
+    if (thread?.pref_updated_at && thread.pref_updated_at >= local.updated_at) {
+      delete next[id];
+      changed = true;
+    }
+  }
+  return changed ? next : overlay;
+}
+
+export function sortInboxThreads(threads: InboxThread[]): InboxThread[] {
+  return [...threads].sort((left, right) => {
+    if (left.pinned !== right.pinned) {
+      return left.pinned ? -1 : 1;
+    }
+    return byRecentActivity(left, right);
+  });
+}
+
+export function filterInboxThreads(
+  threads: InboxThread[],
+  pin: PinFilter,
+  channel: string,
+): InboxThread[] {
+  return threads.filter((thread) => {
+    if (pin === "pinned" && !thread.pinned) {
+      return false;
+    }
+    if (pin === "unpinned" && thread.pinned) {
+      return false;
+    }
+    if (channel !== "all" && thread.channel !== channel) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function threadChannels(
+  threads: InboxThread[],
+): Array<{ id: string; label: string }> {
+  const seen = new Map<string, string>();
+  for (const thread of threads) {
+    if (!seen.has(thread.channel)) {
+      seen.set(thread.channel, thread.channel_label);
+    }
+  }
+  return [...seen.entries()].map(([id, label]) => ({ id, label }));
 }
 
 export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
+}
+
+function latestPref(messages: InboxViewItem[]): {
+  title: string | null;
+  pinned: boolean;
+  updated_at?: string;
+} {
+  let best: InboxViewItem | undefined;
+  for (const item of messages) {
+    if (!item.pref_updated_at) {
+      continue;
+    }
+    if (!best || (best.pref_updated_at ?? "") < item.pref_updated_at) {
+      best = item;
+    }
+  }
+  const source = best ?? messages[messages.length - 1];
+  return {
+    title: source?.title ?? null,
+    pinned: source?.pinned === true,
+    updated_at: source?.pref_updated_at ?? undefined,
+  };
 }
 
 function byOccurredAt(left: InboxViewItem, right: InboxViewItem): number {
@@ -66,6 +179,14 @@ function byOccurredAt(left: InboxViewItem, right: InboxViewItem): number {
     return byTime;
   }
   return left.event.external_id.localeCompare(right.event.external_id);
+}
+
+function byRecentActivity(left: InboxThread, right: InboxThread): number {
+  return activityStamp(right).localeCompare(activityStamp(left));
+}
+
+function activityStamp(thread: InboxThread): string {
+  return latestMessage(thread)?.event.occurred_at ?? "~";
 }
 
 function threadLabel(id: string, latest: InboxViewItem): string {

@@ -22,9 +22,12 @@ import {
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
+import { PersonalConnectorError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { pullStatus } from "./personal-pull-status";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+
+export { PersonalConnectorError } from "./personal-errors";
 
 const DEFAULT_MAX_PAGES = 1;
 const MAX_PAGES_CAP = 5;
@@ -32,17 +35,6 @@ const FOLLOW_TRIES = 6;
 const FOLLOW_WAIT_MS = 750;
 const DEFAULT_PULL_MS = 3_000;
 const LEASE_MS = 60_000;
-
-export class PersonalConnectorError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-    readonly httpStatus: number,
-  ) {
-    super(message);
-    this.name = "PersonalConnectorError";
-  }
-}
 
 export interface ConnectorInstallInput {
   connector_type: string;
