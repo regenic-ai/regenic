@@ -34,6 +34,9 @@ importers:
       '@regenic/dsh-connector':
         specifier: workspace:*
         version: link:../../packages/dsh-connector
+      '@regenic/feishu-connector':
+        specifier: workspace:*
+        version: link:../../packages/feishu-connector
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
@@ -207,6 +210,22 @@ importers:
         version: 5.9.3
 
   packages/dsh-connector:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/feishu-connector:
     dependencies:
       '@regenic/domain':
         specifier: workspace:*

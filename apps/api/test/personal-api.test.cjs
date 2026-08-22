@@ -518,7 +518,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.installations[0].can_reply, false);
       assert.equal(engine.installations[0].can_create, false);
       assert.equal(engine.installations[0].last_attempt, null);
-      assert.equal(engine.catalog.length, 2);
+      assert.equal(engine.catalog.length, 3);
       assert.equal(engine.catalog[0].connector_type, "slack-channel");
       assert.equal(engine.catalog[0].installed, true);
       assert.equal(engine.catalog[0].prerequisites[0].key, "REGENIC_SLACK_TOKEN");
@@ -527,6 +527,10 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[1].installed, false);
       assert.equal(engine.catalog[1].fields[1].key, "session_id");
       assert.equal(engine.catalog[1].fields[1].required, false);
+      assert.equal(engine.catalog[2].connector_type, "feishu-chat");
+      assert.equal(engine.catalog[2].installed, false);
+      assert.equal(engine.catalog[2].fields[0].key, "chat_id");
+      assert.equal(engine.catalog[2].prerequisites[0].key, "lark-cli");
       assert.equal(JSON.stringify(engine).includes("xoxb"), false);
       assert.equal(JSON.stringify(engine).includes("credentials_ref"), false);
       assert.equal(JSON.stringify(engine).includes("access_token"), false);

@@ -29,6 +29,17 @@ dsh web --port 3080
 
 打开客户端：**Engine** → **DSH** → **Install**。Transport 选 **Web**。Session ID 空着跟全部会话，填了只跟一条。Base URL 默认 `http://127.0.0.1:3080`，只接受本机。`dsh web` 要 token 的话，启动桌面应用前设好 `REGENIC_DSH_TOKEN`。
 
+## 接上飞书
+
+终端里要能跑 `lark-cli`。用你自己的账号登录：
+
+```bash
+lark-cli config init
+lark-cli auth login --recommend
+```
+
+打开客户端：**Engine** → **Feishu** → **Install**。填群 ID（`oc_…`）。token 留在系统钥匙串，表单不收。
+
 ## 状态
 
 Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本地优先的连接器和内核。
@@ -36,7 +47,7 @@ Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本地优先的连
 | 能力 | 说明 | 状态 |
 | --- | --- | --- |
 | 消息编排 | 接入渠道 → 统一成消息 → 排序 → 调度 → 可选回复 | [PRODUCT](docs/zh/PRODUCT.md) · [架构](docs/zh/MESSAGE_ORCHESTRATION.md) |
-| 连接器 | Slack、DSH、文件导入；更多渠道随后 | Phase 1（进行中） |
+| 连接器 | Slack、DSH、飞书、文件导入；更多渠道随后 | Phase 1（进行中） |
 | 个人 | 单人；可导出；远端历史可选 | Phase 1（进行中） |
 | 组织 | 多人权威事件与各人视角 | Phase 3（[从个人到组织](docs/zh/rfcs/personal-to-org.md)） |
 | 判断标准 | 可版本化的共用标准 | RFC 已接纳（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |

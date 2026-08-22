@@ -63,6 +63,9 @@ export function connectorLabel(type: string): string {
   if (type === "dsh-session") {
     return "DSH";
   }
+  if (type === "feishu-chat") {
+    return "Feishu";
+  }
   return type;
 }
 
@@ -96,6 +99,9 @@ export function connectorActionError(message: string): string {
   }
   if (message.includes("requires session_id")) {
     return "DSH web requires a session ID";
+  }
+  if (message.includes("requires chat_id")) {
+    return "Feishu requires a chat ID";
   }
   return message;
 }

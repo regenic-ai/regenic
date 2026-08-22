@@ -18,7 +18,7 @@ This page is for people who implement a connector.
 ## What a connector is
 
 A connector registers a `ChannelDriver` with a stable `connector_type` and a
-`source` that exists in `CHANNELS` (`dsh`, `slack`, …).
+`source` that exists in `CHANNELS` (`dsh`, `slack`, `feishu`, …).
 
 The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 `ChannelConnector` and `EgressAdapter` do not persist those records.
@@ -69,7 +69,7 @@ Send and display shape is defined by `message-contract` in `@regenic/domain`.
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `source` | string | Channel id from `CHANNELS` (`dsh`, `slack`) |
+| `source` | string | Channel id from `CHANNELS` (`dsh`, `slack`, `feishu`) |
 | `kind` | `user` \| `assistant` \| `system` | Mapped from the native event |
 | `direction` | `inbound` \| `outbound` | Reads are inbound. Console replies are outbound |
 | `content` | `ContentPart[]` | `body` plus optional `attachment` parts |
@@ -86,7 +86,7 @@ conversation stay a single Event.
 
 Format: `source:target`.
 
-Examples: `dsh:<sessionId>`, `slack:C123`.
+Examples: `dsh:<sessionId>`, `slack:C123`, `feishu:oc_…`.
 
 `ChannelDriverRegistry` resolves `installation + thread`. When more than one
 install matches, `ownsThread` wins over the first match.
@@ -112,12 +112,12 @@ interface ChannelDriver {
 
 | Method | Description |
 | --- | --- |
-| `install` | Persist non-secret config. Slack requires `channel_id`. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
+| `install` | Persist non-secret config. Slack requires `channel_id`. Feishu requires `chat_id`. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
 | `capabilities` | `sync` / `reply` / `create` for this install. |
 | `canReply` | Same value as `capabilities().reply`. |
-| `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. DSH web: `session:<id>` per listed session. |
+| `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>`. DSH web: `session:<id>` per listed session. |
 | `createThread` | Required when `create` is true. Otherwise throw `unsupported_channel`. |
 | `bindEgress` | Required when `reply` is true. Otherwise throw `unsupported_channel`. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
@@ -184,6 +184,7 @@ Tokens are prerequisites, not form fields.
 | `dsh-session` web, no `session_id` | `dsh` | every session | yes | yes | `REGENIC_DSH_TOKEN` if the host asks |
 | `dsh-session` web, with `session_id` | `dsh` | that session | yes | no | same |
 | `dsh-session` cli | `dsh` | one mailbox | yes | no | local `dsh` |
+| `feishu-chat` | `feishu` | one group chat | yes | no | local `lark-cli` user login |
 
 DSH `kind` map:
 
@@ -194,6 +195,16 @@ DSH `kind` map:
 | plugin-injected `user/message` | `system` |
 
 Slack humans map to `user`.
+
+Feishu `kind` map:
+
+| Native message | `kind` |
+| --- | --- |
+| `sender_type=user`, `msg_type` `text` or `post` | `user` |
+| `sender_type=app` (or `bot`), `msg_type` `text` or `post` | `assistant` |
+| image, file, interactive, and other `msg_type` | dropped |
+
+Thread id: `feishu:<chat_id>`. History uses `lark-cli api` with `--as user`. The install form does not take tokens.
 
 ## Out of scope
 

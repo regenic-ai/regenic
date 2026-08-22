@@ -29,6 +29,17 @@ dsh web --port 3080
 
 In the app: **Engine** → **DSH** → **Install**. Transport: **Web**. Leave Session ID empty to follow every session, or fill one. Base URL defaults to `http://127.0.0.1:3080` (localhost only). If `dsh web` wants a token, set `REGENIC_DSH_TOKEN` before you start the desktop app.
 
+## Connect Feishu
+
+`lark-cli` has to work in your terminal. Sign in as yourself:
+
+```bash
+lark-cli config init
+lark-cli auth login --recommend
+```
+
+In the app: **Engine** → **Feishu** → **Install**. Fill the chat ID (`oc_…`). Tokens stay in the OS keychain; the form does not take them.
+
 ## Status
 
 Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is local-first connectors and the kernel.
@@ -36,7 +47,7 @@ Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is local-first conne
 | Capability | Description | Status |
 | --- | --- | --- |
 | Message orchestration | Connect sources → unify messages → rank → dispatch → optional reply | [PRODUCT](docs/en/PRODUCT.md) · [architecture](docs/en/MESSAGE_ORCHESTRATION.md) |
-| Connectors | Slack, DSH, file import; more channels later | Phase 1 (now) |
+| Connectors | Slack, DSH, Feishu, file import; more channels later | Phase 1 (now) |
 | Personal | One principal; open export; optional remote history | Phase 1 (now) |
 | Org | Canonical Event + projections across people | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
 | Standards | Versioned shared standards | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |

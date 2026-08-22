@@ -14,6 +14,7 @@ import {
   type MessageDirection,
   type MessageKind,
 } from "@regenic/domain";
+import { probeLarkCliAuth } from "@regenic/feishu-connector";
 import { resolveInboxBody, type InboxAttachment } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import {
@@ -100,6 +101,7 @@ export class PersonalInboxService {
           "dsh-web": await probeLocalService(
             process.env.REGENIC_DSH_BASE_URL?.trim() || "http://127.0.0.1:3080",
           ),
+          "lark-cli": await probeLarkCliAuth(),
         },
       });
     if (!this.runtime.isReady()) {

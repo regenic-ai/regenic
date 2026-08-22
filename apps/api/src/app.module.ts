@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { ChannelDriverRegistry } from "@regenic/domain";
 import { dshSessionDriver } from "@regenic/dsh-connector";
+import { feishuChatDriver } from "@regenic/feishu-connector";
 import { slackChannelDriver } from "@regenic/slack-connector";
 import { DshApiController } from "./dsh-api.controller";
 import { DshApiService } from "./dsh-api.service";
@@ -24,7 +25,8 @@ import { PersonalRuntimeService } from "./personal-runtime.service";
       useFactory: () =>
         new ChannelDriverRegistry()
           .register(dshSessionDriver)
-          .register(slackChannelDriver),
+          .register(slackChannelDriver)
+          .register(feishuChatDriver),
     },
   ],
 })

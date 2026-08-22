@@ -48,7 +48,7 @@ Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`
 | GET | `/v1/me/inbox` | 当前工作 + 可选 `body_text` |
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
 | GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录 |
-| POST | `/v1/me/connectors` | 从目录安装（Slack / DSH），不接收 token；安装后内核立刻 pull 一次 |
+| POST | `/v1/me/connectors` | 从目录安装（Slack / DSH / 飞书），不接收 token；安装后内核立刻 pull 一次 |
 | DELETE | `/v1/me/connectors/:id` | 卸载安装记录和游标，保留已入库消息 |
 | POST | `/v1/me/connectors/:id/sync` | 手动追平。Slack 一页频道；DSH web 默认同步全部会话（每路最多 5 页）。日常不用点 |
 | POST | `/v1/me/connectors/:id/enable` | 启用连接器，并立刻再 pull 一次 |
@@ -70,6 +70,7 @@ Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`
 | DSH web（本机） | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 本机 `dsh web`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
 | DSH web（托管） | 只填可选 `session_id`；不填 `base_url` | 内核环境变量 `REGENIC_DSH_BASE_URL`（集群 DNS） | 同上；核心只走内网，不要填 Sealos 公网 URL |
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
+| 飞书 | `chat_id`（群名可选） | 本机 `lark-cli`，并已 `lark-cli auth login` | 只拉该群。安装后立刻拉，之后内核轮询。能回写文本 |
 
 DSH 安装不接收 token / `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
 

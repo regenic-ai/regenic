@@ -20,6 +20,7 @@ export interface ChannelDescriptor {
 export const CHANNELS: Record<string, ChannelDescriptor> = {
   dsh: { id: "dsh", label: "DSH" },
   slack: { id: "slack", label: "Slack" },
+  feishu: { id: "feishu", label: "Feishu" },
 };
 
 export function isLocalOutboundId(externalId: string): boolean {

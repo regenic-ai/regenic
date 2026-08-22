@@ -146,6 +146,36 @@ const CATALOG: CatalogDefinition[] = [
       },
     ],
   },
+  {
+    connector_type: "feishu-chat",
+    title: "Feishu",
+    description:
+      "Install by chat. The kernel pulls that group after install and keeps pulling while enabled. Replies go back through lark-cli.",
+    credential_hint: "lark-cli (user login)",
+    fields: [
+      {
+        key: "chat_id",
+        label: "Chat ID",
+        required: true,
+        placeholder: "oc_...",
+      },
+      {
+        key: "chat_name",
+        label: "Chat name",
+        required: false,
+        placeholder: "Optional, display only",
+      },
+    ],
+    prerequisites: [
+      {
+        kind: "local_service",
+        key: "lark-cli",
+        label: "lark-cli",
+        required: true,
+        hint: "Install official lark-cli and run lark-cli auth login --recommend. Tokens stay in the OS keychain.",
+      },
+    ],
+  },
 ];
 
 export function connectorCatalog(
@@ -242,6 +272,14 @@ function connectorPresentation(installation: ConnectorInstallation): {
     return {
       label: sessionId ?? "All sessions",
       detail: transport === "web" || hosted ? "web" : null,
+    };
+  }
+  if (installation.connector_type === "feishu-chat") {
+    const chatName = configString(config, "chat_name");
+    const chatId = configString(config, "chat_id");
+    return {
+      label: chatName ?? chatId ?? installation.id,
+      detail: chatName && chatId ? `${chatId} · cli` : "cli",
     };
   }
   return { label: installation.id, detail: null };

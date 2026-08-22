@@ -15,7 +15,7 @@
 ## 连接器是什么
 
 连接器注册一个 `ChannelDriver`，带稳定的 `connector_type`，以及存在于
-`CHANNELS` 里的 `source`（`dsh`、`slack` 等）。
+`CHANNELS` 里的 `source`（`dsh`、`slack`、`feishu` 等）。
 
 Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 `EgressAdapter` 不写这些记录。
@@ -59,7 +59,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
-| `source` | string | `CHANNELS` 里的渠道 id（`dsh`、`slack`） |
+| `source` | string | `CHANNELS` 里的渠道 id（`dsh`、`slack`、`feishu`） |
 | `kind` | `user` \| `assistant` \| `system` | 从原生事件映射 |
 | `direction` | `inbound` \| `outbound` | 读进来是 inbound。控制台回复是 outbound |
 | `content` | `ContentPart[]` | `body`，外加可选的 `attachment` |
@@ -74,7 +74,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 格式：`source:target`。
 
-例如：`dsh:<sessionId>`、`slack:C123`。
+例如：`dsh:<sessionId>`、`slack:C123`、`feishu:oc_…`。
 
 `ChannelDriverRegistry` 用 `installation + thread` 解析。多条安装都能匹配时，
 `ownsThread` 优先于第一条匹配。
@@ -100,12 +100,12 @@ interface ChannelDriver {
 
 | 方法 | 说明 |
 | --- | --- |
-| `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
+| `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书必须有 `chat_id`。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
 | `capabilities` | 该安装的 `sync` / `reply` / `create`。 |
 | `canReply` | 与 `capabilities().reply` 相同。 |
-| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。DSH web：每个会话 `session:<id>`。 |
+| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：`chat:<id>`。DSH web：每个会话 `session:<id>`。 |
 | `createThread` | `create` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `bindEgress` | `reply` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
@@ -165,6 +165,7 @@ token 是前置条件，不是表单字段。
 | `dsh-session` web，无 `session_id` | `dsh` | 全部会话 | 是 | 是 | 主机要 token 时用 `REGENIC_DSH_TOKEN` |
 | `dsh-session` web，有 `session_id` | `dsh` | 那一条 | 是 | 否 | 同上 |
 | `dsh-session` cli | `dsh` | 一个 mailbox | 是 | 否 | 本机 `dsh` |
+| `feishu-chat` | `feishu` | 一个群 | 是 | 否 | 本机 `lark-cli` 用户登录 |
 
 DSH `kind` 映射：
 
@@ -175,6 +176,16 @@ DSH `kind` 映射：
 | 插件注入的 `user/message` | `system` |
 
 Slack 真人映射为 `user`。
+
+飞书 `kind` 映射：
+
+| 原生消息 | `kind` |
+| --- | --- |
+| `sender_type=user`，`msg_type` 为 `text` 或 `post` | `user` |
+| `sender_type=app`（或 `bot`），`msg_type` 为 `text` 或 `post` | `assistant` |
+| 图片、文件、卡片和其他 `msg_type` | 丢弃 |
+
+线程 id：`feishu:<chat_id>`。历史用 `lark-cli api --as user`。安装表单不收 token。
 
 ## 范围外
 
