@@ -78,7 +78,7 @@ export function TrayApp() {
                       {thread.channel_label}
                     </span>
                     <span className="item-title">{threadTitle(thread)}</span>
-                    <span>{formatChatTime(latest.event.occurred_at)}</span>
+                    <span>{latest ? formatChatTime(latest.event.occurred_at) : ""}</span>
                   </div>
                   <div className="item-reasons">{thread.label}</div>
                 </div>

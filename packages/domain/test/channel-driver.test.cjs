@@ -23,6 +23,12 @@ function stubDriver(partial) {
     outboundId() {
       return "out";
     },
+    capabilities() {
+      return { sync: true, reply: false, create: false };
+    },
+    createThread() {
+      return Promise.reject(new Error("not used"));
+    },
     ...partial,
   };
 }
@@ -107,5 +113,60 @@ describe("channel driver registry", () => {
         .installation.id,
       "dsh-1",
     );
+    assert.equal(drivers.canCreate([slack]), false);
+    assert.equal(drivers.canCreate([dsh, slack]), false);
+  });
+
+  it("picks the first enabled installation that can create a thread", () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(
+        stubDriver({
+          connector_type: "slack-channel",
+          source: "slack",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          capabilities: () => ({ sync: true, reply: false, create: false }),
+          canReply: () => false,
+        }),
+      )
+      .register(
+        stubDriver({
+          connector_type: "dsh-session",
+          source: "dsh",
+          matchesThread: () => true,
+          ownsThread: () => false,
+          capabilities: (installation) => ({
+            sync: true,
+            reply: true,
+            create: !installation.config.session_id,
+          }),
+          canReply: () => true,
+        }),
+      );
+    const slack = {
+      id: "slack-1",
+      org_id: "local-owner",
+      connector_type: "slack-channel",
+      status: "enabled",
+      config: { channel_id: "C123" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const dsh = {
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const pinned = {
+      ...dsh,
+      id: "dsh-pinned",
+      config: { transport: "web", session_id: "sess-a" },
+    };
+
+    assert.equal(drivers.canCreate([slack]), false);
+    assert.equal(drivers.findCreatable([slack, pinned]), undefined);
+    assert.equal(drivers.findCreatable([slack, dsh])?.installation.id, "dsh-1");
   });
 });

@@ -76,7 +76,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 | Kind | Responsibility | Must not |
 | --- | --- | --- |
 | Connector (`ChannelConnector`) | Read a source into `IngestBatch` | Write Event, Blob, ACL, or identity |
-| Channel driver (`ChannelDriver`) | Install, resolve pull streams, bind egress for a thread, declare reply | Patch API / UI with per-channel switches |
+| Channel driver (`ChannelDriver`) | Install, resolve pull streams, bind egress, declare sync / reply / create | Patch API / UI with per-channel switches |
 | Send (`EgressAdapter`) | Write a reply to the original channel | Mint extra privileges or skip approval |
 | Ranker / layer | Scoring after D0 (durability, sensitivity, “need to know”). D0 filter/layer is kernel | Promote personal labels to org truth |
 | Dispatcher policy | Map rank + standard + habits → outside current work \| pending \| defer | Send without a send grant |
@@ -97,10 +97,11 @@ Send and display shape live in `@regenic/domain` `message-contract`. Connectors 
 | Display kind `user` / `assistant` / `system` | Map native events. DSH: `user/message` + `source.kind=user` → user; `assistant/message` text blocks → assistant; plugin-injected `user/message` → system. Slack humans → user |
 | Direction `inbound` / `outbound` | Reads are inbound; console replies are outbound |
 | Send envelope: `ContentPart[]` (`body` + `attachment`) | `EgressAdapter.send` writes back (DSH `session.prompt`) |
+| Channel capabilities `sync` / `reply` / `create` | The driver declares them per install. Unpinned DSH web can create and reply; pinned or CLI follow an existing stream; Slack is sync-only |
 
 Connectors ingest through `channelRecord()` so a surface metadata part travels with the body. The console renders the channel tag and avatar from that surface. Legacy events without it fall back to `inferLegacySurface()`: `:out:` is local outbound, everything else is inbound assistant. The kernel does not guess from body text or `source === "dsh"`. A local outbound and the channel-history echo of the same utterance in one conversation stay a single Event.
 
-Reply, follow, and pull go through `ChannelDriverRegistry`: the API only does `installation + thread → driver.resolveStreams / bindEgress → egress.send(ContentPart[])`. When more than one install can take a thread, `ownsThread` wins (for example a pinned session) over the first catch-all match. Follow and live pull share one queue per stream so they do not fight the lease. The desktop asks inbox `can_send`, not “is this DSH?”. A new channel is a driver, not a kernel or console branch.
+Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: the API only does `installation + thread → driver.resolveStreams / bindEgress / createThread`. When more than one install can take a thread, `ownsThread` wins (for example a pinned session) over the first catch-all match. Follow and live pull share one queue per stream so they do not fight the lease. The desktop asks inbox `can_send` and install `can_create`, not “is this DSH?”. A new channel is a driver, not a kernel or console branch.
 
 ## Extension points
 

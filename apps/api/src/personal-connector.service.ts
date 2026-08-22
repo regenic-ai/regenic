@@ -8,7 +8,9 @@ import {
   ChannelDriverError,
   ChannelDriverRegistry,
   ConnectorRunner,
+  channelLabel,
   conversationId,
+  type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
   type ConnectorRuntimeStore,
@@ -45,6 +47,13 @@ export class PersonalConnectorError extends Error {
 export interface ConnectorInstallInput {
   connector_type: string;
   config?: Record<string, unknown>;
+}
+
+export interface CreatedConversationView {
+  thread_id: string;
+  channel: string;
+  channel_label: string;
+  can_send: boolean;
 }
 
 export interface ConnectorSyncView {
@@ -170,6 +179,59 @@ export class PersonalConnectorService
         )
         .map((item) => item.event.id),
     );
+  }
+
+  async createConversation(
+    input: { installation_id?: string } = {},
+  ): Promise<CreatedConversationView> {
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installations = await store.listInstallations(this.runtime.orgId());
+    const requested = input.installation_id?.trim();
+    let found: { installation: ConnectorInstallation; driver: ChannelDriver } | undefined;
+    if (requested) {
+      const installation = installations.find((item) => item.id === requested);
+      if (!installation) {
+        throw new PersonalConnectorError(
+          "not_found",
+          "Connector installation not found",
+          404,
+        );
+      }
+      const driver = this.drivers.get(installation.connector_type);
+      if (!driver || !driver.capabilities(installation).create) {
+        throw new PersonalConnectorError(
+          "unsupported_channel",
+          "This connector cannot create a conversation",
+          501,
+        );
+      }
+      found = { installation, driver };
+    } else {
+      found = this.drivers.findCreatable(installations);
+      if (!found) {
+        throw new PersonalConnectorError(
+          "unsupported_channel",
+          "No enabled connector can create a conversation",
+          501,
+        );
+      }
+    }
+    try {
+      const thread = await found.driver.createThread(
+        found.installation,
+        host,
+        process.env,
+      );
+      return {
+        thread_id: `${thread.source}:${thread.target}`,
+        channel: thread.source,
+        channel_label: channelLabel(thread.source),
+        can_send: found.driver.canReply(found.installation),
+      };
+    } catch (error) {
+      throw wrapDriverError(error, "send_failed");
+    }
   }
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {

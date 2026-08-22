@@ -98,6 +98,7 @@ Regenic 仍对外提供同一组 HTTP 方法。信封与 DSH web 一致（`clien
 POST /v1/dsh/api/session.history
 POST /v1/dsh/api/session.prompt
 POST /v1/dsh/api/session.list
+POST /v1/dsh/api/session.create
 ```
 
 API 进程需要 `REGENIC_DATABASE` 与 `REGENIC_BLOB_ROOT`。若设置了 `REGENIC_DSH_API_TOKEN`，调用方必须带 `Authorization: Bearer`。

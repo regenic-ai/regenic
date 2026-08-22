@@ -56,7 +56,7 @@ export function groupInboxThreads(items: InboxViewItem[]): InboxThread[] {
     });
 }
 
-export function latestMessage(thread: InboxThread): InboxViewItem {
+export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
 }
 

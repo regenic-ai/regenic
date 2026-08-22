@@ -100,6 +100,27 @@ export class DshWebRpcClient {
     return ids;
   }
 
+  async sessionCreate(
+    input: { workspaceId?: string; cwd?: string; agentPreset?: string } = {},
+  ): Promise<{ sessionId: string }> {
+    const payload: Record<string, unknown> = {};
+    if (input.workspaceId) {
+      payload.workspaceId = input.workspaceId;
+    }
+    if (input.cwd) {
+      payload.cwd = input.cwd;
+    }
+    if (input.agentPreset) {
+      payload.agentPreset = input.agentPreset;
+    }
+    const { value } = await this.call("session.create", payload);
+    const sessionId = createdSessionId(value);
+    if (!sessionId) {
+      throw new DshApiError("DSH session.create did not return a sessionId");
+    }
+    return { sessionId };
+  }
+
   async sessionPrompt(input: DshSessionPromptInput): Promise<{
     accepted: true;
     rpc_id: string;
@@ -171,6 +192,20 @@ function parseSessionListPage(value: unknown): DshSessionListPage {
     next_cursor: nextCursor,
     has_more: page.hasMore === true || page.has_more === true || Boolean(nextCursor),
   };
+}
+
+function createdSessionId(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.trim();
+  }
+  if (!isObject(value)) {
+    return undefined;
+  }
+  return (
+    stringField(value, "sessionId")
+    ?? stringField(value, "session_id")
+    ?? stringField(value, "id")
+  );
 }
 
 function sessionIdFromListItem(item: unknown): string | undefined {

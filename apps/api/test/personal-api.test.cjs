@@ -131,6 +131,8 @@ async function startDshWebStub() {
   const prompts = [];
   const echoes = new Map();
   const extras = new Map();
+  const created = [];
+  let createdCount = 0;
   const server = createServer((request, response) => {
     let raw = "";
     request.on("data", (chunk) => {
@@ -160,6 +162,19 @@ async function startDshWebStub() {
         );
         return;
       }
+      if (url.includes("session.create")) {
+        createdCount += 1;
+        const sessionId = `created-${createdCount}`;
+        created.push(sessionId);
+        response.end(
+          JSON.stringify({
+            type: "server-response",
+            rpcId: body.rpcId,
+            result: { ok: true, value: { sessionId } },
+          }),
+        );
+        return;
+      }
       if (url.includes("session.list")) {
         response.end(
           JSON.stringify({
@@ -168,7 +183,11 @@ async function startDshWebStub() {
             result: {
               ok: true,
               value: {
-                items: [{ sessionId: "sess-a" }, { sessionId: "sess-b" }],
+                items: [
+                  { sessionId: "sess-a" },
+                  { sessionId: "sess-b" },
+                  ...created.map((sessionId) => ({ sessionId })),
+                ],
                 hasMore: false,
               },
             },
@@ -240,6 +259,7 @@ async function startDshWebStub() {
   return {
     origin: `http://127.0.0.1:${address.port}`,
     prompts,
+    created,
     push(sessionId, event) {
       const current = extras.get(sessionId) ?? [];
       current.push(event);
@@ -420,6 +440,8 @@ describe("personal /v1/me", () => {
       assert.equal(engine.installations[0].connector_type, "slack-channel");
       assert.equal(engine.installations[0].label, "C123");
       assert.equal(engine.installations[0].syncable, true);
+      assert.equal(engine.installations[0].can_reply, false);
+      assert.equal(engine.installations[0].can_create, false);
       assert.equal(engine.installations[0].last_attempt, null);
       assert.equal(engine.catalog.length, 2);
       assert.equal(engine.catalog[0].connector_type, "slack-channel");
@@ -437,6 +459,24 @@ describe("personal /v1/me", () => {
       assert.equal(health.sqlite, "up");
       assert.equal(health.status, "ok");
       assert.equal(health.postgres, undefined);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects conversation create when no connector can open a thread", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const created = await fetch(`${origin}/v1/me/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(created.status, 501);
     } finally {
       await app.close();
     }
@@ -661,6 +701,27 @@ describe("personal /v1/me", () => {
       });
       const createdBody = await created.json();
       assert.equal(created.status, 201, JSON.stringify(createdBody));
+      assert.equal(createdBody.can_create, true);
+      assert.equal(createdBody.can_reply, true);
+
+      const slackOnly = await fetch(`${origin}/v1/me/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ installation_id: "slack-1" }),
+      });
+      assert.equal(slackOnly.status, 501);
+
+      const opened = await fetch(`${origin}/v1/me/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const openedBody = await opened.json();
+      assert.equal(opened.status, 201, JSON.stringify(openedBody));
+      assert.equal(openedBody.thread_id, "dsh:created-1");
+      assert.equal(openedBody.channel, "dsh");
+      assert.equal(openedBody.can_send, true);
+      assert.deepEqual(dsh.created, ["created-1"]);
 
       const empty = await fetch(`${origin}/v1/me/replies`, {
         method: "POST",
