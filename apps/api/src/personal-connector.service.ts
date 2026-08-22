@@ -63,7 +63,7 @@ export class PersonalConnectorService
   implements OnApplicationBootstrap, OnModuleDestroy
 {
   private readonly inflight = new Map<string, Promise<ConnectorSyncView>>();
-  private readonly following = new Set<string>();
+  private readonly streamLocks = new Map<string, Promise<void>>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
 
@@ -110,18 +110,6 @@ export class PersonalConnectorService
     installationId: string,
     thread: ConversationThread,
   ): Promise<void> {
-    this.following.add(installationId);
-    try {
-      await this.followThreadOnce(installationId, thread);
-    } finally {
-      this.following.delete(installationId);
-    }
-  }
-
-  private async followThreadOnce(
-    installationId: string,
-    thread: ConversationThread,
-  ): Promise<void> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installation = await this.requireInstallation(store, installationId);
@@ -140,20 +128,29 @@ export class PersonalConnectorService
     } catch (error) {
       throw wrapDriverError(error, "sync_failed");
     }
+    await this.exclusiveStream(installation.id, stream.stream_key, async () => {
+      try {
+        await this.followStream(host, store, installation, stream, thread);
+      } catch (error) {
+        throw wrapDriverError(error, "sync_failed");
+      }
+    });
+  }
+
+  private async followStream(
+    host: Host,
+    store: ConnectorRuntimeStore,
+    installation: ConnectorInstallation,
+    stream: ConnectorStream,
+    thread: ConversationThread,
+  ): Promise<void> {
     const threadId = `${thread.source}:${thread.target}`;
     const known = await this.assistantIds(threadId);
     for (let attempt = 0; attempt < FOLLOW_TRIES; attempt += 1) {
-      try {
-        await pollStream(host, store, installation, stream, 2);
-        const seen = await this.assistantIds(threadId);
-        if ([...seen].some((id) => !known.has(id))) {
-          return;
-        }
-      } catch (error) {
-        const wrapped = wrapDriverError(error, "sync_failed");
-        if (wrapped.code !== "lease_unavailable") {
-          throw wrapped;
-        }
+      await pollStream(host, store, installation, stream, 2);
+      const seen = await this.assistantIds(threadId);
+      if ([...seen].some((id) => !known.has(id))) {
+        return;
       }
       if (attempt < FOLLOW_TRIES - 1) {
         await delay(FOLLOW_WAIT_MS);
@@ -294,9 +291,15 @@ export class PersonalConnectorService
       );
       const runs: ConnectorPollRunResult[] = [];
       for (const stream of streams) {
-        runs.push(
-          ...(await pollStream(host, store, installation, stream, maxPages)),
+        const pages = await this.exclusiveStream(
+          installation.id,
+          stream.stream_key,
+          () => pollStream(host, store, installation, stream, maxPages),
+          { skipIfBusy: true },
         );
+        if (pages) {
+          runs.push(...pages);
+        }
       }
       const last = runs.at(-1);
       return {
@@ -349,6 +352,31 @@ export class PersonalConnectorService
       );
     }
     return installation;
+  }
+
+  private exclusiveStream<T>(
+    installationId: string,
+    streamKey: string,
+    work: () => Promise<T>,
+    options?: { skipIfBusy?: boolean },
+  ): Promise<T | undefined> {
+    const lock = `${installationId}:${streamKey}`;
+    if (options?.skipIfBusy && this.streamLocks.has(lock)) {
+      return Promise.resolve(undefined);
+    }
+    const previous = this.streamLocks.get(lock) ?? Promise.resolve();
+    const current = previous.then(work, work);
+    const released = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.streamLocks.set(lock, released);
+    void released.then(() => {
+      if (this.streamLocks.get(lock) === released) {
+        this.streamLocks.delete(lock);
+      }
+    });
+    return current;
   }
 
   private async viewOf(

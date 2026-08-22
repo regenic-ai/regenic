@@ -45,6 +45,10 @@ export interface ChannelDriver {
     installation: ConnectorInstallation,
     thread: ConversationThread,
   ): boolean;
+  ownsThread(
+    installation: ConnectorInstallation,
+    thread: ConversationThread,
+  ): boolean;
   canReply(installation: ConnectorInstallation): boolean;
   resolveStreams(
     installation: ConnectorInstallation,
@@ -97,7 +101,11 @@ export class ChannelDriverRegistry {
       }
       return [{ installation, driver }];
     });
-    return matches[0];
+    return (
+      matches.find((item) =>
+        item.driver.ownsThread(item.installation, thread),
+      ) ?? matches[0]
+    );
   }
 
   canSend(

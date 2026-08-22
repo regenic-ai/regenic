@@ -51,6 +51,21 @@ export const dshSessionDriver: ChannelDriver = {
     return true;
   },
 
+  ownsThread(installation, thread) {
+    if (!this.matchesThread(installation, thread)) {
+      return false;
+    }
+    const pinned = configString(installation.config, "session_id");
+    if (pinned) {
+      return pinned === thread.target;
+    }
+    const transport = configString(installation.config, "transport") ?? "web";
+    return (
+      transport === "cli" &&
+      configString(installation.config, "mailbox") === thread.target
+    );
+  },
+
   canReply(installation) {
     return installation.status === "enabled";
   },
