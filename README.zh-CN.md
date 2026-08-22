@@ -10,6 +10,25 @@ Regenic 是开源的消息编排层。它接入已经在用的聊天、邮件、
 
 [English](README.md)
 
+## 桌面客户端
+
+需要 Node 20+ 和 [pnpm](https://pnpm.io)。
+
+```bash
+pnpm install
+pnpm dev:desktop
+```
+
+## 接上 DSH
+
+终端里要能跑 `dsh`。先把 web 起起来：
+
+```bash
+dsh web --port 3080
+```
+
+打开客户端：**Engine** → **DSH** → **Install**。Transport 选 **Web**。Session ID 空着跟全部会话，填了只跟一条。Base URL 默认 `http://127.0.0.1:3080`，只接受本机。`dsh web` 要 token 的话，启动桌面应用前设好 `REGENIC_DSH_TOKEN`。
+
 ## 状态
 
 Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本地优先的连接器和内核。
@@ -29,9 +48,9 @@ Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本地优先的连
 
 方法、站点与公开标准：[regenic-ai/regenic-book](https://github.com/regenic-ai/regenic-book)。存储与运行时默认：[技术栈](docs/zh/TECH_STACK.md)。
 
-## 开始使用
+## 本地开发
 
-本仓库目前是能跑通的骨架（健康检查和连通）。加工逻辑从 Phase 1 开始。Compose 用于本地开发。个人产品跑在本机。
+日常用[桌面客户端](#桌面客户端)。Compose 给 API 和 worker 用。
 
 ```bash
 pnpm install
@@ -65,26 +84,15 @@ pnpm local connector-enable --database ./regenic.db --org local-owner \
 		--installation slack-engineering --stream channel:C123
 ```
 
-### DSH 连接器
+### 用 CLI 接 DSH
 
-安装时选择传输方式：`cli`（不占端口）或 `web`（真正的 DSH session）。
-
-**CLI** 执行 `dsh --profile headless "<text>"`。不启动 `dsh web`。每次发送都是新的 DSH 会话，Regenic 只在本地 journal 里拼轮次。官方 headless 没有 `--resume`，那个 flag 属于 TUI 应用。
-
-```bash
-pnpm local dsh-install --database ./regenic.db --org local-owner \
-	--transport cli --mailbox dsh-main --id dsh-main
-```
-
-**Web** 通过 HTTP 对接已启动的 `dsh web`（`session.history` / `session.prompt`）。同一个 `session_id` 可以续聊。
+和[接上 DSH](#接上-dsh)同一件事，只是走终端。用 Web 的话先跑 `dsh web --port 3080`。
 
 ```bash
 pnpm local dsh-install --database ./regenic.db --org local-owner \
 	--transport web --session <sessionId> --base-url http://127.0.0.1:3080 \
 	--id dsh-main
-```
 
-```bash
 pnpm local dsh-sync --database ./regenic.db --blob-root ./blobs \
 	--installation dsh-main --max-pages 20
 
@@ -92,7 +100,14 @@ pnpm local dsh-send --database ./regenic.db --installation dsh-main \
 	--text "Follow up on the last turn"
 ```
 
-Regenic 仍对外提供同一组 HTTP 方法。信封与 DSH web 一致（`client-request` / `server-response`，回显 `rpcId`）。`session.history` 接受与 DSH web 相同的 `sessionId`、`maxMessages`、`beforeSeq`，返回的是该请求对应的历史页，而不是刚入库的增量。新消息会在一侧入库；入库失败时历史页仍返回。若另一路同步占用了租约，返回 `ok: false`，错误码 `agent-busy`。后端按安装记录的 `transport` 走。`web` 若 DSH 要求鉴权，设置 `REGENIC_DSH_TOKEN`。
+`--session` 可以不填，不填就跟所有会话。CLI 模式（不跑 `dsh web`）：
+
+```bash
+pnpm local dsh-install --database ./regenic.db --org local-owner \
+	--transport cli --mailbox dsh-main --id dsh-main
+```
+
+`dsh web` 要 token 就设 `REGENIC_DSH_TOKEN`。API 进程需要 `REGENIC_DATABASE` 和 `REGENIC_BLOB_ROOT`。设了 `REGENIC_DSH_API_TOKEN` 的话，请求带 `Authorization: Bearer`。
 
 ```http
 POST /v1/dsh/api/session.history
@@ -100,8 +115,6 @@ POST /v1/dsh/api/session.prompt
 POST /v1/dsh/api/session.list
 POST /v1/dsh/api/session.create
 ```
-
-API 进程需要 `REGENIC_DATABASE` 与 `REGENIC_BLOB_ROOT`。若设置了 `REGENIC_DSH_API_TOKEN`，调用方必须带 `Authorization: Bearer`。
 
 ### 文件导入
 
