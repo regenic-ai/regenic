@@ -75,7 +75,9 @@ export class PersonalInboxService {
       connectorCatalog(installations, {
         env: process.env,
         services: {
-          "dsh-web": await probeLocalService("http://127.0.0.1:3080"),
+          "dsh-web": await probeLocalService(
+            process.env.REGENIC_DSH_BASE_URL?.trim() || "http://127.0.0.1:3080",
+          ),
         },
       });
     if (!this.runtime.isReady()) {

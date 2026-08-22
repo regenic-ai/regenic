@@ -143,6 +143,33 @@ describe("createDshHostRpcServices", () => {
       assert.equal(page.hasMore, true);
     });
   });
+
+  it("uses REGENIC_DSH_BASE_URL when the stored install is cli", async () => {
+    await withMemoryHost(async (host) => {
+      await host.get("authority").createInstallation({
+        id: "dsh-1",
+        org_id: "local-owner",
+        connector_type: "dsh-session",
+        status: "enabled",
+        config: { transport: "cli", mailbox: "dsh-main" },
+        created_at: "2026-08-21T00:00:00.000Z",
+      });
+      const urls = [];
+      const services = createDshHostRpcServices(host, {
+        org_id: "local-owner",
+        now: () => "2026-08-21T00:00:00.000Z",
+        createId: () => "test",
+        env: { REGENIC_DSH_BASE_URL: "http://regenic-dsh:3080" },
+        fetch: async (url, init) => {
+          urls.push(url);
+          return historyFetch(HISTORY_EVENTS)(url, init);
+        },
+      });
+
+      await services.receive("dsh-main");
+      assert.equal(urls[0], "http://regenic-dsh:3080/api/session.history");
+    });
+  });
 });
 
 function historyFetch(events, hasMore = false) {

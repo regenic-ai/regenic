@@ -35,9 +35,9 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 
 ## 进程
 
-Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`，默认端口 `4370`）。设置页可以改成自定义内核 URL；选自定义时不再拉起本机 sidecar。渲染进程只打 HTTP，不直连 SQLite。人与 Agent 共用 `/v1`。地址记在应用 `userData/desktop-settings.json`。
+Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`，默认端口 `4370`）。设置页可以改成自定义内核 URL；Apply 会先探 `/health`，确认 `mode=personal` 才停本机 sidecar。探失败则保住本机内核。渲染进程只打 HTTP，不直连 SQLite。人与 Agent 共用 `/v1`。地址记在应用 `userData/desktop-settings.json`。自定义内核可以是 `https://`（例如 Sealos）；页面 CSP 的 `connect-src` 允许本机和 HTTPS。
 
-`/v1/me` 只在回环监听时开放（`LISTEN_HOST` 为 `127.0.0.1` / `localhost` / `::1`）。Sealos 等 `0.0.0.0` 部署不会注册这条个人面；`REGENIC_PERSONAL_API=0` 可在本机也关掉。桌面 sidecar 会丢掉父进程里的 `REGENIC_PERSONAL_API`，以免外壳 `=0` 把内核个人面关掉。个人模式 CORS 只回显 `file://`、`null` 和本机 Origin，不回显任意网站。安装 DSH 时不接收 `command` / `workdir`，`base_url` 必须是本机 URL。
+`/v1/me` 默认只在回环监听时开放（`LISTEN_HOST` 为 `127.0.0.1` / `localhost` / `::1`）。Sealos 等 `0.0.0.0` 部署默认没有这条个人面；要让桌面连远程内核，远程进程设 `REGENIC_PERSONAL_API=1`。`REGENIC_PERSONAL_API=0` 可在本机也关掉。桌面 sidecar 会丢掉父进程里的 `REGENIC_PERSONAL_API`，以免外壳 `=0` 把内核个人面关掉。个人模式 CORS 只回显 `file://`、`null` 和本机 Origin，不回显任意网站。安装 DSH 时不接收 `command` / `workdir`。本机表单里的 `base_url` 必须是回环 URL。托管 API（Sealos 等）用环境变量 `REGENIC_DSH_BASE_URL` 指向集群内网 dsh web（例如 `http://regenic-dsh:3080`），目录不再要公网地址；已存的 CLI 安装也会按 web 认会话、允许回复。
 
 默认数据：若仓库里已有 `regenic.db` 则开发时用它；否则 `~/.regenic/regenic.db` 与 `~/.regenic/blobs`。
 
@@ -65,10 +65,11 @@ Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |
 | Slack | `channel_id`（频道名可选） | 本机 `REGENIC_SLACK_TOKEN` | 只拉该频道。安装后立刻拉，之后内核轮询 |
-| DSH web | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 本机 `dsh web`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
+| DSH web（本机） | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 本机 `dsh web`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
+| DSH web（托管） | 只填可选 `session_id`；不填 `base_url` | 内核环境变量 `REGENIC_DSH_BASE_URL`（集群 DNS） | 同上；核心只走内网，不要填 Sealos 公网 URL |
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
 
-DSH 安装不接收 token / `command` / `workdir`；`base_url` 必须是回环。
+DSH 安装不接收 token / `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
 
 ## 启动
 

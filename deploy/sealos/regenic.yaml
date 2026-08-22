@@ -1,21 +1,19 @@
-# Sealos: API uses jesonli/regenic-core:cli (root image + dsh overlay).
-# Sidecar dsh web stays on 127.0.0.1:3080 and is unused by CLI transport.
-# Only expose Regenic :3000. Do not publish 3080.
-# LISTEN_HOST=0.0.0.0 keeps /v1/me off this public ingress. Do not set
-# REGENIC_PERSONAL_API.
+# Sealos API. DSH is a separate Launchpad app (deploy/sealos/dsh.yaml).
+# Talk to it over cluster DNS, not a sidecar. Do not publish DSH from this
+# Service. REGENIC_PERSONAL_API=1 exposes /v1/me for the desktop console.
 #
 # Secrets stay out of git. Once:
 #   cp deploy/sealos/secret.yaml.example deploy/sealos/secret.yaml
-# CLI image (do not bake dsh into the root Dockerfile):
-#   docker build --platform linux/amd64 -t jesonli/regenic-core:cli \
-#     -f deploy/sealos/Dockerfile.api-cli deploy/sealos
-#   docker push jesonli/regenic-core:cli
 # Then:
-#   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/regenic.yaml
+#   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/dsh.yaml
+#   kubectl apply -f deploy/sealos/regenic.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: regenic-data
+  labels:
+    app: regenic
+    cloud.sealos.io/app-deploy-manager: regenic
 spec:
   accessModes:
     - ReadWriteOnce
@@ -29,6 +27,12 @@ metadata:
   name: regenic
   labels:
     app: regenic
+    cloud.sealos.io/app-deploy-manager: regenic
+  annotations:
+    originImageName: jesonli/regenic-core:main
+    deploy.cloud.sealos.io/minReplicas: "1"
+    deploy.cloud.sealos.io/maxReplicas: "1"
+    deploy.cloud.sealos.io/resize: "10Gi"
 spec:
   replicas: 1
   revisionHistoryLimit: 1
@@ -50,7 +54,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: jesonli/regenic-core:cli
+          image: jesonli/regenic-core:main
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false
@@ -64,7 +68,7 @@ spec:
               containerPort: 3000
           command: ["bash", "-lc"]
           args:
-            - mkdir -p /data/home /data/tmp /data/dsh /data/dsh-work /data/dsh-runs && exec pnpm --filter @regenic/api start
+            - mkdir -p /data/home /data/tmp /data/blobs && exec pnpm --filter @regenic/api start
           env:
             - name: NODE_ENV
               value: production
@@ -72,12 +76,16 @@ spec:
               value: "3000"
             - name: LISTEN_HOST
               value: "0.0.0.0"
+            - name: REGENIC_PERSONAL_API
+              value: "1"
             - name: REGENIC_DATABASE
               value: /data/regenic.db
             - name: REGENIC_BLOB_ROOT
               value: /data/blobs
             - name: REGENIC_ORG
               value: local-owner
+            - name: REGENIC_DSH_BASE_URL
+              value: http://regenic-dsh:3080
             - name: REGENIC_DSH_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -92,52 +100,13 @@ spec:
               value: /data/home
             - name: TMPDIR
               value: /data/tmp
-            - name: DSH_HOME
-              value: /data/dsh
           resources:
             requests:
-              cpu: 100m
-              memory: 512Mi
+              cpu: 50m
+              memory: 51Mi
             limits:
-              cpu: "2"
-              memory: 2Gi
-          volumeMounts:
-            - name: data
-              mountPath: /data
-        - name: dsh
-          image: jesonli/dsh:main
-          imagePullPolicy: Always
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            runAsNonRoot: true
-            seccompProfile:
-              type: RuntimeDefault
-          command: ["bash", "-lc"]
-          args:
-            - mkdir -p "$HOME" "$TMPDIR" "$DSH_HOME" && exec dsh web --no-open --port 3080
-          env:
-            - name: HOME
-              value: /data/home
-            - name: TMPDIR
-              value: /data/tmp
-            - name: DSH_HOME
-              value: /data/dsh
-            - name: NODE_OPTIONS
-              value: --max-old-space-size=1024
-            - name: DEEPSEEK_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: regenic-secrets
-                  key: DEEPSEEK_API_KEY
-          resources:
-            requests:
-              cpu: 100m
+              cpu: 500m
               memory: 512Mi
-            limits:
-              cpu: "2"
-              memory: 2Gi
           volumeMounts:
             - name: data
               mountPath: /data
@@ -152,6 +121,7 @@ metadata:
   name: regenic
   labels:
     app: regenic
+    cloud.sealos.io/app-deploy-manager: regenic
 spec:
   selector:
     app: regenic
@@ -160,13 +130,14 @@ spec:
       port: 3000
       targetPort: http
 ---
-# Public HTTPS for API :3000 only. Do not add a rule for dsh :3080.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: regenic
   labels:
     app: regenic
+    cloud.sealos.io/app-deploy-manager: regenic
+    cloud.sealos.io/app-deploy-manager-domain: api-example
   annotations:
     kubernetes.io/ingress.class: nginx
     nginx.ingress.kubernetes.io/backend-protocol: HTTP
