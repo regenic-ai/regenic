@@ -10,6 +10,25 @@ Delivery order is **Personal (local-first)**, then Org. See [PRODUCT.md](docs/en
 
 [简体中文](README.zh-CN.md)
 
+## Desktop app
+
+Need Node 20+ and [pnpm](https://pnpm.io).
+
+```bash
+pnpm install
+pnpm dev:desktop
+```
+
+## Connect DSH
+
+`dsh` has to work in your terminal. Start the web server first:
+
+```bash
+dsh web --port 3080
+```
+
+In the app: **Engine** → **DSH** → **Install**. Transport: **Web**. Leave Session ID empty to follow every session, or fill one. Base URL defaults to `http://127.0.0.1:3080` (localhost only). If `dsh web` wants a token, set `REGENIC_DSH_TOKEN` before you start the desktop app.
+
 ## Status
 
 Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is local-first connectors and the kernel.
@@ -29,9 +48,9 @@ Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is local-first conne
 
 Method, site, and public standards: [regenic-ai/regenic-book](https://github.com/regenic-ai/regenic-book). Store and runtime defaults: [TECH_STACK.md](docs/en/TECH_STACK.md).
 
-## Getting started
+## Local development
 
-The repository is a runnable skeleton (health checks and wiring). Processing logic starts in Phase 1. Compose is for local development. The Personal product runs on the machine.
+Daily use is the [desktop app](#desktop-app). Compose is for API and worker work.
 
 ```bash
 pnpm install
@@ -65,26 +84,15 @@ pnpm local connector-enable --database ./regenic.db --org local-owner \
 		--installation slack-engineering --stream channel:C123
 ```
 
-### DSH connector
+### DSH from the CLI
 
-Choose the transport at install time: `cli` (no port) or `web` (real DSH session).
-
-**CLI** runs `dsh --profile headless "<text>"`. No `dsh web`. Each send is a new DSH session; Regenic journals those turns. Official headless has no `--resume` — that flag belongs to the TUI app.
-
-```bash
-pnpm local dsh-install --database ./regenic.db --org local-owner \
-	--transport cli --mailbox dsh-main --id dsh-main
-```
-
-**Web** talks to a running `dsh web` over HTTP (`session.history` / `session.prompt`). Same `session_id` can continue.
+Same job as [Connect DSH](#connect-dsh), from a terminal. Start `dsh web --port 3080` first if you use Web.
 
 ```bash
 pnpm local dsh-install --database ./regenic.db --org local-owner \
 	--transport web --session <sessionId> --base-url http://127.0.0.1:3080 \
 	--id dsh-main
-```
 
-```bash
 pnpm local dsh-sync --database ./regenic.db --blob-root ./blobs \
 	--installation dsh-main --max-pages 20
 
@@ -92,7 +100,14 @@ pnpm local dsh-send --database ./regenic.db --installation dsh-main \
 	--text "Follow up on the last turn"
 ```
 
-Regenic still exposes the same HTTP methods. The envelope matches DSH web (`client-request` / `server-response`, `rpcId` echoed). `session.history` accepts the same `sessionId`, `maxMessages`, and `beforeSeq` as DSH web and returns that history page — not only the increment just ingested. New messages are ingested on the side; if ingest fails, the history page is still returned. If another sync holds the lease, the response is `ok: false` with `agent-busy`. The backend follows the installation's `transport`. For `web`, set `REGENIC_DSH_TOKEN` if the DSH host requires a bearer token.
+`--session` is optional; omit it to follow every session. CLI transport (no `dsh web`):
+
+```bash
+pnpm local dsh-install --database ./regenic.db --org local-owner \
+	--transport cli --mailbox dsh-main --id dsh-main
+```
+
+If `dsh web` wants a token, set `REGENIC_DSH_TOKEN`. The API process needs `REGENIC_DATABASE` and `REGENIC_BLOB_ROOT`. If `REGENIC_DSH_API_TOKEN` is set, callers send `Authorization: Bearer`.
 
 ```http
 POST /v1/dsh/api/session.history
@@ -100,8 +115,6 @@ POST /v1/dsh/api/session.prompt
 POST /v1/dsh/api/session.list
 POST /v1/dsh/api/session.create
 ```
-
-Set `REGENIC_DATABASE` and `REGENIC_BLOB_ROOT` on the API process. When `REGENIC_DSH_API_TOKEN` is set, callers must send `Authorization: Bearer`.
 
 ### File import
 
