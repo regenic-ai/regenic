@@ -938,6 +938,60 @@ button {
   font-size: 12px;
 }
 
+.choice-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 12px;
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  align-items: start;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.choice strong,
+.choice .muted {
+  display: block;
+}
+
+.choice .muted {
+  margin-top: 2px;
+}
+
+.choice.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.choice-mark {
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+}
+
+.choice.active .choice-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--bg);
+}
+
+.card .field {
+  margin-bottom: 12px;
+}
+
 .field {
   display: grid;
   gap: 4px;
