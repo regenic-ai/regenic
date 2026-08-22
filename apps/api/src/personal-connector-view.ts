@@ -6,6 +6,11 @@ import type {
 
 const SYNCABLE_TYPES = new Set(["slack-channel", "dsh-session"]);
 
+export interface ConnectorFieldWhen {
+  field: string;
+  value: string;
+}
+
 export interface ConnectorField {
   key: string;
   label: string;
@@ -13,6 +18,17 @@ export interface ConnectorField {
   placeholder?: string;
   default?: string;
   options?: { value: string; label: string }[];
+  visible_when?: ConnectorFieldWhen;
+}
+
+export interface ConnectorPrerequisite {
+  kind: "env" | "local_service";
+  key: string;
+  label: string;
+  required: boolean;
+  hint?: string;
+  ready: boolean;
+  visible_when?: ConnectorFieldWhen;
 }
 
 export interface ConnectorCatalogItem {
@@ -22,42 +38,66 @@ export interface ConnectorCatalogItem {
   credential_hint: string;
   installed: boolean;
   instance_count: number;
+  setup_ready: boolean;
   fields: ConnectorField[];
+  prerequisites: ConnectorPrerequisite[];
 }
 
-const CATALOG: Omit<
-  ConnectorCatalogItem,
-  "installed" | "instance_count"
->[] = [
+export interface CatalogReadiness {
+  env?: NodeJS.ProcessEnv;
+  services?: Record<string, boolean>;
+}
+
+interface CatalogDefinition {
+  connector_type: string;
+  title: string;
+  description: string;
+  credential_hint: string;
+  fields: ConnectorField[];
+  prerequisites: Omit<ConnectorPrerequisite, "ready">[];
+}
+
+const CATALOG: CatalogDefinition[] = [
   {
     connector_type: "slack-channel",
     title: "Slack",
-    description: "同步指定频道。Token 只读本机环境变量，不写入库。",
+    description:
+      "Install by channel. Sync pulls that channel only; Sync all runs every installed instance.",
     credential_hint: "REGENIC_SLACK_TOKEN",
     fields: [
       {
         key: "channel_id",
-        label: "频道 ID",
+        label: "Channel ID",
         required: true,
         placeholder: "C01234567",
       },
       {
         key: "channel_name",
-        label: "频道名",
+        label: "Channel name",
         required: false,
-        placeholder: "可选，仅展示",
+        placeholder: "Optional, display only",
+      },
+    ],
+    prerequisites: [
+      {
+        kind: "env",
+        key: "REGENIC_SLACK_TOKEN",
+        label: "Local Slack token",
+        required: true,
+        hint: "Set REGENIC_SLACK_TOKEN in the environment. It is not stored or shown in the form.",
       },
     ],
   },
   {
     connector_type: "dsh-session",
     title: "DSH",
-    description: "同步 DSH session。Web 用本机 token，CLI 走本机 dsh 命令。",
-    credential_hint: "REGENIC_DSH_TOKEN（web）",
+    description:
+      "One install talks to local dsh web. Syncs every session by default; set a Session ID to pull only that one.",
+    credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
     fields: [
       {
         key: "transport",
-        label: "传输",
+        label: "Transport",
         required: true,
         default: "web",
         options: [
@@ -69,20 +109,41 @@ const CATALOG: Omit<
         key: "session_id",
         label: "Session ID",
         required: false,
-        placeholder: "web 模式必填",
+        placeholder: "Leave empty to sync all sessions",
+        visible_when: { field: "transport", value: "web" },
       },
       {
         key: "base_url",
         label: "Base URL",
         required: false,
         default: "http://127.0.0.1:3080",
-        placeholder: "仅本机 127.0.0.1 / localhost",
+        placeholder: "Loopback only (127.0.0.1 / localhost)",
+        visible_when: { field: "transport", value: "web" },
       },
       {
         key: "mailbox",
         label: "Mailbox",
         required: false,
-        placeholder: "CLI 模式，默认同安装 ID",
+        placeholder: "CLI mode; defaults to the install ID",
+        visible_when: { field: "transport", value: "cli" },
+      },
+    ],
+    prerequisites: [
+      {
+        kind: "local_service",
+        key: "dsh-web",
+        label: "Local dsh web",
+        required: true,
+        hint: "Start dsh web --port 3080 first",
+        visible_when: { field: "transport", value: "web" },
+      },
+      {
+        kind: "env",
+        key: "REGENIC_DSH_TOKEN",
+        label: "DSH web token",
+        required: false,
+        hint: "Only if dsh web requires a Bearer token",
+        visible_when: { field: "transport", value: "web" },
       },
     ],
   },
@@ -90,15 +151,29 @@ const CATALOG: Omit<
 
 export function connectorCatalog(
   installations: EngineInstallationView[],
+  readiness: CatalogReadiness = {},
 ): ConnectorCatalogItem[] {
+  const env = readiness.env ?? process.env;
   return CATALOG.map((item) => {
     const instanceCount = installations.filter(
       (installation) => installation.connector_type === item.connector_type,
     ).length;
+    const defaults = defaultFieldValues(item.fields);
+    const prerequisites = item.prerequisites.map((prerequisite) => ({
+      ...prerequisite,
+      ready: prerequisiteReady(prerequisite, env, readiness.services),
+    }));
+    const requiredVisible = prerequisites.filter(
+      (prerequisite) =>
+        prerequisite.required &&
+        matchesWhen(prerequisite.visible_when, defaults),
+    );
     return {
       ...item,
       installed: instanceCount > 0,
       instance_count: instanceCount,
+      setup_ready: requiredVisible.every((prerequisite) => prerequisite.ready),
+      prerequisites,
     };
   });
 }
@@ -149,14 +224,17 @@ function connectorPresentation(installation: ConnectorInstallation): {
     };
   }
   if (installation.connector_type === "dsh-session") {
-    const session =
-      configString(config, "session_id") ??
-      configString(config, "mailbox") ??
-      installation.id;
     const transport = configString(config, "transport");
+    if (transport === "cli") {
+      return {
+        label: configString(config, "mailbox") ?? installation.id,
+        detail: "cli",
+      };
+    }
+    const sessionId = configString(config, "session_id");
     return {
-      label: session,
-      detail: transport === "web" || transport === "cli" ? transport : null,
+      label: sessionId ?? "All sessions",
+      detail: transport === "web" ? "web" : null,
     };
   }
   return { label: installation.id, detail: null };
@@ -170,4 +248,36 @@ export function configString(
   return typeof value === "string" && value.trim().length > 0
     ? value
     : undefined;
+}
+
+export function matchesWhen(
+  when: ConnectorFieldWhen | undefined,
+  values: Record<string, string>,
+): boolean {
+  if (!when) {
+    return true;
+  }
+  return (values[when.field] ?? "") === when.value;
+}
+
+function defaultFieldValues(fields: ConnectorField[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const field of fields) {
+    if (field.default) {
+      values[field.key] = field.default;
+    }
+  }
+  return values;
+}
+
+function prerequisiteReady(
+  prerequisite: Omit<ConnectorPrerequisite, "ready">,
+  env: NodeJS.ProcessEnv,
+  services: Record<string, boolean> | undefined,
+): boolean {
+  if (prerequisite.kind === "env") {
+    const value = env[prerequisite.key];
+    return typeof value === "string" && value.trim().length > 0;
+  }
+  return services?.[prerequisite.key] === true;
 }

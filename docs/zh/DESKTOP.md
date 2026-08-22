@@ -30,7 +30,8 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 ## 双层表面
 
 - **主窗口：** 左图标栏（Inbox / Engine / Settings），中列表，右线程。顶栏是引擎芯片与 Inbox 计数。关窗不退出。
-- **托盘：** 点击打开小窗，显示内核状态、计数、最近 3 条；可「打开控制台」。退出只在托盘菜单。
+- **当前工作按会话列，不按单条消息列。** DSH 一个 session、Slack 一个频道/线程，在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表，聚合只发生在桌面表面。消息窗按阅读流展示：短标题、会话 id 作副标题、系统/runtime 默认折叠，并轻量渲染标题/列表/表格/代码。
+- **托盘：** 点击打开小窗，显示内核状态、计数、最近 3 个会话；可「打开控制台」。退出只在托盘菜单。
 
 ## 进程
 
@@ -49,12 +50,24 @@ Electron 主进程拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`，默
 | GET | `/v1/me/engine` | 内核、库路径、已安装连接器、未安装目录 |
 | POST | `/v1/me/connectors` | 从目录安装（Slack / DSH），不接收 token |
 | DELETE | `/v1/me/connectors/:id` | 卸载安装记录和游标，保留已入库消息 |
-| POST | `/v1/me/connectors/:id/sync` | 按需同步一页（最多 5 页），复用 `ConnectorRunner` |
+| POST | `/v1/me/connectors/:id/sync` | 按需同步。Slack 一页频道；DSH web 默认同步全部会话（每路最多 5 页） |
 | POST | `/v1/me/connectors/:id/enable` | 启用连接器 |
 | POST | `/v1/me/connectors/:id/disable` | 停用连接器 |
 | GET | `/health` | 个人模式查 SQLite，不探 Postgres |
 
 不返回连接器 token 或 quarantine 正文。引擎页可安装、卸载、启用和同步；不自动后台 sync。凭证只读环境变量。
+
+## 连接器：同步范围与前置步骤
+
+安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每种连接器声明 `fields`（含默认值、是否必填、`visible_when`）和 `prerequisites`（环境变量或本机服务）。引擎页按 catalog 渲染表单和就绪状态，不按连接器类型写死 UI。
+
+| 连接器 | 安装要填 | 前置 | 同步范围 |
+| --- | --- | --- | --- |
+| Slack | `channel_id`（频道名可选） | 本机 `REGENIC_SLACK_TOKEN` | 只拉该频道。「全部同步」跑所有已安装实例 |
+| DSH web | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 本机 `dsh web`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标（每路最多 5 页）。填了则只拉那一条 |
+| DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
+
+DSH 安装不接收 token / `command` / `workdir`；`base_url` 必须是回环。
 
 ## 启动
 

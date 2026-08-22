@@ -15,8 +15,15 @@ import {
   engineChip,
   formatTime,
   installationStatusLabel,
-  previewText,
 } from "./format";
+import { groupInboxThreads, latestMessage, type InboxThread } from "./inbox";
+import { MessageBody } from "./MessageBody";
+import {
+  messageRole,
+  readingMessages,
+  roleLabel,
+  threadTitle,
+} from "./message-view";
 import { BrandBadge, BrandLockup } from "./Brand";
 import { EngineIcon, InboxIcon, SettingsIcon } from "./Icons";
 import type {
@@ -47,13 +54,14 @@ export function ConsoleApp() {
       setEngine(nextEngine);
       setError(null);
       setSelectedId((current) => {
-        if (current && nextInbox.some((item) => item.event.id === current)) {
+        const threads = groupInboxThreads(nextInbox);
+        if (current && threads.some((thread) => thread.id === current)) {
           return current;
         }
-        return nextInbox[0]?.event.id ?? null;
+        return threads[0]?.id ?? null;
       });
     } catch {
-      setError("无法连接本机内核");
+      setError("Cannot reach the local kernel");
       setEngine(null);
     }
   };
@@ -68,7 +76,8 @@ export function ConsoleApp() {
     };
   }, []);
 
-  const selected = inbox.find((item) => item.event.id === selectedId) ?? null;
+  const threads = groupInboxThreads(inbox);
+  const selected = threads.find((thread) => thread.id === selectedId) ?? null;
   const chip = engineChip(engine);
 
   return (
@@ -78,21 +87,21 @@ export function ConsoleApp() {
         <div className="titlebar-brand" title="Regenic">
           <BrandBadge />
         </div>
-        <div className="search">搜索（稍后）</div>
+        <div className="search">Search (soon)</div>
         <EngineChip state={chip} />
-        <span className="chip">{engine?.inbox_count ?? inbox.length} 条当前工作</span>
+        <span className="chip">{threads.length} current work</span>
       </header>
-      <nav className="rail" aria-label="主导航">
+      <nav className="rail" aria-label="Main">
         <div className="rail-top">
           <RailButton
-            label="当前工作"
+            label="Current work"
             active={nav === "inbox"}
             onClick={() => setNav("inbox")}
           >
             <InboxIcon />
           </RailButton>
           <RailButton
-            label="引擎"
+            label="Engine"
             active={nav === "engine"}
             onClick={() => setNav("engine")}
           >
@@ -101,7 +110,7 @@ export function ConsoleApp() {
         </div>
         <div className="rail-bottom">
           <RailButton
-            label="设置"
+            label="Settings"
             active={nav === "settings"}
             onClick={() => setNav("settings")}
           >
@@ -112,7 +121,7 @@ export function ConsoleApp() {
       <div className="workspace">
         {nav === "inbox" ? (
           <InboxWorkspace
-            inbox={inbox}
+            threads={threads}
             selected={selected}
             error={error}
             onSelect={setSelectedId}
@@ -155,93 +164,108 @@ function EngineChip({ state }: { state: EngineChipState }) {
   return (
     <span className={`chip ${state}`}>
       <span className="dot" />
-      内核{chipLabel(state)}
+      Kernel {chipLabel(state)}
     </span>
   );
 }
 
 function InboxWorkspace({
-  inbox,
+  threads,
   selected,
   error,
   onSelect,
 }: {
-  inbox: InboxViewItem[];
-  selected: InboxViewItem | null;
+  threads: InboxThread[];
+  selected: InboxThread | null;
   error: string | null;
   onSelect: (id: string) => void;
 }) {
   return (
     <div className="columns">
       <aside className="list">
-        <div className="list-head">当前工作</div>
+        <div className="list-head">Current work</div>
         {error ? <div className="page-empty">{error}</div> : null}
-        {!error && inbox.length === 0 ? (
+        {!error && threads.length === 0 ? (
           <div className="page-empty">
-            还没有进入当前工作的消息。打开引擎页安装并同步连接器。
+            Nothing in current work yet. Open Engine to install and sync a connector.
           </div>
         ) : null}
-        {inbox.map((item) => (
-          <button
-            key={item.event.id}
-            type="button"
-            className={`item${selected?.event.id === item.event.id ? " selected" : ""}`}
-            onClick={() => onSelect(item.event.id)}
-          >
-            <div className="item-meta">
-              <span>{item.event.source}</span>
-              <span>{formatTime(item.event.occurred_at)}</span>
-            </div>
-            <div className="item-title">
-              {previewText(item.body_text, item.event.external_id)}
-            </div>
-            <div className="item-reasons">
-              {item.decision.reason_codes.join(" · ")} · {item.decision.score}
-            </div>
-          </button>
-        ))}
+        {threads.map((thread) => {
+          const latest = latestMessage(thread);
+          return (
+            <button
+              key={thread.id}
+              type="button"
+              className={`item${selected?.id === thread.id ? " selected" : ""}`}
+              onClick={() => onSelect(thread.id)}
+            >
+              <div className="item-meta">
+                <span>{thread.source}</span>
+                <span>{formatTime(latest.event.occurred_at)}</span>
+              </div>
+              <div className="item-title">{threadTitle(thread)}</div>
+              <div className="item-reasons">
+                {thread.messages.length} messages · {thread.label}
+              </div>
+            </button>
+          );
+        })}
       </aside>
       <section className="thread">
         {selected ? (
-          <ThreadPane item={selected} />
+          <ThreadPane thread={selected} />
         ) : (
-          <div className="thread-empty">从左侧选择一条当前工作。</div>
+          <div className="thread-empty">Select a conversation on the left.</div>
         )}
       </section>
     </div>
   );
 }
 
-function ThreadPane({ item }: { item: InboxViewItem }) {
+function ThreadPane({ thread }: { thread: InboxThread }) {
+  const latest = latestMessage(thread);
+  const messages = readingMessages(thread);
   return (
-    <article>
-      <h1>{previewText(item.body_text, item.event.external_id)}</h1>
-      <div className="provenance">
-        <span className="chip data">{item.event.source}</span>
-        <span className="chip">{item.decision.disposition}</span>
-        <span className="chip">{item.decision.reason_codes.join(", ")}</span>
-      </div>
-      <div className="kv">
-        <span>Event</span>
-        <strong>
-          <code>{item.event.id}</code>
-        </strong>
-        <span>external_id</span>
-        <strong>{item.event.external_id}</strong>
-        <span>发生时间</span>
-        <strong>{formatTime(item.event.occurred_at)}</strong>
-        {item.event.content_hash ? (
-          <>
-            <span>Blob</span>
-            <strong>
-              <code>{item.event.content_hash}</code>
-            </strong>
-          </>
-        ) : null}
-      </div>
-      <p className="body-text">
-        {item.body_text ?? "这条消息没有可显示的正文。"}
-      </p>
+    <article className="thread-pane">
+      <header className="thread-head">
+        <h1>{threadTitle(thread)}</h1>
+        <p className="thread-sub">{thread.label}</p>
+        <div className="provenance">
+          <span className="chip data">{thread.source}</span>
+          <span className="chip">{latest.decision.disposition}</span>
+          <span className="chip">{thread.messages.length} messages</span>
+        </div>
+      </header>
+      {messages.length === 0 ? (
+        <p className="muted">This conversation has no displayable messages.</p>
+      ) : (
+        <ol className="thread-messages">
+          {messages.map((item) => {
+            const role = messageRole(item.body_text);
+            const text = item.body_text ?? "";
+            const meta = `${roleLabel(role)} · ${formatTime(item.event.occurred_at)}`;
+            if (role === "system") {
+              return (
+                <li key={item.event.id} className="thread-msg">
+                  <details className="bubble bubble-system">
+                    <summary className="bubble-meta">{meta}</summary>
+                    <MessageBody text={text} />
+                  </details>
+                </li>
+              );
+            }
+            return (
+              <li
+                key={item.event.id}
+                className={`thread-msg bubble bubble-${role}`}
+              >
+                <div className="bubble-meta">{meta}</div>
+                <MessageBody text={text} />
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </article>
   );
 }
@@ -268,7 +292,7 @@ function EnginePage({
       await onChanged();
     } catch (caught) {
       setActionError(
-        caught instanceof Error ? connectorActionError(caught.message) : "操作失败",
+        caught instanceof Error ? connectorActionError(caught.message) : "Action failed",
       );
     } finally {
       setBusyId(null);
@@ -278,8 +302,8 @@ function EnginePage({
   if (error || !engine) {
     return (
       <div className="page">
-        <h1>引擎</h1>
-        <p className="muted">{error ?? "内核未连接。"}</p>
+        <h1>Engine</h1>
+        <p className="muted">{error ?? "Kernel is not connected."}</p>
       </div>
     );
   }
@@ -288,26 +312,28 @@ function EnginePage({
 
   return (
     <div className="page">
-      <h1>引擎</h1>
-      <p className="muted">本机权威库与连接器。在本页点击同步，不会自动后台拉取。</p>
+      <h1>Engine</h1>
+      <p className="muted">
+        Local authority store and connectors. Sync from this page; nothing pulls in the background.
+      </p>
       <section className="card">
-        <h2>内核</h2>
+        <h2>Kernel</h2>
         <div className="kv">
-          <span>状态</span>
-          <strong>{engine.kernel === "running" ? "运行中" : "已停止"}</strong>
+          <span>Status</span>
+          <strong>{engine.kernel === "running" ? "Running" : "Stopped"}</strong>
           <span>org</span>
           <strong>{engine.org_id}</strong>
-          <span>数据库</span>
+          <span>Database</span>
           <strong>
             <code>{engine.database_path ?? "—"}</code>
           </strong>
-          <span>当前工作</span>
+          <span>Current work</span>
           <strong>{engine.inbox_count}</strong>
         </div>
       </section>
       <section className="card">
         <div className="card-head">
-          <h2>连接器管理</h2>
+          <h2>Connectors</h2>
           {syncable.length > 1 ? (
             <button
               type="button"
@@ -326,7 +352,7 @@ function EnginePage({
                     setActionError(
                       caught instanceof Error
                         ? connectorActionError(caught.message)
-                        : "同步失败",
+                        : "Sync failed",
                     );
                   } finally {
                     setSyncingAll(false);
@@ -334,12 +360,12 @@ function EnginePage({
                 })();
               }}
             >
-              {syncingAll ? "同步中…" : "全部同步"}
+              {syncingAll ? "Syncing…" : "Sync all"}
             </button>
           ) : null}
         </div>
         <p className="muted">
-          未安装的连接器也可以在这里安装或卸载。凭证只读本机环境变量。
+          Install or uninstall connectors here. Credentials are read from local environment variables only.
         </p>
         {(engine.catalog ?? []).map((kind) => (
           <ConnectorKind
@@ -378,7 +404,7 @@ function EnginePage({
             onUninstall={(installation) => {
               if (
                 !window.confirm(
-                  `卸载 ${connectorLabel(installation.connector_type)}「${installation.label}」？已入库消息会保留。`,
+                  `Uninstall ${connectorLabel(installation.connector_type)} “${installation.label}”? Ingested messages stay.`,
                 )
               ) {
                 return;
@@ -426,10 +452,15 @@ function ConnectorKind({
           <div className="muted">{kind.description}</div>
           <div className="muted">
             <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
-              {kind.installed ? `已安装 ${kind.instance_count} 个` : "未安装"}
+              {kind.installed
+                ? `${kind.instance_count} installed`
+                : "Not installed"}
             </span>
-            {` · 凭证 ${kind.credential_hint}`}
+            {` · credentials ${kind.credential_hint}`}
           </div>
+          <PrerequisiteList
+            items={visiblePrerequisites(kind, defaultFieldValues(kind))}
+          />
         </div>
         <div className="install-actions">
           <button
@@ -438,7 +469,7 @@ function ConnectorKind({
             disabled={busyId !== null || syncingAll}
             onClick={onOpenInstall}
           >
-            {installing ? "取消" : "安装"}
+            {installing ? "Cancel" : "Install"}
           </button>
         </div>
       </div>
@@ -472,15 +503,14 @@ function ConnectorInstallForm({
   busy: boolean;
   onSubmit: (config: Record<string, string>) => void;
 }) {
-  const [values, setValues] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    for (const field of kind.fields) {
-      if (field.default) {
-        initial[field.key] = field.default;
-      }
-    }
-    return initial;
-  });
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    defaultFieldValues(kind),
+  );
+  const fields = kind.fields.filter((field) =>
+    matchesWhen(field.visible_when, values),
+  );
+  const prerequisites = visiblePrerequisites(kind, values);
+  const blocked = prerequisites.some((item) => item.required && !item.ready);
   return (
     <form
       className="install-form"
@@ -489,7 +519,8 @@ function ConnectorInstallForm({
         onSubmit(values);
       }}
     >
-      {kind.fields.map((field) => (
+      <PrerequisiteList items={prerequisites} />
+      {fields.map((field) => (
         <label key={field.key} className="field">
           <span>
             {field.label}
@@ -526,11 +557,59 @@ function ConnectorInstallForm({
           )}
         </label>
       ))}
-      <button type="submit" className="primary" disabled={busy}>
-        {busy ? "安装中…" : "确认安装"}
+      <button type="submit" className="primary" disabled={busy || blocked}>
+        {busy ? "Installing…" : blocked ? "Finish prerequisites first" : "Install"}
       </button>
     </form>
   );
+}
+
+function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisites"] }) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <ul className="prereq-list">
+      {items.map((item) => (
+        <li key={`${item.kind}:${item.key}`}>
+          <span className={`chip ${item.ready ? "running" : item.required ? "stopped" : ""}`.trim()}>
+            {item.ready ? "Ready" : item.required ? "Needed" : "Optional"}
+          </span>
+          {` ${item.label}`}
+          {item.hint ? ` · ${item.hint}` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function defaultFieldValues(kind: ConnectorCatalogItem): Record<string, string> {
+  const initial: Record<string, string> = {};
+  for (const field of kind.fields) {
+    if (field.default) {
+      initial[field.key] = field.default;
+    }
+  }
+  return initial;
+}
+
+function visiblePrerequisites(
+  kind: ConnectorCatalogItem,
+  values: Record<string, string>,
+): ConnectorCatalogItem["prerequisites"] {
+  return (kind.prerequisites ?? []).filter((item) =>
+    matchesWhen(item.visible_when, values),
+  );
+}
+
+function matchesWhen(
+  when: { field: string; value: string } | undefined,
+  values: Record<string, string>,
+): boolean {
+  if (!when) {
+    return true;
+  }
+  return (values[when.field] ?? "") === when.value;
 }
 
 function ConnectorRow({
@@ -574,10 +653,10 @@ function ConnectorRow({
           disabled={busy || !installation.syncable}
           onClick={onSync}
         >
-          {busy ? "同步中…" : "同步"}
+          {busy ? "Syncing…" : "Sync"}
         </button>
         <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
-          {installation.status === "disabled" ? "启用" : "停用"}
+          {installation.status === "disabled" ? "Enable" : "Disable"}
         </button>
         <button
           type="button"
@@ -585,7 +664,7 @@ function ConnectorRow({
           disabled={busy}
           onClick={onUninstall}
         >
-          卸载
+          Uninstall
         </button>
       </div>
     </div>
@@ -595,11 +674,11 @@ function ConnectorRow({
 function SettingsPage() {
   return (
     <div className="page">
-      <h1>设置</h1>
+      <h1>Settings</h1>
       <BrandLockup size={28} />
       <p className="muted">
-        个人阶段设置稍后。连接器安装、卸载和同步在引擎页。回复发送属于
-        Phase 2。
+        Personal-stage settings come later. Install, uninstall, and sync
+        connectors on the Engine page. Sending replies is Phase 2.
       </p>
     </div>
   );

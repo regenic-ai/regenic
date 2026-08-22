@@ -41,6 +41,11 @@ export interface IngestAttempt {
   error_code?: string;
 }
 
+export interface ConnectorFieldWhen {
+  field: string;
+  value: string;
+}
+
 export interface ConnectorField {
   key: string;
   label: string;
@@ -48,6 +53,17 @@ export interface ConnectorField {
   placeholder?: string;
   default?: string;
   options?: { value: string; label: string }[];
+  visible_when?: ConnectorFieldWhen;
+}
+
+export interface ConnectorPrerequisite {
+  kind: "env" | "local_service";
+  key: string;
+  label: string;
+  required: boolean;
+  hint?: string;
+  ready: boolean;
+  visible_when?: ConnectorFieldWhen;
 }
 
 export interface ConnectorCatalogItem {
@@ -57,7 +73,9 @@ export interface ConnectorCatalogItem {
   credential_hint: string;
   installed: boolean;
   instance_count: number;
+  setup_ready: boolean;
   fields: ConnectorField[];
+  prerequisites: ConnectorPrerequisite[];
 }
 
 export interface EngineInstallationView {
@@ -73,6 +91,7 @@ export interface EngineInstallationView {
 export interface ConnectorSyncView {
   installation_id: string;
   pages_attempted: number;
+  streams_attempted: number;
   accepted_count: number;
   duplicate_count: number;
   quarantined_count: number;

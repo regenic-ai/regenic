@@ -128,6 +128,80 @@ async function startSlackHistoryStub() {
   };
 }
 
+async function startDshWebStub() {
+  const server = createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => {
+      raw += chunk;
+    });
+    request.on("end", () => {
+      const body = raw ? JSON.parse(raw) : {};
+      const method = String(request.url ?? "").includes("session.list")
+        ? "session.list"
+        : "session.history";
+      const sessionId = body.payload?.sessionId;
+      response.setHeader("content-type", "application/json");
+      if (method === "session.list") {
+        response.end(
+          JSON.stringify({
+            type: "server-response",
+            rpcId: body.rpcId,
+            result: {
+              ok: true,
+              value: {
+                items: [{ sessionId: "sess-a" }, { sessionId: "sess-b" }],
+                hasMore: false,
+              },
+            },
+          }),
+        );
+        return;
+      }
+      response.end(
+        JSON.stringify({
+          type: "server-response",
+          rpcId: body.rpcId,
+          result: {
+            ok: true,
+            value: {
+              hasMore: false,
+              events: [
+                {
+                  type: "user/message",
+                  seq: 1,
+                  time: Date.parse("2026-08-21T00:00:00.000Z"),
+                  data: {
+                    content: [
+                      {
+                        type: "text",
+                        text:
+                          sessionId === "sess-a"
+                            ? "Need a decision from session A."
+                            : "Need a decision from session B.",
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        }),
+      );
+    });
+  });
+  await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
   setEnv({
     REGENIC_DATABASE: database,
@@ -186,8 +260,12 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog.length, 2);
       assert.equal(engine.catalog[0].connector_type, "slack-channel");
       assert.equal(engine.catalog[0].installed, true);
+      assert.equal(engine.catalog[0].prerequisites[0].key, "REGENIC_SLACK_TOKEN");
+      assert.equal(engine.catalog[0].prerequisites[0].ready, false);
       assert.equal(engine.catalog[1].connector_type, "dsh-session");
       assert.equal(engine.catalog[1].installed, false);
+      assert.equal(engine.catalog[1].fields[1].key, "session_id");
+      assert.equal(engine.catalog[1].fields[1].required, false);
       assert.equal(JSON.stringify(engine).includes("xoxb"), false);
       assert.equal(JSON.stringify(engine).includes("credentials_ref"), false);
       assert.equal(JSON.stringify(engine).includes("access_token"), false);
@@ -307,6 +385,56 @@ describe("personal /v1/me", () => {
       );
     } finally {
       await app.close();
+    }
+  });
+
+  it("installs DSH without session_id and syncs every listed session", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const dsh = await startDshWebStub();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: dsh.origin },
+        }),
+      });
+      const installation = await created.json();
+      assert.equal(created.status, 201);
+      assert.equal(installation.label, "All sessions");
+      assert.equal(JSON.stringify(installation).includes("credentials"), false);
+
+      const synced = await fetch(
+        `${origin}/v1/me/connectors/${installation.id}/sync`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        },
+      );
+      const body = await synced.json();
+      assert.equal(synced.status, 201);
+      assert.equal(body.streams_attempted, 2);
+      assert.equal(body.accepted_count, 2);
+      assert.equal(body.last_run_status, "completed");
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.equal(
+        inbox.some((item) => item.event.external_id === "sess-a:1"),
+        true,
+      );
+      assert.equal(
+        inbox.some((item) => item.event.external_id === "sess-b:1"),
+        true,
+      );
+    } finally {
+      await app.close();
+      await dsh.close();
     }
   });
 
