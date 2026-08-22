@@ -19,6 +19,29 @@ export interface DshWebRpcClientOptions {
   createId?: () => string;
 }
 
+export type DshPromptPart =
+  | { type: "text"; text: string }
+  | {
+      type: "image";
+      mimeType: string;
+      filename?: string;
+      path?: string;
+      url?: string;
+    }
+  | {
+      type: "file";
+      mimeType: string;
+      filename: string;
+      path?: string;
+      url?: string;
+    };
+
+export interface DshSessionPromptInput {
+  sessionId: string;
+  text?: string;
+  content?: DshPromptPart[];
+}
+
 export interface DshSessionListPage {
   session_ids: string[];
   next_cursor?: string;
@@ -93,14 +116,14 @@ export class DshWebRpcClient {
     return ids;
   }
 
-  async sessionPrompt(input: { sessionId: string; text: string }): Promise<{
+  async sessionPrompt(input: DshSessionPromptInput): Promise<{
     accepted: true;
     rpc_id: string;
   }> {
     const { rpc_id } = await this.call("session.prompt", {
       sessionId: input.sessionId,
       mode: "queue",
-      content: [{ type: "text", text: input.text }],
+      content: promptContent(input),
     });
     return { accepted: true, rpc_id };
   }
@@ -243,6 +266,22 @@ function parseServerResponse(
     typeof error.message === "string" ? error.message : "DSH request failed",
     typeof error.code === "string" ? error.code : undefined,
   );
+}
+
+export function promptContent(input: {
+  text?: string;
+  content?: DshPromptPart[];
+}): DshPromptPart[] {
+  if (input.content && input.content.length > 0) {
+    if (input.content.some((part) => part.type === "text")) {
+      return input.content;
+    }
+    const text = input.text?.trim() ?? "";
+    return text.length > 0
+      ? [{ type: "text", text }, ...input.content]
+      : input.content;
+  }
+  return [{ type: "text", text: input.text ?? "" }];
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

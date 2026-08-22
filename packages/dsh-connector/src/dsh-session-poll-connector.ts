@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import {
   INGEST_SCHEMA_VERSION,
+  channelRecord,
   type ConnectorCursor,
   type IngestBatch,
   type IngestRecord,
+  type MessageDirection,
+  type MessageKind,
   type PollResult,
 } from "@regenic/domain";
 import { DshApiError, type DshHistoryEvent, type DshHistoryPage } from "./dsh-cli-client";
@@ -13,6 +16,8 @@ export const DSH_MAX_HISTORY_PAGES = 100;
 
 export interface DshSurfaceEvent {
   type: "user/message" | "assistant/message";
+  kind: MessageKind;
+  direction: MessageDirection;
   seq: number;
   time: number;
   actor_id: string;
@@ -164,23 +169,16 @@ export class DshSessionPollConnector {
   }
 
   private toRecord(event: DshSurfaceEvent): IngestRecord {
-    return {
-      operation: "create",
-      source: this.source,
+    return channelRecord({
+      channel: this.source,
+      kind: event.kind,
+      direction: event.direction,
       external_id: `${this.options.session_id}:${event.seq}`,
       occurred_at: new Date(event.time).toISOString(),
-      actor: { id: event.actor_id },
-      scope: { id: this.options.session_id },
-      type: "message",
-      content: [
-        {
-          role: "body",
-          media_type: "text/plain",
-          text: event.data.content.map((part) => part.text).join(""),
-        },
-      ],
-      direction_tags: [event.type === "user/message" ? "outbound" : "inbound"],
-    };
+      actor_id: event.actor_id,
+      scope_id: this.options.session_id,
+      text: event.data.content.map((part) => part.text).join(""),
+    });
   }
 
   private deliveryId(
@@ -229,11 +227,8 @@ function assertSeq(name: string, value: number): void {
 }
 
 export function toSurfaceEvent(event: DshHistoryEvent): DshSurfaceEvent[] {
-  if (event.type !== "user/message" && event.type !== "assistant/message") {
-    return [];
-  }
-  const text = extractText(event.data, event.type);
-  if (!text) {
+  const classified = classifyDshHistoryEvent(event);
+  if (!classified) {
     return [];
   }
   if (!Number.isInteger(event.seq) || event.seq < 0 || !Number.isFinite(event.time)) {
@@ -241,14 +236,68 @@ export function toSurfaceEvent(event: DshHistoryEvent): DshSurfaceEvent[] {
   }
   return [
     {
-      type: event.type,
+      type: classified.type,
+      kind: classified.kind,
+      direction: classified.direction,
       seq: event.seq,
       time: event.time,
-      actor_id:
-        event.type === "user/message" ? userActorFromData(event.data) : "assistant",
-      data: { content: [{ type: "text", text }] },
+      actor_id: classified.actor_id,
+      data: { content: [{ type: "text", text: classified.text }] },
     },
   ];
+}
+
+/**
+ * Mirror DeepSeek Harness conversation nodes:
+ * `user/message` + source.kind=user → You;
+ * other `user/message` sources (plugin inject) → Runtime;
+ * `assistant/message` with a text block → DSH Agent.
+ * Reasoning / tool-call-only assistant steps are not a visible reply.
+ */
+export function classifyDshHistoryEvent(event: DshHistoryEvent): {
+  type: "user/message" | "assistant/message";
+  kind: MessageKind;
+  direction: MessageDirection;
+  actor_id: string;
+  text: string;
+} | undefined {
+  if (event.type === "user/message") {
+    const text = extractTextBlocks(userMessageFromData(event.data));
+    if (!text) {
+      return undefined;
+    }
+    const sourceKind = sourceKindFrom(event.data);
+    if (sourceKind && sourceKind !== "user") {
+      return {
+        type: "user/message",
+        kind: "system",
+        direction: "inbound",
+        actor_id: sourceKind,
+        text,
+      };
+    }
+    return {
+      type: "user/message",
+      kind: "user",
+      direction: "outbound",
+      actor_id: sourceKind || "user",
+      text,
+    };
+  }
+  if (event.type === "assistant/message") {
+    const text = extractTextBlocks(assistantMessageFromData(event.data));
+    if (!text) {
+      return undefined;
+    }
+    return {
+      type: "assistant/message",
+      kind: "assistant",
+      direction: "inbound",
+      actor_id: "assistant",
+      text,
+    };
+  }
+  return undefined;
 }
 
 function parseCursor(cursor: ConnectorCursor | null): {
@@ -273,11 +322,15 @@ function formatResumeCursor(afterSeq: number, resumeBefore: number): string {
   return `${afterSeq}:${resumeBefore}`;
 }
 
-function extractText(
-  data: unknown,
-  type: "user/message" | "assistant/message",
-): string | undefined {
-  const message = type === "assistant/message" && isObject(data) ? data.message : data;
+function userMessageFromData(data: unknown): unknown {
+  return data;
+}
+
+function assistantMessageFromData(data: unknown): unknown {
+  return isObject(data) ? data.message : undefined;
+}
+
+function extractTextBlocks(message: unknown): string | undefined {
   if (!isObject(message) || !Array.isArray(message.content)) {
     return undefined;
   }
@@ -288,19 +341,19 @@ function extractText(
         : [],
     )
     .join("");
-  return text.length > 0 ? text : undefined;
+  return text.trim().length > 0 ? text : undefined;
 }
 
-function userActorFromData(data: unknown): string {
+function sourceKindFrom(data: unknown): string | undefined {
   if (
     isObject(data) &&
     isObject(data.source) &&
     typeof data.source.kind === "string" &&
     data.source.kind.trim().length > 0
   ) {
-    return data.source.kind;
+    return data.source.kind.trim();
   }
-  return "user";
+  return undefined;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

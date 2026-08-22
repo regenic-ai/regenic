@@ -6,6 +6,7 @@ const {
   MemoryAuthorityStore,
   MemoryBlobStore,
   MemoryConnectorRuntimeStore,
+  SURFACE_MEDIA_TYPE,
   verifyPollConnectorConformance,
 } = require("@regenic/domain");
 const { DshCliSessionClient, DshSessionPollConnector, MemoryDshRunLog } = require("../dist");
@@ -39,9 +40,108 @@ describe("DshSessionPollConnector", () => {
     assert.equal(result.batch.records[0].external_id, "dsh-main:0");
     assert.equal(result.batch.records[0].actor.id, "user");
     assert.deepEqual(result.batch.records[0].direction_tags, ["outbound"]);
+    assert.equal(surfaceKind(result.batch.records[0]), "user");
     assert.equal(result.batch.records[1].external_id, "dsh-main:1");
     assert.equal(result.batch.records[1].actor.id, "assistant");
     assert.deepEqual(result.batch.records[1].direction_tags, ["inbound"]);
+    assert.equal(surfaceKind(result.batch.records[1]), "assistant");
+  });
+
+  it("maps DSH web history like the harness conversation nodes", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "user/message",
+                seq: 1,
+                time: 1_724_208_000_000,
+                data: {
+                  role: "user",
+                  content: [{ type: "text", text: "Review the form" }],
+                  source: { kind: "user" },
+                },
+              },
+              {
+                type: "user/message",
+                seq: 2,
+                time: 1_724_208_000_100,
+                data: {
+                  role: "user",
+                  content: [{ type: "text", text: "Current runtime context" }],
+                  source: { kind: "plugin", plugin: "dsh-agent-instructions" },
+                },
+              },
+              {
+                type: "assistant/message",
+                seq: 3,
+                time: 1_724_208_000_200,
+                data: {
+                  turn: 1,
+                  step: 1,
+                  message: {
+                    role: "assistant",
+                    content: [
+                      { type: "reasoning", text: "I should inspect the diff." },
+                      { type: "tool-call", id: "call_1", name: "bash", arguments: "{}" },
+                    ],
+                    source: { kind: "model", provider: "deepseek-official", model: "deepseek-v4-flash" },
+                  },
+                },
+              },
+              {
+                type: "assistant/chunk",
+                seq: 4,
+                time: 1_724_208_000_300,
+                data: { turn: 1, step: 2, chunk: { type: "text-delta", text: "ignore" } },
+              },
+              {
+                type: "assistant/message",
+                seq: 5,
+                time: 1_724_208_000_400,
+                data: {
+                  turn: 1,
+                  step: 2,
+                  message: {
+                    role: "assistant",
+                    content: [
+                      { type: "reasoning", text: "Ready to answer." },
+                      { type: "text", text: "The form is ready to ship." },
+                    ],
+                    source: { kind: "model", provider: "deepseek-official", model: "deepseek-v4-flash" },
+                  },
+                },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-web",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        record.actor.id,
+        surfaceKind(record),
+        record.direction_tags,
+      ]),
+      [
+        ["sess-web:1", "user", "user", ["outbound"]],
+        ["sess-web:2", "plugin", "system", ["inbound"]],
+        ["sess-web:5", "assistant", "assistant", ["inbound"]],
+      ],
+    );
+    assert.match(result.batch.records[2].content[0].text, /ready to ship/);
+    assert.doesNotMatch(result.batch.records[2].content[0].text, /Ready to answer/);
   });
 
   it("only accepts events after the committed seq cursor", async () => {
@@ -204,6 +304,13 @@ function pagingHistoryClient(count, pageSize) {
       };
     },
   };
+}
+
+function surfaceKind(record) {
+  const part = record.content.find(
+    (entry) => entry.role === "metadata" && entry.media_type === SURFACE_MEDIA_TYPE,
+  );
+  return JSON.parse(part.text).kind;
 }
 
 function historyEvent(seq) {

@@ -18,6 +18,24 @@ export function formatTime(iso: string): string {
   }).format(date);
 }
 
+export function formatChatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return new Intl.DateTimeFormat(
+    "en-US",
+    sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" },
+  ).format(date);
+}
+
 export function engineChip(engine: PersonalEngineView | null): EngineChipState {
   if (!engine || engine.kernel === "stopped") {
     return "stopped";

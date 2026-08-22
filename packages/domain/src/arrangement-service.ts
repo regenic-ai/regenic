@@ -1,5 +1,6 @@
 import { arrangeMessage, type ArrangementDecision } from "./arrangement";
 import type { EventRecord, IngestRecord } from "./ingestion";
+import { surfaceFromParts } from "./message-contract";
 
 export interface ArrangementStore {
   putDisposition(decision: ArrangementDecision): Promise<void>;
@@ -16,6 +17,7 @@ export class ArrangementService {
     const decision = arrangeMessage({
       event,
       type: record.type,
+      kind: surfaceFromParts(record.content ?? [])?.kind,
       text: bodyText(record),
       weight_hints: record.weight_hints,
       now,

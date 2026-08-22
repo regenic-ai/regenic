@@ -59,6 +59,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 | `blobs` | `BlobStore` |
 | `ingest` | 采集服务（唯一写 Event / Blob 的入口） |
 | `connectors` | 已挂载的 `ChannelConnector` 注册表 |
+| `egress` | 已挂载的 `EgressAdapter` 注册表 |
 
 **内核**
 
@@ -75,6 +76,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 | 种类 | 职责 | 禁止 |
 | --- | --- | --- |
 | 连接器（`ChannelConnector`） | 把来源读成 `IngestBatch` | 直写 Event、Blob、ACL、身份 |
+| 渠道驱动（`ChannelDriver`） | 安装、解析 pull 流、按线程绑定 egress、声明能否回写 | 在 API / UI 里按渠道名打补丁 |
 | 发送（`EgressAdapter`） | 把回复写回原渠道 | 自授权限或跳过审批 |
 | 排序 / 分层 | D0 之后的打分（耐久、敏感、「该知道」）。D0 过滤 / 分层在内核 | 用个人标签冒充组织事实 |
 | 调度策略 | 排序 + 标准 + 习惯 → 不进入当前工作 \| pending \| defer | 没有发送授权就发送 |
@@ -84,6 +86,21 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 每条缝都有定义、提供方和消费者。换一个连接器，不得分叉内核。以后加来源是插件，不是重写产品。
 
 连接器遵守[采集架构](INGESTION_ARCHITECTURE.md)：它们翻译；采集服务负责校验、鉴权、去重、存储与审计。
+
+## 消息契约（内核定，连接器实现）
+
+收发形状由 `@regenic/domain` 的 `message-contract` 定死。连接器只把渠道协议译进/译出这份契约，不在桌面或某个连接器里各写一套判断。
+
+| 由内核规定 | 由连接器实现 |
+| --- | --- |
+| 渠道 id / 展示名（`dsh` → DSH，`slack` → Slack） | 把自己的来源写成该 id |
+| 展示角色 `user` / `assistant` / `system` | 把原生事件映射到角色。DSH：`user/message` 且 `source.kind=user` → user（You）；`assistant/message` 的 `text` 块 → assistant（DSH Agent）；插件注入的 `user/message` → system。Slack 真人 → user |
+| 方向 `inbound` / `outbound` | 读进来是 inbound；人从控制台发出是 outbound |
+| 发送信封：`ContentPart[]`（`body` + `attachment`） | `EgressAdapter.send` 译回渠道（DSH `session.prompt`，Slack 以后 `chat.postMessage`） |
+
+连接器入库必须走 `channelRecord()`，这样正文旁边会带上 surface 元数据。控制台按这份 surface 显示渠道标签和头像，不再猜正文。旧事件没有 surface 时，只用内核的 `inferLegacySurface()` 兜底：`:out:` 视为本地出站，其余视为入站 assistant，不再按正文或 `source === "dsh"` 猜格式。同一会话里，控制台发出的本地出站与渠道 history 回声的同一句话只保留一条 Event。
+
+回复、follow 与 pull 走 `ChannelDriverRegistry`：API 只做 `installation + thread → driver.resolveStreams / bindEgress → egress.send(ContentPart[])`。桌面只问入箱里的 `can_send`，不问「是不是 DSH」。新渠道挂上 driver，不要改内核或控制台的渠道分支。
 
 ## 扩展点
 

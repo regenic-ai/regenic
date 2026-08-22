@@ -4,6 +4,8 @@
  */
 
 export * from "./ingestion";
+export * from "./channel-driver";
+export * from "./message-contract";
 export * from "./ingestion-schema";
 export * from "./canonicalization";
 export * from "./arrangement";

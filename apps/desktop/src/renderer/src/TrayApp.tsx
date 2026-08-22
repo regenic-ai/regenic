@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { BrandLockup } from "./Brand";
 import { fetchEngine, fetchInbox } from "./api";
-import { chipLabel, engineChip, formatTime } from "./format";
+import { chipLabel, engineChip, formatChatTime } from "./format";
 import { groupInboxThreads, latestMessage } from "./inbox";
 import { threadTitle } from "./message-view";
 import type { InboxViewItem, PersonalEngineView } from "./types";
 
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 
 export function TrayApp() {
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
@@ -72,11 +72,16 @@ export function TrayApp() {
             const latest = latestMessage(thread);
             return (
               <div className="item" key={thread.id}>
-                <div className="item-meta">
-                  <span>{thread.source}</span>
-                  <span>{formatTime(latest.event.occurred_at)}</span>
+                <div className="item-copy">
+                  <div className="item-meta">
+                    <span className={`channel-tag channel-${thread.channel}`}>
+                      {thread.channel_label}
+                    </span>
+                    <span className="item-title">{threadTitle(thread)}</span>
+                    <span>{formatChatTime(latest.event.occurred_at)}</span>
+                  </div>
+                  <div className="item-reasons">{thread.label}</div>
                 </div>
-                <div className="item-title">{threadTitle(thread)}</div>
               </div>
             );
           })

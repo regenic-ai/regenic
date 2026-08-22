@@ -88,11 +88,13 @@ function countWorkThreads(
     if (!event?.id || !event.source || !event.external_id) {
       continue;
     }
-    const colon = event.external_id.lastIndexOf(":");
+    const cut = event.external_id.indexOf(":out:");
+    const withoutOut = cut >= 0 ? event.external_id.slice(0, cut) : event.external_id;
+    const colon = withoutOut.lastIndexOf(":");
     ids.add(
       colon > 0
-        ? `${event.source}:${event.external_id.slice(0, colon)}`
-        : `${event.source}:${event.id}`,
+        ? `${event.source}:${withoutOut.slice(0, colon)}`
+        : `${event.source}:${withoutOut || event.id}`,
     );
   }
   return ids.size;
@@ -145,6 +147,9 @@ function sidecarEnv(
   env.REGENIC_ORG = process.env.REGENIC_ORG ?? "local-owner";
   env.PORT = String(port);
   env.LISTEN_HOST = "127.0.0.1";
+  if (!Number(env.REGENIC_CONNECTOR_PULL_MS)) {
+    env.REGENIC_CONNECTOR_PULL_MS = "3000";
+  }
   delete env.REGENIC_PERSONAL_API;
   return env;
 }

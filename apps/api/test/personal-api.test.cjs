@@ -7,7 +7,7 @@ const { afterEach, describe, it } = require("node:test");
 const { NestFactory } = require("@nestjs/core");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService } = require("@regenic/domain");
+const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
 const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
 const { AppModule } = require("../dist/app.module");
 const { decodeBodyText } = require("../dist/inbox-body");
@@ -129,6 +129,9 @@ async function startSlackHistoryStub() {
 }
 
 async function startDshWebStub() {
+  const prompts = [];
+  const echoes = new Map();
+  const extras = new Map();
   const server = createServer((request, response) => {
     let raw = "";
     request.on("data", (chunk) => {
@@ -136,12 +139,29 @@ async function startDshWebStub() {
     });
     request.on("end", () => {
       const body = raw ? JSON.parse(raw) : {};
-      const method = String(request.url ?? "").includes("session.list")
-        ? "session.list"
-        : "session.history";
+      const url = String(request.url ?? "");
       const sessionId = body.payload?.sessionId;
       response.setHeader("content-type", "application/json");
-      if (method === "session.list") {
+      if (url.includes("session.prompt")) {
+        prompts.push(body);
+        const text = (body.payload?.content ?? [])
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("");
+        echoes.set(sessionId, {
+          text,
+          time: Date.now(),
+        });
+        response.end(
+          JSON.stringify({
+            type: "server-response",
+            rpcId: body.rpcId,
+            result: { ok: true, value: { accepted: true } },
+          }),
+        );
+        return;
+      }
+      if (url.includes("session.list")) {
         response.end(
           JSON.stringify({
             type: "server-response",
@@ -157,6 +177,48 @@ async function startDshWebStub() {
         );
         return;
       }
+      const echo = echoes.get(sessionId);
+      const events = [
+        {
+          type: "user/message",
+          seq: 1,
+          time: Date.parse("2026-08-21T00:00:00.000Z"),
+          data: {
+            content: [
+              {
+                type: "text",
+                text:
+                  sessionId === "sess-a"
+                    ? "Need a decision from session A."
+                    : "Need a decision from session B.",
+              },
+            ],
+            source: { kind: "user" },
+          },
+        },
+      ];
+      if (echo) {
+        events.push(
+          {
+            type: "user/message",
+            seq: 2,
+            time: echo.time,
+            data: {
+              content: [{ type: "text", text: echo.text }],
+              source: { kind: "user" },
+            },
+          },
+          {
+            type: "assistant/message",
+            seq: 3,
+            time: echo.time + 1,
+            data: {
+              message: { content: [{ type: "text", text: "pong" }] },
+            },
+          },
+        );
+      }
+      events.push(...(extras.get(sessionId) ?? []));
       response.end(
         JSON.stringify({
           type: "server-response",
@@ -165,24 +227,7 @@ async function startDshWebStub() {
             ok: true,
             value: {
               hasMore: false,
-              events: [
-                {
-                  type: "user/message",
-                  seq: 1,
-                  time: Date.parse("2026-08-21T00:00:00.000Z"),
-                  data: {
-                    content: [
-                      {
-                        type: "text",
-                        text:
-                          sessionId === "sess-a"
-                            ? "Need a decision from session A."
-                            : "Need a decision from session B.",
-                      },
-                    ],
-                  },
-                },
-              ],
+              events,
             },
           },
         }),
@@ -195,11 +240,30 @@ async function startDshWebStub() {
   const address = server.address();
   return {
     origin: `http://127.0.0.1:${address.port}`,
+    prompts,
+    push(sessionId, event) {
+      const current = extras.get(sessionId) ?? [];
+      current.push(event);
+      extras.set(sessionId, current);
+    },
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
+}
+
+async function waitUntil(label, probe, timeoutMs = 4000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await probe()) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
+  }
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
@@ -209,6 +273,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     REGENIC_ORG: "local-owner",
     PORT: "4370",
     LISTEN_HOST: "127.0.0.1",
+    REGENIC_CONNECTOR_PULL_MS: "0",
     ...extraEnv,
   });
   const app = await NestFactory.create(AppModule, { logger: false });
@@ -231,8 +296,106 @@ describe("personal /v1/me", () => {
       assert.equal(inbox[0].event.external_id, "ask-1");
       assert.equal(inbox[0].decision.disposition, "current_work");
       assert.equal(inbox[0].body_text, "Please confirm the release.");
+      assert.equal(inbox[0].can_send, false);
       assert.equal(item.event.id, eventId);
       assert.equal(item.body_text, "Please confirm the release.");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps a short DSH agent reply in the same conversation as the prompt", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:7",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "user",
+          scope_id: "session-x",
+          text: "只用一句话回复：pong",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-x:49",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "assistant",
+          scope_id: "session-x",
+          text: "pong",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const kinds = inbox
+        .map((item) => [item.event.external_id, item.kind, item.body_text])
+        .sort((left, right) => left[0].localeCompare(right[0]));
+      assert.deepEqual(kinds, [
+        ["session-x:49", "assistant", "pong"],
+        ["session-x:7", "user", "只用一句话回复：pong"],
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("includes pending siblings once a conversation is already current work", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-2",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-y:1",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor: { id: "user" },
+          scope: { id: "session-y" },
+          type: "message",
+          content: [{ role: "body", media_type: "text/plain", text: "Please confirm the release." }],
+        },
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-y:2",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor: { id: "assistant" },
+          scope: { id: "session-y" },
+          type: "message",
+          content: [{ role: "body", media_type: "text/plain", text: "later" }],
+        },
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const texts = inbox.map((item) => item.body_text).sort();
+      assert.deepEqual(texts, ["Please confirm the release.", "later"]);
     } finally {
       await app.close();
     }
@@ -252,6 +415,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.org_id, "local-owner");
       assert.equal(engine.database_path, database);
       assert.equal(engine.inbox_count, 1);
+      assert.equal(engine.pull.interval_ms, 0);
       assert.equal(engine.installations[0].id, "slack-1");
       assert.equal(engine.installations[0].connector_type, "slack-channel");
       assert.equal(engine.installations[0].label, "C123");
@@ -296,6 +460,13 @@ describe("personal /v1/me", () => {
       });
       assert.equal(missing.status, 404);
 
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const slackItem = inbox.find(
+        (item) => item.event.external_id === "C123:1710000000.000100",
+      );
+      assert.equal(Boolean(slackItem), true);
+      assert.equal(slackItem.can_send, false);
+
       const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -305,16 +476,9 @@ describe("personal /v1/me", () => {
       assert.equal(synced.status, 201);
       assert.equal(body.installation_id, "slack-1");
       assert.equal(body.last_run_status, "completed");
-      assert.equal(body.accepted_count, 1);
       assert.equal(body.installation.label, "C123");
       assert.equal(JSON.stringify(body).includes("xoxb-test-token"), false);
       assert.equal(JSON.stringify(body).includes("credentials_ref"), false);
-
-      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
-      assert.equal(
-        inbox.some((item) => item.event.external_id === "C123:1710000000.000100"),
-        true,
-      );
 
       const disabled = await fetch(`${origin}/v1/me/connectors/slack-1/disable`, {
         method: "POST",
@@ -409,6 +573,14 @@ describe("personal /v1/me", () => {
       assert.equal(installation.label, "All sessions");
       assert.equal(JSON.stringify(installation).includes("credentials"), false);
 
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const sessionA = inbox.find((item) => item.event.external_id === "sess-a:1");
+      const sessionB = inbox.find((item) => item.event.external_id === "sess-b:1");
+      assert.equal(Boolean(sessionA), true);
+      assert.equal(Boolean(sessionB), true);
+      assert.equal(sessionA.can_send, true);
+      assert.equal(sessionB.can_send, true);
+
       const synced = await fetch(
         `${origin}/v1/me/connectors/${installation.id}/sync`,
         {
@@ -420,17 +592,145 @@ describe("personal /v1/me", () => {
       const body = await synced.json();
       assert.equal(synced.status, 201);
       assert.equal(body.streams_attempted, 2);
-      assert.equal(body.accepted_count, 2);
       assert.equal(body.last_run_status, "completed");
+    } finally {
+      await app.close();
+      await dsh.close();
+    }
+  });
 
-      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+  it("pulls a later DSH message on the live interval without a manual sync", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const dsh = await startDshWebStub();
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CONNECTOR_PULL_MS: "1000",
+    });
+    try {
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: dsh.origin },
+        }),
+      });
+      assert.equal(created.status, 201);
+      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      assert.equal(engine.pull.interval_ms, 1000);
+
+      dsh.push("sess-a", {
+        type: "user/message",
+        seq: 10,
+        time: Date.now(),
+        data: {
+          content: [{ type: "text", text: "Late arriving work from DSH." }],
+          source: { kind: "user" },
+        },
+      });
+
+      await waitUntil("live pull of late DSH message", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+        return inbox.some((item) =>
+          String(item.body_text ?? "").includes("Late arriving work from DSH."),
+        );
+      });
+    } finally {
+      await app.close();
+      await dsh.close();
+    }
+  });
+
+  it("sends a DSH reply with markdown and an image", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const dsh = await startDshWebStub();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: dsh.origin },
+        }),
+      });
+      const createdBody = await created.json();
+      assert.equal(created.status, 201, JSON.stringify(createdBody));
+
+      const empty = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ thread_id: "dsh:sess-a" }),
+      });
+      assert.equal(empty.status, 400);
+
+      const slack = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "slack:C123",
+          text: "Please take a look",
+        }),
+      });
+      assert.equal(slack.status, 501);
+
+      const replied = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:sess-a",
+          text: "Please review **this** screenshot.",
+          attachments: [
+            {
+              filename: "shot.png",
+              media_type: "image/png",
+              data_base64:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+            },
+          ],
+        }),
+      });
+      const body = await replied.json();
+      assert.equal(replied.status, 201, JSON.stringify(body));
+      assert.equal(body.accepted, true);
+      assert.equal(body.thread_id, "dsh:sess-a");
+      assert.match(body.item.body_text, /Please review \*\*this\*\* screenshot/);
+      assert.equal(body.item.direction, "outbound");
+      assert.equal(body.item.can_send, true);
+      assert.equal(body.item.attachments[0].filename, "shot.png");
+      assert.equal(dsh.prompts.length, 1);
+      assert.equal(dsh.prompts[0].method, "session.prompt");
+      assert.equal(dsh.prompts[0].payload.sessionId, "sess-a");
       assert.equal(
-        inbox.some((item) => item.event.external_id === "sess-a:1"),
+        dsh.prompts[0].payload.content.some((part) => part.type === "image"),
         true,
       );
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const userTexts = inbox
+        .filter((item) => item.kind === "user" && item.body_text.includes("Please review"))
+        .map((item) => item.event.external_id);
+      assert.equal(userTexts.length, 1);
+      assert.match(userTexts[0], /^sess-a:out:/);
       assert.equal(
-        inbox.some((item) => item.event.external_id === "sess-b:1"),
+        inbox.some((item) => item.kind === "assistant" && item.body_text === "pong"),
         true,
+      );
+
+      const synced = await fetch(
+        `${origin}/v1/me/connectors/${createdBody.id}/sync`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+      );
+      assert.equal(synced.status, 201);
+      const after = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.equal(
+        after.filter((item) => item.kind === "user" && item.body_text.includes("Please review")).length,
+        1,
       );
     } finally {
       await app.close();

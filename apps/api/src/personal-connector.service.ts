@@ -1,33 +1,34 @@
 import { randomUUID } from "node:crypto";
-import { Injectable } from "@nestjs/common";
 import {
+  Injectable,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
+} from "@nestjs/common";
+import {
+  ChannelDriverError,
+  ChannelDriverRegistry,
   ConnectorRunner,
-  type ChannelConnector,
+  conversationId,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
   type ConnectorRuntimeStore,
-  type JsonValue,
-  type NewConnectorInstallation,
+  type ConnectorStream,
+  type ConversationThread,
 } from "@regenic/domain";
-import {
-  DshSessionPollConnector,
-  DshWebRpcClient,
-  dshSessionKey,
-  dshSessionPlugin,
-  dshSessionPluginConfigFromInstallation,
-} from "@regenic/dsh-connector";
 import type { Host } from "@regenic/plugin-host";
-import { slackChannelPlugin } from "@regenic/slack-connector";
 import {
-  configString,
-  isSyncableType,
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
+import { PersonalInboxService } from "./personal-inbox.service";
+import { pullStatus } from "./personal-pull-status";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 const DEFAULT_MAX_PAGES = 1;
 const MAX_PAGES_CAP = 5;
+const FOLLOW_TRIES = 6;
+const FOLLOW_WAIT_MS = 750;
+const DEFAULT_PULL_MS = 3_000;
 const LEASE_MS = 60_000;
 
 export class PersonalConnectorError extends Error {
@@ -58,10 +59,37 @@ export interface ConnectorSyncView {
 }
 
 @Injectable()
-export class PersonalConnectorService {
+export class PersonalConnectorService
+  implements OnApplicationBootstrap, OnModuleDestroy
+{
   private readonly inflight = new Map<string, Promise<ConnectorSyncView>>();
+  private readonly following = new Set<string>();
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private ticking = false;
 
-  constructor(private readonly runtime: PersonalRuntimeService) {}
+  constructor(
+    private readonly runtime: PersonalRuntimeService,
+    private readonly inbox: PersonalInboxService,
+    private readonly drivers: ChannelDriverRegistry,
+  ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    const pullMs = pullIntervalMs();
+    pullStatus.interval_ms = pullMs;
+    if (pullMs > 0) {
+      this.timer = setInterval(() => {
+        void this.tick();
+      }, pullMs);
+    }
+    await this.tick();
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
 
   async sync(
     installationId: string,
@@ -69,11 +97,7 @@ export class PersonalConnectorService {
   ): Promise<ConnectorSyncView> {
     const existing = this.inflight.get(installationId);
     if (existing) {
-      throw new PersonalConnectorError(
-        "busy",
-        "This connector is already syncing",
-        409,
-      );
+      return existing;
     }
     const job = this.runSync(installationId, clampPages(maxPages)).finally(() => {
       this.inflight.delete(installationId);
@@ -82,13 +106,83 @@ export class PersonalConnectorService {
     return job;
   }
 
+  async followThread(
+    installationId: string,
+    thread: ConversationThread,
+  ): Promise<void> {
+    this.following.add(installationId);
+    try {
+      await this.followThreadOnce(installationId, thread);
+    } finally {
+      this.following.delete(installationId);
+    }
+  }
+
+  private async followThreadOnce(
+    installationId: string,
+    thread: ConversationThread,
+  ): Promise<void> {
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installation = await this.requireInstallation(store, installationId);
+    const driver = this.drivers.get(installation.connector_type);
+    if (!driver || installation.status !== "enabled") {
+      return;
+    }
+    let stream: ConnectorStream;
+    try {
+      stream = await driver.resolveThreadStream(
+        installation,
+        thread,
+        host,
+        process.env,
+      );
+    } catch (error) {
+      throw wrapDriverError(error, "sync_failed");
+    }
+    const threadId = `${thread.source}:${thread.target}`;
+    const known = await this.assistantIds(threadId);
+    for (let attempt = 0; attempt < FOLLOW_TRIES; attempt += 1) {
+      try {
+        await pollStream(host, store, installation, stream, 2);
+        const seen = await this.assistantIds(threadId);
+        if ([...seen].some((id) => !known.has(id))) {
+          return;
+        }
+      } catch (error) {
+        const wrapped = wrapDriverError(error, "sync_failed");
+        if (wrapped.code !== "lease_unavailable") {
+          throw wrapped;
+        }
+      }
+      if (attempt < FOLLOW_TRIES - 1) {
+        await delay(FOLLOW_WAIT_MS);
+      }
+    }
+  }
+
+  private async assistantIds(threadId: string): Promise<Set<string>> {
+    const items = await this.inbox.listInbox();
+    return new Set(
+      items
+        .filter(
+          (item) =>
+            item.kind === "assistant" &&
+            conversationId(item.event.source, item.event.external_id, item.event.id) ===
+              threadId,
+        )
+        .map((item) => item.event.id),
+    );
+  }
+
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
     const store = this.runtime.requireHost().get("authority");
     const now = new Date().toISOString();
     const created = await store.createInstallation(
       this.buildInstallation(input, now),
     );
-    return viewOf(store, created);
+    await this.catchUp(created.id);
+    return this.viewOf(store, created);
   }
 
   async uninstall(installationId: string): Promise<{ id: string; removed: true }> {
@@ -127,7 +221,47 @@ export class PersonalConnectorService {
         404,
       );
     }
-    return viewOf(store, updated);
+    if (status === "enabled") {
+      await this.catchUp(updated.id);
+    }
+    return this.viewOf(store, updated);
+  }
+
+  private async tick(): Promise<void> {
+    if (this.ticking || !this.runtime.isReady()) {
+      return;
+    }
+    this.ticking = true;
+    try {
+      const store = this.runtime.requireHost().get("authority");
+      const installations = await store.listInstallations(this.runtime.orgId());
+      for (const installation of installations) {
+        if (
+          installation.status !== "enabled" ||
+          !this.drivers.has(installation.connector_type) ||
+          this.inflight.has(installation.id)
+        ) {
+          continue;
+        }
+        await this.catchUp(installation.id);
+      }
+      pullStatus.last_tick_at = new Date().toISOString();
+    } catch (error) {
+      pullStatus.last_error =
+        error instanceof Error ? error.message : "Connector pull failed";
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async catchUp(installationId: string): Promise<void> {
+    try {
+      await this.sync(installationId);
+      pullStatus.last_error = null;
+    } catch (error) {
+      pullStatus.last_error =
+        error instanceof Error ? error.message : "Connector pull failed";
+    }
   }
 
   private async runSync(
@@ -144,7 +278,8 @@ export class PersonalConnectorService {
         409,
       );
     }
-    if (!isSyncableType(installation.connector_type)) {
+    const driver = this.drivers.get(installation.connector_type);
+    if (!driver) {
       throw new PersonalConnectorError(
         "unsupported_connector",
         `Connector type cannot be synced: ${installation.connector_type}`,
@@ -152,7 +287,11 @@ export class PersonalConnectorService {
       );
     }
     try {
-      const streams = await resolveSyncStreams(host, installation);
+      const streams = await driver.resolveStreams(
+        installation,
+        host,
+        process.env,
+      );
       const runs: ConnectorPollRunResult[] = [];
       for (const stream of streams) {
         runs.push(
@@ -166,62 +305,35 @@ export class PersonalConnectorService {
         streams_attempted: streams.length,
         ...summarizeRuns(runs),
         last_run_status: last?.status ?? "idle",
-        installation: await viewOf(store, installation),
+        installation: await this.viewOf(store, installation),
       };
     } catch (error) {
-      if (error instanceof PersonalConnectorError) {
-        throw error;
-      }
-      const message =
-        error instanceof Error ? error.message : "Connector sync failed";
-      throw new PersonalConnectorError("sync_failed", message, 502);
+      throw wrapDriverError(error, "sync_failed");
     }
   }
 
   private buildInstallation(
     input: ConnectorInstallInput,
     now: string,
-  ): NewConnectorInstallation {
-    const id = randomUUID();
-    if (input.connector_type === "slack-channel") {
-      const channelId = configString(input.config ?? {}, "channel_id");
-      if (!channelId) {
-        throw new PersonalConnectorError(
-          "invalid_config",
-          "Slack install requires channel_id",
-          400,
-        );
-      }
-      const channelName = configString(input.config ?? {}, "channel_name");
-      const config: Record<string, JsonValue> = { channel_id: channelId };
-      if (channelName) {
-        config.channel_name = channelName;
-      }
-      return {
-        id,
-        org_id: this.runtime.orgId(),
-        connector_type: "slack-channel",
-        status: "enabled",
-        config,
-        credentials_ref: "env:REGENIC_SLACK_TOKEN",
-        created_at: now,
-      };
+  ) {
+    const driver = this.drivers.get(input.connector_type);
+    if (!driver) {
+      throw new PersonalConnectorError(
+        "unsupported_connector",
+        `Connector type cannot be installed: ${input.connector_type}`,
+        400,
+      );
     }
-    if (input.connector_type === "dsh-session") {
-      return {
-        id,
+    try {
+      return driver.install({
+        id: randomUUID(),
         org_id: this.runtime.orgId(),
-        connector_type: "dsh-session",
-        status: "enabled",
-        config: dshInstallConfig(input.config ?? {}, id),
-        created_at: now,
-      };
+        config: input.config ?? {},
+        now,
+      });
+    } catch (error) {
+      throw wrapDriverError(error, "invalid_config");
     }
-    throw new PersonalConnectorError(
-      "unsupported_connector",
-      `Connector type cannot be installed: ${input.connector_type}`,
-      400,
-    );
   }
 
   private async requireInstallation(
@@ -238,74 +350,61 @@ export class PersonalConnectorService {
     }
     return installation;
   }
-}
 
-interface SyncStream {
-  stream_key: string;
-  connector: Pick<ChannelConnector, "poll">;
-}
-
-async function resolveSyncStreams(
-  host: Host,
-  installation: ConnectorInstallation,
-): Promise<SyncStream[]> {
-  if (installation.connector_type === "slack-channel") {
-    const streamKey = await mountConnector(host, installation);
-    const connector = host.get("connectors").get(installation.id);
-    if (!connector) {
-      throw new PersonalConnectorError(
-        "sync_failed",
-        "Connector failed to mount",
-        502,
-      );
-    }
-    return [{ stream_key: streamKey, connector }];
-  }
-
-  const transport = configString(installation.config, "transport") ?? "web";
-  if (transport === "cli") {
-    const streamKey = await mountConnector(host, installation);
-    const connector = host.get("connectors").get(installation.id);
-    if (!connector) {
-      throw new PersonalConnectorError(
-        "sync_failed",
-        "Connector failed to mount",
-        502,
-      );
-    }
-    return [{ stream_key: streamKey, connector }];
-  }
-
-  const client = new DshWebRpcClient({
-    base_url: loopbackHttpUrl(
-      configString(installation.config, "base_url") ?? "http://127.0.0.1:3080",
-    ),
-    access_token: process.env.REGENIC_DSH_TOKEN,
-  });
-  const pinned = configString(installation.config, "session_id");
-  const sessionIds = pinned ? [pinned] : await client.listAllSessionIds();
-  if (sessionIds.length === 0) {
-    throw new PersonalConnectorError(
-      "sync_failed",
-      "DSH web has no sessions to sync",
-      502,
+  private async viewOf(
+    store: ConnectorRuntimeStore,
+    installation: ConnectorInstallation,
+  ): Promise<EngineInstallationView> {
+    const attempts = await store.listAttempts(installation.id);
+    return toInstallationView(
+      installation,
+      attempts[0] ?? null,
+      this.drivers,
     );
   }
-  return sessionIds.map((sessionId) => ({
-    stream_key: `session:${sessionId}`,
-    connector: new DshSessionPollConnector(client, {
-      connector_id: installation.id,
-      org_id: installation.org_id,
-      session_id: sessionId,
-    }),
-  }));
+}
+
+export function wrapDriverError(
+  error: unknown,
+  fallback: "sync_failed" | "send_failed" | "invalid_config",
+): PersonalConnectorError {
+  if (error instanceof PersonalConnectorError) {
+    return error;
+  }
+  if (error instanceof ChannelDriverError) {
+    return new PersonalConnectorError(
+      error.code,
+      error.message,
+      httpStatusFor(error.code),
+    );
+  }
+  const message =
+    error instanceof Error ? error.message : "Connector operation failed";
+  return new PersonalConnectorError(fallback, message, httpStatusFor(fallback));
+}
+
+function httpStatusFor(code: string): number {
+  switch (code) {
+    case "invalid_config":
+    case "missing_credentials":
+      return 400;
+    case "unsupported_channel":
+      return 501;
+    case "no_sender":
+      return 404;
+    case "disabled":
+    case "lease_unavailable":
+      return 409;
+    default:
+      return 502;
+  }
 }
 
 async function pollStream(
   host: Host,
   store: ConnectorRuntimeStore,
   installation: ConnectorInstallation,
-  stream: SyncStream,
+  stream: ConnectorStream,
   maxPages: number,
 ): Promise<ConnectorPollRunResult[]> {
   const runner = new ConnectorRunner(stream.connector, host.get("ingest"), store);
@@ -337,136 +436,18 @@ async function pollStream(
   return runs;
 }
 
-async function mountConnector(
-  host: Host,
-  installation: ConnectorInstallation,
-): Promise<string> {
-  if (installation.connector_type === "slack-channel") {
-    const channelId = configString(installation.config, "channel_id");
-    if (!channelId) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        "Slack installation is missing channel_id",
-        400,
-      );
-    }
-    if (!host.get("connectors").get(installation.id)) {
-      const tokenEnv = slackTokenEnv(installation.credentials_ref);
-      const token = process.env[tokenEnv];
-      if (!token) {
-        throw new PersonalConnectorError(
-          "missing_credentials",
-          `Slack access token is missing from ${tokenEnv}`,
-          400,
-        );
-      }
-      await host.plugin(slackChannelPlugin, {
-        installation_id: installation.id,
-        org_id: installation.org_id,
-        channel_id: channelId,
-        channel_name: configString(installation.config, "channel_name"),
-        access_token: token,
-        endpoint: process.env.REGENIC_SLACK_API_ENDPOINT,
-      });
-    }
-    return `channel:${channelId}`;
+function pullIntervalMs(): number {
+  const raw = Number(process.env.REGENIC_CONNECTOR_PULL_MS ?? DEFAULT_PULL_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 0;
   }
-
-  if (!host.get("connectors").get(installation.id)) {
-    await host.plugin(
-      dshSessionPlugin,
-      {
-        ...dshSessionPluginConfigFromInstallation(installation, {
-          env: process.env,
-          access_token: process.env.REGENIC_DSH_TOKEN,
-        }),
-        command: "dsh",
-        workdir: undefined,
-        base_url: loopbackHttpUrl(
-          configString(installation.config, "base_url") ??
-            "http://127.0.0.1:3080",
-        ),
-      },
-    );
-  }
-  return `session:${dshSessionKey(installation.config, installation.id)}`;
+  return Math.max(1_000, Math.min(raw, 60_000));
 }
 
-async function viewOf(
-  store: ConnectorRuntimeStore,
-  installation: ConnectorInstallation,
-): Promise<EngineInstallationView> {
-  const attempts = await store.listAttempts(installation.id);
-  return toInstallationView(installation, attempts[0] ?? null);
-}
-
-function slackTokenEnv(credentialsRef: string | undefined): string {
-  if (!credentialsRef || credentialsRef === "env:REGENIC_SLACK_TOKEN") {
-    return "REGENIC_SLACK_TOKEN";
-  }
-  throw new PersonalConnectorError(
-    "invalid_config",
-    "Slack credentials_ref must be env:REGENIC_SLACK_TOKEN",
-    400,
-  );
-}
-
-function dshInstallConfig(
-  input: Record<string, unknown>,
-  id: string,
-): Record<string, JsonValue> {
-  const transport = configString(input, "transport") ?? "web";
-  if (transport !== "web" && transport !== "cli") {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "DSH transport must be web or cli",
-      400,
-    );
-  }
-  if (transport === "web") {
-    const config: Record<string, JsonValue> = {
-      transport,
-      base_url: loopbackHttpUrl(
-        configString(input, "base_url") ?? "http://127.0.0.1:3080",
-      ),
-    };
-    const sessionId = configString(input, "session_id");
-    if (sessionId) {
-      config.session_id = sessionId;
-    }
-    return config;
-  }
-  return {
-    transport,
-    mailbox: configString(input, "mailbox") ?? id,
-  };
-}
-
-function loopbackHttpUrl(value: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "DSH base_url must be a loopback http(s) URL",
-      400,
-    );
-  }
-  const host = parsed.hostname.toLowerCase();
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
-    parsed.username ||
-    parsed.password ||
-    (host !== "127.0.0.1" && host !== "localhost" && host !== "::1")
-  ) {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "DSH base_url must be a loopback http(s) URL",
-      400,
-    );
-  }
-  return parsed.toString();
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function clampPages(value: number): number {

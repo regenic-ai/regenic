@@ -18,6 +18,13 @@ import {
   validateIngestBatch,
   type IngestValidationIssue,
 } from "./ingestion-schema";
+import {
+  bodyTextFromStored,
+  conversationId,
+  isLocalOutboundId,
+  normalizeUtterance,
+  surfaceFromParts,
+} from "./message-contract";
 
 export type IngestSubmissionResult =
   | ({ valid: true } & IngestBatchResult)
@@ -93,6 +100,11 @@ export class IngestionService {
 
     if (current?.content_hash === canonical.hash) {
       return this.replayed(record, current);
+    }
+
+    const echoed = await this.findEchoedOutbound(orgId, record);
+    if (echoed) {
+      return this.replayed(record, echoed);
     }
 
     if (
@@ -213,6 +225,52 @@ export class IngestionService {
     };
   }
 
+  private async findEchoedOutbound(
+    orgId: string,
+    record: IngestRecord,
+  ): Promise<EventRecord | null> {
+    if (isLocalOutboundId(record.external_id)) {
+      return null;
+    }
+    if (surfaceFromParts(record.content ?? [])?.kind !== "user") {
+      return null;
+    }
+    const incoming = normalizeUtterance(recordBodyText(record));
+    if (!incoming) {
+      return null;
+    }
+    const conversation = conversationId(record.source, record.external_id);
+    const events = await this.authorityStore.listEvents(orgId);
+    for (const event of events) {
+      if (event.source !== record.source || !isLocalOutboundId(event.external_id)) {
+        continue;
+      }
+      if (conversationId(event.source, event.external_id, event.id) !== conversation) {
+        continue;
+      }
+      const existing = await this.readEventText(event);
+      if (existing && normalizeUtterance(existing) === incoming) {
+        return event;
+      }
+    }
+    return null;
+  }
+
+  private async readEventText(event: EventRecord): Promise<string | undefined> {
+    if (!event.content_hash) {
+      return undefined;
+    }
+    const meta = await this.authorityStore.findBlob(event.content_hash);
+    if (!meta) {
+      return undefined;
+    }
+    try {
+      return bodyTextFromStored(await this.blobStore.get(event.content_hash), meta.media_type);
+    } catch {
+      return undefined;
+    }
+  }
+
   private concurrentUpdate(record: IngestRecord): IngestRecordResult {
     return {
       external_id: record.external_id,
@@ -220,4 +278,8 @@ export class IngestionService {
       error_code: "concurrent_source_update",
     };
   }
+}
+
+function recordBodyText(record: IngestRecord): string | undefined {
+  return record.content?.find((part) => part.role === "body" && part.text !== undefined)?.text;
 }
