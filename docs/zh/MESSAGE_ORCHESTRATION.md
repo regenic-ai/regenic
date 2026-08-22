@@ -100,7 +100,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 
 连接器入库必须走 `channelRecord()`，这样正文旁边会带上 surface 元数据。控制台按这份 surface 显示渠道标签和头像，不再猜正文。旧事件没有 surface 时，只用内核的 `inferLegacySurface()` 兜底：`:out:` 视为本地出站，其余视为入站 assistant，不再按正文或 `source === "dsh"` 猜格式。同一会话里，控制台发出的本地出站与渠道 history 回声的同一句话只保留一条 Event。
 
-回复、follow 与 pull 走 `ChannelDriverRegistry`：API 只做 `installation + thread → driver.resolveStreams / bindEgress → egress.send(ContentPart[])`。桌面只问入箱里的 `can_send`，不问「是不是 DSH」。新渠道挂上 driver，不要改内核或控制台的渠道分支。
+回复、follow 与 pull 走 `ChannelDriverRegistry`：API 只做 `installation + thread → driver.resolveStreams / bindEgress → egress.send(ContentPart[])`。多条安装都能接同一线程时，优先 `ownsThread` 的那条（例如钉死某个 session），否则用第一条能匹配的。同一条流上 follow 与 live pull 串行，不抢 lease。桌面只问入箱里的 `can_send`，不问「是不是 DSH」。新渠道挂上 driver，不要改内核或控制台的渠道分支。
 
 ## 扩展点
 
