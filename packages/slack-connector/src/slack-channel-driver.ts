@@ -43,6 +43,10 @@ export const slackChannelDriver: ChannelDriver = {
     );
   },
 
+  ownsThread(installation, thread) {
+    return this.matchesThread(installation, thread);
+  },
+
   canReply() {
     return false;
   },

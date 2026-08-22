@@ -100,7 +100,7 @@ Send and display shape live in `@regenic/domain` `message-contract`. Connectors 
 
 Connectors ingest through `channelRecord()` so a surface metadata part travels with the body. The console renders the channel tag and avatar from that surface. Legacy events without it fall back to `inferLegacySurface()`: `:out:` is local outbound, everything else is inbound assistant. The kernel does not guess from body text or `source === "dsh"`. A local outbound and the channel-history echo of the same utterance in one conversation stay a single Event.
 
-Reply, follow, and pull go through `ChannelDriverRegistry`: the API only does `installation + thread → driver.resolveStreams / bindEgress → egress.send(ContentPart[])`. The desktop asks inbox `can_send`, not “is this DSH?”. A new channel is a driver, not a kernel or console branch.
+Reply, follow, and pull go through `ChannelDriverRegistry`: the API only does `installation + thread → driver.resolveStreams / bindEgress → egress.send(ContentPart[])`. When more than one install can take a thread, `ownsThread` wins (for example a pinned session) over the first catch-all match. Follow and live pull share one queue per stream so they do not fight the lease. The desktop asks inbox `can_send`, not “is this DSH?”. A new channel is a driver, not a kernel or console branch.
 
 ## Extension points
 
