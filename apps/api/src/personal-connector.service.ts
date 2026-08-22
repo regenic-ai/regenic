@@ -159,6 +159,7 @@ export class PersonalConnectorService
       await pollStream(host, store, installation, stream, 2);
       const seen = await this.assistantIds(threadId);
       if ([...seen].some((id) => !known.has(id))) {
+        await pollStream(host, store, installation, stream, 2);
         return;
       }
       if (attempt < FOLLOW_TRIES - 1) {

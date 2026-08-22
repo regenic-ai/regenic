@@ -144,6 +144,89 @@ describe("DshSessionPollConnector", () => {
     assert.doesNotMatch(result.batch.records[2].content[0].text, /Ready to answer/);
   });
 
+  it("surfaces ask_user_question tool calls as assistant prompts", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "assistant/message",
+                seq: 10,
+                time: 1_724_208_001_000,
+                data: {
+                  message: {
+                    content: [{ type: "text", text: "我需要先确认几个关键信息才能正确实现：" }],
+                  },
+                },
+              },
+              {
+                type: "tool/call",
+                seq: 11,
+                time: 1_724_208_001_100,
+                data: {
+                  name: "bash",
+                  arguments: "{\"command\":\"ls\"}",
+                },
+              },
+              {
+                type: "tool/call",
+                seq: 12,
+                time: 1_724_208_001_200,
+                data: {
+                  name: "ask_user_question",
+                  arguments: JSON.stringify({
+                    questions: [
+                      {
+                        id: "channel",
+                        header: "发送渠道",
+                        question: "日报通过什么方式发送给你？",
+                        options: [
+                          {
+                            label: "写入本地文件（推荐）",
+                            description: "每天生成一份 Markdown 日报",
+                          },
+                          { label: "Webhook / 邮件" },
+                        ],
+                      },
+                      {
+                        id: "scope",
+                        question: "日报总结的范围是什么？",
+                      },
+                    ],
+                  }),
+                },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-ask",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        surfaceKind(record),
+      ]),
+      [
+        ["sess-ask:10", "assistant"],
+        ["sess-ask:12", "assistant"],
+      ],
+    );
+    assert.match(result.batch.records[1].content[0].text, /日报通过什么方式发送给你？/);
+    assert.match(result.batch.records[1].content[0].text, /写入本地文件（推荐）/);
+    assert.match(result.batch.records[1].content[0].text, /日报总结的范围是什么？/);
+    assert.doesNotMatch(result.batch.records[1].content[0].text, /bash/);
+  });
+
   it("only accepts events after the committed seq cursor", async () => {
     const connector = createConnector(new MemoryDshRunLog([
       run(0, "Old", "Old reply"),

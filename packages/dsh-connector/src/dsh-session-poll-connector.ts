@@ -252,7 +252,8 @@ export function toSurfaceEvent(event: DshHistoryEvent): DshSurfaceEvent[] {
  * `user/message` + source.kind=user → You;
  * other `user/message` sources (plugin inject) → Runtime;
  * `assistant/message` with a text block → DSH Agent.
- * Reasoning / tool-call-only assistant steps are not a visible reply.
+ * `tool/call` `ask_user_question` → DSH Agent (the confirmation prompt).
+ * Reasoning / other tool-call-only assistant steps are not a visible reply.
  */
 export function classifyDshHistoryEvent(event: DshHistoryEvent): {
   type: "user/message" | "assistant/message";
@@ -297,6 +298,19 @@ export function classifyDshHistoryEvent(event: DshHistoryEvent): {
       text,
     };
   }
+  if (event.type === "tool/call") {
+    const text = askUserQuestionText(event.data);
+    if (!text) {
+      return undefined;
+    }
+    return {
+      type: "assistant/message",
+      kind: "assistant",
+      direction: "inbound",
+      actor_id: "assistant",
+      text,
+    };
+  }
   return undefined;
 }
 
@@ -328,6 +342,49 @@ function userMessageFromData(data: unknown): unknown {
 
 function assistantMessageFromData(data: unknown): unknown {
   return isObject(data) ? data.message : undefined;
+}
+
+function askUserQuestionText(data: unknown): string | undefined {
+  if (!isObject(data) || data.name !== "ask_user_question") {
+    return undefined;
+  }
+  let parsed: unknown = data.arguments;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!isObject(parsed) || !Array.isArray(parsed.questions)) {
+    return undefined;
+  }
+  const blocks = parsed.questions.flatMap((question) => formatAskUserQuestion(question));
+  return blocks.length > 0 ? blocks.join("\n\n") : undefined;
+}
+
+function formatAskUserQuestion(question: unknown): string[] {
+  if (!isObject(question)) {
+    return [];
+  }
+  const prompt =
+    (typeof question.question === "string" ? question.question.trim() : "")
+    || (typeof question.header === "string" ? question.header.trim() : "");
+  if (!prompt) {
+    return [];
+  }
+  const options = Array.isArray(question.options) ? question.options : [];
+  const lines = options.flatMap((option) => {
+    if (!isObject(option) || typeof option.label !== "string" || option.label.trim().length === 0) {
+      return [];
+    }
+    const description =
+      typeof option.description === "string" && option.description.trim().length > 0
+        ? ` — ${option.description.trim()}`
+        : "";
+    return [`- ${option.label.trim()}${description}`];
+  });
+  return [lines.length > 0 ? `${prompt}\n${lines.join("\n")}` : prompt];
 }
 
 function extractTextBlocks(message: unknown): string | undefined {
