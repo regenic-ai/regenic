@@ -7,3 +7,4 @@ export * from "./dsh-run-log";
 export * from "./dsh-session-egress";
 export * from "./dsh-session-poll-connector";
 export * from "./plugin";
+export * from "./dsh-session-driver";

@@ -79,6 +79,27 @@ async function loadSurface(
   await window.loadFile(rendererUrl(surface), { query: { surface } });
 }
 
+function countWorkThreads(
+  items: Array<{ event?: { id?: string; source?: string; external_id?: string } }>,
+): number {
+  const ids = new Set<string>();
+  for (const item of items) {
+    const event = item.event;
+    if (!event?.id || !event.source || !event.external_id) {
+      continue;
+    }
+    const cut = event.external_id.indexOf(":out:");
+    const withoutOut = cut >= 0 ? event.external_id.slice(0, cut) : event.external_id;
+    const colon = withoutOut.lastIndexOf(":");
+    ids.add(
+      colon > 0
+        ? `${event.source}:${withoutOut.slice(0, colon)}`
+        : `${event.source}:${withoutOut || event.id}`,
+    );
+  }
+  return ids.size;
+}
+
 async function probe(origin: string): Promise<"personal" | "other" | "none"> {
   try {
     const response = await fetch(`${origin}/health`);
@@ -126,6 +147,9 @@ function sidecarEnv(
   env.REGENIC_ORG = process.env.REGENIC_ORG ?? "local-owner";
   env.PORT = String(port);
   env.LISTEN_HOST = "127.0.0.1";
+  if (!Number(env.REGENIC_CONNECTOR_PULL_MS)) {
+    env.REGENIC_CONNECTOR_PULL_MS = "3000";
+  }
   delete env.REGENIC_PERSONAL_API;
   return env;
 }
@@ -300,10 +324,10 @@ function createTray(): void {
   });
   tray.on("right-click", () => {
     const menu = Menu.buildFromTemplate([
-      { label: "打开控制台", click: () => showConsole() },
+      { label: "Open console", click: () => showConsole() },
       { type: "separator" },
       {
-        label: "退出",
+        label: "Quit",
         click: () => {
           quitting = true;
           app.quit();
@@ -320,12 +344,14 @@ async function pollNotifications(): Promise<void> {
     if (!response.ok) {
       return;
     }
-    const items = (await response.json()) as unknown[];
-    const count = Array.isArray(items) ? items.length : 0;
+    const items = (await response.json()) as Array<{
+      event?: { id?: string; source?: string; external_id?: string };
+    }>;
+    const count = Array.isArray(items) ? countWorkThreads(items) : 0;
     if (lastInboxCount !== null && count > lastInboxCount && Notification.isSupported()) {
       new Notification({
         title: "Regenic",
-        body: `${count} 条当前工作`,
+        body: `${count} current work`,
       }).show();
     }
     lastInboxCount = count;

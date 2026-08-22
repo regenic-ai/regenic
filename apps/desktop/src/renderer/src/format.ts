@@ -1,8 +1,8 @@
+import { firstLine } from "./message-view";
 import type { EngineChipState, PersonalEngineView } from "./types";
 
 export function previewText(text: string | undefined, fallback: string): string {
-  const value = text?.replace(/\s+/g, " ").trim();
-  return value && value.length > 0 ? value : fallback;
+  return firstLine(text, 88) || fallback;
 }
 
 export function formatTime(iso: string): string {
@@ -10,12 +10,30 @@ export function formatTime(iso: string): string {
   if (Number.isNaN(date.getTime())) {
     return iso;
   }
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat("en-US", {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+export function formatChatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return new Intl.DateTimeFormat(
+    "en-US",
+    sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" },
+  ).format(date);
 }
 
 export function engineChip(engine: PersonalEngineView | null): EngineChipState {
@@ -30,12 +48,12 @@ export function engineChip(engine: PersonalEngineView | null): EngineChipState {
 
 export function chipLabel(state: EngineChipState): string {
   if (state === "running") {
-    return "运行中";
+    return "Running";
   }
   if (state === "syncing") {
-    return "同步中";
+    return "Syncing";
   }
-  return "已停止";
+  return "Stopped";
 }
 
 export function connectorLabel(type: string): string {
@@ -52,32 +70,32 @@ export function installationStatusLabel(
   status: "enabled" | "disabled" | "needs_attention",
 ): string {
   if (status === "enabled") {
-    return "已启用";
+    return "Enabled";
   }
   if (status === "disabled") {
-    return "已停用";
+    return "Disabled";
   }
-  return "需处理";
+  return "Needs attention";
 }
 
 export function connectorActionError(message: string): string {
   if (message.includes("already syncing") || message.includes("already leased")) {
-    return "这条连接器正在同步";
+    return "This connector is already syncing";
   }
   if (message.includes("is disabled")) {
-    return "连接器已停用，先启用再同步";
+    return "Connector is disabled. Enable it before syncing.";
   }
   if (message.includes("missing from")) {
-    return `缺少渠道凭证。${message}`;
+    return `Missing channel credentials. ${message}`;
   }
   if (message.includes("not found")) {
-    return "找不到这条连接器";
+    return "Connector not found";
   }
   if (message.includes("requires channel_id")) {
-    return "Slack 需要填写频道 ID";
+    return "Slack requires a channel ID";
   }
   if (message.includes("requires session_id")) {
-    return "DSH Web 需要填写 Session ID";
+    return "DSH web requires a session ID";
   }
   return message;
 }
@@ -92,14 +110,14 @@ export function attemptSummary(
   } | null,
 ): string {
   if (!attempt) {
-    return "还没有同步记录";
+    return "No sync yet";
   }
   const when = formatTime(attempt.finished_at ?? attempt.started_at);
   if (attempt.status === "running") {
-    return `同步中 · ${when}`;
+    return `Syncing · ${when}`;
   }
   if (attempt.status === "failed") {
-    return `失败${attempt.error_code ? ` · ${attempt.error_code}` : ""} · ${when}`;
+    return `Failed${attempt.error_code ? ` · ${attempt.error_code}` : ""} · ${when}`;
   }
-  return `成功 · 接受 ${attempt.accepted_count} · ${when}`;
+  return `OK · accepted ${attempt.accepted_count} · ${when}`;
 }

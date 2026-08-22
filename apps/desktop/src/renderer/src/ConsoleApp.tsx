@@ -1,22 +1,33 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   fetchEngine,
   fetchInbox,
   installConnector,
+  sendReply,
   setConnectorStatus,
   syncConnector,
   uninstallConnector,
 } from "./api";
+import { Composer, type ComposerDraft } from "./Composer";
 import {
   attemptSummary,
   chipLabel,
   connectorActionError,
   connectorLabel,
   engineChip,
-  formatTime,
+  formatChatTime,
   installationStatusLabel,
-  previewText,
 } from "./format";
+import { groupInboxThreads, latestMessage, type InboxThread } from "./inbox";
+import { MessageBody } from "./MessageBody";
+import {
+  firstLine,
+  messageRole,
+  readingMessages,
+  roleLabel,
+  threadTitle,
+  type MessageRole,
+} from "./message-view";
 import { BrandBadge, BrandLockup } from "./Brand";
 import { EngineIcon, InboxIcon, SettingsIcon } from "./Icons";
 import type {
@@ -28,7 +39,7 @@ import type {
   PersonalEngineView,
 } from "./types";
 
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 
 export function ConsoleApp() {
   const [nav, setNav] = useState<NavId>("inbox");
@@ -47,13 +58,14 @@ export function ConsoleApp() {
       setEngine(nextEngine);
       setError(null);
       setSelectedId((current) => {
-        if (current && nextInbox.some((item) => item.event.id === current)) {
+        const threads = groupInboxThreads(nextInbox);
+        if (current && threads.some((thread) => thread.id === current)) {
           return current;
         }
-        return nextInbox[0]?.event.id ?? null;
+        return threads[0]?.id ?? null;
       });
     } catch {
-      setError("无法连接本机内核");
+      setError("Cannot reach the local kernel");
       setEngine(null);
     }
   };
@@ -68,7 +80,8 @@ export function ConsoleApp() {
     };
   }, []);
 
-  const selected = inbox.find((item) => item.event.id === selectedId) ?? null;
+  const threads = groupInboxThreads(inbox);
+  const selected = threads.find((thread) => thread.id === selectedId) ?? null;
   const chip = engineChip(engine);
 
   return (
@@ -78,21 +91,21 @@ export function ConsoleApp() {
         <div className="titlebar-brand" title="Regenic">
           <BrandBadge />
         </div>
-        <div className="search">搜索（稍后）</div>
+        <div className="search">Search (soon)</div>
         <EngineChip state={chip} />
-        <span className="chip">{engine?.inbox_count ?? inbox.length} 条当前工作</span>
+        <span className="chip">{threads.length} current work</span>
       </header>
-      <nav className="rail" aria-label="主导航">
+      <nav className="rail" aria-label="Main">
         <div className="rail-top">
           <RailButton
-            label="当前工作"
+            label="Current work"
             active={nav === "inbox"}
             onClick={() => setNav("inbox")}
           >
             <InboxIcon />
           </RailButton>
           <RailButton
-            label="引擎"
+            label="Engine"
             active={nav === "engine"}
             onClick={() => setNav("engine")}
           >
@@ -101,7 +114,7 @@ export function ConsoleApp() {
         </div>
         <div className="rail-bottom">
           <RailButton
-            label="设置"
+            label="Settings"
             active={nav === "settings"}
             onClick={() => setNav("settings")}
           >
@@ -112,10 +125,11 @@ export function ConsoleApp() {
       <div className="workspace">
         {nav === "inbox" ? (
           <InboxWorkspace
-            inbox={inbox}
+            threads={threads}
             selected={selected}
             error={error}
             onSelect={setSelectedId}
+            onRefresh={refresh}
           />
         ) : null}
         {nav === "engine" ? (
@@ -155,95 +169,258 @@ function EngineChip({ state }: { state: EngineChipState }) {
   return (
     <span className={`chip ${state}`}>
       <span className="dot" />
-      内核{chipLabel(state)}
+      Kernel {chipLabel(state)}
     </span>
   );
 }
 
 function InboxWorkspace({
-  inbox,
+  threads,
   selected,
   error,
   onSelect,
+  onRefresh,
 }: {
-  inbox: InboxViewItem[];
-  selected: InboxViewItem | null;
+  threads: InboxThread[];
+  selected: InboxThread | null;
   error: string | null;
   onSelect: (id: string) => void;
+  onRefresh: () => Promise<void>;
 }) {
   return (
     <div className="columns">
       <aside className="list">
-        <div className="list-head">当前工作</div>
+        <div className="list-head">Current work</div>
         {error ? <div className="page-empty">{error}</div> : null}
-        {!error && inbox.length === 0 ? (
+        {!error && threads.length === 0 ? (
           <div className="page-empty">
-            还没有进入当前工作的消息。打开引擎页安装并同步连接器。
+            Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own.
           </div>
         ) : null}
-        {inbox.map((item) => (
-          <button
-            key={item.event.id}
-            type="button"
-            className={`item${selected?.event.id === item.event.id ? " selected" : ""}`}
-            onClick={() => onSelect(item.event.id)}
-          >
-            <div className="item-meta">
-              <span>{item.event.source}</span>
-              <span>{formatTime(item.event.occurred_at)}</span>
-            </div>
-            <div className="item-title">
-              {previewText(item.body_text, item.event.external_id)}
-            </div>
-            <div className="item-reasons">
-              {item.decision.reason_codes.join(" · ")} · {item.decision.score}
-            </div>
-          </button>
-        ))}
+        {threads.map((thread) => {
+          const latest = latestMessage(thread);
+          return (
+            <button
+              key={thread.id}
+              type="button"
+              className={`item${selected?.id === thread.id ? " selected" : ""}`}
+              onClick={() => onSelect(thread.id)}
+            >
+              <div className="item-copy">
+                <div className="item-top">
+                  <span className={`channel-tag channel-${thread.channel}`}>
+                    {thread.channel_label}
+                  </span>
+                  <span className="item-time">{formatChatTime(latest.event.occurred_at)}</span>
+                </div>
+                <div className="item-title">{threadTitle(thread)}</div>
+                <div className="item-reasons">
+                  {firstLine(latest.body_text, 96) || thread.label}
+                </div>
+              </div>
+            </button>
+          );
+        })}
       </aside>
       <section className="thread">
         {selected ? (
-          <ThreadPane item={selected} />
+          <ThreadPane thread={selected} onRefresh={onRefresh} />
         ) : (
-          <div className="thread-empty">从左侧选择一条当前工作。</div>
+          <div className="thread-empty">Select a conversation on the left.</div>
         )}
       </section>
     </div>
   );
 }
 
-function ThreadPane({ item }: { item: InboxViewItem }) {
+function ThreadPane({
+  thread,
+  onRefresh,
+}: {
+  thread: InboxThread;
+  onRefresh: () => Promise<void>;
+}) {
+  const [quote, setQuote] = useState<InboxViewItem | null>(null);
+  const [pending, setPending] = useState<InboxViewItem[]>([]);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const seen = new Set(thread.messages.map((item) => item.event.id));
+  const merged = readingMessages({
+    ...thread,
+    messages: [
+      ...thread.messages,
+      ...pending.filter((item) => !seen.has(item.event.id)),
+    ],
+  });
+  const canReply = thread.can_send;
+
+  useEffect(() => {
+    setQuote(null);
+    setSendError(null);
+    setPending((current) =>
+      current.filter((item) => !thread.messages.some((entry) => entry.event.id === item.event.id)),
+    );
+  }, [thread.id]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (node) {
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [thread.id, merged.length]);
+
+  const send = async (draft: ComposerDraft) => {
+    setSending(true);
+    setSendError(null);
+    const optimistic = localOutbound(thread, draft);
+    setPending((current) => [...current, optimistic]);
+    try {
+      await sendReply({
+        thread_id: thread.id,
+        text: draft.text,
+        reply_to_event_id: draft.reply_to?.event.id,
+        attachments: draft.attachments,
+      });
+      setQuote(null);
+      await onRefresh();
+    } catch (caught) {
+      setSendError(caught instanceof Error ? caught.message : "Send failed");
+      throw caught instanceof Error ? caught : new Error("Send failed");
+    } finally {
+      setPending((current) => current.filter((item) => item.event.id !== optimistic.event.id));
+      setSending(false);
+    }
+  };
+
   return (
-    <article>
-      <h1>{previewText(item.body_text, item.event.external_id)}</h1>
-      <div className="provenance">
-        <span className="chip data">{item.event.source}</span>
-        <span className="chip">{item.decision.disposition}</span>
-        <span className="chip">{item.decision.reason_codes.join(", ")}</span>
+    <article className="thread-pane">
+      <header className="thread-head">
+        <div className="thread-head-main">
+          <div className="thread-title-row">
+            <span className={`channel-tag channel-lg channel-${thread.channel}`}>
+              {thread.channel_label}
+            </span>
+            <h1>{threadTitle(thread)}</h1>
+          </div>
+          <p className="thread-sub">
+            {thread.messages.length} messages · {thread.label}
+          </p>
+        </div>
+      </header>
+      <div className="thread-scroll" ref={scrollRef}>
+        {merged.length === 0 ? (
+          <p className="muted">This conversation has no displayable messages.</p>
+        ) : (
+          <ol className="thread-messages">
+            {merged.map((item, index) => {
+              const role = messageRole(item);
+              const previous = index > 0 ? messageRole(merged[index - 1]) : null;
+              const follow = previous === role && role !== "system";
+              const text = item.body_text ?? "";
+              if (role === "system") {
+                return (
+                  <li key={item.event.id} className="chat-system">
+                    <details>
+                      <summary>
+                        {roleLabel(role)} · {formatChatTime(item.event.occurred_at)}
+                      </summary>
+                      <MessageBody text={text} attachments={item.attachments} />
+                    </details>
+                  </li>
+                );
+              }
+              return (
+                <li
+                  key={item.event.id}
+                  className={`chat-row chat-row-${role}${follow ? " is-follow" : ""}`}
+                >
+                  <ChatAvatar role={role} />
+                  <div className="chat-main">
+                    <div className="chat-meta">
+                      <strong>{roleLabel(role, thread.channel)}</strong>
+                      <span>{formatChatTime(item.event.occurred_at)}</span>
+                      {canReply ? (
+                        <button
+                          type="button"
+                          className="chat-reply"
+                          onClick={() => setQuote(item)}
+                        >
+                          Reply
+                        </button>
+                      ) : null}
+                    </div>
+                    <MessageBody text={text} attachments={item.attachments} />
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </div>
-      <div className="kv">
-        <span>Event</span>
-        <strong>
-          <code>{item.event.id}</code>
-        </strong>
-        <span>external_id</span>
-        <strong>{item.event.external_id}</strong>
-        <span>发生时间</span>
-        <strong>{formatTime(item.event.occurred_at)}</strong>
-        {item.event.content_hash ? (
-          <>
-            <span>Blob</span>
-            <strong>
-              <code>{item.event.content_hash}</code>
-            </strong>
-          </>
-        ) : null}
+      <div className="composer-dock">
+        <Composer
+          disabled={!canReply}
+          hint={
+            canReply
+              ? `Send to ${threadTitle(thread)}`
+              : "Sending back to this channel is not available yet"
+          }
+          quote={quote}
+          sending={sending}
+          error={sendError}
+          onCancelQuote={() => setQuote(null)}
+          onSend={send}
+        />
       </div>
-      <p className="body-text">
-        {item.body_text ?? "这条消息没有可显示的正文。"}
-      </p>
     </article>
   );
+}
+
+function ChatAvatar({
+  role,
+  compact,
+}: {
+  role: MessageRole;
+  compact?: boolean;
+}) {
+  const mark = role === "user" ? "Y" : role === "system" ? "R" : "A";
+  return (
+    <span className={`chat-avatar chat-avatar-${role}${compact ? " is-compact" : ""}`}>
+      {mark}
+    </span>
+  );
+}
+
+function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem {
+  const now = new Date().toISOString();
+  return {
+    decision: {
+      event_id: `local:${now}`,
+      org_id: latestMessage(thread).event.org_id,
+      disposition: "current_work",
+      layer: "L1_event",
+      reason_codes: ["local"],
+      score: 1,
+      decided_at: now,
+    },
+    event: {
+      id: `local:${now}`,
+      org_id: latestMessage(thread).event.org_id,
+      source: thread.source,
+      external_id: `${thread.id.slice(thread.source.length + 1)}:out:local`,
+      operation: "create",
+      occurred_at: now,
+      ingested_at: now,
+    },
+    body_text: draft.text,
+    attachments: draft.attachments,
+    channel: thread.channel,
+    channel_label: thread.channel_label,
+    kind: "user",
+    direction: "outbound",
+    can_send: thread.can_send,
+  };
 }
 
 function EnginePage({
@@ -268,7 +445,7 @@ function EnginePage({
       await onChanged();
     } catch (caught) {
       setActionError(
-        caught instanceof Error ? connectorActionError(caught.message) : "操作失败",
+        caught instanceof Error ? connectorActionError(caught.message) : "Action failed",
       );
     } finally {
       setBusyId(null);
@@ -278,8 +455,8 @@ function EnginePage({
   if (error || !engine) {
     return (
       <div className="page">
-        <h1>引擎</h1>
-        <p className="muted">{error ?? "内核未连接。"}</p>
+        <h1>Engine</h1>
+        <p className="muted">{error ?? "Kernel is not connected."}</p>
       </div>
     );
   }
@@ -288,26 +465,40 @@ function EnginePage({
 
   return (
     <div className="page">
-      <h1>引擎</h1>
-      <p className="muted">本机权威库与连接器。在本页点击同步，不会自动后台拉取。</p>
+      <h1>Engine</h1>
+      <p className="muted">
+        Local authority store and connectors. Enabled connectors pull while the kernel is running. Use Sync only to catch up after a miss.
+      </p>
       <section className="card">
-        <h2>内核</h2>
+        <h2>Kernel</h2>
         <div className="kv">
-          <span>状态</span>
-          <strong>{engine.kernel === "running" ? "运行中" : "已停止"}</strong>
+          <span>Status</span>
+          <strong>{engine.kernel === "running" ? "Running" : "Stopped"}</strong>
           <span>org</span>
           <strong>{engine.org_id}</strong>
-          <span>数据库</span>
+          <span>Database</span>
           <strong>
             <code>{engine.database_path ?? "—"}</code>
           </strong>
-          <span>当前工作</span>
+          <span>Current work</span>
           <strong>{engine.inbox_count}</strong>
+          <span>Live pull</span>
+          <strong>
+            {engine.pull?.interval_ms
+              ? `every ${Math.round(engine.pull.interval_ms / 1000)}s`
+              : "off"}
+            {engine.pull?.last_tick_at
+              ? ` · ${formatChatTime(engine.pull.last_tick_at)}`
+              : ""}
+          </strong>
         </div>
+        {engine.pull?.last_error ? (
+          <p className="action-error">{engine.pull.last_error}</p>
+        ) : null}
       </section>
       <section className="card">
         <div className="card-head">
-          <h2>连接器管理</h2>
+          <h2>Connectors</h2>
           {syncable.length > 1 ? (
             <button
               type="button"
@@ -326,7 +517,7 @@ function EnginePage({
                     setActionError(
                       caught instanceof Error
                         ? connectorActionError(caught.message)
-                        : "同步失败",
+                        : "Sync failed",
                     );
                   } finally {
                     setSyncingAll(false);
@@ -334,12 +525,12 @@ function EnginePage({
                 })();
               }}
             >
-              {syncingAll ? "同步中…" : "全部同步"}
+              {syncingAll ? "Syncing…" : "Sync all"}
             </button>
           ) : null}
         </div>
         <p className="muted">
-          未安装的连接器也可以在这里安装或卸载。凭证只读本机环境变量。
+          Install or uninstall connectors here. Credentials are read from local environment variables only.
         </p>
         {(engine.catalog ?? []).map((kind) => (
           <ConnectorKind
@@ -378,7 +569,7 @@ function EnginePage({
             onUninstall={(installation) => {
               if (
                 !window.confirm(
-                  `卸载 ${connectorLabel(installation.connector_type)}「${installation.label}」？已入库消息会保留。`,
+                  `Uninstall ${connectorLabel(installation.connector_type)} “${installation.label}”? Ingested messages stay.`,
                 )
               ) {
                 return;
@@ -426,10 +617,15 @@ function ConnectorKind({
           <div className="muted">{kind.description}</div>
           <div className="muted">
             <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
-              {kind.installed ? `已安装 ${kind.instance_count} 个` : "未安装"}
+              {kind.installed
+                ? `${kind.instance_count} installed`
+                : "Not installed"}
             </span>
-            {` · 凭证 ${kind.credential_hint}`}
+            {` · credentials ${kind.credential_hint}`}
           </div>
+          <PrerequisiteList
+            items={visiblePrerequisites(kind, defaultFieldValues(kind))}
+          />
         </div>
         <div className="install-actions">
           <button
@@ -438,7 +634,7 @@ function ConnectorKind({
             disabled={busyId !== null || syncingAll}
             onClick={onOpenInstall}
           >
-            {installing ? "取消" : "安装"}
+            {installing ? "Cancel" : "Install"}
           </button>
         </div>
       </div>
@@ -472,15 +668,14 @@ function ConnectorInstallForm({
   busy: boolean;
   onSubmit: (config: Record<string, string>) => void;
 }) {
-  const [values, setValues] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    for (const field of kind.fields) {
-      if (field.default) {
-        initial[field.key] = field.default;
-      }
-    }
-    return initial;
-  });
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    defaultFieldValues(kind),
+  );
+  const fields = kind.fields.filter((field) =>
+    matchesWhen(field.visible_when, values),
+  );
+  const prerequisites = visiblePrerequisites(kind, values);
+  const blocked = prerequisites.some((item) => item.required && !item.ready);
   return (
     <form
       className="install-form"
@@ -489,7 +684,8 @@ function ConnectorInstallForm({
         onSubmit(values);
       }}
     >
-      {kind.fields.map((field) => (
+      <PrerequisiteList items={prerequisites} />
+      {fields.map((field) => (
         <label key={field.key} className="field">
           <span>
             {field.label}
@@ -526,11 +722,59 @@ function ConnectorInstallForm({
           )}
         </label>
       ))}
-      <button type="submit" className="primary" disabled={busy}>
-        {busy ? "安装中…" : "确认安装"}
+      <button type="submit" className="primary" disabled={busy || blocked}>
+        {busy ? "Installing…" : blocked ? "Finish prerequisites first" : "Install"}
       </button>
     </form>
   );
+}
+
+function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisites"] }) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <ul className="prereq-list">
+      {items.map((item) => (
+        <li key={`${item.kind}:${item.key}`}>
+          <span className={`chip ${item.ready ? "running" : item.required ? "stopped" : ""}`.trim()}>
+            {item.ready ? "Ready" : item.required ? "Needed" : "Optional"}
+          </span>
+          {` ${item.label}`}
+          {item.hint ? ` · ${item.hint}` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function defaultFieldValues(kind: ConnectorCatalogItem): Record<string, string> {
+  const initial: Record<string, string> = {};
+  for (const field of kind.fields) {
+    if (field.default) {
+      initial[field.key] = field.default;
+    }
+  }
+  return initial;
+}
+
+function visiblePrerequisites(
+  kind: ConnectorCatalogItem,
+  values: Record<string, string>,
+): ConnectorCatalogItem["prerequisites"] {
+  return (kind.prerequisites ?? []).filter((item) =>
+    matchesWhen(item.visible_when, values),
+  );
+}
+
+function matchesWhen(
+  when: { field: string; value: string } | undefined,
+  values: Record<string, string>,
+): boolean {
+  if (!when) {
+    return true;
+  }
+  return (values[when.field] ?? "") === when.value;
 }
 
 function ConnectorRow({
@@ -574,10 +818,10 @@ function ConnectorRow({
           disabled={busy || !installation.syncable}
           onClick={onSync}
         >
-          {busy ? "同步中…" : "同步"}
+          {busy ? "Syncing…" : "Sync"}
         </button>
         <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
-          {installation.status === "disabled" ? "启用" : "停用"}
+          {installation.status === "disabled" ? "Enable" : "Disable"}
         </button>
         <button
           type="button"
@@ -585,7 +829,7 @@ function ConnectorRow({
           disabled={busy}
           onClick={onUninstall}
         >
-          卸载
+          Uninstall
         </button>
       </div>
     </div>
@@ -595,11 +839,12 @@ function ConnectorRow({
 function SettingsPage() {
   return (
     <div className="page">
-      <h1>设置</h1>
+      <h1>Settings</h1>
       <BrandLockup size={28} />
       <p className="muted">
-        个人阶段设置稍后。连接器安装、卸载和同步在引擎页。回复发送属于
-        Phase 2。
+        Personal-stage settings come later. Install, uninstall, and sync
+        connectors on the Engine page. Replies in a DSH session go back to
+        that session.
       </p>
     </div>
   );

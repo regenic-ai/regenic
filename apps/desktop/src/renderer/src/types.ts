@@ -22,11 +22,26 @@ export interface EventRecord {
   ingested_at: string;
 }
 
+export interface InboxAttachment {
+  filename: string;
+  media_type: string;
+  data_base64?: string;
+}
+
+export type MessageKind = "user" | "assistant" | "system";
+export type MessageDirection = "inbound" | "outbound";
+
 export interface InboxViewItem {
   decision: ArrangementDecision;
   event: EventRecord;
   body_text?: string;
   media_type?: string;
+  attachments?: InboxAttachment[];
+  channel: string;
+  channel_label: string;
+  kind: MessageKind;
+  direction: MessageDirection;
+  can_send: boolean;
 }
 
 export interface IngestAttempt {
@@ -41,6 +56,11 @@ export interface IngestAttempt {
   error_code?: string;
 }
 
+export interface ConnectorFieldWhen {
+  field: string;
+  value: string;
+}
+
 export interface ConnectorField {
   key: string;
   label: string;
@@ -48,6 +68,17 @@ export interface ConnectorField {
   placeholder?: string;
   default?: string;
   options?: { value: string; label: string }[];
+  visible_when?: ConnectorFieldWhen;
+}
+
+export interface ConnectorPrerequisite {
+  kind: "env" | "local_service";
+  key: string;
+  label: string;
+  required: boolean;
+  hint?: string;
+  ready: boolean;
+  visible_when?: ConnectorFieldWhen;
 }
 
 export interface ConnectorCatalogItem {
@@ -57,7 +88,9 @@ export interface ConnectorCatalogItem {
   credential_hint: string;
   installed: boolean;
   instance_count: number;
+  setup_ready: boolean;
   fields: ConnectorField[];
+  prerequisites: ConnectorPrerequisite[];
 }
 
 export interface EngineInstallationView {
@@ -73,6 +106,7 @@ export interface EngineInstallationView {
 export interface ConnectorSyncView {
   installation_id: string;
   pages_attempted: number;
+  streams_attempted: number;
   accepted_count: number;
   duplicate_count: number;
   quarantined_count: number;
@@ -80,13 +114,34 @@ export interface ConnectorSyncView {
   installation: EngineInstallationView;
 }
 
+export interface PullStatusView {
+  interval_ms: number;
+  last_tick_at: string | null;
+  last_error: string | null;
+}
+
 export interface PersonalEngineView {
   kernel: "running" | "stopped";
   org_id: string;
   database_path: string | null;
   inbox_count: number;
+  pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
 }
 
 export type EngineChipState = "running" | "syncing" | "stopped";
+
+export interface ReplyAttachmentInput {
+  filename: string;
+  media_type: string;
+  data_base64: string;
+}
+
+export interface ReplyView {
+  accepted: true;
+  source: string;
+  thread_id: string;
+  rpc_id?: string;
+  item: InboxViewItem;
+}
