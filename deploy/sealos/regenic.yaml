@@ -2,27 +2,16 @@
 # Talk to it over cluster DNS, not a sidecar. Do not publish DSH from this
 # Service. REGENIC_PERSONAL_API=1 exposes /v1/me for the desktop console.
 #
+# Disk is a StatefulSet claim (`data-regenic-0`). Restarting or replacing the
+# pod remounts the same volume. Do not click Launchpad "开存储" on this app.
+#
 # Secrets stay out of git. Once:
 #   cp deploy/sealos/secret.yaml.example deploy/sealos/secret.yaml
 # Then:
 #   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/dsh.yaml
 #   kubectl apply -f deploy/sealos/regenic.yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: regenic-data
-  labels:
-    app: regenic
-    cloud.sealos.io/app-deploy-manager: regenic
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
----
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: regenic
   labels:
@@ -34,8 +23,12 @@ metadata:
     deploy.cloud.sealos.io/maxReplicas: "1"
     deploy.cloud.sealos.io/resize: "10Gi"
 spec:
+  serviceName: regenic
   replicas: 1
   revisionHistoryLimit: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   selector:
     matchLabels:
       app: regenic
@@ -110,10 +103,18 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: regenic-data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app: regenic
+          cloud.sealos.io/app-deploy-manager: regenic
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
 ---
 apiVersion: v1
 kind: Service

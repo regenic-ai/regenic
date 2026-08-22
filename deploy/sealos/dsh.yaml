@@ -1,6 +1,8 @@
 # Standalone DSH web for Sealos App Launchpad. Cluster-only: no Ingress.
 # Official dsh refuses --host 0.0.0.0, so a loopback proxy publishes :3081.
 # API talks to Service DNS: http://regenic-dsh:3080 -> proxy -> 127.0.0.1:3080
+# Disk is a StatefulSet claim (`data-regenic-dsh-0`). Do not click Launchpad
+# "开存储" on this app; replacing the pod remounts the same volume.
 #
 #   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/dsh.yaml
 #   kubectl delete ingress regenic-dsh --ignore-not-found
@@ -67,22 +69,8 @@ data:
       process.stdout.write(`dsh proxy 0.0.0.0:${listenPort} -> ${targetHost}:${targetPort}\n`);
     });
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: regenic-dsh-data
-  labels:
-    app: regenic-dsh
-    cloud.sealos.io/app-deploy-manager: regenic-dsh
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
----
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: regenic-dsh
   labels:
@@ -94,8 +82,12 @@ metadata:
     deploy.cloud.sealos.io/maxReplicas: "1"
     deploy.cloud.sealos.io/resize: "10Gi"
 spec:
+  serviceName: regenic-dsh
   replicas: 1
   revisionHistoryLimit: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   selector:
     matchLabels:
       app: regenic-dsh
@@ -166,12 +158,21 @@ spec:
               mountPath: /tmp/dsh-proxy.js
               subPath: proxy.js
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: regenic-dsh-data
         - name: proxy
           configMap:
             name: regenic-dsh
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app: regenic-dsh
+          cloud.sealos.io/app-deploy-manager: regenic-dsh
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
