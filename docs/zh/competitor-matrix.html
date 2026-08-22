@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Regenic 竞品对照表 · 2026-08</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f6f4ef;
+      --surface: #fffdf8;
+      --ink: #1c1b19;
+      --muted: #5c574e;
+      --line: #d9d2c5;
+      --accent: #0f6b5c;
+      --accent-soft: #e4f2ee;
+      --danger: #9b2c2c;
+      --danger-soft: #f8e8e6;
+      --warning: #8a5a12;
+      --warning-soft: #f7edd8;
+      --info: #1f4e79;
+      --info-soft: #e6eef6;
+      --success: #1f6b3a;
+      --success-soft: #e6f3ea;
+      --shadow: 0 1px 0 rgba(28, 27, 25, 0.04);
+      --radius: 10px;
+      --max: 1120px;
+      --font: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #e8f3ef 0%, transparent 55%),
+        radial-gradient(900px 400px at 100% 0%, #efe8dc 0%, transparent 50%),
+        var(--bg);
+      line-height: 1.55;
+    }
+
+    .wrap {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 40px 20px 80px;
+    }
+
+    header h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.75rem, 3vw, 2.25rem);
+      letter-spacing: -0.02em;
+      font-weight: 700;
+    }
+
+    .lede {
+      margin: 0 0 18px;
+      color: var(--muted);
+      max-width: 62ch;
+      font-size: 1.02rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 5px 12px;
+      font-size: 0.82rem;
+      font-weight: 500;
+    }
+
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+
+    .filters button {
+      font: inherit;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 7px 14px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+
+    .filters button:hover { border-color: #b8b0a0; }
+    .filters button[aria-pressed="true"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .callout {
+      background: var(--warning-soft);
+      border: 1px solid #e2cfab;
+      border-left: 4px solid var(--warning);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      margin-bottom: 22px;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--warning);
+      font-size: 0.98rem;
+    }
+
+    .callout p { margin: 0; color: var(--ink); }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px 14px;
+      box-shadow: var(--shadow);
+    }
+
+    .stat .v {
+      font-size: 1.8rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+    }
+
+    .stat .l {
+      margin-top: 4px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .stat.danger .v { color: var(--danger); }
+    .stat.warning .v { color: var(--warning); }
+    .stat.info .v { color: var(--info); }
+    .stat.success .v { color: var(--success); }
+
+    section { margin-top: 34px; }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 1.25rem;
+      letter-spacing: -0.01em;
+    }
+
+    h2 .count {
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 0.9rem;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+
+    .table-scroll {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+      font-size: 0.9rem;
+    }
+
+    th, td {
+      padding: 11px 12px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: #f0ebe2;
+      font-weight: 600;
+      font-size: 0.8rem;
+      color: var(--muted);
+      white-space: nowrap;
+      z-index: 1;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tbody tr:nth-child(even) td { background: #fbf9f4; }
+
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 7px;
+      vertical-align: middle;
+    }
+
+    .dot.A { background: var(--danger); }
+    .dot.B { background: var(--warning); }
+    .dot.C { background: var(--info); }
+    .dot.Watch { background: #8a857a; }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      margin-left: 6px;
+      vertical-align: middle;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .threat {
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .threat.A { color: var(--danger); }
+    .threat.B { color: var(--warning); }
+    .threat.C { color: var(--info); }
+    .threat.Watch { color: var(--muted); }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .card h3 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .tag {
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      letter-spacing: 0.02em;
+    }
+
+    .tag.A { background: var(--danger-soft); color: var(--danger); }
+    .tag.B { background: var(--warning-soft); color: var(--warning); }
+
+    .moat {
+      background: var(--success-soft);
+      border: 1px solid #b9dcc6;
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+
+    .moat p { margin: 0 0 8px; }
+    .moat .src {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    footer {
+      margin-top: 36px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.82rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 800px) {
+      .stats, .cards { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      .stats, .cards { grid-template-columns: 1fr; }
+      .wrap { padding: 24px 14px 56px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .filters { display: none; }
+      .table-scroll { overflow: visible; border: none; }
+      table { min-width: 0; font-size: 10pt; }
+      .card, .stat, .callout, .moat { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Regenic 竞品对照表</h1>
+      <p class="lede">
+        功能 × 定位 × 威胁等级。对照基准：信息加工层 + 判断标准 / 统一上下文 + 先个人本地、后组织。
+      </p>
+      <div class="meta">
+        <span class="chip">调研截止 · 2026-08-09</span>
+        <span class="chip">Regenic 内部分享</span>
+        <span class="chip">可筛选 · 可打印</span>
+      </div>
+    </header>
+
+    <div class="filters" id="filters" role="toolbar" aria-label="筛选"></div>
+
+    <div class="callout">
+      <strong>结论：仍无完整撞方；但 2026 新品把 Phase 1 外壳挤热了</strong>
+      <p>
+        没人同时做「多渠道加工 + 版本化判断标准 + 个人权威→组织合并（蒸馏不抬权）」。真正抬升的威胁是：Persnally / Memoreei / Heirloom 把「本地上下文 / 渠道记忆 / 个人→团队」讲清楚了——若对外只讲 memory，会被当成同类。
+      </p>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <section>
+      <h2>威胁等级定义</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>等级</th><th>含义</th><th>对 Regenic 的含义</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="dot A"></span><span class="threat A">A 高</span></td>
+              <td>Phase 1 叙事或「个人→团队」路径正面重叠</td>
+              <td>演示与获客会被直接对标；需用标准/加工差异拉开</td>
+            </tr>
+            <tr>
+              <td><span class="dot B"></span><span class="threat B">B 中</span></td>
+              <td>占一块能力（memory API / 企业搜索 / 管道库）</td>
+              <td>替代局部模块或抢品类词；非同品类替代</td>
+            </tr>
+            <tr>
+              <td><span class="dot C"></span><span class="threat C">C 低</span></td>
+              <td>相邻小工具/研究原型</td>
+              <td>噪音与灵感来源，非主竞品</td>
+            </tr>
+            <tr>
+              <td><span class="dot Watch"></span><span class="threat Watch">Watch</span></td>
+              <td>规范/治理，尚无产品形态</td>
+              <td>思想邻居；可对齐语言，暂不抢用户</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>竞品总表 <span class="count" id="table-count"></span></h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>产品</th>
+              <th>威胁</th>
+              <th>定位</th>
+              <th>重叠</th>
+              <th>缺口（相对 Regenic）</th>
+              <th>何时</th>
+            </tr>
+          </thead>
+          <tbody id="competitor-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>2026 新出现 / 新升温（优先盯）</h2>
+      <div class="cards">
+        <article class="card">
+          <h3><span class="tag A">A</span> Persnally</h3>
+          <p>本地 context engine，claim 带证据，MCP，纠错权威。2026-07 已加 per-client identity token。最接近「个人双能力」里「上下文」半边，但主线是身份/偏好模型。</p>
+        </article>
+        <article class="card">
+          <h3><span class="tag A">A</span> Memoreei</h3>
+          <p>WhatsApp / Discord / Slack / Gmail 等 13 源 → 本地 SQLite → MCP 检索。Phase 1「接真实渠道」演示层最近；缺标准与分层加工。</p>
+        </article>
+        <article class="card">
+          <h3><span class="tag A">A</span> Heirloom</h3>
+          <p>2026-05 起；Slack / Obsidian 等 ingest + 已宣称 self-host Teams。唯一把「个人 memory → 组织共享」写进路线的新品，但仍是密文共享记忆，不是权威事件 + 标准。</p>
+        </article>
+        <article class="card">
+          <h3><span class="tag B">B</span> Beever Atlas / OpenMemory / Supermemory</h3>
+          <p>Atlas（2026-04）：团队聊天→Wiki。OpenMemory：自托管认知记忆 + 连接器。Supermemory：云端 memory 品类领导者。三者都会抢「context / memory layer」心智。</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>功能维度对照（Regenic vs 最近邻）</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>能力维度</th>
+              <th>Regenic</th>
+              <th>最近邻</th>
+              <th>撞方判断</th>
+            </tr>
+          </thead>
+          <tbody id="feature-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>分产品行动提示 <span class="count" id="action-count"></span></h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>产品</th><th>建议动作</th></tr>
+          </thead>
+          <tbody id="action-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="moat">
+        <h3>仍未撞上的护城河组合</h3>
+        <p>版本化判断标准生命周期 × 渠道加工（非笔记）× 个人本地权威 → 组织权威合并 × 蒸馏不抬权 × 人机对称 API。单项能力多有邻居；整包仍空。</p>
+        <p class="src">来源：各项目 README / 官网、widemem 2026 memory landscape、GitHub 活跃度抽样。威胁等级为相对 Regenic 产品路径的判断，非融资或 star 排名。</p>
+      </div>
+    </section>
+
+    <footer>
+      <span>Regenic · 竞品调研分享页</span>
+      <span>单文件 HTML · 打开即可筛选 / 打印</span>
+    </footer>
+  </div>
+
+  <script>
+    const competitors = [
+      {
+        name: "Persnally",
+        when: "2025-09 起；v2.10 2026-07",
+        isNew: true,
+        threat: "A",
+        positioning: "本地个人 context engine；「你会怎么做」+ MCP",
+        overlap: "本地优先、event/claim 出处、纠错权威、per-client scope、MCP",
+        gap: "吃 AI 历史/身份模型，不是多渠道加工层；无标准机器与组织权威合并",
+        watch: "叙事最易撞 Phase 1；勿对外只讲「本地 memory」",
+      },
+      {
+        name: "Memoreei",
+        when: "2026 活跃",
+        isNew: true,
+        threat: "A",
+        positioning: "个人通信全史检索：13 渠道 → SQLite → MCP",
+        overlap: "多渠道接入、本地权威、给人机检索「该知道什么」",
+        gap: "检索/回忆为主；无分层加工、无标准修订、无组织蒸馏不抬权",
+        watch: "Phase 1 渠道叙事最近邻；功能演示易被对标",
+      },
+      {
+        name: "Heirloom",
+        when: "2026-05；已宣称 Teams v1",
+        isNew: true,
+        threat: "A",
+        positioning: "Rust 本地 MCP memory；Slack/Obsidian 等 ingest + 自托管 Teams",
+        overlap: "本地优先 → 组织共享路径；加密 SQLite；多源 ingest",
+        gap: "仍是 memory 共享，不是标准驱动加工；组织侧偏密文共享库",
+        watch: "唯一明确「个人→团队」的新品路线；需持续盯",
+      },
+      {
+        name: "OpenMemory",
+        when: "2025-10；~4.4k★",
+        isNew: true,
+        threat: "B",
+        positioning: "自托管认知记忆引擎；多 sector + 连接器 + MCP",
+        overlap: "本地/自托管、出处痕迹、Notion/Drive 等源、多用户 server",
+        gap: "Agent memory 库，非产品 OS；无判断标准生命周期",
+        watch: "开发者会拿它当「记忆层」替代品",
+      },
+      {
+        name: "Supermemory",
+        when: "热度 2025–26；~17k★",
+        isNew: true,
+        threat: "B",
+        positioning: "云端 memory/context API；benchmark 领先 + 插件生态",
+        overlap: "fact 图、矛盾处理、连接器、MCP/插件进 Cursor/Claude",
+        gap: "云优先 memory API；不是本地权威加工层，也无标准机器",
+        watch: "心智占位强；会稀释「context layer」品类名",
+      },
+      {
+        name: "Cognee",
+        when: "规模化 2025；~13k★",
+        isNew: false,
+        threat: "B",
+        positioning: "开源认知管道：classify→extract→graph；38+ 源",
+        overlap: "六段管道、多源 ingest、企业采用；与「加工」语感接近",
+        gap: "知识图/RAG 管道，非标准修订与人机同一决策标准",
+        watch: "组织侧技术买家可能拿它当基建替代",
+      },
+      {
+        name: "Beever Atlas",
+        when: "v0.1 2026-04",
+        isNew: true,
+        threat: "B",
+        positioning: "团队聊天 → 双记忆 + 自动 Wiki；Slack/Discord/Teams",
+        overlap: "渠道采集、蒸馏/验证、出处、MCP、自托管团队知识",
+        gap: "目标是 LLM Wiki，不是标准机器；组织优先而非个人本地",
+        watch: "Phase 3 渠道→知识叙事相邻",
+      },
+      {
+        name: "ctxd (keeprlabs)",
+        when: "2026 v0.3+",
+        isNew: true,
+        threat: "B",
+        positioning: "Agent context substrate：Event log + capability token + MCP",
+        overlap: "append-only Event、能力边界、个人/组织 substrate 叙事",
+        gap: "偏 daemon/基建；无 Digest/标准/日蒸馏产品闭环",
+        watch: "架构语汇最近；可当灵感也可被误认为同类",
+      },
+      {
+        name: "Cairn 系",
+        when: "2026 多 fork",
+        isNew: true,
+        threat: "B",
+        positioning: "「一个 local brain 给所有 agent」；lens / 审计",
+        overlap: "本地 SQLite、evidence、MCP、per-client 授权",
+        gap: "个人 memory OS；无渠道加工与标准机器",
+        watch: "与 Persnally 同赛道噪音",
+      },
+      {
+        name: "Mem0 / Zep·Graphiti / Letta",
+        when: "成熟；2026 仍主导",
+        isNew: false,
+        threat: "B",
+        positioning: "开发者 Agent memory 基础设施（API/图/自编辑）",
+        overlap: "长期记忆、时序事实、企业合规（Zep）",
+        gap: "库/平台，不是端到端「加工+标准」产品",
+        watch: "集成商会用它们拼出「假 Regenic」",
+      },
+      {
+        name: "PMB / Substrate / Contextful / personal-context-mcp",
+        when: "2025–26 爆发",
+        isNew: true,
+        threat: "C",
+        positioning: "编码 Agent 本地记忆 / 项目 context pack",
+        overlap: "本地 SQLite、决策/lesson、MCP",
+        gap: "范围锁在 IDE/代码工作区，非生活/工作渠道加工",
+        watch: "开发者心智分流；非主战场",
+      },
+      {
+        name: "Veracium / knowledge-worker / Keimenon",
+        when: "2025–26",
+        isNew: true,
+        threat: "C",
+        positioning: "出处感知 claim / 本地知识图",
+        overlap: "provenance、第三方 claim 隔离（近「蒸馏不抬权」）",
+        gap: "研究/插件形态；无产品级标准与组织路径",
+        watch: "概念验证邻居",
+      },
+      {
+        name: "Glean / Dust / Hebbia / Copilot",
+        when: "成熟闭源",
+        isNew: false,
+        threat: "B",
+        positioning: "企业搜索 / Agent 工作台 / 深研 / 生态助手",
+        overlap: "组织统一上下文、连接器、ACL、agent",
+        gap: "云组织优先；无本地个人权威→组织合并；无标准机器内核",
+        watch: "Phase 3/4 采购对手，非 Phase 1 撞方",
+      },
+      {
+        name: "DelegateZero / Judgment Assurance / DPS",
+        when: "2026 规范层",
+        isNew: true,
+        threat: "Watch",
+        positioning: "委托判断 schema / 判断治理 / 决策出处标准",
+        overlap: "「判断标准」语义最近的公开规范",
+        gap: "规范与治理框架，不是可装的加工产品",
+        watch: "思想邻居；可能成为你们对外对齐的标准语言",
+      },
+    ];
+
+    const featureRows = [
+      ["多渠道接入（拉/推）", "核心（Connector 只翻译）", "Memoreei / Beever / Cognee / OpenMemory", "A–B：表层功能已有"],
+      ["本地权威库 + 可导出", "Phase 1 默认", "Persnally / Heirloom / OpenMemory / ctxd", "A：叙事高重叠"],
+      ["Event / Blob 分层 + 幂等", "RFC 0005", "ctxd / 部分 ingest ADR", "架构常见，产品少讲"],
+      ["Claim + 出处 / 隔离", "RFC 0002/0006", "Persnally / Veracium / OpenMemory", "概念扩散中"],
+      ["Digest / 日蒸馏", "RFC 0007", "Beever wiki 管道 / Cognee cognify", "有蒸馏，无「进标准」"],
+      ["版本化判断标准", "双能力核心", "DelegateZero 等规范（非产品）", "几乎无产品撞方"],
+      ["人机同一 API", "RFC 0004", "MCP 生态普遍「给 agent」", "对称 API 仍少见"],
+      ["个人→组织 + 蒸馏不抬权", "Phase 3 护城河", "Heirloom Teams（弱）/ Dust Spaces", "完整模型未见"],
+      ["明确不做第二大脑/聊天", "产品边界", "多数竞品正往 memory/wiki 堆", "差异化叙事资产"],
+    ];
+
+    const tiers = ["全部", "A 高威胁", "B 中威胁", "C 低威胁", "Watch", "2026 新品"];
+    let currentTier = "全部";
+
+    function threatLabel(t) {
+      if (t === "A") return "A 高";
+      if (t === "B") return "B 中";
+      if (t === "C") return "C 低";
+      return "Watch";
+    }
+
+    function matches(c, tier) {
+      if (tier === "全部") return true;
+      if (tier === "2026 新品") return c.isNew;
+      if (tier === "A 高威胁") return c.threat === "A";
+      if (tier === "B 中威胁") return c.threat === "B";
+      if (tier === "C 低威胁") return c.threat === "C";
+      return c.threat === "Watch";
+    }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderFilters() {
+      const root = document.getElementById("filters");
+      root.innerHTML = tiers.map((t) =>
+        `<button type="button" aria-pressed="${t === currentTier}" data-tier="${esc(t)}">${esc(t)}</button>`
+      ).join("");
+      root.querySelectorAll("button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          currentTier = btn.dataset.tier;
+          render();
+        });
+      });
+    }
+
+    function renderStats() {
+      const a = competitors.filter((c) => c.threat === "A").length;
+      const b = competitors.filter((c) => c.threat === "B").length;
+      const n = competitors.filter((c) => c.isNew).length;
+      document.getElementById("stats").innerHTML = `
+        <div class="stat danger"><div class="v">${a}</div><div class="l">A 高威胁</div></div>
+        <div class="stat warning"><div class="v">${b}</div><div class="l">B 中威胁</div></div>
+        <div class="stat info"><div class="v">${n}</div><div class="l">2025–26 新品/新热</div></div>
+        <div class="stat success"><div class="v">0</div><div class="l">完整双能力撞方</div></div>
+      `;
+    }
+
+    function renderTables() {
+      const filtered = competitors.filter((c) => matches(c, currentTier));
+      document.getElementById("table-count").textContent =
+        `· 当前筛选 ${filtered.length} / ${competitors.length}`;
+      document.getElementById("action-count").textContent =
+        `· ${filtered.length} 项`;
+
+      document.getElementById("competitor-body").innerHTML = filtered.map((c) => `
+        <tr>
+          <td>${esc(c.name)}${c.isNew ? '<span class="badge">新品</span>' : ""}</td>
+          <td><span class="dot ${c.threat}"></span><span class="threat ${c.threat}">${threatLabel(c.threat)}</span></td>
+          <td>${esc(c.positioning)}</td>
+          <td>${esc(c.overlap)}</td>
+          <td>${esc(c.gap)}</td>
+          <td>${esc(c.when)}</td>
+        </tr>
+      `).join("");
+
+      document.getElementById("action-body").innerHTML = filtered.map((c) => `
+        <tr>
+          <td>${esc(c.name)}</td>
+          <td>${esc(c.watch)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderFeatures() {
+      document.getElementById("feature-body").innerHTML = featureRows.map((r) => `
+        <tr>
+          <td>${esc(r[0])}</td>
+          <td>${esc(r[1])}</td>
+          <td>${esc(r[2])}</td>
+          <td>${esc(r[3])}</td>
+        </tr>
+      `).join("");
+    }
+
+    function render() {
+      renderFilters();
+      renderStats();
+      renderTables();
+    }
+
+    renderFeatures();
+    render();
+  </script>
+</body>
+</html>
