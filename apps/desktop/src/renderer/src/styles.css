@@ -229,6 +229,26 @@ button {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.list-new {
+  color: var(--g500);
+  font-weight: 650;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.list-new:hover:not(:disabled) {
+  background: var(--g900);
+}
+
+.list-new:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .item {

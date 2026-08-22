@@ -144,6 +144,67 @@ describe("createDshHostRpcServices", () => {
     });
   });
 
+  it("creates a session and then histories that session id", async () => {
+    await withMemoryHost(async (host) => {
+      await host.get("authority").createInstallation({
+        id: "dsh-1",
+        org_id: "local-owner",
+        connector_type: "dsh-session",
+        status: "enabled",
+        config: { transport: "web", base_url: "http://127.0.0.1:3080" },
+        created_at: "2026-08-21T00:00:00.000Z",
+      });
+      const calls = [];
+      const services = createDshHostRpcServices(host, {
+        org_id: "local-owner",
+        now: () => "2026-08-21T00:00:00.000Z",
+        createId: () => "test",
+        fetch: async (url, init) => {
+          const body = JSON.parse(init.body);
+          calls.push({ url, method: body.method, sessionId: body.payload?.sessionId });
+          if (url.includes("session.create")) {
+            return {
+              ok: true,
+              status: 200,
+              async json() {
+                return {
+                  type: "server-response",
+                  rpcId: body.rpcId,
+                  result: { ok: true, value: { sessionId: "sess-real" } },
+                };
+              },
+            };
+          }
+          if (url.includes("session.list")) {
+            return {
+              ok: true,
+              status: 200,
+              async json() {
+                return {
+                  type: "server-response",
+                  rpcId: body.rpcId,
+                  result: { ok: true, value: { items: [{ sessionId: "sess-real" }], hasMore: false } },
+                };
+              },
+            };
+          }
+          return historyFetch(HISTORY_EVENTS)(url, init);
+        },
+      });
+
+      const created = await services.createSession();
+      assert.deepEqual(created, { sessionId: "sess-real" });
+      const listed = await services.listSessions();
+      assert.deepEqual(listed.map((item) => item.sessionId), ["sess-real"]);
+      const page = await services.receive("sess-real");
+      assert.deepEqual(page.events.map((event) => event.seq), [0, 1]);
+      assert.equal(
+        calls.some((item) => item.method === "session.history" && item.sessionId === "sess-real"),
+        true,
+      );
+    });
+  });
+
   it("uses REGENIC_DSH_BASE_URL when the stored install is cli", async () => {
     await withMemoryHost(async (host) => {
       await host.get("authority").createInstallation({

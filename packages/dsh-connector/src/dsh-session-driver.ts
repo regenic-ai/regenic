@@ -11,7 +11,7 @@ import {
   type NewConnectorInstallation,
   type RegisteredEgress,
 } from "@regenic/domain";
-import { DshWebRpcClient } from "./dsh-rpc-client";
+import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
 import { DshSessionEgress } from "./dsh-session-egress";
 import { DshSessionPollConnector } from "./dsh-session-poll-connector";
 import {
@@ -68,8 +68,24 @@ export const dshSessionDriver: ChannelDriver = {
     );
   },
 
+  capabilities(installation) {
+    if (installation.status !== "enabled") {
+      return { sync: false, reply: false, create: false };
+    }
+    const transport = resolveEffectiveDshTransport(installation.config);
+    const pinned = configString(installation.config, "session_id");
+    if (transport === "cli") {
+      return { sync: true, reply: true, create: false };
+    }
+    return { sync: true, reply: true, create: !pinned };
+  },
+
   canReply(installation) {
-    return installation.status === "enabled";
+    return this.capabilities(installation).reply;
+  },
+
+  async createThread(installation, _host, env) {
+    return createDshConversation(installation, env);
   },
 
   async resolveStreams(installation, host, env) {
@@ -77,12 +93,9 @@ export const dshSessionDriver: ChannelDriver = {
     if (transport === "cli") {
       return [await mountInstalled(host, installation, env)];
     }
-    const client = webClient(installation, env);
+    const client = dshWebRpcClient(installation, env);
     const pinned = configString(installation.config, "session_id");
     const sessionIds = pinned ? [pinned] : await client.listAllSessionIds();
-    if (sessionIds.length === 0) {
-      throw new ChannelDriverError("sync_failed", "DSH web has no sessions to sync");
-    }
     return sessionIds.map((sessionId) =>
       sessionStream(installation, client, sessionId),
     );
@@ -93,7 +106,7 @@ export const dshSessionDriver: ChannelDriver = {
     if (transport === "cli") {
       return mountInstalled(host, installation, env);
     }
-    return sessionStream(installation, webClient(installation, env), thread.target);
+    return sessionStream(installation, dshWebRpcClient(installation, env), thread.target);
   },
 
   async bindEgress(installation, thread, host, env) {
@@ -106,7 +119,7 @@ export const dshSessionDriver: ChannelDriver = {
       }
       return egress;
     }
-    return new DshSessionEgress(webClient(installation, env), {
+    return new DshSessionEgress(dshWebRpcClient(installation, env), {
       installation_id: installation.id,
       session_id: thread.target,
     });
@@ -158,18 +171,35 @@ async function mountInstalled(
   };
 }
 
-function webClient(
+export async function createDshConversation(
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
+  extras: { fetch?: DshFetch; access_token?: string } = {},
+): Promise<ConversationThread> {
+  if (!dshSessionDriver.capabilities(installation).create) {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "This DSH installation cannot create a conversation",
+    );
+  }
+  const created = await dshWebRpcClient(installation, env, extras).sessionCreate();
+  return { source: "dsh", target: created.sessionId };
+}
+
+export function dshWebRpcClient(
+  installation: { config: Record<string, unknown> },
+  env: NodeJS.ProcessEnv,
+  extras: { fetch?: DshFetch; access_token?: string } = {},
 ): DshWebRpcClient {
   return new DshWebRpcClient({
     base_url: resolveDshWebBaseUrl(installation, env),
-    access_token: env.REGENIC_DSH_TOKEN,
+    access_token: extras.access_token ?? env.REGENIC_DSH_TOKEN,
+    fetch: extras.fetch,
   });
 }
 
 function resolveDshWebBaseUrl(
-  installation: ConnectorInstallation,
+  installation: { config: Record<string, unknown> },
   env: NodeJS.ProcessEnv,
 ): string {
   return (

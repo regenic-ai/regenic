@@ -1,10 +1,9 @@
 import type {
+  ChannelDriver,
   ConnectorInstallation,
   ConnectorInstallationStatus,
   IngestAttempt,
 } from "@regenic/domain";
-
-const SYNCABLE_TYPES = new Set(["slack-channel", "dsh-session"]);
 
 export interface ConnectorFieldWhen {
   field: string;
@@ -186,30 +185,35 @@ export interface EngineInstallationView {
   label: string;
   detail: string | null;
   syncable: boolean;
+  can_reply: boolean;
+  can_create: boolean;
   last_attempt: IngestAttempt | null;
 }
 
 export function toInstallationView(
   installation: ConnectorInstallation,
   lastAttempt: IngestAttempt | null,
-  registered: { has(connectorType: string): boolean } = SYNCABLE_TYPES,
+  drivers: { get(connectorType: string): ChannelDriver | undefined },
 ): EngineInstallationView {
   const { label, detail } = connectorPresentation(installation);
+  const driver = drivers.get(installation.connector_type);
+  const capabilities = driver?.capabilities(installation) ?? {
+    sync: false,
+    reply: false,
+    create: false,
+  };
+  const enabled = installation.status === "enabled";
   return {
     id: installation.id,
     connector_type: installation.connector_type,
     status: installation.status,
     label,
     detail,
-    syncable:
-      installation.status === "enabled" &&
-      registered.has(installation.connector_type),
+    syncable: enabled && capabilities.sync,
+    can_reply: enabled && capabilities.reply,
+    can_create: enabled && capabilities.create,
     last_attempt: lastAttempt,
   };
-}
-
-export function isSyncableType(connectorType: string): boolean {
-  return SYNCABLE_TYPES.has(connectorType);
 }
 
 function connectorPresentation(installation: ConnectorInstallation): {

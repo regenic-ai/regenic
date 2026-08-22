@@ -47,8 +47,23 @@ export const slackChannelDriver: ChannelDriver = {
     return this.matchesThread(installation, thread);
   },
 
+  capabilities(installation) {
+    return {
+      sync: installation.status === "enabled",
+      reply: false,
+      create: false,
+    };
+  },
+
   canReply() {
     return false;
+  },
+
+  async createThread() {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "Creating a Slack conversation is not available",
+    );
   },
 
   async resolveStreams(installation, host, env) {
