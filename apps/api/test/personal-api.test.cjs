@@ -4,12 +4,11 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
-const { NestFactory } = require("@nestjs/core");
+const { createHttpApp } = require("../dist/http-app");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
 const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
-const { AppModule } = require("../dist/app.module");
 const { decodeBodyText } = require("../dist/inbox-body");
 
 const roots = [];
@@ -277,7 +276,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     REGENIC_PERSONAL_API: undefined,
     ...extraEnv,
   });
-  const app = await NestFactory.create(AppModule, { logger: false });
+  const app = await createHttpApp({ logger: false });
   await app.listen(0, "127.0.0.1");
   return { app, origin: await app.getUrl() };
 }
@@ -707,10 +706,34 @@ describe("personal /v1/me", () => {
       assert.equal(dsh.prompts.length, 1);
       assert.equal(dsh.prompts[0].method, "session.prompt");
       assert.equal(dsh.prompts[0].payload.sessionId, "sess-a");
+      const image = dsh.prompts[0].payload.content.find((part) => part.type === "image");
+      assert.equal(image.mimeType, "image/png");
+      assert.equal(image.mediaType, "image/png");
+      assert.equal(image.name, "shot.png");
       assert.equal(
-        dsh.prompts[0].payload.content.some((part) => part.type === "image"),
-        true,
+        image.data,
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
       );
+      assert.equal(image.url, undefined);
+      assert.equal(image.path, undefined);
+
+      const oversized = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:sess-a",
+          text: "large screenshot",
+          attachments: [
+            {
+              filename: "wide.png",
+              media_type: "image/png",
+              data_base64: Buffer.alloc(150 * 1024, 7).toString("base64"),
+            },
+          ],
+        }),
+      });
+      assert.notEqual(oversized.status, 413);
+      assert.equal(oversized.status, 201, await oversized.text());
 
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const userTexts = inbox
@@ -945,7 +968,7 @@ describe("personal /v1/me", () => {
       PORT: "4370",
       LISTEN_HOST: "127.0.0.1",
     });
-    const app = await NestFactory.create(AppModule, { logger: false });
+    const app = await createHttpApp({ logger: false });
     await app.listen(0, "127.0.0.1");
     const origin = await app.getUrl();
     try {
