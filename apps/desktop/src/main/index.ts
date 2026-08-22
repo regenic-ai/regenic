@@ -107,9 +107,15 @@ function countWorkThreads(
   return ids.size;
 }
 
-async function probe(origin: string): Promise<"personal" | "other" | "none"> {
+async function probe(
+  origin: string,
+  timeoutMs?: number,
+): Promise<"personal" | "other" | "none"> {
   try {
-    const response = await fetch(`${origin}/health`);
+    const response = await fetch(
+      `${origin}/health`,
+      timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : undefined,
+    );
     const body = (await response.json()) as { mode?: string };
     return body.mode === "personal" ? "personal" : "other";
   } catch {
@@ -225,14 +231,44 @@ async function startLocalKernel(): Promise<void> {
   }
 }
 
-async function applyKernelPreference(preference: KernelPreference): Promise<void> {
-  saveKernelPreference(settingsFile(), preference);
+async function assertPersonalKernel(origin: string): Promise<void> {
+  const mode = await probe(origin, 4000);
+  if (mode === "none") {
+    throw new Error(`Cannot reach the kernel at ${origin}`);
+  }
+  if (mode !== "personal") {
+    throw new Error(
+      `Kernel at ${origin} is not personal. On that server set REGENIC_PERSONAL_API=1; /v1/me stays off when LISTEN_HOST is not loopback.`,
+    );
+  }
+}
+
+async function connectSavedKernel(): Promise<void> {
+  const preference = loadKernelPreference(settingsFile());
   if (preference.mode === "custom" && preference.origin) {
+    try {
+      await assertPersonalKernel(preference.origin);
+      apiOrigin = preference.origin;
+      return;
+    } catch (error) {
+      process.stderr.write(
+        `[kernel] ${error instanceof Error ? error.message : error}\n`,
+      );
+    }
+  }
+  await startLocalKernel();
+}
+
+async function applyKernelPreference(preference: KernelPreference): Promise<void> {
+  if (preference.mode === "custom" && preference.origin) {
+    await assertPersonalKernel(preference.origin);
+    saveKernelPreference(settingsFile(), preference);
     stopOwnedSidecar();
     apiOrigin = preference.origin;
     broadcastOrigin();
     return;
   }
+  saveKernelPreference(settingsFile(), { mode: "local" });
   await startLocalKernel();
   broadcastOrigin();
 }
@@ -429,7 +465,7 @@ app.whenReady().then(async () => {
   );
 
   try {
-    await applyKernelPreference(loadKernelPreference(settingsFile()));
+    await connectSavedKernel();
   } catch (error) {
     process.stderr.write(`[kernel] ${error instanceof Error ? error.message : error}\n`);
   }

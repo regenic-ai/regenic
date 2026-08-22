@@ -69,7 +69,7 @@ export function ConsoleApp() {
         return threads[0]?.id ?? null;
       });
     } catch {
-      setError("Cannot reach the local kernel");
+      setError(`Cannot reach the kernel at ${currentApiOrigin()}`);
       setEngine(null);
     }
   };
@@ -915,7 +915,8 @@ function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) {
             <span>
               <strong>Custom</strong>
               <span className="muted">
-                Point the console at another kernel. Desktop will not start a local sidecar.
+                Point at another personal kernel. Apply probes /health first; a remote
+                server needs REGENIC_PERSONAL_API=1.
               </span>
             </span>
           </button>
@@ -929,6 +930,12 @@ function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) {
               onChange={(event) => setCustomOrigin(event.target.value)}
             />
           </label>
+        ) : null}
+        {mode === "custom" && activeOrigin !== customOrigin ? (
+          <p className="muted">
+            Saved custom kernel is unused. Console is on <code>{activeOrigin}</code>{" "}
+            until Apply succeeds.
+          </p>
         ) : null}
         <div className="install-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void apply()}>
