@@ -1,39 +1,26 @@
-import type { InboxViewItem } from "./types";
+import type { InboxViewItem, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
 import { latestMessage } from "./inbox";
 
-export type MessageRole = "user" | "assistant" | "system";
+export type MessageRole = MessageKind;
 
-const SYSTEM_PATTERN =
-  /current runtime context|dsh file policy|approval prompts are disabled|danger-full-access|workspace-write|read-only permission|you are (a |an )?(helpful )?(assistant|agent)/i;
-
-const USER_PATTERN = /[?？]|\bplease\b|can you|请|帮/i;
-
-export function messageRole(text: string | undefined): MessageRole {
-  const value = text?.trim() ?? "";
-  if (!value) {
-    return "assistant";
-  }
-  if (SYSTEM_PATTERN.test(value.slice(0, 280))) {
-    return "system";
-  }
-  if (SYSTEM_PATTERN.test(value) && value.length < 1200) {
-    return "system";
-  }
-  if (value.length < 500 && USER_PATTERN.test(value)) {
-    return "user";
+export function messageRole(item: InboxViewItem | string | undefined): MessageRole {
+  if (item && typeof item === "object") {
+    if (item.kind === "user" || item.kind === "assistant" || item.kind === "system") {
+      return item.kind;
+    }
   }
   return "assistant";
 }
 
-export function roleLabel(role: MessageRole): string {
+export function roleLabel(role: MessageRole, channel?: string): string {
   if (role === "user") {
     return "You";
   }
   if (role === "system") {
     return "Runtime";
   }
-  return "Assistant";
+  return channel === "dsh" ? "DSH Agent" : "Assistant";
 }
 
 export function firstLine(text: string | undefined, max = 80): string {
@@ -42,7 +29,7 @@ export function firstLine(text: string | undefined, max = 80): string {
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
   const line =
-    lines.find((part) => !part.startsWith("```") && !isTableRow(part)) ??
+    lines.find((part) => !part.startsWith("```") && !isTableRow(part) && !/^>\s?/.test(part)) ??
     lines[0] ??
     "";
   let clean = line
@@ -64,26 +51,87 @@ export function firstLine(text: string | undefined, max = 80): string {
 }
 
 export function threadTitle(thread: InboxThread): string {
-  const human = thread.messages.find(
-    (item) => messageRole(item.body_text) !== "system",
-  );
-  const source = human ?? latestMessage(thread);
-  return firstLine(source.body_text, 88) || thread.label;
+  return firstLine(threadFace(thread).body_text, 120) || thread.label;
+}
+
+function threadFace(thread: InboxThread): InboxViewItem {
+  const user = thread.messages.find((item) => messageRole(item) === "user");
+  const human =
+    user ?? thread.messages.find((item) => messageRole(item) !== "system");
+  return human ?? latestMessage(thread);
 }
 
 export function readingMessages(thread: InboxThread): InboxViewItem[] {
-  return thread.messages.filter((item) => {
+  const visible = thread.messages.filter((item) => {
     const text = item.body_text?.trim() ?? "";
-    return text.length > 0;
+    return text.length > 0 || (item.attachments?.length ?? 0) > 0;
   });
+  return coalesceReading(visible);
+}
+
+function coalesceReading(items: InboxViewItem[]): InboxViewItem[] {
+  const merged: InboxViewItem[] = [];
+  for (const item of items) {
+    const role = messageRole(item);
+    const previous = merged[merged.length - 1];
+    if (
+      previous &&
+      messageRole(previous) === role &&
+      role !== "system"
+    ) {
+      if (sameUtterance(previous, item)) {
+        continue;
+      }
+      merged[merged.length - 1] = joinReading(previous, item);
+      continue;
+    }
+    merged.push(item);
+  }
+  return merged;
+}
+
+function sameUtterance(left: InboxViewItem, right: InboxViewItem): boolean {
+  const leftText = (left.body_text ?? "").replace(/\s+/g, " ").trim();
+  const rightText = (right.body_text ?? "").replace(/\s+/g, " ").trim();
+  return leftText.length > 0 && leftText === rightText;
+}
+
+function joinReading(left: InboxViewItem, right: InboxViewItem): InboxViewItem {
+  const leftText = left.body_text?.trim() ?? "";
+  const rightText = right.body_text?.trim() ?? "";
+  const body = [leftText, rightText].filter((part) => part.length > 0).join("\n\n");
+  const attachments = [...(left.attachments ?? []), ...(right.attachments ?? [])];
+  return {
+    ...left,
+    body_text: body.length > 0 ? body : undefined,
+    attachments: attachments.length > 0 ? attachments : undefined,
+  };
 }
 
 export type RichBlock =
   | { type: "heading"; level: 1 | 2 | 3; text: string }
   | { type: "paragraph"; text: string }
+  | { type: "quote"; text: string }
   | { type: "list"; ordered: boolean; items: string[] }
   | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "code"; text: string };
+
+export function splitQuoted(text: string): { quote?: string; body: string } {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const quotes: string[] = [];
+  let index = 0;
+  while (index < lines.length && /^>\s?/.test(lines[index])) {
+    quotes.push(lines[index].replace(/^>\s?/, ""));
+    index += 1;
+  }
+  while (index < lines.length && lines[index].trim() === "") {
+    index += 1;
+  }
+  return {
+    quote: quotes.length > 0 ? quotes.join("\n") : undefined,
+    body: lines.slice(index).join("\n"),
+  };
+}
 
 export function parseRichBlocks(text: string): RichBlock[] {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
@@ -106,6 +154,15 @@ export function parseRichBlocks(text: string): RichBlock[] {
         index += 1;
       }
       blocks.push({ type: "code", text: closed.join("\n") });
+      continue;
+    }
+    if (isQuoteLine(line)) {
+      const quotes: string[] = [];
+      while (index < lines.length && isQuoteLine(lines[index])) {
+        quotes.push(lines[index].replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push({ type: "quote", text: quotes.join("\n") });
       continue;
     }
     const heading = /^(#{1,6})\s+(.+)$/.exec(line);
@@ -180,6 +237,10 @@ function splitTableRow(line: string): string[] {
   return trimmed.split("|").map((cell) => cell.trim());
 }
 
+function isQuoteLine(line: string): boolean {
+  return /^>\s?/.test(line);
+}
+
 function isUnorderedItem(line: string): boolean {
   return /^\s*[-*+]\s+/.test(line);
 }
@@ -198,7 +259,7 @@ function isBlockBoundary(line: string): boolean {
   if (/^(#{1,6})\s+/.test(line)) {
     return true;
   }
-  if (isUnorderedItem(line) || isOrderedItem(line) || isTableRow(line)) {
+  if (isQuoteLine(line) || isUnorderedItem(line) || isOrderedItem(line) || isTableRow(line)) {
     return true;
   }
   return false;

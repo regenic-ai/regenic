@@ -3,7 +3,10 @@ import type { InboxViewItem } from "./types";
 export interface InboxThread {
   id: string;
   source: string;
+  channel: string;
+  channel_label: string;
   label: string;
+  can_send: boolean;
   messages: InboxViewItem[];
 }
 
@@ -12,11 +15,13 @@ export function workThreadId(
   externalId: string,
   fallbackId: string,
 ): string {
-  const colon = externalId.lastIndexOf(":");
+  const cut = externalId.indexOf(":out:");
+  const withoutOut = cut >= 0 ? externalId.slice(0, cut) : externalId;
+  const colon = withoutOut.lastIndexOf(":");
   if (colon > 0) {
-    return `${source}:${externalId.slice(0, colon)}`;
+    return `${source}:${withoutOut.slice(0, colon)}`;
   }
-  return `${source}:${fallbackId}`;
+  return `${source}:${withoutOut || fallbackId}`;
 }
 
 export function groupInboxThreads(items: InboxViewItem[]): InboxThread[] {
@@ -37,7 +42,10 @@ export function groupInboxThreads(items: InboxViewItem[]): InboxThread[] {
       return {
         id,
         source: latest.event.source,
+        channel: latest.channel ?? latest.event.source,
+        channel_label: latest.channel_label ?? latest.event.source.toUpperCase(),
         label: threadLabel(id, latest),
+        can_send: ordered.some((item) => item.can_send),
         messages: ordered,
       };
     })

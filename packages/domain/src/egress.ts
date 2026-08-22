@@ -8,6 +8,7 @@ export interface EgressCapabilities {
 
 export interface SendTarget {
   external_id?: string;
+  scope_id?: string;
 }
 
 export interface SendIntent {

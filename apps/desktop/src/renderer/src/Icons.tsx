@@ -32,6 +32,45 @@ export function EngineIcon() {
   );
 }
 
+export function FormatIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M3.5 12.5 6.2 3.5h1.6l2.7 9H9.2l-.5-1.8H5.3l-.5 1.8H3.5Zm2.2-3.2h2.6L7.1 5.4 5.7 9.3ZM11 4.2h2.6v1h-1.7V12h-1V5.2H11v-1Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+export function AttachIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8.7 3.6 4.2 8.1a2.4 2.4 0 1 0 3.4 3.4l5-5a1.6 1.6 0 1 0-2.3-2.3l-4.8 4.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function SendIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M2.4 8.1 13.4 3.4 9 13.3l-.8-4.2-3.8-1Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function SettingsIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
@@ -48,3 +87,4 @@ export function SettingsIcon() {
     </svg>
   );
 }
+

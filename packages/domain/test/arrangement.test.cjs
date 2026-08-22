@@ -64,6 +64,16 @@ describe("arrangeMessage", () => {
     assert.deepEqual(decision.reason_codes, ["thread_reply_noise"]);
   });
 
+  it("keeps a short assistant reply in current work", () => {
+    const decision = arrangeMessage({
+      event: event({ source: "dsh" }),
+      kind: "assistant",
+      text: "pong",
+    });
+    assert.equal(decision.disposition, "current_work");
+    assert.deepEqual(decision.reason_codes, ["assistant_reply"]);
+  });
+
   it("holds short unclear messages as pending", () => {
     const decision = arrangeMessage({
       event: event(),
@@ -72,6 +82,16 @@ describe("arrangeMessage", () => {
 
     assert.equal(decision.disposition, "pending");
     assert.deepEqual(decision.reason_codes, ["needs_review"]);
+  });
+
+  it("keeps an explicit weight hint even when the text looks like noise", () => {
+    const decision = arrangeMessage({
+      event: event(),
+      text: "ok",
+      weight_hints: { importance: 1 },
+    });
+    assert.equal(decision.disposition, "current_work");
+    assert.deepEqual(decision.reason_codes, ["weight_hint"]);
   });
 
   it("uses weight hints before default personal attention", () => {

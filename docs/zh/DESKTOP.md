@@ -12,7 +12,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 | 飞书桌面端 | 三栏工作面、图标栏、线程、关窗进托盘 | 频道瀑布流、聊天身份、紫/蓝品牌铬 |
 | Docker Desktop | 托盘引擎层、内核 Running/Syncing/Stopped、本机 sidecar | 容器/镜像列表、引擎设置向导 |
 
-默认只显示**当前工作**。渠道仍在原处；回复发回原渠道（发送属于 Phase 2）。
+默认只显示**当前工作**。渠道仍在原处；回复发回原渠道。线程能不能发由内核 `can_send` 决定（连接器 `ChannelDriver` 声明），桌面不按「是不是 DSH」开关输入框。能发的线程用飞书式输入框（Markdown、图片、文件）；Slack 驱动目前 `canReply: false`，回写 501。发送走 `installation + thread → egress.send(ContentPart[])`。发送后内核按该线程 follow/pull，把 Agent 回复拉进权威库，不必再去引擎页点 Sync。引擎 Sync 只负责追平其他会话或首次拉齐。同一句本地出站与渠道 history 回声只保留一条 Event。
 
 ## 视觉
 
@@ -30,7 +30,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 ## 双层表面
 
 - **主窗口：** 左图标栏（Inbox / Engine / Settings），中列表，右线程。顶栏是引擎芯片与 Inbox 计数。关窗不退出。
-- **当前工作按会话列，不按单条消息列。** DSH 一个 session、Slack 一个频道/线程，在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表，聚合只发生在桌面表面。消息窗按阅读流展示：短标题、会话 id 作副标题、系统/runtime 默认折叠，并轻量渲染标题/列表/表格/代码。
+- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`），聚合只发生在桌面表面。列表和标题醒目标出**来源渠道**。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按飞书阅读流：头像+名字（You / Agent / Runtime）、少气泡、引用条、runtime 居中折叠。底部输入是「Send to …」加格式/附件/发送图标；Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。
 - **托盘：** 点击打开小窗，显示内核状态、计数、最近 3 个会话；可「打开控制台」。退出只在托盘菜单。
 
 ## 进程
@@ -47,15 +47,16 @@ Electron 主进程拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`，默
 | --- | --- | --- |
 | GET | `/v1/me/inbox` | 当前工作 + 可选 `body_text` |
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
-| GET | `/v1/me/engine` | 内核、库路径、已安装连接器、未安装目录 |
-| POST | `/v1/me/connectors` | 从目录安装（Slack / DSH），不接收 token |
+| GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录 |
+| POST | `/v1/me/connectors` | 从目录安装（Slack / DSH），不接收 token；安装后内核立刻 pull 一次 |
 | DELETE | `/v1/me/connectors/:id` | 卸载安装记录和游标，保留已入库消息 |
-| POST | `/v1/me/connectors/:id/sync` | 按需同步。Slack 一页频道；DSH web 默认同步全部会话（每路最多 5 页） |
-| POST | `/v1/me/connectors/:id/enable` | 启用连接器 |
-| POST | `/v1/me/connectors/:id/disable` | 停用连接器 |
+| POST | `/v1/me/connectors/:id/sync` | 手动追平。Slack 一页频道；DSH web 默认同步全部会话（每路最多 5 页）。日常不用点 |
+| POST | `/v1/me/connectors/:id/enable` | 启用连接器，并立刻再 pull 一次 |
+| POST | `/v1/me/connectors/:id/disable` | 停用连接器，停止 pull |
+| POST | `/v1/me/replies` | 把回复发回原渠道。API 按 installation + thread 找 `ChannelDriver`，再 `egress.send`。入库后 follow 该线程直到出现新的 Agent 回复或短暂超时；驱动 `canReply: false` 时 501 |
 | GET | `/health` | 个人模式查 SQLite，不探 Postgres |
 
-不返回连接器 token 或 quarantine 正文。引擎页可安装、卸载、启用和同步；不自动后台 sync。凭证只读环境变量。
+不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 3 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。对话窗发送后会更快跟当前 DSH session。引擎 Sync 只是漏了再追平。凭证只读环境变量。
 
 ## 连接器：同步范围与前置步骤
 
@@ -63,8 +64,8 @@ Electron 主进程拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`，默
 
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |
-| Slack | `channel_id`（频道名可选） | 本机 `REGENIC_SLACK_TOKEN` | 只拉该频道。「全部同步」跑所有已安装实例 |
-| DSH web | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 本机 `dsh web`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标（每路最多 5 页）。填了则只拉那一条 |
+| Slack | `channel_id`（频道名可选） | 本机 `REGENIC_SLACK_TOKEN` | 只拉该频道。安装后立刻拉，之后内核轮询 |
+| DSH web | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 本机 `dsh web`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
 
 DSH 安装不接收 token / `command` / `workdir`；`base_url` 必须是回环。
@@ -75,8 +76,8 @@ DSH 安装不接收 token / `command` / `workdir`；`base_url` 必须是回环�
 pnpm dev:desktop
 ```
 
-需已能 `pnpm --filter @regenic/api... build`。无 Inbox 数据时，在引擎页安装并同步连接器。
+需已能 `pnpm --filter @regenic/api... build`。无 Inbox 数据时，在引擎页安装连接器，内核会自己拉。
 
 ## 本版不做
 
-发送 / 回复、OAuth 授权流、标准编辑、自动后台 sync、Windows/Linux 打包。
+Slack 回写、OAuth 授权流、标准编辑、渠道 webhook/push、Windows/Linux 打包。渠道目前是 pull 轮询，不是事件推送。

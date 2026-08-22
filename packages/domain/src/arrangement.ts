@@ -1,4 +1,5 @@
 import type { EventRecord, WeightHints } from "./ingestion";
+import type { MessageKind } from "./message-contract";
 
 export type MessageDisposition =
   | "current_work"
@@ -25,6 +26,7 @@ export interface InboxItem {
 export interface ArrangementInput {
   event: Pick<EventRecord, "id" | "org_id" | "source" | "operation">;
   type?: string;
+  kind?: MessageKind;
   text?: string;
   weight_hints?: WeightHints;
   now?: string;
@@ -43,12 +45,16 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
     return decision(input, "outside_current_work", ["tombstoned"], 0, decidedAt);
   }
 
+  if (isHighHint(input.weight_hints)) {
+    return decision(input, "current_work", ["weight_hint"], 0.9, decidedAt);
+  }
+
   if (isNoise(text)) {
     return decision(input, "outside_current_work", ["noise"], 0, decidedAt);
   }
 
-  if (isHighHint(input.weight_hints)) {
-    return decision(input, "current_work", ["weight_hint"], 0.9, decidedAt);
+  if (input.kind === "assistant") {
+    return decision(input, "current_work", ["assistant_reply"], 0.7, decidedAt);
   }
 
   if (isActionable(text)) {

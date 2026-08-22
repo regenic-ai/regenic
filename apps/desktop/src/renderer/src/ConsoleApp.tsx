@@ -1,28 +1,32 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   fetchEngine,
   fetchInbox,
   installConnector,
+  sendReply,
   setConnectorStatus,
   syncConnector,
   uninstallConnector,
 } from "./api";
+import { Composer, type ComposerDraft } from "./Composer";
 import {
   attemptSummary,
   chipLabel,
   connectorActionError,
   connectorLabel,
   engineChip,
-  formatTime,
+  formatChatTime,
   installationStatusLabel,
 } from "./format";
 import { groupInboxThreads, latestMessage, type InboxThread } from "./inbox";
 import { MessageBody } from "./MessageBody";
 import {
+  firstLine,
   messageRole,
   readingMessages,
   roleLabel,
   threadTitle,
+  type MessageRole,
 } from "./message-view";
 import { BrandBadge, BrandLockup } from "./Brand";
 import { EngineIcon, InboxIcon, SettingsIcon } from "./Icons";
@@ -35,7 +39,7 @@ import type {
   PersonalEngineView,
 } from "./types";
 
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 
 export function ConsoleApp() {
   const [nav, setNav] = useState<NavId>("inbox");
@@ -125,6 +129,7 @@ export function ConsoleApp() {
             selected={selected}
             error={error}
             onSelect={setSelectedId}
+            onRefresh={refresh}
           />
         ) : null}
         {nav === "engine" ? (
@@ -174,11 +179,13 @@ function InboxWorkspace({
   selected,
   error,
   onSelect,
+  onRefresh,
 }: {
   threads: InboxThread[];
   selected: InboxThread | null;
   error: string | null;
   onSelect: (id: string) => void;
+  onRefresh: () => Promise<void>;
 }) {
   return (
     <div className="columns">
@@ -187,7 +194,7 @@ function InboxWorkspace({
         {error ? <div className="page-empty">{error}</div> : null}
         {!error && threads.length === 0 ? (
           <div className="page-empty">
-            Nothing in current work yet. Open Engine to install and sync a connector.
+            Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own.
           </div>
         ) : null}
         {threads.map((thread) => {
@@ -199,13 +206,17 @@ function InboxWorkspace({
               className={`item${selected?.id === thread.id ? " selected" : ""}`}
               onClick={() => onSelect(thread.id)}
             >
-              <div className="item-meta">
-                <span>{thread.source}</span>
-                <span>{formatTime(latest.event.occurred_at)}</span>
-              </div>
-              <div className="item-title">{threadTitle(thread)}</div>
-              <div className="item-reasons">
-                {thread.messages.length} messages · {thread.label}
+              <div className="item-copy">
+                <div className="item-top">
+                  <span className={`channel-tag channel-${thread.channel}`}>
+                    {thread.channel_label}
+                  </span>
+                  <span className="item-time">{formatChatTime(latest.event.occurred_at)}</span>
+                </div>
+                <div className="item-title">{threadTitle(thread)}</div>
+                <div className="item-reasons">
+                  {firstLine(latest.body_text, 96) || thread.label}
+                </div>
               </div>
             </button>
           );
@@ -213,7 +224,7 @@ function InboxWorkspace({
       </aside>
       <section className="thread">
         {selected ? (
-          <ThreadPane thread={selected} />
+          <ThreadPane thread={selected} onRefresh={onRefresh} />
         ) : (
           <div className="thread-empty">Select a conversation on the left.</div>
         )}
@@ -222,52 +233,194 @@ function InboxWorkspace({
   );
 }
 
-function ThreadPane({ thread }: { thread: InboxThread }) {
-  const latest = latestMessage(thread);
-  const messages = readingMessages(thread);
+function ThreadPane({
+  thread,
+  onRefresh,
+}: {
+  thread: InboxThread;
+  onRefresh: () => Promise<void>;
+}) {
+  const [quote, setQuote] = useState<InboxViewItem | null>(null);
+  const [pending, setPending] = useState<InboxViewItem[]>([]);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const seen = new Set(thread.messages.map((item) => item.event.id));
+  const merged = readingMessages({
+    ...thread,
+    messages: [
+      ...thread.messages,
+      ...pending.filter((item) => !seen.has(item.event.id)),
+    ],
+  });
+  const canReply = thread.can_send;
+
+  useEffect(() => {
+    setQuote(null);
+    setSendError(null);
+    setPending((current) =>
+      current.filter((item) => !thread.messages.some((entry) => entry.event.id === item.event.id)),
+    );
+  }, [thread.id]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (node) {
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [thread.id, merged.length]);
+
+  const send = async (draft: ComposerDraft) => {
+    setSending(true);
+    setSendError(null);
+    const optimistic = localOutbound(thread, draft);
+    setPending((current) => [...current, optimistic]);
+    try {
+      await sendReply({
+        thread_id: thread.id,
+        text: draft.text,
+        reply_to_event_id: draft.reply_to?.event.id,
+        attachments: draft.attachments,
+      });
+      setQuote(null);
+      await onRefresh();
+    } catch (caught) {
+      setSendError(caught instanceof Error ? caught.message : "Send failed");
+      throw caught instanceof Error ? caught : new Error("Send failed");
+    } finally {
+      setPending((current) => current.filter((item) => item.event.id !== optimistic.event.id));
+      setSending(false);
+    }
+  };
+
   return (
     <article className="thread-pane">
       <header className="thread-head">
-        <h1>{threadTitle(thread)}</h1>
-        <p className="thread-sub">{thread.label}</p>
-        <div className="provenance">
-          <span className="chip data">{thread.source}</span>
-          <span className="chip">{latest.decision.disposition}</span>
-          <span className="chip">{thread.messages.length} messages</span>
+        <div className="thread-head-main">
+          <div className="thread-title-row">
+            <span className={`channel-tag channel-lg channel-${thread.channel}`}>
+              {thread.channel_label}
+            </span>
+            <h1>{threadTitle(thread)}</h1>
+          </div>
+          <p className="thread-sub">
+            {thread.messages.length} messages · {thread.label}
+          </p>
         </div>
       </header>
-      {messages.length === 0 ? (
-        <p className="muted">This conversation has no displayable messages.</p>
-      ) : (
-        <ol className="thread-messages">
-          {messages.map((item) => {
-            const role = messageRole(item.body_text);
-            const text = item.body_text ?? "";
-            const meta = `${roleLabel(role)} · ${formatTime(item.event.occurred_at)}`;
-            if (role === "system") {
+      <div className="thread-scroll" ref={scrollRef}>
+        {merged.length === 0 ? (
+          <p className="muted">This conversation has no displayable messages.</p>
+        ) : (
+          <ol className="thread-messages">
+            {merged.map((item, index) => {
+              const role = messageRole(item);
+              const previous = index > 0 ? messageRole(merged[index - 1]) : null;
+              const follow = previous === role && role !== "system";
+              const text = item.body_text ?? "";
+              if (role === "system") {
+                return (
+                  <li key={item.event.id} className="chat-system">
+                    <details>
+                      <summary>
+                        {roleLabel(role)} · {formatChatTime(item.event.occurred_at)}
+                      </summary>
+                      <MessageBody text={text} attachments={item.attachments} />
+                    </details>
+                  </li>
+                );
+              }
               return (
-                <li key={item.event.id} className="thread-msg">
-                  <details className="bubble bubble-system">
-                    <summary className="bubble-meta">{meta}</summary>
-                    <MessageBody text={text} />
-                  </details>
+                <li
+                  key={item.event.id}
+                  className={`chat-row chat-row-${role}${follow ? " is-follow" : ""}`}
+                >
+                  <ChatAvatar role={role} />
+                  <div className="chat-main">
+                    <div className="chat-meta">
+                      <strong>{roleLabel(role, thread.channel)}</strong>
+                      <span>{formatChatTime(item.event.occurred_at)}</span>
+                      {canReply ? (
+                        <button
+                          type="button"
+                          className="chat-reply"
+                          onClick={() => setQuote(item)}
+                        >
+                          Reply
+                        </button>
+                      ) : null}
+                    </div>
+                    <MessageBody text={text} attachments={item.attachments} />
+                  </div>
                 </li>
               );
-            }
-            return (
-              <li
-                key={item.event.id}
-                className={`thread-msg bubble bubble-${role}`}
-              >
-                <div className="bubble-meta">{meta}</div>
-                <MessageBody text={text} />
-              </li>
-            );
-          })}
-        </ol>
-      )}
+            })}
+          </ol>
+        )}
+      </div>
+      <div className="composer-dock">
+        <Composer
+          disabled={!canReply}
+          hint={
+            canReply
+              ? `Send to ${threadTitle(thread)}`
+              : "Sending back to this channel is not available yet"
+          }
+          quote={quote}
+          sending={sending}
+          error={sendError}
+          onCancelQuote={() => setQuote(null)}
+          onSend={send}
+        />
+      </div>
     </article>
   );
+}
+
+function ChatAvatar({
+  role,
+  compact,
+}: {
+  role: MessageRole;
+  compact?: boolean;
+}) {
+  const mark = role === "user" ? "Y" : role === "system" ? "R" : "A";
+  return (
+    <span className={`chat-avatar chat-avatar-${role}${compact ? " is-compact" : ""}`}>
+      {mark}
+    </span>
+  );
+}
+
+function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem {
+  const now = new Date().toISOString();
+  return {
+    decision: {
+      event_id: `local:${now}`,
+      org_id: latestMessage(thread).event.org_id,
+      disposition: "current_work",
+      layer: "L1_event",
+      reason_codes: ["local"],
+      score: 1,
+      decided_at: now,
+    },
+    event: {
+      id: `local:${now}`,
+      org_id: latestMessage(thread).event.org_id,
+      source: thread.source,
+      external_id: `${thread.id.slice(thread.source.length + 1)}:out:local`,
+      operation: "create",
+      occurred_at: now,
+      ingested_at: now,
+    },
+    body_text: draft.text,
+    attachments: draft.attachments,
+    channel: thread.channel,
+    channel_label: thread.channel_label,
+    kind: "user",
+    direction: "outbound",
+    can_send: thread.can_send,
+  };
 }
 
 function EnginePage({
@@ -314,7 +467,7 @@ function EnginePage({
     <div className="page">
       <h1>Engine</h1>
       <p className="muted">
-        Local authority store and connectors. Sync from this page; nothing pulls in the background.
+        Local authority store and connectors. Enabled connectors pull while the kernel is running. Use Sync only to catch up after a miss.
       </p>
       <section className="card">
         <h2>Kernel</h2>
@@ -329,7 +482,19 @@ function EnginePage({
           </strong>
           <span>Current work</span>
           <strong>{engine.inbox_count}</strong>
+          <span>Live pull</span>
+          <strong>
+            {engine.pull?.interval_ms
+              ? `every ${Math.round(engine.pull.interval_ms / 1000)}s`
+              : "off"}
+            {engine.pull?.last_tick_at
+              ? ` · ${formatChatTime(engine.pull.last_tick_at)}`
+              : ""}
+          </strong>
         </div>
+        {engine.pull?.last_error ? (
+          <p className="action-error">{engine.pull.last_error}</p>
+        ) : null}
       </section>
       <section className="card">
         <div className="card-head">
@@ -678,7 +843,8 @@ function SettingsPage() {
       <BrandLockup size={28} />
       <p className="muted">
         Personal-stage settings come later. Install, uninstall, and sync
-        connectors on the Engine page. Sending replies is Phase 2.
+        connectors on the Engine page. Replies in a DSH session go back to
+        that session.
       </p>
     </div>
   );

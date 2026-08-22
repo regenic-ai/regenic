@@ -5,6 +5,7 @@ const {
   IngestionService,
   MemoryAuthorityStore,
   MemoryBlobStore,
+  channelRecord,
 } = require("../dist");
 
 function createBatch(recordOverrides = {}) {
@@ -234,5 +235,52 @@ describe("IngestionService", () => {
     assert.equal(result.records[0].error_code, "content_unavailable");
     assert.equal(authorityStore.allEvents().length, 0);
     assert.equal(blobStore.size, 0);
+  });
+
+  it("treats a DSH history echo as the same utterance as a local outbound", async () => {
+    const { authorityStore, service } = createHarness();
+    const outbound = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "out-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:out:rpc-1",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "session-x",
+          text: "你是哪个模型",
+        }),
+      ],
+    });
+    const echoed = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "sync-1",
+      received_at: "2026-08-21T00:00:02.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:57",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "user",
+          scope_id: "session-x",
+          text: "你是哪个模型",
+        }),
+      ],
+    });
+
+    assert.equal(outbound.records[0].status, "accepted");
+    assert.equal(echoed.records[0].status, "duplicate");
+    assert.equal(echoed.records[0].event_id, outbound.records[0].event_id);
+    assert.equal(authorityStore.allEvents().length, 1);
   });
 });

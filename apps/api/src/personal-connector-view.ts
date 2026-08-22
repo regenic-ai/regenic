@@ -62,7 +62,7 @@ const CATALOG: CatalogDefinition[] = [
     connector_type: "slack-channel",
     title: "Slack",
     description:
-      "Install by channel. Sync pulls that channel only; Sync all runs every installed instance.",
+      "Install by channel. The kernel pulls that channel after install and keeps pulling while enabled.",
     credential_hint: "REGENIC_SLACK_TOKEN",
     fields: [
       {
@@ -92,7 +92,7 @@ const CATALOG: CatalogDefinition[] = [
     connector_type: "dsh-session",
     title: "DSH",
     description:
-      "One install talks to local dsh web. Syncs every session by default; set a Session ID to pull only that one.",
+      "One install talks to local dsh web. The kernel pulls every session after install; set a Session ID to follow only that one.",
     credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
     fields: [
       {
@@ -191,6 +191,7 @@ export interface EngineInstallationView {
 export function toInstallationView(
   installation: ConnectorInstallation,
   lastAttempt: IngestAttempt | null,
+  registered: { has(connectorType: string): boolean } = SYNCABLE_TYPES,
 ): EngineInstallationView {
   const { label, detail } = connectorPresentation(installation);
   return {
@@ -201,7 +202,7 @@ export function toInstallationView(
     detail,
     syncable:
       installation.status === "enabled" &&
-      SYNCABLE_TYPES.has(installation.connector_type),
+      registered.has(installation.connector_type),
     last_attempt: lastAttempt,
   };
 }
