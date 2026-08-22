@@ -1,6 +1,6 @@
 # 桌面端
 
-- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [技术栈](TECH_STACK.md) · RFC 0004
+- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [连接器](CONNECTOR.md) · [技术栈](TECH_STACK.md) · RFC 0004
 - **状态：** Phase 1 v0（控制台 + 本机引擎）
 
 Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个飞书，也不是容器面板。

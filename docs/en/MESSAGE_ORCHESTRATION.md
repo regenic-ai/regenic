@@ -1,7 +1,7 @@
 # Message orchestration
 
 - **简体中文:** [../zh/MESSAGE_ORCHESTRATION.md](../zh/MESSAGE_ORCHESTRATION.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006
+- **Related:** [PRODUCT.md](PRODUCT.md) · [CONNECTOR.md](CONNECTOR.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006
 - **Status:** Public architecture for Phase 1+
 
 Regenic orchestrates **messages**. It does not host the apps where those messages were written.
@@ -85,29 +85,21 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 
 Each seam has a definition, a provider, and consumers. Swapping one connector for another must not fork the kernel. Adding a source later is a plugin, not a rewrite.
 
-Connectors follow [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md): they translate; the ingest service validates, authorizes, deduplicates, stores, and audits.
+Connectors follow the [connector contract](CONNECTOR.md). They translate; the ingest service validates, authorizes, deduplicates, stores, and audits. See [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md).
 
-## Message contract (kernel defines, connectors implement)
+## Message contract
 
-Send and display shape live in `@regenic/domain` `message-contract`. Connectors only translate a channel into that contract. The desktop does not invent its own role rules.
+Send and display shape live in `@regenic/domain` `message-contract`. The connector implements that contract; the desktop does not invent role rules. Implementer rules, ports, and current drivers are in [CONNECTOR.md](CONNECTOR.md).
 
-| Kernel | Connector |
-| --- | --- |
-| Channel id / label (`dsh` → DSH, `slack` → Slack) | Emit that id as `source` |
-| Display kind `user` / `assistant` / `system` | Map native events. DSH: `user/message` + `source.kind=user` → user; `assistant/message` text blocks → assistant; plugin-injected `user/message` → system. Slack humans → user |
-| Direction `inbound` / `outbound` | Reads are inbound; console replies are outbound |
-| Send envelope: `ContentPart[]` (`body` + `attachment`) | `EgressAdapter.send` writes back (DSH `session.prompt`) |
-| Channel capabilities `sync` / `reply` / `create` | The driver declares them per install. Unpinned DSH web can create and reply; pinned or CLI follow an existing stream; Slack is sync-only |
+Connectors ingest through `channelRecord()` so surface metadata travels with the body. Legacy events without it fall back to `inferLegacySurface()`. A local outbound and the channel-history echo of the same utterance stay a single Event.
 
-Connectors ingest through `channelRecord()` so a surface metadata part travels with the body. The console renders the channel tag and avatar from that surface. Legacy events without it fall back to `inferLegacySurface()`: `:out:` is local outbound, everything else is inbound assistant. The kernel does not guess from body text or `source === "dsh"`. A local outbound and the channel-history echo of the same utterance in one conversation stay a single Event.
-
-Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: the API only does `installation + thread → driver.resolveStreams / bindEgress / createThread`. When more than one install can take a thread, `ownsThread` wins (for example a pinned session) over the first catch-all match. Follow and live pull share one queue per stream so they do not fight the lease. The desktop asks inbox `can_send` and install `can_create`, not “is this DSH?”. A new channel is a driver, not a kernel or console branch.
+Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: `installation + thread → driver.resolveStreams / bindEgress / createThread`. `ownsThread` wins over a catch-all match. Follow and live pull share one queue per stream. The desktop asks `can_send` and `can_create`, not “is this DSH?”.
 
 ## Extension points
 
 | Goal | Mechanism |
 | --- | --- |
-| Add a source | Connector; conformance tests |
+| Add a source | [Connector contract](CONNECTOR.md); conformance tests |
 | Add a send path | Same channel, send enabled |
 | Change what counts as important | Ranker plus a versioned standard |
 | Auto-handle ordinary mail | Dispatcher policy bound to a standard; those messages stay outside the current work and every skip is audited |

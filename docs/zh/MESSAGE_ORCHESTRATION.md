@@ -1,7 +1,7 @@
 # 消息编排
 
 - **English:** [../en/MESSAGE_ORCHESTRATION.md](../en/MESSAGE_ORCHESTRATION.md)
-- **相关：** [产品](PRODUCT.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006
+- **相关：** [产品](PRODUCT.md) · [连接器](CONNECTOR.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006
 - **状态：** Phase 1 起的公开架构
 
 Regenic 编排的是**消息**。它不托管这些消息当初被写下的那些应用。
@@ -85,29 +85,21 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 
 每条缝都有定义、提供方和消费者。换一个连接器，不得分叉内核。以后加来源是插件，不是重写产品。
 
-连接器遵守[采集架构](INGESTION_ARCHITECTURE.md)：它们翻译；采集服务负责校验、鉴权、去重、存储与审计。
+连接器遵守[连接器合同](CONNECTOR.md)。它们翻译；采集服务负责校验、鉴权、去重、存储与审计。见[采集架构](INGESTION_ARCHITECTURE.md)。
 
-## 消息契约（内核定，连接器实现）
+## 消息契约
 
-收发形状由 `@regenic/domain` 的 `message-contract` 定死。连接器只把渠道协议译进/译出这份契约，不在桌面或某个连接器里各写一套判断。
+收发形状由 `@regenic/domain` 的 `message-contract` 定死。连接器实现这份契约，桌面不另写角色规则。实现规则、端口和现有驱动见[连接器](CONNECTOR.md)。
 
-| 由内核规定 | 由连接器实现 |
-| --- | --- |
-| 渠道 id / 展示名（`dsh` → DSH，`slack` → Slack） | 把自己的来源写成该 id |
-| 展示角色 `user` / `assistant` / `system` | 把原生事件映射到角色。DSH：`user/message` 且 `source.kind=user` → user（You）；`assistant/message` 的 `text` 块 → assistant（DSH Agent）；插件注入的 `user/message` → system。Slack 真人 → user |
-| 方向 `inbound` / `outbound` | 读进来是 inbound；人从控制台发出是 outbound |
-| 发送信封：`ContentPart[]`（`body` + `attachment`） | `EgressAdapter.send` 译回渠道（DSH `session.prompt`，Slack 以后 `chat.postMessage`） |
-| 渠道能力 `sync` / `reply` / `create` | 驱动按安装声明。DSH web 未钉死 session 时可建可回；钉死或 CLI 只跟已有流；Slack 只能同步 |
+入库走 `channelRecord()`，surface 跟正文一起走。旧事件没有 surface 时用 `inferLegacySurface()`。本地出站与渠道 history 回声的同一句话只保留一条 Event。
 
-连接器入库必须走 `channelRecord()`，这样正文旁边会带上 surface 元数据。控制台按这份 surface 显示渠道标签和头像，不再猜正文。旧事件没有 surface 时，只用内核的 `inferLegacySurface()` 兜底：`:out:` 视为本地出站，其余视为入站 assistant，不再按正文或 `source === "dsh"` 猜格式。同一会话里，控制台发出的本地出站与渠道 history 回声的同一句话只保留一条 Event。
-
-回复、follow、pull 与新建对话走 `ChannelDriverRegistry`：API 只做 `installation + thread → driver.resolveStreams / bindEgress / createThread`。多条安装都能接同一线程时，优先 `ownsThread` 的那条（例如钉死某个 session），否则用第一条能匹配的。同一条流上 follow 与 live pull 串行，不抢 lease。桌面只问入箱里的 `can_send` 和安装上的 `can_create`，不问「是不是 DSH」。新渠道挂上 driver，不要改内核或控制台的渠道分支。
+回复、follow、pull 与新建对话走 `ChannelDriverRegistry`：`installation + thread → driver.resolveStreams / bindEgress / createThread`。`ownsThread` 优先于兜底匹配。同一条流上 follow 与 live pull 串行。桌面只问 `can_send` 和 `can_create`，不问「是不是 DSH」。
 
 ## 扩展点
 
 | 目标 | 机制 |
 | --- | --- |
-| 加来源 | 连接器；一致性测试 |
+| 加来源 | [连接器合同](CONNECTOR.md)；一致性测试 |
 | 加发送 | 同一渠道打开发送 |
 | 改「什么算重要」 | 排序器 + 版本化标准 |
 | 普通邮件自动处理 | 绑在标准上的调度策略；这些消息不进入当前工作，每次跳过都记审计 |

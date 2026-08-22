@@ -2,7 +2,7 @@
 
 - **简体中文：** [../zh/INGESTION_ARCHITECTURE.md](../zh/INGESTION_ARCHITECTURE.md)
 - **Status:** Phase 1 implementation architecture
-- **Related:** RFC 0005, RFC 0006, RFC 0007, [Technology stack](TECH_STACK.md), and [Message orchestration](MESSAGE_ORCHESTRATION.md)
+- **Related:** RFC 0005, RFC 0006, RFC 0007, [Connectors](CONNECTOR.md), [Technology stack](TECH_STACK.md), and [Message orchestration](MESSAGE_ORCHESTRATION.md)
 
 ## 1. Purpose
 
@@ -91,7 +91,7 @@ Native adapter              ChannelConnector drivers
 
 ### 5.1 ChannelConnector
 
-A driver understands one source protocol. It may verify signatures, call source APIs, normalize records, and report capabilities. It does not own persistence or authorization decisions.
+A driver understands one source protocol. It may verify signatures, call source APIs, normalize records, and report capabilities. It does not own persistence or authorization decisions. Implementer rules are in [CONNECTOR.md](CONNECTOR.md).
 
 ```ts
 interface ChannelConnector {

@@ -1,7 +1,7 @@
 # Technology stack
 
 - **简体中文:** [../zh/TECH_STACK.md](../zh/TECH_STACK.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md) · [ROADMAP.md](ROADMAP.md) · [Desktop](../zh/DESKTOP.md) · RFC 0004, 0005, 0006, 0007
+- **Related:** [PRODUCT.md](PRODUCT.md) · [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md) · [CONNECTOR.md](CONNECTOR.md) · [ROADMAP.md](ROADMAP.md) · [Desktop](../zh/DESKTOP.md) · RFC 0004, 0005, 0006, 0007
 
 The Personal edition is **local-first**; Org follows. The domain model and API
 shapes stay shared; what changes by phase is the **default drivers**, not a
@@ -174,6 +174,8 @@ Address by `content_hash`. `storage_uri` is ops metadata only.
 Domain code (including GC and distillation) talks to the port, not a cloud SDK.
 
 ## 9. Channel ingest (`ChannelConnector`)
+
+Implementer contract: [CONNECTOR.md](CONNECTOR.md).
 
 ```text
 capabilities() → { webhook, poll, backfill, member_sync }
