@@ -19,6 +19,12 @@ export interface DshWebRpcClientOptions {
   createId?: () => string;
 }
 
+export interface DshSessionListPage {
+  session_ids: string[];
+  next_cursor?: string;
+  has_more: boolean;
+}
+
 export class DshWebRpcClient {
   private readonly baseUrl: string;
   private readonly fetch: DshFetch;
@@ -47,6 +53,44 @@ export class DshWebRpcClient {
     }
     const { value } = await this.call("session.history", payload);
     return parseHistoryPage(value);
+  }
+
+  async sessionList(input: { cursor?: string } = {}): Promise<DshSessionListPage> {
+    const payload: Record<string, unknown> = {};
+    if (input.cursor) {
+      payload.cursor = input.cursor;
+    }
+    const { value } = await this.call("session.list", payload);
+    return parseSessionListPage(value);
+  }
+
+  async listAllSessionIds(options: {
+    max_pages?: number;
+    max_sessions?: number;
+  } = {}): Promise<string[]> {
+    const maxPages = options.max_pages ?? 20;
+    const maxSessions = options.max_sessions ?? 100;
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const listed = await this.sessionList(cursor ? { cursor } : {});
+      for (const sessionId of listed.session_ids) {
+        if (seen.has(sessionId)) {
+          continue;
+        }
+        seen.add(sessionId);
+        ids.push(sessionId);
+        if (ids.length >= maxSessions) {
+          return ids;
+        }
+      }
+      if (!listed.has_more || !listed.next_cursor || listed.next_cursor === cursor) {
+        break;
+      }
+      cursor = listed.next_cursor;
+    }
+    return ids;
   }
 
   async sessionPrompt(input: { sessionId: string; text: string }): Promise<{
@@ -98,6 +142,52 @@ export class DshWebRpcClient {
     }
     return parseServerResponse(await response.json(), rpcId);
   }
+}
+
+function parseSessionListPage(value: unknown): DshSessionListPage {
+  const page = isObject(value) ? value : {};
+  const items = Array.isArray(value)
+    ? value
+    : Array.isArray(page.items)
+      ? page.items
+      : [];
+  const sessionIds = items.flatMap((item) => {
+    const sessionId = sessionIdFromListItem(item);
+    return sessionId ? [sessionId] : [];
+  });
+  const nextCursor =
+    stringField(page, "nextCursor")
+    ?? stringField(page, "next_cursor")
+    ?? stringField(page, "cursor");
+  return {
+    session_ids: sessionIds,
+    next_cursor: nextCursor,
+    has_more: page.hasMore === true || page.has_more === true || Boolean(nextCursor),
+  };
+}
+
+function sessionIdFromListItem(item: unknown): string | undefined {
+  if (typeof item === "string" && item.trim().length > 0) {
+    return item.trim();
+  }
+  if (!isObject(item)) {
+    return undefined;
+  }
+  return (
+    stringField(item, "sessionId")
+    ?? stringField(item, "session_id")
+    ?? stringField(item, "id")
+  );
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const field = value[name];
+  return typeof field === "string" && field.trim().length > 0
+    ? field.trim()
+    : undefined;
 }
 
 function parseHistoryPage(value: unknown): DshHistoryPage {

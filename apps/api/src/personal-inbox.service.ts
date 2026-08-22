@@ -65,6 +65,15 @@ export class PersonalInboxService {
   async getEngine(): Promise<PersonalEngineView> {
     const options = this.runtime.getOptions();
     const orgId = this.runtime.orgId();
+    const catalogReady = async (
+      installations: EngineInstallationView[],
+    ) =>
+      connectorCatalog(installations, {
+        env: process.env,
+        services: {
+          "dsh-web": await probeLocalService("http://127.0.0.1:3080"),
+        },
+      });
     if (!this.runtime.isReady()) {
       return {
         kernel: "stopped",
@@ -72,7 +81,7 @@ export class PersonalInboxService {
         database_path: options?.database ?? null,
         inbox_count: 0,
         installations: [],
-        catalog: connectorCatalog([]),
+        catalog: await catalogReady([]),
       };
     }
     const host = this.runtime.requireHost();
@@ -93,8 +102,17 @@ export class PersonalInboxService {
       database_path: options?.database ?? null,
       inbox_count: inbox.length,
       installations: views,
-      catalog: connectorCatalog(views),
+      catalog: await catalogReady(views),
     };
+  }
+}
+
+async function probeLocalService(url: string): Promise<boolean> {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(400) });
+    return true;
+  } catch {
+    return false;
   }
 }
 

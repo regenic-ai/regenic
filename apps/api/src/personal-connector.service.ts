@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import {
   ConnectorRunner,
+  type ChannelConnector,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
   type ConnectorRuntimeStore,
@@ -9,6 +10,8 @@ import {
   type NewConnectorInstallation,
 } from "@regenic/domain";
 import {
+  DshSessionPollConnector,
+  DshWebRpcClient,
   dshSessionKey,
   dshSessionPlugin,
   dshSessionPluginConfigFromInstallation,
@@ -46,6 +49,7 @@ export interface ConnectorInstallInput {
 export interface ConnectorSyncView {
   installation_id: string;
   pages_attempted: number;
+  streams_attempted: number;
   accepted_count: number;
   duplicate_count: number;
   quarantined_count: number;
@@ -148,45 +152,18 @@ export class PersonalConnectorService {
       );
     }
     try {
-      const streamKey = await mountConnector(host, installation);
-      const connector = host.get("connectors").get(installation.id);
-      if (!connector) {
-        throw new PersonalConnectorError(
-          "sync_failed",
-          "Connector failed to mount",
-          502,
-        );
-      }
-      const runner = new ConnectorRunner(connector, host.get("ingest"), store);
+      const streams = await resolveSyncStreams(host, installation);
       const runs: ConnectorPollRunResult[] = [];
-      const seenCursors = new Set<string>();
-      for (let page = 0; page < maxPages; page += 1) {
-        const run = await runner.poll({
-          installation_id: installation.id,
-          stream_key: streamKey,
-          lease_owner: `personal-api:${randomUUID()}`,
-          lease_duration_ms: LEASE_MS,
-        });
-        runs.push(run);
-        if (run.status === "lease_unavailable") {
-          throw new PersonalConnectorError(
-            "lease_unavailable",
-            "Connector stream is already leased",
-            409,
-          );
-        }
-        if (run.status !== "completed" || !run.next_cursor) {
-          break;
-        }
-        if (seenCursors.has(run.next_cursor)) {
-          break;
-        }
-        seenCursors.add(run.next_cursor);
+      for (const stream of streams) {
+        runs.push(
+          ...(await pollStream(host, store, installation, stream, maxPages)),
+        );
       }
       const last = runs.at(-1);
       return {
         installation_id: installation.id,
         pages_attempted: runs.length,
+        streams_attempted: streams.length,
         ...summarizeRuns(runs),
         last_run_status: last?.status ?? "idle",
         installation: await viewOf(store, installation),
@@ -261,6 +238,103 @@ export class PersonalConnectorService {
     }
     return installation;
   }
+}
+
+interface SyncStream {
+  stream_key: string;
+  connector: Pick<ChannelConnector, "poll">;
+}
+
+async function resolveSyncStreams(
+  host: Host,
+  installation: ConnectorInstallation,
+): Promise<SyncStream[]> {
+  if (installation.connector_type === "slack-channel") {
+    const streamKey = await mountConnector(host, installation);
+    const connector = host.get("connectors").get(installation.id);
+    if (!connector) {
+      throw new PersonalConnectorError(
+        "sync_failed",
+        "Connector failed to mount",
+        502,
+      );
+    }
+    return [{ stream_key: streamKey, connector }];
+  }
+
+  const transport = configString(installation.config, "transport") ?? "web";
+  if (transport === "cli") {
+    const streamKey = await mountConnector(host, installation);
+    const connector = host.get("connectors").get(installation.id);
+    if (!connector) {
+      throw new PersonalConnectorError(
+        "sync_failed",
+        "Connector failed to mount",
+        502,
+      );
+    }
+    return [{ stream_key: streamKey, connector }];
+  }
+
+  const client = new DshWebRpcClient({
+    base_url: loopbackHttpUrl(
+      configString(installation.config, "base_url") ?? "http://127.0.0.1:3080",
+    ),
+    access_token: process.env.REGENIC_DSH_TOKEN,
+  });
+  const pinned = configString(installation.config, "session_id");
+  const sessionIds = pinned ? [pinned] : await client.listAllSessionIds();
+  if (sessionIds.length === 0) {
+    throw new PersonalConnectorError(
+      "sync_failed",
+      "DSH web has no sessions to sync",
+      502,
+    );
+  }
+  return sessionIds.map((sessionId) => ({
+    stream_key: `session:${sessionId}`,
+    connector: new DshSessionPollConnector(client, {
+      connector_id: installation.id,
+      org_id: installation.org_id,
+      session_id: sessionId,
+    }),
+  }));
+}
+
+async function pollStream(
+  host: Host,
+  store: ConnectorRuntimeStore,
+  installation: ConnectorInstallation,
+  stream: SyncStream,
+  maxPages: number,
+): Promise<ConnectorPollRunResult[]> {
+  const runner = new ConnectorRunner(stream.connector, host.get("ingest"), store);
+  const runs: ConnectorPollRunResult[] = [];
+  const seenCursors = new Set<string>();
+  for (let page = 0; page < maxPages; page += 1) {
+    const run = await runner.poll({
+      installation_id: installation.id,
+      stream_key: stream.stream_key,
+      lease_owner: `personal-api:${randomUUID()}`,
+      lease_duration_ms: LEASE_MS,
+    });
+    runs.push(run);
+    if (run.status === "lease_unavailable") {
+      throw new PersonalConnectorError(
+        "lease_unavailable",
+        "Connector stream is already leased",
+        409,
+      );
+    }
+    if (run.status !== "completed" || !run.next_cursor) {
+      break;
+    }
+    if (seenCursors.has(run.next_cursor)) {
+      break;
+    }
+    seenCursors.add(run.next_cursor);
+  }
+  return runs;
 }
 
 async function mountConnector(
@@ -350,21 +424,17 @@ function dshInstallConfig(
     );
   }
   if (transport === "web") {
-    const sessionId = configString(input, "session_id");
-    if (!sessionId) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        "DSH web install requires session_id",
-        400,
-      );
-    }
-    return {
+    const config: Record<string, JsonValue> = {
       transport,
-      session_id: sessionId,
       base_url: loopbackHttpUrl(
         configString(input, "base_url") ?? "http://127.0.0.1:3080",
       ),
     };
+    const sessionId = configString(input, "session_id");
+    if (sessionId) {
+      config.session_id = sessionId;
+    }
+    return config;
   }
   return {
     transport,

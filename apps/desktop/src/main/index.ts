@@ -79,6 +79,25 @@ async function loadSurface(
   await window.loadFile(rendererUrl(surface), { query: { surface } });
 }
 
+function countWorkThreads(
+  items: Array<{ event?: { id?: string; source?: string; external_id?: string } }>,
+): number {
+  const ids = new Set<string>();
+  for (const item of items) {
+    const event = item.event;
+    if (!event?.id || !event.source || !event.external_id) {
+      continue;
+    }
+    const colon = event.external_id.lastIndexOf(":");
+    ids.add(
+      colon > 0
+        ? `${event.source}:${event.external_id.slice(0, colon)}`
+        : `${event.source}:${event.id}`,
+    );
+  }
+  return ids.size;
+}
+
 async function probe(origin: string): Promise<"personal" | "other" | "none"> {
   try {
     const response = await fetch(`${origin}/health`);
@@ -300,10 +319,10 @@ function createTray(): void {
   });
   tray.on("right-click", () => {
     const menu = Menu.buildFromTemplate([
-      { label: "打开控制台", click: () => showConsole() },
+      { label: "Open console", click: () => showConsole() },
       { type: "separator" },
       {
-        label: "退出",
+        label: "Quit",
         click: () => {
           quitting = true;
           app.quit();
@@ -320,12 +339,14 @@ async function pollNotifications(): Promise<void> {
     if (!response.ok) {
       return;
     }
-    const items = (await response.json()) as unknown[];
-    const count = Array.isArray(items) ? items.length : 0;
+    const items = (await response.json()) as Array<{
+      event?: { id?: string; source?: string; external_id?: string };
+    }>;
+    const count = Array.isArray(items) ? countWorkThreads(items) : 0;
     if (lastInboxCount !== null && count > lastInboxCount && Notification.isSupported()) {
       new Notification({
         title: "Regenic",
-        body: `${count} 条当前工作`,
+        body: `${count} current work`,
       }).show();
     }
     lastInboxCount = count;

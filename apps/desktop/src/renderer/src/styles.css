@@ -289,11 +289,37 @@ button {
   color: var(--text);
 }
 
+.thread-pane {
+  min-width: 0;
+  max-width: 72ch;
+}
+
+.thread-head {
+  margin-bottom: 20px;
+}
+
+.thread-head h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.thread-sub {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: text;
+}
+
 .provenance {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 12px 0 20px;
+  margin: 0;
 }
 
 .body-text {
@@ -302,6 +328,177 @@ button {
   font-size: 14px;
   max-width: 68ch;
   color: var(--text);
+}
+
+.thread-messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.thread-msg {
+  min-width: 0;
+}
+
+.bubble {
+  border-radius: 10px;
+  padding: 10px 14px;
+  user-select: text;
+}
+
+.bubble-meta {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.bubble-assistant {
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.bubble-user {
+  background: var(--accent-soft);
+  border: 1px solid #244a20;
+}
+
+.bubble-system {
+  padding: 8px 12px;
+  background: #121612;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+}
+
+.bubble-system summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.bubble-system .bubble-meta {
+  margin-bottom: 0;
+}
+
+.bubble-system[open] .bubble-meta {
+  margin-bottom: 8px;
+}
+
+.bubble-system .rich-body {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rich-body {
+  user-select: text;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.rich-heading {
+  margin: 12px 0 6px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.rich-body > .rich-heading:first-child {
+  margin-top: 0;
+}
+
+.rich-body h2.rich-heading {
+  font-size: 15px;
+}
+
+.rich-body h3.rich-heading {
+  font-size: 14px;
+}
+
+.rich-body h4.rich-heading {
+  font-size: 13px;
+}
+
+.rich-p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+
+.rich-body > .rich-p:last-child,
+.rich-body > .rich-list:last-child,
+.rich-body > .rich-code:last-child,
+.rich-body > .rich-table-wrap:last-child {
+  margin-bottom: 0;
+}
+
+.rich-list {
+  margin: 0 0 8px;
+  padding-left: 1.25em;
+}
+
+.rich-list li + li {
+  margin-top: 4px;
+}
+
+.rich-table-wrap {
+  max-width: 100%;
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.rich-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.rich-table th,
+.rich-table td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.rich-table th {
+  background: #121812;
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.rich-table td {
+  background: var(--bg);
+}
+
+.rich-code {
+  margin: 8px 0;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0d100e;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.rich-code code {
+  font-size: inherit;
+  white-space: pre;
+}
+
+.rich-body code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #1e2620;
+  font-size: 12px;
+}
+
+.rich-code code {
+  padding: 0;
+  background: transparent;
 }
 
 .page {
@@ -413,6 +610,16 @@ button {
   display: grid;
   gap: 10px;
   padding: 0 0 12px 12px;
+}
+
+.prereq-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .field {

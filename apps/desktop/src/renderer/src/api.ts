@@ -26,7 +26,11 @@ export async function fetchEngine(): Promise<PersonalEngineView> {
   return {
     ...engine,
     installations: engine.installations ?? [],
-    catalog: engine.catalog ?? [],
+    catalog: (engine.catalog ?? []).map((item) => ({
+      ...item,
+      prerequisites: item.prerequisites ?? [],
+      setup_ready: item.setup_ready ?? false,
+    })),
   };
 }
 
