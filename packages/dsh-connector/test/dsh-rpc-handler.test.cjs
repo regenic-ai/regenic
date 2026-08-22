@@ -36,6 +36,9 @@ function services(overrides = {}) {
     async send() {
       return { accepted: true };
     },
+    async createSession() {
+      return { sessionId: "sess-new" };
+    },
     ...overrides,
   };
 }
@@ -217,6 +220,24 @@ describe("handleDshPublicRpc", () => {
     );
     assert.equal(result.body.result.ok, false);
     assert.equal(result.body.result.error.code, "bad-request");
+  });
+
+  it("creates a session through session.create", async () => {
+    const result = await handleDshPublicRpc(
+      "session.create",
+      {
+        contentType: "application/json",
+        body: {
+          type: "client-request",
+          rpcId: "rpc-create",
+          method: "session.create",
+          payload: {},
+        },
+      },
+      services(),
+    );
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.body.result.value, { sessionId: "sess-new" });
   });
 
   it("returns agent-busy when receive reports a held lease", async () => {

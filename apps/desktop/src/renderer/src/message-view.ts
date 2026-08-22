@@ -53,6 +53,9 @@ export function firstLine(text: string | undefined, max = 80): string {
 }
 
 export function threadTitle(thread: InboxThread): string {
+  if (thread.messages.length === 0) {
+    return thread.label;
+  }
   return firstLine(threadFace(thread).body_text, 120) || thread.label;
 }
 
@@ -60,7 +63,7 @@ function threadFace(thread: InboxThread): InboxViewItem {
   const user = thread.messages.find((item) => messageRole(item) === "user");
   const human =
     user ?? thread.messages.find((item) => messageRole(item) !== "system");
-  return human ?? latestMessage(thread);
+  return human ?? latestMessage(thread) ?? thread.messages[0];
 }
 
 export function readingMessages(thread: InboxThread): InboxViewItem[] {

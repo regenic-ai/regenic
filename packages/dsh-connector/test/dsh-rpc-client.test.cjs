@@ -165,6 +165,34 @@ describe("DshWebRpcClient", () => {
     ]);
   });
 
+  it("creates a session with an empty payload", async () => {
+    const calls = [];
+    const client = new DshWebRpcClient({
+      base_url: "http://127.0.0.1:3080",
+      createId: () => "rpc-1",
+      async fetch(url, init) {
+        calls.push({ url, body: JSON.parse(init.body) });
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              type: "server-response",
+              rpcId: "rpc-1",
+              result: { ok: true, value: { sessionId: "sess-new" } },
+            };
+          },
+        };
+      },
+    });
+
+    const created = await client.sessionCreate();
+    assert.equal(created.sessionId, "sess-new");
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/api/session.create");
+    assert.equal(calls[0].body.method, "session.create");
+    assert.deepEqual(calls[0].body.payload, {});
+  });
+
   it("lists session ids from session.list pages", async () => {
     const calls = [];
     const client = new DshWebRpcClient({

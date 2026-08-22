@@ -1,5 +1,6 @@
 import type {
   ConnectorSyncView,
+  CreatedConversation,
   EngineInstallationView,
   InboxViewItem,
   KernelSettingsView,
@@ -78,7 +79,12 @@ export async function fetchEngine(): Promise<PersonalEngineView> {
       last_tick_at: null,
       last_error: null,
     },
-    installations: engine.installations ?? [],
+    installations: (engine.installations ?? []).map((item) => ({
+      ...item,
+      syncable: item.syncable === true,
+      can_reply: item.can_reply === true,
+      can_create: item.can_create === true,
+    })),
     catalog: (engine.catalog ?? []).map((item) => ({
       ...item,
       prerequisites: item.prerequisites ?? [],
@@ -136,6 +142,27 @@ export async function uninstallConnector(id: string): Promise<void> {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `uninstall ${response.status}`);
   }
+}
+
+export async function createConversation(input: {
+  installation_id?: string;
+} = {}): Promise<CreatedConversation> {
+  const response = await fetch(`${origin()}/v1/me/conversations`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as
+    | CreatedConversation
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `conversation ${response.status}`,
+    );
+  }
+  return body as CreatedConversation;
 }
 
 export async function sendReply(input: {

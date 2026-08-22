@@ -76,7 +76,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 | 种类 | 职责 | 禁止 |
 | --- | --- | --- |
 | 连接器（`ChannelConnector`） | 把来源读成 `IngestBatch` | 直写 Event、Blob、ACL、身份 |
-| 渠道驱动（`ChannelDriver`） | 安装、解析 pull 流、按线程绑定 egress、声明能否回写 | 在 API / UI 里按渠道名打补丁 |
+| 渠道驱动（`ChannelDriver`） | 安装、解析 pull 流、按线程绑定 egress、用 `capabilities()` 声明 sync / reply / create | 在 API / UI 里按渠道名打补丁 |
 | 发送（`EgressAdapter`） | 把回复写回原渠道 | 自授权限或跳过审批 |
 | 排序 / 分层 | D0 之后的打分（耐久、敏感、「该知道」）。D0 过滤 / 分层在内核 | 用个人标签冒充组织事实 |
 | 调度策略 | 排序 + 标准 + 习惯 → 不进入当前工作 \| pending \| defer | 没有发送授权就发送 |
@@ -97,10 +97,11 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 | 展示角色 `user` / `assistant` / `system` | 把原生事件映射到角色。DSH：`user/message` 且 `source.kind=user` → user（You）；`assistant/message` 的 `text` 块 → assistant（DSH Agent）；插件注入的 `user/message` → system。Slack 真人 → user |
 | 方向 `inbound` / `outbound` | 读进来是 inbound；人从控制台发出是 outbound |
 | 发送信封：`ContentPart[]`（`body` + `attachment`） | `EgressAdapter.send` 译回渠道（DSH `session.prompt`，Slack 以后 `chat.postMessage`） |
+| 渠道能力 `sync` / `reply` / `create` | 驱动按安装声明。DSH web 未钉死 session 时可建可回；钉死或 CLI 只跟已有流；Slack 只能同步 |
 
 连接器入库必须走 `channelRecord()`，这样正文旁边会带上 surface 元数据。控制台按这份 surface 显示渠道标签和头像，不再猜正文。旧事件没有 surface 时，只用内核的 `inferLegacySurface()` 兜底：`:out:` 视为本地出站，其余视为入站 assistant，不再按正文或 `source === "dsh"` 猜格式。同一会话里，控制台发出的本地出站与渠道 history 回声的同一句话只保留一条 Event。
 
-回复、follow 与 pull 走 `ChannelDriverRegistry`：API 只做 `installation + thread → driver.resolveStreams / bindEgress → egress.send(ContentPart[])`。多条安装都能接同一线程时，优先 `ownsThread` 的那条（例如钉死某个 session），否则用第一条能匹配的。同一条流上 follow 与 live pull 串行，不抢 lease。桌面只问入箱里的 `can_send`，不问「是不是 DSH」。新渠道挂上 driver，不要改内核或控制台的渠道分支。
+回复、follow、pull 与新建对话走 `ChannelDriverRegistry`：API 只做 `installation + thread → driver.resolveStreams / bindEgress / createThread`。多条安装都能接同一线程时，优先 `ownsThread` 的那条（例如钉死某个 session），否则用第一条能匹配的。同一条流上 follow 与 live pull 串行，不抢 lease。桌面只问入箱里的 `can_send` 和安装上的 `can_create`，不问「是不是 DSH」。新渠道挂上 driver，不要改内核或控制台的渠道分支。
 
 ## 扩展点
 

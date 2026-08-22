@@ -8,7 +8,8 @@ const {
   resolveDshTransport,
   resolveEffectiveDshTransport,
 } = require("../dist/plugin");
-const { dshSessionDriver } = require("../dist/dsh-session-driver");
+const { ChannelDriverError } = require("@regenic/domain");
+const { createDshConversation, dshSessionDriver } = require("../dist/dsh-session-driver");
 const { loopbackHttpUrl, operatorHttpUrl, resolveOperatorDshBaseUrl } = require("../dist/dsh-url");
 
 function withEnv(overrides, run) {
@@ -157,5 +158,118 @@ describe("dshSessionPlugin", () => {
         }),
       );
     });
+  });
+
+  it("declares create only for unpinned web installs", () => {
+    const web = {
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const pinned = {
+      ...web,
+      config: { transport: "web", session_id: "sess-a" },
+    };
+    const cli = {
+      ...web,
+      config: { transport: "cli", mailbox: "dsh-main" },
+    };
+    withEnv({ REGENIC_DSH_BASE_URL: undefined }, () => {
+      assert.deepEqual(dshSessionDriver.capabilities(web), {
+        sync: true,
+        reply: true,
+        create: true,
+      });
+      assert.deepEqual(dshSessionDriver.capabilities(pinned), {
+        sync: true,
+        reply: true,
+        create: false,
+      });
+      assert.deepEqual(dshSessionDriver.capabilities(cli), {
+        sync: true,
+        reply: true,
+        create: false,
+      });
+    });
+  });
+
+  it("returns no streams when DSH web has no sessions", async () => {
+    const installation = {
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:3080" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const previous = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            type: "server-response",
+            rpcId: body.rpcId,
+            result: { ok: true, value: { items: [], hasMore: false } },
+          };
+        },
+      };
+    };
+    const host = await createHost();
+    try {
+      const streams = await dshSessionDriver.resolveStreams(installation, host, {});
+      assert.deepEqual(streams, []);
+    } finally {
+      globalThis.fetch = previous;
+      await host.dispose();
+    }
+  });
+
+  it("creates a DSH web session and rejects pinned or CLI installs", async () => {
+    const web = {
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:3080" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const created = await createDshConversation(web, {}, {
+      async fetch(_url, init) {
+        const body = JSON.parse(init.body);
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              type: "server-response",
+              rpcId: body.rpcId,
+              result: { ok: true, value: { sessionId: "sess-new" } },
+            };
+          },
+        };
+      },
+    });
+    assert.deepEqual(created, { source: "dsh", target: "sess-new" });
+
+    await assert.rejects(
+      () => createDshConversation({
+        ...web,
+        config: { transport: "web", session_id: "sess-a" },
+      }, {}),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
+    await assert.rejects(
+      () => createDshConversation({
+        ...web,
+        config: { transport: "cli", mailbox: "dsh-main" },
+      }, {}),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
   });
 });
