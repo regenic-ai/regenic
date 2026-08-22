@@ -19,6 +19,35 @@ export interface DshWebRpcClientOptions {
   createId?: () => string;
 }
 
+export type DshPromptPart =
+  | { type: "text"; text: string }
+  | {
+      type: "image";
+      mimeType: string;
+      filename?: string;
+      path?: string;
+      url?: string;
+    }
+  | {
+      type: "file";
+      mimeType: string;
+      filename: string;
+      path?: string;
+      url?: string;
+    };
+
+export interface DshSessionPromptInput {
+  sessionId: string;
+  text?: string;
+  content?: DshPromptPart[];
+}
+
+export interface DshSessionListPage {
+  session_ids: string[];
+  next_cursor?: string;
+  has_more: boolean;
+}
+
 export class DshWebRpcClient {
   private readonly baseUrl: string;
   private readonly fetch: DshFetch;
@@ -49,14 +78,52 @@ export class DshWebRpcClient {
     return parseHistoryPage(value);
   }
 
-  async sessionPrompt(input: { sessionId: string; text: string }): Promise<{
+  async sessionList(input: { cursor?: string } = {}): Promise<DshSessionListPage> {
+    const payload: Record<string, unknown> = {};
+    if (input.cursor) {
+      payload.cursor = input.cursor;
+    }
+    const { value } = await this.call("session.list", payload);
+    return parseSessionListPage(value);
+  }
+
+  async listAllSessionIds(options: {
+    max_pages?: number;
+    max_sessions?: number;
+  } = {}): Promise<string[]> {
+    const maxPages = options.max_pages ?? 20;
+    const maxSessions = options.max_sessions ?? 100;
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const listed = await this.sessionList(cursor ? { cursor } : {});
+      for (const sessionId of listed.session_ids) {
+        if (seen.has(sessionId)) {
+          continue;
+        }
+        seen.add(sessionId);
+        ids.push(sessionId);
+        if (ids.length >= maxSessions) {
+          return ids;
+        }
+      }
+      if (!listed.has_more || !listed.next_cursor || listed.next_cursor === cursor) {
+        break;
+      }
+      cursor = listed.next_cursor;
+    }
+    return ids;
+  }
+
+  async sessionPrompt(input: DshSessionPromptInput): Promise<{
     accepted: true;
     rpc_id: string;
   }> {
     const { rpc_id } = await this.call("session.prompt", {
       sessionId: input.sessionId,
       mode: "queue",
-      content: [{ type: "text", text: input.text }],
+      content: promptContent(input),
     });
     return { accepted: true, rpc_id };
   }
@@ -98,6 +165,52 @@ export class DshWebRpcClient {
     }
     return parseServerResponse(await response.json(), rpcId);
   }
+}
+
+function parseSessionListPage(value: unknown): DshSessionListPage {
+  const page = isObject(value) ? value : {};
+  const items = Array.isArray(value)
+    ? value
+    : Array.isArray(page.items)
+      ? page.items
+      : [];
+  const sessionIds = items.flatMap((item) => {
+    const sessionId = sessionIdFromListItem(item);
+    return sessionId ? [sessionId] : [];
+  });
+  const nextCursor =
+    stringField(page, "nextCursor")
+    ?? stringField(page, "next_cursor")
+    ?? stringField(page, "cursor");
+  return {
+    session_ids: sessionIds,
+    next_cursor: nextCursor,
+    has_more: page.hasMore === true || page.has_more === true || Boolean(nextCursor),
+  };
+}
+
+function sessionIdFromListItem(item: unknown): string | undefined {
+  if (typeof item === "string" && item.trim().length > 0) {
+    return item.trim();
+  }
+  if (!isObject(item)) {
+    return undefined;
+  }
+  return (
+    stringField(item, "sessionId")
+    ?? stringField(item, "session_id")
+    ?? stringField(item, "id")
+  );
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const field = value[name];
+  return typeof field === "string" && field.trim().length > 0
+    ? field.trim()
+    : undefined;
 }
 
 function parseHistoryPage(value: unknown): DshHistoryPage {
@@ -153,6 +266,22 @@ function parseServerResponse(
     typeof error.message === "string" ? error.message : "DSH request failed",
     typeof error.code === "string" ? error.code : undefined,
   );
+}
+
+export function promptContent(input: {
+  text?: string;
+  content?: DshPromptPart[];
+}): DshPromptPart[] {
+  if (input.content && input.content.length > 0) {
+    if (input.content.some((part) => part.type === "text")) {
+      return input.content;
+    }
+    const text = input.text?.trim() ?? "";
+    return text.length > 0
+      ? [{ type: "text", text }, ...input.content]
+      : input.content;
+  }
+  return [{ type: "text", text: input.text ?? "" }];
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -19,6 +19,10 @@ import {
   PersonalInboxService,
   PersonalKernelStoppedError,
 } from "./personal-inbox.service";
+import {
+  PersonalReplyService,
+  type ReplyInput,
+} from "./personal-reply.service";
 
 @Controller("v1/me")
 @UseGuards(PersonalApiGuard)
@@ -26,6 +30,7 @@ export class PersonalController {
   constructor(
     private readonly inbox: PersonalInboxService,
     private readonly connectors: PersonalConnectorService,
+    private readonly replies: PersonalReplyService,
   ) {}
 
   @Get("inbox")
@@ -47,6 +52,11 @@ export class PersonalController {
   @Get("engine")
   getEngine() {
     return this.inbox.getEngine();
+  }
+
+  @Post("replies")
+  sendReply(@Body() body: ReplyInput) {
+    return this.guard(() => this.replies.send(body ?? {}));
   }
 
   @Post("connectors")

@@ -3,6 +3,8 @@ import type {
   EngineInstallationView,
   InboxViewItem,
   PersonalEngineView,
+  ReplyAttachmentInput,
+  ReplyView,
 } from "./types";
 
 function origin(): string {
@@ -14,7 +16,15 @@ export async function fetchInbox(): Promise<InboxViewItem[]> {
   if (!response.ok) {
     throw new Error(`inbox ${response.status}`);
   }
-  return (await response.json()) as InboxViewItem[];
+  const items = (await response.json()) as InboxViewItem[];
+  return items.map((item) => ({
+    ...item,
+    channel: item.channel ?? item.event.source,
+    channel_label: item.channel_label ?? item.event.source.toUpperCase(),
+    kind: item.kind ?? "assistant",
+    direction: item.direction ?? "inbound",
+    can_send: item.can_send === true,
+  }));
 }
 
 export async function fetchEngine(): Promise<PersonalEngineView> {
@@ -25,8 +35,17 @@ export async function fetchEngine(): Promise<PersonalEngineView> {
   const engine = (await response.json()) as PersonalEngineView;
   return {
     ...engine,
+    pull: engine.pull ?? {
+      interval_ms: 0,
+      last_tick_at: null,
+      last_error: null,
+    },
     installations: engine.installations ?? [],
-    catalog: engine.catalog ?? [],
+    catalog: (engine.catalog ?? []).map((item) => ({
+      ...item,
+      prerequisites: item.prerequisites ?? [],
+      setup_ready: item.setup_ready ?? false,
+    })),
   };
 }
 
@@ -79,6 +98,30 @@ export async function uninstallConnector(id: string): Promise<void> {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `uninstall ${response.status}`);
   }
+}
+
+export async function sendReply(input: {
+  thread_id: string;
+  text?: string;
+  reply_to_event_id?: string;
+  attachments?: ReplyAttachmentInput[];
+}): Promise<ReplyView> {
+  const response = await fetch(`${origin()}/v1/me/replies`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as
+    | ReplyView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `reply ${response.status}`,
+    );
+  }
+  return body as ReplyView;
 }
 
 export async function setConnectorStatus(

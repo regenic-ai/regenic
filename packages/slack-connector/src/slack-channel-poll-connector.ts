@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   INGEST_SCHEMA_VERSION,
+  channelRecord,
   type ConnectorCursor,
   type IngestBatch,
   type PollResult,
@@ -139,26 +140,28 @@ export class SlackChannelPollConnector {
     }
     const actorId = message.user ?? `bot:${message.bot_id}`;
     const isThreadReply = Boolean(message.thread_ts && message.thread_ts !== message.ts);
-    return [
-      {
-        operation: "create",
-        source: this.source,
-        external_id: `${this.options.channel_id}:${message.ts}`,
-        occurred_at: slackTimestampToIso(message.ts),
-        actor: { id: actorId },
-        scope: {
-          id: this.options.channel_id,
-          name: this.options.channel_name,
-        },
-        type: isThreadReply ? "thread_reply" : "message",
-        thread: isThreadReply ? { id: `${this.options.channel_id}:${message.thread_ts}` } : undefined,
-        parent_external_id: isThreadReply
-          ? `${this.options.channel_id}:${message.thread_ts}`
-          : undefined,
-        content: [{ role: "body", media_type: "text/plain", text: message.text }],
-        attrs: message.subtype ? { slack_subtype: message.subtype } : undefined,
-      },
-    ];
+    const record = channelRecord({
+      channel: this.source,
+      kind: message.bot_id ? "assistant" : "user",
+      direction: "inbound",
+      external_id: `${this.options.channel_id}:${message.ts}`,
+      occurred_at: slackTimestampToIso(message.ts),
+      actor_id: actorId,
+      scope_id: this.options.channel_id,
+      scope_name: this.options.channel_name,
+      type: isThreadReply ? "thread_reply" : "message",
+      thread_id: isThreadReply
+        ? `${this.options.channel_id}:${message.thread_ts}`
+        : undefined,
+      parent_external_id: isThreadReply
+        ? `${this.options.channel_id}:${message.thread_ts}`
+        : undefined,
+      text: message.text,
+    });
+    if (message.subtype) {
+      record.attrs = { slack_subtype: message.subtype };
+    }
+    return [record];
   }
 
   private deliveryId(cursor: string | undefined, nextCursor: string | undefined): string {

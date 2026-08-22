@@ -115,4 +115,79 @@ describe("DshWebRpcClient", () => {
       },
     );
   });
+
+  it("sends image and file parts on session.prompt", async () => {
+    const calls = [];
+    const client = new DshWebRpcClient({
+      base_url: "http://127.0.0.1:3080",
+      createId: () => "rpc-1",
+      async fetch(url, init) {
+        calls.push({ url, body: JSON.parse(init.body) });
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              type: "server-response",
+              rpcId: "rpc-1",
+              result: { ok: true, value: {} },
+            };
+          },
+        };
+      },
+    });
+
+    await client.sessionPrompt({
+      sessionId: "sess-1",
+      text: "Look at this",
+      content: [
+        { type: "text", text: "Look at this" },
+        { type: "image", mimeType: "image/png", filename: "shot.png", url: "data:image/png;base64,aa" },
+      ],
+    });
+
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/api/session.prompt");
+    assert.deepEqual(calls[0].body.payload.content, [
+      { type: "text", text: "Look at this" },
+      { type: "image", mimeType: "image/png", filename: "shot.png", url: "data:image/png;base64,aa" },
+    ]);
+  });
+
+  it("lists session ids from session.list pages", async () => {
+    const calls = [];
+    const client = new DshWebRpcClient({
+      base_url: "http://127.0.0.1:3080",
+      createId: () => `rpc-${calls.length + 1}`,
+      async fetch(url, init) {
+        calls.push({ url, body: JSON.parse(init.body) });
+        const cursor = calls[calls.length - 1].body.payload.cursor;
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              type: "server-response",
+              rpcId: `rpc-${calls.length}`,
+              result: {
+                ok: true,
+                value: cursor
+                  ? { items: [{ id: "sess-2" }], hasMore: false }
+                  : {
+                      items: [{ sessionId: "sess-1" }],
+                      nextCursor: "page-2",
+                      hasMore: true,
+                    },
+              },
+            };
+          },
+        };
+      },
+    });
+
+    const ids = await client.listAllSessionIds();
+    assert.deepEqual(ids, ["sess-1", "sess-2"]);
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/api/session.list");
+    assert.equal(calls[0].body.method, "session.list");
+    assert.equal(calls[1].body.payload.cursor, "page-2");
+  });
 });
