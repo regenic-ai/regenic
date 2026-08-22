@@ -364,6 +364,7 @@ function ThreadPane({
       </div>
       <div className="composer-dock">
         <Composer
+          key={thread.id}
           disabled={!canReply}
           hint={
             canReply

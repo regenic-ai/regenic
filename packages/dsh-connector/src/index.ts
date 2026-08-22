@@ -1,5 +1,6 @@
 export * from "./dsh-cli-client";
 export * from "./dsh-cli-session-client";
+export * from "./dsh-prompt-part";
 export * from "./dsh-rpc-client";
 export * from "./dsh-rpc-handler";
 export * from "./dsh-host-services";

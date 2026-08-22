@@ -109,13 +109,19 @@ function stripAttachmentLines(text: string): string {
 }
 
 function renderInline(text: string): ReactNode[] {
-  const pieces = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+  const pieces = text.split(/(`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g);
   return pieces.map((piece, index) => {
     if (piece.startsWith("`") && piece.endsWith("`") && piece.length >= 2) {
       return <code key={index}>{piece.slice(1, -1)}</code>;
     }
     if (piece.startsWith("**") && piece.endsWith("**") && piece.length >= 4) {
       return <strong key={index}>{piece.slice(2, -2)}</strong>;
+    }
+    if (piece.startsWith("~~") && piece.endsWith("~~") && piece.length >= 4) {
+      return <s key={index}>{piece.slice(2, -2)}</s>;
+    }
+    if (piece.startsWith("*") && piece.endsWith("*") && piece.length >= 2) {
+      return <em key={index}>{piece.slice(1, -1)}</em>;
     }
     return <span key={index}>{piece}</span>;
   });

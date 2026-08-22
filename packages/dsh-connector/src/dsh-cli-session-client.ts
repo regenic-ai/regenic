@@ -18,7 +18,13 @@ export class DshCliSessionClient {
   async sessionPrompt(input: {
     sessionId?: string;
     text?: string;
-    content?: Array<{ type: string; text?: string; filename?: string; path?: string }>;
+    content?: Array<{
+      type: string;
+      text?: string;
+      name?: string;
+      filename?: string;
+      path?: string;
+    }>;
   }): Promise<{
     accepted: true;
     rpc_id: string;
@@ -42,7 +48,13 @@ export class DshCliSessionClient {
 
 function flattenPromptText(input: {
   text?: string;
-  content?: Array<{ type: string; text?: string; filename?: string; path?: string }>;
+  content?: Array<{
+    type: string;
+    text?: string;
+    name?: string;
+    filename?: string;
+    path?: string;
+  }>;
 }): string {
   if (typeof input.text === "string" && input.text.trim().length > 0) {
     return input.text;
@@ -52,11 +64,14 @@ function flattenPromptText(input: {
       if (part.type === "text" && typeof part.text === "string") {
         return [part.text];
       }
-      if (part.path) {
-        return [`[Attached: ${part.path}]`];
+      if (part.name) {
+        return [`[Attached: ${part.name}]`];
       }
       if (part.filename) {
         return [`[Attached: ${part.filename}]`];
+      }
+      if (part.path) {
+        return [`[Attached: ${part.path}]`];
       }
       return [];
     })
