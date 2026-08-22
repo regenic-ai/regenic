@@ -707,9 +707,11 @@ function ConnectorKind({
             </span>
             {` · credentials ${kind.credential_hint}`}
           </div>
-          <PrerequisiteList
-            items={visiblePrerequisites(kind, defaultFieldValues(kind))}
-          />
+          {installing ? null : (
+            <PrerequisiteList
+              items={visiblePrerequisites(kind, defaultFieldValues(kind))}
+            />
+          )}
         </div>
         <div className="install-actions">
           <button
