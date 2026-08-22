@@ -6,6 +6,7 @@ import {
   fetchInbox,
   fetchKernelSettings,
   installConnector,
+  createConversation,
   sendReply,
   setConnectorStatus,
   syncConnector,
@@ -35,6 +36,7 @@ import { BrandBadge, BrandLockup } from "./Brand";
 import { EngineIcon, InboxIcon, SettingsIcon } from "./Icons";
 import type {
   ConnectorCatalogItem,
+  CreatedConversation,
   EngineChipState,
   EngineInstallationView,
   InboxViewItem,
@@ -49,8 +51,12 @@ export function ConsoleApp() {
   const [nav, setNav] = useState<NavId>("inbox");
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [engine, setEngine] = useState<PersonalEngineView | null>(null);
+  const [drafts, setDrafts] = useState<CreatedConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
 
   const refresh = async () => {
     try {
@@ -61,8 +67,13 @@ export function ConsoleApp() {
       setInbox(nextInbox);
       setEngine(nextEngine);
       setError(null);
+      const synced = groupInboxThreads(nextInbox);
+      const nextDrafts = draftsRef.current.filter(
+        (draft) => !synced.some((thread) => thread.id === draft.thread_id),
+      );
+      setDrafts(nextDrafts);
       setSelectedId((current) => {
-        const threads = groupInboxThreads(nextInbox);
+        const threads = mergeDraftThreads(synced, nextDrafts);
         if (current && threads.some((thread) => thread.id === current)) {
           return current;
         }
@@ -84,9 +95,30 @@ export function ConsoleApp() {
     };
   }, []);
 
-  const threads = groupInboxThreads(inbox);
+  const threads = mergeDraftThreads(groupInboxThreads(inbox), drafts);
   const selected = threads.find((thread) => thread.id === selectedId) ?? null;
   const chip = engineChip(engine);
+  const canCreate = engine?.installations.some((item) => item.can_create) === true;
+
+  const startConversation = async () => {
+    if (creating || !canCreate) {
+      return;
+    }
+    setCreating(true);
+    try {
+      const created = await createConversation();
+      setDrafts((current) => [
+        created,
+        ...current.filter((item) => item.thread_id !== created.thread_id),
+      ]);
+      setSelectedId(created.thread_id);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Cannot create a conversation");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
     <div className="shell">
@@ -132,6 +164,9 @@ export function ConsoleApp() {
             threads={threads}
             selected={selected}
             error={error}
+            canCreate={canCreate}
+            creating={creating}
+            onCreate={startConversation}
             onSelect={setSelectedId}
             onRefresh={refresh}
           />
@@ -178,27 +213,68 @@ function EngineChip({ state }: { state: EngineChipState }) {
   );
 }
 
+function mergeDraftThreads(
+  threads: InboxThread[],
+  drafts: CreatedConversation[],
+): InboxThread[] {
+  const seen = new Set(threads.map((thread) => thread.id));
+  const extras = drafts
+    .filter((draft) => !seen.has(draft.thread_id))
+    .map((draft): InboxThread => ({
+      id: draft.thread_id,
+      source: draft.channel,
+      channel: draft.channel,
+      channel_label: draft.channel_label,
+      label: "New conversation",
+      can_send: draft.can_send,
+      messages: [],
+    }));
+  return [...extras, ...threads];
+}
+
 function InboxWorkspace({
   threads,
   selected,
   error,
+  canCreate,
+  creating,
+  onCreate,
   onSelect,
   onRefresh,
 }: {
   threads: InboxThread[];
   selected: InboxThread | null;
   error: string | null;
+  canCreate: boolean;
+  creating: boolean;
+  onCreate: () => Promise<void>;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
 }) {
   return (
     <div className="columns">
       <aside className="list">
-        <div className="list-head">Current work</div>
+        <div className="list-head">
+          <span>Current work</span>
+          {canCreate ? (
+            <button
+              type="button"
+              className="list-new"
+              disabled={creating}
+              onClick={() => {
+                void onCreate();
+              }}
+            >
+              {creating ? "Starting…" : "New"}
+            </button>
+          ) : null}
+        </div>
         {error ? <div className="page-empty">{error}</div> : null}
         {!error && threads.length === 0 ? (
           <div className="page-empty">
-            Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own.
+            {canCreate
+              ? "No current work yet. Start a new conversation."
+              : "Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own."}
           </div>
         ) : null}
         {threads.map((thread) => {
@@ -215,11 +291,13 @@ function InboxWorkspace({
                   <span className={`channel-tag channel-${thread.channel}`}>
                     {thread.channel_label}
                   </span>
-                  <span className="item-time">{formatChatTime(latest.event.occurred_at)}</span>
+                  <span className="item-time">
+                    {latest ? formatChatTime(latest.event.occurred_at) : ""}
+                  </span>
                 </div>
                 <div className="item-title">{threadTitle(thread)}</div>
                 <div className="item-reasons">
-                  {firstLine(latest.body_text, 96) || thread.label}
+                  {firstLine(latest?.body_text, 96) || thread.label}
                 </div>
               </div>
             </button>
@@ -399,10 +477,11 @@ function ChatAvatar({
 
 function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem {
   const now = new Date().toISOString();
+  const orgId = latestMessage(thread)?.event.org_id ?? "local-owner";
   return {
     decision: {
       event_id: `local:${now}`,
-      org_id: latestMessage(thread).event.org_id,
+      org_id: orgId,
       disposition: "current_work",
       layer: "L1_event",
       reason_codes: ["local"],
@@ -411,7 +490,7 @@ function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem
     },
     event: {
       id: `local:${now}`,
-      org_id: latestMessage(thread).event.org_id,
+      org_id: orgId,
       source: thread.source,
       external_id: `${thread.id.slice(thread.source.length + 1)}:out:local`,
       operation: "create",

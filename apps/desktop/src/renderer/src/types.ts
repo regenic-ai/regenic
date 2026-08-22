@@ -108,7 +108,16 @@ export interface EngineInstallationView {
   label: string;
   detail: string | null;
   syncable: boolean;
+  can_reply: boolean;
+  can_create: boolean;
   last_attempt: IngestAttempt | null;
+}
+
+export interface CreatedConversation {
+  thread_id: string;
+  channel: string;
+  channel_label: string;
+  can_send: boolean;
 }
 
 export interface ConnectorSyncView {

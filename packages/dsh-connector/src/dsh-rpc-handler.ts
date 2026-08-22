@@ -4,6 +4,7 @@ export const DSH_PUBLIC_METHODS = [
   "session.history",
   "session.prompt",
   "session.list",
+  "session.create",
 ] as const;
 
 export type DshPublicMethod = (typeof DSH_PUBLIC_METHODS)[number];
@@ -40,6 +41,7 @@ export interface DshRpcServices {
     hasMore: boolean;
   }>;
   send(sessionId: string, text: string): Promise<{ accepted: true }>;
+  createSession(payload?: Record<string, unknown>): Promise<{ sessionId: string }>;
 }
 
 export interface DshRpcHttpInput {
@@ -103,6 +105,9 @@ async function dispatch(
 ): Promise<unknown> {
   if (method === "session.list") {
     return { items: await services.listSessions() };
+  }
+  if (method === "session.create") {
+    return services.createSession(payload);
   }
   const sessionId = requiredSessionId(payload);
   if (method === "session.history") {

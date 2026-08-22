@@ -59,6 +59,11 @@ export class PersonalController {
     return this.guard(() => this.replies.send(body ?? {}));
   }
 
+  @Post("conversations")
+  createConversation(@Body() body: { installation_id?: string } | undefined) {
+    return this.guard(() => this.connectors.createConversation(body ?? {}));
+  }
+
   @Post("connectors")
   installConnector(
     @Body()

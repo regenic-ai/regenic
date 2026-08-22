@@ -21,6 +21,11 @@ export class DshApiController {
     return this.dispatch("session.list", request, response);
   }
 
+  @Post("session.create")
+  create(@Req() request: Request, @Res() response: Response): Promise<void> {
+    return this.dispatch("session.create", request, response);
+  }
+
   private async dispatch(
     method: string,
     request: Request,

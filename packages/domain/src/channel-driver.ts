@@ -11,6 +11,12 @@ export interface ConversationThread {
   target: string;
 }
 
+export interface ChannelCapabilities {
+  sync: boolean;
+  reply: boolean;
+  create: boolean;
+}
+
 export interface ConnectorStream {
   stream_key: string;
   connector: Pick<ChannelConnector, "poll">;
@@ -49,7 +55,13 @@ export interface ChannelDriver {
     installation: ConnectorInstallation,
     thread: ConversationThread,
   ): boolean;
+  capabilities(installation: ConnectorInstallation): ChannelCapabilities;
   canReply(installation: ConnectorInstallation): boolean;
+  createThread(
+    installation: ConnectorInstallation,
+    host: Host,
+    env: NodeJS.ProcessEnv,
+  ): Promise<ConversationThread>;
   resolveStreams(
     installation: ConnectorInstallation,
     host: Host,
@@ -114,6 +126,25 @@ export class ChannelDriverRegistry {
   ): boolean {
     const found = this.findForThread(installations, thread);
     return Boolean(found && found.driver.canReply(found.installation));
+  }
+
+  findCreatable(
+    installations: ConnectorInstallation[],
+  ): { installation: ConnectorInstallation; driver: ChannelDriver } | undefined {
+    for (const installation of installations) {
+      if (installation.status !== "enabled") {
+        continue;
+      }
+      const driver = this.get(installation.connector_type);
+      if (driver?.capabilities(installation).create) {
+        return { installation, driver };
+      }
+    }
+    return undefined;
+  }
+
+  canCreate(installations: ConnectorInstallation[]): boolean {
+    return Boolean(this.findCreatable(installations));
   }
 }
 

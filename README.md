@@ -98,6 +98,7 @@ Regenic still exposes the same HTTP methods. The envelope matches DSH web (`clie
 POST /v1/dsh/api/session.history
 POST /v1/dsh/api/session.prompt
 POST /v1/dsh/api/session.list
+POST /v1/dsh/api/session.create
 ```
 
 Set `REGENIC_DATABASE` and `REGENIC_BLOB_ROOT` on the API process. When `REGENIC_DSH_API_TOKEN` is set, callers must send `Authorization: Bearer`.
