@@ -1,8 +1,11 @@
-# Sealos-only overlay: CLI transport needs `dsh` on PATH and Node >= 22.
-# Keep this out of the root API image.
+# Obsolete after DSH was split out (deploy/sealos/dsh.yaml).
+# The API now talks HTTP to http://regenic-dsh:3080 and should use
+# jesonli/regenic-core:main (node:20-bookworm-slim, ~100MB).
+# This overlay is huge because it starts from full node:22-bookworm,
+# installs python3/make/g++, copies the whole app, and npm-installs dsh.
+# Do not build or deploy :cli unless you are debugging CLI transport.
 #
-#   docker build --platform linux/amd64 -t jesonli/regenic-core:cli \
-#     -f deploy/sealos/Dockerfile.api-cli deploy/sealos
+#   docker build --platform linux/amd64 --target api -t jesonli/regenic-core:main .
 ARG API_IMAGE=jesonli/regenic-core:main
 FROM ${API_IMAGE} AS app
 

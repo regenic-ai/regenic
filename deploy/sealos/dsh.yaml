@@ -1,0 +1,189 @@
+# Standalone DSH web for Sealos App Launchpad. Cluster-only: no Ingress.
+# Official dsh refuses --host 0.0.0.0, so a loopback proxy publishes :3081.
+# API talks to Service DNS: http://regenic-dsh:3080 -> proxy -> 127.0.0.1:3080
+#
+#   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/dsh.yaml
+#   kubectl delete ingress regenic-dsh --ignore-not-found
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: regenic-dsh
+  labels:
+    app: regenic-dsh
+    cloud.sealos.io/app-deploy-manager: regenic-dsh
+data:
+  proxy.js: |
+    #!/usr/bin/env node
+    const http = require("node:http");
+    const net = require("node:net");
+    
+    const listenPort = Number(process.env.DSH_PROXY_PORT || 3081);
+    const targetPort = Number(process.env.DSH_PORT || 3080);
+    const targetHost = process.env.DSH_LOOPBACK_HOST || "127.0.0.1";
+    
+    const server = http.createServer((req, res) => {
+      const upstream = http.request(
+        {
+          host: targetHost,
+          port: targetPort,
+          path: req.url,
+          method: req.method,
+          headers: req.headers,
+        },
+        (incoming) => {
+          res.writeHead(incoming.statusCode ?? 502, incoming.headers);
+          incoming.pipe(res);
+        },
+      );
+      upstream.on("error", (error) => {
+        if (!res.headersSent) {
+          res.writeHead(502, { "content-type": "text/plain" });
+        }
+        res.end(`dsh proxy: ${error.message}`);
+      });
+      req.pipe(upstream);
+    });
+    
+    server.on("upgrade", (req, socket, head) => {
+      const dest = net.connect(targetPort, targetHost, () => {
+        const header =
+          `${req.method} ${req.url} HTTP/1.1\r\n` +
+          Object.entries(req.headers)
+            .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`)
+            .join("\r\n") +
+          "\r\n\r\n";
+        dest.write(header);
+        if (head.length > 0) {
+          dest.write(head);
+        }
+        dest.pipe(socket);
+        socket.pipe(dest);
+      });
+      dest.on("error", () => socket.destroy());
+      socket.on("error", () => dest.destroy());
+    });
+    
+    server.listen(listenPort, "0.0.0.0", () => {
+      process.stdout.write(`dsh proxy 0.0.0.0:${listenPort} -> ${targetHost}:${targetPort}\n`);
+    });
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: regenic-dsh-data
+  labels:
+    app: regenic-dsh
+    cloud.sealos.io/app-deploy-manager: regenic-dsh
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regenic-dsh
+  labels:
+    app: regenic-dsh
+    cloud.sealos.io/app-deploy-manager: regenic-dsh
+  annotations:
+    originImageName: jesonli/dsh:main
+    deploy.cloud.sealos.io/minReplicas: "1"
+    deploy.cloud.sealos.io/maxReplicas: "1"
+    deploy.cloud.sealos.io/resize: "10Gi"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: regenic-dsh
+  template:
+    metadata:
+      labels:
+        app: regenic-dsh
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: regenic-dsh
+          image: jesonli/dsh:main
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 3081
+          command: ["bash", "-lc"]
+          args:
+            - |
+              mkdir -p "$HOME" "$TMPDIR" "$DSH_HOME"
+              node /tmp/dsh-proxy.js &
+              exec dsh web --no-open --port 3080 --trusted-host regenic-dsh --trusted-host regenic-dsh:3080 --trusted-host regenic-dsh.ns-example.svc.cluster.local --trusted-host regenic-dsh.ns-example.svc.cluster.local:3080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3081
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          env:
+            - name: HOME
+              value: /data/home
+            - name: TMPDIR
+              value: /data/tmp
+            - name: DSH_HOME
+              value: /data/dsh
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=512
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: regenic-secrets
+                  key: DEEPSEEK_API_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 102Mi
+            limits:
+              cpu: "1"
+              memory: 1024Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: proxy
+              mountPath: /tmp/dsh-proxy.js
+              subPath: proxy.js
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: regenic-dsh-data
+        - name: proxy
+          configMap:
+            name: regenic-dsh
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: regenic-dsh
+  labels:
+    app: regenic-dsh
+    cloud.sealos.io/app-deploy-manager: regenic-dsh
+spec:
+  selector:
+    app: regenic-dsh
+  ports:
+    - name: http
+      port: 3080
+      targetPort: 3081

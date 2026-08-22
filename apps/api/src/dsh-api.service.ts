@@ -48,6 +48,7 @@ export class DshApiService {
       createDshHostRpcServices(host, {
         org_id: env.REGENIC_ORG,
         access_token: env.REGENIC_DSH_TOKEN,
+        env: process.env,
       }),
     );
   }

@@ -18,7 +18,9 @@ import {
   dshSessionKey,
   dshSessionPlugin,
   dshSessionPluginConfigFromInstallation,
+  resolveEffectiveDshTransport,
 } from "./plugin";
+import { loopbackHttpUrl, resolveOperatorDshBaseUrl } from "./dsh-url";
 
 export const dshSessionDriver: ChannelDriver = {
   connector_type: "dsh-session",
@@ -41,7 +43,7 @@ export const dshSessionDriver: ChannelDriver = {
     }
     const pinned = configString(installation.config, "session_id");
     const mailbox = configString(installation.config, "mailbox");
-    const transport = configString(installation.config, "transport") ?? "web";
+    const transport = resolveEffectiveDshTransport(installation.config);
     if (pinned) {
       return pinned === thread.target;
     }
@@ -59,7 +61,7 @@ export const dshSessionDriver: ChannelDriver = {
     if (pinned) {
       return pinned === thread.target;
     }
-    const transport = configString(installation.config, "transport") ?? "web";
+    const transport = resolveEffectiveDshTransport(installation.config);
     return (
       transport === "cli" &&
       configString(installation.config, "mailbox") === thread.target
@@ -71,7 +73,7 @@ export const dshSessionDriver: ChannelDriver = {
   },
 
   async resolveStreams(installation, host, env) {
-    const transport = configString(installation.config, "transport") ?? "web";
+    const transport = resolveEffectiveDshTransport(installation.config, env);
     if (transport === "cli") {
       return [await mountInstalled(host, installation, env)];
     }
@@ -87,7 +89,7 @@ export const dshSessionDriver: ChannelDriver = {
   },
 
   async resolveThreadStream(installation, thread, host, env) {
-    const transport = configString(installation.config, "transport") ?? "web";
+    const transport = resolveEffectiveDshTransport(installation.config, env);
     if (transport === "cli") {
       return mountInstalled(host, installation, env);
     }
@@ -95,7 +97,7 @@ export const dshSessionDriver: ChannelDriver = {
   },
 
   async bindEgress(installation, thread, host, env) {
-    const transport = configString(installation.config, "transport") ?? "web";
+    const transport = resolveEffectiveDshTransport(installation.config, env);
     if (transport === "cli") {
       await mountInstalled(host, installation, env);
       const egress = host.get("egress").get(installation.id);
@@ -143,9 +145,7 @@ async function mountInstalled(
       }),
       command: "dsh",
       workdir: undefined,
-      base_url: loopbackHttpUrl(
-        configString(installation.config, "base_url") ?? "http://127.0.0.1:3080",
-      ),
+      base_url: resolveDshWebBaseUrl(installation, env),
     });
   }
   const connector = host.get("connectors").get(installation.id);
@@ -163,24 +163,43 @@ function webClient(
   env: NodeJS.ProcessEnv,
 ): DshWebRpcClient {
   return new DshWebRpcClient({
-    base_url: loopbackHttpUrl(
-      configString(installation.config, "base_url") ?? "http://127.0.0.1:3080",
-    ),
+    base_url: resolveDshWebBaseUrl(installation, env),
     access_token: env.REGENIC_DSH_TOKEN,
   });
+}
+
+function resolveDshWebBaseUrl(
+  installation: ConnectorInstallation,
+  env: NodeJS.ProcessEnv,
+): string {
+  return (
+    resolveOperatorDshBaseUrl(env)
+    ?? loopbackHttpUrl(
+      configString(installation.config, "base_url") ?? "http://127.0.0.1:3080",
+    )
+  );
 }
 
 function dshInstallConfig(
   input: Record<string, unknown>,
   id: string,
 ): Record<string, JsonValue> {
-  const transport = configString(input, "transport") ?? "web";
-  if (transport !== "web" && transport !== "cli") {
+  const requested = configString(input, "transport") ?? "web";
+  if (requested !== "web" && requested !== "cli") {
     throw new ChannelDriverError("invalid_config", "DSH transport must be web or cli");
   }
-  if (transport === "web") {
+  const operatorUrl = resolveOperatorDshBaseUrl();
+  if (operatorUrl) {
+    const config: Record<string, JsonValue> = { transport: "web" };
+    const sessionId = configString(input, "session_id");
+    if (sessionId) {
+      config.session_id = sessionId;
+    }
+    return config;
+  }
+  if (requested === "web") {
     const config: Record<string, JsonValue> = {
-      transport,
+      transport: requested,
       base_url: loopbackHttpUrl(
         configString(input, "base_url") ?? "http://127.0.0.1:3080",
       ),
@@ -192,34 +211,9 @@ function dshInstallConfig(
     return config;
   }
   return {
-    transport,
+    transport: requested,
     mailbox: configString(input, "mailbox") ?? id,
   };
-}
-
-function loopbackHttpUrl(value: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new ChannelDriverError(
-      "invalid_config",
-      "DSH base_url must be a loopback http(s) URL",
-    );
-  }
-  const host = parsed.hostname.toLowerCase();
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
-    parsed.username ||
-    parsed.password ||
-    (host !== "127.0.0.1" && host !== "localhost" && host !== "::1")
-  ) {
-    throw new ChannelDriverError(
-      "invalid_config",
-      "DSH base_url must be a loopback http(s) URL",
-    );
-  }
-  return parsed.toString();
 }
 
 function configString(

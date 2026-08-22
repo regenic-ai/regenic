@@ -18,6 +18,7 @@ export interface DshHostServiceOptions {
   spawn?: DshSpawn;
   fetch?: DshFetch;
   access_token?: string;
+  env?: NodeJS.ProcessEnv;
   now?: () => string;
   createId?: () => string;
   lease_owner?: string;
@@ -114,6 +115,7 @@ async function mountDshSession(
         spawn: options.spawn,
         fetch: options.fetch,
         access_token: options.access_token,
+        env: options.env,
         now: options.now,
         createId: options.createId,
       }),
