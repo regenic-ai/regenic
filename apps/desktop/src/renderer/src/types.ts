@@ -1,5 +1,13 @@
 export type NavId = "inbox" | "engine" | "settings";
 
+export type KernelMode = "local" | "custom";
+
+export interface KernelSettingsView {
+  mode: KernelMode;
+  customOrigin: string;
+  activeOrigin: string;
+}
+
 export interface ArrangementDecision {
   event_id: string;
   org_id: string;

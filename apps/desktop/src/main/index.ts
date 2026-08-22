@@ -13,6 +13,13 @@ import {
 } from "electron";
 import appIconPng from "../brand/app-icon.png?asset";
 import trayPng from "../brand/tray-mark.png?asset";
+import {
+  LOCAL_KERNEL_ORIGIN,
+  loadKernelPreference,
+  parseKernelOrigin,
+  saveKernelPreference,
+  type KernelPreference,
+} from "./kernel-settings";
 
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
@@ -154,6 +161,30 @@ function sidecarEnv(
   return env;
 }
 
+function settingsFile(): string {
+  return join(app.getPath("userData"), "desktop-settings.json");
+}
+
+function kernelView() {
+  const preference = loadKernelPreference(settingsFile());
+  return {
+    mode: preference.mode,
+    customOrigin: preference.origin ?? LOCAL_KERNEL_ORIGIN,
+    activeOrigin: apiOrigin,
+  };
+}
+
+function broadcastOrigin(): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send("regenic:api-origin", apiOrigin);
+  }
+}
+
+function stopOwnedSidecar(): void {
+  sidecar?.kill();
+  sidecar = null;
+}
+
 function spawnSidecar(port: number): void {
   const { database, blobRoot } = resolveDataPaths();
   const apiEntry = join(repoRoot(), "apps/api/dist/main.js");
@@ -178,7 +209,7 @@ function spawnSidecar(port: number): void {
   });
 }
 
-async function startKernel(): Promise<void> {
+async function startLocalKernel(): Promise<void> {
   const picked = await pickKernelPort();
   if ("reuse" in picked) {
     apiOrigin = picked.reuse;
@@ -189,10 +220,21 @@ async function startKernel(): Promise<void> {
   try {
     await waitForPersonal(apiOrigin);
   } catch (error) {
-    sidecar?.kill();
-    sidecar = null;
+    stopOwnedSidecar();
     throw error;
   }
+}
+
+async function applyKernelPreference(preference: KernelPreference): Promise<void> {
+  saveKernelPreference(settingsFile(), preference);
+  if (preference.mode === "custom" && preference.origin) {
+    stopOwnedSidecar();
+    apiOrigin = preference.origin;
+    broadcastOrigin();
+    return;
+  }
+  await startLocalKernel();
+  broadcastOrigin();
 }
 
 function applyAppIcon(): void {
@@ -369,9 +411,25 @@ app.whenReady().then(async () => {
     quitting = true;
     app.quit();
   });
+  ipcMain.handle("regenic:get-api-origin", async () => apiOrigin);
+  ipcMain.handle("regenic:get-kernel-settings", async () => kernelView());
+  ipcMain.handle(
+    "regenic:set-kernel-settings",
+    async (_event, input: { mode?: string; origin?: string }) => {
+      if (input?.mode === "custom") {
+        await applyKernelPreference({
+          mode: "custom",
+          origin: parseKernelOrigin(input.origin ?? ""),
+        });
+      } else {
+        await applyKernelPreference({ mode: "local" });
+      }
+      return kernelView();
+    },
+  );
 
   try {
-    await startKernel();
+    await applyKernelPreference(loadKernelPreference(settingsFile()));
   } catch (error) {
     process.stderr.write(`[kernel] ${error instanceof Error ? error.message : error}\n`);
   }
