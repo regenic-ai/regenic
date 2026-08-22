@@ -1,11 +1,15 @@
-# Standalone DSH web for Sealos App Launchpad. Cluster-only: no Ingress.
+# Standalone DSH web for Sealos App Launchpad.
 # Official dsh refuses --host 0.0.0.0, so a loopback proxy publishes :3081.
 # API talks to Service DNS: http://regenic-dsh:3080 -> proxy -> 127.0.0.1:3080
 # Disk is a StatefulSet claim (`data-regenic-dsh-0`). Do not click Launchpad
 # "开存储" on this app; replacing the pod remounts the same volume.
 #
+# Public hosts, namespace DNS, and Ingress stay out of git. Copy:
+#   cp deploy/sealos/dsh.local.yaml.example deploy/sealos/dsh.local.yaml
+# Then:
 #   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/dsh.yaml
-#   kubectl delete ingress regenic-dsh --ignore-not-found
+#   kubectl apply -f deploy/sealos/dsh.local.yaml
+# API public hosts: deploy/sealos/regenic.local.yaml.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -122,8 +126,15 @@ spec:
           args:
             - |
               mkdir -p "$HOME" "$TMPDIR" "$DSH_HOME"
+              if [ ! -d "$HOME/regenic/.git" ]; then
+                git clone https://github.com/regenic-ai/regenic.git "$HOME/regenic"
+              fi
               node /tmp/dsh-proxy.js &
-              exec dsh web --no-open --port 3080 --trusted-host regenic-dsh --trusted-host regenic-dsh:3080 --trusted-host regenic-dsh.ns-example.svc.cluster.local --trusted-host regenic-dsh.ns-example.svc.cluster.local:3080
+              trusted="--trusted-host regenic-dsh --trusted-host regenic-dsh:3080"
+              for host in $DSH_TRUSTED_HOSTS; do
+                trusted="$trusted --trusted-host $host"
+              done
+              exec dsh web --no-open --port 3080 $trusted
           readinessProbe:
             httpGet:
               path: /
@@ -132,11 +143,17 @@ spec:
             periodSeconds: 5
           env:
             - name: HOME
-              value: /data/home
+              value: /home/node
             - name: TMPDIR
               value: /data/tmp
             - name: DSH_HOME
               value: /data/dsh
+            - name: DSH_TRUSTED_HOSTS
+              valueFrom:
+                configMapKeyRef:
+                  name: regenic-dsh-env
+                  key: DSH_TRUSTED_HOSTS
+                  optional: true
             - name: NODE_OPTIONS
               value: --max-old-space-size=512
             - name: DEEPSEEK_API_KEY
@@ -154,6 +171,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: data
+              mountPath: /home/node
+              subPath: home
             - name: proxy
               mountPath: /tmp/dsh-proxy.js
               subPath: proxy.js
