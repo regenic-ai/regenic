@@ -64,6 +64,14 @@ export class PersonalController {
     return this.guard(() => this.connectors.createConversation(body ?? {}));
   }
 
+  @Post("conversations/prefs")
+  updateConversationPrefs(
+    @Body()
+    body: { thread_id?: string; title?: string | null; pinned?: boolean } | undefined,
+  ) {
+    return this.guard(() => this.inbox.updateConversationPrefs(body ?? {}));
+  }
+
   @Post("connectors")
   installConnector(
     @Body()

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { BrandLockup } from "./Brand";
 import { fetchEngine, fetchInbox } from "./api";
 import { chipLabel, engineChip, formatChatTime } from "./format";
-import { groupInboxThreads, latestMessage } from "./inbox";
+import { groupInboxThreads, latestMessage, sortInboxThreads } from "./inbox";
 import { threadTitle } from "./message-view";
 import type { InboxViewItem, PersonalEngineView } from "./types";
 
@@ -44,7 +44,7 @@ export function TrayApp() {
   }, []);
 
   const chip = engineChip(engine);
-  const threads = groupInboxThreads(inbox);
+  const threads = sortInboxThreads(groupInboxThreads(inbox));
   const recent = threads.slice(0, 3);
 
   return (
@@ -71,7 +71,7 @@ export function TrayApp() {
           recent.map((thread) => {
             const latest = latestMessage(thread);
             return (
-              <div className="item" key={thread.id}>
+              <div className={`item${thread.pinned ? " pinned" : ""}`} key={thread.id}>
                 <div className="item-copy">
                   <div className="item-meta">
                     <span className={`channel-tag channel-${thread.channel}`}>

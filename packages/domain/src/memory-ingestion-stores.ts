@@ -3,6 +3,8 @@ import type {
   AuthorityStore,
   BlobRecord,
   BlobStore,
+  ConversationPref,
+  ConversationPrefPatch,
   EventRecord,
   EventRevision,
   NewEvent,
@@ -56,11 +58,16 @@ export class MemoryBlobStore implements BlobStore {
   }
 }
 
+function prefKey(orgId: string, threadId: string): string {
+  return `${orgId}\0${threadId}`;
+}
+
 export class MemoryAuthorityStore implements AuthorityStore {
   private readonly currentBySource = new Map<string, EventRecord>();
   private readonly events: EventRecord[] = [];
   private readonly blobs = new Map<string, BlobRecord>();
   private readonly dispositions = new Map<string, ArrangementDecision>();
+  private readonly prefs = new Map<string, ConversationPref>();
   private nextId = 1;
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
@@ -106,6 +113,35 @@ export class MemoryAuthorityStore implements AuthorityStore {
       .sort((left, right) =>
         right.event.occurred_at.localeCompare(left.event.occurred_at),
       );
+  }
+
+  async listConversationPrefs(orgId: string): Promise<ConversationPref[]> {
+    return [...this.prefs.values()]
+      .filter((pref) => pref.org_id === orgId)
+      .map((pref) => ({ ...pref }));
+  }
+
+  async getConversationPref(
+    orgId: string,
+    threadId: string,
+  ): Promise<ConversationPref | null> {
+    const pref = this.prefs.get(prefKey(orgId, threadId));
+    return pref ? { ...pref } : null;
+  }
+
+  async putConversationPref(
+    input: ConversationPrefPatch,
+  ): Promise<ConversationPref> {
+    const current = this.prefs.get(prefKey(input.org_id, input.thread_id));
+    const next: ConversationPref = {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      title: input.title !== undefined ? input.title : (current?.title ?? null),
+      pinned: input.pinned !== undefined ? input.pinned : (current?.pinned ?? false),
+      updated_at: input.updated_at,
+    };
+    this.prefs.set(prefKey(input.org_id, input.thread_id), next);
+    return { ...next };
   }
 
   async append(input: NewEvent): Promise<EventRecord> {

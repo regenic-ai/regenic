@@ -375,6 +375,81 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("persists a conversation title and pin across inbox reads", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-title",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-title:7",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "user",
+          scope_id: "session-title",
+          text: "只用一句话回复：pong",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const created = await (
+        await fetch(`${origin}/v1/me/conversations/prefs`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            thread_id: "dsh:session-title",
+            title: "  Release desk  ",
+            pinned: true,
+          }),
+        })
+      ).json();
+      assert.equal(created.title, "Release desk");
+      assert.equal(created.pinned, true);
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.equal(inbox[0].thread_id, "dsh:session-title");
+      assert.equal(inbox[0].title, "Release desk");
+      assert.equal(inbox[0].pinned, true);
+
+      const cleared = await (
+        await fetch(`${origin}/v1/me/conversations/prefs`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            thread_id: "dsh:session-title",
+            title: "",
+          }),
+        })
+      ).json();
+      assert.equal(cleared.title, null);
+      assert.equal(cleared.pinned, true);
+
+      const again = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.equal(again[0].title, null);
+      assert.equal(again[0].pinned, true);
+
+      const invalid = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "x" }),
+      });
+      assert.equal(invalid.status, 400);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("includes pending siblings once a conversation is already current work", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

@@ -1,0 +1,46 @@
+# Gitignored after copy:
+#   cp deploy/sealos/dsh.local.yaml.example deploy/sealos/dsh.local.yaml
+# Fill the public hosts for this workspace, then:
+#   kubectl apply -f deploy/sealos/dsh.yaml -f deploy/sealos/dsh.local.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: regenic-dsh-env
+  labels:
+    app: regenic-dsh
+    cloud.sealos.io/app-deploy-manager: regenic-dsh
+data:
+  # Space-separated extra --trusted-host values. Do not commit real hosts.
+  DSH_TRUSTED_HOSTS: "regenic-dsh.example.svc.cluster.local regenic-dsh.example.svc.cluster.local:3080 dsh.example.site"
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: regenic-dsh
+  labels:
+    app: regenic-dsh
+    cloud.sealos.io/app-deploy-manager: regenic-dsh
+    cloud.sealos.io/app-deploy-manager-domain: dsh-example
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  tls:
+    - hosts:
+        - dsh.example.site
+      secretName: wildcard-cert
+  rules:
+    - host: dsh.example.site
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: regenic-dsh
+                port:
+                  number: 3080

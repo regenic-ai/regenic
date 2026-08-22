@@ -212,6 +212,22 @@ export interface TombstoneEvent extends SourceIdentity {
   expected_head_id: string | null;
 }
 
+export interface ConversationPref {
+  org_id: string;
+  thread_id: string;
+  title: string | null;
+  pinned: boolean;
+  updated_at: string;
+}
+
+export interface ConversationPrefPatch {
+  org_id: string;
+  thread_id: string;
+  title?: string | null;
+  pinned?: boolean;
+  updated_at: string;
+}
+
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
   findBySourceIdentity(identity: SourceIdentity): Promise<EventRecord | null>;
@@ -222,6 +238,12 @@ export interface AuthorityStore {
   putDisposition(decision: ArrangementDecision): Promise<void>;
   getDisposition(eventId: string): Promise<ArrangementDecision | null>;
   listInbox(orgId: string): Promise<InboxItem[]>;
+  listConversationPrefs(orgId: string): Promise<ConversationPref[]>;
+  getConversationPref(
+    orgId: string,
+    threadId: string,
+  ): Promise<ConversationPref | null>;
+  putConversationPref(input: ConversationPrefPatch): Promise<ConversationPref>;
 }
 
 export type ConnectorInstallationStatus =

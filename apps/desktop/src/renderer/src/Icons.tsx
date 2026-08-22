@@ -71,6 +71,48 @@ export function SendIcon() {
   );
 }
 
+export function PinIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M10.6 2.4 13.6 5.4a1 1 0 0 1-.15 1.55L11.2 8.2 8.7 13.2a.5.5 0 0 1-.9.05L6.3 10.2 3.2 9.1a.5.5 0 0 1-.1-.85L8 5.6l1.3-2.25A1 1 0 0 1 10.6 2.4Z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6.4 10.1 3.2 13.3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function PencilIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M9.4 3.4 12.6 6.6 6 13.2H2.8v-3.2L9.4 3.4Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M8.2 4.6 11.4 7.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function SettingsIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">

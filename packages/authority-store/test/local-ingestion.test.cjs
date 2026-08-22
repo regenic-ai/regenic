@@ -63,7 +63,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 3);
+    assert.equal(authorityStore.schemaVersion, 4);
     authorityStore.close();
   });
 
@@ -215,12 +215,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 4");
+    database.pragma("user_version = 5");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 4 is newer than supported 3/,
+      /schema 5 is newer than supported 4/,
     );
   });
 
@@ -255,5 +255,36 @@ describe("local ingestion persistence", () => {
 
     assert.equal((await harness.authorityStore.listInbox("local-owner")).length, 0);
     harness.authorityStore.close();
+  });
+
+  it("keeps conversation title and pin after reopen", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let store = new SqliteAuthorityStore(path);
+    await store.putConversationPref({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      title: "Release desk",
+      pinned: true,
+      updated_at: "2026-08-22T00:00:00.000Z",
+    });
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    const pref = await store.getConversationPref("local-owner", "dsh:session-a");
+    const listed = await store.listConversationPrefs("local-owner");
+    assert.equal(pref.title, "Release desk");
+    assert.equal(pref.pinned, true);
+    assert.equal(listed.length, 1);
+    await store.putConversationPref({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      title: null,
+      updated_at: "2026-08-22T00:01:00.000Z",
+    });
+    const cleared = await store.getConversationPref("local-owner", "dsh:session-a");
+    assert.equal(cleared.title, null);
+    assert.equal(cleared.pinned, true);
+    store.close();
   });
 });

@@ -50,6 +50,10 @@ export interface InboxViewItem {
   kind: MessageKind;
   direction: MessageDirection;
   can_send: boolean;
+  thread_id?: string;
+  title?: string | null;
+  pinned?: boolean;
+  pref_updated_at?: string | null;
 }
 
 export interface IngestAttempt {
@@ -118,6 +122,15 @@ export interface CreatedConversation {
   channel: string;
   channel_label: string;
   can_send: boolean;
+  title?: string | null;
+  pinned?: boolean;
+}
+
+export interface ConversationPrefView {
+  thread_id: string;
+  title: string | null;
+  pinned: boolean;
+  updated_at: string;
 }
 
 export interface ConnectorSyncView {

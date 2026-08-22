@@ -1,5 +1,6 @@
 import type {
   ConnectorSyncView,
+  ConversationPrefView,
   CreatedConversation,
   EngineInstallationView,
   InboxViewItem,
@@ -63,6 +64,10 @@ export async function fetchInbox(): Promise<InboxViewItem[]> {
     kind: item.kind ?? "assistant",
     direction: item.direction ?? "inbound",
     can_send: item.can_send === true,
+    thread_id: item.thread_id,
+    title: item.title ?? null,
+    pinned: item.pinned === true,
+    pref_updated_at: item.pref_updated_at ?? null,
   }));
 }
 
@@ -163,6 +168,29 @@ export async function createConversation(input: {
     );
   }
   return body as CreatedConversation;
+}
+
+export async function updateConversationPrefs(input: {
+  thread_id: string;
+  title?: string | null;
+  pinned?: boolean;
+}): Promise<ConversationPrefView> {
+  const response = await fetch(`${origin()}/v1/me/conversations/prefs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as
+    | ConversationPrefView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `conversation prefs ${response.status}`,
+    );
+  }
+  return body as ConversationPrefView;
 }
 
 export async function sendReply(input: {

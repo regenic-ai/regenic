@@ -5,11 +5,12 @@
 # Disk is a StatefulSet claim (`data-regenic-0`). Restarting or replacing the
 # pod remounts the same volume. Do not click Launchpad "开存储" on this app.
 #
-# Secrets stay out of git. Once:
+# Secrets and public hosts stay out of git. Once:
 #   cp deploy/sealos/secret.yaml.example deploy/sealos/secret.yaml
+#   cp deploy/sealos/regenic.local.yaml.example deploy/sealos/regenic.local.yaml
 # Then:
-#   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/dsh.yaml
-#   kubectl apply -f deploy/sealos/regenic.yaml
+#   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/regenic.yaml
+#   kubectl apply -f deploy/sealos/regenic.local.yaml
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -130,35 +131,3 @@ spec:
     - name: http
       port: 3000
       targetPort: http
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: regenic
-  labels:
-    app: regenic
-    cloud.sealos.io/app-deploy-manager: regenic
-    cloud.sealos.io/app-deploy-manager-domain: api-example
-  annotations:
-    kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/backend-protocol: HTTP
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: 32m
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-spec:
-  tls:
-    - hosts:
-        - api.example.site
-      secretName: wildcard-cert
-  rules:
-    - host: api.example.site
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: regenic
-                port:
-                  number: 3000

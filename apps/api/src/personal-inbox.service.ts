@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import {
+  ChannelDriverError,
   ChannelDriverRegistry,
   channelLabel,
   conversationId,
@@ -7,12 +8,14 @@ import {
   resolveMessageSurface,
   type ArrangementDecision,
   type ConnectorInstallation,
+  type ConversationPref,
   type ConversationThread,
   type EventRecord,
   type MessageDirection,
   type MessageKind,
 } from "@regenic/domain";
 import { resolveInboxBody, type InboxAttachment } from "./inbox-body";
+import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
   toInstallationView,
@@ -36,7 +39,26 @@ export interface InboxViewItem {
   kind: MessageKind;
   direction: MessageDirection;
   can_send: boolean;
+  thread_id: string;
+  title: string | null;
+  pinned: boolean;
+  pref_updated_at: string | null;
 }
+
+export interface ConversationPrefView {
+  thread_id: string;
+  title: string | null;
+  pinned: boolean;
+  updated_at: string;
+}
+
+export interface ConversationPrefInput {
+  thread_id?: string;
+  title?: string | null;
+  pinned?: boolean;
+}
+
+const MAX_TITLE_LENGTH = 120;
 
 export type { EngineInstallationView } from "./personal-connector-view";
 
@@ -123,10 +145,14 @@ export class PersonalInboxService {
     const authority = host.get("authority");
     const blobs = host.get("blobs");
     const orgId = this.runtime.orgId();
-    const [focused, installations] = await Promise.all([
+    const [focused, installations, prefs] = await Promise.all([
       authority.listInbox(orgId),
       authority.listInstallations(orgId),
+      authority.listConversationPrefs(orgId),
     ]);
+    const prefsByThread = new Map(
+      prefs.map((pref) => [pref.thread_id, pref] as const),
+    );
     const threadIds = new Set(
       focused.map((item) =>
         conversationId(item.event.source, item.event.external_id, item.event.id),
@@ -151,15 +177,52 @@ export class PersonalInboxService {
       }
     }
     return Promise.all(
-      [...focused, ...extras].map(async (item) =>
-        decorateInboxItem(
+      [...focused, ...extras].map(async (item) => {
+        const threadId = conversationId(
+          item.event.source,
+          item.event.external_id,
+          item.event.id,
+        );
+        return decorateInboxItem(
           item,
           await resolveInboxBody(authority, blobs, item.event.content_hash),
           installations,
           this.drivers,
-        ),
-      ),
+          prefsByThread.get(threadId) ?? null,
+        );
+      }),
     );
+  }
+
+  async updateConversationPrefs(
+    input: ConversationPrefInput,
+  ): Promise<ConversationPrefView> {
+    const host = this.runtime.requireHost();
+    const threadId = input.thread_id?.trim() ?? "";
+    try {
+      parseConversationThread(threadId);
+    } catch (error) {
+      const message =
+        error instanceof ChannelDriverError
+          ? error.message
+          : "thread_id must look like source:target";
+      throw new PersonalConnectorError("invalid_config", message, 400);
+    }
+    if (input.title === undefined && input.pinned === undefined) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "title or pinned is required",
+        400,
+      );
+    }
+    const pref = await host.get("authority").putConversationPref({
+      org_id: this.runtime.orgId(),
+      thread_id: threadId,
+      title: input.title !== undefined ? normalizeTitle(input.title) : undefined,
+      pinned: input.pinned,
+      updated_at: new Date().toISOString(),
+    });
+    return toPrefView(pref);
   }
 }
 
@@ -177,6 +240,7 @@ function decorateInboxItem(
   body: Awaited<ReturnType<typeof resolveInboxBody>>,
   installations: ConnectorInstallation[],
   drivers: ChannelDriverRegistry,
+  pref: ConversationPref | null,
 ): InboxViewItem {
   const surface = resolveMessageSurface({
     source: item.event.source,
@@ -184,6 +248,8 @@ function decorateInboxItem(
     body_text: body.body_text,
     stored: body.surface,
   });
+  const thread = threadOf(item.event);
+  const threadId = `${thread.source}:${thread.target}`;
   return {
     ...item,
     ...body,
@@ -191,7 +257,30 @@ function decorateInboxItem(
     channel_label: channelLabel(surface.channel),
     kind: surface.kind,
     direction: surface.direction,
-    can_send: drivers.canSend(installations, threadOf(item.event)),
+    can_send: drivers.canSend(installations, thread),
+    thread_id: threadId,
+    title: pref?.title ?? null,
+    pinned: pref?.pinned === true,
+    pref_updated_at: pref?.updated_at ?? null,
+  };
+}
+
+function normalizeTitle(value: string | null): string | null {
+  const title = (value ?? "").replace(/\s+/g, " ").trim();
+  if (title.length === 0) {
+    return null;
+  }
+  return title.length > MAX_TITLE_LENGTH
+    ? title.slice(0, MAX_TITLE_LENGTH)
+    : title;
+}
+
+function toPrefView(pref: ConversationPref): ConversationPrefView {
+  return {
+    thread_id: pref.thread_id,
+    title: pref.title,
+    pinned: pref.pinned,
+    updated_at: pref.updated_at,
   };
 }
 

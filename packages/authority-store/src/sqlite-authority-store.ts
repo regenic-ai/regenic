@@ -8,6 +8,8 @@ import type {
   AuthorityStore,
   BlobRecord,
   ConnectorInstallation,
+  ConversationPref,
+  ConversationPrefPatch,
   InboxItem,
   ConnectorLease,
   ConnectorRuntimeStore,
@@ -114,6 +116,14 @@ interface QuarantineRow {
   reason_code: IngestQuarantine["reason_code"];
   safe_metadata_json: string;
   created_at: string;
+}
+
+interface PrefRow {
+  org_id: string;
+  thread_id: string;
+  title: string | null;
+  pinned: number;
+  updated_at: string;
 }
 
 interface InsertEventInput extends SourceIdentity {
@@ -243,6 +253,80 @@ export class SqliteAuthorityStore
         ingested_at: row.ingested_at,
       }),
     }));
+  }
+
+  async listConversationPrefs(orgId: string): Promise<ConversationPref[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT org_id, thread_id, title, pinned, updated_at
+          FROM conversation_prefs WHERE org_id = ?
+          ORDER BY pinned DESC, updated_at DESC
+        `,
+      )
+      .all(orgId) as PrefRow[];
+    return rows.map((row) => this.toPref(row));
+  }
+
+  async getConversationPref(
+    orgId: string,
+    threadId: string,
+  ): Promise<ConversationPref | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT org_id, thread_id, title, pinned, updated_at
+          FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
+        `,
+      )
+      .get(orgId, threadId) as PrefRow | undefined;
+    return row ? this.toPref(row) : null;
+  }
+
+  async putConversationPref(
+    input: ConversationPrefPatch,
+  ): Promise<ConversationPref> {
+    const transaction = this.database.transaction(() => {
+      const current = this.database
+        .prepare(
+          `
+            SELECT org_id, thread_id, title, pinned, updated_at
+            FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
+          `,
+        )
+        .get(input.org_id, input.thread_id) as PrefRow | undefined;
+      const next: ConversationPref = {
+        org_id: input.org_id,
+        thread_id: input.thread_id,
+        title: input.title !== undefined ? input.title : (current?.title ?? null),
+        pinned:
+          input.pinned !== undefined
+            ? input.pinned
+            : Boolean(current?.pinned),
+        updated_at: input.updated_at,
+      };
+      this.database
+        .prepare(
+          `
+            INSERT INTO conversation_prefs (
+              org_id, thread_id, title, pinned, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(org_id, thread_id) DO UPDATE SET
+              title = excluded.title,
+              pinned = excluded.pinned,
+              updated_at = excluded.updated_at
+          `,
+        )
+        .run(
+          next.org_id,
+          next.thread_id,
+          next.title,
+          next.pinned ? 1 : 0,
+          next.updated_at,
+        );
+      return next;
+    });
+    return transaction.immediate();
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
@@ -815,6 +899,16 @@ export class SqliteAuthorityStore
       parent_event_id: row.parent_event_id ?? undefined,
       occurred_at: row.occurred_at,
       ingested_at: row.ingested_at,
+    };
+  }
+
+  private toPref(row: PrefRow): ConversationPref {
+    return {
+      org_id: row.org_id,
+      thread_id: row.thread_id,
+      title: row.title,
+      pinned: row.pinned === 1,
+      updated_at: row.updated_at,
     };
   }
 
