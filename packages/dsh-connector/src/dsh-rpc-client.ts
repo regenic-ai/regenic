@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DshApiError, type DshHistoryEvent, type DshHistoryPage } from "./dsh-cli-client";
+import type { DshPromptPart } from "./dsh-prompt-part";
 
 export interface DshFetchResponse {
   ok: boolean;
@@ -18,23 +19,6 @@ export interface DshWebRpcClientOptions {
   fetch?: DshFetch;
   createId?: () => string;
 }
-
-export type DshPromptPart =
-  | { type: "text"; text: string }
-  | {
-      type: "image";
-      mimeType: string;
-      filename?: string;
-      path?: string;
-      url?: string;
-    }
-  | {
-      type: "file";
-      mimeType: string;
-      filename: string;
-      path?: string;
-      url?: string;
-    };
 
 export interface DshSessionPromptInput {
   sessionId: string;

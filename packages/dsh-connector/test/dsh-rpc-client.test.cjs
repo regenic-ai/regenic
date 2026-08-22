@@ -142,14 +142,26 @@ describe("DshWebRpcClient", () => {
       text: "Look at this",
       content: [
         { type: "text", text: "Look at this" },
-        { type: "image", mimeType: "image/png", filename: "shot.png", url: "data:image/png;base64,aa" },
+        {
+          type: "image",
+          mimeType: "image/png",
+          mediaType: "image/png",
+          data: "aa",
+          name: "shot.png",
+        },
       ],
     });
 
     assert.equal(calls[0].url, "http://127.0.0.1:3080/api/session.prompt");
     assert.deepEqual(calls[0].body.payload.content, [
       { type: "text", text: "Look at this" },
-      { type: "image", mimeType: "image/png", filename: "shot.png", url: "data:image/png;base64,aa" },
+      {
+        type: "image",
+        mimeType: "image/png",
+        mediaType: "image/png",
+        data: "aa",
+        name: "shot.png",
+      },
     ]);
   });
 

@@ -123,7 +123,7 @@ export class PersonalReplyService {
     const quoted = input.reply_to_event_id
       ? await this.inbox.getInboxItem(input.reply_to_event_id)
       : null;
-    const composed = composeReplyText(text, quoted, attachments);
+    const composed = composeReplyText(text, quoted);
     const content: ContentPart[] = [
       { role: "body", media_type: "text/markdown", text: composed },
       ...attachments.map(
@@ -273,11 +273,7 @@ export class PersonalReplyService {
   }
 }
 
-function composeReplyText(
-  text: string,
-  quoted: InboxViewItem | null,
-  attachments: PreparedAttachment[],
-): string {
+function composeReplyText(text: string, quoted: InboxViewItem | null): string {
   const blocks: string[] = [];
   if (quoted?.body_text) {
     const line = quoted.body_text.split(/\r?\n/).find((part) => part.trim()) ?? "";
@@ -287,9 +283,6 @@ function composeReplyText(
   }
   if (text) {
     blocks.push(text);
-  }
-  for (const attachment of attachments) {
-    blocks.push(`[Attached: ${attachment.path}]`);
   }
   return blocks.join("\n\n");
 }
