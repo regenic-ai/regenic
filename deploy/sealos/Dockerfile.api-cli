@@ -6,10 +6,22 @@
 ARG API_IMAGE=jesonli/regenic-core:main
 FROM ${API_IMAGE} AS app
 
-FROM node:22-bookworm-slim
+FROM node:22-bookworm
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable \
+  && corepack prepare pnpm@9.15.0 --activate
 COPY --from=app /app /app
+# Root API image is Node 20. `pnpm rebuild` keeps the existing ABI-115
+# prebuild; delete it and fetch the Node 22 binary.
+RUN set -eux \
+  && dir="$(find /app/node_modules/.pnpm -maxdepth 1 -type d -name 'better-sqlite3@*')" \
+  && cd "$dir/node_modules/better-sqlite3" \
+  && rm -rf build \
+  && npx --yes prebuild-install \
+  && node -e "require('.')"
 RUN npm install -g @deepseek-ai/dsh \
   && dsh --help >/dev/null
 ENV NODE_ENV=production
