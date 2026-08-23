@@ -39,9 +39,9 @@ import {
   type InboxThread,
   type PinFilter,
 } from "./inbox";
+import { normalizeListTitle } from "./types";
 import {
   conversationKindLabel,
-  firstLine,
   messageRole,
   readingMessages,
   sameUtterance,
@@ -297,7 +297,7 @@ export function ConsoleApp() {
     }
   }, [selectedId]);
 
-  const threads = useMemo(() => {
+  const listThreads = useMemo(() => {
     const grouped =
       groupedInboxRef.current === inbox
         ? groupedRef.current
@@ -306,14 +306,15 @@ export function ConsoleApp() {
     groupedInboxRef.current = inbox;
     return sortInboxThreads(
       applyPrefOverlay(
-        applyOpenedAt(
-          overlayThreadMessages(mergeDraftThreads(grouped, drafts), messagesByThread),
-          openedAtRef.current,
-        ),
+        applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
         prefOverlay,
       ),
     );
-  }, [inbox, drafts, prefOverlay, messagesByThread]);
+  }, [inbox, drafts, prefOverlay]);
+  const threads = useMemo(
+    () => overlayThreadMessages(listThreads, messagesByThread),
+    [listThreads, messagesByThread],
+  );
   const selected = threads.find((thread) => thread.id === selectedId) ?? null;
   const chip = engineChip(engine);
   const createTargets = createConversationTargets(engine);
@@ -401,7 +402,7 @@ export function ConsoleApp() {
         </div>
         <div className="search">Search (soon)</div>
         <EngineChip state={chip} />
-        <span className="chip">{threads.length} current work</span>
+        <span className="chip">{listThreads.length} current work</span>
       </header>
       <nav className="rail" aria-label="Main">
         <div className="rail-top">
@@ -433,7 +434,7 @@ export function ConsoleApp() {
       <div className="workspace">
         {nav === "inbox" ? (
           <InboxWorkspace
-            threads={threads}
+            threads={listThreads}
             selected={selected}
             error={error}
             createTargets={createTargets}
@@ -548,6 +549,7 @@ function mergeDraftThreads(
       label: "New conversation",
       can_send: draft.can_send,
       await_reply: draft.await_reply === true,
+      list_title: normalizeListTitle(draft.list_title),
       title: draft.title ?? null,
       conversation_label: null,
       conversation_kind: null,
@@ -664,23 +666,21 @@ function InboxWorkspace({
               className={`item${selected?.id === thread.id ? " selected" : ""}${
                 thread.pinned ? " pinned" : ""
               }`}
-            >
-              <div
-                className="item-main"
-                role="button"
-                tabIndex={0}
-                onClick={() => {
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                onSelect(thread.id);
+                if (renamingId && renamingId !== thread.id) {
+                  setRenamingId(null);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && event.target === event.currentTarget) {
                   onSelect(thread.id);
-                  if (renamingId && renamingId !== thread.id) {
-                    setRenamingId(null);
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && event.target === event.currentTarget) {
-                    onSelect(thread.id);
-                  }
-                }}
-              >
+                }
+              }}
+            >
+              <div className="item-main">
                 <div className="item-copy">
                   <div className="item-top">
                     <span className="item-tags">
@@ -706,11 +706,6 @@ function InboxWorkspace({
                     }
                     onSave={(title) => onRename(thread, title)}
                   />
-                  <div className="item-reasons">
-                    {threadActivityCopy(threadActivityOf(thread)) ||
-                      firstLine(latest?.body_text, 96) ||
-                      thread.label}
-                  </div>
                 </div>
               </div>
               <div className="item-tools">
@@ -719,7 +714,8 @@ function InboxWorkspace({
                   className={`item-tool${thread.pinned ? " is-on" : ""}`}
                   aria-label={thread.pinned ? "Unpin" : "Pin"}
                   title={thread.pinned ? "Unpin" : "Pin"}
-                  onClick={() => {
+                  onClick={(event) => {
+                    event.stopPropagation();
                     void onPin(thread, !thread.pinned);
                   }}
                 >
@@ -730,7 +726,8 @@ function InboxWorkspace({
                   className="item-tool"
                   aria-label="Rename"
                   title="Rename"
-                  onClick={() => {
+                  onClick={(event) => {
+                    event.stopPropagation();
                     onSelect(thread.id);
                     setRenamingId(thread.id);
                   }}

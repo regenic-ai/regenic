@@ -12,7 +12,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 | 飞书桌面端 | 三栏工作面、图标栏、线程、关窗进托盘 | 频道瀑布流、聊天身份、紫/蓝品牌铬 |
 | Docker Desktop | 托盘引擎层、内核 Running/Syncing/Stopped、本机 sidecar | 容器/镜像列表、引擎设置向导 |
 
-默认只显示**当前工作**。渠道仍在原处；回复发回原渠道。线程能不能发由内核 `can_send` 决定（连接器 `ChannelDriver` 声明），桌面不按「是不是 DSH」开关输入框。能发的线程用 Composer 回写（所见即所得格式、图片、文件）；Slack 驱动目前 `canReply: false`，回写 501。发送走 `installation + thread → egress.send(ContentPart[])`。发送后内核按该线程 follow/pull，等到新的 inbound、`working` 或 `awaiting_user`，不必只等一条有正文的 Agent 回复。连接器通过 `surface.activity` 声明对端状态（`working` / `awaiting_user`），通过 `capabilities.await_reply` 声明发送后要不要等对端。桌面只读这两处，用状态条表示「已发送 / 对端还在处理 / 原渠道在等你」，不按渠道名写死。飞书不声明 `await_reply`，发出去就不挂等待条。`working` 不画成聊天气泡。不必再去引擎页点 Sync。引擎 Sync 只负责追平其他会话或首次拉齐。同一句本地出站与渠道 history 回声只保留一条 Event。
+默认只显示**当前工作**。渠道仍在原处；回复发回原渠道。线程能不能发由内核 `can_send` 决定（连接器 `ChannelDriver` 声明），桌面不按「是不是 DSH」开关输入框。能发的线程用 Composer 回写（所见即所得格式、图片、文件）；Slack 驱动目前 `canReply: false`，回写 501。发送走 `installation + thread → egress.send(ContentPart[])`。发送后内核按该线程 follow/pull，等到新的 inbound、`working` 或 `awaiting_user`，不必只等一条有正文的 Agent 回复。连接器通过 `surface.activity` 声明对端状态（`working` / `awaiting_user`），通过 `capabilities.await_reply` 声明发送后要不要等对端，通过 `capabilities.list_title` 声明列表标题用会话名、第一条用户消息还是可见消息。桌面只读这些声明，用状态条表示「已发送 / 对端还在处理 / 原渠道在等你」，不按渠道名写死。飞书不声明 `await_reply`，发出去就不挂等待条。`working` 不画成聊天气泡。不必再去引擎页点 Sync。引擎 Sync 只负责追平其他会话或首次拉齐。同一句本地出站与渠道 history 回声只保留一条 Event。
 
 ## 视觉
 
@@ -30,7 +30,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 ## 双层表面
 
 - **主窗口：** 左图标栏（Inbox / Engine / Settings），中列表，右线程。顶栏是引擎芯片与 Inbox 计数。关窗不退出。
-- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`、`await_reply`、自定义 `title`、`pinned`、连接器写入的 `conversation_label` / `conversation_kind` / `actor_label`），聚合只发生在桌面表面。标题可双击或用铅笔手改，置顶用图钉；二者写入内核 `conversation_prefs`，轮询不会用首条消息把自定义标题冲掉。清空标题则回到连接器给的会话名（群名或单聊对方），没有会话名才用首条消息。引擎页的安装和改同步范围用同一套 catalog 弹窗，不按连接器写死表单。列表按来源渠道过滤，置顶用图钉开关；置顶会话排在前面。列表和标题醒目标出**来源渠道**。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按发言人展开：每条消息保留自己的名字和时间。同一人连续发言只收起头像和名字，不把不同人的正文拼成一块。线程窗只挂可视区域附近的消息，长会话可以滚动，不会一次性把几千上万条都画进 DOM。同步时按 React 的 keyed list 对账：先对前缀、再对后缀，剩下的才建 key map；key 相同且 props 未变就复用原对象。拉取追加时只脏对应会话，其它会话不重建。打开的对话不会因为别的会话在拉而整段重建；本会话只是追加时也只更新尾部。新建的空会话按打开时间排到未置顶最前，不用 locale 相关的 `~` 哨兵。发送写入的 outbound 和渠道拉回来的同一句只显示一次。桌面列表只拉 `heads=1`（每个会话最新一条，不含附件字节）。点开的会话再拉 `thread_id`，之后只跟该会话的 `since` 增量。内核 `listInbox` 按会话/时间/heads 收窄，引擎摘要只算 `inbox_digest` 不再水合全部 Event。`inbox_count` 是会话数，和列表一致；改标题或置顶也会推进 digest。打开过的会话正文只缓存最近几条，关掉后会丢掉。空闲后轮询放到 8 秒。列表轮询走 `engine?detail=0`，已打开的会话才跟增量。托盘同样只拉头。开会话时停在最新一条；往上翻历史时新消息不把滚动位置拽回去。没有 `actor_label` 时才回退 You / Agent / Runtime。引用条、runtime 居中折叠。底部是 Cursor 式 Composer：多行编辑、图片缩略图、拖入/粘贴附件，以及飞书常用的加粗/斜体/删除线/行内代码/列表（⌘B / ⌘I / ⌘⇧X）。Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。安装声明了 `can_create` 时，列表里有「新对话」，按钮带上该安装的 `channel_label`（现在是 New DSH）。多条都能建时，先跟当前渠道过滤，否则弹出选择。桌面仍不写死渠道名。Slack / 飞书不能新建。列表顶栏收成一行：渠道过滤 + 置顶开关 + New。
+- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`、`await_reply`、`list_title`、自定义 `title`、`pinned`、连接器写入的 `conversation_label` / `conversation_kind` / `actor_label`），聚合只发生在桌面表面。标题可双击或用铅笔手改，置顶用图钉；二者写入内核 `conversation_prefs`，轮询不会用首条消息把自定义标题冲掉。清空标题则按 `list_title` 回退：聊天渠道用会话名（群名或单聊对方），没有会话名才用会话 id；会话 Agent 渠道用第一条用户消息。引擎页的安装和改同步范围用同一套 catalog 弹窗，不按连接器写死表单。列表按来源渠道过滤，置顶用图钉开关；置顶会话排在前面。列表和标题醒目标出**来源渠道**。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按发言人展开：每条消息保留自己的名字和时间。同一人连续发言只收起头像和名字，不把不同人的正文拼成一块。线程窗只挂可视区域附近的消息，长会话可以滚动，不会一次性把几千上万条都画进 DOM。同步时按 React 的 keyed list 对账：先对前缀、再对后缀，剩下的才建 key map；key 相同且 props 未变就复用原对象。拉取追加时只脏对应会话，其它会话不重建。打开的对话不会因为别的会话在拉而整段重建；本会话只是追加时也只更新尾部。新建的空会话按打开时间排到未置顶最前，不用 locale 相关的 `~` 哨兵。发送写入的 outbound 和渠道拉回来的同一句只显示一次。桌面列表只拉 `heads=1`（每个会话最后一条可见消息的短脸，不含附件、不带回复预览，也不叠全文）。列表不画第三行预览；点开会话才拉 `thread_id` 全文，之后只跟该会话的 `since` 增量。内核 `listInbox` 按会话/时间/heads 收窄，引擎摘要只算 `inbox_digest` 不再水合全部 Event。`inbox_count` 是会话数，和列表一致；改标题或置顶也会推进 digest。打开过的会话正文只缓存最近几条，关掉后会丢掉。空闲后轮询放到 8 秒。列表轮询走 `engine?detail=0`，已打开的会话才跟增量。托盘同样只拉头。开会话时停在最新一条；往上翻历史时新消息不把滚动位置拽回去。没有 `actor_label` 时才回退 You / Agent / Runtime。引用条、runtime 居中折叠。底部是 Cursor 式 Composer：多行编辑、图片缩略图、拖入/粘贴附件，以及飞书常用的加粗/斜体/删除线/行内代码/列表（⌘B / ⌘I / ⌘⇧X）。Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。安装声明了 `can_create` 时，列表里有「新对话」，按钮带上该安装的 `channel_label`（现在是 New DSH）。多条都能建时，先跟当前渠道过滤，否则弹出选择。桌面仍不写死渠道名。Slack / 飞书不能新建。列表顶栏收成一行：渠道过滤 + 置顶开关 + New。
 - **托盘：** 点击打开小窗，显示内核状态、计数、最近 3 个会话；可「打开控制台」。退出只在托盘菜单。
 
 ## 进程
@@ -45,7 +45,7 @@ Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/v1/me/inbox` | 当前工作 + 可选 `body_text`。`heads=1` 每个会话最新一条且附件不含字节；`thread_id` 只返回该会话；`since` / `since_id` 做增量 |
+| GET | `/v1/me/inbox` | 当前工作 + 可选 `body_text`。`heads=1` 每个会话最后一条可见消息的短脸，不含附件和回复预览；`thread_id` 只返回该会话全文；`since` / `since_id` 做增量 |
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
 | GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录。`inbox_count` 是当前工作会话数。`detail=0` 跳过 catalog 探测和 attempt 列表，仍带 `inbox_digest`（含最新 Event 和 conversation prefs） |
 | POST | `/v1/me/connectors` | 从目录安装（Slack / DSH / 飞书），不接收 token；安装后内核立刻 pull 一次 |

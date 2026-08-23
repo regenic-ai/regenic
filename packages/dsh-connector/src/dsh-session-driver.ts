@@ -76,9 +76,21 @@ export const dshSessionDriver: ChannelDriver = {
     const transport = resolveEffectiveDshTransport(installation.config);
     const pinned = configString(installation.config, "session_id");
     if (transport === "cli") {
-      return { sync: true, reply: true, create: false, await_reply: true };
+      return {
+        sync: true,
+        reply: true,
+        create: false,
+        await_reply: true,
+        list_title: "prompt",
+      };
     }
-    return { sync: true, reply: true, create: !pinned, await_reply: true };
+    return {
+      sync: true,
+      reply: true,
+      create: !pinned,
+      await_reply: true,
+      list_title: "prompt",
+    };
   },
 
   canReply(installation) {

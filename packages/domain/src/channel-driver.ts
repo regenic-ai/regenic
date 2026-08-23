@@ -11,6 +11,15 @@ export interface ConversationThread {
   target: string;
 }
 
+export type ListTitleMode = "conversation" | "face" | "prompt";
+
+export function normalizeListTitle(value: unknown): ListTitleMode {
+  if (value === "conversation" || value === "prompt") {
+    return value;
+  }
+  return "face";
+}
+
 export interface ChannelCapabilities {
   sync: boolean;
   reply: boolean;
@@ -20,6 +29,13 @@ export interface ChannelCapabilities {
    * Session/agent channels set this. Chat channels leave it unset.
    */
   await_reply?: boolean;
+  /**
+   * How the desktop titles a conversation in lists.
+   * Chat channels set `conversation` (group / DM / channel name).
+   * Session/agent channels set `prompt` (first user message).
+   * Omit it to keep the visible-message face.
+   */
+  list_title?: ListTitleMode;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -104,6 +120,11 @@ export interface ChannelDriver {
   probeCatalog?(input: {
     env: NodeJS.ProcessEnv;
   }): Promise<ConnectorCatalogProbe>;
+  resolveConversationLabels?(
+    installation: ConnectorInstallation,
+    threads: ConversationThread[],
+    env: NodeJS.ProcessEnv,
+  ): Promise<Map<string, string>>;
 }
 
 export class ChannelDriverRegistry {
@@ -197,6 +218,71 @@ export class ChannelDriverRegistry {
     return Boolean(
       found && found.driver.capabilities(found.installation).await_reply,
     );
+  }
+
+  listTitle(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): ListTitleMode {
+    const found = this.findForThread(installations, thread);
+    return normalizeListTitle(
+      found?.driver.capabilities(found.installation).list_title,
+    );
+  }
+
+  async resolveConversationLabels(
+    installations: ConnectorInstallation[],
+    threads: ConversationThread[],
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<Map<string, string>> {
+    const labels = new Map<string, string>();
+    const groups = new Map<
+      string,
+      {
+        installation: ConnectorInstallation;
+        driver: ChannelDriver;
+        threads: ConversationThread[];
+      }
+    >();
+    for (const thread of threads) {
+      const found = this.findForThread(installations, thread);
+      if (!found?.driver.resolveConversationLabels) {
+        continue;
+      }
+      const group = groups.get(found.installation.id);
+      if (group) {
+        group.threads.push(thread);
+      } else {
+        groups.set(found.installation.id, {
+          installation: found.installation,
+          driver: found.driver,
+          threads: [thread],
+        });
+      }
+    }
+    await Promise.all(
+      [...groups.values()].map(async (group) => {
+        try {
+          const part = await group.driver.resolveConversationLabels?.(
+            group.installation,
+            group.threads,
+            env,
+          );
+          if (!part) {
+            return;
+          }
+          for (const [id, name] of part) {
+            const trimmed = name.replace(/\s+/g, " ").trim();
+            if (trimmed) {
+              labels.set(id, trimmed);
+            }
+          }
+        } catch {
+          // A lookup failure leaves that source unlabeled. It must not block inbox.
+        }
+      }),
+    );
+    return labels;
   }
 
   findCreatable(

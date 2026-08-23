@@ -54,16 +54,70 @@ export function latestByThread<T extends { event: EventRecord }>(items: T[]): T[
   for (const item of items) {
     const id = eventThreadId(item.event);
     const current = best.get(id);
-    if (
-      !current ||
-      item.event.occurred_at > current.event.occurred_at ||
-      (item.event.occurred_at === current.event.occurred_at &&
-        item.event.id > current.event.id)
-    ) {
+    if (!current || isNewerEvent(item.event, current.event)) {
       best.set(id, item);
     }
   }
   return [...best.values()];
+}
+
+export function isThreadStatusItem(item: unknown): boolean {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+  const record = item as {
+    activity?: string;
+    decision?: { reason_codes?: string[] };
+  };
+  if (record.activity === "working") {
+    return true;
+  }
+  return record.decision?.reason_codes?.includes("thread_status") === true;
+}
+
+/**
+ * List heads are the last visible message. Status markers stay off the list
+ * payload; the desktop titles the row from this face only.
+ */
+export function headsByThread<T extends { event: EventRecord }>(
+  items: T[],
+  isStatus: (item: T) => boolean = (item) => isThreadStatusItem(item),
+): T[] {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const id = eventThreadId(item.event);
+    const bucket = groups.get(id);
+    if (bucket) {
+      bucket.push(item);
+    } else {
+      groups.set(id, [item]);
+    }
+  }
+  const heads: T[] = [];
+  for (const bucket of groups.values()) {
+    let face: T | undefined;
+    for (const item of bucket) {
+      if (
+        !isStatus(item) &&
+        item.event.operation !== "tombstone" &&
+        (!face || isNewerEvent(item.event, face.event))
+      ) {
+        face = item;
+      }
+    }
+    if (!face) {
+      continue;
+    }
+    heads.push(face);
+  }
+  return heads;
+}
+
+function isNewerEvent(left: EventRecord, right: EventRecord): boolean {
+  return (
+    left.occurred_at > right.occurred_at ||
+    (left.occurred_at === right.occurred_at && left.id > right.id)
+  );
 }
 
 export function escapeLikeLiteral(value: string): string {
@@ -122,9 +176,20 @@ export function summarizeInboxItems(
   items: InboxItem[],
   prefs: Array<{ updated_at: string }> = [],
 ): InboxSummary {
+  const withFace = new Set(
+    items
+      .filter(
+        (item) =>
+          !isThreadStatusItem(item) && item.event.operation !== "tombstone",
+      )
+      .map((item) => eventThreadId(item.event)),
+  );
+  const listable = items.filter((item) =>
+    withFace.has(eventThreadId(item.event)),
+  );
   return {
-    count: new Set(items.map((item) => eventThreadId(item.event))).size,
-    digest: inboxDigest(items, prefs),
+    count: withFace.size,
+    digest: inboxDigest(listable, prefs),
   };
 }
 
@@ -150,8 +215,13 @@ export function selectInboxItems(
     );
   }
   if (query?.heads) {
-    selected = latestByThread(
-      selected.filter((item) => item.decision.disposition === "current_work"),
+    const currentThreads = new Set(
+      selected
+        .filter((item) => item.decision.disposition === "current_work")
+        .map((item) => eventThreadId(item.event)),
+    );
+    selected = headsByThread(
+      selected.filter((item) => currentThreads.has(eventThreadId(item.event))),
     );
   }
   return selected;

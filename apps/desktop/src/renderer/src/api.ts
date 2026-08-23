@@ -9,6 +9,7 @@ import type {
   ReplyAttachmentInput,
   ReplyView,
 } from "./types";
+import { normalizeListTitle } from "./types";
 
 let currentOrigin = window.regenic?.apiOrigin ?? "http://127.0.0.1:4370";
 
@@ -87,6 +88,7 @@ export async function fetchInbox(
     direction: item.direction ?? "inbound",
     can_send: item.can_send === true,
     await_reply: item.await_reply === true,
+    list_title: normalizeListTitle(item.list_title),
     thread_id: item.thread_id,
     title: item.title ?? null,
     pinned: item.pinned === true,

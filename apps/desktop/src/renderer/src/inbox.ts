@@ -1,5 +1,5 @@
 import type { InboxReuse } from "./thread-window";
-import type { InboxViewItem } from "./types";
+import type { InboxViewItem, ListTitleMode } from "./types";
 
 export interface InboxThread {
   id: string;
@@ -14,6 +14,7 @@ export interface InboxThread {
   pref_updated_at?: string;
   can_send: boolean;
   await_reply?: boolean;
+  list_title?: ListTitleMode;
   messages: InboxViewItem[];
   opened_at?: string;
 }
@@ -217,6 +218,7 @@ export function overlayThreadMessages(
       can_send: messages.some((item) => item.can_send) || thread.can_send,
       await_reply:
         messages.some((item) => item.await_reply === true) || thread.await_reply === true,
+      list_title: threadListTitle(messages, thread.list_title),
     };
   });
   return changed ? next : threads;
@@ -312,6 +314,7 @@ function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
     pref_updated_at: pref.updated_at,
     can_send: ordered.some((item) => item.can_send),
     await_reply: ordered.some((item) => item.await_reply === true),
+    list_title: threadListTitle(ordered),
     messages: ordered,
   };
 }
@@ -417,6 +420,25 @@ function compareStamp(left: string, right: string): number {
     return 0;
   }
   return left < right ? -1 : 1;
+}
+
+function threadListTitle(
+  messages: InboxViewItem[],
+  fallback?: InboxThread["list_title"],
+): InboxThread["list_title"] {
+  if (
+    messages.some((item) => item.list_title === "conversation") ||
+    fallback === "conversation"
+  ) {
+    return "conversation";
+  }
+  if (
+    messages.some((item) => item.list_title === "prompt") ||
+    fallback === "prompt"
+  ) {
+    return "prompt";
+  }
+  return "face";
 }
 
 function conversationField(

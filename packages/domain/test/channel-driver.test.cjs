@@ -179,6 +179,78 @@ describe("channel driver registry", () => {
     assert.equal(drivers.awaitReply([dsh], { source: "dsh", target: "sess-a" }), false);
   });
 
+  it("reads list_title from the driver, not the channel name", async () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(
+        stubDriver({
+          connector_type: "dsh-session",
+          source: "dsh",
+          matchesThread: (_installation, thread) => thread.source === "dsh",
+          ownsThread: () => true,
+          capabilities: () => ({
+            sync: true,
+            reply: true,
+            create: true,
+            await_reply: true,
+            list_title: "prompt",
+          }),
+          canReply: () => true,
+        }),
+      )
+      .register(
+        stubDriver({
+          connector_type: "feishu-chat",
+          source: "feishu",
+          matchesThread: (_installation, thread) => thread.source === "feishu",
+          ownsThread: () => true,
+          capabilities: () => ({
+            sync: true,
+            reply: true,
+            create: false,
+            list_title: "conversation",
+          }),
+          canReply: () => true,
+          async resolveConversationLabels(_installation, threads) {
+            return new Map(
+              threads.map((thread) => [
+                `${thread.source}:${thread.target}`,
+                "Ada",
+              ]),
+            );
+          },
+        }),
+      );
+    const dsh = {
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const feishu = {
+      id: "feishu-1",
+      org_id: "local-owner",
+      connector_type: "feishu-chat",
+      status: "enabled",
+      config: { selection: "all" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    assert.equal(
+      drivers.listTitle([dsh], { source: "dsh", target: "sess-a" }),
+      "prompt",
+    );
+    assert.equal(
+      drivers.listTitle([feishu], { source: "feishu", target: "oc_1" }),
+      "conversation",
+    );
+    const labels = await drivers.resolveConversationLabels(
+      [feishu],
+      [{ source: "feishu", target: "oc_1" }],
+    );
+    assert.equal(labels.get("feishu:oc_1"), "Ada");
+  });
+
   it("reads await_reply from the driver, not the channel name", () => {
     const drivers = new ChannelDriverRegistry()
       .register(

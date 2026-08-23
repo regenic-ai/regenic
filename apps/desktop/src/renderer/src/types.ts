@@ -39,6 +39,14 @@ export interface InboxAttachment {
 export type MessageKind = "user" | "assistant" | "system";
 export type MessageDirection = "inbound" | "outbound";
 export type ThreadActivity = "awaiting_user" | "working";
+export type ListTitleMode = "conversation" | "face" | "prompt";
+
+export function normalizeListTitle(value: unknown): ListTitleMode {
+  if (value === "conversation" || value === "prompt") {
+    return value;
+  }
+  return "face";
+}
 
 export interface InboxViewItem {
   decision: ArrangementDecision;
@@ -52,6 +60,7 @@ export interface InboxViewItem {
   direction: MessageDirection;
   can_send: boolean;
   await_reply?: boolean;
+  list_title?: ListTitleMode;
   thread_id?: string;
   title?: string | null;
   pinned?: boolean;
@@ -133,6 +142,7 @@ export interface CreatedConversation {
   channel_label: string;
   can_send: boolean;
   await_reply?: boolean;
+  list_title?: ListTitleMode;
   title?: string | null;
   pinned?: boolean;
   opened_at?: string;

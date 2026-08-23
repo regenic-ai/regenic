@@ -304,8 +304,16 @@ export class SqliteAuthorityStore
             FROM message_dispositions d
             JOIN events e ON e.id = d.event_id
             JOIN source_heads h ON h.current_event_id = e.id
-            WHERE d.org_id = ? AND d.disposition = 'current_work'
+            WHERE d.org_id = ?
             GROUP BY thread_id
+            HAVING
+              SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
+              AND SUM(
+                CASE
+                  WHEN d.reason_codes_json LIKE '%thread_status%' THEN 0
+                  ELSE 1
+                END
+              ) > 0
           )
         `,
       )
@@ -988,24 +996,49 @@ export class SqliteAuthorityStore
     query?: InboxQuery,
   ): { sql: string; params: unknown[] } {
     if (query?.heads) {
-      const { clauses, params } = this.inboxClauses(orgId, query, "current_work");
+      const visible = this.inboxClauses(orgId, query, "any");
+      const current = this.inboxClauses(orgId, query, "current_work", {
+        event: "e2",
+        disposition: "d2",
+      });
       return {
         sql: `
           SELECT * FROM (
             SELECT ${INBOX_COLUMNS},
               ROW_NUMBER() OVER (
-                PARTITION BY conversation_id(e.source, e.external_id, e.id)
+                PARTITION BY conversation_id(e.source, e.external_id, e.id),
+                  CASE
+                    WHEN d.reason_codes_json LIKE '%thread_status%' THEN 1
+                    ELSE 0
+                  END
                 ORDER BY e.occurred_at DESC, e.id DESC
               ) AS rn
             FROM message_dispositions d
             JOIN events e ON e.id = d.event_id
             JOIN source_heads h ON h.current_event_id = e.id
-            WHERE ${clauses.join(" AND ")}
+            WHERE ${visible.clauses.join(" AND ")}
+              AND conversation_id(e.source, e.external_id, e.id) IN (
+                SELECT conversation_id(e2.source, e2.external_id, e2.id)
+                FROM message_dispositions d2
+                JOIN events e2 ON e2.id = d2.event_id
+                JOIN source_heads h2 ON h2.current_event_id = e2.id
+                WHERE ${current.clauses.join(" AND ")}
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM message_dispositions d3
+                JOIN events e3 ON e3.id = d3.event_id
+                WHERE d3.org_id = e.org_id
+                  AND conversation_id(e3.source, e3.external_id, e3.id)
+                    = conversation_id(e.source, e.external_id, e.id)
+                  AND d3.reason_codes_json NOT LIKE '%thread_status%'
+              )
           ) ranked
           WHERE rn = 1
+            AND reason_codes_json NOT LIKE '%thread_status%'
           ORDER BY occurred_at ASC, id ASC
         `,
-        params,
+        params: [...visible.params, ...current.params],
       };
     }
     if (query?.siblings) {
@@ -1049,30 +1082,37 @@ export class SqliteAuthorityStore
     orgId: string,
     query: InboxQuery | undefined,
     disposition: "current_work" | "any",
+    tables: { event?: string; disposition?: string } = {},
   ): { clauses: string[]; params: unknown[] } {
-    const clauses = ["e.org_id = ?"];
+    const event = tables.event ?? "e";
+    const decision = tables.disposition ?? "d";
+    const clauses = [`${event}.org_id = ?`];
     const params: unknown[] = [orgId];
     if (disposition === "current_work") {
-      clauses.push("d.disposition = 'current_work'");
+      clauses.push(`${decision}.disposition = 'current_work'`);
     }
     if (query?.source) {
-      clauses.push("e.source = ?");
+      clauses.push(`${event}.source = ?`);
       params.push(query.source);
     }
     if (query?.target) {
-      clauses.push("(e.external_id = ? OR e.external_id LIKE ? ESCAPE '\\')");
+      clauses.push(
+        `(${event}.external_id = ? OR ${event}.external_id LIKE ? ESCAPE '\\')`,
+      );
       params.push(query.target, threadExternalIdLike(query.target));
     }
     if (query?.thread_ids && query.thread_ids.length > 0) {
       clauses.push(
-        `conversation_id(e.source, e.external_id, e.id) IN (${query.thread_ids
+        `conversation_id(${event}.source, ${event}.external_id, ${event}.id) IN (${query.thread_ids
           .map(() => "?")
           .join(", ")})`,
       );
       params.push(...query.thread_ids);
     }
     if (query?.since) {
-      clauses.push("(e.ingested_at > ? OR (e.ingested_at = ? AND e.id > ?))");
+      clauses.push(
+        `(${event}.ingested_at > ? OR (${event}.ingested_at = ? AND ${event}.id > ?))`,
+      );
       params.push(query.since, query.since, query.since_id ?? "");
     }
     return { clauses, params };

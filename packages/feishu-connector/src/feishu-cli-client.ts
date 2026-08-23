@@ -63,6 +63,7 @@ export interface FeishuChat {
   chat_id: string;
   name?: string;
   chat_mode?: FeishuChatMode;
+  p2p_target_id?: string;
 }
 
 export interface FeishuChatPage {
@@ -157,7 +158,9 @@ export class LarkCliClient implements FeishuImClient {
       env: this.options.env,
       timeout_ms: this.timeoutMs,
     });
-    return parseChatPage(unwrapLarkCli(result));
+    const page = parseChatPage(unwrapLarkCli(result));
+    await this.fillP2pNames(page.items);
+    return page;
   }
 
   async listAllChats(
@@ -209,6 +212,24 @@ export class LarkCliClient implements FeishuImClient {
       throw new FeishuApiError("lark-cli send did not return message_id");
     }
     return { message_id: messageId };
+  }
+
+  private async fillP2pNames(chats: FeishuChat[]): Promise<void> {
+    const missing = chats.filter((chat) => !chat.name && chat.p2p_target_id);
+    if (missing.length === 0) {
+      return;
+    }
+    const names = await this.resolveUserNames(
+      missing.map((chat) => chat.p2p_target_id as string),
+    );
+    for (const chat of missing) {
+      const name = chat.p2p_target_id
+        ? names.get(chat.p2p_target_id)
+        : undefined;
+      if (name) {
+        chat.name = name;
+      }
+    }
   }
 
   async resolveUserNames(ids: string[]): Promise<Map<string, string>> {
@@ -379,12 +400,14 @@ function parseChat(value: unknown): FeishuChat[] {
     return [];
   }
   const chatMode = stringValue(value.chat_mode);
+  const p2pTargetId = stringValue(value.p2p_target_id);
   return [
     {
       chat_id: value.chat_id,
-      name: stringValue(value.name),
+      name: stringValue(value.name) ?? localizedName(value.localized_name),
       chat_mode:
         chatMode === "p2p" || chatMode === "group" ? chatMode : undefined,
+      ...(p2pTargetId ? { p2p_target_id: p2pTargetId } : {}),
     },
   ];
 }

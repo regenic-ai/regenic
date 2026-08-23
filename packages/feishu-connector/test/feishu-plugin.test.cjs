@@ -51,6 +51,31 @@ describe("feishuChatDriver", () => {
     created_at: "2026-08-22T00:00:00.000Z",
   };
 
+  it("titles lists from the conversation, not the message face", async () => {
+    assert.deepEqual(feishuChatDriver.capabilities(installation), {
+      sync: true,
+      reply: true,
+      create: false,
+      list_title: "conversation",
+    });
+    const picked = feishuChatDriver.install({
+      id: "feishu-2",
+      org_id: "local-owner",
+      config: {
+        selection: "pick",
+        chat_ids: ["oc_1"],
+        chat_names: ["Ada"],
+      },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    const labels = await feishuChatDriver.resolveConversationLabels(
+      picked,
+      [{ source: "feishu", target: "oc_1" }],
+      {},
+    );
+    assert.equal(labels.get("feishu:oc_1"), "Ada");
+  });
+
   it("installs all groups or a picked set", () => {
     const all = feishuChatDriver.install({
       id: "feishu-1",

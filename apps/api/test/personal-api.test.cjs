@@ -421,6 +421,7 @@ describe("personal /v1/me", () => {
       assert.equal(head.length, 1);
       assert.equal(head[0].thread_id, "dsh:session-x");
       assert.equal(head[0].event.external_id, "session-x:2");
+      assert.equal(head[0].body_text, "second");
       for (let index = 1; index < one.length; index += 1) {
         assert.ok(
           one[index - 1].event.occurred_at <= one[index].event.occurred_at,
@@ -485,6 +486,73 @@ describe("personal /v1/me", () => {
         ["session-x:49", "assistant", "pong"],
         ["session-x:7", "user", "只用一句话回复：pong"],
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("titles DSH list heads from the first user message", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await authority.createInstallation({
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:9" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    });
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-prompt-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:7",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "user",
+          scope_id: "session-x",
+          text: "只用一句话回复：pong",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-x:49",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "assistant",
+          scope_id: "session-x",
+          text: "pong",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:50",
+          occurred_at: "2026-08-21T00:00:02.000Z",
+          actor_id: "user",
+          scope_id: "session-x",
+          text: "再来一句",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      assert.equal(heads.length, 1);
+      assert.equal(heads[0].list_title, "prompt");
+      assert.equal(heads[0].conversation_label, "只用一句话回复：pong");
+      assert.equal(heads[0].body_text, undefined);
+      assert.equal(heads[0].event.external_id, "session-x:50");
     } finally {
       await app.close();
     }
@@ -711,6 +779,7 @@ describe("personal /v1/me", () => {
       assert.equal(Boolean(slackItem), true);
       assert.equal(slackItem.can_send, false);
       assert.equal(slackItem.await_reply, false);
+      assert.equal(slackItem.list_title, "conversation");
 
       const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
         method: "POST",
@@ -871,6 +940,8 @@ describe("personal /v1/me", () => {
       assert.equal(sessionB.can_send, true);
       assert.equal(sessionA.await_reply, true);
       assert.equal(sessionB.await_reply, true);
+      assert.equal(sessionA.list_title, "prompt");
+      assert.equal(sessionB.list_title, "prompt");
 
       const synced = await fetch(
         `${origin}/v1/me/connectors/${installation.id}/sync`,
@@ -976,6 +1047,7 @@ describe("personal /v1/me", () => {
       assert.equal(openedBody.channel_label, "DSH");
       assert.equal(openedBody.can_send, true);
       assert.equal(openedBody.await_reply, true);
+      assert.equal(openedBody.list_title, "prompt");
       assert.deepEqual(dsh.created, ["created-1"]);
 
       const empty = await fetch(`${origin}/v1/me/replies`, {

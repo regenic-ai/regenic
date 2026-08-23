@@ -9,6 +9,7 @@ import {
   ChannelDriverRegistry,
   ConnectorRunner,
   channelLabel,
+  normalizeListTitle,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -47,6 +48,7 @@ export interface CreatedConversationView {
   channel_label: string;
   can_send: boolean;
   await_reply: boolean;
+  list_title: "conversation" | "face" | "prompt";
 }
 
 export interface ConnectorSyncView {
@@ -234,6 +236,9 @@ export class PersonalConnectorService
         channel_label: channelLabel(thread.source),
         can_send: found.driver.canReply(found.installation),
         await_reply: found.driver.capabilities(found.installation).await_reply === true,
+        list_title: normalizeListTitle(
+          found.driver.capabilities(found.installation).list_title,
+        ),
       };
     } catch (error) {
       throw wrapDriverError(error, "send_failed");

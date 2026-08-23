@@ -61,7 +61,12 @@ export const feishuChatDriver: ChannelDriver = {
     if (installation.status !== "enabled") {
       return { sync: false, reply: false, create: false };
     }
-    return { sync: true, reply: true, create: false };
+    return {
+      sync: true,
+      reply: true,
+      create: false,
+      list_title: "conversation",
+    };
   },
 
   canReply(installation) {
@@ -103,6 +108,45 @@ export const feishuChatDriver: ChannelDriver = {
 
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt) {
     return `${thread.target}:out:${receipt.rpc_id ?? "local"}`;
+  },
+
+  async resolveConversationLabels(installation, threads, env) {
+    const wanted = threads.filter((thread) => thread.source === FEISHU_SOURCE);
+    const labels = new Map<string, string>();
+    if (wanted.length === 0) {
+      return labels;
+    }
+    const picked = feishuPickedChatIds(installation.config);
+    const names = configStringList(installation.config, "chat_names");
+    if (picked.length > 0 && names.length === picked.length) {
+      for (let index = 0; index < picked.length; index += 1) {
+        const name = names[index]?.replace(/\s+/g, " ").trim();
+        if (name) {
+          labels.set(`${FEISHU_SOURCE}:${picked[index]}`, name);
+        }
+      }
+    }
+    const missing = wanted.filter(
+      (thread) => !labels.has(`${thread.source}:${thread.target}`),
+    );
+    if (missing.length === 0) {
+      return labels;
+    }
+    try {
+      const chats = await resolveFeishuChatTargets(
+        installation.config,
+        larkClient(env),
+      );
+      for (const chat of chats) {
+        const name = chat.name?.replace(/\s+/g, " ").trim();
+        if (name) {
+          labels.set(`${FEISHU_SOURCE}:${chat.chat_id}`, name);
+        }
+      }
+    } catch {
+      // Live chat list is optional. Config names still apply.
+    }
+    return labels;
   },
 
   async probeCatalog({ env }) {

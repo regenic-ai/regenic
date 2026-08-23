@@ -331,7 +331,13 @@ function appendWorkingMarker(
   }
   const latest = raw.reduce((left, right) => (left.seq > right.seq ? left : right));
   const latestVisible = surface[surface.length - 1];
-  if (latestVisible && latestVisible.seq >= latest.seq) {
+  if (!latestVisible) {
+    return surface;
+  }
+  if (latestVisible.seq >= latest.seq) {
+    return surface;
+  }
+  if (latestVisible.kind === "assistant" || latestVisible.activity === "awaiting_user") {
     return surface;
   }
   return [

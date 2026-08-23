@@ -53,6 +53,19 @@ export function threadActivityOf(
   if (!latest) {
     return undefined;
   }
+  if (latest.activity === "working") {
+    if (!isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)) {
+      return undefined;
+    }
+    const lastVisible = lastVisibleMessage(thread);
+    if (lastVisible?.activity === "awaiting_user") {
+      return "awaiting_user";
+    }
+    if (lastVisible?.kind === "assistant" && lastVisible.direction === "inbound") {
+      return undefined;
+    }
+    return "working";
+  }
   if (latest.activity) {
     return latest.activity;
   }
@@ -121,6 +134,18 @@ export function threadTitle(thread: InboxThread): string {
   if (custom) {
     return custom;
   }
+  if (thread.list_title === "conversation") {
+    return (
+      thread.conversation_label?.replace(/\s+/g, " ").trim() || thread.label
+    );
+  }
+  if (thread.list_title === "prompt") {
+    return (
+      thread.conversation_label?.replace(/\s+/g, " ").trim() ||
+      firstUserLine(thread) ||
+      thread.label
+    );
+  }
   const conversation = thread.conversation_label?.replace(/\s+/g, " ").trim();
   if (conversation) {
     return conversation;
@@ -128,10 +153,41 @@ export function threadTitle(thread: InboxThread): string {
   if (thread.messages.length === 0) {
     return thread.label;
   }
-  return firstLine(threadFace(thread).body_text, 120) || thread.label;
+  const face = threadFace(thread);
+  if (face.activity === "working") {
+    return thread.label;
+  }
+  return firstLine(face.body_text, 120) || thread.label;
 }
 
-function threadFace(thread: InboxThread): InboxViewItem {
+export function threadPreview(thread: InboxThread): string {
+  const activity = threadActivityCopy(threadActivityOf(thread));
+  if (activity) {
+    return activity;
+  }
+  const face = threadFace(thread);
+  if (face && face.activity !== "working") {
+    return firstLine(face.body_text, 96) || thread.label;
+  }
+  return thread.label;
+}
+
+function firstUserLine(thread: InboxThread): string {
+  const user = thread.messages.find((item) => messageRole(item) === "user");
+  return firstLine(user?.body_text, 120);
+}
+
+function lastVisibleMessage(thread: InboxThread): InboxViewItem | undefined {
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    const item = thread.messages[index];
+    if (item.activity !== "working") {
+      return item;
+    }
+  }
+  return undefined;
+}
+
+export function threadFace(thread: InboxThread): InboxViewItem {
   const visible = thread.messages.filter((item) => item.activity !== "working");
   const pool = visible.length > 0 ? visible : thread.messages;
   const user = pool.find((item) => messageRole(item) === "user");
