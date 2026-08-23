@@ -102,6 +102,14 @@ describe("channel driver registry", () => {
 
     assert.equal(drivers.canSend([dsh, slack], { source: "dsh", target: "sess-a" }), true);
     assert.equal(drivers.canSend([dsh, slack], { source: "slack", target: "C123" }), false);
+    assert.equal(
+      drivers.awaitReply([dsh, slack], { source: "dsh", target: "sess-a" }),
+      false,
+    );
+    assert.equal(
+      drivers.awaitReply([dsh, slack], { source: "slack", target: "C123" }),
+      false,
+    );
     assert.equal(drivers.findForThread([dsh], { source: "slack", target: "C123" }), undefined);
     assert.equal(
       drivers.findForThread([dsh, pinned], { source: "dsh", target: "sess-a" })
@@ -168,5 +176,93 @@ describe("channel driver registry", () => {
     assert.equal(drivers.canCreate([slack]), false);
     assert.equal(drivers.findCreatable([slack, pinned]), undefined);
     assert.equal(drivers.findCreatable([slack, dsh])?.installation.id, "dsh-1");
+    assert.equal(drivers.awaitReply([dsh], { source: "dsh", target: "sess-a" }), false);
+  });
+
+  it("reads await_reply from the driver, not the channel name", () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(
+        stubDriver({
+          connector_type: "dsh-session",
+          source: "dsh",
+          matchesThread: (_installation, thread) => thread.source === "dsh",
+          ownsThread: () => true,
+          capabilities: () => ({
+            sync: true,
+            reply: true,
+            create: true,
+            await_reply: true,
+          }),
+          canReply: () => true,
+        }),
+      )
+      .register(
+        stubDriver({
+          connector_type: "feishu-chat",
+          source: "feishu",
+          matchesThread: (_installation, thread) => thread.source === "feishu",
+          ownsThread: () => true,
+          capabilities: () => ({ sync: true, reply: true, create: false }),
+          canReply: () => true,
+        }),
+      );
+    const dsh = {
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const feishu = {
+      id: "feishu-1",
+      org_id: "local-owner",
+      connector_type: "feishu-chat",
+      status: "enabled",
+      config: { selection: "all" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    assert.equal(drivers.awaitReply([dsh], { source: "dsh", target: "sess-a" }), true);
+    assert.equal(
+      drivers.awaitReply([feishu], { source: "feishu", target: "oc_1" }),
+      false,
+    );
+  });
+
+  it("merges catalog probes from drivers and isolates probe failures", async () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(
+        stubDriver({
+          connector_type: "dsh-session",
+          source: "dsh",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          async probeCatalog() {
+            return {
+              services: {
+                "dsh-web": { ready: true, hint: "dsh web is reachable." },
+              },
+            };
+          },
+        }),
+      )
+      .register(
+        stubDriver({
+          connector_type: "feishu-chat",
+          source: "feishu",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          async probeCatalog() {
+            throw new Error("lark-cli missing");
+          },
+        }),
+      );
+    const probed = await drivers.probeCatalog({});
+    assert.deepEqual(probed.services, {
+      "dsh-web": { ready: true, hint: "dsh web is reachable." },
+    });
+    assert.deepEqual(probed.field_options, {});
   });
 });

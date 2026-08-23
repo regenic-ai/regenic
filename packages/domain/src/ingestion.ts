@@ -228,16 +228,36 @@ export interface ConversationPrefPatch {
   updated_at: string;
 }
 
+export interface EventListQuery {
+  source?: string;
+  target?: string;
+  since?: string;
+  since_id?: string;
+  thread_ids?: string[];
+}
+
+export interface InboxQuery extends EventListQuery {
+  heads?: boolean;
+  siblings?: boolean;
+}
+
+export interface InboxSummary {
+  count: number;
+  digest: string;
+}
+
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
   findBySourceIdentity(identity: SourceIdentity): Promise<EventRecord | null>;
-  listEvents(orgId: string): Promise<EventRecord[]>;
+  getEvent(orgId: string, eventId: string): Promise<EventRecord | null>;
+  listEvents(orgId: string, query?: EventListQuery): Promise<EventRecord[]>;
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
   putDisposition(decision: ArrangementDecision): Promise<void>;
   getDisposition(eventId: string): Promise<ArrangementDecision | null>;
-  listInbox(orgId: string): Promise<InboxItem[]>;
+  listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]>;
+  summarizeInbox(orgId: string): Promise<InboxSummary>;
   listConversationPrefs(orgId: string): Promise<ConversationPref[]>;
   getConversationPref(
     orgId: string,
@@ -304,6 +324,13 @@ export interface SetConnectorInstallationStatus {
   id: string;
   org_id: string;
   status: ConnectorInstallationStatus;
+  updated_at: string;
+}
+
+export interface SetConnectorInstallationConfig {
+  id: string;
+  org_id: string;
+  config: Record<string, JsonValue>;
   updated_at: string;
 }
 
@@ -374,6 +401,7 @@ export interface ConnectorRuntimeStore {
   findInstallation(id: string): Promise<ConnectorInstallation | null>;
   listInstallations(orgId: string): Promise<ConnectorInstallation[]>;
   setInstallationStatus(input: SetConnectorInstallationStatus): Promise<ConnectorInstallation | null>;
+  updateInstallationConfig(input: SetConnectorInstallationConfig): Promise<ConnectorInstallation | null>;
   deleteInstallation(id: string, orgId: string): Promise<boolean>;
   acquireLease(input: AcquireConnectorLease): Promise<ConnectorLease | null>;
   releaseLease(input: ReleaseConnectorLease): Promise<boolean>;

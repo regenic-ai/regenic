@@ -10,6 +10,7 @@ import type {
   NewIngestAttempt,
   ResetConnectorCursor,
   ReleaseConnectorLease,
+  SetConnectorInstallationConfig,
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
 } from "./ingestion";
@@ -63,6 +64,22 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     const updated = {
       ...installation,
       status: input.status,
+      updated_at: input.updated_at,
+    };
+    this.installations.set(updated.id, updated);
+    return this.copyInstallation(updated);
+  }
+
+  async updateInstallationConfig(
+    input: SetConnectorInstallationConfig,
+  ): Promise<ConnectorInstallation | null> {
+    const installation = this.installations.get(input.id);
+    if (!installation || installation.org_id !== input.org_id) {
+      return null;
+    }
+    const updated = {
+      ...installation,
+      config: { ...input.config },
       updated_at: input.updated_at,
     };
     this.installations.set(updated.id, updated);

@@ -1,8 +1,9 @@
-import type {
-  ChannelDriver,
-  ConnectorInstallation,
-  ConnectorInstallationStatus,
-  IngestAttempt,
+import {
+  channelLabel,
+  type ChannelDriver,
+  type ConnectorInstallation,
+  type ConnectorInstallationStatus,
+  type IngestAttempt,
 } from "@regenic/domain";
 
 export interface ConnectorFieldWhen {
@@ -16,6 +17,7 @@ export interface ConnectorField {
   required: boolean;
   placeholder?: string;
   default?: string;
+  multiple?: boolean;
   options?: { value: string; label: string }[];
   visible_when?: ConnectorFieldWhen;
 }
@@ -42,9 +44,15 @@ export interface ConnectorCatalogItem {
   prerequisites: ConnectorPrerequisite[];
 }
 
+export interface CatalogServiceState {
+  ready: boolean;
+  hint?: string;
+}
+
 export interface CatalogReadiness {
   env?: NodeJS.ProcessEnv;
-  services?: Record<string, boolean>;
+  services?: Record<string, boolean | CatalogServiceState>;
+  field_options?: Record<string, Record<string, { value: string; label: string }[]>>;
 }
 
 interface CatalogDefinition {
@@ -83,7 +91,7 @@ const CATALOG: CatalogDefinition[] = [
         key: "REGENIC_SLACK_TOKEN",
         label: "Local Slack token",
         required: true,
-        hint: "Set REGENIC_SLACK_TOKEN in the environment. It is not stored or shown in the form.",
+        hint: "Set REGENIC_SLACK_TOKEN (bot token from your Slack app) before starting the desktop. The form does not take it.",
       },
     ],
   },
@@ -132,17 +140,73 @@ const CATALOG: CatalogDefinition[] = [
         kind: "local_service",
         key: "dsh-web",
         label: "Local dsh web",
-        required: true,
-        hint: "Start dsh web --port 3080 first",
+        required: false,
+        hint: "dsh must work in your terminal. Then start dsh web --port 3080.",
         visible_when: { field: "transport", value: "web" },
+      },
+      {
+        kind: "local_service",
+        key: "dsh-cli",
+        label: "Local dsh",
+        required: true,
+        hint: "dsh must work in your terminal.",
+        visible_when: { field: "transport", value: "cli" },
       },
       {
         kind: "env",
         key: "REGENIC_DSH_TOKEN",
         label: "DSH web token",
         required: false,
-        hint: "Only if dsh web requires a Bearer token",
+        hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
         visible_when: { field: "transport", value: "web" },
+      },
+    ],
+  },
+  {
+    connector_type: "feishu-chat",
+    title: "Feishu",
+    description:
+      "Install once. Default is every group and every direct message you can see. Change the set later on the installed row. Replies go back through lark-cli.",
+    credential_hint: "lark-cli (user login)",
+    fields: [
+      {
+        key: "selection",
+        label: "Sync set",
+        required: true,
+        default: "all",
+        options: [
+          { value: "all", label: "All conversations of the kinds below" },
+          { value: "pick", label: "Choose conversations" },
+        ],
+      },
+      {
+        key: "kinds",
+        label: "Kinds",
+        required: true,
+        multiple: true,
+        default: "group,p2p",
+        options: [
+          { value: "group", label: "All groups" },
+          { value: "p2p", label: "All direct messages" },
+        ],
+        visible_when: { field: "selection", value: "all" },
+      },
+      {
+        key: "chat_ids",
+        label: "Conversations",
+        required: true,
+        multiple: true,
+        placeholder: "Sign in with lark-cli to load groups and direct messages",
+        visible_when: { field: "selection", value: "pick" },
+      },
+    ],
+    prerequisites: [
+      {
+        kind: "local_service",
+        key: "lark-cli",
+        label: "lark-cli",
+        required: true,
+        hint: "Not installed. Run: npx @larksuite/cli@latest install. Docs: https://github.com/larksuite/cli",
       },
     ],
   },
@@ -159,10 +223,14 @@ export function connectorCatalog(
       (installation) => installation.connector_type === item.connector_type,
     ).length;
     const defaults = defaultFieldValues(definition.fields);
-    const prerequisites = definition.prerequisites.map((prerequisite) => ({
-      ...prerequisite,
-      ready: prerequisiteReady(prerequisite, env, readiness.services),
-    }));
+    const prerequisites = definition.prerequisites.map((prerequisite) => {
+      const service = serviceState(readiness.services, prerequisite.key);
+      return {
+        ...prerequisite,
+        ready: prerequisiteReady(prerequisite, env, service),
+        hint: service?.hint ?? prerequisite.hint,
+      };
+    });
     const requiredVisible = prerequisites.filter(
       (prerequisite) =>
         prerequisite.required &&
@@ -170,6 +238,12 @@ export function connectorCatalog(
     );
     return {
       ...definition,
+      fields: definition.fields.map((field) => ({
+        ...field,
+        options:
+          readiness.field_options?.[item.connector_type]?.[field.key] ??
+          field.options,
+      })),
       installed: instanceCount > 0,
       instance_count: instanceCount,
       setup_ready: requiredVisible.every((prerequisite) => prerequisite.ready),
@@ -184,9 +258,12 @@ export interface EngineInstallationView {
   status: ConnectorInstallationStatus;
   label: string;
   detail: string | null;
+  settings: Record<string, string>;
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;
+  channel: string;
+  channel_label: string;
   last_attempt: IngestAttempt | null;
 }
 
@@ -203,15 +280,19 @@ export function toInstallationView(
     create: false,
   };
   const enabled = installation.status === "enabled";
+  const channel = driver?.source ?? installation.connector_type;
   return {
     id: installation.id,
     connector_type: installation.connector_type,
     status: installation.status,
     label,
     detail,
+    settings: installationSettings(installation.config),
     syncable: enabled && capabilities.sync,
     can_reply: enabled && capabilities.reply,
     can_create: enabled && capabilities.create,
+    channel,
+    channel_label: channelLabel(channel),
     last_attempt: lastAttempt,
   };
 }
@@ -244,7 +325,53 @@ function connectorPresentation(installation: ConnectorInstallation): {
       detail: transport === "web" || hosted ? "web" : null,
     };
   }
+  if (installation.connector_type === "feishu-chat") {
+    const selection = configString(config, "selection");
+    const chatIds = configStringList(config, "chat_ids");
+    const chatName = configString(config, "chat_name");
+    const chatId = configString(config, "chat_id");
+    if (selection === "all" || (!selection && chatIds.length === 0 && !chatId)) {
+      return { label: feishuAllLabel(config), detail: "cli" };
+    }
+    if (chatIds.length > 1) {
+      return { label: `${chatIds.length} conversations`, detail: "cli" };
+    }
+    return {
+      label: chatName ?? chatIds[0] ?? chatId ?? installation.id,
+      detail: "cli",
+    };
+  }
   return { label: installation.id, detail: null };
+}
+
+export function installationSettings(
+  config: Record<string, unknown>,
+): Record<string, string> {
+  const settings: Record<string, string> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (typeof value === "string") {
+      settings[key] = value;
+    } else if (
+      Array.isArray(value) &&
+      value.every((entry) => typeof entry === "string")
+    ) {
+      settings[key] = value.join(",");
+    }
+  }
+  return settings;
+}
+
+function feishuAllLabel(config: Record<string, unknown>): string {
+  const kinds = configStringList(config, "kinds");
+  const groups = kinds.length === 0 || kinds.includes("group");
+  const p2p = kinds.length === 0 || kinds.includes("p2p");
+  if (groups && p2p) {
+    return "All conversations";
+  }
+  if (p2p) {
+    return "All direct messages";
+  }
+  return "All groups";
 }
 
 export function configString(
@@ -255,6 +382,25 @@ export function configString(
   return typeof value === "string" && value.trim().length > 0
     ? value
     : undefined;
+}
+
+function configStringList(
+  config: Record<string, unknown>,
+  name: string,
+): string[] {
+  const value = config[name];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) =>
+      typeof entry === "string" && entry.trim().length > 0 ? [entry.trim()] : [],
+    );
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+  return [];
 }
 
 export function matchesWhen(
@@ -291,7 +437,7 @@ function catalogDefinitionForEnv(
         kind: "local_service",
         key: "dsh-web",
         label: "Cluster DSH",
-        required: true,
+        required: false,
         hint: "Uses REGENIC_DSH_BASE_URL (cluster DNS, not a public URL)",
       },
       {
@@ -299,7 +445,7 @@ function catalogDefinitionForEnv(
         key: "REGENIC_DSH_TOKEN",
         label: "DSH web token",
         required: false,
-        hint: "Only if dsh web requires a Bearer token",
+        hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
       },
     ],
   };
@@ -315,14 +461,28 @@ function defaultFieldValues(fields: ConnectorField[]): Record<string, string> {
   return values;
 }
 
+function serviceState(
+  services: CatalogReadiness["services"],
+  key: string,
+): CatalogServiceState | undefined {
+  const value = services?.[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "boolean") {
+    return { ready: value };
+  }
+  return value;
+}
+
 function prerequisiteReady(
   prerequisite: Omit<ConnectorPrerequisite, "ready">,
   env: NodeJS.ProcessEnv,
-  services: Record<string, boolean> | undefined,
+  service: CatalogServiceState | undefined,
 ): boolean {
   if (prerequisite.kind === "env") {
     const value = env[prerequisite.key];
     return typeof value === "string" && value.trim().length > 0;
   }
-  return services?.[prerequisite.key] === true;
+  return service?.ready === true;
 }

@@ -1,45 +1,72 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BrandLockup } from "./Brand";
 import { fetchEngine, fetchInbox } from "./api";
 import { chipLabel, engineChip, formatChatTime } from "./format";
 import { groupInboxThreads, latestMessage, sortInboxThreads } from "./inbox";
-import { threadTitle } from "./message-view";
+import { threadActivityCopy, threadActivityOf, threadTitle } from "./message-view";
 import type { InboxViewItem, PersonalEngineView } from "./types";
 
 const POLL_MS = 2000;
+const IDLE_POLL_MS = 8000;
 
 export function TrayApp() {
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [engine, setEngine] = useState<PersonalEngineView | null>(null);
+  const digestRef = useRef<string | null>(null);
+  const delayRef = useRef(POLL_MS);
+  const inFlight = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    let timer = 0;
     const load = async () => {
+      if (inFlight.current) {
+        return;
+      }
+      inFlight.current = true;
       try {
-        const nextEngine = await fetchEngine();
+        const nextEngine = await fetchEngine({ detailed: false });
         if (cancelled) {
           return;
         }
         setEngine(nextEngine);
-        if (nextEngine.kernel === "running") {
-          setInbox(await fetchInbox());
-        } else {
+        const digest = nextEngine.inbox_digest ?? "";
+        const skip =
+          nextEngine.kernel === "running" &&
+          digest.length > 0 &&
+          digest === digestRef.current;
+        if (nextEngine.kernel !== "running") {
+          digestRef.current = digest || null;
           setInbox([]);
+          delayRef.current = IDLE_POLL_MS;
+          return;
         }
+        if (!skip) {
+          setInbox(await fetchInbox({ heads: true }));
+          digestRef.current = digest || digestRef.current;
+        }
+        delayRef.current = skip ? IDLE_POLL_MS : POLL_MS;
       } catch {
         if (!cancelled) {
           setEngine(null);
           setInbox([]);
         }
+      } finally {
+        inFlight.current = false;
       }
     };
-    void load();
-    const timer = window.setInterval(() => {
-      void load();
-    }, POLL_MS);
+    const tick = async () => {
+      await load();
+      if (!cancelled) {
+        timer = window.setTimeout(() => {
+          void tick();
+        }, delayRef.current);
+      }
+    };
+    void tick();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, []);
 
@@ -80,7 +107,9 @@ export function TrayApp() {
                     <span className="item-title">{threadTitle(thread)}</span>
                     <span>{latest ? formatChatTime(latest.event.occurred_at) : ""}</span>
                   </div>
-                  <div className="item-reasons">{thread.label}</div>
+                  <div className="item-reasons">
+                    {threadActivityCopy(threadActivityOf(thread)) || thread.label}
+                  </div>
                 </div>
               </div>
             );

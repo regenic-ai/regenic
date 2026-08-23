@@ -38,6 +38,7 @@ export interface InboxAttachment {
 
 export type MessageKind = "user" | "assistant" | "system";
 export type MessageDirection = "inbound" | "outbound";
+export type ThreadActivity = "awaiting_user" | "working";
 
 export interface InboxViewItem {
   decision: ArrangementDecision;
@@ -50,10 +51,15 @@ export interface InboxViewItem {
   kind: MessageKind;
   direction: MessageDirection;
   can_send: boolean;
+  await_reply?: boolean;
   thread_id?: string;
   title?: string | null;
   pinned?: boolean;
   pref_updated_at?: string | null;
+  conversation_label?: string | null;
+  conversation_kind?: string | null;
+  actor_label?: string | null;
+  activity?: ThreadActivity;
 }
 
 export interface IngestAttempt {
@@ -79,6 +85,7 @@ export interface ConnectorField {
   required: boolean;
   placeholder?: string;
   default?: string;
+  multiple?: boolean;
   options?: { value: string; label: string }[];
   visible_when?: ConnectorFieldWhen;
 }
@@ -111,9 +118,12 @@ export interface EngineInstallationView {
   status: "enabled" | "disabled" | "needs_attention";
   label: string;
   detail: string | null;
+  settings?: Record<string, string>;
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;
+  channel?: string;
+  channel_label?: string;
   last_attempt: IngestAttempt | null;
 }
 
@@ -122,8 +132,10 @@ export interface CreatedConversation {
   channel: string;
   channel_label: string;
   can_send: boolean;
+  await_reply?: boolean;
   title?: string | null;
   pinned?: boolean;
+  opened_at?: string;
 }
 
 export interface ConversationPrefView {
@@ -155,6 +167,7 @@ export interface PersonalEngineView {
   org_id: string;
   database_path: string | null;
   inbox_count: number;
+  inbox_digest?: string;
   pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];

@@ -49,6 +49,10 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
     return decision(input, "current_work", ["weight_hint"], 0.9, decidedAt);
   }
 
+  if (input.type === "thread_status") {
+    return decision(input, "current_work", ["thread_status"], 0.65, decidedAt);
+  }
+
   if (isNoise(text)) {
     return decision(input, "outside_current_work", ["noise"], 0, decidedAt);
   }

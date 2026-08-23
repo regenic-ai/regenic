@@ -1,8 +1,8 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { parseRichBlocks } from "./message-view";
 import type { InboxAttachment } from "./types";
 
-export function MessageBody({
+export const MessageBody = memo(function MessageBody({
   text,
   attachments,
 }: {
@@ -97,7 +97,7 @@ export function MessageBody({
       ) : null}
     </div>
   );
-}
+});
 
 function stripAttachmentLines(text: string): string {
   return text

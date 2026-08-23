@@ -30,10 +30,13 @@ interface EncodedContentPart {
   bytes_base64?: string;
 }
 
+export type AttachmentMode = "preview" | "meta";
+
 export async function resolveInboxBody(
   authority: AuthorityStore,
   blobs: BlobStore,
   contentHash: string | undefined,
+  attachments: AttachmentMode = "preview",
 ): Promise<InboxBody> {
   if (!contentHash) {
     return {};
@@ -44,15 +47,19 @@ export async function resolveInboxBody(
   }
   try {
     const bytes = await blobs.get(contentHash);
-    return decodeInboxBody(bytes, meta.media_type);
+    return decodeInboxBody(bytes, meta.media_type, attachments);
   } catch {
     return { media_type: meta.media_type };
   }
 }
 
-export function decodeInboxBody(bytes: Uint8Array, mediaType: string): InboxBody {
+export function decodeInboxBody(
+  bytes: Uint8Array,
+  mediaType: string,
+  attachments: AttachmentMode = "preview",
+): InboxBody {
   if (mediaType === CONTENT_PARTS_MEDIA_TYPE) {
-    return decodeContentParts(bytes);
+    return decodeContentParts(bytes, attachments);
   }
   if (isTextMedia(mediaType)) {
     return {
@@ -70,7 +77,10 @@ export function decodeBodyText(
   return decodeInboxBody(bytes, mediaType).body_text;
 }
 
-function decodeContentParts(bytes: Uint8Array): InboxBody {
+function decodeContentParts(
+  bytes: Uint8Array,
+  attachmentMode: AttachmentMode,
+): InboxBody {
   let parts: EncodedContentPart[];
   try {
     parts = JSON.parse(Buffer.from(bytes).toString("utf8")) as EncodedContentPart[];
@@ -99,10 +109,20 @@ function decodeContentParts(bytes: Uint8Array): InboxBody {
       typeof part.source_filename === "string" && part.source_filename.trim().length > 0
         ? part.source_filename
         : "attachment";
+    if (attachmentMode === "meta") {
+      return [
+        {
+          filename,
+          media_type: part.media_type,
+        },
+      ];
+    }
     const raw = part.bytes_base64;
     const size = raw ? Buffer.from(raw, "base64").byteLength : 0;
     const preview =
-      Boolean(raw) && part.media_type.startsWith("image/") && size <= IMAGE_PREVIEW_BYTES;
+      Boolean(raw) &&
+      part.media_type.startsWith("image/") &&
+      size <= IMAGE_PREVIEW_BYTES;
     return [
       {
         filename,

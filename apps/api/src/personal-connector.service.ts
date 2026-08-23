@@ -9,7 +9,6 @@ import {
   ChannelDriverRegistry,
   ConnectorRunner,
   channelLabel,
-  conversationId,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -31,6 +30,7 @@ export { PersonalConnectorError } from "./personal-errors";
 
 const DEFAULT_MAX_PAGES = 1;
 const MAX_PAGES_CAP = 5;
+const STREAM_CONCURRENCY = 4;
 const FOLLOW_TRIES = 6;
 const FOLLOW_WAIT_MS = 750;
 const DEFAULT_PULL_MS = 3_000;
@@ -46,6 +46,7 @@ export interface CreatedConversationView {
   channel: string;
   channel_label: string;
   can_send: boolean;
+  await_reply: boolean;
 }
 
 export interface ConnectorSyncView {
@@ -65,6 +66,8 @@ export class PersonalConnectorService
 {
   private readonly inflight = new Map<string, Promise<ConnectorSyncView>>();
   private readonly streamLocks = new Map<string, Promise<void>>();
+  private readonly streamIdleUntil = new Map<string, number>();
+  private readonly streamCatchingUp = new Set<string>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
 
@@ -95,12 +98,17 @@ export class PersonalConnectorService
   async sync(
     installationId: string,
     maxPages = DEFAULT_MAX_PAGES,
+    options?: { skipIdle?: boolean },
   ): Promise<ConnectorSyncView> {
     const existing = this.inflight.get(installationId);
     if (existing) {
       return existing;
     }
-    const job = this.runSync(installationId, clampPages(maxPages)).finally(() => {
+    const job = this.runSync(
+      installationId,
+      clampPages(maxPages),
+      options,
+    ).finally(() => {
       this.inflight.delete(installationId);
     });
     this.inflight.set(installationId, job);
@@ -146,11 +154,11 @@ export class PersonalConnectorService
     thread: ConversationThread,
   ): Promise<void> {
     const threadId = `${thread.source}:${thread.target}`;
-    const known = await this.assistantIds(threadId);
+    const before = await this.threadFollowState(threadId);
     for (let attempt = 0; attempt < FOLLOW_TRIES; attempt += 1) {
       await pollStream(host, store, installation, stream, 2);
-      const seen = await this.assistantIds(threadId);
-      if ([...seen].some((id) => !known.has(id))) {
+      const after = await this.threadFollowState(threadId);
+      if (after.latestId && after.latestId !== before.latestId && after.inbound) {
         await pollStream(host, store, installation, stream, 2);
         return;
       }
@@ -160,18 +168,22 @@ export class PersonalConnectorService
     }
   }
 
-  private async assistantIds(threadId: string): Promise<Set<string>> {
-    const items = await this.inbox.listInbox();
-    return new Set(
-      items
-        .filter(
-          (item) =>
-            item.kind === "assistant" &&
-            conversationId(item.event.source, item.event.external_id, item.event.id) ===
-              threadId,
-        )
-        .map((item) => item.event.id),
-    );
+  private async threadFollowState(threadId: string): Promise<{
+    latestId?: string;
+    inbound: boolean;
+  }> {
+    const items = await this.inbox.listInbox({
+      thread_id: threadId,
+      heads: true,
+    });
+    const latest = items[items.length - 1];
+    if (!latest) {
+      return { inbound: false };
+    }
+    return {
+      latestId: latest.event.id,
+      inbound: latest.direction === "inbound",
+    };
   }
 
   async createConversation(
@@ -221,6 +233,7 @@ export class PersonalConnectorService
         channel: thread.source,
         channel_label: channelLabel(thread.source),
         can_send: found.driver.canReply(found.installation),
+        await_reply: found.driver.capabilities(found.installation).await_reply === true,
       };
     } catch (error) {
       throw wrapDriverError(error, "send_failed");
@@ -235,6 +248,50 @@ export class PersonalConnectorService
     );
     await this.catchUp(created.id);
     return this.viewOf(store, created);
+  }
+
+  async updateConfig(
+    installationId: string,
+    config: Record<string, unknown>,
+  ): Promise<EngineInstallationView> {
+    const store = this.runtime.requireHost().get("authority");
+    const current = await this.requireInstallation(store, installationId);
+    const driver = this.drivers.get(current.connector_type);
+    if (!driver) {
+      throw new PersonalConnectorError(
+        "unsupported_connector",
+        `Connector type cannot be updated: ${current.connector_type}`,
+        400,
+      );
+    }
+    let nextConfig: ConnectorInstallation["config"];
+    try {
+      nextConfig = driver.install({
+        id: current.id,
+        org_id: current.org_id,
+        config,
+        now: new Date().toISOString(),
+      }).config;
+    } catch (error) {
+      throw wrapDriverError(error, "invalid_config");
+    }
+    const updated = await store.updateInstallationConfig({
+      id: current.id,
+      org_id: this.runtime.orgId(),
+      config: nextConfig,
+      updated_at: new Date().toISOString(),
+    });
+    if (!updated) {
+      throw new PersonalConnectorError(
+        "not_found",
+        "Connector installation not found",
+        404,
+      );
+    }
+    if (updated.status === "enabled") {
+      await this.catchUp(updated.id);
+    }
+    return this.viewOf(store, updated);
   }
 
   async uninstall(installationId: string): Promise<{ id: string; removed: true }> {
@@ -295,7 +352,7 @@ export class PersonalConnectorService
         ) {
           continue;
         }
-        await this.catchUp(installation.id);
+        await this.catchUp(installation.id, { skipIdle: true });
       }
       pullStatus.last_tick_at = new Date().toISOString();
     } catch (error) {
@@ -306,9 +363,16 @@ export class PersonalConnectorService
     }
   }
 
-  private async catchUp(installationId: string): Promise<void> {
+  private async catchUp(
+    installationId: string,
+    options?: { skipIdle?: boolean },
+  ): Promise<void> {
     try {
-      await this.sync(installationId);
+      await this.sync(
+        installationId,
+        options?.skipIdle ? DEFAULT_MAX_PAGES : MAX_PAGES_CAP,
+        options,
+      );
       pullStatus.last_error = null;
     } catch (error) {
       pullStatus.last_error =
@@ -319,6 +383,7 @@ export class PersonalConnectorService
   private async runSync(
     installationId: string,
     maxPages: number,
+    options?: { skipIdle?: boolean },
   ): Promise<ConnectorSyncView> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
@@ -344,23 +409,62 @@ export class PersonalConnectorService
         host,
         process.env,
       );
-      const runs: ConnectorPollRunResult[] = [];
-      for (const stream of streams) {
-        const pages = await this.exclusiveStream(
-          installation.id,
-          stream.stream_key,
-          () => pollStream(host, store, installation, stream, maxPages),
-          { skipIfBusy: true },
-        );
-        if (pages) {
-          runs.push(...pages);
+      this.pruneStreamPace(installation.id, streams);
+      const now = Date.now();
+      const planned = streams.flatMap((stream) => {
+        const key = streamPaceKey(installation.id, stream.stream_key);
+        const idleMs = streamIdleMs(stream);
+        if (
+          options?.skipIdle &&
+          idleMs !== undefined &&
+          (this.streamIdleUntil.get(key) ?? 0) > now
+        ) {
+          return [];
         }
+        const pages = this.streamCatchingUp.has(key)
+          ? Math.max(maxPages, streamCatchUpPages(stream, maxPages))
+          : maxPages;
+        return [{ stream, pages, key, idleMs }];
+      });
+      const batches = await mapLimit(planned, STREAM_CONCURRENCY, async (item) => {
+        try {
+          const pages = await this.exclusiveStream(
+            installation.id,
+            item.stream.stream_key,
+            () =>
+              pollStream(host, store, installation, item.stream, item.pages),
+            { skipIfBusy: true },
+          );
+          return {
+            key: item.key,
+            pages: pages ?? [],
+            pagesBudget: item.pages,
+            idleMs: item.idleMs,
+            error: null,
+          };
+        } catch (error) {
+          return {
+            key: item.key,
+            pages: [] as ConnectorPollRunResult[],
+            pagesBudget: item.pages,
+            idleMs: item.idleMs,
+            error,
+          };
+        }
+      });
+      const runs = batches.flatMap((batch) => batch.pages);
+      for (const batch of batches) {
+        this.rememberStreamPace(batch);
+      }
+      const firstError = batches.find((batch) => batch.error)?.error;
+      if (runs.length === 0 && firstError) {
+        throw firstError;
       }
       const last = runs.at(-1);
       return {
         installation_id: installation.id,
         pages_attempted: runs.length,
-        streams_attempted: streams.length,
+        streams_attempted: options?.skipIdle ? planned.length : streams.length,
         ...summarizeRuns(runs),
         last_run_status: last?.status ?? "idle",
         installation: await this.viewOf(store, installation),
@@ -407,6 +511,57 @@ export class PersonalConnectorService
       );
     }
     return installation;
+  }
+
+  private pruneStreamPace(
+    installationId: string,
+    streams: ConnectorStream[],
+  ): void {
+    const live = new Set(
+      streams.map((stream) => streamPaceKey(installationId, stream.stream_key)),
+    );
+    const prefix = `${installationId}:`;
+    for (const key of this.streamIdleUntil.keys()) {
+      if (key.startsWith(prefix) && !live.has(key)) {
+        this.streamIdleUntil.delete(key);
+        this.streamCatchingUp.delete(key);
+      }
+    }
+    for (const key of this.streamCatchingUp) {
+      if (key.startsWith(prefix) && !live.has(key)) {
+        this.streamCatchingUp.delete(key);
+      }
+    }
+  }
+
+  private rememberStreamPace(input: {
+    key: string;
+    pages: ConnectorPollRunResult[];
+    pagesBudget: number;
+    idleMs?: number;
+  }): void {
+    if (input.pages.length === 0) {
+      return;
+    }
+    if (input.pages.some((page) => page.status === "retryable_failure")) {
+      this.streamCatchingUp.add(input.key);
+      this.streamIdleUntil.delete(input.key);
+      return;
+    }
+    const summary = summarizeRuns(input.pages);
+    const progressed =
+      summary.accepted_count > 0 || summary.quarantined_count > 0;
+    if (progressed && input.pages.length >= input.pagesBudget) {
+      this.streamCatchingUp.add(input.key);
+      this.streamIdleUntil.delete(input.key);
+      return;
+    }
+    this.streamCatchingUp.delete(input.key);
+    if (input.idleMs !== undefined) {
+      this.streamIdleUntil.set(input.key, Date.now() + input.idleMs);
+      return;
+    }
+    this.streamIdleUntil.delete(input.key);
   }
 
   private exclusiveStream<T>(
@@ -531,6 +686,52 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function streamPaceKey(installationId: string, streamKey: string): string {
+  return `${installationId}:${streamKey}`;
+}
+
+function streamIdleMs(stream: ConnectorStream): number | undefined {
+  const value = stream.pace?.idle_ms;
+  if (!Number.isInteger(value) || value === undefined || value < 1) {
+    return undefined;
+  }
+  return value;
+}
+
+function streamCatchUpPages(
+  stream: ConnectorStream,
+  fallback: number,
+): number {
+  const value = stream.pace?.catch_up_pages;
+  if (!Number.isInteger(value) || value === undefined || value < 1) {
+    return fallback;
+  }
+  return Math.min(value, MAX_PAGES_CAP);
+}
+
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index] as T);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
 }
 
 function clampPages(value: number): number {

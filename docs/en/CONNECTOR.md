@@ -18,7 +18,7 @@ This page is for people who implement a connector.
 ## What a connector is
 
 A connector registers a `ChannelDriver` with a stable `connector_type` and a
-`source` that exists in `CHANNELS` (`dsh`, `slack`, …).
+`source` that exists in `CHANNELS` (`dsh`, `slack`, `feishu`, …).
 
 The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 `ChannelConnector` and `EgressAdapter` do not persist those records.
@@ -61,7 +61,7 @@ The following are not allowed:
 - Mapping an unknown native type to `message`.
 - Putting bodies or secrets in `attrs`, logs, or quarantine metadata.
 - Adding per-channel switches in the API or desktop. The desktop reads
-  `can_send` and `can_create`.
+  `can_send`, `can_create`, `await_reply`, and `surface.activity`.
 
 ## Message format
 
@@ -69,15 +69,29 @@ Send and display shape is defined by `message-contract` in `@regenic/domain`.
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `source` | string | Channel id from `CHANNELS` (`dsh`, `slack`) |
+| `source` | string | Channel id from `CHANNELS` (`dsh`, `slack`, `feishu`) |
 | `kind` | `user` \| `assistant` \| `system` | Mapped from the native event |
 | `direction` | `inbound` \| `outbound` | Reads are inbound. Console replies are outbound |
 | `content` | `ContentPart[]` | `body` plus optional `attachment` parts |
-| `capabilities` | `{ sync, reply, create }` | Returned by `ChannelDriver.capabilities()` |
+| `capabilities` | `{ sync, reply, create, await_reply? }` | Returned by `ChannelDriver.capabilities()` |
 
-`channelRecord()` attaches surface metadata (`channel`, `kind`, `direction`)
-to the record. The desktop reads that metadata. It does not infer role or
-direction from the driver name.
+`channelRecord()` attaches surface metadata (`channel`, `kind`, `direction`,
+and optional `conversation_label` / `conversation_kind` / `actor_label` /
+`activity`) to the record. `activity` is channel-agnostic thread state:
+`working` (the other side is still processing with no visible body) or
+`awaiting_user` (it is waiting for an answer in the original channel). The
+desktop reads that field. It does not infer role, direction, or a stuck
+state from the driver name.
+`await_reply` is also a driver declaration: set it when the other side
+keeps working after a send (a session agent). Chat channels such as Feishu
+omit it. The desktop shows “Sent. Waiting for a reply” only when
+`await_reply` is true and the latest message is outbound. That banner is
+not a third `activity` value; it is presentation of the driver flag.
+
+When the other side has only invisible labor, a connector may emit a
+`type: "thread_status"` record with `activity: "working"`. Arrangement keeps
+it in current work. The desktop uses it as a status banner, not a chat
+bubble.
 
 A local outbound and the channel-history echo of the same utterance in one
 conversation stay a single Event.
@@ -86,7 +100,7 @@ conversation stay a single Event.
 
 Format: `source:target`.
 
-Examples: `dsh:<sessionId>`, `slack:C123`.
+Examples: `dsh:<sessionId>`, `slack:C123`, `feishu:oc_…`.
 
 `ChannelDriverRegistry` resolves `installation + thread`. When more than one
 install matches, `ownsThread` wins over the first match.
@@ -100,7 +114,7 @@ interface ChannelDriver {
   install(input): NewConnectorInstallation;
   matchesThread(installation, thread): boolean;
   ownsThread(installation, thread): boolean;
-  capabilities(installation): { sync; reply; create };
+  capabilities(installation): { sync; reply; create; await_reply? };
   canReply(installation): boolean;
   createThread(installation, host, env): Promise<ConversationThread>;
   resolveStreams(installation, host, env): Promise<ConnectorStream[]>;
@@ -112,18 +126,33 @@ interface ChannelDriver {
 
 | Method | Description |
 | --- | --- |
-| `install` | Persist non-secret config. Slack requires `channel_id`. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
+| `install` | Persist non-secret config. Slack requires `channel_id`. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
-| `capabilities` | `sync` / `reply` / `create` for this install. |
+| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`. DSH sets it; Feishu / Slack omit it. |
 | `canReply` | Same value as `capabilities().reply`. |
-| `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. DSH web: `session:<id>` per listed session. |
+| `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` per selected conversation, or every visible group and/or p2p chat when `selection=all`. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
 | `createThread` | Required when `create` is true. Otherwise throw `unsupported_channel`. |
 | `bindEgress` | Required when `reply` is true. Otherwise throw `unsupported_channel`. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
 
 `ChannelDriverError` codes: `invalid_config`, `missing_credentials`,
 `sync_failed`, `send_failed`, `unsupported_channel`, `no_sender`.
+
+```ts
+interface ConnectorStreamPace {
+  idle_ms?: number;
+  catch_up_pages?: number;
+}
+
+interface ConnectorStream {
+  stream_key: string;
+  connector: Pick<ChannelConnector, "poll">;
+  pace?: ConnectorStreamPace;
+}
+```
+
+`pace` is declared per stream. The kernel only reads the fields: after an empty tick, a background tick may skip a stream that set `idle_ms`; while catching up it pulls at most `catch_up_pages` (kernel-capped). Omit `pace` to poll one page every tick. Feishu sets `{ idle_ms: 15_000, catch_up_pages: 5 }`; DSH and Slack omit it.
 
 ## ChannelConnector
 
@@ -165,16 +194,26 @@ adapter writes that envelope back to the same source and thread.
 
 ## Catalog
 
-`GET /v1/me/engine` returns a catalog. The Engine page renders the install
-form from that catalog. A new connector adds an entry there. The desktop
-does not hard-code fields per type.
+`GET /v1/me/engine` returns a catalog. The Engine page opens a dialog for those catalog fields on Install
+and on Edit sync.
+A new connector adds an entry there. The desktop does not hard-code fields
+per type. Installations include `settings` (non-secret config as strings)
+so the edit form can prefill.
 
 | Field | Description |
 | --- | --- |
-| `fields` | `key`, `label`, required, default, `visible_when` |
-| `prerequisites` | Environment variable or local service, with `ready` |
+| `fields` | `key`, `label`, required, default, `visible_when`, optional `multiple` + `options` |
+| `prerequisites` | Environment variable or local service, with `ready` and a `hint` |
 
-Tokens are prerequisites, not form fields.
+Tokens are prerequisites, not form fields. The kernel does not install a
+CLI or start a local server. `hint` says what the user should run when
+`ready` is false. Feishu distinguishes a missing binary from a signed-out
+CLI. DSH probes the same way: whether `dsh web` is reachable, and whether
+`dsh` is on PATH.
+
+The driver owns that check (`probeCatalog()`). The API only merges each
+driver's `ready` / `hint` / field options. The desktop only renders the
+catalog. Adding a source does not change the API or the desktop.
 
 ## Built-in drivers
 
@@ -184,6 +223,7 @@ Tokens are prerequisites, not form fields.
 | `dsh-session` web, no `session_id` | `dsh` | every session | yes | yes | `REGENIC_DSH_TOKEN` if the host asks |
 | `dsh-session` web, with `session_id` | `dsh` | that session | yes | no | same |
 | `dsh-session` cli | `dsh` | one mailbox | yes | no | local `dsh` |
+| `feishu-chat` | `feishu` | selected conversations, or all visible groups and/or p2p chats | yes | no | local `lark-cli` user login |
 
 DSH `kind` map:
 
@@ -194,6 +234,33 @@ DSH `kind` map:
 | plugin-injected `user/message` | `system` |
 
 Slack humans map to `user`.
+
+Feishu `kind` map:
+
+| Native message | `kind` |
+| --- | --- |
+| `sender_type=user`, `msg_type` `text` or `post` | `user` |
+| `sender_type=app` (or `bot`), `msg_type` `text` or `post` | `assistant` |
+| image, file, interactive, and other `msg_type` | dropped |
+
+Thread id: `feishu:<chat_id>`. History uses `lark-cli api` with `--as user`, up to 50 messages per page. The conversation list is cached for about 30 seconds. Each record stores the chat name, `group` or `direct`, and the sender name. Mentions in the body use the native `mentions[]` names (`@_user_1` becomes `@Ben`; `@all` becomes `@所有人`). `contact +search-user` is only for remaining sender ids. The form lists groups and p2p chats from `lark-cli im +chat-list --types=p2p,group`. It does not take tokens or a pasted `oc_…`. Default is both kinds. The set can be changed after install.
+
+## Setup
+
+The Engine page blocks Install until required visible prerequisites are
+`ready`. The user does the steps; the kernel only probes.
+
+| Driver | When `ready` is false | What to run |
+| --- | --- | --- |
+| `slack-channel` | `REGENIC_SLACK_TOKEN` unset | Set a bot token from your Slack app, then restart the desktop |
+| `dsh-session` web | `dsh` not on PATH | `dsh` must work in the terminal. Then `dsh web --port 3080` |
+| `dsh-session` web | `dsh` present, port 3080 down | `dsh web --port 3080` |
+| `dsh-session` cli | local `dsh` | `dsh` must work in the terminal |
+| `feishu-chat` | `lark-cli` not on PATH | `npx @larksuite/cli@latest install` ([lark-cli](https://github.com/larksuite/cli)) |
+| `feishu-chat` | CLI present, user not signed in | `lark-cli config init` then `lark-cli auth login --recommend` |
+
+Feishu tokens stay in the OS keychain. Optional `REGENIC_LARK_CLI` points
+at a binary that is not on PATH.
 
 ## Out of scope
 

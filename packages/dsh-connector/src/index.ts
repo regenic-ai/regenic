@@ -10,3 +10,4 @@ export * from "./dsh-session-poll-connector";
 export * from "./plugin";
 export * from "./dsh-session-driver";
 export * from "./dsh-url";
+export * from "./probe";

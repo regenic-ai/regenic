@@ -1,6 +1,5 @@
 import type { InboxViewItem, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
-import { latestMessage } from "./inbox";
 
 export type MessageRole = MessageKind;
 
@@ -13,7 +12,15 @@ export function messageRole(item: InboxViewItem | string | undefined): MessageRo
   return "assistant";
 }
 
-export function roleLabel(role: MessageRole, channel?: string): string {
+export function roleLabel(
+  role: MessageRole,
+  channel?: string,
+  actorLabel?: string | null,
+): string {
+  const named = actorLabel?.replace(/\s+/g, " ").trim();
+  if (named) {
+    return named;
+  }
   if (role === "user") {
     return "You";
   }
@@ -21,6 +28,63 @@ export function roleLabel(role: MessageRole, channel?: string): string {
     return "Runtime";
   }
   return channel === "dsh" ? "DSH Agent" : "Assistant";
+}
+
+export function conversationKindLabel(kind: string | null | undefined): string | null {
+  if (kind === "group") {
+    return "Group";
+  }
+  if (kind === "direct") {
+    return "Direct";
+  }
+  if (kind && kind.trim()) {
+    return kind.trim();
+  }
+  return null;
+}
+
+const SENT_WAIT_MS = 30 * 60 * 1000;
+
+export function threadActivityOf(
+  thread: InboxThread,
+  now = Date.now(),
+): InboxViewItem["activity"] | "sent" | undefined {
+  const latest = thread.messages[thread.messages.length - 1];
+  if (!latest) {
+    return undefined;
+  }
+  if (latest.activity) {
+    return latest.activity;
+  }
+  if (
+    thread.await_reply === true &&
+    latest.kind === "user" &&
+    latest.direction === "outbound" &&
+    isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)
+  ) {
+    return "sent";
+  }
+  return undefined;
+}
+
+function isRecentStamp(stamp: string, now: number, windowMs: number): boolean {
+  const at = Date.parse(stamp);
+  return Number.isFinite(at) && now - at >= 0 && now - at < windowMs;
+}
+
+export function threadActivityCopy(
+  activity: InboxViewItem["activity"] | "sent" | undefined,
+): string | undefined {
+  if (activity === "awaiting_user") {
+    return "Waiting for your reply in the original channel.";
+  }
+  if (activity === "working") {
+    return "The other side is still working.";
+  }
+  if (activity === "sent") {
+    return "Sent. Waiting for a reply from the original channel.";
+  }
+  return undefined;
 }
 
 export function firstLine(text: string | undefined, max = 80): string {
@@ -57,6 +121,10 @@ export function threadTitle(thread: InboxThread): string {
   if (custom) {
     return custom;
   }
+  const conversation = thread.conversation_label?.replace(/\s+/g, " ").trim();
+  if (conversation) {
+    return conversation;
+  }
   if (thread.messages.length === 0) {
     return thread.label;
   }
@@ -64,34 +132,81 @@ export function threadTitle(thread: InboxThread): string {
 }
 
 function threadFace(thread: InboxThread): InboxViewItem {
-  const user = thread.messages.find((item) => messageRole(item) === "user");
-  const human =
-    user ?? thread.messages.find((item) => messageRole(item) !== "system");
-  return human ?? latestMessage(thread) ?? thread.messages[0];
+  const visible = thread.messages.filter((item) => item.activity !== "working");
+  const pool = visible.length > 0 ? visible : thread.messages;
+  const user = pool.find((item) => messageRole(item) === "user");
+  const human = user ?? pool.find((item) => messageRole(item) !== "system");
+  return human ?? pool[pool.length - 1] ?? thread.messages[0];
 }
 
-export function readingMessages(thread: InboxThread): InboxViewItem[] {
-  const visible = thread.messages.filter((item) => {
-    const text = item.body_text?.trim() ?? "";
-    return text.length > 0 || (item.attachments?.length ?? 0) > 0;
-  });
-  return coalesceReading(visible);
+export function readingMessages(
+  thread: InboxThread,
+  previous?: { source: InboxViewItem[]; reading: InboxViewItem[] },
+): InboxViewItem[] {
+  const source = thread.messages;
+  if (
+    previous &&
+    source.length >= previous.source.length &&
+    previous.source.every((item, index) => item === source[index])
+  ) {
+    if (source.length === previous.source.length) {
+      return previous.reading;
+    }
+    return appendReading(previous.reading, source.slice(previous.source.length).filter(isReadable));
+  }
+  return coalesceReading(source.filter(isReadable));
+}
+
+function isReadable(item: InboxViewItem): boolean {
+  if (item.activity === "working") {
+    return false;
+  }
+  const text = item.body_text?.trim() ?? "";
+  return text.length > 0 || (item.attachments?.length ?? 0) > 0;
+}
+
+export function sameSpeaker(left: InboxViewItem, right: InboxViewItem): boolean {
+  return speakerKey(left) === speakerKey(right);
+}
+
+export function speakerMark(
+  role: MessageRole,
+  actorLabel?: string | null,
+): string {
+  const named = actorLabel?.replace(/\s+/g, " ").trim();
+  if (named) {
+    return named.slice(0, 1);
+  }
+  if (role === "user") {
+    return "Y";
+  }
+  if (role === "system") {
+    return "R";
+  }
+  return "A";
+}
+
+function speakerKey(item: InboxViewItem): string {
+  const role = messageRole(item);
+  const named = item.actor_label?.replace(/\s+/g, " ").trim();
+  if (named) {
+    return `${role}:${named}`;
+  }
+  return role;
 }
 
 function coalesceReading(items: InboxViewItem[]): InboxViewItem[] {
-  const merged: InboxViewItem[] = [];
-  for (const item of items) {
-    const role = messageRole(item);
-    const previous = merged[merged.length - 1];
-    if (
-      previous &&
-      messageRole(previous) === role &&
-      role !== "system"
-    ) {
-      if (sameUtterance(previous, item)) {
-        continue;
-      }
-      merged[merged.length - 1] = joinReading(previous, item);
+  return appendReading([], items);
+}
+
+function appendReading(
+  previous: InboxViewItem[],
+  added: InboxViewItem[],
+): InboxViewItem[] {
+  const merged = previous.length > 0 ? previous.slice() : [];
+  for (const item of added) {
+    const last = merged[merged.length - 1];
+    if (last && sameSpeaker(last, item) && sameUtterance(last, item)) {
       continue;
     }
     merged.push(item);
@@ -99,22 +214,10 @@ function coalesceReading(items: InboxViewItem[]): InboxViewItem[] {
   return merged;
 }
 
-function sameUtterance(left: InboxViewItem, right: InboxViewItem): boolean {
+export function sameUtterance(left: InboxViewItem, right: InboxViewItem): boolean {
   const leftText = (left.body_text ?? "").replace(/\s+/g, " ").trim();
   const rightText = (right.body_text ?? "").replace(/\s+/g, " ").trim();
   return leftText.length > 0 && leftText === rightText;
-}
-
-function joinReading(left: InboxViewItem, right: InboxViewItem): InboxViewItem {
-  const leftText = left.body_text?.trim() ?? "";
-  const rightText = right.body_text?.trim() ?? "";
-  const body = [leftText, rightText].filter((part) => part.length > 0).join("\n\n");
-  const attachments = [...(left.attachments ?? []), ...(right.attachments ?? [])];
-  return {
-    ...left,
-    body_text: body.length > 0 ? body : undefined,
-    attachments: attachments.length > 0 ? attachments : undefined,
-  };
 }
 
 export type RichBlock =

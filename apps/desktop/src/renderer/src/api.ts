@@ -51,8 +51,30 @@ export async function applyKernelSettings(input: {
   return settings;
 }
 
-export async function fetchInbox(): Promise<InboxViewItem[]> {
-  const response = await fetch(`${origin()}/v1/me/inbox`);
+export async function fetchInbox(
+  query: {
+    since?: string;
+    since_id?: string;
+    heads?: boolean;
+    thread_id?: string;
+  } = {},
+): Promise<InboxViewItem[]> {
+  const params = new URLSearchParams();
+  if (query.since) {
+    params.set("since", query.since);
+  }
+  if (query.since_id) {
+    params.set("since_id", query.since_id);
+  }
+  if (query.heads) {
+    params.set("heads", "1");
+  }
+  if (query.thread_id) {
+    params.set("thread_id", query.thread_id);
+  }
+  const encoded = params.toString();
+  const suffix = encoded ? `?${encoded}` : "";
+  const response = await fetch(`${origin()}/v1/me/inbox${suffix}`);
   if (!response.ok) {
     throw new Error(`inbox ${response.status}`);
   }
@@ -64,21 +86,30 @@ export async function fetchInbox(): Promise<InboxViewItem[]> {
     kind: item.kind ?? "assistant",
     direction: item.direction ?? "inbound",
     can_send: item.can_send === true,
+    await_reply: item.await_reply === true,
     thread_id: item.thread_id,
     title: item.title ?? null,
     pinned: item.pinned === true,
+    conversation_label: item.conversation_label ?? null,
+    conversation_kind: item.conversation_kind ?? null,
+    actor_label: item.actor_label ?? null,
     pref_updated_at: item.pref_updated_at ?? null,
+    activity: item.activity,
   }));
 }
 
-export async function fetchEngine(): Promise<PersonalEngineView> {
-  const response = await fetch(`${origin()}/v1/me/engine`);
+export async function fetchEngine(
+  query: { detailed?: boolean } = {},
+): Promise<PersonalEngineView> {
+  const suffix = query.detailed === false ? "?detail=0" : "";
+  const response = await fetch(`${origin()}/v1/me/engine${suffix}`);
   if (!response.ok) {
     throw new Error(`engine ${response.status}`);
   }
   const engine = (await response.json()) as PersonalEngineView;
   return {
     ...engine,
+    inbox_digest: engine.inbox_digest,
     pull: engine.pull ?? {
       interval_ms: 0,
       last_tick_at: null,
@@ -89,6 +120,8 @@ export async function fetchEngine(): Promise<PersonalEngineView> {
       syncable: item.syncable === true,
       can_reply: item.can_reply === true,
       can_create: item.can_create === true,
+      channel: item.channel,
+      channel_label: item.channel_label,
     })),
     catalog: (engine.catalog ?? []).map((item) => ({
       ...item,
@@ -134,6 +167,28 @@ export async function installConnector(
       "error" in body && body.error?.message
         ? body.error.message
         : `install ${response.status}`,
+    );
+  }
+  return body as EngineInstallationView;
+}
+
+export async function updateConnectorConfig(
+  id: string,
+  config: Record<string, string>,
+): Promise<EngineInstallationView> {
+  const response = await fetch(`${origin()}/v1/me/connectors/${id}/config`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+  const body = (await response.json()) as
+    | EngineInstallationView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `update ${response.status}`,
     );
   }
   return body as EngineInstallationView;

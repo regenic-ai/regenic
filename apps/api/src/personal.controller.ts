@@ -8,6 +8,7 @@ import {
   NotFoundException,
   Param,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import { PersonalApiGuard } from "./personal-api.guard";
@@ -34,8 +35,20 @@ export class PersonalController {
   ) {}
 
   @Get("inbox")
-  listInbox() {
-    return this.guard(() => this.inbox.listInbox());
+  listInbox(
+    @Query("since") since?: string,
+    @Query("since_id") sinceId?: string,
+    @Query("heads") heads?: string,
+    @Query("thread_id") threadId?: string,
+  ) {
+    return this.guard(() =>
+      this.inbox.listInbox({
+        since: since?.trim() || undefined,
+        since_id: sinceId?.trim() || undefined,
+        heads: heads === "1" || heads === "true",
+        thread_id: threadId?.trim() || undefined,
+      }),
+    );
   }
 
   @Get("inbox/:event_id")
@@ -50,8 +63,10 @@ export class PersonalController {
   }
 
   @Get("engine")
-  getEngine() {
-    return this.inbox.getEngine();
+  getEngine(@Query("detail") detail?: string) {
+    return this.guard(() =>
+      this.inbox.getEngine({ detailed: detail !== "0" }),
+    );
   }
 
   @Post("replies")
@@ -95,6 +110,14 @@ export class PersonalController {
         config: body.config,
       }),
     );
+  }
+
+  @Post("connectors/:id/config")
+  updateConnectorConfig(
+    @Param("id") id: string,
+    @Body() body: { config?: Record<string, unknown> } | undefined,
+  ) {
+    return this.guard(() => this.connectors.updateConfig(id, body?.config ?? {}));
   }
 
   @Delete("connectors/:id")

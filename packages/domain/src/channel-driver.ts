@@ -15,11 +15,32 @@ export interface ChannelCapabilities {
   sync: boolean;
   reply: boolean;
   create: boolean;
+  /**
+   * After an outbound, treat silence as waiting for the other side.
+   * Session/agent channels set this. Chat channels leave it unset.
+   */
+  await_reply?: boolean;
+}
+
+export interface ConnectorCatalogServiceState {
+  ready: boolean;
+  hint?: string;
+}
+
+export interface ConnectorCatalogProbe {
+  services?: Record<string, ConnectorCatalogServiceState>;
+  field_options?: Record<string, { value: string; label: string }[]>;
+}
+
+export interface ConnectorStreamPace {
+  idle_ms?: number;
+  catch_up_pages?: number;
 }
 
 export interface ConnectorStream {
   stream_key: string;
   connector: Pick<ChannelConnector, "poll">;
+  pace?: ConnectorStreamPace;
 }
 
 export class ChannelDriverError extends Error {
@@ -80,6 +101,9 @@ export interface ChannelDriver {
     env: NodeJS.ProcessEnv,
   ): Promise<RegisteredEgress>;
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt): string;
+  probeCatalog?(input: {
+    env: NodeJS.ProcessEnv;
+  }): Promise<ConnectorCatalogProbe>;
 }
 
 export class ChannelDriverRegistry {
@@ -92,6 +116,43 @@ export class ChannelDriverRegistry {
 
   get(connectorType: string): ChannelDriver | undefined {
     return this.drivers.get(connectorType);
+  }
+
+  list(): ChannelDriver[] {
+    return [...this.drivers.values()];
+  }
+
+  async probeCatalog(
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<{
+    services: Record<string, ConnectorCatalogServiceState>;
+    field_options: Record<
+      string,
+      Record<string, { value: string; label: string }[]>
+    >;
+  }> {
+    const services: Record<string, ConnectorCatalogServiceState> = {};
+    const field_options: Record<
+      string,
+      Record<string, { value: string; label: string }[]>
+    > = {};
+    await Promise.all(
+      this.list().map(async (driver) => {
+        if (!driver.probeCatalog) {
+          return;
+        }
+        try {
+          const probe = await driver.probeCatalog({ env });
+          Object.assign(services, probe.services ?? {});
+          if (probe.field_options) {
+            field_options[driver.connector_type] = probe.field_options;
+          }
+        } catch {
+          // A probe failure leaves that source unready. It must not block others.
+        }
+      }),
+    );
+    return { services, field_options };
   }
 
   has(connectorType: string): boolean {
@@ -126,6 +187,16 @@ export class ChannelDriverRegistry {
   ): boolean {
     const found = this.findForThread(installations, thread);
     return Boolean(found && found.driver.canReply(found.installation));
+  }
+
+  awaitReply(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): boolean {
+    const found = this.findForThread(installations, thread);
+    return Boolean(
+      found && found.driver.capabilities(found.installation).await_reply,
+    );
   }
 
   findCreatable(

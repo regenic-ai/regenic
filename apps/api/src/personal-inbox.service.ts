@@ -4,6 +4,8 @@ import {
   ChannelDriverRegistry,
   channelLabel,
   conversationId,
+  inboxDigest,
+  latestByThread,
   parseConversationThread,
   resolveMessageSurface,
   type ArrangementDecision,
@@ -11,8 +13,10 @@ import {
   type ConversationPref,
   type ConversationThread,
   type EventRecord,
+  type InboxQuery,
   type MessageDirection,
   type MessageKind,
+  type ThreadActivity,
 } from "@regenic/domain";
 import { resolveInboxBody, type InboxAttachment } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
@@ -39,10 +43,15 @@ export interface InboxViewItem {
   kind: MessageKind;
   direction: MessageDirection;
   can_send: boolean;
+  await_reply: boolean;
   thread_id: string;
   title: string | null;
   pinned: boolean;
   pref_updated_at: string | null;
+  conversation_label: string | null;
+  conversation_kind: string | null;
+  actor_label: string | null;
+  activity?: ThreadActivity;
 }
 
 export interface ConversationPrefView {
@@ -67,9 +76,21 @@ export interface PersonalEngineView {
   org_id: string;
   database_path: string | null;
   inbox_count: number;
+  inbox_digest: string;
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
+}
+
+export interface InboxListQuery {
+  since?: string;
+  since_id?: string;
+  heads?: boolean;
+  thread_id?: string;
+}
+
+export interface EngineQuery {
+  detailed?: boolean;
 }
 
 @Injectable()
@@ -79,35 +100,61 @@ export class PersonalInboxService {
     private readonly drivers: ChannelDriverRegistry,
   ) {}
 
-  async listInbox(): Promise<InboxViewItem[]> {
-    return this.loadThreadInbox();
+  async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
+    return this.loadThreadInbox(query);
   }
 
   async getInboxItem(eventId: string): Promise<InboxViewItem | null> {
-    const items = await this.loadThreadInbox();
-    return items.find((entry) => entry.event.id === eventId) ?? null;
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const blobs = host.get("blobs");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    if (!event) {
+      return null;
+    }
+    const decision = await authority.getDisposition(eventId);
+    if (!decision) {
+      return null;
+    }
+    const threadId = conversationId(event.source, event.external_id, event.id);
+    const [installations, pref] = await Promise.all([
+      authority.listInstallations(orgId),
+      authority.getConversationPref(orgId, threadId),
+    ]);
+    return decorateInboxItem(
+      { decision, event },
+      await resolveInboxBody(authority, blobs, event.content_hash),
+      installations,
+      this.drivers,
+      pref,
+    );
   }
 
-  async getEngine(): Promise<PersonalEngineView> {
+  async getEngine(query: EngineQuery = {}): Promise<PersonalEngineView> {
+    const detailed = query.detailed !== false;
     const options = this.runtime.getOptions();
     const orgId = this.runtime.orgId();
     const catalogReady = async (
       installations: EngineInstallationView[],
-    ) =>
-      connectorCatalog(installations, {
+    ) => {
+      if (!detailed) {
+        return [];
+      }
+      const probed = await this.drivers.probeCatalog(process.env);
+      return connectorCatalog(installations, {
         env: process.env,
-        services: {
-          "dsh-web": await probeLocalService(
-            process.env.REGENIC_DSH_BASE_URL?.trim() || "http://127.0.0.1:3080",
-          ),
-        },
+        services: probed.services,
+        field_options: probed.field_options,
       });
+    };
     if (!this.runtime.isReady()) {
       return {
         kernel: "stopped",
         org_id: orgId,
         database_path: options?.database ?? null,
         inbox_count: 0,
+        inbox_digest: inboxDigest([]),
         pull: { ...pullStatus },
         installations: [],
         catalog: await catalogReady([]),
@@ -116,12 +163,14 @@ export class PersonalInboxService {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const [inbox, installations] = await Promise.all([
-      authority.listInbox(orgId),
+      authority.summarizeInbox(orgId),
       authority.listInstallations(orgId),
     ]);
     const views = await Promise.all(
       installations.map(async (installation) => {
-        const attempts = await authority.listAttempts(installation.id);
+        const attempts = detailed
+          ? await authority.listAttempts(installation.id)
+          : [];
         return toInstallationView(
           installation,
           attempts[0] ?? null,
@@ -133,51 +182,39 @@ export class PersonalInboxService {
       kernel: "running",
       org_id: orgId,
       database_path: options?.database ?? null,
-      inbox_count: inbox.length,
+      inbox_count: inbox.count,
+      inbox_digest: inbox.digest,
       pull: { ...pullStatus },
       installations: views,
       catalog: await catalogReady(views),
     };
   }
 
-  private async loadThreadInbox(): Promise<InboxViewItem[]> {
+  private async loadThreadInbox(
+    query: InboxListQuery = {},
+  ): Promise<InboxViewItem[]> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const blobs = host.get("blobs");
     const orgId = this.runtime.orgId();
-    const [focused, installations, prefs] = await Promise.all([
-      authority.listInbox(orgId),
+    const thread = parseThreadQuery(query.thread_id);
+    const storeQuery = inboxStoreQuery(query, thread);
+    const [records, installations, prefs] = await Promise.all([
+      authority.listInbox(orgId, storeQuery),
       authority.listInstallations(orgId),
-      authority.listConversationPrefs(orgId),
+      thread
+        ? authority
+            .getConversationPref(orgId, query.thread_id ?? "")
+            .then((pref) => (pref ? [pref] : []))
+        : authority.listConversationPrefs(orgId),
     ]);
     const prefsByThread = new Map(
       prefs.map((pref) => [pref.thread_id, pref] as const),
     );
-    const threadIds = new Set(
-      focused.map((item) =>
-        conversationId(item.event.source, item.event.external_id, item.event.id),
-      ),
-    );
-    const extras: Array<{ decision: ArrangementDecision; event: EventRecord }> = [];
-    if (threadIds.size > 0) {
-      const events = await authority.listEvents(orgId);
-      const seen = new Set(focused.map((item) => item.event.id));
-      for (const event of events) {
-        if (seen.has(event.id)) {
-          continue;
-        }
-        if (!threadIds.has(conversationId(event.source, event.external_id, event.id))) {
-          continue;
-        }
-        const decision = await authority.getDisposition(event.id);
-        if (!decision) {
-          continue;
-        }
-        extras.push({ decision, event });
-      }
-    }
+    const selected = selectInboxRecords(records, query);
+    const attachments = query.heads ? "meta" : "preview";
     return Promise.all(
-      [...focused, ...extras].map(async (item) => {
+      selected.map(async (item) => {
         const threadId = conversationId(
           item.event.source,
           item.event.external_id,
@@ -185,7 +222,12 @@ export class PersonalInboxService {
         );
         return decorateInboxItem(
           item,
-          await resolveInboxBody(authority, blobs, item.event.content_hash),
+          await resolveInboxBody(
+            authority,
+            blobs,
+            item.event.content_hash,
+            attachments,
+          ),
           installations,
           this.drivers,
           prefsByThread.get(threadId) ?? null,
@@ -226,15 +268,6 @@ export class PersonalInboxService {
   }
 }
 
-async function probeLocalService(url: string): Promise<boolean> {
-  try {
-    await fetch(url, { signal: AbortSignal.timeout(400) });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function decorateInboxItem(
   item: { decision: ArrangementDecision; event: EventRecord },
   body: Awaited<ReturnType<typeof resolveInboxBody>>,
@@ -258,11 +291,90 @@ function decorateInboxItem(
     kind: surface.kind,
     direction: surface.direction,
     can_send: drivers.canSend(installations, thread),
+    await_reply: drivers.awaitReply(installations, thread),
     thread_id: threadId,
     title: pref?.title ?? null,
     pinned: pref?.pinned === true,
     pref_updated_at: pref?.updated_at ?? null,
+    conversation_label: surface.conversation_label ?? null,
+    conversation_kind: surface.conversation_kind ?? null,
+    actor_label: surface.actor_label ?? null,
+    activity: surface.activity,
   };
+}
+
+function parseThreadQuery(
+  threadId: string | undefined,
+): ConversationThread | undefined {
+  if (!threadId?.trim()) {
+    return undefined;
+  }
+  try {
+    return parseConversationThread(threadId);
+  } catch {
+    return undefined;
+  }
+}
+
+export function selectInboxRecords<T extends { event: EventRecord }>(
+  items: T[],
+  query: InboxListQuery,
+): T[] {
+  let selected = items;
+  if (query.thread_id) {
+    selected = selected.filter(
+      (item) =>
+        conversationId(item.event.source, item.event.external_id, item.event.id) ===
+        query.thread_id,
+    );
+  }
+  if (query.since) {
+    selected = selected.filter((item) =>
+      isAfterCursor(item.event, query.since ?? "", query.since_id ?? ""),
+    );
+  }
+  if (query.heads) {
+    selected = latestByThread(selected);
+  }
+  return selected;
+}
+
+export function isAfterCursor(
+  event: { id: string; ingested_at: string },
+  since: string,
+  sinceId: string,
+): boolean {
+  if (event.ingested_at > since) {
+    return true;
+  }
+  return event.ingested_at === since && event.id > sinceId;
+}
+
+function inboxStoreQuery(
+  query: InboxListQuery,
+  thread?: ConversationThread,
+): InboxQuery {
+  if (query.heads) {
+    return thread
+      ? {
+          heads: true,
+          thread_ids: [`${thread.source}:${thread.target}`],
+        }
+      : { heads: true };
+  }
+  return {
+    source: thread?.source,
+    target: thread?.target,
+    since: query.since,
+    since_id: query.since_id,
+    siblings: true,
+  };
+}
+
+export function inboxFingerprint(
+  items: Array<{ event: { id: string; ingested_at: string } }>,
+): string {
+  return inboxDigest(items);
 }
 
 function normalizeTitle(value: string | null): string | null {

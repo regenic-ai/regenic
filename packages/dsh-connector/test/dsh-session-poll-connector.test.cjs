@@ -225,6 +225,152 @@ describe("DshSessionPollConnector", () => {
     assert.match(result.batch.records[1].content[0].text, /写入本地文件（推荐）/);
     assert.match(result.batch.records[1].content[0].text, /日报总结的范围是什么？/);
     assert.doesNotMatch(result.batch.records[1].content[0].text, /bash/);
+    assert.equal(surfaceActivity(result.batch.records[1]), "awaiting_user");
+  });
+
+  it("marks invisible labor as a working thread status", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "user/message",
+                seq: 1,
+                time: 1_724_208_002_000,
+                data: {
+                  content: [{ type: "text", text: "Continue" }],
+                  source: { kind: "user" },
+                },
+              },
+              {
+                type: "tool/call",
+                seq: 2,
+                time: 1_724_208_002_100,
+                data: {
+                  name: "bash",
+                  arguments: "{\"command\":\"ls\"}",
+                },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-work",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        record.type,
+        surfaceKind(record),
+        surfaceActivity(record),
+      ]),
+      [
+        ["sess-work:1", "message", "user", undefined],
+        ["sess-work:2", "thread_status", "system", "working"],
+      ],
+    );
+    assert.match(result.batch.records[1].content[0].text, /Still working/);
+  });
+
+  it("marks an in-progress chunk as working when it is the latest event", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "user/message",
+                seq: 3,
+                time: 1_724_208_002_200,
+                data: {
+                  content: [{ type: "text", text: "Continue" }],
+                  source: { kind: "user" },
+                },
+              },
+              {
+                type: "assistant/chunk",
+                seq: 4,
+                time: 1_724_208_002_300,
+                data: { chunk: { type: "text-delta", text: "Deep diving" } },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-chunk",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        record.type,
+        surfaceActivity(record),
+      ]),
+      [
+        ["sess-chunk:3", "message", undefined],
+        ["sess-chunk:4", "thread_status", "working"],
+      ],
+    );
+  });
+
+  it("does not add a working marker after a visible assistant reply", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "assistant/reasoning",
+                seq: 7,
+                time: 1_724_208_003_000,
+                data: {},
+              },
+              {
+                type: "assistant/message",
+                seq: 8,
+                time: 1_724_208_003_100,
+                data: {
+                  message: { content: [{ type: "text", text: "Here is the outline." }] },
+                },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-done",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        surfaceKind(record),
+        surfaceActivity(record),
+      ]),
+      [["sess-done:8", "assistant", undefined]],
+    );
   });
 
   it("only accepts events after the committed seq cursor", async () => {
@@ -390,10 +536,18 @@ function pagingHistoryClient(count, pageSize) {
 }
 
 function surfaceKind(record) {
+  return surfaceOf(record).kind;
+}
+
+function surfaceActivity(record) {
+  return surfaceOf(record).activity;
+}
+
+function surfaceOf(record) {
   const part = record.content.find(
     (entry) => entry.role === "metadata" && entry.media_type === SURFACE_MEDIA_TYPE,
   );
-  return JSON.parse(part.text).kind;
+  return JSON.parse(part.text);
 }
 
 function historyEvent(seq) {

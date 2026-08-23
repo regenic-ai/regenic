@@ -1,0 +1,622 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import type { FeishuMention } from "./feishu-message";
+
+export class FeishuApiError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "FeishuApiError";
+  }
+}
+
+export interface FeishuSpawnResult {
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+}
+
+export type FeishuSpawn = (input: {
+  command: string[];
+  env?: NodeJS.ProcessEnv;
+  timeout_ms: number;
+}) => Promise<FeishuSpawnResult>;
+
+export interface FeishuHistoryItem {
+  message_id: string;
+  msg_type: string;
+  create_time?: string;
+  deleted?: boolean;
+  chat_id?: string;
+  root_id?: string;
+  parent_id?: string;
+  sender?: {
+    id?: string;
+    sender_type?: string;
+    name?: string;
+  };
+  body?: {
+    content?: string;
+  };
+  mentions?: FeishuMention[];
+}
+
+export interface FeishuHistoryPage {
+  items: FeishuHistoryItem[];
+  has_more: boolean;
+  page_token?: string;
+}
+
+export interface FeishuListInput {
+  chat_id: string;
+  page_size: number;
+  page_token?: string;
+  start_time?: string;
+}
+
+export type FeishuChatMode = "group" | "p2p";
+
+export interface FeishuChat {
+  chat_id: string;
+  name?: string;
+  chat_mode?: FeishuChatMode;
+}
+
+export interface FeishuChatPage {
+  items: FeishuChat[];
+  has_more: boolean;
+  page_token?: string;
+}
+
+export interface FeishuImClient {
+  listMessages(input: FeishuListInput): Promise<FeishuHistoryPage>;
+  listChats?(input: {
+    page_size: number;
+    page_token?: string;
+    types?: FeishuChatMode[];
+  }): Promise<FeishuChatPage>;
+  sendText(input: {
+    chat_id: string;
+    text: string;
+    uuid?: string;
+  }): Promise<{ message_id: string }>;
+  resolveUserNames?(ids: string[]): Promise<Map<string, string>>;
+}
+
+export interface LarkCliClientOptions {
+  command?: string;
+  env?: NodeJS.ProcessEnv;
+  spawn?: FeishuSpawn;
+  timeout_ms?: number;
+}
+
+export class LarkCliClient implements FeishuImClient {
+  private readonly command: string;
+  private readonly timeoutMs: number;
+  private readonly spawn: FeishuSpawn;
+
+  constructor(private readonly options: LarkCliClientOptions = {}) {
+    this.command = resolveLarkCommand(
+      options.command ?? options.env?.REGENIC_LARK_CLI ?? process.env.REGENIC_LARK_CLI,
+    );
+    this.timeoutMs = options.timeout_ms ?? 60_000;
+    if (!Number.isInteger(this.timeoutMs) || this.timeoutMs < 1) {
+      throw new Error("lark-cli timeout_ms must be a positive integer");
+    }
+    this.spawn = options.spawn ?? spawnLarkProcess;
+  }
+
+  async listMessages(input: FeishuListInput): Promise<FeishuHistoryPage> {
+    const params: Record<string, string | number> = {
+      container_id_type: "chat",
+      container_id: input.chat_id,
+      sort_type: "ByCreateTimeAsc",
+      page_size: input.page_size,
+    };
+    if (input.page_token) {
+      params.page_token = input.page_token;
+    }
+    if (input.start_time) {
+      params.start_time = input.start_time;
+    }
+    const payload = await this.request({
+      method: "GET",
+      path: "/open-apis/im/v1/messages",
+      params,
+    });
+    return parseHistoryPage(payload);
+  }
+
+  async listChats(input: {
+    page_size: number;
+    page_token?: string;
+    types?: FeishuChatMode[];
+  }): Promise<FeishuChatPage> {
+    const types = normalizeChatTypes(input.types);
+    const argv = [
+      this.command,
+      "im",
+      "+chat-list",
+      "--as",
+      "user",
+      "--types",
+      types.join(","),
+      "--page-size",
+      String(input.page_size),
+      "--format",
+      "json",
+    ];
+    if (input.page_token) {
+      argv.push("--page-token", input.page_token);
+    }
+    const result = await this.spawn({
+      command: argv,
+      env: this.options.env,
+      timeout_ms: this.timeoutMs,
+    });
+    return parseChatPage(unwrapLarkCli(result));
+  }
+
+  async listAllChats(
+    maxPages = 10,
+    types?: FeishuChatMode[],
+  ): Promise<FeishuChat[]> {
+    const key = normalizeChatTypes(types).join(",");
+    const now = Date.now();
+    const cached = chatListCache.get(key);
+    if (cached && now - cached.at < CHAT_LIST_TTL_MS) {
+      return cached.chats;
+    }
+    const chats: FeishuChat[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const result = await this.listChats({
+        page_size: 50,
+        page_token: pageToken,
+        types,
+      });
+      chats.push(...result.items);
+      if (!result.has_more || !result.page_token) {
+        break;
+      }
+      pageToken = result.page_token;
+    }
+    chatListCache.set(key, { at: now, chats });
+    return chats;
+  }
+
+  async sendText(input: {
+    chat_id: string;
+    text: string;
+    uuid?: string;
+  }): Promise<{ message_id: string }> {
+    const payload = await this.request({
+      method: "POST",
+      path: "/open-apis/im/v1/messages",
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: input.chat_id,
+        msg_type: "text",
+        content: JSON.stringify({ text: input.text }),
+        ...(input.uuid ? { uuid: input.uuid } : {}),
+      },
+    });
+    const messageId = readMessageId(payload);
+    if (!messageId) {
+      throw new FeishuApiError("lark-cli send did not return message_id");
+    }
+    return { message_id: messageId };
+  }
+
+  async resolveUserNames(ids: string[]): Promise<Map<string, string>> {
+    const unique = [
+      ...new Set(
+        ids
+          .map((id) => id.trim())
+          .filter((id) => id.length > 0 && id.toLowerCase() !== "all" && id.toLowerCase() !== "@_all"),
+      ),
+    ];
+    const names = new Map<string, string>();
+    const missing: string[] = [];
+    const now = Date.now();
+    for (const id of unique) {
+      const cached = userNameCache.get(id);
+      if (cached && now - cached.at < USER_NAME_TTL_MS) {
+        names.set(id, cached.name);
+      } else {
+        missing.push(id);
+      }
+    }
+    for (let index = 0; index < missing.length; index += 50) {
+      const batch = missing.slice(index, index + 50);
+      const lookedUp = await this.lookupUserNames(batch);
+      for (const [id, name] of lookedUp) {
+        userNameCache.set(id, { name, at: now });
+        names.set(id, name);
+      }
+    }
+    return names;
+  }
+
+  async authStatus(): Promise<boolean> {
+    const result = await this.spawn({
+      command: [this.command, "auth", "status", "--json"],
+      env: this.options.env,
+      timeout_ms: Math.min(this.timeoutMs, 2_000),
+    });
+    return larkCliUserReady(result.stdout, result.exit_code);
+  }
+
+  private async request(input: {
+    method: "GET" | "POST";
+    path: string;
+    params?: Record<string, string | number>;
+    data?: Record<string, unknown>;
+  }): Promise<unknown> {
+    const argv = [
+      this.command,
+      "api",
+      input.method,
+      input.path,
+      "--as",
+      "user",
+      "--format",
+      "json",
+    ];
+    if (input.params && Object.keys(input.params).length > 0) {
+      argv.push("--params", JSON.stringify(input.params));
+    }
+    if (input.data) {
+      argv.push("--data", JSON.stringify(input.data));
+    }
+    const result = await this.spawn({
+      command: argv,
+      env: this.options.env,
+      timeout_ms: this.timeoutMs,
+    });
+    return unwrapLarkCli(result);
+  }
+
+  private async lookupUserNames(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) {
+      return new Map();
+    }
+    try {
+      const result = await this.spawn({
+        command: [
+          this.command,
+          "contact",
+          "+search-user",
+          "--as",
+          "user",
+          "--user-ids",
+          ids.join(","),
+          "--format",
+          "json",
+        ],
+        env: this.options.env,
+        timeout_ms: Math.min(this.timeoutMs, 15_000),
+      });
+      return parseUserNamePage(unwrapLarkCli(result));
+    } catch {
+      return new Map();
+    }
+  }
+}
+
+export function resolveLarkCommand(configured?: string): string {
+  const command = configured?.trim() || "lark-cli";
+  if (isAbsolute(command) && !existsSync(command)) {
+    return "lark-cli";
+  }
+  return command;
+}
+
+export function unwrapLarkCli(result: FeishuSpawnResult): unknown {
+  const stdout = result.stdout.trim();
+  let parsed: unknown;
+  if (stdout.length > 0) {
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      throw new FeishuApiError(
+        result.stderr.trim() || "lark-cli returned invalid JSON",
+      );
+    }
+  }
+  if (isObject(parsed) && parsed.ok === false) {
+    const error = isObject(parsed.error) ? parsed.error : undefined;
+    throw new FeishuApiError(
+      stringValue(error?.message) ??
+        (result.stderr.trim() || "lark-cli request failed"),
+      stringValue(error?.subtype) ??
+        (typeof error?.code === "number" ? String(error.code) : undefined),
+    );
+  }
+  if (result.exit_code !== 0) {
+    throw new FeishuApiError(
+      result.stderr.trim() || `lark-cli exited with code ${result.exit_code}`,
+    );
+  }
+  if (isObject(parsed) && typeof parsed.code === "number" && parsed.code !== 0) {
+    throw new FeishuApiError(
+      stringValue(parsed.msg) ?? `Feishu API error ${parsed.code}`,
+      String(parsed.code),
+    );
+  }
+  if (isObject(parsed) && "data" in parsed) {
+    return parsed.data;
+  }
+  return parsed;
+}
+
+export function parseChatPage(value: unknown): FeishuChatPage {
+  const root = isObject(value) && isObject(value.data) ? value.data : value;
+  if (!isObject(root)) {
+    throw new FeishuApiError("Feishu chat list response is invalid");
+  }
+  const raw = Array.isArray(root.items)
+    ? root.items
+    : Array.isArray(root.chats)
+      ? root.chats
+      : [];
+  return {
+    items: raw.flatMap((item) => parseChat(item)),
+    has_more: root.has_more === true,
+    page_token: stringValue(root.page_token),
+  };
+}
+
+function parseChat(value: unknown): FeishuChat[] {
+  if (!isObject(value) || typeof value.chat_id !== "string") {
+    return [];
+  }
+  const status = stringValue(value.chat_status);
+  if (status && status !== "normal") {
+    return [];
+  }
+  const chatMode = stringValue(value.chat_mode);
+  return [
+    {
+      chat_id: value.chat_id,
+      name: stringValue(value.name),
+      chat_mode:
+        chatMode === "p2p" || chatMode === "group" ? chatMode : undefined,
+    },
+  ];
+}
+
+const USER_NAME_TTL_MS = 10 * 60 * 1000;
+const CHAT_LIST_TTL_MS = 30_000;
+const userNameCache = new Map<string, { name: string; at: number }>();
+const chatListCache = new Map<string, { at: number; chats: FeishuChat[] }>();
+
+export function resetFeishuUserNameCache(): void {
+  userNameCache.clear();
+}
+
+export function resetFeishuChatListCache(): void {
+  chatListCache.clear();
+}
+
+export function parseUserNamePage(value: unknown): Map<string, string> {
+  const root = isObject(value) && isObject(value.data) ? value.data : value;
+  const names = new Map<string, string>();
+  if (!isObject(root)) {
+    return names;
+  }
+  const raw = Array.isArray(root.users)
+    ? root.users
+    : Array.isArray(root.items)
+      ? root.items
+      : [];
+  for (const item of raw) {
+    if (!isObject(item)) {
+      continue;
+    }
+    const id =
+      stringValue(item.open_id) ??
+      stringValue(item.user_id) ??
+      stringValue(item.id);
+    const name =
+      stringValue(item.name) ??
+      stringValue(item.user_name) ??
+      localizedName(item.localized_name);
+    if (id && name) {
+      names.set(id, name);
+    }
+  }
+  return names;
+}
+
+function localizedName(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return stringValue(value);
+  }
+  if (!isObject(value)) {
+    return undefined;
+  }
+  return (
+    stringValue(value.zh_cn) ??
+    stringValue(value.en_us) ??
+    stringValue(value.name)
+  );
+}
+
+function senderName(sender: Record<string, unknown>): string | undefined {
+  return (
+    stringValue(sender.name) ??
+    stringValue(sender.sender_name) ??
+    localizedName(sender.localized_name)
+  );
+}
+
+export function feishuChatOptionLabel(chat: FeishuChat): string {
+  const kind = chat.chat_mode === "p2p" ? "Direct" : "Group";
+  return chat.name ? `${kind} · ${chat.name}` : `${kind} · ${chat.chat_id}`;
+}
+
+function normalizeChatTypes(types?: FeishuChatMode[]): FeishuChatMode[] {
+  const selected = new Set(
+    (types ?? []).filter((type) => type === "group" || type === "p2p"),
+  );
+  if (selected.size === 0) {
+    return ["group", "p2p"];
+  }
+  return (["group", "p2p"] as const).filter((type) => selected.has(type));
+}
+
+export function parseHistoryPage(value: unknown): FeishuHistoryPage {
+  const root = isObject(value) && isObject(value.data) ? value.data : value;
+  if (!isObject(root)) {
+    throw new FeishuApiError("Feishu history response is invalid");
+  }
+  const items = Array.isArray(root.items)
+    ? root.items.flatMap((item) => parseHistoryItem(item))
+    : [];
+  return {
+    items,
+    has_more: root.has_more === true,
+    page_token: stringValue(root.page_token),
+  };
+}
+
+export function larkCliUserReady(stdout: string, exitCode: number): boolean {
+  if (exitCode !== 0) {
+    return false;
+  }
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!isObject(parsed) || parsed.ok === false) {
+      return false;
+    }
+    if (parsed.identity === "user") {
+      return true;
+    }
+    if (isObject(parsed.identities) && isObject(parsed.identities.user)) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function parseHistoryItem(value: unknown): FeishuHistoryItem[] {
+  if (!isObject(value) || typeof value.message_id !== "string") {
+    return [];
+  }
+  return [
+    {
+      message_id: value.message_id,
+      msg_type: stringValue(value.msg_type) ?? "",
+      create_time: stringValue(value.create_time),
+      deleted: value.deleted === true,
+      chat_id: stringValue(value.chat_id),
+      root_id: stringValue(value.root_id),
+      parent_id: stringValue(value.parent_id),
+      sender: isObject(value.sender)
+        ? {
+            id: stringValue(value.sender.id),
+            sender_type: stringValue(value.sender.sender_type),
+            name: senderName(value.sender),
+          }
+        : undefined,
+      body: isObject(value.body)
+        ? { content: stringValue(value.body.content) }
+        : undefined,
+      mentions: parseMentions(value.mentions),
+    },
+  ];
+}
+
+function parseMentions(value: unknown): FeishuMention[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const mentions = value.flatMap((item) => {
+    if (!isObject(item)) {
+      return [];
+    }
+    const mention: FeishuMention = {
+      key: stringValue(item.key),
+      id: stringValue(item.id),
+      name: stringValue(item.name),
+    };
+    if (!mention.key && !mention.id && !mention.name) {
+      return [];
+    }
+    return [mention];
+  });
+  return mentions.length > 0 ? mentions : undefined;
+}
+
+function readMessageId(value: unknown): string | undefined {
+  if (isObject(value) && typeof value.message_id === "string") {
+    return value.message_id;
+  }
+  if (isObject(value) && isObject(value.data) && typeof value.data.message_id === "string") {
+    return value.data.message_id;
+  }
+  return undefined;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+export async function spawnLarkProcess(input: {
+  command: string[];
+  env?: NodeJS.ProcessEnv;
+  timeout_ms: number;
+}): Promise<FeishuSpawnResult> {
+  const [bin, ...args] = input.command;
+  if (!bin) {
+    throw new FeishuApiError("lark-cli command is missing");
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, {
+      env: { ...process.env, ...input.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout.push(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr.push(chunk);
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new FeishuApiError(`lark-cli timed out after ${input.timeout_ms}ms`));
+    }, input.timeout_ms);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(
+        new FeishuApiError(
+          `Unable to start lark-cli (is it on PATH?): ${error.message}`,
+        ),
+      );
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+        exit_code: code ?? 1,
+      });
+    });
+  });
+}

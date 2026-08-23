@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 4;
+export const LATEST_SCHEMA_VERSION = 5;
 
 export const MIGRATIONS = [
   {
@@ -137,6 +137,13 @@ export const MIGRATIONS = [
 
       CREATE INDEX conversation_prefs_org_idx
         ON conversation_prefs (org_id, pinned, updated_at);
+    `,
+  },
+  {
+    version: 5,
+    sql: `
+      CREATE INDEX events_org_ingested_idx
+        ON events (org_id, ingested_at, id);
     `,
   },
 ] as const;

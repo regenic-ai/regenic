@@ -224,7 +224,7 @@ button {
 }
 
 .list-head {
-  padding: 14px 16px 8px;
+  padding: 14px 14px 8px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
@@ -255,6 +255,66 @@ button {
   display: grid;
   gap: 6px;
   padding: 0 14px 10px;
+}
+
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 10px;
+  min-width: 0;
+}
+
+.list-toolbar .filter-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.list-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.list-pin {
+  width: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.list-new-wrap {
+  position: relative;
+}
+
+.list-new-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 4;
+  min-width: 112px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.list-new-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.list-new-menu button:hover {
+  background: var(--hover);
 }
 
 .filter-row {
@@ -362,6 +422,13 @@ button {
   font-size: 11px;
 }
 
+.item-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .item-time {
   flex: 0 0 auto;
   color: var(--muted);
@@ -423,6 +490,19 @@ button {
   padding: 0 8px;
   font-size: 11px;
   line-height: 22px;
+}
+
+.kind-tag {
+  flex: 0 0 auto;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 16px;
 }
 
 .thread-title-row {
@@ -505,6 +585,7 @@ button {
   min-height: 0;
   overflow: auto;
   padding: 16px 24px 20px;
+  overflow-anchor: none;
 }
 
 .thread-head h1 {
@@ -549,6 +630,28 @@ button {
   gap: 18px;
   width: 100%;
   min-width: 0;
+}
+
+.thread-messages.is-windowed {
+  display: block;
+  position: relative;
+  gap: 0;
+}
+
+.thread-window-item {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  padding-bottom: 18px;
+  box-sizing: border-box;
+}
+
+.thread-window-item.is-follow {
+  padding-bottom: 10px;
+}
+
+.thread-window-item.is-follow .chat-row {
+  margin-top: 0;
 }
 
 .chat-row {
@@ -849,6 +952,17 @@ button {
   flex-shrink: 0;
   background: var(--bg);
   padding: 8px 16px 14px;
+}
+
+.thread-activity {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--warning-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .composer {
@@ -1195,6 +1309,14 @@ button {
   padding-left: 12px;
 }
 
+.install-block {
+  border-top: 1px solid var(--line);
+}
+
+.install-block .install {
+  border-top: 0;
+}
+
 .install-form {
   display: grid;
   gap: 10px;
@@ -1281,6 +1403,85 @@ button {
   color: var(--text);
   background: var(--bg);
   font: inherit;
+}
+
+.field-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.check-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.check-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.check-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(10 10 10 / 62%);
+}
+
+.dialog {
+  width: min(560px, 100%);
+  max-height: min(84vh, 720px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 45%);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 0;
+}
+
+.dialog-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.dialog .install-form {
+  padding: 12px 16px 16px;
+}
+
+.dialog .check-list {
+  max-height: 320px;
+}
+
+.check-item input {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
 }
 
 .ghost.danger {
