@@ -52,6 +52,7 @@ export const slackChannelDriver: ChannelDriver = {
       sync: installation.status === "enabled",
       reply: false,
       create: false,
+      list_title: "conversation",
     };
   },
 
@@ -83,6 +84,21 @@ export const slackChannelDriver: ChannelDriver = {
 
   outboundId(thread: ConversationThread) {
     return `${thread.target}:out:local`;
+  },
+
+  async resolveConversationLabels(installation, threads) {
+    const channelId = configString(installation.config, "channel_id");
+    const channelName = configString(installation.config, "channel_name");
+    const labels = new Map<string, string>();
+    if (!channelId || !channelName) {
+      return labels;
+    }
+    for (const thread of threads) {
+      if (thread.source === "slack" && thread.target === channelId) {
+        labels.set(`slack:${channelId}`, channelName);
+      }
+    }
+    return labels;
   },
 };
 

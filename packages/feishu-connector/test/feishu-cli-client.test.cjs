@@ -14,6 +14,7 @@ const {
   probeLarkCli,
   probeLarkCliAuth,
   resetFeishuChatListCache,
+  resetFeishuUserNameCache,
   resetLarkCliProbeCache,
   resolveLarkCommand,
   unwrapLarkCli,
@@ -140,15 +141,85 @@ describe("LarkCliClient", () => {
       chats: [
         { chat_id: "oc_ok", name: "Live", chat_mode: "group", chat_status: "normal" },
         { chat_id: "oc_dm", name: "Ada", chat_mode: "p2p", chat_status: "normal" },
+        {
+          chat_id: "oc_loc",
+          localized_name: { zh_cn: "工程" },
+          chat_mode: "group",
+          chat_status: "normal",
+        },
+        {
+          chat_id: "oc_bare",
+          chat_mode: "p2p",
+          p2p_target_id: "ou_9",
+          chat_status: "normal",
+        },
         { chat_id: "oc_dead", name: "Gone", chat_status: "dissolved" },
       ],
     });
     assert.deepEqual(page.items, [
       { chat_id: "oc_ok", name: "Live", chat_mode: "group" },
       { chat_id: "oc_dm", name: "Ada", chat_mode: "p2p" },
+      { chat_id: "oc_loc", name: "工程", chat_mode: "group" },
+      {
+        chat_id: "oc_bare",
+        name: undefined,
+        chat_mode: "p2p",
+        p2p_target_id: "ou_9",
+      },
     ]);
     assert.equal(feishuChatOptionLabel(page.items[0]), "Group · Live");
     assert.equal(feishuChatOptionLabel(page.items[1]), "Direct · Ada");
+  });
+
+  it("fills a nameless p2p chat from p2p_target_id", async () => {
+    resetFeishuChatListCache();
+    resetFeishuUserNameCache();
+    const calls = [];
+    const client = new LarkCliClient({
+      async spawn(input) {
+        calls.push(input);
+        if (input.command.includes("+search-user")) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: { users: [{ open_id: "ou_9", name: "Ben" }] },
+            }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              chats: [
+                {
+                  chat_id: "oc_bare",
+                  chat_mode: "p2p",
+                  p2p_target_id: "ou_9",
+                  chat_status: "normal",
+                },
+              ],
+              has_more: false,
+            },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const chats = await client.listAllChats();
+    assert.equal(calls.some((call) => call.command.includes("+search-user")), true);
+    assert.deepEqual(chats, [
+      {
+        chat_id: "oc_bare",
+        name: "Ben",
+        chat_mode: "p2p",
+        p2p_target_id: "ou_9",
+      },
+    ]);
+    resetFeishuChatListCache();
+    resetFeishuUserNameCache();
   });
 
   it("resolves sender names through contact +search-user", async () => {

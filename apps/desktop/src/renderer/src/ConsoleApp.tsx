@@ -41,12 +41,12 @@ import {
 } from "./inbox";
 import {
   conversationKindLabel,
-  firstLine,
   messageRole,
   readingMessages,
   sameUtterance,
   threadActivityCopy,
   threadActivityOf,
+  threadPreview,
   threadTitle,
 } from "./message-view";
 import {
@@ -548,6 +548,7 @@ function mergeDraftThreads(
       label: "New conversation",
       can_send: draft.can_send,
       await_reply: draft.await_reply === true,
+      list_title: draft.list_title === "conversation" ? "conversation" : "face",
       title: draft.title ?? null,
       conversation_label: null,
       conversation_kind: null,
@@ -707,9 +708,7 @@ function InboxWorkspace({
                     onSave={(title) => onRename(thread, title)}
                   />
                   <div className="item-reasons">
-                    {threadActivityCopy(threadActivityOf(thread)) ||
-                      firstLine(latest?.body_text, 96) ||
-                      thread.label}
+                    {threadPreview(thread)}
                   </div>
                 </div>
               </div>

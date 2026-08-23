@@ -711,6 +711,7 @@ describe("personal /v1/me", () => {
       assert.equal(Boolean(slackItem), true);
       assert.equal(slackItem.can_send, false);
       assert.equal(slackItem.await_reply, false);
+      assert.equal(slackItem.list_title, "conversation");
 
       const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
         method: "POST",
@@ -871,6 +872,8 @@ describe("personal /v1/me", () => {
       assert.equal(sessionB.can_send, true);
       assert.equal(sessionA.await_reply, true);
       assert.equal(sessionB.await_reply, true);
+      assert.equal(sessionA.list_title, "face");
+      assert.equal(sessionB.list_title, "face");
 
       const synced = await fetch(
         `${origin}/v1/me/connectors/${installation.id}/sync`,
@@ -976,6 +979,7 @@ describe("personal /v1/me", () => {
       assert.equal(openedBody.channel_label, "DSH");
       assert.equal(openedBody.can_send, true);
       assert.equal(openedBody.await_reply, true);
+      assert.equal(openedBody.list_title, "face");
       assert.deepEqual(dsh.created, ["created-1"]);
 
       const empty = await fetch(`${origin}/v1/me/replies`, {

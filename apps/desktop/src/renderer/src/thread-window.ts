@@ -12,7 +12,7 @@ export function itemRevision(item: InboxViewItem): string {
     item.title ?? ""
   }\t${item.pinned ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
     item.conversation_label ?? ""
-  }\t${body}\t${item.attachments?.length ?? 0}`;
+  }\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}`;
 }
 
 export function inboxRevision(items: InboxViewItem[]): string {
@@ -102,6 +102,7 @@ export function sameInboxProps(
     previous.kind !== next.kind ||
     previous.can_send !== next.can_send ||
     previous.await_reply !== next.await_reply ||
+    previous.list_title !== next.list_title ||
     previous.activity !== next.activity
   ) {
     return false;

@@ -5,7 +5,7 @@ import {
   channelLabel,
   conversationId,
   inboxDigest,
-  latestByThread,
+  headsByThread,
   parseConversationThread,
   resolveMessageSurface,
   type ArrangementDecision,
@@ -44,6 +44,7 @@ export interface InboxViewItem {
   direction: MessageDirection;
   can_send: boolean;
   await_reply: boolean;
+  list_title: "conversation" | "face";
   thread_id: string;
   title: string | null;
   pinned: boolean;
@@ -122,13 +123,14 @@ export class PersonalInboxService {
       authority.listInstallations(orgId),
       authority.getConversationPref(orgId, threadId),
     ]);
-    return decorateInboxItem(
-      { decision, event },
-      await resolveInboxBody(authority, blobs, event.content_hash),
+    const body = await resolveInboxBody(authority, blobs, event.content_hash);
+    const item = { decision, event };
+    const labels = await conversationLabelsFor(
+      [{ item, body }],
       installations,
       this.drivers,
-      pref,
     );
+    return decorateInboxItem(item, body, installations, this.drivers, pref, labels);
   }
 
   async getEngine(query: EngineQuery = {}): Promise<PersonalEngineView> {
@@ -213,26 +215,39 @@ export class PersonalInboxService {
     );
     const selected = selectInboxRecords(records, query);
     const attachments = query.heads ? "meta" : "preview";
-    return Promise.all(
+    const resolved = await Promise.all(
       selected.map(async (item) => {
         const threadId = conversationId(
           item.event.source,
           item.event.external_id,
           item.event.id,
         );
-        return decorateInboxItem(
+        return {
           item,
-          await resolveInboxBody(
+          threadId,
+          body: await resolveInboxBody(
             authority,
             blobs,
             item.event.content_hash,
             attachments,
           ),
-          installations,
-          this.drivers,
-          prefsByThread.get(threadId) ?? null,
-        );
+        };
       }),
+    );
+    const labels = await conversationLabelsFor(
+      resolved,
+      installations,
+      this.drivers,
+    );
+    return resolved.map(({ item, threadId, body }) =>
+      decorateInboxItem(
+        item,
+        body,
+        installations,
+        this.drivers,
+        prefsByThread.get(threadId) ?? null,
+        labels,
+      ),
     );
   }
 
@@ -274,13 +289,9 @@ function decorateInboxItem(
   installations: ConnectorInstallation[],
   drivers: ChannelDriverRegistry,
   pref: ConversationPref | null,
+  labels: ReadonlyMap<string, string> = new Map(),
 ): InboxViewItem {
-  const surface = resolveMessageSurface({
-    source: item.event.source,
-    external_id: item.event.external_id,
-    body_text: body.body_text,
-    stored: body.surface,
-  });
+  const surface = messageSurfaceOf(item.event, body);
   const thread = threadOf(item.event);
   const threadId = `${thread.source}:${thread.target}`;
   return {
@@ -292,15 +303,47 @@ function decorateInboxItem(
     direction: surface.direction,
     can_send: drivers.canSend(installations, thread),
     await_reply: drivers.awaitReply(installations, thread),
+    list_title: drivers.listTitle(installations, thread),
     thread_id: threadId,
     title: pref?.title ?? null,
     pinned: pref?.pinned === true,
     pref_updated_at: pref?.updated_at ?? null,
-    conversation_label: surface.conversation_label ?? null,
+    conversation_label:
+      surface.conversation_label ?? labels.get(threadId) ?? null,
     conversation_kind: surface.conversation_kind ?? null,
     actor_label: surface.actor_label ?? null,
     activity: surface.activity,
   };
+}
+
+async function conversationLabelsFor(
+  items: Array<{
+    item: { event: EventRecord };
+    body: Awaited<ReturnType<typeof resolveInboxBody>>;
+  }>,
+  installations: ConnectorInstallation[],
+  drivers: ChannelDriverRegistry,
+): Promise<Map<string, string>> {
+  const missing = items.flatMap(({ item, body }) => {
+    const surface = messageSurfaceOf(item.event, body);
+    return surface.conversation_label ? [] : [threadOf(item.event)];
+  });
+  if (missing.length === 0) {
+    return new Map();
+  }
+  return drivers.resolveConversationLabels(installations, missing);
+}
+
+function messageSurfaceOf(
+  event: EventRecord,
+  body: Awaited<ReturnType<typeof resolveInboxBody>>,
+) {
+  return resolveMessageSurface({
+    source: event.source,
+    external_id: event.external_id,
+    body_text: body.body_text,
+    stored: body.surface,
+  });
 }
 
 function parseThreadQuery(
@@ -334,7 +377,7 @@ export function selectInboxRecords<T extends { event: EventRecord }>(
     );
   }
   if (query.heads) {
-    selected = latestByThread(selected);
+    selected = headsByThread(selected);
   }
   return selected;
 }

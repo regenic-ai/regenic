@@ -54,6 +54,12 @@ export function threadActivityOf(
     return undefined;
   }
   if (latest.activity) {
+    if (
+      latest.activity === "working" &&
+      !isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)
+    ) {
+      return undefined;
+    }
     return latest.activity;
   }
   if (
@@ -121,6 +127,11 @@ export function threadTitle(thread: InboxThread): string {
   if (custom) {
     return custom;
   }
+  if (thread.list_title === "conversation") {
+    return (
+      thread.conversation_label?.replace(/\s+/g, " ").trim() || thread.label
+    );
+  }
   const conversation = thread.conversation_label?.replace(/\s+/g, " ").trim();
   if (conversation) {
     return conversation;
@@ -128,10 +139,26 @@ export function threadTitle(thread: InboxThread): string {
   if (thread.messages.length === 0) {
     return thread.label;
   }
-  return firstLine(threadFace(thread).body_text, 120) || thread.label;
+  const face = threadFace(thread);
+  if (face.activity === "working") {
+    return thread.label;
+  }
+  return firstLine(face.body_text, 120) || thread.label;
 }
 
-function threadFace(thread: InboxThread): InboxViewItem {
+export function threadPreview(thread: InboxThread): string {
+  const activity = threadActivityCopy(threadActivityOf(thread));
+  if (activity) {
+    return activity;
+  }
+  const face = threadFace(thread);
+  if (face && face.activity !== "working") {
+    return firstLine(face.body_text, 96) || thread.label;
+  }
+  return thread.label;
+}
+
+export function threadFace(thread: InboxThread): InboxViewItem {
   const visible = thread.messages.filter((item) => item.activity !== "working");
   const pool = visible.length > 0 ? visible : thread.messages;
   const user = pool.find((item) => messageRole(item) === "user");

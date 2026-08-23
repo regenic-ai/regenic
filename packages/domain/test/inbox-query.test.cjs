@@ -3,7 +3,9 @@ const { describe, it } = require("node:test");
 const {
   escapeLikeLiteral,
   formatInboxDigest,
+  headsByThread,
   inboxDigest,
+  selectInboxItems,
   summarizeInboxItems,
   threadExternalIdLike,
 } = require("../dist");
@@ -64,5 +66,91 @@ describe("inbox query helpers", () => {
   it("escapes LIKE wildcards in a thread target prefix", () => {
     assert.equal(escapeLikeLiteral("a_b%c\\d"), "a\\_b\\%c\\\\d");
     assert.equal(threadExternalIdLike("a_b"), "a\\_b:%");
+  });
+
+  it("keeps the last visible message as the head and rides a newer working marker", () => {
+    const visible = {
+      decision: {
+        disposition: "current_work",
+        reason_codes: ["actionable"],
+      },
+      event: {
+        id: "e1",
+        source: "dsh",
+        external_id: "session-x:1",
+        occurred_at: "2026-08-22T10:43:00.000Z",
+        ingested_at: "2026-08-22T10:43:00.000Z",
+      },
+    };
+    const working = {
+      decision: {
+        disposition: "current_work",
+        reason_codes: ["thread_status"],
+      },
+      event: {
+        id: "e2",
+        source: "dsh",
+        external_id: "session-x:2",
+        occurred_at: "2026-08-22T10:44:00.000Z",
+        ingested_at: "2026-08-22T10:44:00.000Z",
+      },
+    };
+    const other = {
+      decision: {
+        disposition: "current_work",
+        reason_codes: ["actionable"],
+      },
+      event: {
+        id: "e3",
+        source: "dsh",
+        external_id: "session-z:1",
+        occurred_at: "2026-08-22T12:00:00.000Z",
+        ingested_at: "2026-08-22T12:00:00.000Z",
+      },
+    };
+    const heads = headsByThread([visible, working, other]);
+    assert.deepEqual(
+      heads.map((item) => item.event.id).sort(),
+      ["e1", "e2", "e3"],
+    );
+    const selected = selectInboxItems([visible, working, other], { heads: true });
+    assert.deepEqual(
+      selected.map((item) => item.event.id).sort(),
+      ["e1", "e2", "e3"],
+    );
+  });
+
+  it("uses a sibling outside current work as the list face", () => {
+    const noise = {
+      decision: {
+        disposition: "outside_current_work",
+        reason_codes: ["noise"],
+      },
+      event: {
+        id: "e1",
+        source: "dsh",
+        external_id: "session-x:1",
+        occurred_at: "2026-08-22T10:43:00.000Z",
+        ingested_at: "2026-08-22T10:43:00.000Z",
+      },
+    };
+    const working = {
+      decision: {
+        disposition: "current_work",
+        reason_codes: ["thread_status"],
+      },
+      event: {
+        id: "e2",
+        source: "dsh",
+        external_id: "session-x:2",
+        occurred_at: "2026-08-22T10:44:00.000Z",
+        ingested_at: "2026-08-22T10:44:00.000Z",
+      },
+    };
+    const heads = selectInboxItems([noise, working], { heads: true });
+    assert.deepEqual(
+      heads.map((item) => item.event.id).sort(),
+      ["e1", "e2"],
+    );
   });
 });

@@ -118,9 +118,10 @@ export class MemoryAuthorityStore implements AuthorityStore {
   }
 
   async listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]> {
-    const items = query?.siblings
-      ? this.decidedInbox(orgId, query)
-      : this.currentWorkInbox(orgId);
+    const items =
+      query?.siblings || query?.heads
+        ? this.decidedInbox(orgId, query)
+        : this.currentWorkInbox(orgId);
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
       if (byTime !== 0) {

@@ -43,6 +43,7 @@ describe("slackChannelPlugin", () => {
       sync: true,
       reply: false,
       create: false,
+      list_title: "conversation",
     });
     await assert.rejects(
       () => slackChannelDriver.createThread(installation, {}, process.env),

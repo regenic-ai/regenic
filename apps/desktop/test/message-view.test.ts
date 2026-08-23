@@ -5,6 +5,7 @@ import {
   readingMessages,
   threadActivityCopy,
   threadActivityOf,
+  threadPreview,
   threadTitle,
 } from "../src/renderer/src/message-view.ts";
 import type { InboxViewItem, ThreadActivity } from "../src/renderer/src/types.ts";
@@ -134,6 +135,7 @@ describe("thread activity", () => {
     ]);
     assert.equal(threadActivityOf(waiting), "awaiting_user");
     assert.match(threadActivityCopy(threadActivityOf(waiting)) ?? "", /original channel/);
+    const now = Date.parse("2026-08-23T12:05:00.000Z");
     const working = thread([
       item({
         id: "work-1",
@@ -144,8 +146,46 @@ describe("thread activity", () => {
         activity: "working",
       }),
     ]);
-    assert.equal(threadActivityOf(working), "working");
-    assert.match(threadActivityCopy(threadActivityOf(working)) ?? "", /still working/i);
+    assert.equal(threadActivityOf(working, now), "working");
+    assert.match(threadActivityCopy(threadActivityOf(working, now)) ?? "", /still working/i);
+  });
+
+  it("does not keep a stale working marker as current activity", () => {
+    const now = Date.parse("2026-08-23T13:00:00.000Z");
+    const stale = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:8",
+        text: "只用一句话回复: pong",
+      }),
+      item({
+        id: "work-1",
+        external_id: "session-1:9",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+        occurred_at: "2026-08-22T10:44:00.000Z",
+      }),
+    ]);
+    assert.equal(threadActivityOf(stale, now), undefined);
+    assert.equal(threadTitle(stale), "只用一句话回复: pong");
+    assert.equal(threadPreview(stale), "只用一句话回复: pong");
+  });
+
+  it("does not title a heads-only working row as Still working", () => {
+    const only = thread([
+      item({
+        id: "work-1",
+        external_id: "session-1:9",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+      }),
+    ]);
+    assert.equal(threadTitle(only), "session");
+    assert.equal(threadPreview(only), "session");
   });
 
   it("treats a recent outbound as waiting only when the connector awaits a reply", () => {
@@ -180,6 +220,53 @@ describe("thread activity", () => {
       }),
     ]);
     assert.equal(threadActivityOf(stale, now), undefined);
+  });
+
+  it("titles a conversation-mode thread from the connector label, not the first message", () => {
+    const chat = thread(
+      [
+        item({
+          id: "m1",
+          external_id: "oc_1:om_1",
+          text: "写邮件的功能里加个颜色呗",
+        }),
+      ],
+      {
+        id: "feishu:oc_1",
+        source: "feishu",
+        channel: "feishu",
+        channel_label: "Feishu",
+        label: "oc_1",
+        conversation_label: "Ada",
+        list_title: "conversation",
+        await_reply: false,
+      },
+    );
+    assert.equal(threadTitle(chat), "Ada");
+    assert.equal(threadPreview(chat), "写邮件的功能里加个颜色呗");
+  });
+
+  it("does not fall back to the first message when conversation title is missing", () => {
+    const chat = thread(
+      [
+        item({
+          id: "m1",
+          external_id: "oc_1:om_1",
+          text: "写邮件的功能里加个颜色呗",
+        }),
+      ],
+      {
+        id: "feishu:oc_1",
+        source: "feishu",
+        channel: "feishu",
+        channel_label: "Feishu",
+        label: "oc_1",
+        conversation_label: null,
+        list_title: "conversation",
+        await_reply: false,
+      },
+    );
+    assert.equal(threadTitle(chat), "oc_1");
   });
 
   it("does not title the thread from a working marker", () => {

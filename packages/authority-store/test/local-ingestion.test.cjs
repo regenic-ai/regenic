@@ -383,6 +383,115 @@ describe("local ingestion persistence", () => {
     authorityStore.close();
   });
 
+  it("keeps a working marker off the list face when heads are requested", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "working-head-1",
+      received_at: "2026-08-22T10:44:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-w:1",
+          occurred_at: "2026-08-22T10:43:00.000Z",
+          actor: { id: "user" },
+          scope: { id: "session-w" },
+          type: "message",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "只用一句话回复: pong",
+            },
+          ],
+        },
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-w:2",
+          occurred_at: "2026-08-22T10:44:00.000Z",
+          actor: { id: "assistant" },
+          scope: { id: "session-w" },
+          type: "thread_status",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Still working.",
+            },
+          ],
+        },
+      ],
+    });
+    const heads = await authorityStore.listInbox("local-owner", { heads: true });
+    assert.deepEqual(
+      heads.map((item) => item.event.external_id).sort(),
+      ["session-w:1", "session-w:2"],
+    );
+    assert.equal(
+      heads.find((item) => item.event.external_id === "session-w:2")
+        ?.decision.reason_codes.includes("thread_status"),
+      true,
+    );
+    authorityStore.close();
+  });
+
+  it("uses a message outside current work as the heads face", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "working-face-1",
+      received_at: "2026-08-22T10:44:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-n:1",
+          occurred_at: "2026-08-22T10:43:00.000Z",
+          actor: { id: "user" },
+          scope: { id: "session-n" },
+          type: "message",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "thanks",
+            },
+          ],
+        },
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-n:2",
+          occurred_at: "2026-08-22T10:44:00.000Z",
+          actor: { id: "assistant" },
+          scope: { id: "session-n" },
+          type: "thread_status",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Still working.",
+            },
+          ],
+        },
+      ],
+    });
+    const heads = await authorityStore.listInbox("local-owner", { heads: true });
+    assert.deepEqual(
+      heads.map((item) => item.event.external_id).sort(),
+      ["session-n:1", "session-n:2"],
+    );
+    authorityStore.close();
+  });
+
   it("does not treat LIKE wildcards in a thread target as a match-all", async () => {
     const root = await createRoot();
     const { authorityStore, service } = await createHarness(root);

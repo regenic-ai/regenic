@@ -47,6 +47,7 @@ export interface CreatedConversationView {
   channel_label: string;
   can_send: boolean;
   await_reply: boolean;
+  list_title: "conversation" | "face";
 }
 
 export interface ConnectorSyncView {
@@ -234,6 +235,11 @@ export class PersonalConnectorService
         channel_label: channelLabel(thread.source),
         can_send: found.driver.canReply(found.installation),
         await_reply: found.driver.capabilities(found.installation).await_reply === true,
+        list_title:
+          found.driver.capabilities(found.installation).list_title ===
+          "conversation"
+            ? "conversation"
+            : "face",
       };
     } catch (error) {
       throw wrapDriverError(error, "send_failed");
