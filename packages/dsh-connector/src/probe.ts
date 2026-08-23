@@ -3,7 +3,8 @@ import type { ConnectorCatalogProbe } from "@regenic/domain";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
 
 const PROBE_TTL_MS = 20_000;
-const PROBE_TIMEOUT_MS = 400;
+const PROBE_FAIL_TTL_MS = 2_000;
+const PROBE_TIMEOUT_MS = 2_000;
 export const DEFAULT_DSH_WEB_URL = "http://127.0.0.1:3080";
 
 export const DSH_WEB_MISSING_HINT =
@@ -69,7 +70,8 @@ export async function probeDshWeb(options: {
   now?: () => number;
 } = {}): Promise<DshWebProbe> {
   const now = options.now?.() ?? Date.now();
-  if (cache && now - cache.at < PROBE_TTL_MS) {
+  const ttl = cache?.probe.up ? PROBE_TTL_MS : PROBE_FAIL_TTL_MS;
+  if (cache && now - cache.at < ttl) {
     return cache.probe;
   }
   const probe = await runDshWebProbe(options);
@@ -97,6 +99,10 @@ async function runDshWebProbe(options: {
   return { hosted, up, command_present: commandPresent };
 }
 
+export function dshWebProbeUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/api/session.list`;
+}
+
 function dshProbeUrl(env: NodeJS.ProcessEnv): string {
   const hosted = env.REGENIC_DSH_BASE_URL?.trim();
   if (hosted) {
@@ -114,7 +120,17 @@ async function probeLocalService(
   fetchImpl: typeof fetch,
 ): Promise<boolean> {
   try {
-    await fetchImpl(url, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    await fetchImpl(dshWebProbeUrl(url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "client-request",
+        rpcId: "catalog-probe",
+        method: "session.list",
+        payload: {},
+      }),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
     return true;
   } catch {
     return false;

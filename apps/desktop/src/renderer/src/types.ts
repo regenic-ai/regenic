@@ -119,6 +119,8 @@ export interface EngineInstallationView {
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;
+  channel?: string;
+  channel_label?: string;
   last_attempt: IngestAttempt | null;
 }
 
@@ -129,6 +131,7 @@ export interface CreatedConversation {
   can_send: boolean;
   title?: string | null;
   pinned?: boolean;
+  opened_at?: string;
 }
 
 export interface ConversationPrefView {
@@ -160,6 +163,7 @@ export interface PersonalEngineView {
   org_id: string;
   database_path: string | null;
   inbox_count: number;
+  inbox_digest?: string;
   pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];

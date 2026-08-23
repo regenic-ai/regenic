@@ -51,8 +51,30 @@ export async function applyKernelSettings(input: {
   return settings;
 }
 
-export async function fetchInbox(): Promise<InboxViewItem[]> {
-  const response = await fetch(`${origin()}/v1/me/inbox`);
+export async function fetchInbox(
+  query: {
+    since?: string;
+    since_id?: string;
+    heads?: boolean;
+    thread_id?: string;
+  } = {},
+): Promise<InboxViewItem[]> {
+  const params = new URLSearchParams();
+  if (query.since) {
+    params.set("since", query.since);
+  }
+  if (query.since_id) {
+    params.set("since_id", query.since_id);
+  }
+  if (query.heads) {
+    params.set("heads", "1");
+  }
+  if (query.thread_id) {
+    params.set("thread_id", query.thread_id);
+  }
+  const encoded = params.toString();
+  const suffix = encoded ? `?${encoded}` : "";
+  const response = await fetch(`${origin()}/v1/me/inbox${suffix}`);
   if (!response.ok) {
     throw new Error(`inbox ${response.status}`);
   }
@@ -74,14 +96,18 @@ export async function fetchInbox(): Promise<InboxViewItem[]> {
   }));
 }
 
-export async function fetchEngine(): Promise<PersonalEngineView> {
-  const response = await fetch(`${origin()}/v1/me/engine`);
+export async function fetchEngine(
+  query: { detailed?: boolean } = {},
+): Promise<PersonalEngineView> {
+  const suffix = query.detailed === false ? "?detail=0" : "";
+  const response = await fetch(`${origin()}/v1/me/engine${suffix}`);
   if (!response.ok) {
     throw new Error(`engine ${response.status}`);
   }
   const engine = (await response.json()) as PersonalEngineView;
   return {
     ...engine,
+    inbox_digest: engine.inbox_digest,
     pull: engine.pull ?? {
       interval_ms: 0,
       last_tick_at: null,
@@ -92,6 +118,8 @@ export async function fetchEngine(): Promise<PersonalEngineView> {
       syncable: item.syncable === true,
       can_reply: item.can_reply === true,
       can_create: item.can_create === true,
+      channel: item.channel,
+      channel_label: item.channel_label,
     })),
     catalog: (engine.catalog ?? []).map((item) => ({
       ...item,

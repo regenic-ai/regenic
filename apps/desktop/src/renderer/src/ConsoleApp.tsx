@@ -26,9 +26,12 @@ import {
 } from "./format";
 import {
   applyPrefOverlay,
+  evictThreadCache,
   filterInboxThreads,
   groupInboxThreads,
   latestMessage,
+  orderThreadMessages,
+  overlayThreadMessages,
   prunePrefOverlay,
   sortInboxThreads,
   threadChannels,
@@ -39,14 +42,22 @@ import {
 import {
   conversationKindLabel,
   firstLine,
+  messageRole,
   readingMessages,
+  sameUtterance,
   threadTitle,
 } from "./message-view";
 import {
   ThreadMessageList,
   type ThreadMessageListHandle,
 } from "./ThreadMessageList";
-import { reuseInboxItems } from "./thread-window";
+import {
+  inboxCursor,
+  mergeInboxDelta,
+  reuseInboxItems,
+  reuseInboxList,
+  type InboxReuse,
+} from "./thread-window";
 import { BrandBadge, BrandLockup } from "./Brand";
 import { EngineIcon, InboxIcon, PencilIcon, PinIcon, SettingsIcon } from "./Icons";
 import type {
@@ -61,6 +72,8 @@ import type {
 } from "./types";
 
 const POLL_MS = 2000;
+const IDLE_POLL_MS = 8000;
+const FULL_REFRESH_MS = 45_000;
 
 function engineRevision(
   engine: PersonalEngineView | null,
@@ -86,6 +99,9 @@ function engineRevision(
 export function ConsoleApp() {
   const [nav, setNav] = useState<NavId>("inbox");
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
+  const [messagesByThread, setMessagesByThread] = useState<
+    Record<string, InboxViewItem[]>
+  >({});
   const [engine, setEngine] = useState<PersonalEngineView | null>(null);
   const [drafts, setDrafts] = useState<CreatedConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -100,85 +116,227 @@ export function ConsoleApp() {
   prefOverlayRef.current = prefOverlay;
   const inboxRef = useRef(inbox);
   inboxRef.current = inbox;
+  const messagesRef = useRef(messagesByThread);
+  messagesRef.current = messagesByThread;
   const groupedRef = useRef<InboxThread[]>([]);
   const navRef = useRef(nav);
   navRef.current = nav;
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  const refreshInFlight = useRef(false);
+  const refreshAgain = useRef(false);
+  const inboxDigestRef = useRef<string | null>(null);
+  const openedAtRef = useRef<Record<string, string>>({});
+  const reuseHintRef = useRef<InboxReuse | undefined>(undefined);
+  const groupedInboxRef = useRef<InboxViewItem[] | null>(null);
+  const loadedThreadsRef = useRef(new Set<string>());
+  const threadLoadSeq = useRef<Record<string, number>>({});
+  const lastFullRef = useRef(0);
+  const delayRef = useRef(POLL_MS);
+
+  const applyHeads = (nextHeads: InboxViewItem[]) => {
+    const reused = reuseInboxList(inboxRef.current, nextHeads);
+    reuseHintRef.current = reused;
+    if (reused.same) {
+      return;
+    }
+    setInbox(reused.items);
+    const synced = groupInboxThreads(reused.items, groupedRef.current, reused);
+    groupedRef.current = synced;
+    groupedInboxRef.current = reused.items;
+    setPrefOverlay((current) => prunePrefOverlay(current, synced));
+    const nextDrafts = draftsRef.current.filter(
+      (draft) => !synced.some((thread) => thread.id === draft.thread_id),
+    );
+    setDrafts((current) =>
+      nextDrafts.length === current.length ? current : nextDrafts,
+    );
+    setSelectedId((current) => {
+      const nextThreads = mergeDraftThreads(synced, nextDrafts);
+      if (current && nextThreads.some((thread) => thread.id === current)) {
+        return current;
+      }
+      return nextThreads[0]?.id ?? null;
+    });
+  };
+
+  const ensureThread = async (threadId: string, mode: "open" | "poll") => {
+    const seq = (threadLoadSeq.current[threadId] ?? 0) + 1;
+    threadLoadSeq.current[threadId] = seq;
+    const current = messagesRef.current[threadId] ?? [];
+    const loaded = loadedThreadsRef.current.has(threadId);
+    const cursor = inboxCursor(current);
+    if (loaded && cursor && (mode === "poll" || current.length > 1)) {
+      const delta = await fetchInbox({
+        thread_id: threadId,
+        since: cursor.since,
+        since_id: cursor.since_id,
+      });
+      if (threadLoadSeq.current[threadId] !== seq) {
+        return;
+      }
+      if (delta.length === 0) {
+        return;
+      }
+      setMessagesByThread((prev) =>
+        rememberThreadMessages(
+          prev,
+          threadId,
+          orderThreadMessages(mergeInboxDelta(prev[threadId] ?? current, delta)),
+        ),
+      );
+      return;
+    }
+    const items = await fetchInbox({ thread_id: threadId });
+    if (threadLoadSeq.current[threadId] !== seq) {
+      return;
+    }
+    loadedThreadsRef.current.add(threadId);
+    setMessagesByThread((prev) =>
+      rememberThreadMessages(
+        prev,
+        threadId,
+        orderThreadMessages(reuseInboxItems(prev[threadId] ?? [], items)),
+      ),
+    );
+  };
+
+  const rememberThreadMessages = (
+    prev: Record<string, InboxViewItem[]>,
+    threadId: string,
+    items: InboxViewItem[],
+  ) => {
+    const next = evictThreadCache(
+      { ...prev, [threadId]: items },
+      [threadId, selectedIdRef.current, ...loadedThreadsRef.current],
+    );
+    for (const id of [...loadedThreadsRef.current]) {
+      if (!next[id]) {
+        loadedThreadsRef.current.delete(id);
+      }
+    }
+    return next;
+  };
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) {
+      refreshAgain.current = true;
+      return;
+    }
+    refreshInFlight.current = true;
     try {
-      const [nextInbox, nextEngine] = await Promise.all([
-        fetchInbox(),
-        fetchEngine(),
-      ]);
-      const reused = reuseInboxItems(inboxRef.current, nextInbox);
-      if (reused !== inboxRef.current) {
-        setInbox(reused);
-        const synced = groupInboxThreads(reused, groupedRef.current);
-        groupedRef.current = synced;
-        setPrefOverlay((current) => prunePrefOverlay(current, synced));
-        const nextDrafts = draftsRef.current.filter(
-          (draft) => !synced.some((thread) => thread.id === draft.thread_id),
-        );
-        setDrafts((current) =>
-          nextDrafts.length === current.length ? current : nextDrafts,
-        );
-        setSelectedId((current) => {
-          const nextThreads = mergeDraftThreads(synced, nextDrafts);
-          if (current && nextThreads.some((thread) => thread.id === current)) {
-            return current;
-          }
-          return nextThreads[0]?.id ?? null;
+      do {
+        refreshAgain.current = false;
+        const detailed = navRef.current === "engine";
+        const nextEngine = await fetchEngine({ detailed });
+        const digest = nextEngine.inbox_digest ?? "";
+        const now = Date.now();
+        const skipHeads =
+          digest.length > 0 &&
+          digest === inboxDigestRef.current &&
+          inboxRef.current.length > 0 &&
+          now - lastFullRef.current < FULL_REFRESH_MS;
+        if (!skipHeads) {
+          applyHeads(await fetchInbox({ heads: true }));
+          inboxDigestRef.current = digest || inboxDigestRef.current;
+          lastFullRef.current = Date.now();
+        }
+        const openId = selectedIdRef.current;
+        if (openId && loadedThreadsRef.current.has(openId)) {
+          await ensureThread(openId, "poll");
+        }
+        delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
+        setEngine((current) => {
+          const merged =
+            !detailed && current?.catalog?.length && !nextEngine.catalog?.length
+              ? { ...nextEngine, catalog: current.catalog }
+              : nextEngine;
+          return engineRevision(current, detailed) === engineRevision(merged, detailed)
+            ? current
+            : merged;
         });
-      }
-      setEngine((current) =>
-        engineRevision(current, navRef.current === "engine") ===
-        engineRevision(nextEngine, navRef.current === "engine")
-          ? current
-          : nextEngine,
-      );
-      setError((current) => (current === null ? current : null));
+        setError((current) => (current === null ? current : null));
+      } while (refreshAgain.current);
     } catch {
       setError(`Cannot reach the kernel at ${currentApiOrigin()}`);
       setEngine(null);
+    } finally {
+      refreshInFlight.current = false;
     }
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, POLL_MS);
+    let cancelled = false;
+    let timer = 0;
+    const tick = async () => {
+      await refresh();
+      if (!cancelled) {
+        timer = window.setTimeout(() => {
+          void tick();
+        }, delayRef.current);
+      }
+    };
+    void tick();
     return () => {
-      window.clearInterval(timer);
+      cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [refresh]);
 
+  useEffect(() => {
+    if (nav === "engine") {
+      void refresh();
+    }
+  }, [nav, refresh]);
+
+  useEffect(() => {
+    if (selectedId) {
+      void ensureThread(selectedId, "open");
+    }
+  }, [selectedId]);
+
   const threads = useMemo(() => {
-    const grouped = groupInboxThreads(inbox, groupedRef.current);
+    const grouped =
+      groupedInboxRef.current === inbox
+        ? groupedRef.current
+        : groupInboxThreads(inbox, groupedRef.current, reuseHintRef.current);
     groupedRef.current = grouped;
+    groupedInboxRef.current = inbox;
     return sortInboxThreads(
-      applyPrefOverlay(mergeDraftThreads(grouped, drafts), prefOverlay),
+      applyPrefOverlay(
+        applyOpenedAt(
+          overlayThreadMessages(mergeDraftThreads(grouped, drafts), messagesByThread),
+          openedAtRef.current,
+        ),
+        prefOverlay,
+      ),
     );
-  }, [inbox, drafts, prefOverlay]);
+  }, [inbox, drafts, prefOverlay, messagesByThread]);
   const selected = threads.find((thread) => thread.id === selectedId) ?? null;
   const chip = engineChip(engine);
-  const canCreate = engine?.installations.some((item) => item.can_create) === true;
+  const createTargets = createConversationTargets(engine);
 
-  const startConversation = async () => {
-    if (creating || !canCreate) {
+  const startConversation = async (installationId: string) => {
+    if (creating || createTargets.length === 0) {
       return;
     }
     setCreating(true);
     try {
-      const created = await createConversation();
+      const created = {
+        ...(await createConversation({ installation_id: installationId })),
+        opened_at: new Date().toISOString(),
+      };
+      openedAtRef.current[created.thread_id] = created.opened_at;
       setDrafts((current) => [
         created,
         ...current.filter((item) => item.thread_id !== created.thread_id),
       ]);
       setSelectedId(created.thread_id);
       setError(null);
+      return created;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Cannot create a conversation");
+      return undefined;
     } finally {
       setCreating(false);
     }
@@ -276,7 +434,7 @@ export function ConsoleApp() {
             threads={threads}
             selected={selected}
             error={error}
-            canCreate={canCreate}
+            createTargets={createTargets}
             creating={creating}
             onCreate={startConversation}
             onSelect={setSelectedId}
@@ -327,6 +485,52 @@ function EngineChip({ state }: { state: EngineChipState }) {
   );
 }
 
+interface CreateTarget {
+  id: string;
+  channel: string;
+  channel_label: string;
+  label: string;
+}
+
+function createConversationTargets(
+  engine: PersonalEngineView | null,
+): CreateTarget[] {
+  if (!engine) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const targets: CreateTarget[] = [];
+  for (const item of engine.installations) {
+    if (!item.can_create || seen.has(item.id)) {
+      continue;
+    }
+    seen.add(item.id);
+    targets.push({
+      id: item.id,
+      channel: item.channel ?? item.connector_type,
+      channel_label: item.channel_label ?? item.connector_type,
+      label: item.label,
+    });
+  }
+  return targets;
+}
+
+function applyOpenedAt(
+  threads: InboxThread[],
+  openedAt: Record<string, string>,
+): InboxThread[] {
+  let changed = false;
+  const next = threads.map((thread) => {
+    const opened = openedAt[thread.id];
+    if (!opened || thread.opened_at === opened) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, opened_at: opened };
+  });
+  return changed ? next : threads;
+}
+
 function mergeDraftThreads(
   threads: InboxThread[],
   drafts: CreatedConversation[],
@@ -345,16 +549,17 @@ function mergeDraftThreads(
       conversation_label: null,
       conversation_kind: null,
       pinned: draft.pinned === true,
+      opened_at: draft.opened_at,
       messages: [],
     }));
-  return [...extras, ...threads];
+  return extras.length === 0 ? threads : [...extras, ...threads];
 }
 
 function InboxWorkspace({
   threads,
   selected,
   error,
-  canCreate,
+  createTargets,
   creating,
   onCreate,
   onSelect,
@@ -365,9 +570,9 @@ function InboxWorkspace({
   threads: InboxThread[];
   selected: InboxThread | null;
   error: string | null;
-  canCreate: boolean;
+  createTargets: CreateTarget[];
   creating: boolean;
-  onCreate: () => Promise<void>;
+  onCreate: (installationId: string) => Promise<CreatedConversation | undefined>;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
   onRename: (thread: InboxThread, title: string | null) => Promise<void>;
@@ -378,6 +583,7 @@ function InboxWorkspace({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const channels = threadChannels(threads);
   const visible = filterInboxThreads(threads, pinFilter, channelFilter);
+  const canCreate = createTargets.length > 0;
   const renameSelected = useCallback(
     (title: string | null) => (selected ? onRename(selected, title) : Promise.resolve()),
     [selected, onRename],
@@ -392,49 +598,55 @@ function InboxWorkspace({
       <aside className="list">
         <div className="list-head">
           <span>Current work</span>
-          {canCreate ? (
-            <button
-              type="button"
-              className="list-new"
-              disabled={creating}
-              onClick={() => {
-                void onCreate();
-              }}
-            >
-              {creating ? "Starting…" : "New"}
-            </button>
-          ) : null}
         </div>
-        {threads.length > 0 ? (
-          <div className="list-filters">
-            <FilterRow
-              label="Pin"
-              options={[
-                { id: "all", label: "All" },
-                { id: "pinned", label: "Pinned" },
-                { id: "unpinned", label: "Unpinned" },
-              ]}
-              value={pinFilter}
-              onChange={(id) => setPinFilter(id as PinFilter)}
-            />
+        {threads.length > 0 || canCreate ? (
+          <div className="list-toolbar">
             {channels.length > 1 ? (
               <FilterRow
                 label="Channel"
-                options={[
-                  { id: "all", label: "All" },
-                  ...channels,
-                ]}
+                options={[{ id: "all", label: "All" }, ...channels]}
                 value={channelFilter}
                 onChange={setChannelFilter}
               />
             ) : null}
+            <div className="list-toolbar-actions">
+              {threads.length > 0 ? (
+                <button
+                  type="button"
+                  className={`filter-chip list-pin${pinFilter === "pinned" ? " active" : ""}`}
+                  aria-pressed={pinFilter === "pinned"}
+                  aria-label={pinFilter === "pinned" ? "Show all conversations" : "Show pinned only"}
+                  title={pinFilter === "pinned" ? "Showing pinned" : "Pinned only"}
+                  onClick={() =>
+                    setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
+                  }
+                >
+                  <PinIcon filled={pinFilter === "pinned"} />
+                </button>
+              ) : null}
+              <NewConversationButton
+                targets={createTargets}
+                creating={creating}
+                channelFilter={channelFilter}
+                onCreate={async (installationId) => {
+                  const created = await onCreate(installationId);
+                  if (
+                    created &&
+                    channelFilter !== "all" &&
+                    channelFilter !== created.channel
+                  ) {
+                    setChannelFilter(created.channel);
+                  }
+                }}
+              />
+            </div>
           </div>
         ) : null}
         {error ? <div className="page-empty">{error}</div> : null}
         {!error && threads.length === 0 ? (
           <div className="page-empty">
             {canCreate
-              ? "No current work yet. Start a new conversation."
+              ? `No current work yet. Start a new ${createTargets[0].channel_label} conversation.`
               : "Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own."}
           </div>
         ) : null}
@@ -537,6 +749,101 @@ function InboxWorkspace({
           <div className="thread-empty">Select a conversation on the left.</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function NewConversationButton({
+  targets,
+  creating,
+  channelFilter,
+  onCreate,
+}: {
+  targets: CreateTarget[];
+  creating: boolean;
+  channelFilter: string;
+  onCreate: (installationId: string) => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+  if (targets.length === 0) {
+    return null;
+  }
+  const preferred =
+    targets.find((item) => item.channel === channelFilter) ??
+    (targets.length === 1 ? targets[0] : undefined);
+  if (preferred) {
+    return (
+      <button
+        type="button"
+        className="list-new"
+        disabled={creating}
+        title={`New ${preferred.channel_label} conversation`}
+        onClick={() => {
+          void onCreate(preferred.id);
+        }}
+      >
+        {creating ? "Starting…" : `New ${preferred.channel_label}`}
+      </button>
+    );
+  }
+  return (
+    <div className="list-new-wrap" ref={menuRef}>
+      <button
+        type="button"
+        className="list-new"
+        disabled={creating}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((current) => !current)}
+      >
+        {creating ? "Starting…" : "New ▾"}
+      </button>
+      {open ? (
+        <div className="list-new-menu" role="menu">
+          {targets.map((target) => {
+            const ambiguous =
+              targets.filter((item) => item.channel_label === target.channel_label)
+                .length > 1;
+            return (
+              <button
+                key={target.id}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  void onCreate(target.id);
+                }}
+              >
+                {ambiguous && target.label
+                  ? `${target.channel_label} · ${target.label}`
+                  : target.channel_label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -700,10 +1007,14 @@ const ThreadPane = memo(function ThreadPane({
   useEffect(() => {
     setQuote(null);
     setSendError(null);
-    setPending((current) =>
-      current.filter((item) => !thread.messages.some((entry) => entry.event.id === item.event.id)),
-    );
+    setPending([]);
   }, [thread.id]);
+
+  useEffect(() => {
+    setPending((current) =>
+      current.filter((item) => !ackedOutbound(item, thread.messages)),
+    );
+  }, [thread.messages]);
 
   const send = async (draft: ComposerDraft) => {
     setSending(true);
@@ -794,6 +1105,14 @@ const ThreadPane = memo(function ThreadPane({
     </article>
   );
 });
+
+function ackedOutbound(pending: InboxViewItem, messages: InboxViewItem[]): boolean {
+  return messages.some(
+    (item) =>
+      item.event.id === pending.event.id ||
+      (messageRole(item) === messageRole(pending) && sameUtterance(item, pending)),
+  );
+}
 
 function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem {
   const now = new Date().toISOString();

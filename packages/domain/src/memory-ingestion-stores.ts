@@ -5,13 +5,22 @@ import type {
   BlobStore,
   ConversationPref,
   ConversationPrefPatch,
+  EventListQuery,
   EventRecord,
   EventRevision,
+  InboxQuery,
+  InboxSummary,
   NewEvent,
   SourceIdentity,
   TombstoneEvent,
 } from "./ingestion";
 import { AuthorityConflictError } from "./ingestion";
+import {
+  eventThreadId,
+  matchesEventQuery,
+  selectInboxItems,
+  summarizeInboxItems,
+} from "./inbox-query";
 
 function sourceKey(identity: SourceIdentity): string {
   return JSON.stringify([identity.org_id, identity.source, identity.external_id]);
@@ -81,9 +90,19 @@ export class MemoryAuthorityStore implements AuthorityStore {
     return this.currentBySource.get(sourceKey(identity)) ?? null;
   }
 
-  async listEvents(orgId: string): Promise<EventRecord[]> {
+  async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {
+    const event = this.events.find(
+      (item) => item.org_id === orgId && item.id === eventId,
+    );
+    return event ? { ...event } : null;
+  }
+
+  async listEvents(
+    orgId: string,
+    query?: EventListQuery,
+  ): Promise<EventRecord[]> {
     return this.events
-      .filter((event) => event.org_id === orgId)
+      .filter((event) => matchesEventQuery(event, orgId, query))
       .map((event) => ({ ...event }));
   }
 
@@ -98,21 +117,72 @@ export class MemoryAuthorityStore implements AuthorityStore {
       : null;
   }
 
-  async listInbox(orgId: string): Promise<InboxItem[]> {
-    return [...this.currentBySource.values()]
-      .flatMap((event) => {
-        const decision = this.dispositions.get(event.id);
-        if (event.org_id !== orgId || decision?.disposition !== "current_work") {
-          return [];
-        }
-        return [{
-          decision: { ...decision, reason_codes: [...decision.reason_codes] },
+  async listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]> {
+    const items = query?.siblings
+      ? this.decidedInbox(orgId, query)
+      : this.currentWorkInbox(orgId);
+    return selectInboxItems(items, query).sort((left, right) => {
+      const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
+      if (byTime !== 0) {
+        return byTime;
+      }
+      return left.event.id.localeCompare(right.event.id);
+    });
+  }
+
+  async summarizeInbox(orgId: string): Promise<InboxSummary> {
+    return summarizeInboxItems(this.currentWorkInbox(orgId));
+  }
+
+  private currentWorkInbox(orgId: string): InboxItem[] {
+    return [...this.currentBySource.values()].flatMap((event) => {
+      const decision = this.dispositions.get(event.id);
+      if (event.org_id !== orgId || decision?.disposition !== "current_work") {
+        return [];
+      }
+      return [
+        {
+          decision: {
+            ...decision,
+            reason_codes: [...decision.reason_codes],
+          },
           event: { ...event },
-        }];
-      })
-      .sort((left, right) =>
-        right.event.occurred_at.localeCompare(left.event.occurred_at),
-      );
+        },
+      ];
+    });
+  }
+
+  private decidedInbox(orgId: string, query?: InboxQuery): InboxItem[] {
+    const scoped = Boolean(query?.source || query?.target || query?.thread_ids);
+    const allowed = scoped
+      ? undefined
+      : new Set(
+          this.currentWorkInbox(orgId).map((item) => eventThreadId(item.event)),
+        );
+    if (allowed && allowed.size === 0) {
+      return [];
+    }
+    return this.events.flatMap((event) => {
+      if (!matchesEventQuery(event, orgId, query)) {
+        return [];
+      }
+      if (allowed && !allowed.has(eventThreadId(event))) {
+        return [];
+      }
+      const decision = this.dispositions.get(event.id);
+      if (!decision) {
+        return [];
+      }
+      return [
+        {
+          decision: {
+            ...decision,
+            reason_codes: [...decision.reason_codes],
+          },
+          event: { ...event },
+        },
+      ];
+    });
   }
 
   async listConversationPrefs(orgId: string): Promise<ConversationPref[]> {

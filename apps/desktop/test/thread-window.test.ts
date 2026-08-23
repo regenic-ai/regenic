@@ -6,7 +6,10 @@ import {
   inboxRevision,
   isStuckToEnd,
   prefixOffsets,
+  inboxCursor,
+  mergeInboxDelta,
   reuseInboxItems,
+  reuseInboxList,
 } from "../src/renderer/src/thread-window.ts";
 import { groupInboxThreads } from "../src/renderer/src/inbox.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
@@ -91,6 +94,30 @@ describe("thread window", () => {
     assert.equal(inboxRevision(first), inboxRevision(first));
   });
 
+  it("reuses items by content hash without walking the message body", () => {
+    const first = [item("a", "one")];
+    const parsedAgain = [
+      {
+        ...first[0],
+        body_text: "one copied again",
+        event: { ...first[0].event },
+      },
+    ];
+    const reused = reuseInboxItems(first, parsedAgain);
+    assert.equal(reused, first);
+    assert.equal(reused[0], first[0]);
+
+    const edited = [
+      {
+        ...first[0],
+        body_text: "changed",
+        event: { ...first[0].event, content_hash: "hash-a-2" },
+      },
+    ];
+    const next = reuseInboxItems(first, edited);
+    assert.equal(next[0], edited[0]);
+  });
+
   it("reuses unchanged inbox objects so a later poll does not replace the open thread", () => {
     const first = [item("a", "one"), item("b", "two")];
     const parsedAgain = first.map((entry) => ({
@@ -102,15 +129,29 @@ describe("thread window", () => {
     assert.equal(reused[0], first[0]);
 
     const extra = item("c", "three", "feishu:oc_2");
-    const appended = reuseInboxItems(first, [...parsedAgain, extra]);
+    const appendedList = reuseInboxList(first, [...parsedAgain, extra]);
+    const appended = appendedList.items;
+    assert.equal(appendedList.unchangedPrefix, 2);
     assert.equal(appended[0], first[0]);
     assert.equal(appended[1], first[1]);
     assert.equal(appended[2], extra);
 
     const previous = groupInboxThreads(first);
-    const next = groupInboxThreads(appended, previous);
+    const next = groupInboxThreads(appended, previous, appendedList);
     assert.equal(next.find((thread) => thread.id === "feishu:oc_1"), previous[0]);
     assert.equal(next.find((thread) => thread.id === "feishu:oc_1")?.messages[0], first[0]);
+  });
+
+  it("merges a delta by replacing matching ids and appending the rest", () => {
+    const first = [item("a", "one"), item("b", "two")];
+    const edited = { ...first[1], body_text: "two edited", event: { ...first[1].event } };
+    const extra = item("c", "three", "feishu:oc_2");
+    const merged = mergeInboxDelta(first, [edited, extra]);
+    assert.equal(merged[0], first[0]);
+    assert.equal(merged[1], edited);
+    assert.equal(merged[2], extra);
+    const cursor = inboxCursor(merged);
+    assert.equal(cursor?.since_id, "c");
   });
 
   it("detects a stick-to-end scroll position", () => {

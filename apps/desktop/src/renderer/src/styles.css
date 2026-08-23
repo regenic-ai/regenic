@@ -224,7 +224,7 @@ button {
 }
 
 .list-head {
-  padding: 14px 16px 8px;
+  padding: 14px 14px 8px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
@@ -255,6 +255,66 @@ button {
   display: grid;
   gap: 6px;
   padding: 0 14px 10px;
+}
+
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 10px;
+  min-width: 0;
+}
+
+.list-toolbar .filter-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.list-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.list-pin {
+  width: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.list-new-wrap {
+  position: relative;
+}
+
+.list-new-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 4;
+  min-width: 112px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.list-new-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.list-new-menu button:hover {
+  background: var(--hover);
 }
 
 .filter-row {

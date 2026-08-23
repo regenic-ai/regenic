@@ -4,6 +4,8 @@ import {
   ChannelDriverRegistry,
   channelLabel,
   conversationId,
+  inboxDigest,
+  latestByThread,
   parseConversationThread,
   resolveMessageSurface,
   type ArrangementDecision,
@@ -11,6 +13,7 @@ import {
   type ConversationPref,
   type ConversationThread,
   type EventRecord,
+  type InboxQuery,
   type MessageDirection,
   type MessageKind,
 } from "@regenic/domain";
@@ -70,9 +73,21 @@ export interface PersonalEngineView {
   org_id: string;
   database_path: string | null;
   inbox_count: number;
+  inbox_digest: string;
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
+}
+
+export interface InboxListQuery {
+  since?: string;
+  since_id?: string;
+  heads?: boolean;
+  thread_id?: string;
+}
+
+export interface EngineQuery {
+  detailed?: boolean;
 }
 
 @Injectable()
@@ -82,21 +97,47 @@ export class PersonalInboxService {
     private readonly drivers: ChannelDriverRegistry,
   ) {}
 
-  async listInbox(): Promise<InboxViewItem[]> {
-    return this.loadThreadInbox();
+  async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
+    return this.loadThreadInbox(query);
   }
 
   async getInboxItem(eventId: string): Promise<InboxViewItem | null> {
-    const items = await this.loadThreadInbox();
-    return items.find((entry) => entry.event.id === eventId) ?? null;
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const blobs = host.get("blobs");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    if (!event) {
+      return null;
+    }
+    const decision = await authority.getDisposition(eventId);
+    if (!decision) {
+      return null;
+    }
+    const threadId = conversationId(event.source, event.external_id, event.id);
+    const [installations, pref] = await Promise.all([
+      authority.listInstallations(orgId),
+      authority.getConversationPref(orgId, threadId),
+    ]);
+    return decorateInboxItem(
+      { decision, event },
+      await resolveInboxBody(authority, blobs, event.content_hash),
+      installations,
+      this.drivers,
+      pref,
+    );
   }
 
-  async getEngine(): Promise<PersonalEngineView> {
+  async getEngine(query: EngineQuery = {}): Promise<PersonalEngineView> {
+    const detailed = query.detailed !== false;
     const options = this.runtime.getOptions();
     const orgId = this.runtime.orgId();
     const catalogReady = async (
       installations: EngineInstallationView[],
     ) => {
+      if (!detailed) {
+        return [];
+      }
       const probed = await this.drivers.probeCatalog(process.env);
       return connectorCatalog(installations, {
         env: process.env,
@@ -110,6 +151,7 @@ export class PersonalInboxService {
         org_id: orgId,
         database_path: options?.database ?? null,
         inbox_count: 0,
+        inbox_digest: inboxDigest([]),
         pull: { ...pullStatus },
         installations: [],
         catalog: await catalogReady([]),
@@ -118,12 +160,14 @@ export class PersonalInboxService {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const [inbox, installations] = await Promise.all([
-      authority.listInbox(orgId),
+      authority.summarizeInbox(orgId),
       authority.listInstallations(orgId),
     ]);
     const views = await Promise.all(
       installations.map(async (installation) => {
-        const attempts = await authority.listAttempts(installation.id);
+        const attempts = detailed
+          ? await authority.listAttempts(installation.id)
+          : [];
         return toInstallationView(
           installation,
           attempts[0] ?? null,
@@ -135,51 +179,39 @@ export class PersonalInboxService {
       kernel: "running",
       org_id: orgId,
       database_path: options?.database ?? null,
-      inbox_count: inbox.length,
+      inbox_count: inbox.count,
+      inbox_digest: inbox.digest,
       pull: { ...pullStatus },
       installations: views,
       catalog: await catalogReady(views),
     };
   }
 
-  private async loadThreadInbox(): Promise<InboxViewItem[]> {
+  private async loadThreadInbox(
+    query: InboxListQuery = {},
+  ): Promise<InboxViewItem[]> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const blobs = host.get("blobs");
     const orgId = this.runtime.orgId();
-    const [focused, installations, prefs] = await Promise.all([
-      authority.listInbox(orgId),
+    const thread = parseThreadQuery(query.thread_id);
+    const storeQuery = inboxStoreQuery(query, thread);
+    const [records, installations, prefs] = await Promise.all([
+      authority.listInbox(orgId, storeQuery),
       authority.listInstallations(orgId),
-      authority.listConversationPrefs(orgId),
+      thread
+        ? authority
+            .getConversationPref(orgId, query.thread_id ?? "")
+            .then((pref) => (pref ? [pref] : []))
+        : authority.listConversationPrefs(orgId),
     ]);
     const prefsByThread = new Map(
       prefs.map((pref) => [pref.thread_id, pref] as const),
     );
-    const threadIds = new Set(
-      focused.map((item) =>
-        conversationId(item.event.source, item.event.external_id, item.event.id),
-      ),
-    );
-    const extras: Array<{ decision: ArrangementDecision; event: EventRecord }> = [];
-    if (threadIds.size > 0) {
-      const events = await authority.listEvents(orgId);
-      const seen = new Set(focused.map((item) => item.event.id));
-      for (const event of events) {
-        if (seen.has(event.id)) {
-          continue;
-        }
-        if (!threadIds.has(conversationId(event.source, event.external_id, event.id))) {
-          continue;
-        }
-        const decision = await authority.getDisposition(event.id);
-        if (!decision) {
-          continue;
-        }
-        extras.push({ decision, event });
-      }
-    }
+    const selected = selectInboxRecords(records, query);
+    const attachments = query.heads ? "meta" : "preview";
     return Promise.all(
-      [...focused, ...extras].map(async (item) => {
+      selected.map(async (item) => {
         const threadId = conversationId(
           item.event.source,
           item.event.external_id,
@@ -187,7 +219,12 @@ export class PersonalInboxService {
         );
         return decorateInboxItem(
           item,
-          await resolveInboxBody(authority, blobs, item.event.content_hash),
+          await resolveInboxBody(
+            authority,
+            blobs,
+            item.event.content_hash,
+            attachments,
+          ),
           installations,
           this.drivers,
           prefsByThread.get(threadId) ?? null,
@@ -259,6 +296,75 @@ function decorateInboxItem(
     conversation_kind: surface.conversation_kind ?? null,
     actor_label: surface.actor_label ?? null,
   };
+}
+
+function parseThreadQuery(
+  threadId: string | undefined,
+): ConversationThread | undefined {
+  if (!threadId?.trim()) {
+    return undefined;
+  }
+  try {
+    return parseConversationThread(threadId);
+  } catch {
+    return undefined;
+  }
+}
+
+export function selectInboxRecords<T extends { event: EventRecord }>(
+  items: T[],
+  query: InboxListQuery,
+): T[] {
+  let selected = items;
+  if (query.thread_id) {
+    selected = selected.filter(
+      (item) =>
+        conversationId(item.event.source, item.event.external_id, item.event.id) ===
+        query.thread_id,
+    );
+  }
+  if (query.since) {
+    selected = selected.filter((item) =>
+      isAfterCursor(item.event, query.since ?? "", query.since_id ?? ""),
+    );
+  }
+  if (query.heads) {
+    selected = latestByThread(selected);
+  }
+  return selected;
+}
+
+export function isAfterCursor(
+  event: { id: string; ingested_at: string },
+  since: string,
+  sinceId: string,
+): boolean {
+  if (event.ingested_at > since) {
+    return true;
+  }
+  return event.ingested_at === since && event.id > sinceId;
+}
+
+function inboxStoreQuery(
+  query: InboxListQuery,
+  thread?: ConversationThread,
+): InboxQuery {
+  if (query.heads) {
+    return { heads: true };
+  }
+  return {
+    source: thread?.source,
+    target: thread?.target,
+    since: query.since,
+    since_id: query.since_id,
+    siblings: true,
+  };
+}
+
+export function inboxFingerprint(
+  items: Array<{ event: { id: string; ingested_at: string } }>,
+): string {
+  return inboxDigest(items);
 }
 
 function normalizeTitle(value: string | null): string | null {

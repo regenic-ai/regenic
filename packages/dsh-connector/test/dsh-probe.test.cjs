@@ -37,15 +37,17 @@ describe("DSH catalog probe", () => {
     const probe = await probeDshCatalog({
       env: {},
       now: () => 1,
-      async fetch(url) {
-        fetches.push(String(url));
+      async fetch(url, init) {
+        fetches.push({ url: String(url), method: init?.method });
         throw new Error("down");
       },
       async probeCommand() {
         return false;
       },
     });
-    assert.deepEqual(fetches, ["http://127.0.0.1:3080"]);
+    assert.deepEqual(fetches, [
+      { url: "http://127.0.0.1:3080/api/session.list", method: "POST" },
+    ]);
     assert.equal(probe.services["dsh-web"].ready, false);
     assert.equal(probe.services["dsh-web"].hint, DSH_WEB_MISSING_HINT);
     assert.equal(probe.services["dsh-cli"].ready, false);
@@ -71,6 +73,19 @@ describe("DSH catalog probe", () => {
     assert.equal(probe.services["dsh-web"].hint, DSH_WEB_READY_HINT);
     assert.equal(probe.services["dsh-cli"].ready, true);
     assert.equal(lookedUp, 0);
+    resetDshProbeCache();
+  });
+
+  it("treats an HTTP error from dsh web as reachable", async () => {
+    resetDshProbeCache();
+    const probe = await probeDshCatalog({
+      env: {},
+      now: () => 1,
+      async fetch() {
+        return new Response("no", { status: 401 });
+      },
+    });
+    assert.equal(probe.services["dsh-web"].ready, true);
     resetDshProbeCache();
   });
 });

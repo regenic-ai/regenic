@@ -44,6 +44,7 @@ export const ThreadMessageList = memo(
   const stickRef = useRef(true);
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const measureFrame = useRef<number | null>(null);
   const [layout, setLayout] = useState({ start: 0, end: 0, total: 0 });
 
   const syncLayout = useCallback((pin = false) => {
@@ -100,6 +101,15 @@ export const ThreadMessageList = memo(
   }, [items, syncLayout]);
 
   useLayoutEffect(() => {
+    return () => {
+      if (measureFrame.current !== null) {
+        window.cancelAnimationFrame(measureFrame.current);
+        measureFrame.current = null;
+      }
+    };
+  }, []);
+
+  useLayoutEffect(() => {
     if (!stickRef.current) {
       return;
     }
@@ -117,7 +127,13 @@ export const ThreadMessageList = memo(
         return;
       }
       sizesRef.current.set(id, rounded);
-      syncLayout(stickRef.current);
+      if (measureFrame.current !== null) {
+        return;
+      }
+      measureFrame.current = window.requestAnimationFrame(() => {
+        measureFrame.current = null;
+        syncLayout(stickRef.current);
+      });
     },
     [syncLayout],
   );

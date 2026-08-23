@@ -49,6 +49,19 @@ describe("connector catalog hints", () => {
       ["dsh-web", "dsh-cli", "REGENIC_DSH_TOKEN"],
     );
     assert.equal(dsh.prerequisites[1].visible_when.value, "cli");
+    assert.equal(dsh.prerequisites[0].required, false);
+  });
+
+  it("does not block a DSH web install when dsh web is down", () => {
+    const dsh = connectorCatalog([], {
+      env: {},
+      services: {
+        "dsh-web": { ready: false, hint: "Start dsh web --port 3080 first." },
+        "dsh-cli": { ready: true, hint: "dsh is on PATH." },
+      },
+    }).find((item) => item.connector_type === "dsh-session");
+    assert.equal(dsh.prerequisites[0].ready, false);
+    assert.equal(dsh.setup_ready, true);
   });
 
   it("fills Feishu conversation options for a pick list", () => {
@@ -85,6 +98,7 @@ describe("connector catalog hints", () => {
       {
         get() {
           return {
+            source: "feishu",
             capabilities() {
               return { sync: true, reply: true, create: false };
             },
@@ -93,6 +107,8 @@ describe("connector catalog hints", () => {
       },
     );
     assert.equal(view.label, "All conversations");
+    assert.equal(view.channel, "feishu");
+    assert.equal(view.channel_label, "Feishu");
     assert.equal(view.settings.kinds, "group,p2p");
   });
 });

@@ -9,7 +9,7 @@ const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
 const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
-const { decodeBodyText } = require("../dist/inbox-body");
+const { decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
 
 const roots = [];
 const previousEnv = {};
@@ -324,6 +324,113 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("returns inbox deltas, heads, and a light engine view", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const service = new IngestionService(
+      new FsBlobStore(blobRoot),
+      new SqliteAuthorityStore(database),
+    );
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-delta-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:1",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "user",
+          scope_id: "session-x",
+          text: "first",
+        }),
+      ],
+    });
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-delta-2",
+      received_at: "2026-08-21T00:01:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-x:2",
+          occurred_at: "2026-08-21T00:01:00.000Z",
+          actor_id: "assistant",
+          scope_id: "session-x",
+          text: "second",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-y:1",
+          occurred_at: "2026-08-21T00:02:00.000Z",
+          actor_id: "user",
+          scope_id: "session-y",
+          text: "other thread",
+        }),
+      ],
+    });
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const all = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.ok(all.length >= 3);
+      const first = [...all].sort((left, right) => {
+        if (left.event.ingested_at === right.event.ingested_at) {
+          return left.event.id < right.event.id ? -1 : 1;
+        }
+        return left.event.ingested_at < right.event.ingested_at ? -1 : 1;
+      })[0];
+      const delta = await (
+        await fetch(
+          `${origin}/v1/me/inbox?since=${encodeURIComponent(first.event.ingested_at)}&since_id=${encodeURIComponent(first.event.id)}`,
+        )
+      ).json();
+      assert.ok(delta.every((item) => item.event.id !== first.event.id));
+      assert.ok(delta.length < all.length);
+
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      const threads = new Set(heads.map((item) => item.thread_id));
+      assert.equal(heads.length, threads.size);
+      assert.ok(heads.length >= 2);
+      assert.ok(
+        heads.every((item) =>
+          (item.attachments ?? []).every((file) => !file.data_base64),
+        ),
+      );
+
+      const one = await (
+        await fetch(`${origin}/v1/me/inbox?thread_id=${encodeURIComponent("dsh:session-x")}`)
+      ).json();
+      assert.ok(one.length >= 2);
+      assert.ok(one.every((item) => item.thread_id === "dsh:session-x"));
+      for (let index = 1; index < one.length; index += 1) {
+        assert.ok(
+          one[index - 1].event.occurred_at <= one[index].event.occurred_at,
+          "thread messages should be oldest first",
+        );
+      }
+
+      const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      assert.equal(light.catalog.length, 0);
+      assert.match(light.inbox_digest, /^\d+:/);
+
+      const full = await (await fetch(`${origin}/v1/me/engine`)).json();
+      assert.ok(full.catalog.length >= 1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("keeps a short DSH agent reply in the same conversation as the prompt", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
@@ -510,6 +617,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.org_id, "local-owner");
       assert.equal(engine.database_path, database);
       assert.equal(engine.inbox_count, 1);
+      assert.match(engine.inbox_digest, /^1:/);
       assert.equal(engine.pull.interval_ms, 0);
       assert.equal(engine.installations[0].id, "slack-1");
       assert.equal(engine.installations[0].connector_type, "slack-channel");
@@ -831,6 +939,8 @@ describe("personal /v1/me", () => {
       assert.equal(created.status, 201, JSON.stringify(createdBody));
       assert.equal(createdBody.can_create, true);
       assert.equal(createdBody.can_reply, true);
+      assert.equal(createdBody.channel, "dsh");
+      assert.equal(createdBody.channel_label, "DSH");
 
       const slackOnly = await fetch(`${origin}/v1/me/conversations`, {
         method: "POST",
@@ -848,6 +958,7 @@ describe("personal /v1/me", () => {
       assert.equal(opened.status, 201, JSON.stringify(openedBody));
       assert.equal(openedBody.thread_id, "dsh:created-1");
       assert.equal(openedBody.channel, "dsh");
+      assert.equal(openedBody.channel_label, "DSH");
       assert.equal(openedBody.can_send, true);
       assert.deepEqual(dsh.created, ["created-1"]);
 
@@ -1192,6 +1303,29 @@ describe("inbox body decode", () => {
       decodeBodyText(envelope, "application/vnd.regenic.content-parts+json"),
       "Please confirm",
     );
+    const withFile = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          bytes_base64: Buffer.from("Please confirm", "utf8").toString("base64"),
+        },
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "shot.png",
+          bytes_base64: Buffer.from("fakepng", "utf8").toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const meta = decodeInboxBody(
+      withFile,
+      "application/vnd.regenic.content-parts+json",
+      "meta",
+    );
+    assert.equal(meta.attachments[0].data_base64, undefined);
+    assert.equal(meta.attachments[0].filename, "shot.png");
   });
 });
 

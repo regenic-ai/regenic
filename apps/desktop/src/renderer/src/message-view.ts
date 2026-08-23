@@ -1,6 +1,5 @@
 import type { InboxViewItem, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
-import { latestMessage } from "./inbox";
 
 export type MessageRole = MessageKind;
 
@@ -92,7 +91,7 @@ function threadFace(thread: InboxThread): InboxViewItem {
   const user = thread.messages.find((item) => messageRole(item) === "user");
   const human =
     user ?? thread.messages.find((item) => messageRole(item) !== "system");
-  return human ?? latestMessage(thread) ?? thread.messages[0];
+  return human ?? thread.messages[thread.messages.length - 1] ?? thread.messages[0];
 }
 
 export function readingMessages(
@@ -145,7 +144,7 @@ function speakerKey(item: InboxViewItem): string {
   if (named) {
     return `${role}:${named}`;
   }
-  return `${role}:${item.event.id}`;
+  return role;
 }
 
 function coalesceReading(items: InboxViewItem[]): InboxViewItem[] {
@@ -167,7 +166,7 @@ function appendReading(
   return merged;
 }
 
-function sameUtterance(left: InboxViewItem, right: InboxViewItem): boolean {
+export function sameUtterance(left: InboxViewItem, right: InboxViewItem): boolean {
   const leftText = (left.body_text ?? "").replace(/\s+/g, " ").trim();
   const rightText = (right.body_text ?? "").replace(/\s+/g, " ").trim();
   return leftText.length > 0 && leftText === rightText;

@@ -1,8 +1,9 @@
-import type {
-  ChannelDriver,
-  ConnectorInstallation,
-  ConnectorInstallationStatus,
-  IngestAttempt,
+import {
+  channelLabel,
+  type ChannelDriver,
+  type ConnectorInstallation,
+  type ConnectorInstallationStatus,
+  type IngestAttempt,
 } from "@regenic/domain";
 
 export interface ConnectorFieldWhen {
@@ -139,7 +140,7 @@ const CATALOG: CatalogDefinition[] = [
         kind: "local_service",
         key: "dsh-web",
         label: "Local dsh web",
-        required: true,
+        required: false,
         hint: "dsh must work in your terminal. Then start dsh web --port 3080.",
         visible_when: { field: "transport", value: "web" },
       },
@@ -261,6 +262,8 @@ export interface EngineInstallationView {
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;
+  channel: string;
+  channel_label: string;
   last_attempt: IngestAttempt | null;
 }
 
@@ -277,6 +280,7 @@ export function toInstallationView(
     create: false,
   };
   const enabled = installation.status === "enabled";
+  const channel = driver?.source ?? installation.connector_type;
   return {
     id: installation.id,
     connector_type: installation.connector_type,
@@ -287,6 +291,8 @@ export function toInstallationView(
     syncable: enabled && capabilities.sync,
     can_reply: enabled && capabilities.reply,
     can_create: enabled && capabilities.create,
+    channel,
+    channel_label: channelLabel(channel),
     last_attempt: lastAttempt,
   };
 }
@@ -431,7 +437,7 @@ function catalogDefinitionForEnv(
         kind: "local_service",
         key: "dsh-web",
         label: "Cluster DSH",
-        required: true,
+        required: false,
         hint: "Uses REGENIC_DSH_BASE_URL (cluster DNS, not a public URL)",
       },
       {

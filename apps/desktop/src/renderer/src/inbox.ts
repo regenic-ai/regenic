@@ -1,3 +1,4 @@
+import type { InboxReuse } from "./thread-window";
 import type { InboxViewItem } from "./types";
 
 export interface InboxThread {
@@ -13,9 +14,12 @@ export interface InboxThread {
   pref_updated_at?: string;
   can_send: boolean;
   messages: InboxViewItem[];
+  opened_at?: string;
 }
 
 export type PinFilter = "all" | "pinned" | "unpinned";
+
+export const MAX_CACHED_THREADS = 8;
 
 export interface ConversationPrefOverlay {
   title: string | null;
@@ -40,44 +44,32 @@ export function workThreadId(
 export function groupInboxThreads(
   items: InboxViewItem[],
   previous: InboxThread[] = [],
+  reuse?: InboxReuse,
 ): InboxThread[] {
-  const groups = new Map<string, InboxViewItem[]>();
-  for (const item of items) {
-    const id =
-      item.thread_id ??
-      workThreadId(item.event.source, item.event.external_id, item.event.id);
-    const bucket = groups.get(id);
-    if (bucket) {
-      bucket.push(item);
-    } else {
-      groups.set(id, [item]);
-    }
+  if (reuse?.same && previous.length > 0) {
+    return previous;
   }
-  const prevById = new Map(previous.map((thread) => [thread.id, thread]));
-  return [...groups.entries()]
-    .map(([id, messages]) => {
-      const old = prevById.get(id);
-      if (old && sameMessageSet(old.messages, messages)) {
-        return old;
-      }
-      const ordered = [...messages].sort(byOccurredAt);
-      if (
-        old &&
-        old.messages.length === ordered.length &&
-        old.messages.every((item, index) => item === ordered[index])
-      ) {
-        return old;
-      }
-      return buildThread(id, ordered);
-    })
-    .sort(byRecentActivity);
+  if (
+    reuse &&
+    previous.length > 0 &&
+    reuse.oldLength > 0 &&
+    reuse.unchangedPrefix === reuse.oldLength &&
+    items.length >= reuse.oldLength
+  ) {
+    return appendInboxThreads(previous, items.slice(reuse.oldLength));
+  }
+  return rebuildInboxThreads(items, previous);
 }
 
 export function applyPrefOverlay(
   threads: InboxThread[],
   overlay: Record<string, ConversationPrefOverlay>,
 ): InboxThread[] {
-  return threads.map((thread) => {
+  if (isEmptyRecord(overlay)) {
+    return threads;
+  }
+  let changed = false;
+  const next = threads.map((thread) => {
     const local = overlay[thread.id];
     if (!local) {
       return thread;
@@ -85,6 +77,14 @@ export function applyPrefOverlay(
     if (thread.pref_updated_at && thread.pref_updated_at > local.updated_at) {
       return thread;
     }
+    if (
+      thread.title === local.title &&
+      thread.pinned === local.pinned &&
+      thread.pref_updated_at === local.updated_at
+    ) {
+      return thread;
+    }
+    changed = true;
     return {
       ...thread,
       title: local.title,
@@ -92,6 +92,7 @@ export function applyPrefOverlay(
       pref_updated_at: local.updated_at,
     };
   });
+  return changed ? next : threads;
 }
 
 export function prunePrefOverlay(
@@ -112,12 +113,15 @@ export function prunePrefOverlay(
 }
 
 export function sortInboxThreads(threads: InboxThread[]): InboxThread[] {
-  return [...threads].sort((left, right) => {
-    if (left.pinned !== right.pinned) {
-      return left.pinned ? -1 : 1;
+  if (threads.length < 2) {
+    return threads;
+  }
+  for (let index = 1; index < threads.length; index += 1) {
+    if (compareInboxThreads(threads[index - 1], threads[index]) > 0) {
+      return [...threads].sort(compareInboxThreads);
     }
-    return byRecentActivity(left, right);
-  });
+  }
+  return threads;
 }
 
 export function filterInboxThreads(
@@ -151,8 +155,142 @@ export function threadChannels(
   return [...seen.entries()].map(([id, label]) => ({ id, label }));
 }
 
+export function evictThreadCache<T>(
+  cache: Record<string, T>,
+  prefer: Array<string | null | undefined>,
+  limit = MAX_CACHED_THREADS,
+): Record<string, T> {
+  const keys = Object.keys(cache);
+  if (keys.length <= limit) {
+    return cache;
+  }
+  const keep = new Set<string>();
+  for (const id of prefer) {
+    if (id && cache[id]) {
+      keep.add(id);
+    }
+    if (keep.size >= limit) {
+      break;
+    }
+  }
+  for (const id of keys) {
+    if (keep.size >= limit) {
+      break;
+    }
+    keep.add(id);
+  }
+  if (keep.size === keys.length) {
+    return cache;
+  }
+  const next: Record<string, T> = {};
+  for (const id of keep) {
+    next[id] = cache[id];
+  }
+  return next;
+}
+
+export function orderThreadMessages(
+  messages: InboxViewItem[],
+): InboxViewItem[] {
+  return orderMessages(messages);
+}
+
+export function overlayThreadMessages(
+  threads: InboxThread[],
+  messagesByThread: Record<string, InboxViewItem[]>,
+): InboxThread[] {
+  let changed = false;
+  const next = threads.map((thread) => {
+    const raw = messagesByThread[thread.id];
+    if (!raw) {
+      return thread;
+    }
+    const messages = orderMessages(raw);
+    if (messages === thread.messages || sameMessageList(messages, thread.messages)) {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      messages,
+      can_send: messages.some((item) => item.can_send) || thread.can_send,
+    };
+  });
+  return changed ? next : threads;
+}
+
 export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
+}
+
+function rebuildInboxThreads(
+  items: InboxViewItem[],
+  previous: InboxThread[],
+): InboxThread[] {
+  const groups = new Map<string, InboxViewItem[]>();
+  for (const item of items) {
+    const id = threadIdOf(item);
+    const bucket = groups.get(id);
+    if (bucket) {
+      bucket.push(item);
+    } else {
+      groups.set(id, [item]);
+    }
+  }
+  const prevById = new Map(previous.map((thread) => [thread.id, thread]));
+  const next: InboxThread[] = [];
+  for (const [id, messages] of groups) {
+    const old = prevById.get(id);
+    if (old && sameMessageList(old.messages, messages)) {
+      next.push(old);
+      continue;
+    }
+    const ordered = orderMessages(messages);
+    if (old && sameMessageList(old.messages, ordered)) {
+      next.push(old);
+      continue;
+    }
+    next.push(buildThread(id, ordered));
+  }
+  return sortInboxThreads(next);
+}
+
+function appendInboxThreads(
+  previous: InboxThread[],
+  added: InboxViewItem[],
+): InboxThread[] {
+  if (added.length === 0) {
+    return previous;
+  }
+  const dirty = new Map<string, InboxViewItem[]>();
+  for (const item of added) {
+    const id = threadIdOf(item);
+    const bucket = dirty.get(id);
+    if (bucket) {
+      bucket.push(item);
+    } else {
+      dirty.set(id, [item]);
+    }
+  }
+  const next = previous.map((thread) => {
+    const extra = dirty.get(thread.id);
+    if (!extra) {
+      return thread;
+    }
+    dirty.delete(thread.id);
+    return buildThread(thread.id, mergeMessages(thread.messages, extra));
+  });
+  for (const [id, extra] of dirty) {
+    next.push(buildThread(id, orderMessages(extra)));
+  }
+  return sortInboxThreads(next);
+}
+
+function threadIdOf(item: InboxViewItem): string {
+  return (
+    item.thread_id ??
+    workThreadId(item.event.source, item.event.external_id, item.event.id)
+  );
 }
 
 function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
@@ -174,12 +312,60 @@ function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
   };
 }
 
-function sameMessageSet(left: InboxViewItem[], right: InboxViewItem[]): boolean {
+function sameMessageList(left: InboxViewItem[], right: InboxViewItem[]): boolean {
   if (left.length !== right.length) {
     return false;
   }
-  const refs = new Set(left);
-  return right.every((item) => refs.has(item));
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function orderMessages(messages: InboxViewItem[]): InboxViewItem[] {
+  if (messages.length < 2) {
+    return messages;
+  }
+  for (let index = 1; index < messages.length; index += 1) {
+    if (byOccurredAt(messages[index - 1], messages[index]) > 0) {
+      return [...messages].sort(byOccurredAt);
+    }
+  }
+  return messages;
+}
+
+function mergeMessages(
+  existing: InboxViewItem[],
+  added: InboxViewItem[],
+): InboxViewItem[] {
+  if (added.length === 0) {
+    return existing;
+  }
+  if (added.length === 1) {
+    const last = existing[existing.length - 1];
+    if (!last || byOccurredAt(last, added[0]) <= 0) {
+      return [...existing, added[0]];
+    }
+  }
+  return orderMessages([...existing, ...added]);
+}
+
+function compareInboxThreads(left: InboxThread, right: InboxThread): number {
+  if (left.pinned !== right.pinned) {
+    return left.pinned ? -1 : 1;
+  }
+  return byRecentActivity(left, right);
+}
+
+function isEmptyRecord(value: Record<string, unknown>): boolean {
+  for (const key in value) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function latestPref(messages: InboxViewItem[]): {
@@ -205,19 +391,28 @@ function latestPref(messages: InboxViewItem[]): {
 }
 
 function byOccurredAt(left: InboxViewItem, right: InboxViewItem): number {
-  const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
+  const byTime = compareStamp(left.event.occurred_at, right.event.occurred_at);
   if (byTime !== 0) {
     return byTime;
   }
-  return left.event.external_id.localeCompare(right.event.external_id);
+  return compareStamp(left.event.external_id, right.event.external_id);
 }
 
 function byRecentActivity(left: InboxThread, right: InboxThread): number {
-  return activityStamp(right).localeCompare(activityStamp(left));
+  return compareStamp(activityStamp(right), activityStamp(left));
 }
 
 function activityStamp(thread: InboxThread): string {
-  return latestMessage(thread)?.event.occurred_at ?? "~";
+  const latest = latestMessage(thread)?.event.occurred_at ?? "";
+  const opened = thread.opened_at ?? "";
+  return latest > opened ? latest : opened;
+}
+
+function compareStamp(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
 }
 
 function conversationField(

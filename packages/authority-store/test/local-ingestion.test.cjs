@@ -63,7 +63,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 4);
+    assert.equal(authorityStore.schemaVersion, 5);
     authorityStore.close();
   });
 
@@ -215,12 +215,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 5");
+    database.pragma("user_version = 6");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 5 is newer than supported 4/,
+      /schema 6 is newer than supported 5/,
     );
   });
 
@@ -286,5 +286,80 @@ describe("local ingestion persistence", () => {
     assert.equal(cleared.title, null);
     assert.equal(cleared.pinned, true);
     store.close();
+  });
+
+  it("lists inbox heads, thread siblings, and a digest without a full scan API", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "heads-1",
+      received_at: "2026-08-23T00:00:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-x:1",
+          occurred_at: "2026-08-23T00:00:00.000Z",
+          actor: { id: "user" },
+          scope: { id: "session-x" },
+          type: "message",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Please confirm the release.",
+            },
+          ],
+        },
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-x:2",
+          occurred_at: "2026-08-23T00:00:01.000Z",
+          actor: { id: "assistant" },
+          scope: { id: "session-x" },
+          type: "message",
+          content: [{ role: "body", media_type: "text/plain", text: "later" }],
+        },
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-z:1",
+          occurred_at: "2026-08-23T00:00:02.000Z",
+          actor: { id: "user" },
+          scope: { id: "session-z" },
+          type: "message",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Please review the rollout.",
+            },
+          ],
+        },
+      ],
+    });
+
+    const current = await authorityStore.listInbox("local-owner");
+    const heads = await authorityStore.listInbox("local-owner", { heads: true });
+    const thread = await authorityStore.listInbox("local-owner", {
+      siblings: true,
+      source: "dsh",
+      target: "session-x",
+    });
+    const summary = await authorityStore.summarizeInbox("local-owner");
+    const threads = new Set(
+      heads.map((item) => `${item.event.source}:${item.event.external_id.split(":")[0]}`),
+    );
+
+    assert.equal(heads.length, threads.size);
+    assert.ok(heads.length >= 2);
+    assert.ok(thread.length >= 2);
+    assert.equal(summary.count, current.length);
+    assert.equal(summary.digest.startsWith(`${current.length}:`), true);
+    authorityStore.close();
   });
 });

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { AuthorityConflictError } from "@regenic/domain";
+import { AuthorityConflictError, conversationId } from "@regenic/domain";
 import type {
   ArrangementDecision,
   AuthorityStore,
@@ -11,9 +11,12 @@ import type {
   ConversationPref,
   ConversationPrefPatch,
   InboxItem,
+  InboxQuery,
+  InboxSummary,
   ConnectorLease,
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
+  EventListQuery,
   EventRecord,
   EventRevision,
   IngestAttempt,
@@ -127,6 +130,13 @@ interface PrefRow {
   updated_at: string;
 }
 
+const INBOX_COLUMNS = `
+  d.event_id, d.org_id AS disposition_org_id, d.disposition, d.layer,
+  d.reason_codes_json, d.score, d.decided_at,
+  e.id, e.source, e.external_id, e.operation, e.content_hash,
+  e.parent_event_id, e.occurred_at, e.ingested_at
+`;
+
 interface InsertEventInput extends SourceIdentity {
   operation: IngestOperation;
   content_hash?: string;
@@ -150,6 +160,11 @@ export class SqliteAuthorityStore
       this.database.pragma("busy_timeout = 5000");
       this.database.pragma("foreign_keys = ON");
       this.database.pragma("journal_mode = WAL");
+      this.database.function(
+        "conversation_id",
+        (source: string, externalId: string, fallbackId: string) =>
+          conversationId(source, externalId, fallbackId),
+      );
       this.migrate();
     } catch (error) {
       this.database.close();
@@ -163,16 +178,54 @@ export class SqliteAuthorityStore
     return this.findCurrent(identity);
   }
 
-  async listEvents(orgId: string): Promise<EventRecord[]> {
+  async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, org_id, source, external_id, operation, content_hash,
+                 parent_event_id, occurred_at, ingested_at
+          FROM events WHERE org_id = ? AND id = ?
+        `,
+      )
+      .get(orgId, eventId) as EventRow | undefined;
+    return row ? this.toEvent(row) : null;
+  }
+
+  async listEvents(orgId: string, query?: EventListQuery): Promise<EventRecord[]> {
+    const clauses = ["org_id = ?"];
+    const params: unknown[] = [orgId];
+    if (query?.source) {
+      clauses.push("source = ?");
+      params.push(query.source);
+    }
+    if (query?.target) {
+      clauses.push("(external_id = ? OR external_id LIKE ?)");
+      params.push(query.target, `${query.target}:%`);
+    }
+    if (query?.thread_ids) {
+      if (query.thread_ids.length === 0) {
+        return [];
+      }
+      clauses.push(
+        `conversation_id(source, external_id, id) IN (${query.thread_ids
+          .map(() => "?")
+          .join(", ")})`,
+      );
+      params.push(...query.thread_ids);
+    }
+    if (query?.since) {
+      clauses.push("(ingested_at > ? OR (ingested_at = ? AND id > ?))");
+      params.push(query.since, query.since, query.since_id ?? "");
+    }
     const rows = this.database
       .prepare(
         `
           SELECT id, org_id, source, external_id, operation, content_hash,
                  parent_event_id, occurred_at, ingested_at
-          FROM events WHERE org_id = ? ORDER BY sequence ASC
+          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
         `,
       )
-      .all(orgId) as EventRow[];
+      .all(...params) as EventRow[];
     return rows.map((row) => this.toEvent(row));
   }
 
@@ -215,45 +268,41 @@ export class SqliteAuthorityStore
     return row ? this.toDisposition(row) : null;
   }
 
-  async listInbox(orgId: string): Promise<InboxItem[]> {
-    const rows = this.database
+  async listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]> {
+    if (query?.thread_ids && query.thread_ids.length === 0) {
+      return [];
+    }
+    const { sql, params } = this.inboxSql(orgId, query);
+    const rows = this.database.prepare(sql).all(...params) as InboxRow[];
+    return rows.map((row) => this.toInboxItem(row));
+  }
+
+  async summarizeInbox(orgId: string): Promise<InboxSummary> {
+    const row = this.database
       .prepare(
         `
           SELECT
-            d.event_id, d.org_id AS disposition_org_id, d.disposition, d.layer,
-            d.reason_codes_json, d.score, d.decided_at,
-            e.id, e.source, e.external_id, e.operation, e.content_hash,
-            e.parent_event_id, e.occurred_at, e.ingested_at
+            COUNT(*) OVER () AS count,
+            e.ingested_at AS latest_at,
+            e.id AS latest_id
           FROM message_dispositions d
           JOIN events e ON e.id = d.event_id
           JOIN source_heads h ON h.current_event_id = e.id
           WHERE d.org_id = ? AND d.disposition = 'current_work'
-          ORDER BY e.occurred_at DESC
+          ORDER BY e.ingested_at DESC, e.id DESC
+          LIMIT 1
         `,
       )
-      .all(orgId) as InboxRow[];
-    return rows.map((row) => ({
-      decision: this.toDisposition({
-        event_id: row.event_id,
-        org_id: row.disposition_org_id,
-        disposition: row.disposition,
-        layer: row.layer,
-        reason_codes_json: row.reason_codes_json,
-        score: row.score,
-        decided_at: row.decided_at,
-      }),
-      event: this.toEvent({
-        id: row.id,
-        org_id: row.disposition_org_id,
-        source: row.source,
-        external_id: row.external_id,
-        operation: row.operation,
-        content_hash: row.content_hash,
-        parent_event_id: row.parent_event_id,
-        occurred_at: row.occurred_at,
-        ingested_at: row.ingested_at,
-      }),
-    }));
+      .get(orgId) as
+      | { count: number; latest_at: string; latest_id: string }
+      | undefined;
+    if (!row) {
+      return { count: 0, digest: "0::" };
+    }
+    return {
+      count: row.count,
+      digest: `${row.count}:${row.latest_at}:${row.latest_id}`,
+    };
   }
 
   async listConversationPrefs(orgId: string): Promise<ConversationPref[]> {
@@ -906,6 +955,126 @@ export class SqliteAuthorityStore
       throw new AuthorityConflictError();
     }
     return event;
+  }
+
+  private inboxSql(
+    orgId: string,
+    query?: InboxQuery,
+  ): { sql: string; params: unknown[] } {
+    if (query?.heads) {
+      const { clauses, params } = this.inboxClauses(orgId, query, "current_work");
+      return {
+        sql: `
+          SELECT * FROM (
+            SELECT ${INBOX_COLUMNS},
+              ROW_NUMBER() OVER (
+                PARTITION BY conversation_id(e.source, e.external_id, e.id)
+                ORDER BY e.occurred_at DESC, e.id DESC
+              ) AS rn
+            FROM message_dispositions d
+            JOIN events e ON e.id = d.event_id
+            JOIN source_heads h ON h.current_event_id = e.id
+            WHERE ${clauses.join(" AND ")}
+          ) ranked
+          WHERE rn = 1
+          ORDER BY occurred_at ASC, id ASC
+        `,
+        params,
+      };
+    }
+    if (query?.siblings) {
+      const { clauses, params } = this.inboxClauses(orgId, query, "any");
+      if (!query.source && !query.target && !query.thread_ids) {
+        clauses.push(`conversation_id(e.source, e.external_id, e.id) IN (
+          SELECT conversation_id(e2.source, e2.external_id, e2.id)
+          FROM message_dispositions d2
+          JOIN events e2 ON e2.id = d2.event_id
+          JOIN source_heads h2 ON h2.current_event_id = e2.id
+          WHERE d2.org_id = ? AND d2.disposition = 'current_work'
+        )`);
+        params.push(orgId);
+      }
+      return {
+        sql: `
+          SELECT ${INBOX_COLUMNS}
+          FROM message_dispositions d
+          JOIN events e ON e.id = d.event_id
+          WHERE ${clauses.join(" AND ")}
+          ORDER BY e.occurred_at ASC, e.id ASC
+        `,
+        params,
+      };
+    }
+    const { clauses, params } = this.inboxClauses(orgId, query, "current_work");
+    return {
+      sql: `
+        SELECT ${INBOX_COLUMNS}
+        FROM message_dispositions d
+        JOIN events e ON e.id = d.event_id
+        JOIN source_heads h ON h.current_event_id = e.id
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY e.occurred_at ASC, e.id ASC
+      `,
+      params,
+    };
+  }
+
+  private inboxClauses(
+    orgId: string,
+    query: InboxQuery | undefined,
+    disposition: "current_work" | "any",
+  ): { clauses: string[]; params: unknown[] } {
+    const clauses = ["e.org_id = ?"];
+    const params: unknown[] = [orgId];
+    if (disposition === "current_work") {
+      clauses.push("d.disposition = 'current_work'");
+    }
+    if (query?.source) {
+      clauses.push("e.source = ?");
+      params.push(query.source);
+    }
+    if (query?.target) {
+      clauses.push("(e.external_id = ? OR e.external_id LIKE ?)");
+      params.push(query.target, `${query.target}:%`);
+    }
+    if (query?.thread_ids && query.thread_ids.length > 0) {
+      clauses.push(
+        `conversation_id(e.source, e.external_id, e.id) IN (${query.thread_ids
+          .map(() => "?")
+          .join(", ")})`,
+      );
+      params.push(...query.thread_ids);
+    }
+    if (query?.since) {
+      clauses.push("(e.ingested_at > ? OR (e.ingested_at = ? AND e.id > ?))");
+      params.push(query.since, query.since, query.since_id ?? "");
+    }
+    return { clauses, params };
+  }
+
+  private toInboxItem(row: InboxRow): InboxItem {
+    return {
+      decision: this.toDisposition({
+        event_id: row.event_id,
+        org_id: row.disposition_org_id,
+        disposition: row.disposition,
+        layer: row.layer,
+        reason_codes_json: row.reason_codes_json,
+        score: row.score,
+        decided_at: row.decided_at,
+      }),
+      event: this.toEvent({
+        id: row.id,
+        org_id: row.disposition_org_id,
+        source: row.source,
+        external_id: row.external_id,
+        operation: row.operation,
+        content_hash: row.content_hash,
+        parent_event_id: row.parent_event_id,
+        occurred_at: row.occurred_at,
+        ingested_at: row.ingested_at,
+      }),
+    };
   }
 
   private toEvent(row: EventRow): EventRecord {
