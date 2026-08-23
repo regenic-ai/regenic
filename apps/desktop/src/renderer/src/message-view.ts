@@ -43,6 +43,49 @@ export function conversationKindLabel(kind: string | null | undefined): string |
   return null;
 }
 
+const SENT_WAIT_MS = 30 * 60 * 1000;
+
+export function threadActivityOf(
+  thread: InboxThread,
+  now = Date.now(),
+): InboxViewItem["activity"] | "sent" | undefined {
+  const latest = thread.messages[thread.messages.length - 1];
+  if (!latest) {
+    return undefined;
+  }
+  if (latest.activity) {
+    return latest.activity;
+  }
+  if (
+    latest.kind === "user" &&
+    latest.direction === "outbound" &&
+    isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)
+  ) {
+    return "sent";
+  }
+  return undefined;
+}
+
+function isRecentStamp(stamp: string, now: number, windowMs: number): boolean {
+  const at = Date.parse(stamp);
+  return Number.isFinite(at) && now - at >= 0 && now - at < windowMs;
+}
+
+export function threadActivityCopy(
+  activity: InboxViewItem["activity"] | "sent" | undefined,
+): string | undefined {
+  if (activity === "awaiting_user") {
+    return "Waiting for your reply in the original channel.";
+  }
+  if (activity === "working") {
+    return "The other side is still working.";
+  }
+  if (activity === "sent") {
+    return "Sent. Waiting for a reply from the original channel.";
+  }
+  return undefined;
+}
+
 export function firstLine(text: string | undefined, max = 80): string {
   const lines = (text ?? "")
     .split(/\r?\n/)
@@ -88,10 +131,11 @@ export function threadTitle(thread: InboxThread): string {
 }
 
 function threadFace(thread: InboxThread): InboxViewItem {
-  const user = thread.messages.find((item) => messageRole(item) === "user");
-  const human =
-    user ?? thread.messages.find((item) => messageRole(item) !== "system");
-  return human ?? thread.messages[thread.messages.length - 1] ?? thread.messages[0];
+  const visible = thread.messages.filter((item) => item.activity !== "working");
+  const pool = visible.length > 0 ? visible : thread.messages;
+  const user = pool.find((item) => messageRole(item) === "user");
+  const human = user ?? pool.find((item) => messageRole(item) !== "system");
+  return human ?? pool[pool.length - 1] ?? thread.messages[0];
 }
 
 export function readingMessages(
@@ -113,6 +157,9 @@ export function readingMessages(
 }
 
 function isReadable(item: InboxViewItem): boolean {
+  if (item.activity === "working") {
+    return false;
+  }
   const text = item.body_text?.trim() ?? "";
   return text.length > 0 || (item.attachments?.length ?? 0) > 0;
 }

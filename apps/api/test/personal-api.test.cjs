@@ -510,6 +510,7 @@ describe("personal /v1/me", () => {
     authority.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
+      const before = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       const created = await (
         await fetch(`${origin}/v1/me/conversations/prefs`, {
           method: "POST",
@@ -523,6 +524,9 @@ describe("personal /v1/me", () => {
       ).json();
       assert.equal(created.title, "Release desk");
       assert.equal(created.pinned, true);
+      const after = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      assert.equal(after.inbox_count, before.inbox_count);
+      assert.notEqual(after.inbox_digest, before.inbox_digest);
 
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       assert.equal(inbox[0].thread_id, "dsh:session-title");

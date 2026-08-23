@@ -38,6 +38,7 @@ export interface InboxAttachment {
 
 export type MessageKind = "user" | "assistant" | "system";
 export type MessageDirection = "inbound" | "outbound";
+export type ThreadActivity = "awaiting_user" | "working";
 
 export interface InboxViewItem {
   decision: ArrangementDecision;
@@ -57,6 +58,7 @@ export interface InboxViewItem {
   conversation_label?: string | null;
   conversation_kind?: string | null;
   actor_label?: string | null;
+  activity?: ThreadActivity;
 }
 
 export interface IngestAttempt {

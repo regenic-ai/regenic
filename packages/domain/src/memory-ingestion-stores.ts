@@ -131,7 +131,10 @@ export class MemoryAuthorityStore implements AuthorityStore {
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
-    return summarizeInboxItems(this.currentWorkInbox(orgId));
+    return summarizeInboxItems(
+      this.currentWorkInbox(orgId),
+      [...this.prefs.values()].filter((pref) => pref.org_id === orgId),
+    );
   }
 
   private currentWorkInbox(orgId: string): InboxItem[] {

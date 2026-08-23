@@ -45,6 +45,8 @@ import {
   messageRole,
   readingMessages,
   sameUtterance,
+  threadActivityCopy,
+  threadActivityOf,
   threadTitle,
 } from "./message-view";
 import {
@@ -704,7 +706,9 @@ function InboxWorkspace({
                     onSave={(title) => onRename(thread, title)}
                   />
                   <div className="item-reasons">
-                    {firstLine(latest?.body_text, 96) || thread.label}
+                    {threadActivityCopy(threadActivityOf(thread)) ||
+                      firstLine(latest?.body_text, 96) ||
+                      thread.label}
                   </div>
                 </div>
               </div>
@@ -985,7 +989,7 @@ const ThreadPane = memo(function ThreadPane({
     source: InboxViewItem[];
     reading: InboxViewItem[];
   }>({ threadId: "", source: [], reading: [] });
-  const merged = useMemo(() => {
+  const { merged, activityNote } = useMemo(() => {
     const seen = new Set(thread.messages.map((item) => item.event.id));
     const source = [
       ...thread.messages,
@@ -997,7 +1001,12 @@ const ThreadPane = memo(function ThreadPane({
         : undefined;
     const reading = readingMessages({ ...thread, messages: source }, previous);
     readingRef.current = { threadId: thread.id, source, reading };
-    return reading;
+    return {
+      merged: reading,
+      activityNote: threadActivityCopy(
+        threadActivityOf({ ...thread, messages: source }),
+      ),
+    };
   }, [thread, pending]);
   const canReply = thread.can_send;
   const quoteMessage = useCallback((item: InboxViewItem) => {
@@ -1087,6 +1096,7 @@ const ThreadPane = memo(function ThreadPane({
         onReply={quoteMessage}
       />
       <div className="composer-dock">
+        {activityNote ? <p className="thread-activity">{activityNote}</p> : null}
         <Composer
           key={thread.id}
           disabled={!canReply}

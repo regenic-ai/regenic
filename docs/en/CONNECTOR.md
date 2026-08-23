@@ -61,7 +61,7 @@ The following are not allowed:
 - Mapping an unknown native type to `message`.
 - Putting bodies or secrets in `attrs`, logs, or quarantine metadata.
 - Adding per-channel switches in the API or desktop. The desktop reads
-  `can_send` and `can_create`.
+  `can_send`, `can_create`, and `surface.activity`.
 
 ## Message format
 
@@ -76,9 +76,17 @@ Send and display shape is defined by `message-contract` in `@regenic/domain`.
 | `capabilities` | `{ sync, reply, create }` | Returned by `ChannelDriver.capabilities()` |
 
 `channelRecord()` attaches surface metadata (`channel`, `kind`, `direction`,
-and optional `conversation_label` / `conversation_kind` / `actor_label`).
-to the record. The desktop reads that metadata. It does not infer role or
-direction from the driver name.
+and optional `conversation_label` / `conversation_kind` / `actor_label` /
+`activity`) to the record. `activity` is channel-agnostic thread state:
+`working` (the other side is still processing with no visible body) or
+`awaiting_user` (it is waiting for an answer in the original channel). The
+desktop reads that field. It does not infer role, direction, or a stuck
+state from the driver name.
+
+When the other side has only invisible labor, a connector may emit a
+`type: "thread_status"` record with `activity: "working"`. Arrangement keeps
+it in current work. The desktop uses it as a status banner, not a chat
+bubble.
 
 A local outbound and the channel-history echo of the same utterance in one
 conversation stay a single Event.

@@ -66,26 +66,77 @@ export function latestByThread<T extends { event: EventRecord }>(items: T[]): T[
   return [...best.values()];
 }
 
+export function escapeLikeLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+export function threadExternalIdLike(target: string): string {
+  return `${escapeLikeLiteral(target)}:%`;
+}
+
+export function formatInboxDigest(input: {
+  count: number;
+  latest_at?: string;
+  latest_id?: string;
+  pref_count?: number;
+  pref_updated_at?: string;
+}): string {
+  return `${input.count}:${input.latest_at ?? ""}:${input.latest_id ?? ""}:${
+    input.pref_count ?? 0
+  }:${input.pref_updated_at ?? ""}`;
+}
+
 export function inboxDigest(
-  items: Array<{ event: { id: string; ingested_at: string } }>,
+  items: Array<{
+    event: { id: string; ingested_at: string; source?: string; external_id?: string };
+  }>,
+  prefs: Array<{ updated_at: string }> = [],
 ): string {
+  const threads = new Set<string>();
   let latestAt = "";
   let latestId = "";
   for (const item of items) {
+    threads.add(threadKey(item.event));
     const at = item.event.ingested_at;
     if (at > latestAt || (at === latestAt && item.event.id > latestId)) {
       latestAt = at;
       latestId = item.event.id;
     }
   }
-  return `${items.length}:${latestAt}:${latestId}`;
+  let prefUpdatedAt = "";
+  for (const pref of prefs) {
+    if (pref.updated_at > prefUpdatedAt) {
+      prefUpdatedAt = pref.updated_at;
+    }
+  }
+  return formatInboxDigest({
+    count: threads.size,
+    latest_at: latestAt,
+    latest_id: latestId,
+    pref_count: prefs.length,
+    pref_updated_at: prefUpdatedAt,
+  });
 }
 
-export function summarizeInboxItems(items: InboxItem[]): InboxSummary {
+export function summarizeInboxItems(
+  items: InboxItem[],
+  prefs: Array<{ updated_at: string }> = [],
+): InboxSummary {
   return {
-    count: items.length,
-    digest: inboxDigest(items),
+    count: new Set(items.map((item) => eventThreadId(item.event))).size,
+    digest: inboxDigest(items, prefs),
   };
+}
+
+function threadKey(event: {
+  id: string;
+  source?: string;
+  external_id?: string;
+}): string {
+  if (event.source && event.external_id) {
+    return conversationId(event.source, event.external_id, event.id);
+  }
+  return event.id;
 }
 
 export function selectInboxItems(

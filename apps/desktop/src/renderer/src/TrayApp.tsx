@@ -3,7 +3,7 @@ import { BrandLockup } from "./Brand";
 import { fetchEngine, fetchInbox } from "./api";
 import { chipLabel, engineChip, formatChatTime } from "./format";
 import { groupInboxThreads, latestMessage, sortInboxThreads } from "./inbox";
-import { threadTitle } from "./message-view";
+import { threadActivityCopy, threadActivityOf, threadTitle } from "./message-view";
 import type { InboxViewItem, PersonalEngineView } from "./types";
 
 const POLL_MS = 2000;
@@ -107,7 +107,9 @@ export function TrayApp() {
                     <span className="item-title">{threadTitle(thread)}</span>
                     <span>{latest ? formatChatTime(latest.event.occurred_at) : ""}</span>
                   </div>
-                  <div className="item-reasons">{thread.label}</div>
+                  <div className="item-reasons">
+                    {threadActivityCopy(threadActivityOf(thread)) || thread.label}
+                  </div>
                 </div>
               </div>
             );

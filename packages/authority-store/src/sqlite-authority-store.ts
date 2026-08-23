@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { AuthorityConflictError, conversationId } from "@regenic/domain";
+import {
+  AuthorityConflictError,
+  conversationId,
+  formatInboxDigest,
+  threadExternalIdLike,
+} from "@regenic/domain";
 import type {
   ArrangementDecision,
   AuthorityStore,
@@ -199,8 +204,8 @@ export class SqliteAuthorityStore
       params.push(query.source);
     }
     if (query?.target) {
-      clauses.push("(external_id = ? OR external_id LIKE ?)");
-      params.push(query.target, `${query.target}:%`);
+      clauses.push("(external_id = ? OR external_id LIKE ? ESCAPE '\\')");
+      params.push(query.target, threadExternalIdLike(query.target));
     }
     if (query?.thread_ids) {
       if (query.thread_ids.length === 0) {
@@ -278,13 +283,10 @@ export class SqliteAuthorityStore
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
-    const row = this.database
+    const latest = this.database
       .prepare(
         `
-          SELECT
-            COUNT(*) OVER () AS count,
-            e.ingested_at AS latest_at,
-            e.id AS latest_id
+          SELECT e.ingested_at AS latest_at, e.id AS latest_id
           FROM message_dispositions d
           JOIN events e ON e.id = d.event_id
           JOIN source_heads h ON h.current_event_id = e.id
@@ -293,15 +295,39 @@ export class SqliteAuthorityStore
           LIMIT 1
         `,
       )
-      .get(orgId) as
-      | { count: number; latest_at: string; latest_id: string }
-      | undefined;
-    if (!row) {
-      return { count: 0, digest: "0::" };
-    }
+      .get(orgId) as { latest_at: string; latest_id: string } | undefined;
+    const counted = this.database
+      .prepare(
+        `
+          SELECT COUNT(*) AS count FROM (
+            SELECT conversation_id(e.source, e.external_id, e.id) AS thread_id
+            FROM message_dispositions d
+            JOIN events e ON e.id = d.event_id
+            JOIN source_heads h ON h.current_event_id = e.id
+            WHERE d.org_id = ? AND d.disposition = 'current_work'
+            GROUP BY thread_id
+          )
+        `,
+      )
+      .get(orgId) as { count: number };
+    const prefs = this.database
+      .prepare(
+        `
+          SELECT COUNT(*) AS pref_count,
+                 COALESCE(MAX(updated_at), '') AS pref_updated_at
+          FROM conversation_prefs WHERE org_id = ?
+        `,
+      )
+      .get(orgId) as { pref_count: number; pref_updated_at: string };
     return {
-      count: row.count,
-      digest: `${row.count}:${row.latest_at}:${row.latest_id}`,
+      count: counted.count,
+      digest: formatInboxDigest({
+        count: counted.count,
+        latest_at: latest?.latest_at ?? "",
+        latest_id: latest?.latest_id ?? "",
+        pref_count: prefs.pref_count,
+        pref_updated_at: prefs.pref_updated_at,
+      }),
     };
   }
 
@@ -1034,8 +1060,8 @@ export class SqliteAuthorityStore
       params.push(query.source);
     }
     if (query?.target) {
-      clauses.push("(e.external_id = ? OR e.external_id LIKE ?)");
-      params.push(query.target, `${query.target}:%`);
+      clauses.push("(e.external_id = ? OR e.external_id LIKE ? ESCAPE '\\')");
+      params.push(query.target, threadExternalIdLike(query.target));
     }
     if (query?.thread_ids && query.thread_ids.length > 0) {
       clauses.push(

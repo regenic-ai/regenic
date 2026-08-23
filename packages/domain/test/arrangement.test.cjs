@@ -64,6 +64,17 @@ describe("arrangeMessage", () => {
     assert.deepEqual(decision.reason_codes, ["thread_reply_noise"]);
   });
 
+  it("keeps a thread status marker in current work", () => {
+    const decision = arrangeMessage({
+      event: event({ source: "dsh" }),
+      type: "thread_status",
+      kind: "system",
+      text: "",
+    });
+    assert.equal(decision.disposition, "current_work");
+    assert.deepEqual(decision.reason_codes, ["thread_status"]);
+  });
+
   it("keeps a short assistant reply in current work", () => {
     const decision = arrangeMessage({
       event: event({ source: "dsh" }),

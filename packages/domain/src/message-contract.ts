@@ -5,6 +5,7 @@ export const SURFACE_MEDIA_TYPE = "application/vnd.regenic.surface+json";
 export type ChannelId = string;
 export type MessageKind = "user" | "assistant" | "system";
 export type MessageDirection = "inbound" | "outbound";
+export type ThreadActivity = "awaiting_user" | "working";
 
 export interface MessageSurface {
   channel: ChannelId;
@@ -13,6 +14,7 @@ export interface MessageSurface {
   conversation_label?: string;
   conversation_kind?: string;
   actor_label?: string;
+  activity?: ThreadActivity;
 }
 
 export interface ChannelDescriptor {
@@ -89,6 +91,7 @@ export function channelRecord(input: {
   occurred_at: string;
   actor_id: string;
   actor_label?: string;
+  activity?: ThreadActivity;
   scope_id: string;
   scope_name?: string;
   conversation_kind?: string;
@@ -108,6 +111,7 @@ export function channelRecord(input: {
       ? { conversation_kind: input.conversation_kind }
       : {}),
     ...(input.actor_label ? { actor_label: input.actor_label } : {}),
+    ...(input.activity ? { activity: input.activity } : {}),
   };
   const body = input.content ?? [];
   const hasBody = body.some((part) => part.role === "body");
@@ -246,6 +250,7 @@ function readSurface(
   const conversationLabel = optionalLabel(value.conversation_label);
   const conversationKind = optionalLabel(value.conversation_kind);
   const actorLabel = optionalLabel(value.actor_label);
+  const activity = isActivity(value.activity) ? value.activity : undefined;
   return {
     channel: value.channel.trim() || fallbackChannel || value.channel,
     kind: value.kind,
@@ -253,6 +258,7 @@ function readSurface(
     ...(conversationLabel ? { conversation_label: conversationLabel } : {}),
     ...(conversationKind ? { conversation_kind: conversationKind } : {}),
     ...(actorLabel ? { actor_label: actorLabel } : {}),
+    ...(activity ? { activity } : {}),
   };
 }
 
@@ -268,4 +274,8 @@ function isKind(value: unknown): value is MessageKind {
 
 function isDirection(value: unknown): value is MessageDirection {
   return value === "inbound" || value === "outbound";
+}
+
+function isActivity(value: unknown): value is ThreadActivity {
+  return value === "awaiting_user" || value === "working";
 }

@@ -9,7 +9,6 @@ import {
   ChannelDriverRegistry,
   ConnectorRunner,
   channelLabel,
-  conversationId,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -23,7 +22,10 @@ import {
   type EngineInstallationView,
 } from "./personal-connector-view";
 import { PersonalConnectorError } from "./personal-errors";
-import { PersonalInboxService } from "./personal-inbox.service";
+import {
+  PersonalInboxService,
+  type InboxViewItem,
+} from "./personal-inbox.service";
 import { pullStatus } from "./personal-pull-status";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
@@ -154,11 +156,21 @@ export class PersonalConnectorService
     thread: ConversationThread,
   ): Promise<void> {
     const threadId = `${thread.source}:${thread.target}`;
-    const known = await this.assistantIds(threadId);
+    const before = await this.threadFollowState(threadId);
+    if (before.activity === "awaiting_user") {
+      return;
+    }
     for (let attempt = 0; attempt < FOLLOW_TRIES; attempt += 1) {
       await pollStream(host, store, installation, stream, 2);
-      const seen = await this.assistantIds(threadId);
-      if ([...seen].some((id) => !known.has(id))) {
+      const after = await this.threadFollowState(threadId);
+      if (after.activity === "awaiting_user") {
+        return;
+      }
+      if (
+        after.latestId &&
+        after.latestId !== before.latestId &&
+        (after.inbound || after.activity === "working")
+      ) {
         await pollStream(host, store, installation, stream, 2);
         return;
       }
@@ -168,18 +180,21 @@ export class PersonalConnectorService
     }
   }
 
-  private async assistantIds(threadId: string): Promise<Set<string>> {
-    const items = await this.inbox.listInbox();
-    return new Set(
-      items
-        .filter(
-          (item) =>
-            item.kind === "assistant" &&
-            conversationId(item.event.source, item.event.external_id, item.event.id) ===
-              threadId,
-        )
-        .map((item) => item.event.id),
-    );
+  private async threadFollowState(threadId: string): Promise<{
+    latestId?: string;
+    inbound: boolean;
+    activity?: InboxViewItem["activity"];
+  }> {
+    const items = await this.inbox.listInbox({ thread_id: threadId });
+    const latest = items[items.length - 1];
+    if (!latest) {
+      return { inbound: false };
+    }
+    return {
+      latestId: latest.event.id,
+      inbound: latest.direction === "inbound",
+      activity: latest.activity,
+    };
   }
 
   async createConversation(

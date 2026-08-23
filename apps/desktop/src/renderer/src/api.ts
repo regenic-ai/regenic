@@ -93,6 +93,7 @@ export async function fetchInbox(
     conversation_kind: item.conversation_kind ?? null,
     actor_label: item.actor_label ?? null,
     pref_updated_at: item.pref_updated_at ?? null,
+    activity: item.activity,
   }));
 }
 

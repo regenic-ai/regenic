@@ -16,6 +16,7 @@ import {
   type InboxQuery,
   type MessageDirection,
   type MessageKind,
+  type ThreadActivity,
 } from "@regenic/domain";
 import { resolveInboxBody, type InboxAttachment } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
@@ -49,6 +50,7 @@ export interface InboxViewItem {
   conversation_label: string | null;
   conversation_kind: string | null;
   actor_label: string | null;
+  activity?: ThreadActivity;
 }
 
 export interface ConversationPrefView {
@@ -295,6 +297,7 @@ function decorateInboxItem(
     conversation_label: surface.conversation_label ?? null,
     conversation_kind: surface.conversation_kind ?? null,
     actor_label: surface.actor_label ?? null,
+    activity: surface.activity,
   };
 }
 

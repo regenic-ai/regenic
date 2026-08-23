@@ -954,6 +954,17 @@ button {
   padding: 8px 16px 14px;
 }
 
+.thread-activity {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--warning-soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .composer {
   position: relative;
   display: grid;

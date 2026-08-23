@@ -100,7 +100,8 @@ export function sameInboxProps(
     previous.conversation_kind !== next.conversation_kind ||
     previous.thread_id !== next.thread_id ||
     previous.kind !== next.kind ||
-    previous.can_send !== next.can_send
+    previous.can_send !== next.can_send ||
+    previous.activity !== next.activity
   ) {
     return false;
   }

@@ -8,6 +8,7 @@ import {
   type MessageDirection,
   type MessageKind,
   type PollResult,
+  type ThreadActivity,
 } from "@regenic/domain";
 import { DshApiError, type DshHistoryEvent, type DshHistoryPage } from "./dsh-cli-client";
 
@@ -21,6 +22,7 @@ export interface DshSurfaceEvent {
   seq: number;
   time: number;
   actor_id: string;
+  activity?: ThreadActivity;
   data: { content: Array<{ type: "text"; text: string }> };
 }
 
@@ -176,7 +178,9 @@ export class DshSessionPollConnector {
       external_id: `${this.options.session_id}:${event.seq}`,
       occurred_at: new Date(event.time).toISOString(),
       actor_id: event.actor_id,
+      activity: event.activity,
       scope_id: this.options.session_id,
+      type: event.activity === "working" ? "thread_status" : "message",
       text: event.data.content.map((part) => part.text).join(""),
     });
   }
@@ -196,9 +200,10 @@ export class DshSessionPollConnector {
 }
 
 function toSurfaceEvents(events: DshHistoryEvent[]): DshSurfaceEvent[] {
-  return events
+  const surface = events
     .flatMap((event) => toSurfaceEvent(event))
     .sort((left, right) => left.seq - right.seq);
+  return appendWorkingMarker(events, surface);
 }
 
 function dedupeHistoryEvents(events: DshHistoryEvent[]): DshHistoryEvent[] {
@@ -242,6 +247,7 @@ export function toSurfaceEvent(event: DshHistoryEvent): DshSurfaceEvent[] {
       seq: event.seq,
       time: event.time,
       actor_id: classified.actor_id,
+      activity: classified.activity,
       data: { content: [{ type: "text", text: classified.text }] },
     },
   ];
@@ -261,6 +267,7 @@ export function classifyDshHistoryEvent(event: DshHistoryEvent): {
   direction: MessageDirection;
   actor_id: string;
   text: string;
+  activity?: ThreadActivity;
 } | undefined {
   if (event.type === "user/message") {
     const text = extractTextBlocks(userMessageFromData(event.data));
@@ -308,10 +315,51 @@ export function classifyDshHistoryEvent(event: DshHistoryEvent): {
       kind: "assistant",
       direction: "inbound",
       actor_id: "assistant",
+      activity: "awaiting_user",
       text,
     };
   }
   return undefined;
+}
+
+function appendWorkingMarker(
+  raw: DshHistoryEvent[],
+  surface: DshSurfaceEvent[],
+): DshSurfaceEvent[] {
+  if (raw.length === 0) {
+    return surface;
+  }
+  const latest = raw.reduce((left, right) => (left.seq > right.seq ? left : right));
+  const latestVisible = surface[surface.length - 1];
+  if (latestVisible && latestVisible.seq >= latest.seq) {
+    return surface;
+  }
+  if (!isWorkingHistoryEvent(latest)) {
+    return surface;
+  }
+  return [
+    ...surface,
+    {
+      type: "assistant/message",
+      kind: "system",
+      direction: "inbound",
+      seq: latest.seq,
+      time: latest.time,
+      actor_id: "assistant",
+      activity: "working",
+      data: { content: [{ type: "text", text: "Still working." }] },
+    },
+  ];
+}
+
+function isWorkingHistoryEvent(event: DshHistoryEvent): boolean {
+  if (event.type === "assistant/message") {
+    return !extractTextBlocks(assistantMessageFromData(event.data));
+  }
+  if (event.type === "tool/call") {
+    return !askUserQuestionText(event.data);
+  }
+  return event.type === "assistant/reasoning" || event.type === "tool/result";
 }
 
 function parseCursor(cursor: ConnectorCursor | null): {

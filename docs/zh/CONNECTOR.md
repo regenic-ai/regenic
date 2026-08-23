@@ -51,7 +51,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 把 token 存进 `config`，或从 `/v1/me` 返回。
 - 把未知的原生类型映射成 `message`。
 - 把正文或密钥放进 `attrs`、日志或隔离区元数据。
-- 在 API 或桌面按渠道名加开关。桌面读 `can_send` 和 `can_create`。
+- 在 API 或桌面按渠道名加开关。桌面读 `can_send`、`can_create` 和 `surface.activity`。
 
 ## 消息格式
 
@@ -66,8 +66,14 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 | `capabilities` | `{ sync, reply, create }` | 由 `ChannelDriver.capabilities()` 返回 |
 
 `channelRecord()` 把 surface（`channel`、`kind`、`direction`，以及可选的
-`conversation_label` / `conversation_kind` / `actor_label`）附在记录上。
-桌面读这份元数据，不按驱动名推断角色或方向。
+`conversation_label` / `conversation_kind` / `actor_label` / `activity`）
+附在记录上。`activity` 是渠道无关的线程状态：`working`（对端还在处理，
+尚无可见正文）或 `awaiting_user`（对端在等用户在原渠道回答）。桌面只读
+该字段，不按驱动名推断角色、方向或「是不是卡住了」。
+
+对端只有不可见劳动时，连接器可另发一条 `type: "thread_status"` 记录
+（`activity: "working"`）。编排把它留在当前工作。桌面用它做状态条，不画
+成聊天气泡。
 
 同一会话里，本地出站和渠道 history 回声的同一句话只保留一条 Event。
 

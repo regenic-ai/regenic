@@ -73,6 +73,41 @@ describe("message contract", () => {
     );
   });
 
+  it("keeps connector activity on the stored surface", () => {
+    const record = channelRecord({
+      channel: "dsh",
+      kind: "system",
+      direction: "inbound",
+      external_id: "sess-1:working",
+      occurred_at: "2026-08-21T00:00:00.000Z",
+      actor_id: "assistant",
+      activity: "working",
+      scope_id: "sess-1",
+      type: "thread_status",
+      text: "Still working.",
+    });
+    assert.equal(record.type, "thread_status");
+    assert.deepEqual(surfaceFromParts(record.content), {
+      channel: "dsh",
+      kind: "system",
+      direction: "inbound",
+      activity: "working",
+    });
+    assert.deepEqual(
+      resolveMessageSurface({
+        source: "dsh",
+        external_id: "sess-1:working",
+        stored: surfaceFromParts(record.content),
+      }),
+      {
+        channel: "dsh",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+      },
+    );
+  });
+
   it("lets a connector emit one ingest record that already carries surface", () => {
     const record = channelRecord({
       channel: "dsh",

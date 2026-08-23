@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { InboxThread } from "../src/renderer/src/inbox.ts";
-import { readingMessages } from "../src/renderer/src/message-view.ts";
-import type { InboxViewItem } from "../src/renderer/src/types.ts";
+import {
+  readingMessages,
+  threadActivityCopy,
+  threadActivityOf,
+  threadTitle,
+} from "../src/renderer/src/message-view.ts";
+import type { InboxViewItem, ThreadActivity } from "../src/renderer/src/types.ts";
 
 function item(input: {
   id: string;
   external_id: string;
   text: string;
+  kind?: InboxViewItem["kind"];
+  direction?: InboxViewItem["direction"];
+  activity?: ThreadActivity;
+  occurred_at?: string;
 }): InboxViewItem {
   return {
     decision: {
@@ -25,16 +34,17 @@ function item(input: {
       source: "dsh",
       external_id: input.external_id,
       operation: "create",
-      occurred_at: "2026-08-23T12:00:00.000Z",
-      ingested_at: "2026-08-23T12:00:00.000Z",
+      occurred_at: input.occurred_at ?? "2026-08-23T12:00:00.000Z",
+      ingested_at: input.occurred_at ?? "2026-08-23T12:00:00.000Z",
     },
     body_text: input.text,
     channel: "dsh",
     channel_label: "DSH",
-    kind: "user",
-    direction: "outbound",
+    kind: input.kind ?? "user",
+    direction: input.direction ?? "outbound",
     can_send: true,
     thread_id: "dsh:session-1",
+    activity: input.activity,
   };
 }
 
@@ -84,5 +94,98 @@ describe("reading messages", () => {
     });
     const reading = readingMessages(thread([first, second]));
     assert.equal(reading.length, 2);
+  });
+
+  it("hides working markers from the reading list", () => {
+    const outbound = item({
+      id: "out-1",
+      external_id: "session-1:out:rpc",
+      text: "Continue",
+    });
+    const working = item({
+      id: "work-1",
+      external_id: "session-1:9",
+      text: "Still working.",
+      kind: "system",
+      direction: "inbound",
+      activity: "working",
+    });
+    const reading = readingMessages(thread([outbound, working]));
+    assert.deepEqual(reading.map((entry) => entry.event.id), ["out-1"]);
+  });
+});
+
+describe("thread activity", () => {
+  it("reads connector activity without using the channel name", () => {
+    const waiting = thread([
+      item({
+        id: "ask-1",
+        external_id: "session-1:12",
+        text: "Which channel?",
+        kind: "assistant",
+        direction: "inbound",
+        activity: "awaiting_user",
+      }),
+    ]);
+    assert.equal(threadActivityOf(waiting), "awaiting_user");
+    assert.match(threadActivityCopy(threadActivityOf(waiting)) ?? "", /original channel/);
+    const working = thread([
+      item({
+        id: "work-1",
+        external_id: "session-1:9",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+      }),
+    ]);
+    assert.equal(threadActivityOf(working), "working");
+    assert.match(threadActivityCopy(threadActivityOf(working)) ?? "", /still working/i);
+  });
+
+  it("treats a recent outbound as waiting for the original channel", () => {
+    const now = Date.parse("2026-08-23T12:05:00.000Z");
+    const sent = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:out:rpc",
+        text: "Continue",
+        occurred_at: "2026-08-23T12:00:00.000Z",
+      }),
+    ]);
+    assert.equal(threadActivityOf(sent, now), "sent");
+    assert.match(threadActivityCopy(threadActivityOf(sent, now)) ?? "", /Waiting for a reply/);
+  });
+
+  it("does not keep a stale outbound in the waiting state", () => {
+    const now = Date.parse("2026-08-23T13:00:00.000Z");
+    const stale = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:out:rpc",
+        text: "thanks",
+        occurred_at: "2026-08-23T12:00:00.000Z",
+      }),
+    ]);
+    assert.equal(threadActivityOf(stale, now), undefined);
+  });
+
+  it("does not title the thread from a working marker", () => {
+    const titled = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:out:rpc",
+        text: "Optimize the outline",
+      }),
+      item({
+        id: "work-1",
+        external_id: "session-1:9",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+      }),
+    ]);
+    assert.equal(threadTitle(titled), "Optimize the outline");
   });
 });

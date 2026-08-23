@@ -358,8 +358,82 @@ describe("local ingestion persistence", () => {
     assert.equal(heads.length, threads.size);
     assert.ok(heads.length >= 2);
     assert.ok(thread.length >= 2);
-    assert.equal(summary.count, current.length);
-    assert.equal(summary.digest.startsWith(`${current.length}:`), true);
+    assert.equal(summary.count, heads.length);
+    assert.equal(summary.digest.startsWith(`${heads.length}:`), true);
+    assert.ok(current.length >= heads.length);
+
+    const beforePref = summary.digest;
+    await authorityStore.putConversationPref({
+      org_id: "local-owner",
+      thread_id: "dsh:session-x",
+      title: "Release",
+      pinned: true,
+      updated_at: "2026-08-23T00:10:00.000Z",
+    });
+    const afterPref = await authorityStore.summarizeInbox("local-owner");
+    assert.equal(afterPref.count, heads.length);
+    assert.notEqual(afterPref.digest, beforePref);
+
+    const wildcard = await authorityStore.listInbox("local-owner", {
+      siblings: true,
+      source: "dsh",
+      target: "session_x",
+    });
+    assert.equal(wildcard.length, 0);
+    authorityStore.close();
+  });
+
+  it("does not treat LIKE wildcards in a thread target as a match-all", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "like-1",
+      received_at: "2026-08-23T00:00:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "axb:1",
+          occurred_at: "2026-08-23T00:00:00.000Z",
+          actor: { id: "user" },
+          scope: { id: "axb" },
+          type: "message",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Please confirm the release.",
+            },
+          ],
+        },
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "a_b:1",
+          occurred_at: "2026-08-23T00:00:01.000Z",
+          actor: { id: "user" },
+          scope: { id: "a_b" },
+          type: "message",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Please review the rollout.",
+            },
+          ],
+        },
+      ],
+    });
+    const matched = await authorityStore.listInbox("local-owner", {
+      siblings: true,
+      source: "dsh",
+      target: "a_b",
+    });
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].event.external_id, "a_b:1");
     authorityStore.close();
   });
 });
