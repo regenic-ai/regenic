@@ -307,6 +307,13 @@ export interface SetConnectorInstallationStatus {
   updated_at: string;
 }
 
+export interface SetConnectorInstallationConfig {
+  id: string;
+  org_id: string;
+  config: Record<string, JsonValue>;
+  updated_at: string;
+}
+
 export interface ResetConnectorCursor {
   installation_id: string;
   stream_key: string;
@@ -374,6 +381,7 @@ export interface ConnectorRuntimeStore {
   findInstallation(id: string): Promise<ConnectorInstallation | null>;
   listInstallations(orgId: string): Promise<ConnectorInstallation[]>;
   setInstallationStatus(input: SetConnectorInstallationStatus): Promise<ConnectorInstallation | null>;
+  updateInstallationConfig(input: SetConnectorInstallationConfig): Promise<ConnectorInstallation | null>;
   deleteInstallation(id: string, orgId: string): Promise<boolean>;
   acquireLease(input: AcquireConnectorLease): Promise<ConnectorLease | null>;
   releaseLease(input: ReleaseConnectorLease): Promise<boolean>;

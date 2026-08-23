@@ -14,7 +14,6 @@ import {
   type MessageDirection,
   type MessageKind,
 } from "@regenic/domain";
-import { probeLarkCliAuth } from "@regenic/feishu-connector";
 import { resolveInboxBody, type InboxAttachment } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import {
@@ -44,6 +43,9 @@ export interface InboxViewItem {
   title: string | null;
   pinned: boolean;
   pref_updated_at: string | null;
+  conversation_label: string | null;
+  conversation_kind: string | null;
+  actor_label: string | null;
 }
 
 export interface ConversationPrefView {
@@ -94,16 +96,14 @@ export class PersonalInboxService {
     const orgId = this.runtime.orgId();
     const catalogReady = async (
       installations: EngineInstallationView[],
-    ) =>
-      connectorCatalog(installations, {
+    ) => {
+      const probed = await this.drivers.probeCatalog(process.env);
+      return connectorCatalog(installations, {
         env: process.env,
-        services: {
-          "dsh-web": await probeLocalService(
-            process.env.REGENIC_DSH_BASE_URL?.trim() || "http://127.0.0.1:3080",
-          ),
-          "lark-cli": await probeLarkCliAuth(),
-        },
+        services: probed.services,
+        field_options: probed.field_options,
       });
+    };
     if (!this.runtime.isReady()) {
       return {
         kernel: "stopped",
@@ -228,15 +228,6 @@ export class PersonalInboxService {
   }
 }
 
-async function probeLocalService(url: string): Promise<boolean> {
-  try {
-    await fetch(url, { signal: AbortSignal.timeout(400) });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function decorateInboxItem(
   item: { decision: ArrangementDecision; event: EventRecord },
   body: Awaited<ReturnType<typeof resolveInboxBody>>,
@@ -264,6 +255,9 @@ function decorateInboxItem(
     title: pref?.title ?? null,
     pinned: pref?.pinned === true,
     pref_updated_at: pref?.updated_at ?? null,
+    conversation_label: surface.conversation_label ?? null,
+    conversation_kind: surface.conversation_kind ?? null,
+    actor_label: surface.actor_label ?? null,
   };
 }
 

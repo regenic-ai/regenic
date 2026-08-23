@@ -97,6 +97,14 @@ export class PersonalController {
     );
   }
 
+  @Post("connectors/:id/config")
+  updateConnectorConfig(
+    @Param("id") id: string,
+    @Body() body: { config?: Record<string, unknown> } | undefined,
+  ) {
+    return this.guard(() => this.connectors.updateConfig(id, body?.config ?? {}));
+  }
+
   @Delete("connectors/:id")
   uninstallConnector(@Param("id") id: string) {
     return this.guard(() => this.connectors.uninstall(id));

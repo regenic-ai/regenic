@@ -169,4 +169,41 @@ describe("channel driver registry", () => {
     assert.equal(drivers.findCreatable([slack, pinned]), undefined);
     assert.equal(drivers.findCreatable([slack, dsh])?.installation.id, "dsh-1");
   });
+
+  it("merges catalog probes from drivers and isolates probe failures", async () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(
+        stubDriver({
+          connector_type: "dsh-session",
+          source: "dsh",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          async probeCatalog() {
+            return {
+              services: {
+                "dsh-web": { ready: true, hint: "dsh web is reachable." },
+              },
+            };
+          },
+        }),
+      )
+      .register(
+        stubDriver({
+          connector_type: "feishu-chat",
+          source: "feishu",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          async probeCatalog() {
+            throw new Error("lark-cli missing");
+          },
+        }),
+      );
+    const probed = await drivers.probeCatalog({});
+    assert.deepEqual(probed.services, {
+      "dsh-web": { ready: true, hint: "dsh web is reachable." },
+    });
+    assert.deepEqual(probed.field_options, {});
+  });
 });

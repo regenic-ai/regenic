@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   applyKernelSettings,
   currentApiOrigin,
@@ -11,6 +11,7 @@ import {
   setConnectorStatus,
   syncConnector,
   uninstallConnector,
+  updateConnectorConfig,
   updateConversationPrefs,
 } from "./api";
 import { Composer, type ComposerDraft } from "./Composer";
@@ -35,15 +36,17 @@ import {
   type InboxThread,
   type PinFilter,
 } from "./inbox";
-import { MessageBody } from "./MessageBody";
 import {
+  conversationKindLabel,
   firstLine,
-  messageRole,
   readingMessages,
-  roleLabel,
   threadTitle,
-  type MessageRole,
 } from "./message-view";
+import {
+  ThreadMessageList,
+  type ThreadMessageListHandle,
+} from "./ThreadMessageList";
+import { reuseInboxItems } from "./thread-window";
 import { BrandBadge, BrandLockup } from "./Brand";
 import { EngineIcon, InboxIcon, PencilIcon, PinIcon, SettingsIcon } from "./Icons";
 import type {
@@ -59,6 +62,27 @@ import type {
 
 const POLL_MS = 2000;
 
+function engineRevision(
+  engine: PersonalEngineView | null,
+  detailed: boolean,
+): string {
+  if (!engine) {
+    return "";
+  }
+  const installs = engine.installations
+    .map(
+      (item) =>
+        `${item.id}:${item.status}:${item.last_attempt?.status ?? ""}:${item.label}`,
+    )
+    .join(",");
+  const catalog = (engine.catalog ?? [])
+    .map((item) => `${item.connector_type}:${item.installed}:${item.setup_ready ? 1 : 0}`)
+    .join(",");
+  return `${engine.kernel}|${engine.inbox_count}|${engine.pull?.last_error ?? ""}|${installs}|${catalog}${
+    detailed ? `|${engine.pull?.last_tick_at ?? ""}` : ""
+  }`;
+}
+
 export function ConsoleApp() {
   const [nav, setNav] = useState<NavId>("inbox");
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
@@ -72,34 +96,52 @@ export function ConsoleApp() {
   );
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
+  const prefOverlayRef = useRef(prefOverlay);
+  prefOverlayRef.current = prefOverlay;
+  const inboxRef = useRef(inbox);
+  inboxRef.current = inbox;
+  const groupedRef = useRef<InboxThread[]>([]);
+  const navRef = useRef(nav);
+  navRef.current = nav;
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       const [nextInbox, nextEngine] = await Promise.all([
         fetchInbox(),
         fetchEngine(),
       ]);
-      setInbox(nextInbox);
-      setEngine(nextEngine);
-      setError(null);
-      const synced = groupInboxThreads(nextInbox);
-      setPrefOverlay((current) => prunePrefOverlay(current, synced));
-      const nextDrafts = draftsRef.current.filter(
-        (draft) => !synced.some((thread) => thread.id === draft.thread_id),
+      const reused = reuseInboxItems(inboxRef.current, nextInbox);
+      if (reused !== inboxRef.current) {
+        setInbox(reused);
+        const synced = groupInboxThreads(reused, groupedRef.current);
+        groupedRef.current = synced;
+        setPrefOverlay((current) => prunePrefOverlay(current, synced));
+        const nextDrafts = draftsRef.current.filter(
+          (draft) => !synced.some((thread) => thread.id === draft.thread_id),
+        );
+        setDrafts((current) =>
+          nextDrafts.length === current.length ? current : nextDrafts,
+        );
+        setSelectedId((current) => {
+          const nextThreads = mergeDraftThreads(synced, nextDrafts);
+          if (current && nextThreads.some((thread) => thread.id === current)) {
+            return current;
+          }
+          return nextThreads[0]?.id ?? null;
+        });
+      }
+      setEngine((current) =>
+        engineRevision(current, navRef.current === "engine") ===
+        engineRevision(nextEngine, navRef.current === "engine")
+          ? current
+          : nextEngine,
       );
-      setDrafts(nextDrafts);
-      setSelectedId((current) => {
-        const threads = mergeDraftThreads(synced, nextDrafts);
-        if (current && threads.some((thread) => thread.id === current)) {
-          return current;
-        }
-        return threads[0]?.id ?? null;
-      });
+      setError((current) => (current === null ? current : null));
     } catch {
       setError(`Cannot reach the kernel at ${currentApiOrigin()}`);
       setEngine(null);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -109,11 +151,15 @@ export function ConsoleApp() {
     return () => {
       window.clearInterval(timer);
     };
-  }, []);
+  }, [refresh]);
 
-  const threads = sortInboxThreads(
-    applyPrefOverlay(mergeDraftThreads(groupInboxThreads(inbox), drafts), prefOverlay),
-  );
+  const threads = useMemo(() => {
+    const grouped = groupInboxThreads(inbox, groupedRef.current);
+    groupedRef.current = grouped;
+    return sortInboxThreads(
+      applyPrefOverlay(mergeDraftThreads(grouped, drafts), prefOverlay),
+    );
+  }, [inbox, drafts, prefOverlay]);
   const selected = threads.find((thread) => thread.id === selectedId) ?? null;
   const chip = engineChip(engine);
   const canCreate = engine?.installations.some((item) => item.can_create) === true;
@@ -138,11 +184,11 @@ export function ConsoleApp() {
     }
   };
 
-  const persistPrefs = async (
+  const persistPrefs = useCallback(async (
     thread: InboxThread,
     patch: { title?: string | null; pinned?: boolean },
   ) => {
-    const previous = prefOverlay[thread.id];
+    const previous = prefOverlayRef.current[thread.id];
     const optimistic: ConversationPrefOverlay = {
       title: patch.title !== undefined ? patch.title : thread.title,
       pinned: patch.pinned !== undefined ? patch.pinned : thread.pinned,
@@ -176,7 +222,15 @@ export function ConsoleApp() {
       setError(caught instanceof Error ? caught.message : "Cannot update conversation");
       throw caught;
     }
-  };
+  }, []);
+  const renameThread = useCallback(
+    (thread: InboxThread, title: string | null) => persistPrefs(thread, { title }),
+    [persistPrefs],
+  );
+  const pinThread = useCallback(
+    (thread: InboxThread, pinned: boolean) => persistPrefs(thread, { pinned }),
+    [persistPrefs],
+  );
 
   return (
     <div className="shell">
@@ -227,8 +281,8 @@ export function ConsoleApp() {
             onCreate={startConversation}
             onSelect={setSelectedId}
             onRefresh={refresh}
-            onRename={(thread, title) => persistPrefs(thread, { title })}
-            onPin={(thread, pinned) => persistPrefs(thread, { pinned })}
+            onRename={renameThread}
+            onPin={pinThread}
           />
         ) : null}
         {nav === "engine" ? (
@@ -288,6 +342,8 @@ function mergeDraftThreads(
       label: "New conversation",
       can_send: draft.can_send,
       title: draft.title ?? null,
+      conversation_label: null,
+      conversation_kind: null,
       pinned: draft.pinned === true,
       messages: [],
     }));
@@ -322,6 +378,14 @@ function InboxWorkspace({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const channels = threadChannels(threads);
   const visible = filterInboxThreads(threads, pinFilter, channelFilter);
+  const renameSelected = useCallback(
+    (title: string | null) => (selected ? onRename(selected, title) : Promise.resolve()),
+    [selected, onRename],
+  );
+  const pinSelected = useCallback(
+    (pinned: boolean) => (selected ? onPin(selected, pinned) : Promise.resolve()),
+    [selected, onPin],
+  );
 
   return (
     <div className="columns">
@@ -404,8 +468,15 @@ function InboxWorkspace({
               >
                 <div className="item-copy">
                   <div className="item-top">
-                    <span className={`channel-tag channel-${thread.channel}`}>
-                      {thread.channel_label}
+                    <span className="item-tags">
+                      <span className={`channel-tag channel-${thread.channel}`}>
+                        {thread.channel_label}
+                      </span>
+                      {conversationKindLabel(thread.conversation_kind) ? (
+                        <span className="kind-tag">
+                          {conversationKindLabel(thread.conversation_kind)}
+                        </span>
+                      ) : null}
                     </span>
                     <span className="item-time">
                       {latest ? formatChatTime(latest.event.occurred_at) : ""}
@@ -459,8 +530,8 @@ function InboxWorkspace({
           <ThreadPane
             thread={selected}
             onRefresh={onRefresh}
-            onRename={(title) => onRename(selected, title)}
-            onPin={(pinned) => onPin(selected, pinned)}
+            onRename={renameSelected}
+            onPin={pinSelected}
           />
         ) : (
           <div className="thread-empty">Select a conversation on the left.</div>
@@ -586,7 +657,7 @@ function ThreadTitleField({
   );
 }
 
-function ThreadPane({
+const ThreadPane = memo(function ThreadPane({
   thread,
   onRefresh,
   onRename,
@@ -601,16 +672,30 @@ function ThreadPane({
   const [pending, setPending] = useState<InboxViewItem[]>([]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const seen = new Set(thread.messages.map((item) => item.event.id));
-  const merged = readingMessages({
-    ...thread,
-    messages: [
+  const listRef = useRef<ThreadMessageListHandle>(null);
+  const readingRef = useRef<{
+    threadId: string;
+    source: InboxViewItem[];
+    reading: InboxViewItem[];
+  }>({ threadId: "", source: [], reading: [] });
+  const merged = useMemo(() => {
+    const seen = new Set(thread.messages.map((item) => item.event.id));
+    const source = [
       ...thread.messages,
       ...pending.filter((item) => !seen.has(item.event.id)),
-    ],
-  });
+    ];
+    const previous =
+      readingRef.current.threadId === thread.id
+        ? { source: readingRef.current.source, reading: readingRef.current.reading }
+        : undefined;
+    const reading = readingMessages({ ...thread, messages: source }, previous);
+    readingRef.current = { threadId: thread.id, source, reading };
+    return reading;
+  }, [thread, pending]);
   const canReply = thread.can_send;
+  const quoteMessage = useCallback((item: InboxViewItem) => {
+    setQuote(item);
+  }, []);
 
   useEffect(() => {
     setQuote(null);
@@ -620,18 +705,12 @@ function ThreadPane({
     );
   }, [thread.id]);
 
-  useEffect(() => {
-    const node = scrollRef.current;
-    if (node) {
-      node.scrollTop = node.scrollHeight;
-    }
-  }, [thread.id, merged.length]);
-
   const send = async (draft: ComposerDraft) => {
     setSending(true);
     setSendError(null);
     const optimistic = localOutbound(thread, draft);
     setPending((current) => [...current, optimistic]);
+    listRef.current?.scrollToEnd();
     try {
       await sendReply({
         thread_id: thread.id,
@@ -658,6 +737,11 @@ function ThreadPane({
             <span className={`channel-tag channel-lg channel-${thread.channel}`}>
               {thread.channel_label}
             </span>
+            {conversationKindLabel(thread.conversation_kind) ? (
+              <span className="kind-tag">
+                {conversationKindLabel(thread.conversation_kind)}
+              </span>
+            ) : null}
             <h1>
               <ThreadTitleField
                 className="thread-title"
@@ -678,60 +762,19 @@ function ThreadPane({
             </button>
           </div>
           <p className="thread-sub">
-            {thread.messages.length} messages · {thread.label}
+            {thread.messages.length} messages
+            {thread.conversation_label ? "" : ` · ${thread.label}`}
           </p>
         </div>
       </header>
-      <div className="thread-scroll" ref={scrollRef}>
-        {merged.length === 0 ? (
-          <p className="muted">This conversation has no displayable messages.</p>
-        ) : (
-          <ol className="thread-messages">
-            {merged.map((item, index) => {
-              const role = messageRole(item);
-              const previous = index > 0 ? messageRole(merged[index - 1]) : null;
-              const follow = previous === role && role !== "system";
-              const text = item.body_text ?? "";
-              if (role === "system") {
-                return (
-                  <li key={item.event.id} className="chat-system">
-                    <details>
-                      <summary>
-                        {roleLabel(role)} · {formatChatTime(item.event.occurred_at)}
-                      </summary>
-                      <MessageBody text={text} attachments={item.attachments} />
-                    </details>
-                  </li>
-                );
-              }
-              return (
-                <li
-                  key={item.event.id}
-                  className={`chat-row chat-row-${role}${follow ? " is-follow" : ""}`}
-                >
-                  <ChatAvatar role={role} />
-                  <div className="chat-main">
-                    <div className="chat-meta">
-                      <strong>{roleLabel(role, thread.channel)}</strong>
-                      <span>{formatChatTime(item.event.occurred_at)}</span>
-                      {canReply ? (
-                        <button
-                          type="button"
-                          className="chat-reply"
-                          onClick={() => setQuote(item)}
-                        >
-                          Reply
-                        </button>
-                      ) : null}
-                    </div>
-                    <MessageBody text={text} attachments={item.attachments} />
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </div>
+      <ThreadMessageList
+        ref={listRef}
+        threadId={thread.id}
+        items={merged}
+        channel={thread.channel}
+        canReply={canReply}
+        onReply={quoteMessage}
+      />
       <div className="composer-dock">
         <Composer
           key={thread.id}
@@ -750,22 +793,7 @@ function ThreadPane({
       </div>
     </article>
   );
-}
-
-function ChatAvatar({
-  role,
-  compact,
-}: {
-  role: MessageRole;
-  compact?: boolean;
-}) {
-  const mark = role === "user" ? "Y" : role === "system" ? "R" : "A";
-  return (
-    <span className={`chat-avatar chat-avatar-${role}${compact ? " is-compact" : ""}`}>
-      {mark}
-    </span>
-  );
-}
+});
 
 function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem {
   const now = new Date().toISOString();
@@ -819,10 +847,12 @@ function EnginePage({
     try {
       await action();
       await onChanged();
+      return true;
     } catch (caught) {
       setActionError(
         caught instanceof Error ? connectorActionError(caught.message) : "Action failed",
       );
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -918,11 +948,8 @@ function EnginePage({
             busyId={busyId}
             syncingAll={syncingAll}
             installing={installingType === kind.connector_type}
-            onOpenInstall={() =>
-              setInstallingType((current) =>
-                current === kind.connector_type ? null : kind.connector_type,
-              )
-            }
+            onOpenInstall={() => setInstallingType(kind.connector_type)}
+            onCloseInstall={() => setInstallingType(null)}
             onInstall={(config) =>
               void runAction(kind.connector_type, async () => {
                 await installConnector(kind.connector_type, config);
@@ -940,6 +967,11 @@ function EnginePage({
                   installation.id,
                   installation.status === "disabled" ? "enabled" : "disabled",
                 );
+              })
+            }
+            onUpdate={(installation, config) =>
+              runAction(installation.id, async () => {
+                await updateConnectorConfig(installation.id, config);
               })
             }
             onUninstall={(installation) => {
@@ -969,9 +1001,11 @@ function ConnectorKind({
   syncingAll,
   installing,
   onOpenInstall,
+  onCloseInstall,
   onInstall,
   onSync,
   onToggle,
+  onUpdate,
   onUninstall,
 }: {
   kind: ConnectorCatalogItem;
@@ -980,11 +1014,17 @@ function ConnectorKind({
   syncingAll: boolean;
   installing: boolean;
   onOpenInstall: () => void;
+  onCloseInstall: () => void;
   onInstall: (config: Record<string, string>) => void;
   onSync: (id: string) => void;
   onToggle: (installation: EngineInstallationView) => void;
+  onUpdate: (
+    installation: EngineInstallationView,
+    config: Record<string, string>,
+  ) => Promise<boolean>;
   onUninstall: (installation: EngineInstallationView) => void;
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
   return (
     <div className="connector-kind">
       <div className="install">
@@ -999,11 +1039,9 @@ function ConnectorKind({
             </span>
             {` · credentials ${kind.credential_hint}`}
           </div>
-          {installing ? null : (
-            <PrerequisiteList
-              items={visiblePrerequisites(kind, defaultFieldValues(kind))}
-            />
-          )}
+          <PrerequisiteList
+            items={visiblePrerequisites(kind, defaultFieldValues(kind))}
+          />
         </div>
         <div className="install-actions">
           <button
@@ -1012,24 +1050,42 @@ function ConnectorKind({
             disabled={busyId !== null || syncingAll}
             onClick={onOpenInstall}
           >
-            {installing ? "Cancel" : "Install"}
+            Install
           </button>
         </div>
       </div>
       {installing ? (
-        <ConnectorInstallForm
+        <ConnectorSettingsDialog
+          title={`Install ${kind.title}`}
           kind={kind}
           busy={busyId === kind.connector_type}
+          submitLabel="Install"
+          busyLabel="Installing…"
           onSubmit={onInstall}
+          onClose={onCloseInstall}
         />
       ) : null}
       {installations.map((installation) => (
         <ConnectorRow
           key={installation.id}
+          kind={kind}
           installation={installation}
           busy={busyId === installation.id || syncingAll}
+          editing={editingId === installation.id}
+          onEdit={() =>
+            setEditingId((current) =>
+              current === installation.id ? null : installation.id,
+            )
+          }
           onSync={() => onSync(installation.id)}
           onToggle={() => onToggle(installation)}
+          onSave={(config) => {
+            void onUpdate(installation, config).then((saved) => {
+              if (saved) {
+                setEditingId(null);
+              }
+            });
+          }}
           onUninstall={() => onUninstall(installation)}
         />
       ))}
@@ -1037,23 +1093,90 @@ function ConnectorKind({
   );
 }
 
-function ConnectorInstallForm({
+function ConnectorSettingsDialog({
+  title,
   kind,
   busy,
+  initialValues,
+  submitLabel,
+  busyLabel,
+  onSubmit,
+  onClose,
+}: {
+  title: string;
+  kind: ConnectorCatalogItem;
+  busy: boolean;
+  initialValues?: Record<string, string>;
+  submitLabel: string;
+  busyLabel: string;
+  onSubmit: (config: Record<string, string>) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  return (
+    <div
+      className="dialog-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) {
+          onClose();
+        }
+      }}
+    >
+      <div className="dialog" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="dialog-head">
+          <h2>{title}</h2>
+          <button type="button" className="ghost" disabled={busy} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <ConnectorSettingsForm
+          kind={kind}
+          busy={busy}
+          initialValues={initialValues}
+          submitLabel={submitLabel}
+          busyLabel={busyLabel}
+          onSubmit={onSubmit}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ConnectorSettingsForm({
+  kind,
+  busy,
+  initialValues,
+  submitLabel,
+  busyLabel,
   onSubmit,
 }: {
   kind: ConnectorCatalogItem;
   busy: boolean;
+  initialValues?: Record<string, string>;
+  submitLabel: string;
+  busyLabel: string;
   onSubmit: (config: Record<string, string>) => void;
 }) {
-  const [values, setValues] = useState<Record<string, string>>(() =>
-    defaultFieldValues(kind),
-  );
+  const [values, setValues] = useState<Record<string, string>>(() => ({
+    ...defaultFieldValues(kind),
+    ...initialValues,
+  }));
   const fields = kind.fields.filter((field) =>
     matchesWhen(field.visible_when, values),
   );
   const prerequisites = visiblePrerequisites(kind, values);
   const blocked = prerequisites.some((item) => item.required && !item.ready);
+  const missingRequired = fields.some(
+    (field) => field.required && !(values[field.key] ?? "").trim(),
+  );
   return (
     <form
       className="install-form"
@@ -1069,7 +1192,18 @@ function ConnectorInstallForm({
             {field.label}
             {field.required ? " *" : ""}
           </span>
-          {field.options ? (
+          {field.multiple ? (
+            <CheckOptionList
+              field={field}
+              selected={splitValues(values[field.key])}
+              onToggle={(value) =>
+                setValues((current) => ({
+                  ...current,
+                  [field.key]: toggleCsvValue(current[field.key], value),
+                }))
+              }
+            />
+          ) : field.options ? (
             <select
               value={values[field.key] ?? field.default ?? ""}
               onChange={(event) =>
@@ -1100,11 +1234,73 @@ function ConnectorInstallForm({
           )}
         </label>
       ))}
-      <button type="submit" className="primary" disabled={busy || blocked}>
-        {busy ? "Installing…" : blocked ? "Finish prerequisites first" : "Install"}
+      <button
+        type="submit"
+        className="primary"
+        disabled={busy || blocked || missingRequired}
+      >
+        {busy
+          ? busyLabel
+          : blocked
+            ? "Finish prerequisites first"
+            : missingRequired
+              ? "Fill required fields"
+              : submitLabel}
       </button>
     </form>
   );
+}
+
+function CheckOptionList({
+  field,
+  selected,
+  onToggle,
+}: {
+  field: ConnectorCatalogItem["fields"][number];
+  selected: string[];
+  onToggle: (value: string) => void;
+}) {
+  if (!field.options || field.options.length === 0) {
+    return (
+      <p className="field-empty">{field.placeholder ?? "No options yet"}</p>
+    );
+  }
+  return (
+    <ul className="check-list">
+      {field.options.map((option) => {
+        const checked = selected.includes(option.value);
+        return (
+          <li key={option.value}>
+            <label className={`check-item${checked ? " active" : ""}`}>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggle(option.value)}
+              />
+              <span>{option.label}</span>
+            </label>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function splitValues(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function toggleCsvValue(current: string | undefined, value: string): string {
+  const selected = new Set(splitValues(current));
+  if (selected.has(value)) {
+    selected.delete(value);
+  } else {
+    selected.add(value);
+  }
+  return [...selected].join(",");
 }
 
 function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisites"] }) {
@@ -1156,16 +1352,24 @@ function matchesWhen(
 }
 
 function ConnectorRow({
+  kind,
   installation,
   busy,
+  editing,
+  onEdit,
   onSync,
   onToggle,
+  onSave,
   onUninstall,
 }: {
+  kind: ConnectorCatalogItem;
   installation: EngineInstallationView;
   busy: boolean;
+  editing: boolean;
+  onEdit: () => void;
   onSync: () => void;
   onToggle: () => void;
+  onSave: (config: Record<string, string>) => void;
   onUninstall: () => void;
 }) {
   const statusChip =
@@ -1175,41 +1379,61 @@ function ConnectorRow({
         ? "stopped"
         : "";
   return (
-    <div className="install install-instance">
-      <div>
-        <strong>
-          {connectorLabel(installation.connector_type)} · {installation.label}
-        </strong>
-        <div className="muted">
-          <span className={`chip ${statusChip}`.trim()}>
-            {installationStatusLabel(installation.status)}
-          </span>
-          {installation.detail ? ` · ${installation.detail}` : ""}
-          {` · ${installation.id}`}
+    <div className="install-block">
+      <div className="install install-instance">
+        <div>
+          <strong>
+            {connectorLabel(installation.connector_type)} · {installation.label}
+          </strong>
+          <div className="muted">
+            <span className={`chip ${statusChip}`.trim()}>
+              {installationStatusLabel(installation.status)}
+            </span>
+            {installation.detail ? ` · ${installation.detail}` : ""}
+            {` · ${installation.id}`}
+          </div>
+          <div className="muted">{attemptSummary(installation.last_attempt)}</div>
         </div>
-        <div className="muted">{attemptSummary(installation.last_attempt)}</div>
+        <div className="install-actions">
+          <button
+            type="button"
+            className="primary"
+            disabled={busy || !installation.syncable}
+            onClick={onSync}
+          >
+            {busy ? "Syncing…" : "Sync"}
+          </button>
+          <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
+            {installation.status === "disabled" ? "Enable" : "Disable"}
+          </button>
+          {kind.fields.length > 0 ? (
+            <button type="button" className="ghost" disabled={busy} onClick={onEdit}>
+              Edit sync
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ghost danger"
+            disabled={busy}
+            onClick={onUninstall}
+          >
+            Uninstall
+          </button>
+        </div>
       </div>
-      <div className="install-actions">
-        <button
-          type="button"
-          className="primary"
-          disabled={busy || !installation.syncable}
-          onClick={onSync}
-        >
-          {busy ? "Syncing…" : "Sync"}
-        </button>
-        <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
-          {installation.status === "disabled" ? "Enable" : "Disable"}
-        </button>
-        <button
-          type="button"
-          className="ghost danger"
-          disabled={busy}
-          onClick={onUninstall}
-        >
-          Uninstall
-        </button>
-      </div>
+      {editing ? (
+        <ConnectorSettingsDialog
+          key={`${installation.id}:${JSON.stringify(installation.settings ?? {})}`}
+          title={`Edit ${connectorLabel(installation.connector_type)} sync`}
+          kind={kind}
+          busy={busy}
+          initialValues={installation.settings}
+          submitLabel="Save"
+          busyLabel="Saving…"
+          onSubmit={onSave}
+          onClose={onEdit}
+        />
+      ) : null}
     </div>
   );
 }

@@ -21,6 +21,7 @@ import {
   resolveEffectiveDshTransport,
 } from "./plugin";
 import { loopbackHttpUrl, resolveOperatorDshBaseUrl } from "./dsh-url";
+import { probeDshCatalog } from "./probe";
 
 export const dshSessionDriver: ChannelDriver = {
   connector_type: "dsh-session",
@@ -127,6 +128,10 @@ export const dshSessionDriver: ChannelDriver = {
 
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt) {
     return `${thread.target}:out:${receipt.rpc_id ?? randomUUID()}`;
+  },
+
+  async probeCatalog({ env }) {
+    return probeDshCatalog({ env });
   },
 };
 

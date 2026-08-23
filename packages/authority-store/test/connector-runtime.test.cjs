@@ -263,4 +263,19 @@ describe("SQLite connector runtime", () => {
     assert.equal(await store.getCursor(installation.id, "personal"), null);
     store.close();
   });
+
+  it("updates installation config in place", async () => {
+    const root = await createRoot();
+    const store = await createStore(root);
+    const updated = await store.updateInstallationConfig({
+      id: installation.id,
+      org_id: installation.org_id,
+      config: { scope: "picked", chat_ids: ["oc_1"] },
+      updated_at: "2026-08-23T00:00:00.000Z",
+    });
+    assert.deepEqual(updated.config, { scope: "picked", chat_ids: ["oc_1"] });
+    assert.equal(updated.updated_at, "2026-08-23T00:00:00.000Z");
+    assert.equal(updated.status, "enabled");
+    store.close();
+  });
 });

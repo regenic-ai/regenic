@@ -31,7 +31,7 @@ function textItem(overrides = {}) {
     message_id: "om_1",
     msg_type: "text",
     create_time: "1723420800000",
-    sender: { id: "ou_1", sender_type: "user" },
+    sender: { id: "ou_1", sender_type: "user", name: "Ada" },
     body: { content: JSON.stringify({ text: "Root" }) },
     ...overrides,
   };
@@ -89,7 +89,7 @@ describe("FeishuChatPollConnector", () => {
     assert.deepEqual(calls, [
       {
         chat_id: "oc_1",
-        page_size: 20,
+        page_size: 50,
         page_token: "page-1",
         start_time: undefined,
       },
@@ -99,7 +99,15 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(result.batch.records[0].type, "message");
     assert.equal(result.batch.records[1].type, "thread_reply");
     assert.equal(result.batch.records[1].parent_external_id, "oc_1:om_1");
+    assert.equal(result.batch.records[0].actor.display_name, "Ada");
+    assert.equal(result.batch.records[0].scope.name, "engineering");
     assert.equal(result.batch.records[1].scope.name, "engineering");
+    const surface = JSON.parse(
+      result.batch.records[0].content.find((part) => part.role === "metadata").text,
+    );
+    assert.equal(surface.conversation_label, "engineering");
+    assert.equal(surface.conversation_kind, "group");
+    assert.equal(surface.actor_label, "Ada");
     assert.equal(
       result.next_cursor,
       JSON.stringify({ page_token: "page-2", start_time: "1723420860" }),
@@ -196,6 +204,97 @@ describe("FeishuChatPollConnector", () => {
       "Hello link",
     );
     assert.equal(extractFeishuText("image", "{}"), undefined);
+    assert.equal(
+      extractFeishuText(
+        "text",
+        JSON.stringify({
+          text: '<at user_id="ou_2">@_user_1</at> please look',
+        }),
+        new Map([["ou_2", "Ben"]]),
+      ),
+      "@Ben please look",
+    );
+  });
+
+  it("uses native mentions so @ is readable without contact lookup", async () => {
+    const searched = [];
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [
+            textItem({
+              message_id: "om_at",
+              body: {
+                content: JSON.stringify({
+                  text: '<at user_id="ou_2">@_user_1</at> 看一下 <at user_id="all">@_all</at>',
+                }),
+              },
+              mentions: [
+                { key: "@_user_1", id: "ou_2", name: "Ben" },
+                { key: "@_all", id: "all", name: "所有人" },
+              ],
+            }),
+          ],
+          has_more: false,
+        };
+      },
+      async resolveUserNames(ids) {
+        searched.push(ids);
+        return new Map();
+      },
+    });
+    const result = await connector.poll(null);
+    const body = result.batch.records[0].content.find((part) => part.role === "body");
+    assert.equal(body.text, "@Ben 看一下 @所有人");
+    assert.deepEqual(searched, [["ou_1"]]);
+  });
+
+  it("keeps @_user_1 when mentions and lookup both miss, so the hash stays stable", () => {
+    assert.equal(
+      extractFeishuText(
+        "text",
+        JSON.stringify({
+          text: '<at user_id="ou_2">@_user_1</at> 看一下',
+        }),
+      ),
+      "@_user_1 看一下",
+    );
+    assert.equal(
+      extractFeishuText(
+        "text",
+        JSON.stringify({
+          text: '<at user_id="ou_2">@_user_1</at> 看一下',
+        }),
+        undefined,
+        [{ key: "@_user_1", id: "ou_2", name: "张三" }],
+      ),
+      "@张三 看一下",
+    );
+    assert.equal(
+      extractFeishuText(
+        "post",
+        JSON.stringify({
+          zh_cn: {
+            content: [[
+              { tag: "at", user_id: "ou_2", user_name: "@_user_1" },
+              { tag: "text", text: " 请看" },
+            ]],
+          },
+        }),
+        undefined,
+        [{ key: "@_user_1", id: "ou_2", name: "张三" }],
+      ),
+      "@张三 请看",
+    );
+    assert.equal(
+      extractFeishuText(
+        "text",
+        JSON.stringify({
+          text: '<at user_id="all">@_all</at> standup',
+        }),
+      ),
+      "@所有人 standup",
+    );
   });
 
   it("does not keep paging once has_more is false", () => {

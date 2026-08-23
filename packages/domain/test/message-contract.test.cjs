@@ -32,6 +32,47 @@ describe("message contract", () => {
     assert.equal(channelLabel("mail"), "MAIL");
   });
 
+  it("keeps conversation and actor labels on the stored surface", () => {
+    const record = channelRecord({
+      channel: "feishu",
+      kind: "user",
+      direction: "inbound",
+      external_id: "oc_1:om_1",
+      occurred_at: "2026-08-21T00:00:00.000Z",
+      actor_id: "ou_1",
+      actor_label: "Ada",
+      scope_id: "oc_1",
+      scope_name: "Bioby.ai",
+      conversation_kind: "group",
+      text: "hello",
+    });
+    assert.equal(record.actor.display_name, "Ada");
+    assert.equal(record.scope.name, "Bioby.ai");
+    assert.deepEqual(surfaceFromParts(record.content), {
+      channel: "feishu",
+      kind: "user",
+      direction: "inbound",
+      conversation_label: "Bioby.ai",
+      conversation_kind: "group",
+      actor_label: "Ada",
+    });
+    assert.deepEqual(
+      resolveMessageSurface({
+        source: "feishu",
+        external_id: "oc_1:om_1",
+        stored: surfaceFromParts(record.content),
+      }),
+      {
+        channel: "feishu",
+        kind: "user",
+        direction: "inbound",
+        conversation_label: "Bioby.ai",
+        conversation_kind: "group",
+        actor_label: "Ada",
+      },
+    );
+  });
+
   it("lets a connector emit one ingest record that already carries surface", () => {
     const record = channelRecord({
       channel: "dsh",

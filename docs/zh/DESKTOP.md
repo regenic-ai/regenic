@@ -30,7 +30,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 ## 双层表面
 
 - **主窗口：** 左图标栏（Inbox / Engine / Settings），中列表，右线程。顶栏是引擎芯片与 Inbox 计数。关窗不退出。
-- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`、自定义 `title`、`pinned`），聚合只发生在桌面表面。标题可双击或用铅笔手改，置顶用图钉；二者写入内核 `conversation_prefs`，轮询不会用首条消息把自定义标题冲掉。清空标题则回到自动标题。列表可按 Pinned / Unpinned 和来源渠道过滤，置顶会话排在前面。列表和标题醒目标出**来源渠道**。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按飞书阅读流：头像+名字（You / Agent / Runtime）、少气泡、引用条、runtime 居中折叠。底部是 Cursor 式 Composer：多行编辑、图片缩略图、拖入/粘贴附件，以及飞书常用的加粗/斜体/删除线/行内代码/列表（⌘B / ⌘I / ⌘⇧X）。Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。安装声明了 `can_create` 时，列表里有「新对话」；桌面不问渠道名。Slack 只能同步，没有新建、也不能回。
+- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`、自定义 `title`、`pinned`、连接器写入的 `conversation_label` / `conversation_kind` / `actor_label`），聚合只发生在桌面表面。标题可双击或用铅笔手改，置顶用图钉；二者写入内核 `conversation_prefs`，轮询不会用首条消息把自定义标题冲掉。清空标题则回到连接器给的会话名（群名或单聊对方），没有会话名才用首条消息。引擎页的安装和改同步范围用同一套 catalog 弹窗，不按连接器写死表单。列表可按 Pinned / Unpinned 和来源渠道过滤，置顶会话排在前面。列表和标题醒目标出**来源渠道**。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按发言人展开：每条消息保留自己的名字和时间。同一人连续发言只收起头像和名字，不把不同人的正文拼成一块。线程窗只挂可视区域附近的消息，长会话可以滚动，不会一次性把几千上万条都画进 DOM。同步时未变化的消息和会话会复用原对象，打开的对话不会因为别的会话在拉而整段重建；本会话只是追加时也只更新尾部。开会话时停在最新一条；往上翻历史时新消息不把滚动位置拽回去。没有 `actor_label` 时才回退 You / Agent / Runtime。引用条、runtime 居中折叠。底部是 Cursor 式 Composer：多行编辑、图片缩略图、拖入/粘贴附件，以及飞书常用的加粗/斜体/删除线/行内代码/列表（⌘B / ⌘I / ⌘⇧X）。Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。安装声明了 `can_create` 时，列表里有「新对话」；桌面不问渠道名。Slack 只能同步，没有新建、也不能回。
 - **托盘：** 点击打开小窗，显示内核状态、计数、最近 3 个会话；可「打开控制台」。退出只在托盘菜单。
 
 ## 进程
@@ -49,6 +49,7 @@ Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
 | GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录 |
 | POST | `/v1/me/connectors` | 从目录安装（Slack / DSH / 飞书），不接收 token；安装后内核立刻 pull 一次 |
+| POST | `/v1/me/connectors/:id/config` | 改已安装连接器的非密钥配置（同一套 catalog 字段），不丢游标；enabled 时立刻再 pull 一次 |
 | DELETE | `/v1/me/connectors/:id` | 卸载安装记录和游标，保留已入库消息 |
 | POST | `/v1/me/connectors/:id/sync` | 手动追平。Slack 一页频道；DSH web 默认同步全部会话（每路最多 5 页）。日常不用点 |
 | POST | `/v1/me/connectors/:id/enable` | 启用连接器，并立刻再 pull 一次 |
@@ -58,19 +59,19 @@ Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`
 | POST | `/v1/me/replies` | 把回复发回原渠道。API 按 installation + thread 找 `ChannelDriver`，再 `egress.send`。入库后 follow 该线程直到出现新的 Agent 回复或短暂超时；驱动 `canReply: false` 时 501 |
 | GET | `/health` | 个人模式查 SQLite，不探 Postgres |
 
-不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 3 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。对话窗发送后会更快跟当前 DSH session。引擎 Sync 只是漏了再追平。凭证只读环境变量。
+不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 3 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。同 tick 有限并行。流上的 `pace` 由连接器声明：飞书追上后约 15 秒再扫，DSH 不写 `pace`，仍每 tick 跟。对话窗发送后会更快跟当前 DSH session。引擎 Sync 只是漏了再追平。凭证只读环境变量。
 
 ## 连接器：同步范围与前置步骤
 
-安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每种连接器声明 `fields`（含默认值、是否必填、`visible_when`）和 `prerequisites`（环境变量或本机服务）。引擎页按 catalog 渲染表单和就绪状态，不按连接器类型写死 UI。
+安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每种连接器声明 `fields`（含默认值、是否必填、`visible_when`）和 `prerequisites`（环境变量或本机服务）。`ready` / `hint` 由该连接器的 `probeCatalog()` 探测，API 只合并，引擎页只渲染，不按连接器类型写死 UI。
 
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |
-| Slack | `channel_id`（频道名可选） | 本机 `REGENIC_SLACK_TOKEN` | 只拉该频道。安装后立刻拉，之后内核轮询 |
-| DSH web（本机） | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 本机 `dsh web`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
+| Slack | `channel_id`（频道名可选） | 启动前设好 `REGENIC_SLACK_TOKEN`（Slack 应用的 bot token）。表单不收 | 只拉该频道。安装后立刻拉，之后内核轮询 |
+| DSH web（本机） | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 终端能跑 `dsh` 后执行 `dsh web --port 3080`；`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
 | DSH web（托管） | 只填可选 `session_id`；不填 `base_url` | 内核环境变量 `REGENIC_DSH_BASE_URL`（集群 DNS） | 同上；核心只走内网，不要填 Sealos 公网 URL |
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
-| 飞书 | `chat_id`（群名可选） | 本机 `lark-cli`，并已 `lark-cli auth login` | 只拉该群。安装后立刻拉，之后内核轮询。能回写文本 |
+| 飞书 | 弹窗里默认勾选全部群和全部单聊；也可勾选具体会话。安装后随时 Edit sync | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 按选择拉群和单聊，记录群名/对方名和发送者名。安装后立刻拉，之后内核轮询。能回写文本 |
 
 DSH 安装不接收 token / `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
 

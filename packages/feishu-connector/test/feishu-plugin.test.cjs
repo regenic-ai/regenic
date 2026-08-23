@@ -2,7 +2,12 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const { ChannelDriverError, MemoryConnectorRegistry, MemoryEgressRegistry } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
-const { feishuChatDriver } = require("../dist/feishu-chat-driver");
+const {
+  FEISHU_STREAM_PACE,
+  createFeishuStreams,
+  feishuChatDriver,
+  resolveFeishuChatTargets,
+} = require("../dist/feishu-chat-driver");
 const { feishuChatPlugin } = require("../dist/plugin");
 
 describe("feishuChatPlugin", () => {
@@ -46,21 +51,52 @@ describe("feishuChatDriver", () => {
     created_at: "2026-08-22T00:00:00.000Z",
   };
 
-  it("installs a chat and can reply after enable", () => {
+  it("installs all groups or a picked set", () => {
+    const all = feishuChatDriver.install({
+      id: "feishu-1",
+      org_id: "local-owner",
+      config: { selection: "all" },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    assert.deepEqual(all.config, { selection: "all", kinds: ["group", "p2p"] });
+    assert.equal(
+      feishuChatDriver.matchesThread(all, { source: "feishu", target: "oc_9" }),
+      true,
+    );
+    assert.equal(
+      feishuChatDriver.ownsThread(all, { source: "feishu", target: "oc_9" }),
+      false,
+    );
+
+    const picked = feishuChatDriver.install({
+      id: "feishu-2",
+      org_id: "local-owner",
+      config: { selection: "pick", chat_ids: "oc_1,oc_2" },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    assert.deepEqual(picked.config, { selection: "pick", chat_ids: ["oc_1", "oc_2"] });
+    assert.equal(
+      feishuChatDriver.matchesThread(picked, { source: "feishu", target: "oc_2" }),
+      true,
+    );
+    assert.equal(
+      feishuChatDriver.ownsThread(picked, { source: "feishu", target: "oc_2" }),
+      true,
+    );
+    assert.equal(
+      feishuChatDriver.matchesThread(picked, { source: "feishu", target: "oc_9" }),
+      false,
+    );
+  });
+
+  it("keeps a legacy single chat_id install", () => {
     const created = feishuChatDriver.install({
       id: "feishu-1",
       org_id: "local-owner",
       config: { chat_id: "oc_1", chat_name: "engineering" },
       now: "2026-08-22T00:00:00.000Z",
     });
-    assert.equal(created.connector_type, "feishu-chat");
-    assert.equal(created.credentials_ref, undefined);
-    assert.deepEqual(created.config, { chat_id: "oc_1", chat_name: "engineering" });
-    assert.deepEqual(feishuChatDriver.capabilities(installation), {
-      sync: true,
-      reply: true,
-      create: false,
-    });
+    assert.deepEqual(created.config, { selection: "pick", chat_ids: ["oc_1"] });
     assert.equal(
       feishuChatDriver.matchesThread(installation, { source: "feishu", target: "oc_1" }),
       true,
@@ -74,13 +110,68 @@ describe("feishuChatDriver", () => {
     );
   });
 
-  it("requires chat_id and cannot create a conversation", async () => {
+  it("installs all direct messages only", () => {
+    const created = feishuChatDriver.install({
+      id: "feishu-3",
+      org_id: "local-owner",
+      config: { selection: "all", kinds: "p2p" },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    assert.deepEqual(created.config, { selection: "all", kinds: ["p2p"] });
+  });
+
+  it("resolves all conversations including p2p", async () => {
+    const chats = await resolveFeishuChatTargets(
+      { selection: "all" },
+      {
+        async listAllChats(maxPages, types) {
+          assert.equal(maxPages, 10);
+          assert.deepEqual(types, ["group", "p2p"]);
+          return [
+            { chat_id: "oc_g", name: "Team", chat_mode: "group" },
+            { chat_id: "oc_p", name: "Ada", chat_mode: "p2p" },
+          ];
+        },
+      },
+    );
+    assert.deepEqual(
+      chats.map((chat) => chat.chat_id),
+      ["oc_g", "oc_p"],
+    );
+    const streams = createFeishuStreams(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all" },
+        created_at: "2026-08-22T00:00:00.000Z",
+      },
+      chats,
+      { async listMessages() { return { items: [], has_more: false }; } },
+    );
+    assert.equal(streams.length, 2);
+    assert.deepEqual(streams[0].pace, FEISHU_STREAM_PACE);
+    assert.deepEqual(streams[1].pace, FEISHU_STREAM_PACE);
+  });
+
+  it("requires a picked conversation and cannot create a conversation", async () => {
     assert.throws(
       () =>
         feishuChatDriver.install({
           id: "feishu-1",
           org_id: "local-owner",
-          config: {},
+          config: { selection: "pick" },
+          now: "2026-08-22T00:00:00.000Z",
+        }),
+      (error) => error instanceof ChannelDriverError && error.code === "invalid_config",
+    );
+    assert.throws(
+      () =>
+        feishuChatDriver.install({
+          id: "feishu-1",
+          org_id: "local-owner",
+          config: { selection: "all", kinds: "none" },
           now: "2026-08-22T00:00:00.000Z",
         }),
       (error) => error instanceof ChannelDriverError && error.code === "invalid_config",

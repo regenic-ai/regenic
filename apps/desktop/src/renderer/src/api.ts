@@ -67,6 +67,9 @@ export async function fetchInbox(): Promise<InboxViewItem[]> {
     thread_id: item.thread_id,
     title: item.title ?? null,
     pinned: item.pinned === true,
+    conversation_label: item.conversation_label ?? null,
+    conversation_kind: item.conversation_kind ?? null,
+    actor_label: item.actor_label ?? null,
     pref_updated_at: item.pref_updated_at ?? null,
   }));
 }
@@ -134,6 +137,28 @@ export async function installConnector(
       "error" in body && body.error?.message
         ? body.error.message
         : `install ${response.status}`,
+    );
+  }
+  return body as EngineInstallationView;
+}
+
+export async function updateConnectorConfig(
+  id: string,
+  config: Record<string, string>,
+): Promise<EngineInstallationView> {
+  const response = await fetch(`${origin()}/v1/me/connectors/${id}/config`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+  const body = (await response.json()) as
+    | EngineInstallationView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `update ${response.status}`,
     );
   }
   return body as EngineInstallationView;

@@ -7,6 +7,8 @@ export interface InboxThread {
   channel_label: string;
   label: string;
   title: string | null;
+  conversation_label: string | null;
+  conversation_kind: string | null;
   pinned: boolean;
   pref_updated_at?: string;
   can_send: boolean;
@@ -35,7 +37,10 @@ export function workThreadId(
   return `${source}:${withoutOut || fallbackId}`;
 }
 
-export function groupInboxThreads(items: InboxViewItem[]): InboxThread[] {
+export function groupInboxThreads(
+  items: InboxViewItem[],
+  previous: InboxThread[] = [],
+): InboxThread[] {
   const groups = new Map<string, InboxViewItem[]>();
   for (const item of items) {
     const id =
@@ -48,23 +53,22 @@ export function groupInboxThreads(items: InboxViewItem[]): InboxThread[] {
       groups.set(id, [item]);
     }
   }
+  const prevById = new Map(previous.map((thread) => [thread.id, thread]));
   return [...groups.entries()]
     .map(([id, messages]) => {
+      const old = prevById.get(id);
+      if (old && sameMessageSet(old.messages, messages)) {
+        return old;
+      }
       const ordered = [...messages].sort(byOccurredAt);
-      const latest = ordered[ordered.length - 1];
-      const pref = latestPref(ordered);
-      return {
-        id,
-        source: latest.event.source,
-        channel: latest.channel ?? latest.event.source,
-        channel_label: latest.channel_label ?? latest.event.source.toUpperCase(),
-        label: threadLabel(id, latest),
-        title: pref.title,
-        pinned: pref.pinned,
-        pref_updated_at: pref.updated_at,
-        can_send: ordered.some((item) => item.can_send),
-        messages: ordered,
-      };
+      if (
+        old &&
+        old.messages.length === ordered.length &&
+        old.messages.every((item, index) => item === ordered[index])
+      ) {
+        return old;
+      }
+      return buildThread(id, ordered);
     })
     .sort(byRecentActivity);
 }
@@ -151,6 +155,33 @@ export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
 }
 
+function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
+  const latest = ordered[ordered.length - 1];
+  const pref = latestPref(ordered);
+  return {
+    id,
+    source: latest.event.source,
+    channel: latest.channel ?? latest.event.source,
+    channel_label: latest.channel_label ?? latest.event.source.toUpperCase(),
+    label: threadLabel(id, latest),
+    title: pref.title,
+    conversation_label: conversationField(ordered, "conversation_label"),
+    conversation_kind: conversationField(ordered, "conversation_kind"),
+    pinned: pref.pinned,
+    pref_updated_at: pref.updated_at,
+    can_send: ordered.some((item) => item.can_send),
+    messages: ordered,
+  };
+}
+
+function sameMessageSet(left: InboxViewItem[], right: InboxViewItem[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const refs = new Set(left);
+  return right.every((item) => refs.has(item));
+}
+
 function latestPref(messages: InboxViewItem[]): {
   title: string | null;
   pinned: boolean;
@@ -187,6 +218,19 @@ function byRecentActivity(left: InboxThread, right: InboxThread): number {
 
 function activityStamp(thread: InboxThread): string {
   return latestMessage(thread)?.event.occurred_at ?? "~";
+}
+
+function conversationField(
+  messages: InboxViewItem[],
+  key: "conversation_label" | "conversation_kind",
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const value = messages[index]?.[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return null;
 }
 
 function threadLabel(id: string, latest: InboxViewItem): string {

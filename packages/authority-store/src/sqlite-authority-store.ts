@@ -24,6 +24,7 @@ import type {
   NewIngestAttempt,
   ResetConnectorCursor,
   ReleaseConnectorLease,
+  SetConnectorInstallationConfig,
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
   SourceIdentity,
@@ -427,6 +428,25 @@ export class SqliteAuthorityStore
         `,
       )
       .run(input.status, input.updated_at, input.id, input.org_id);
+    return updated.changes === 1 ? this.findInstallation(input.id) : null;
+  }
+
+  async updateInstallationConfig(
+    input: SetConnectorInstallationConfig,
+  ): Promise<ConnectorInstallation | null> {
+    const updated = this.database
+      .prepare(
+        `
+          UPDATE connector_installations SET config_json = ?, updated_at = ?
+          WHERE id = ? AND org_id = ?
+        `,
+      )
+      .run(
+        JSON.stringify(input.config),
+        input.updated_at,
+        input.id,
+        input.org_id,
+      );
     return updated.changes === 1 ? this.findInstallation(input.id) : null;
   }
 

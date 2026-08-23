@@ -1,25 +1,99 @@
 # Regenic
 
-Message orchestration for people and organizations.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
+[![pnpm](https://img.shields.io/badge/pnpm-9-blue.svg)](https://pnpm.io)
 
-Regenic is an open-source message orchestration layer. It connects to chat, mail, tickets, and documents already in use. Judgment standards and personal habits decide which messages need handling now; those land in a console shared by humans and agents. The rest stay outside the current work. Replies go back to the original channel.
+[简体中文](README.zh-CN.md) | [English](README.md)
 
-Access control and judgment standards stay in a small kernel.
+Puts messages from Feishu, Slack, and your local agent into one window. Only what needs you now is listed. Replies go back to the original app. Accounts and rules stay on this computer.
 
-Delivery order is **Personal (local-first)**, then Org. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
+What you can use now is **one person, data on this machine**. Shared use across a team comes later. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
 
-[简体中文](README.zh-CN.md)
+[Install](#installation--quick-start) · [Add Feishu, Slack, or DSH](#add-feishu-slack-or-dsh) · [Login and tokens](#login-and-tokens) · [Local CLI](#local-cli) · [Status](#status) · [Security](#security) · [Docs](#documentation) · [Contributing](#contributing)
 
-## Desktop app
+## What it does
 
-Need Node 20+ and [pnpm](https://pnpm.io).
+- **The original apps stay** — Feishu stays Feishu, Slack stays Slack. This reads messages and sends replies back. It does not replace them.
+- **The window only lists what needs you now** — not every group chat dumped in one place.
+- **People and automation share one API** — the desktop app and scripts both use `/v1`.
+- **Tokens stay out of the database** — environment variables or the OS keychain. The install form does not take them.
+- **One person first, then a team** — this computer is the source of truth. Shared records across people come later.
+
+## Personal or team
+
+| You are… | What to do |
+| --- | --- |
+| **One person** — desktop app on this computer, plus Feishu, Slack, or DSH | Follow [Quick Start](#installation--quick-start) |
+| **Working from a terminal** — sync, import, export | See [Local CLI](#local-cli) |
+| **A team sharing one record** | Not built yet. See [personal → org](docs/en/rfcs/personal-to-org.md) |
+
+## Features
+
+| Area | What you can do | Now |
+| --- | --- | --- |
+| Desktop app | Local window: messages that need you, engine, settings. Closing it does not quit | works |
+| DSH | Read sessions, send text; leave session empty to follow all of them, and create new ones | works |
+| Feishu | Read groups and direct messages, send text. Sign in as yourself with official `lark-cli` | works |
+| Slack | Read one channel | read only, no reply |
+| File import | CSV / JSONL, with a map of which column is which | CLI |
+| WhatsApp | A read-only JSONL file you export yourself | CLI |
+| Export | Message JSONL, daily Markdown, a citation list for another tool | CLI |
+
+## Installation & Quick Start
+
+### Requirements
+
+- Node.js 20+
+- [pnpm](https://pnpm.io)
+
+Feishu, Slack, and DSH each need their own tool installed first. See [Add Feishu, Slack, or DSH](#add-feishu-slack-or-dsh).
+
+### Quick Start (for you)
+
+#### Open the app
 
 ```bash
 pnpm install
 pnpm dev:desktop
 ```
 
-## Connect DSH
+#### Add Feishu, Slack, or DSH in the app
+
+In the app: **Engine** → **DSH** / **Feishu** / **Slack** → **Install**.
+
+Install and sign in to that tool first, then click Install. Feishu needs `lark-cli` signed in. DSH needs `dsh web` running. Steps are under [Add Feishu, Slack, or DSH](#add-feishu-slack-or-dsh).
+
+### Quick Start (for an AI assistant)
+
+These steps are for an assistant helping with install. Some of them need the user in a browser.
+
+**Step 1 — Open the app**
+
+```bash
+pnpm install
+pnpm dev:desktop
+```
+
+**Step 2 — Get the tool ready for whichever one they want**
+
+Feishu:
+
+```bash
+npx @larksuite/cli@latest install
+```
+
+`lark-cli config init` and `lark-cli auth login --recommend` print an authorization URL. Send that URL to the user. The command exits after they finish in the browser. Then run `lark-cli auth status`.
+
+DSH: confirm `dsh` works in the terminal, then `dsh web --port 3080`.
+
+**Step 3 — Have the user click Install in the app**
+
+**Engine** → the one you just prepared → **Install**. Feishu: all groups and direct messages by default, or tick the ones to sync. You can change that later with **Edit sync**. DSH Session ID can stay empty.
+
+## Add Feishu, Slack, or DSH
+
+### DSH
 
 `dsh` has to work in your terminal. Start the web server first:
 
@@ -29,39 +103,56 @@ dsh web --port 3080
 
 In the app: **Engine** → **DSH** → **Install**. Transport: **Web**. Leave Session ID empty to follow every session, or fill one. Base URL defaults to `http://127.0.0.1:3080` (localhost only). If `dsh web` wants a token, set `REGENIC_DSH_TOKEN` before you start the desktop app.
 
-## Connect Feishu
+### Feishu
 
-`lark-cli` has to work in your terminal. Sign in as yourself:
+Sign in as yourself with the official [lark-cli](https://github.com/larksuite/cli). Full steps: [lark-cli README](https://github.com/larksuite/cli/blob/main/README.md).
+
+**Install**
 
 ```bash
-lark-cli config init
-lark-cli auth login --recommend
+npx @larksuite/cli@latest install
 ```
 
-In the app: **Engine** → **Feishu** → **Install**. Fill the chat ID (`oc_…`). Tokens stay in the OS keychain; the form does not take them.
+**Configure and sign in**
 
-## Status
+```bash
+# 1. Set up the app (once; finishes in the browser)
+lark-cli config init
 
-Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is local-first connectors and the kernel.
+# 2. Sign in (--recommend picks the common scopes)
+lark-cli auth login --recommend
 
-| Capability | Description | Status |
+# 3. Confirm you are signed in
+lark-cli auth status
+```
+
+`config init` and `auth login` each print an authorization URL. Complete it in the browser; the command exits on its own.
+
+**Add conversations in the app**
+
+In the app: **Engine** → **Feishu** → **Install**. Default is **All groups** and **All direct messages**. Switch to **Choose conversations** to tick specific ones. After install, **Edit sync** changes the same set. The form loads groups and p2p chats from `lark-cli`. You do not paste `oc_…`.
+
+The Engine page checks whether `lark-cli` is installed and whether you are signed in. The two cases show different hints. The app will not install it for you.
+
+If `lark-cli` is not on PATH, set `REGENIC_LARK_CLI` to the command before you start the desktop app. This version follows the conversations you select and can send text back. It does not create a new group.
+
+### Slack
+
+Set `REGENIC_SLACK_TOKEN` before you start the desktop app. In the app: **Engine** → **Slack** → **Install**. Fill the channel ID (`C…`). Channel name is optional. This version only reads that channel and cannot reply.
+
+## Login and tokens
+
+| | How you sign in | Install form |
 | --- | --- | --- |
-| Message orchestration | Connect sources → unify messages → rank → dispatch → optional reply | [PRODUCT](docs/en/PRODUCT.md) · [architecture](docs/en/MESSAGE_ORCHESTRATION.md) |
-| Connectors | Slack, DSH, Feishu, file import; more channels later | Phase 1 (now) |
-| Personal | One principal; open export; optional remote history | Phase 1 (now) |
-| Org | Canonical Event + projections across people | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
-| Standards | Versioned shared standards | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
-| Context | Claims, snapshots, Event/Blob | RFC Accepted ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
-| Collaboration | Proposal / Decision / Review / Handoff | RFC Accepted ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
-| API | Humans and agents use the same `/v1` | RFC Accepted ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
-| ACL | `visible()`; distill does not raise privilege; send is a grant | RFC Accepted ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |
-| Distillation | Intake for the standards machine | RFC Accepted ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
+| DSH | Local `dsh`; `REGENIC_DSH_TOKEN` if the web host asks | no token |
+| Feishu | `lark-cli auth login`; login stays in the OS keychain | no token |
+| Slack | `REGENIC_SLACK_TOKEN` | no token |
 
-Method, site, and public standards: [regenic-ai/regenic-book](https://github.com/regenic-ai/regenic-book). Store and runtime defaults: [TECH_STACK.md](docs/en/TECH_STACK.md).
+The form only takes non-secret fields (group selection, channel ID, session). Tokens are not written to the database and do not appear on `/v1/me`.
 
 ## Local development
 
-Daily use is the [desktop app](#desktop-app). Compose is for API and worker work.
+Daily use is the desktop app above. Docker Compose starts the API and background workers.
 
 ```bash
 pnpm install
@@ -69,11 +160,20 @@ docker compose up --build
 curl -s http://localhost:3000/health
 ```
 
+The API process needs `REGENIC_DATABASE` and `REGENIC_BLOB_ROOT`. If `REGENIC_DSH_API_TOKEN` is set, callers send `Authorization: Bearer`.
+
+```http
+POST /v1/dsh/api/session.history
+POST /v1/dsh/api/session.prompt
+POST /v1/dsh/api/session.list
+POST /v1/dsh/api/session.create
+```
+
 ## Local CLI
 
-The local CLI syncs connectors against SQLite and a filesystem Blob store. Access tokens are not written to the database. Pass the token through the referenced environment variable when synchronizing.
+Same job as the desktop app, from a terminal. Data lives in SQLite and a local file directory. Tokens are not written to the database. Pass them in through the environment when you sync.
 
-### Slack connector
+### Slack
 
 ```bash
 pnpm local slack-install --database ./regenic.db --org local-owner \
@@ -91,13 +191,13 @@ pnpm local connector-disable --database ./regenic.db --org local-owner \
 	--installation slack-engineering
 pnpm local connector-enable --database ./regenic.db --org local-owner \
 	--installation slack-engineering
-	pnpm local reset-cursor --database ./regenic.db --org local-owner \
-		--installation slack-engineering --stream channel:C123
+pnpm local reset-cursor --database ./regenic.db --org local-owner \
+	--installation slack-engineering --stream channel:C123
 ```
 
-### DSH from the CLI
+### DSH
 
-Same job as [Connect DSH](#connect-dsh), from a terminal. Start `dsh web --port 3080` first if you use Web.
+Same job as [Add DSH](#dsh). Start `dsh web --port 3080` first if you use Web.
 
 ```bash
 pnpm local dsh-install --database ./regenic.db --org local-owner \
@@ -111,25 +211,18 @@ pnpm local dsh-send --database ./regenic.db --installation dsh-main \
 	--text "Follow up on the last turn"
 ```
 
-`--session` is optional; omit it to follow every session. CLI transport (no `dsh web`):
+`--session` is optional; omit it to follow every session. Call local `dsh` directly (no `dsh web`):
 
 ```bash
 pnpm local dsh-install --database ./regenic.db --org local-owner \
 	--transport cli --mailbox dsh-main --id dsh-main
 ```
 
-If `dsh web` wants a token, set `REGENIC_DSH_TOKEN`. The API process needs `REGENIC_DATABASE` and `REGENIC_BLOB_ROOT`. If `REGENIC_DSH_API_TOKEN` is set, callers send `Authorization: Bearer`.
-
-```http
-POST /v1/dsh/api/session.history
-POST /v1/dsh/api/session.prompt
-POST /v1/dsh/api/session.list
-POST /v1/dsh/api/session.create
-```
+If `dsh web` wants a token, set `REGENIC_DSH_TOKEN`.
 
 ### File import
 
-Import CSV or JSONL through an explicit JSON mapping file. Invalid rows are reported; valid rows become the same kind of message as a channel sync.
+When you import CSV or JSONL, also provide a JSON file that says which column is the message ID, time, body, and author. Bad rows are reported. Good rows become the same kind of message as a Feishu or Slack sync.
 
 ```json
 {
@@ -155,9 +248,7 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 
 ### Personal WhatsApp export
 
-Personal WhatsApp uses a user-triggered, read-only JSONL export. The first
-bridge does not receive browser cookies, scan chats in the background, or send
-messages. Each exported message has stable `chat_id` and `message_id` values.
+Personal WhatsApp only accepts a read-only JSONL file you export yourself. This version does not take browser cookies, scan chats in the background, or send messages. Each exported message has stable `chat_id` and `message_id` values.
 
 ```bash
 pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
@@ -167,7 +258,7 @@ pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
 
 ### Inbox
 
-List current-work messages after kernel filter and layer. Acknowledgements, tombstones, and ordinary thread replies stay stored as Events and stay out of this list.
+List the messages that need you now. Receipts, deletions, and ordinary thread replies stay in the store and stay out of this list.
 
 ```bash
 pnpm local inbox --database ./regenic.db --org local-owner
@@ -175,7 +266,7 @@ pnpm local inbox --database ./regenic.db --org local-owner
 
 ### JSONL export
 
-Export append-only Event metadata as JSONL. Each line includes provenance and a content hash, never inline Blob bytes.
+Export message records as JSONL. Each line includes where it came from and a content fingerprint, never the attachment bytes.
 
 ```bash
 pnpm local export-jsonl --database ./regenic.db --org local-owner \
@@ -184,7 +275,7 @@ pnpm local export-jsonl --database ./regenic.db --org local-owner \
 
 ### Markdown digest
 
-Render a date-grouped Markdown view of append-only text Events. Every entry keeps Event and Blob evidence references.
+Group text messages by date into a Markdown file. Every entry keeps a pointer to the original record and its attachments.
 
 ```bash
 pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
@@ -193,13 +284,38 @@ pnpm local render-digest --database ./regenic.db --blob-root ./blobs \
 
 ### Evidence bundle
 
-Publish bounded committed Event references for a declared consumer and purpose. The local JSONL driver never includes Blob bodies or connector credentials.
+Export a bounded list of message citations for a named consumer and purpose. The file does not include attachment bodies or tokens.
 
 ```bash
 pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 	--consumer teamily-workspace --purpose research-context --max-events 100 \
 	--output ./evidence-bundles.jsonl
 ```
+
+## Status
+
+Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is Feishu / Slack / DSH on this machine, plus the local service.
+
+| Capability | Description | Status |
+| --- | --- | --- |
+| Handle messages | Read in → one message shape → rank → decide whether to handle → optional reply | [PRODUCT](docs/en/PRODUCT.md) · [architecture](docs/en/MESSAGE_ORCHESTRATION.md) |
+| Feishu / Slack / DSH | These work now, plus file import; more later | Phase 1 (now) |
+| Personal | One person; export; optional remote backup | Phase 1 (now) |
+| Team | One shared record, each person sees their own view | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
+| Rules | Shared rules you can change and version | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
+| Context | Claims, snapshots, Event/Blob | RFC Accepted ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
+| Collaboration | Proposal / Decision / Review / Handoff | RFC Accepted ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
+| API | People and automation use the same `/v1` | RFC Accepted ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
+| Access | `visible()`; summarizing does not grant extra access; sending is a separate grant | RFC Accepted ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |
+| Daily digest | Turn daily messages into material for the rules | RFC Accepted ([0007](docs/en/rfcs/0007-daily-distillation.md)) |
+
+Method, site, and public standards: [regenic-ai/regenic-book](https://github.com/regenic-ai/regenic-book). Store and runtime defaults: [TECH_STACK.md](docs/en/TECH_STACK.md).
+
+## Security
+
+The personal API listens on this computer only, by default. When it reads or replies, it uses the account already signed in on this machine. Feishu especially: `lark-cli` calls Feishu as you, inside the permissions you granted. Only add the conversations or channels you mean to handle.
+
+Do not put tokens in the install form, the repo, or chat logs.
 
 ## Documentation
 

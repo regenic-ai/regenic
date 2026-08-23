@@ -529,8 +529,13 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[1].fields[1].required, false);
       assert.equal(engine.catalog[2].connector_type, "feishu-chat");
       assert.equal(engine.catalog[2].installed, false);
-      assert.equal(engine.catalog[2].fields[0].key, "chat_id");
+      assert.equal(engine.catalog[2].fields[0].key, "selection");
+      assert.equal(engine.catalog[2].fields[1].key, "kinds");
+      assert.equal(engine.catalog[2].fields[1].default, "group,p2p");
+      assert.equal(engine.catalog[2].fields[2].key, "chat_ids");
+      assert.equal(engine.catalog[2].fields[2].multiple, true);
       assert.equal(engine.catalog[2].prerequisites[0].key, "lark-cli");
+      assert.equal(engine.installations[0].settings.channel_id, "C123");
       assert.equal(JSON.stringify(engine).includes("xoxb"), false);
       assert.equal(JSON.stringify(engine).includes("credentials_ref"), false);
       assert.equal(JSON.stringify(engine).includes("access_token"), false);
@@ -650,6 +655,50 @@ describe("personal /v1/me", () => {
           .installed,
         true,
       );
+
+      const updated = await fetch(
+        `${origin}/v1/me/connectors/${installation.id}/config`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            config: { transport: "web", session_id: "desk-2" },
+          }),
+        },
+      );
+      const updatedBody = await updated.json();
+      assert.equal(updated.status, 201);
+      assert.equal(updatedBody.label, "desk-2");
+      assert.equal(updatedBody.id, installation.id);
+      assert.equal(updatedBody.settings.session_id, "desk-2");
+
+      const feishu = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "feishu-chat",
+          config: { selection: "all" },
+        }),
+      });
+      const feishuBody = await feishu.json();
+      assert.equal(feishu.status, 201, JSON.stringify(feishuBody));
+      assert.equal(feishuBody.label, "All conversations");
+      assert.equal(feishuBody.settings.kinds, "group,p2p");
+
+      const feishuUpdated = await fetch(
+        `${origin}/v1/me/connectors/${feishuBody.id}/config`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            config: { selection: "all", kinds: "p2p" },
+          }),
+        },
+      );
+      const feishuUpdatedBody = await feishuUpdated.json();
+      assert.equal(feishuUpdated.status, 201, JSON.stringify(feishuUpdatedBody));
+      assert.equal(feishuUpdatedBody.label, "All direct messages");
+      assert.equal(feishuUpdatedBody.settings.kinds, "p2p");
 
       const removed = await fetch(
         `${origin}/v1/me/connectors/${installation.id}`,

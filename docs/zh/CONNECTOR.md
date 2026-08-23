@@ -65,7 +65,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 | `content` | `ContentPart[]` | `body`，外加可选的 `attachment` |
 | `capabilities` | `{ sync, reply, create }` | 由 `ChannelDriver.capabilities()` 返回 |
 
-`channelRecord()` 把 surface（`channel`、`kind`、`direction`）附在记录上。
+`channelRecord()` 把 surface（`channel`、`kind`、`direction`，以及可选的
+`conversation_label` / `conversation_kind` / `actor_label`）附在记录上。
 桌面读这份元数据，不按驱动名推断角色或方向。
 
 同一会话里，本地出站和渠道 history 回声的同一句话只保留一条 Event。
@@ -100,18 +101,33 @@ interface ChannelDriver {
 
 | 方法 | 说明 |
 | --- | --- |
-| `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书必须有 `chat_id`。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
+| `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书存 `selection=all` 加 `kinds`（`group` / `p2p`，默认两个都开），或勾选的 `chat_ids`。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
 | `capabilities` | 该安装的 `sync` / `reply` / `create`。 |
 | `canReply` | 与 `capabilities().reply` 相同。 |
-| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：`chat:<id>`。DSH web：每个会话 `session:<id>`。 |
+| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：每个选中的会话一条 `chat:<id>`，`selection=all` 时跟当前能看到的群和/或单聊。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转后隔多久再扫）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支。 |
 | `createThread` | `create` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `bindEgress` | `reply` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
 
 `ChannelDriverError` 错误码：`invalid_config`、`missing_credentials`、
 `sync_failed`、`send_failed`、`unsupported_channel`、`no_sender`。
+
+```ts
+interface ConnectorStreamPace {
+  idle_ms?: number;
+  catch_up_pages?: number;
+}
+
+interface ConnectorStream {
+  stream_key: string;
+  connector: Pick<ChannelConnector, "poll">;
+  pace?: ConnectorStreamPace;
+}
+```
+
+`pace` 由连接器按流声明。内核只读字段：有 `idle_ms` 且本 tick 空转后，后台 tick 可跳过该流；有进展时下一轮最多拉 `catch_up_pages` 页（内核封顶）。不写 `pace` 则每 tick 扫 1 页。飞书写 `{ idle_ms: 15_000, catch_up_pages: 5 }`；DSH / Slack 不写。
 
 ## ChannelConnector
 
@@ -148,14 +164,20 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 ## 目录
 
-`GET /v1/me/engine` 返回 catalog。引擎页按它渲染安装表单。新连接器在那里加一条。桌面不按类型写死字段。
+`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。新连接器在那里加一条。桌面不按类型写死字段。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
 
 | 字段 | 说明 |
 | --- | --- |
-| `fields` | `key`、`label`、是否必填、默认值、`visible_when` |
-| `prerequisites` | 环境变量或本机服务，带 `ready` |
+| `fields` | `key`、`label`、是否必填、默认值、`visible_when`、可选 `multiple` + `options` |
+| `prerequisites` | 环境变量或本机服务，带 `ready` 和 `hint` |
 
-token 是前置条件，不是表单字段。
+token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起本机服务。
+`ready` 为 false 时，`hint` 写出该跑的命令。飞书会分两档：没装二进制，
+或装了但未登录。DSH 同样由连接器探测：`dsh web` 是否可达，以及 PATH 上
+有没有 `dsh`。
+
+监测写在驱动的 `probeCatalog()` 里。API 只合并各驱动的 `ready` / `hint` /
+表单选项，桌面只渲染 catalog。加来源不用改 API 或桌面。
 
 ## 内置驱动
 
@@ -165,7 +187,7 @@ token 是前置条件，不是表单字段。
 | `dsh-session` web，无 `session_id` | `dsh` | 全部会话 | 是 | 是 | 主机要 token 时用 `REGENIC_DSH_TOKEN` |
 | `dsh-session` web，有 `session_id` | `dsh` | 那一条 | 是 | 否 | 同上 |
 | `dsh-session` cli | `dsh` | 一个 mailbox | 是 | 否 | 本机 `dsh` |
-| `feishu-chat` | `feishu` | 一个群 | 是 | 否 | 本机 `lark-cli` 用户登录 |
+| `feishu-chat` | `feishu` | 勾选的会话，或当前能看到的全部群和/或单聊 | 是 | 否 | 本机 `lark-cli` 用户登录 |
 
 DSH `kind` 映射：
 
@@ -185,7 +207,22 @@ Slack 真人映射为 `user`。
 | `sender_type=app`（或 `bot`），`msg_type` 为 `text` 或 `post` | `assistant` |
 | 图片、文件、卡片和其他 `msg_type` | 丢弃 |
 
-线程 id：`feishu:<chat_id>`。历史用 `lark-cli api --as user`。安装表单不收 token。
+线程 id：`feishu:<chat_id>`。历史用 `lark-cli api --as user`，每页最多 50 条。会话列表缓存约 30 秒。每条记录带上群名或单聊对方、`group` / `direct`、以及发送者姓名。群里 `@` 用消息自带的 `mentions[]` 写成可读人名；`@所有人` 也在这一步翻译。搜不到的发送者再走 `contact +search-user`。表单用 `lark-cli im +chat-list --types=p2p,group` 列出群和单聊，不收 token，也不用手贴 `oc_…`。默认两种都同步。安装后可以改范围。
+
+## 安装前置
+
+引擎页在必填前置 `ready` 之前挡住 Install。步骤由用户做，内核只探测。
+
+| 驱动 | `ready` 为 false 时 | 该跑什么 |
+| --- | --- | --- |
+| `slack-channel` | 未设 `REGENIC_SLACK_TOKEN` | 从 Slack 应用取 bot token，写入环境变量后重启桌面 |
+| `dsh-session` web | PATH 上没有 `dsh` | 先让终端能跑 `dsh`，再 `dsh web --port 3080` |
+| `dsh-session` web | 有 `dsh`，3080 没起来 | `dsh web --port 3080` |
+| `dsh-session` cli | 本机 `dsh` | 终端能跑 `dsh` |
+| `feishu-chat` | PATH 上没有 `lark-cli` | `npx @larksuite/cli@latest install`（[lark-cli](https://github.com/larksuite/cli)） |
+| `feishu-chat` | 有 CLI，用户未登录 | `lark-cli config init`，然后 `lark-cli auth login --recommend` |
+
+飞书 token 留在系统钥匙串。二进制不在 PATH 上时，可用 `REGENIC_LARK_CLI`。
 
 ## 范围外
 

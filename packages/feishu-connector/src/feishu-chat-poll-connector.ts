@@ -6,12 +6,19 @@ import {
   type IngestBatch,
   type PollResult,
 } from "@regenic/domain";
-import type { FeishuHistoryItem, FeishuImClient } from "./feishu-cli-client";
+import type {
+  FeishuChatMode,
+  FeishuHistoryItem,
+  FeishuImClient,
+} from "./feishu-cli-client";
 import {
   FEISHU_SOURCE,
+  collectFeishuUserIds,
   extractFeishuText,
+  feishuConversationKind,
   feishuCreateTimeToIso,
   feishuCreateTimeToStartSeconds,
+  feishuMentionNames,
   senderKind,
 } from "./feishu-message";
 
@@ -25,6 +32,7 @@ export interface FeishuChatPollConnectorOptions {
   org_id: string;
   chat_id: string;
   chat_name?: string;
+  chat_mode?: FeishuChatMode;
   page_size?: number;
   now?: () => string;
 }
@@ -38,7 +46,7 @@ export class FeishuChatPollConnector {
     private readonly client: FeishuImClient,
     private readonly options: FeishuChatPollConnectorOptions,
   ) {
-    this.pageSize = options.page_size ?? 20;
+    this.pageSize = options.page_size ?? 50;
     if (!Number.isInteger(this.pageSize) || this.pageSize < 1 || this.pageSize > 50) {
       throw new Error("Feishu page_size must be an integer from 1 through 50");
     }
@@ -53,7 +61,8 @@ export class FeishuChatPollConnector {
       page_token: state.page_token,
       start_time: state.start_time,
     });
-    const records = page.items.flatMap((item) => this.toRecord(item));
+    const names = await this.resolveNames(page.items);
+    const records = page.items.flatMap((item) => this.toRecord(item, names));
     const nextCursor = encodeFeishuCursor(nextFeishuCursor(state, page));
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
@@ -67,13 +76,56 @@ export class FeishuChatPollConnector {
     return { batch, next_cursor: nextCursor };
   }
 
-  private toRecord(item: FeishuHistoryItem): IngestBatch["records"] {
+  private async resolveNames(
+    items: FeishuHistoryItem[],
+  ): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (const item of items) {
+      for (const [id, name] of feishuMentionNames(item.mentions)) {
+        names.set(id, name);
+      }
+    }
+    if (!this.client.resolveUserNames) {
+      return names;
+    }
+    const ids = [
+      ...new Set(
+        items.flatMap((item) =>
+          collectFeishuUserIds({
+            sender_id: item.sender?.id,
+            content: item.body?.content,
+            mentions: item.mentions,
+          }),
+        ),
+      ),
+    ].filter((id) => !names.has(id));
+    if (ids.length === 0) {
+      return names;
+    }
+    const lookedUp = await this.client.resolveUserNames(ids);
+    for (const [id, name] of lookedUp) {
+      if (!names.has(id)) {
+        names.set(id, name);
+      }
+    }
+    return names;
+  }
+
+  private toRecord(
+    item: FeishuHistoryItem,
+    names: ReadonlyMap<string, string>,
+  ): IngestBatch["records"] {
     if (item.deleted) {
       return [];
     }
     const kind = senderKind(item.sender?.sender_type);
     const actorId = item.sender?.id;
-    const text = extractFeishuText(item.msg_type, item.body?.content);
+    const text = extractFeishuText(
+      item.msg_type,
+      item.body?.content,
+      names,
+      item.mentions,
+    );
     if (!kind || !actorId || !text) {
       return [];
     }
@@ -93,8 +145,10 @@ export class FeishuChatPollConnector {
         external_id: `${chatId}:${item.message_id}`,
         occurred_at: feishuCreateTimeToIso(item.create_time, this.now()),
         actor_id: actorId,
+        actor_label: this.actorLabel(item, kind, names),
         scope_id: chatId,
         scope_name: this.options.chat_name,
+        conversation_kind: feishuConversationKind(this.options.chat_mode),
         type: isThreadReply ? "thread_reply" : "message",
         thread_id: isThreadReply && threadRoot ? `${chatId}:${threadRoot}` : undefined,
         parent_external_id:
@@ -104,6 +158,24 @@ export class FeishuChatPollConnector {
         text,
       }),
     ];
+  }
+
+  private actorLabel(
+    item: FeishuHistoryItem,
+    kind: "user" | "assistant",
+    names: ReadonlyMap<string, string>,
+  ): string | undefined {
+    const actorId = item.sender?.id;
+    const named =
+      emptyToUndefined(item.sender?.name) ??
+      (actorId ? names.get(actorId) : undefined);
+    if (named) {
+      return named;
+    }
+    if (kind === "assistant" && this.options.chat_mode === "p2p") {
+      return this.options.chat_name;
+    }
+    return undefined;
   }
 
   private deliveryId(cursor: string | undefined, nextCursor: string | undefined): string {

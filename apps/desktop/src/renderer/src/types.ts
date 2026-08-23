@@ -54,6 +54,9 @@ export interface InboxViewItem {
   title?: string | null;
   pinned?: boolean;
   pref_updated_at?: string | null;
+  conversation_label?: string | null;
+  conversation_kind?: string | null;
+  actor_label?: string | null;
 }
 
 export interface IngestAttempt {
@@ -79,6 +82,7 @@ export interface ConnectorField {
   required: boolean;
   placeholder?: string;
   default?: string;
+  multiple?: boolean;
   options?: { value: string; label: string }[];
   visible_when?: ConnectorFieldWhen;
 }
@@ -111,6 +115,7 @@ export interface EngineInstallationView {
   status: "enabled" | "disabled" | "needs_attention";
   label: string;
   detail: string | null;
+  settings?: Record<string, string>;
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;

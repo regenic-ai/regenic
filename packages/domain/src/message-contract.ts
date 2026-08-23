@@ -10,6 +10,9 @@ export interface MessageSurface {
   channel: ChannelId;
   kind: MessageKind;
   direction: MessageDirection;
+  conversation_label?: string;
+  conversation_kind?: string;
+  actor_label?: string;
 }
 
 export interface ChannelDescriptor {
@@ -85,8 +88,10 @@ export function channelRecord(input: {
   external_id: string;
   occurred_at: string;
   actor_id: string;
+  actor_label?: string;
   scope_id: string;
   scope_name?: string;
+  conversation_kind?: string;
   type?: string;
   parent_external_id?: string;
   thread_id?: string;
@@ -98,6 +103,11 @@ export function channelRecord(input: {
     channel: input.channel,
     kind: input.kind,
     direction: input.direction,
+    ...(input.scope_name ? { conversation_label: input.scope_name } : {}),
+    ...(input.conversation_kind
+      ? { conversation_kind: input.conversation_kind }
+      : {}),
+    ...(input.actor_label ? { actor_label: input.actor_label } : {}),
   };
   const body = input.content ?? [];
   const hasBody = body.some((part) => part.role === "body");
@@ -125,7 +135,10 @@ export function channelRecord(input: {
     source: input.channel,
     external_id: input.external_id,
     occurred_at: input.occurred_at,
-    actor: { id: input.actor_id },
+    actor: {
+      id: input.actor_id,
+      ...(input.actor_label ? { display_name: input.actor_label } : {}),
+    },
     scope: {
       id: input.scope_id,
       name: input.scope_name,
@@ -193,11 +206,7 @@ export function resolveMessageSurface(input: {
   stored?: MessageSurface;
 }): MessageSurface {
   if (input.stored && isKind(input.stored.kind) && isDirection(input.stored.direction)) {
-    return {
-      channel: input.stored.channel || input.source,
-      kind: input.stored.kind,
-      direction: input.stored.direction,
-    };
+    return readSurface(input.stored, input.source);
   }
   return inferLegacySurface(input);
 }
@@ -222,16 +231,35 @@ function parseSurface(raw: string): MessageSurface | undefined {
       isKind(value.kind) &&
       isDirection(value.direction)
     ) {
-      return {
-        channel: value.channel,
-        kind: value.kind,
-        direction: value.direction,
-      };
+      return readSurface(value);
     }
   } catch {
     return undefined;
   }
   return undefined;
+}
+
+function readSurface(
+  value: MessageSurface,
+  fallbackChannel?: string,
+): MessageSurface {
+  const conversationLabel = optionalLabel(value.conversation_label);
+  const conversationKind = optionalLabel(value.conversation_kind);
+  const actorLabel = optionalLabel(value.actor_label);
+  return {
+    channel: value.channel.trim() || fallbackChannel || value.channel,
+    kind: value.kind,
+    direction: value.direction,
+    ...(conversationLabel ? { conversation_label: conversationLabel } : {}),
+    ...(conversationKind ? { conversation_kind: conversationKind } : {}),
+    ...(actorLabel ? { actor_label: actorLabel } : {}),
+  };
+}
+
+function optionalLabel(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
 
 function isKind(value: unknown): value is MessageKind {
