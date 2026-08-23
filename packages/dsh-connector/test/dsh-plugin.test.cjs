@@ -182,16 +182,19 @@ describe("dshSessionPlugin", () => {
         sync: true,
         reply: true,
         create: true,
+        await_reply: true,
       });
       assert.deepEqual(dshSessionDriver.capabilities(pinned), {
         sync: true,
         reply: true,
         create: false,
+        await_reply: true,
       });
       assert.deepEqual(dshSessionDriver.capabilities(cli), {
         sync: true,
         reply: true,
         create: false,
+        await_reply: true,
       });
     });
   });

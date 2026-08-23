@@ -51,6 +51,7 @@ export interface InboxViewItem {
   kind: MessageKind;
   direction: MessageDirection;
   can_send: boolean;
+  await_reply?: boolean;
   thread_id?: string;
   title?: string | null;
   pinned?: boolean;
@@ -131,6 +132,7 @@ export interface CreatedConversation {
   channel: string;
   channel_label: string;
   can_send: boolean;
+  await_reply?: boolean;
   title?: string | null;
   pinned?: boolean;
   opened_at?: string;

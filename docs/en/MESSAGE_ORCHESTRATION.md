@@ -93,7 +93,7 @@ Send and display shape live in `@regenic/domain` `message-contract`. The connect
 
 Connectors ingest through `channelRecord()` so surface metadata travels with the body. Legacy events without it fall back to `inferLegacySurface()`. A local outbound and the channel-history echo of the same utterance stay a single Event.
 
-Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: `installation + thread → driver.resolveStreams / bindEgress / createThread`. `ownsThread` wins over a catch-all match. Follow and live pull share one queue per stream. The desktop asks `can_send`, `can_create`, and `activity`, not “is this DSH?”.
+Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: `installation + thread → driver.resolveStreams / bindEgress / createThread`. `ownsThread` wins over a catch-all match. Follow and live pull share one queue per stream. The desktop asks `can_send`, `can_create`, `await_reply`, and `activity`, not “is this DSH?”.
 
 ## Extension points
 

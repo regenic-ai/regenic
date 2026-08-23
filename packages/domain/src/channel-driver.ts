@@ -15,6 +15,11 @@ export interface ChannelCapabilities {
   sync: boolean;
   reply: boolean;
   create: boolean;
+  /**
+   * After an outbound, treat silence as waiting for the other side.
+   * Session/agent channels set this. Chat channels leave it unset.
+   */
+  await_reply?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -182,6 +187,16 @@ export class ChannelDriverRegistry {
   ): boolean {
     const found = this.findForThread(installations, thread);
     return Boolean(found && found.driver.canReply(found.installation));
+  }
+
+  awaitReply(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): boolean {
+    const found = this.findForThread(installations, thread);
+    return Boolean(
+      found && found.driver.capabilities(found.installation).await_reply,
+    );
   }
 
   findCreatable(

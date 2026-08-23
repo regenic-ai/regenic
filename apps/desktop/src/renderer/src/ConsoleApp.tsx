@@ -547,6 +547,7 @@ function mergeDraftThreads(
       channel_label: draft.channel_label,
       label: "New conversation",
       can_send: draft.can_send,
+      await_reply: draft.await_reply === true,
       title: draft.title ?? null,
       conversation_label: null,
       conversation_kind: null,
@@ -1153,6 +1154,7 @@ function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem
     kind: "user",
     direction: "outbound",
     can_send: thread.can_send,
+    await_reply: thread.await_reply === true,
   };
 }
 

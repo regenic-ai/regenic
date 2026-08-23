@@ -13,6 +13,7 @@ export interface InboxThread {
   pinned: boolean;
   pref_updated_at?: string;
   can_send: boolean;
+  await_reply?: boolean;
   messages: InboxViewItem[];
   opened_at?: string;
 }
@@ -214,6 +215,8 @@ export function overlayThreadMessages(
       ...thread,
       messages,
       can_send: messages.some((item) => item.can_send) || thread.can_send,
+      await_reply:
+        messages.some((item) => item.await_reply === true) || thread.await_reply === true,
     };
   });
   return changed ? next : threads;
@@ -308,6 +311,7 @@ function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
     pinned: pref.pinned,
     pref_updated_at: pref.updated_at,
     can_send: ordered.some((item) => item.can_send),
+    await_reply: ordered.some((item) => item.await_reply === true),
     messages: ordered,
   };
 }

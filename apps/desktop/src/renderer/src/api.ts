@@ -86,6 +86,7 @@ export async function fetchInbox(
     kind: item.kind ?? "assistant",
     direction: item.direction ?? "inbound",
     can_send: item.can_send === true,
+    await_reply: item.await_reply === true,
     thread_id: item.thread_id,
     title: item.title ?? null,
     pinned: item.pinned === true,

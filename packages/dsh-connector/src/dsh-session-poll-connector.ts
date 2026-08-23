@@ -334,9 +334,6 @@ function appendWorkingMarker(
   if (latestVisible && latestVisible.seq >= latest.seq) {
     return surface;
   }
-  if (!isWorkingHistoryEvent(latest)) {
-    return surface;
-  }
   return [
     ...surface,
     {
@@ -350,16 +347,6 @@ function appendWorkingMarker(
       data: { content: [{ type: "text", text: "Still working." }] },
     },
   ];
-}
-
-function isWorkingHistoryEvent(event: DshHistoryEvent): boolean {
-  if (event.type === "assistant/message") {
-    return !extractTextBlocks(assistantMessageFromData(event.data));
-  }
-  if (event.type === "tool/call") {
-    return !askUserQuestionText(event.data);
-  }
-  return event.type === "assistant/reasoning" || event.type === "tool/result";
 }
 
 function parseCursor(cursor: ConnectorCursor | null): {

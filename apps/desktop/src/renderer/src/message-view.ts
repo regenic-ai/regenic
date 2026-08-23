@@ -57,6 +57,7 @@ export function threadActivityOf(
     return latest.activity;
   }
   if (
+    thread.await_reply === true &&
     latest.kind === "user" &&
     latest.direction === "outbound" &&
     isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)

@@ -101,6 +101,7 @@ export function sameInboxProps(
     previous.thread_id !== next.thread_id ||
     previous.kind !== next.kind ||
     previous.can_send !== next.can_send ||
+    previous.await_reply !== next.await_reply ||
     previous.activity !== next.activity
   ) {
     return false;

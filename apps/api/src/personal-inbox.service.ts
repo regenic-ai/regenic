@@ -43,6 +43,7 @@ export interface InboxViewItem {
   kind: MessageKind;
   direction: MessageDirection;
   can_send: boolean;
+  await_reply: boolean;
   thread_id: string;
   title: string | null;
   pinned: boolean;
@@ -290,6 +291,7 @@ function decorateInboxItem(
     kind: surface.kind,
     direction: surface.direction,
     can_send: drivers.canSend(installations, thread),
+    await_reply: drivers.awaitReply(installations, thread),
     thread_id: threadId,
     title: pref?.title ?? null,
     pinned: pref?.pinned === true,
@@ -353,7 +355,12 @@ function inboxStoreQuery(
   thread?: ConversationThread,
 ): InboxQuery {
   if (query.heads) {
-    return { heads: true };
+    return thread
+      ? {
+          heads: true,
+          thread_ids: [`${thread.source}:${thread.target}`],
+        }
+      : { heads: true };
   }
   return {
     source: thread?.source,

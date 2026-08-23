@@ -281,6 +281,54 @@ describe("DshSessionPollConnector", () => {
     assert.match(result.batch.records[1].content[0].text, /Still working/);
   });
 
+  it("marks an in-progress chunk as working when it is the latest event", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "user/message",
+                seq: 3,
+                time: 1_724_208_002_200,
+                data: {
+                  content: [{ type: "text", text: "Continue" }],
+                  source: { kind: "user" },
+                },
+              },
+              {
+                type: "assistant/chunk",
+                seq: 4,
+                time: 1_724_208_002_300,
+                data: { chunk: { type: "text-delta", text: "Deep diving" } },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-chunk",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        record.type,
+        surfaceActivity(record),
+      ]),
+      [
+        ["sess-chunk:3", "message", undefined],
+        ["sess-chunk:4", "thread_status", "working"],
+      ],
+    );
+  });
+
   it("does not add a working marker after a visible assistant reply", async () => {
     const connector = new DshSessionPollConnector(
       {

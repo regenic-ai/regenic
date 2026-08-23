@@ -413,6 +413,14 @@ describe("personal /v1/me", () => {
       ).json();
       assert.ok(one.length >= 2);
       assert.ok(one.every((item) => item.thread_id === "dsh:session-x"));
+      const head = await (
+        await fetch(
+          `${origin}/v1/me/inbox?heads=1&thread_id=${encodeURIComponent("dsh:session-x")}`,
+        )
+      ).json();
+      assert.equal(head.length, 1);
+      assert.equal(head[0].thread_id, "dsh:session-x");
+      assert.equal(head[0].event.external_id, "session-x:2");
       for (let index = 1; index < one.length; index += 1) {
         assert.ok(
           one[index - 1].event.occurred_at <= one[index].event.occurred_at,
@@ -702,6 +710,7 @@ describe("personal /v1/me", () => {
       );
       assert.equal(Boolean(slackItem), true);
       assert.equal(slackItem.can_send, false);
+      assert.equal(slackItem.await_reply, false);
 
       const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
         method: "POST",
@@ -860,6 +869,8 @@ describe("personal /v1/me", () => {
       assert.equal(Boolean(sessionB), true);
       assert.equal(sessionA.can_send, true);
       assert.equal(sessionB.can_send, true);
+      assert.equal(sessionA.await_reply, true);
+      assert.equal(sessionB.await_reply, true);
 
       const synced = await fetch(
         `${origin}/v1/me/connectors/${installation.id}/sync`,
@@ -964,6 +975,7 @@ describe("personal /v1/me", () => {
       assert.equal(openedBody.channel, "dsh");
       assert.equal(openedBody.channel_label, "DSH");
       assert.equal(openedBody.can_send, true);
+      assert.equal(openedBody.await_reply, true);
       assert.deepEqual(dsh.created, ["created-1"]);
 
       const empty = await fetch(`${origin}/v1/me/replies`, {

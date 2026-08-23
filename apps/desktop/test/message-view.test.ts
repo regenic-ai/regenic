@@ -48,7 +48,10 @@ function item(input: {
   };
 }
 
-function thread(messages: InboxViewItem[]): InboxThread {
+function thread(
+  messages: InboxViewItem[],
+  extras: Partial<InboxThread> = {},
+): InboxThread {
   return {
     id: "dsh:session-1",
     source: "dsh",
@@ -60,7 +63,9 @@ function thread(messages: InboxViewItem[]): InboxThread {
     conversation_kind: null,
     pinned: false,
     can_send: true,
+    await_reply: true,
     messages,
+    ...extras,
   };
 }
 
@@ -143,18 +148,25 @@ describe("thread activity", () => {
     assert.match(threadActivityCopy(threadActivityOf(working)) ?? "", /still working/i);
   });
 
-  it("treats a recent outbound as waiting for the original channel", () => {
+  it("treats a recent outbound as waiting only when the connector awaits a reply", () => {
     const now = Date.parse("2026-08-23T12:05:00.000Z");
-    const sent = thread([
-      item({
-        id: "out-1",
-        external_id: "session-1:out:rpc",
-        text: "Continue",
-        occurred_at: "2026-08-23T12:00:00.000Z",
-      }),
-    ]);
+    const outbound = item({
+      id: "out-1",
+      external_id: "session-1:out:rpc",
+      text: "Continue",
+      occurred_at: "2026-08-23T12:00:00.000Z",
+    });
+    const sent = thread([outbound]);
     assert.equal(threadActivityOf(sent, now), "sent");
     assert.match(threadActivityCopy(threadActivityOf(sent, now)) ?? "", /Waiting for a reply/);
+    const chat = thread([outbound], {
+      id: "feishu:oc_1",
+      source: "feishu",
+      channel: "feishu",
+      channel_label: "Feishu",
+      await_reply: false,
+    });
+    assert.equal(threadActivityOf(chat, now), undefined);
   });
 
   it("does not keep a stale outbound in the waiting state", () => {
