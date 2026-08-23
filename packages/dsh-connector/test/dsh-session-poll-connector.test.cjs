@@ -228,6 +228,38 @@ describe("DshSessionPollConnector", () => {
     assert.equal(surfaceActivity(result.batch.records[1]), "awaiting_user");
   });
 
+  it("does not invent a working conversation when nothing is visible", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "tool/call",
+                seq: 2,
+                time: 1_724_208_002_100,
+                data: {
+                  name: "bash",
+                  arguments: "{\"command\":\"ls\"}",
+                },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-empty",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(result.batch.records, []);
+  });
+
   it("marks invisible labor as a working thread status", async () => {
     const connector = new DshSessionPollConnector(
       {
@@ -325,6 +357,66 @@ describe("DshSessionPollConnector", () => {
       [
         ["sess-chunk:3", "message", undefined],
         ["sess-chunk:4", "thread_status", "working"],
+      ],
+    );
+  });
+
+  it("does not add a working marker when invisible labor follows a visible reply", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "user/message",
+                seq: 1,
+                time: 1_724_208_002_000,
+                data: {
+                  content: [{ type: "text", text: "只用一句话回复：pong" }],
+                  source: { kind: "user" },
+                },
+              },
+              {
+                type: "assistant/message",
+                seq: 2,
+                time: 1_724_208_002_100,
+                data: {
+                  message: { content: [{ type: "text", text: "pong" }] },
+                },
+              },
+              {
+                type: "tool/call",
+                seq: 3,
+                time: 1_724_208_002_200,
+                data: {
+                  name: "bash",
+                  arguments: "{\"command\":\"ls\"}",
+                },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-replied",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        record.type,
+        surfaceKind(record),
+        surfaceActivity(record),
+      ]),
+      [
+        ["sess-replied:1", "message", "user", undefined],
+        ["sess-replied:2", "message", "assistant", undefined],
       ],
     );
   });

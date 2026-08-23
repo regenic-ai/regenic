@@ -6,19 +6,24 @@ import {
   conversationId,
   inboxDigest,
   headsByThread,
+  isThreadStatusItem,
   parseConversationThread,
   resolveMessageSurface,
   type ArrangementDecision,
+  type AuthorityStore,
+  type BlobStore,
   type ConnectorInstallation,
   type ConversationPref,
   type ConversationThread,
   type EventRecord,
+  type InboxItem,
   type InboxQuery,
+  type ListTitleMode,
   type MessageDirection,
   type MessageKind,
   type ThreadActivity,
 } from "@regenic/domain";
-import { resolveInboxBody, type InboxAttachment } from "./inbox-body";
+import { resolveInboxBody, type InboxAttachment, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
@@ -44,7 +49,7 @@ export interface InboxViewItem {
   direction: MessageDirection;
   can_send: boolean;
   await_reply: boolean;
-  list_title: "conversation" | "face";
+  list_title: ListTitleMode;
   thread_id: string;
   title: string | null;
   pinned: boolean;
@@ -225,11 +230,12 @@ export class PersonalInboxService {
         return {
           item,
           threadId,
-          body: await resolveInboxBody(
+          body: await resolveListBody(
             authority,
             blobs,
             item.event.content_hash,
             attachments,
+            query.heads === true,
           ),
         };
       }),
@@ -239,16 +245,37 @@ export class PersonalInboxService {
       installations,
       this.drivers,
     );
-    return resolved.map(({ item, threadId, body }) =>
-      decorateInboxItem(
+    const prompts = await promptLabelsFor(
+      orgId,
+      resolved,
+      installations,
+      this.drivers,
+      authority,
+      blobs,
+      query.heads === true,
+    );
+    return resolved.map(({ item, threadId, body }) => {
+      const view = decorateInboxItem(
         item,
         body,
         installations,
         this.drivers,
         prefsByThread.get(threadId) ?? null,
         labels,
-      ),
-    );
+      );
+      const prompt = prompts.get(threadId);
+      const titled =
+        view.list_title === "prompt" && prompt
+          ? { ...view, conversation_label: prompt }
+          : view;
+      if (
+        query.heads === true &&
+        (titled.list_title === "conversation" || titled.list_title === "prompt")
+      ) {
+        return { ...titled, body_text: undefined, attachments: undefined };
+      }
+      return titled;
+    });
   }
 
   async updateConversationPrefs(
@@ -281,6 +308,47 @@ export class PersonalInboxService {
     });
     return toPrefView(pref);
   }
+}
+
+const LIST_FACE_MAX = 120;
+
+async function resolveListBody(
+  authority: Parameters<typeof resolveInboxBody>[0],
+  blobs: Parameters<typeof resolveInboxBody>[1],
+  contentHash: string | undefined,
+  attachments: Parameters<typeof resolveInboxBody>[3],
+  heads: boolean,
+): Promise<InboxBody> {
+  const body = await resolveInboxBody(
+    authority,
+    blobs,
+    contentHash,
+    attachments,
+  );
+  if (!heads) {
+    return body;
+  }
+  return {
+    media_type: body.media_type,
+    surface: body.surface,
+    body_text: listFaceText(body.body_text),
+  };
+}
+
+function listFaceText(text: string | undefined): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const line = text
+    .split(/\r?\n/)
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  if (!line) {
+    return undefined;
+  }
+  return line.length > LIST_FACE_MAX
+    ? `${line.slice(0, LIST_FACE_MAX - 1)}…`
+    : line;
 }
 
 function decorateInboxItem(
@@ -332,6 +400,149 @@ async function conversationLabelsFor(
     return new Map();
   }
   return drivers.resolveConversationLabels(installations, missing);
+}
+
+const PROMPT_SCAN_LIMIT = 24;
+
+async function promptLabelsFor(
+  orgId: string,
+  resolved: Array<{
+    item: { event: EventRecord };
+    threadId: string;
+    body: InboxBody;
+  }>,
+  installations: ConnectorInstallation[],
+  drivers: ChannelDriverRegistry,
+  authority: AuthorityStore,
+  blobs: BlobStore,
+  heads: boolean,
+): Promise<Map<string, string>> {
+  const promptIds = [
+    ...new Set(
+      resolved
+        .filter(
+          ({ item }) =>
+            drivers.listTitle(installations, threadOf(item.event)) === "prompt",
+        )
+        .map(({ threadId }) => threadId),
+    ),
+  ];
+  if (promptIds.length === 0) {
+    return new Map();
+  }
+  if (!heads) {
+    return firstUserLabelsFrom(resolved);
+  }
+  const siblings = await authority.listInbox(orgId, {
+    siblings: true,
+    thread_ids: promptIds,
+  });
+  const groups = new Map<string, InboxItem[]>();
+  for (const item of siblings) {
+    const id = conversationId(
+      item.event.source,
+      item.event.external_id,
+      item.event.id,
+    );
+    const bucket = groups.get(id);
+    if (bucket) {
+      bucket.push(item);
+    } else {
+      groups.set(id, [item]);
+    }
+  }
+  const labels = new Map<string, string>();
+  await Promise.all(
+    promptIds.map(async (threadId) => {
+      const text = await firstUserTextIn(
+        (groups.get(threadId) ?? []).slice().sort(byEventTime),
+        resolved,
+        authority,
+        blobs,
+      );
+      if (text) {
+        labels.set(threadId, text);
+      }
+    }),
+  );
+  return labels;
+}
+
+function firstUserLabelsFrom(
+  resolved: Array<{
+    item: { event: EventRecord };
+    threadId: string;
+    body: InboxBody;
+  }>,
+): Map<string, string> {
+  const best = new Map<string, { text: string; at: string; id: string }>();
+  for (const row of resolved) {
+    const surface = messageSurfaceOf(row.item.event, row.body);
+    const text = listFaceText(row.body.body_text);
+    if (surface.kind !== "user" || !text) {
+      continue;
+    }
+    const current = best.get(row.threadId);
+    if (
+      !current ||
+      row.item.event.occurred_at < current.at ||
+      (row.item.event.occurred_at === current.at &&
+        row.item.event.id < current.id)
+    ) {
+      best.set(row.threadId, {
+        text,
+        at: row.item.event.occurred_at,
+        id: row.item.event.id,
+      });
+    }
+  }
+  return new Map([...best].map(([id, value]) => [id, value.text]));
+}
+
+async function firstUserTextIn(
+  items: InboxItem[],
+  resolved: Array<{
+    item: { event: EventRecord };
+    body: InboxBody;
+  }>,
+  authority: AuthorityStore,
+  blobs: BlobStore,
+): Promise<string | undefined> {
+  let scanned = 0;
+  for (const item of items) {
+    if (isThreadStatusItem(item) || item.event.operation === "tombstone") {
+      continue;
+    }
+    scanned += 1;
+    if (scanned > PROMPT_SCAN_LIMIT) {
+      break;
+    }
+    const cached = resolved.find((row) => row.item.event.id === item.event.id);
+    const body =
+      cached?.body ??
+      (await resolveInboxBody(
+        authority,
+        blobs,
+        item.event.content_hash,
+        "meta",
+      ));
+    const surface = messageSurfaceOf(item.event, body);
+    const text = listFaceText(body.body_text);
+    if (surface.kind === "user" && text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function byEventTime(
+  left: { event: EventRecord },
+  right: { event: EventRecord },
+): number {
+  if (left.event.occurred_at !== right.event.occurred_at) {
+    return left.event.occurred_at < right.event.occurred_at ? -1 : 1;
+  }
+  return left.event.id < right.event.id ? -1 : 1;
 }
 
 function messageSurfaceOf(

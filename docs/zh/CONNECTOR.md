@@ -75,14 +75,18 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 一条是 outbound 时，才显示「已发送，等对端」。这不是第三条 `activity`，
 只是对驱动声明的展示。
 `list_title` 同样由驱动声明：聊天渠道设 `conversation`，列表标题用
-`conversation_label`（群名、频道名、单聊对方）；会话 Agent 不写，桌面用
-可见消息脸。桌面不按渠道名分支。旧 Event 缺会话名时，驱动可实现
+`conversation_label`（群名、频道名、单聊对方）；会话 Agent 设 `prompt`，
+列表标题用该会话第一条用户消息；不写则用可见消息脸。桌面不按渠道名分支。旧 Event 缺会话名时，驱动可实现
 `resolveConversationLabels`，inbox 装饰层补上，不改历史正文。
 
-对端只有不可见劳动时，连接器可另发一条 `type: "thread_status"` 记录
-（`activity: "working"`）。编排把它留在当前工作。桌面用它做状态条，不画
-成聊天气泡，也不用它当会话标题。列表 `heads` 露出该会话上一条可见消息（不必仍在当前工作）；过期的
-`working` 不再显示成「对端还在处理」，也不用 session id 当标题。
+对端只有不可见劳动、且还没有可见回复时，连接器可另发一条
+`type: "thread_status"` 记录（`activity: "working"`）。编排把它留在当前工作。
+桌面用它做状态条，不画成聊天气泡，也不用它当会话标题。最后一条可见消息
+已经是 Agent 回复时，不再挂「对端还在处理」——回复后面的工具/推理不算在等回复。
+列表 `heads` 只露出该会话上一条可见消息（不必仍在当前工作），不附带
+更新的 `working` 标记，也不水合全文。只有
+`working`、没有任何可见消息的会话不进列表，避免标题退化成 session id。
+过期的 `working` 也不再显示。
 
 同一会话里，本地出站和渠道 history 回声的同一句话只保留一条 Event。
 
@@ -120,7 +124,7 @@ interface ChannelDriver {
 | `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书存 `selection=all` 加 `kinds`（`group` / `p2p`，默认两个都开），或勾选的 `chat_ids`。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
-| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply` 与 `list_title`。`await_reply`：DSH 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH 不写（默认 `face`）。 |
+| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply` 与 `list_title`。`await_reply`：DSH 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH 为 `prompt`（第一条用户消息）。 |
 | `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。飞书用安装里的 `chat_names` 或会话列表（单聊 `name` 空则解析 `p2p_target_id`）。Slack 用 `channel_name`。查找失败不得挡住 inbox。 |
 | `canReply` | 与 `capabilities().reply` 相同。 |
 | `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：每个选中的会话一条 `chat:<id>`，`selection=all` 时跟当前能看到的群和/或单聊。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转后隔多久再扫）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支。 |

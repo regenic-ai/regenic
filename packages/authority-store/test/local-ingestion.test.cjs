@@ -429,14 +429,44 @@ describe("local ingestion persistence", () => {
     });
     const heads = await authorityStore.listInbox("local-owner", { heads: true });
     assert.deepEqual(
-      heads.map((item) => item.event.external_id).sort(),
-      ["session-w:1", "session-w:2"],
+      heads.map((item) => item.event.external_id),
+      ["session-w:1"],
     );
-    assert.equal(
-      heads.find((item) => item.event.external_id === "session-w:2")
-        ?.decision.reason_codes.includes("thread_status"),
-      true,
-    );
+    authorityStore.close();
+  });
+
+  it("does not list a conversation that is only a working marker", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "working-only-1",
+      received_at: "2026-08-22T10:43:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-empty:2",
+          occurred_at: "2026-08-22T10:43:00.000Z",
+          actor: { id: "assistant" },
+          scope: { id: "session-empty" },
+          type: "thread_status",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Still working.",
+            },
+          ],
+        },
+      ],
+    });
+    const heads = await authorityStore.listInbox("local-owner", { heads: true });
+    const summary = await authorityStore.summarizeInbox("local-owner");
+    assert.deepEqual(heads, []);
+    assert.equal(summary.count, 0);
     authorityStore.close();
   });
 
@@ -486,8 +516,8 @@ describe("local ingestion persistence", () => {
     });
     const heads = await authorityStore.listInbox("local-owner", { heads: true });
     assert.deepEqual(
-      heads.map((item) => item.event.external_id).sort(),
-      ["session-n:1", "session-n:2"],
+      heads.map((item) => item.event.external_id),
+      ["session-n:1"],
     );
     authorityStore.close();
   });

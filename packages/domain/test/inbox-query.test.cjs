@@ -68,7 +68,7 @@ describe("inbox query helpers", () => {
     assert.equal(threadExternalIdLike("a_b"), "a\\_b:%");
   });
 
-  it("keeps the last visible message as the head and rides a newer working marker", () => {
+  it("keeps the last visible message as the head and drops a newer working marker", () => {
     const visible = {
       decision: {
         disposition: "current_work",
@@ -111,12 +111,12 @@ describe("inbox query helpers", () => {
     const heads = headsByThread([visible, working, other]);
     assert.deepEqual(
       heads.map((item) => item.event.id).sort(),
-      ["e1", "e2", "e3"],
+      ["e1", "e3"],
     );
     const selected = selectInboxItems([visible, working, other], { heads: true });
     assert.deepEqual(
       selected.map((item) => item.event.id).sort(),
-      ["e1", "e2", "e3"],
+      ["e1", "e3"],
     );
   });
 
@@ -149,8 +149,27 @@ describe("inbox query helpers", () => {
     };
     const heads = selectInboxItems([noise, working], { heads: true });
     assert.deepEqual(
-      heads.map((item) => item.event.id).sort(),
-      ["e1", "e2"],
+      heads.map((item) => item.event.id),
+      ["e1"],
     );
+  });
+
+  it("does not list a conversation that is only a working marker", () => {
+    const working = {
+      decision: {
+        disposition: "current_work",
+        reason_codes: ["thread_status"],
+      },
+      event: {
+        id: "e2",
+        source: "dsh",
+        external_id: "session-empty:2",
+        occurred_at: "2026-08-22T10:43:00.000Z",
+        ingested_at: "2026-08-22T10:43:00.000Z",
+      },
+    };
+    assert.deepEqual(headsByThread([working]), []);
+    assert.deepEqual(selectInboxItems([working], { heads: true }), []);
+    assert.equal(summarizeInboxItems([working]).count, 0);
   });
 });

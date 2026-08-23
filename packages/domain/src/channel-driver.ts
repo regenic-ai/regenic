@@ -11,7 +11,14 @@ export interface ConversationThread {
   target: string;
 }
 
-export type ListTitleMode = "conversation" | "face";
+export type ListTitleMode = "conversation" | "face" | "prompt";
+
+export function normalizeListTitle(value: unknown): ListTitleMode {
+  if (value === "conversation" || value === "prompt") {
+    return value;
+  }
+  return "face";
+}
 
 export interface ChannelCapabilities {
   sync: boolean;
@@ -25,7 +32,8 @@ export interface ChannelCapabilities {
   /**
    * How the desktop titles a conversation in lists.
    * Chat channels set `conversation` (group / DM / channel name).
-   * Session/agent channels omit this and keep the visible-message face.
+   * Session/agent channels set `prompt` (first user message).
+   * Omit it to keep the visible-message face.
    */
   list_title?: ListTitleMode;
 }
@@ -217,10 +225,9 @@ export class ChannelDriverRegistry {
     thread: ConversationThread,
   ): ListTitleMode {
     const found = this.findForThread(installations, thread);
-    return found?.driver.capabilities(found.installation).list_title ===
-      "conversation"
-      ? "conversation"
-      : "face";
+    return normalizeListTitle(
+      found?.driver.capabilities(found.installation).list_title,
+    );
   }
 
   async resolveConversationLabels(

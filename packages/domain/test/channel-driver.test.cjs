@@ -192,6 +192,7 @@ describe("channel driver registry", () => {
             reply: true,
             create: true,
             await_reply: true,
+            list_title: "prompt",
           }),
           canReply: () => true,
         }),
@@ -237,7 +238,7 @@ describe("channel driver registry", () => {
     };
     assert.equal(
       drivers.listTitle([dsh], { source: "dsh", target: "sess-a" }),
-      "face",
+      "prompt",
     );
     assert.equal(
       drivers.listTitle([feishu], { source: "feishu", target: "oc_1" }),

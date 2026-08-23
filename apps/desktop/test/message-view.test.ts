@@ -150,6 +150,35 @@ describe("thread activity", () => {
     assert.match(threadActivityCopy(threadActivityOf(working, now)) ?? "", /still working/i);
   });
 
+  it("does not keep working after a visible assistant reply", () => {
+    const now = Date.parse("2026-08-23T12:05:00.000Z");
+    const replied = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:7",
+        text: "只用一句话回复：pong",
+      }),
+      item({
+        id: "in-1",
+        external_id: "session-1:140",
+        text: "我是 deepseek-v4-flash 模型，运行在 DeepSeek Harness 环境中为你服务。",
+        kind: "assistant",
+        direction: "inbound",
+      }),
+      item({
+        id: "work-1",
+        external_id: "session-1:300",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+        occurred_at: "2026-08-23T12:00:00.000Z",
+      }),
+    ]);
+    assert.equal(threadActivityOf(replied, now), undefined);
+    assert.equal(threadPreview(replied), "只用一句话回复：pong");
+  });
+
   it("does not keep a stale working marker as current activity", () => {
     const now = Date.parse("2026-08-23T13:00:00.000Z");
     const stale = thread([
@@ -267,6 +296,46 @@ describe("thread activity", () => {
       },
     );
     assert.equal(threadTitle(chat), "oc_1");
+  });
+
+  it("titles a prompt-mode thread from the first user message, not the last reply", () => {
+    const session = thread(
+      [
+        item({
+          id: "out-1",
+          external_id: "session-1:7",
+          text: "只用一句话回复：pong",
+        }),
+        item({
+          id: "in-1",
+          external_id: "session-1:49",
+          text: "pong",
+          kind: "assistant",
+          direction: "inbound",
+        }),
+      ],
+      {
+        conversation_label: "只用一句话回复：pong",
+        list_title: "prompt",
+      },
+    );
+    assert.equal(threadTitle(session), "只用一句话回复：pong");
+    const headsOnly = thread(
+      [
+        item({
+          id: "in-1",
+          external_id: "session-1:49",
+          text: "pong",
+          kind: "assistant",
+          direction: "inbound",
+        }),
+      ],
+      {
+        conversation_label: "只用一句话回复：pong",
+        list_title: "prompt",
+      },
+    );
+    assert.equal(threadTitle(headsOnly), "只用一句话回复：pong");
   });
 
   it("does not title the thread from a working marker", () => {

@@ -304,8 +304,16 @@ export class SqliteAuthorityStore
             FROM message_dispositions d
             JOIN events e ON e.id = d.event_id
             JOIN source_heads h ON h.current_event_id = e.id
-            WHERE d.org_id = ? AND d.disposition = 'current_work'
+            WHERE d.org_id = ?
             GROUP BY thread_id
+            HAVING
+              SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
+              AND SUM(
+                CASE
+                  WHEN d.reason_codes_json LIKE '%thread_status%' THEN 0
+                  ELSE 1
+                END
+              ) > 0
           )
         `,
       )
@@ -1016,8 +1024,18 @@ export class SqliteAuthorityStore
                 JOIN source_heads h2 ON h2.current_event_id = e2.id
                 WHERE ${current.clauses.join(" AND ")}
               )
+              AND EXISTS (
+                SELECT 1
+                FROM message_dispositions d3
+                JOIN events e3 ON e3.id = d3.event_id
+                WHERE d3.org_id = e.org_id
+                  AND conversation_id(e3.source, e3.external_id, e3.id)
+                    = conversation_id(e.source, e.external_id, e.id)
+                  AND d3.reason_codes_json NOT LIKE '%thread_status%'
+              )
           ) ranked
           WHERE rn = 1
+            AND reason_codes_json NOT LIKE '%thread_status%'
           ORDER BY occurred_at ASC, id ASC
         `,
         params: [...visible.params, ...current.params],

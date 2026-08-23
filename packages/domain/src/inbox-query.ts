@@ -76,9 +76,8 @@ export function isThreadStatusItem(item: unknown): boolean {
 }
 
 /**
- * List heads are the last visible message. A newer `thread_status` may ride
- * along so the desktop can show live activity without using the marker as the
- * conversation face.
+ * List heads are the last visible message. Status markers stay off the list
+ * payload; the desktop titles the row from this face only.
  */
 export function headsByThread<T extends { event: EventRecord }>(
   items: T[],
@@ -96,12 +95,8 @@ export function headsByThread<T extends { event: EventRecord }>(
   }
   const heads: T[] = [];
   for (const bucket of groups.values()) {
-    let latest = bucket[0];
     let face: T | undefined;
     for (const item of bucket) {
-      if (latest && isNewerEvent(item.event, latest.event)) {
-        latest = item;
-      }
       if (
         !isStatus(item) &&
         item.event.operation !== "tombstone" &&
@@ -110,13 +105,10 @@ export function headsByThread<T extends { event: EventRecord }>(
         face = item;
       }
     }
-    const chosen = face ?? latest;
-    if (chosen) {
-      heads.push(chosen);
+    if (!face) {
+      continue;
     }
-    if (latest && chosen && latest !== chosen && isStatus(latest)) {
-      heads.push(latest);
-    }
+    heads.push(face);
   }
   return heads;
 }
@@ -184,9 +176,20 @@ export function summarizeInboxItems(
   items: InboxItem[],
   prefs: Array<{ updated_at: string }> = [],
 ): InboxSummary {
+  const withFace = new Set(
+    items
+      .filter(
+        (item) =>
+          !isThreadStatusItem(item) && item.event.operation !== "tombstone",
+      )
+      .map((item) => eventThreadId(item.event)),
+  );
+  const listable = items.filter((item) =>
+    withFace.has(eventThreadId(item.event)),
+  );
   return {
-    count: new Set(items.map((item) => eventThreadId(item.event))).size,
-    digest: inboxDigest(items, prefs),
+    count: withFace.size,
+    digest: inboxDigest(listable, prefs),
   };
 }
 

@@ -90,17 +90,23 @@ omit it. The desktop shows “Sent. Waiting for a reply” only when
 not a third `activity` value; it is presentation of the driver flag.
 `list_title` is the same kind of declaration: chat channels set
 `conversation` so the list title is `conversation_label` (group, channel,
-or DM counterpart). Session agents omit it; the desktop uses the visible
-message face. The desktop does not branch on channel name. When an old
+or DM counterpart). Session agents set `prompt` so the list title is the
+first user message. Omit it to keep the visible-message face. The desktop
+does not branch on channel name. When an old
 Event has no conversation name, a driver may implement
 `resolveConversationLabels` so inbox decoration can fill it without
 rewriting history.
 
-When the other side has only invisible labor, a connector may emit a
-`type: "thread_status"` record with `activity: "working"`. Arrangement keeps
-it in current work. The desktop uses it as a status banner, not a chat
-bubble or conversation title. List `heads` keep the last visible message;
-a stale `working` marker is not shown as “still working.”
+When the other side has only invisible labor and no visible reply yet, a
+connector may emit a `type: "thread_status"` record with
+`activity: "working"`. Arrangement keeps it in current work. The desktop
+uses it as a status banner, not a chat bubble or conversation title. If
+the last visible message is already an assistant reply, leftover tool or
+reasoning events after it do not keep the banner up. List `heads` keep the
+last visible message. They do not ride a newer `working` marker or
+hydrate the full reply. A conversation that is only a `working` marker
+stays off the list so the title does not collapse to a session id. A
+stale `working` marker is not shown as “still working.”
 
 A local outbound and the channel-history echo of the same utterance in one
 conversation stay a single Event.
@@ -139,7 +145,7 @@ interface ChannelDriver {
 | `install` | Persist non-secret config. Slack requires `channel_id`. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
-| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply` and `list_title`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH omits it (default `face`). |
+| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply` and `list_title`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH sets `prompt` (first user message). |
 | `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Feishu uses install `chat_names` or the live chat list (a nameless p2p chat resolves `p2p_target_id`). Slack uses `channel_name`. A lookup failure must not block inbox. |
 | `canReply` | Same value as `capabilities().reply`. |
 | `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` per selected conversation, or every visible group and/or p2p chat when `selection=all`. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |

@@ -1,5 +1,5 @@
 import type { InboxReuse } from "./thread-window";
-import type { InboxViewItem } from "./types";
+import type { InboxViewItem, ListTitleMode } from "./types";
 
 export interface InboxThread {
   id: string;
@@ -14,7 +14,7 @@ export interface InboxThread {
   pref_updated_at?: string;
   can_send: boolean;
   await_reply?: boolean;
-  list_title?: "conversation" | "face";
+  list_title?: ListTitleMode;
   messages: InboxViewItem[];
   opened_at?: string;
 }
@@ -431,6 +431,12 @@ function threadListTitle(
     fallback === "conversation"
   ) {
     return "conversation";
+  }
+  if (
+    messages.some((item) => item.list_title === "prompt") ||
+    fallback === "prompt"
+  ) {
+    return "prompt";
   }
   return "face";
 }
