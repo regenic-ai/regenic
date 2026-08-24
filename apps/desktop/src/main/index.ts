@@ -418,7 +418,7 @@ function createTray(): void {
 
 async function pollNotifications(): Promise<void> {
   try {
-    const response = await fetch(`${apiOrigin}/v1/me/inbox`);
+    const response = await fetch(`${apiOrigin}/v1/me/inbox?heads=1`);
     if (!response.ok) {
       return;
     }

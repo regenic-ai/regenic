@@ -236,9 +236,7 @@ export class SqliteAuthorityStore
         return [];
       }
       clauses.push(
-        `conversation_id(source, external_id, id) IN (${query.thread_ids
-          .map(() => "?")
-          .join(", ")})`,
+        `thread_id IN (${query.thread_ids.map(() => "?").join(", ")})`,
       );
       params.push(...query.thread_ids);
     }
@@ -329,12 +327,12 @@ export class SqliteAuthorityStore
       .prepare(
         `
           SELECT COUNT(*) AS count FROM (
-            SELECT conversation_id(e.source, e.external_id, e.id) AS thread_id
+            SELECT e.thread_id AS thread_id
             FROM message_dispositions d
             JOIN events e ON e.id = d.event_id
             JOIN source_heads h ON h.current_event_id = e.id
             WHERE d.org_id = ?
-            GROUP BY thread_id
+            GROUP BY e.thread_id
             HAVING
               SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
               AND SUM(
@@ -986,8 +984,8 @@ export class SqliteAuthorityStore
         `
           INSERT INTO events (
             id, org_id, source, external_id, operation, content_hash,
-            parent_event_id, revision_id, occurred_at, ingested_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            parent_event_id, revision_id, occurred_at, ingested_at, thread_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -1001,6 +999,7 @@ export class SqliteAuthorityStore
         input.revision_id ?? null,
         event.occurred_at,
         event.ingested_at,
+        conversationId(event.source, event.external_id, event.id),
       );
     const headUpdate =
       input.expected_head_id === null
@@ -1049,36 +1048,23 @@ export class SqliteAuthorityStore
           SELECT * FROM (
             SELECT ${INBOX_COLUMNS},
               ROW_NUMBER() OVER (
-                PARTITION BY conversation_id(e.source, e.external_id, e.id),
-                  CASE
-                    WHEN d.reason_codes_json LIKE '%thread_status%' THEN 1
-                    ELSE 0
-                  END
+                PARTITION BY e.thread_id
                 ORDER BY e.occurred_at DESC, e.id DESC
               ) AS rn
             FROM message_dispositions d
             JOIN events e ON e.id = d.event_id
             JOIN source_heads h ON h.current_event_id = e.id
             WHERE ${visible.clauses.join(" AND ")}
-              AND conversation_id(e.source, e.external_id, e.id) IN (
-                SELECT conversation_id(e2.source, e2.external_id, e2.id)
+              AND d.reason_codes_json NOT LIKE '%thread_status%'
+              AND e.thread_id IN (
+                SELECT e2.thread_id
                 FROM message_dispositions d2
                 JOIN events e2 ON e2.id = d2.event_id
                 JOIN source_heads h2 ON h2.current_event_id = e2.id
                 WHERE ${current.clauses.join(" AND ")}
               )
-              AND EXISTS (
-                SELECT 1
-                FROM message_dispositions d3
-                JOIN events e3 ON e3.id = d3.event_id
-                WHERE d3.org_id = e.org_id
-                  AND conversation_id(e3.source, e3.external_id, e3.id)
-                    = conversation_id(e.source, e.external_id, e.id)
-                  AND d3.reason_codes_json NOT LIKE '%thread_status%'
-              )
           ) ranked
           WHERE rn = 1
-            AND reason_codes_json NOT LIKE '%thread_status%'
           ORDER BY occurred_at ASC, id ASC
         `,
         params: [...visible.params, ...current.params],
@@ -1087,8 +1073,8 @@ export class SqliteAuthorityStore
     if (query?.siblings) {
       const { clauses, params } = this.inboxClauses(orgId, query, "any");
       if (!query.source && !query.target && !query.thread_ids) {
-        clauses.push(`conversation_id(e.source, e.external_id, e.id) IN (
-          SELECT conversation_id(e2.source, e2.external_id, e2.id)
+        clauses.push(`e.thread_id IN (
+          SELECT e2.thread_id
           FROM message_dispositions d2
           JOIN events e2 ON e2.id = d2.event_id
           JOIN source_heads h2 ON h2.current_event_id = e2.id
@@ -1148,9 +1134,7 @@ export class SqliteAuthorityStore
     }
     if (query?.thread_ids && query.thread_ids.length > 0) {
       clauses.push(
-        `conversation_id(${event}.source, ${event}.external_id, ${event}.id) IN (${query.thread_ids
-          .map(() => "?")
-          .join(", ")})`,
+        `${event}.thread_id IN (${query.thread_ids.map(() => "?").join(", ")})`,
       );
       params.push(...query.thread_ids);
     }

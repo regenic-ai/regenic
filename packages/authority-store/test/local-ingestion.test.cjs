@@ -6,10 +6,12 @@ const { afterEach, describe, it } = require("node:test");
 const Database = require("better-sqlite3");
 const { FsBlobStore } = require("@regenic/blob-store");
 const {
+  conversationId,
   INGEST_SCHEMA_VERSION,
   IngestionService,
 } = require("@regenic/domain");
 const { SqliteAuthorityStore } = require("../dist");
+const { MIGRATIONS } = require("../dist/migrations");
 
 const roots = [];
 
@@ -63,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 5);
+    assert.equal(authorityStore.schemaVersion, 6);
     authorityStore.close();
   });
 
@@ -215,12 +217,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 6");
+    database.pragma("user_version = 7");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 6 is newer than supported 5/,
+      /schema 7 is newer than supported 6/,
     );
   });
 
@@ -399,6 +401,117 @@ describe("local ingestion persistence", () => {
     });
     assert.equal(wildcard.length, 0);
     authorityStore.close();
+  });
+
+  it("backfills thread_id when opening a v5 authority database", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    for (const migration of MIGRATIONS) {
+      if (migration.version > 5) {
+        continue;
+      }
+      legacy.exec(migration.sql);
+      legacy.pragma(`user_version = ${migration.version}`);
+    }
+    const occurred = "2026-08-24T00:00:00.000Z";
+    legacy
+      .prepare(
+        `
+          INSERT INTO events (
+            id, org_id, source, external_id, operation,
+            occurred_at, ingested_at
+          ) VALUES (?, ?, ?, ?, 'create', ?, ?)
+        `,
+      )
+      .run("evt-1", "local-owner", "feishu", "oc_chat:om_1", occurred, occurred);
+    legacy
+      .prepare(
+        `
+          INSERT INTO source_heads (
+            org_id, source, external_id, current_event_id
+          ) VALUES (?, ?, ?, ?)
+        `,
+      )
+      .run("local-owner", "feishu", "oc_chat:om_1", "evt-1");
+    legacy
+      .prepare(
+        `
+          INSERT INTO message_dispositions (
+            event_id, org_id, disposition, layer, reason_codes_json, score, decided_at
+          ) VALUES (?, ?, 'current_work', 'L1_event', ?, 1, ?)
+        `,
+      )
+      .run("evt-1", "local-owner", JSON.stringify(["actionable"]), occurred);
+    legacy.close();
+
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    const row = inspect
+      .prepare("SELECT thread_id FROM events WHERE id = ?")
+      .get("evt-1");
+    inspect.close();
+    assert.equal(store.schemaVersion, 6);
+    assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
+    const heads = await store.listInbox("local-owner", { heads: true });
+    assert.equal(heads.length, 1);
+    assert.equal(heads[0].event.id, "evt-1");
+    store.close();
+  });
+
+  it("collapses thousands of source identities onto one conversation head", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const db = new Database(path);
+    const occurred = "2026-08-24T00:00:00.000Z";
+    const insertEvent = db.prepare(
+      `
+        INSERT INTO events (
+          id, org_id, source, external_id, operation,
+          occurred_at, ingested_at, thread_id
+        ) VALUES (?, 'local-owner', 'feishu', ?, 'create', ?, ?, ?)
+      `,
+    );
+    const insertHead = db.prepare(
+      `
+        INSERT INTO source_heads (
+          org_id, source, external_id, current_event_id
+        ) VALUES ('local-owner', 'feishu', ?, ?)
+      `,
+    );
+    const insertDisposition = db.prepare(
+      `
+        INSERT INTO message_dispositions (
+          event_id, org_id, disposition, layer, reason_codes_json, score, decided_at
+        ) VALUES (?, 'local-owner', 'current_work', 'L1_event', '["actionable"]', 1, ?)
+      `,
+    );
+    const seed = db.transaction(() => {
+      for (let index = 0; index < 2500; index += 1) {
+        const id = `evt-${String(index).padStart(4, "0")}`;
+        const externalId = `oc_chat:${index}`;
+        const at = new Date(Date.parse(occurred) + index).toISOString();
+        insertEvent.run(
+          id,
+          externalId,
+          at,
+          at,
+          conversationId("feishu", externalId, id),
+        );
+        insertHead.run(externalId, id);
+        insertDisposition.run(id, at);
+      }
+    });
+    seed();
+    db.close();
+
+    const heads = await store.listInbox("local-owner", { heads: true });
+    const summary = await store.summarizeInbox("local-owner");
+    assert.equal(heads.length, 1);
+    assert.equal(heads[0].event.external_id, "oc_chat:2499");
+    assert.equal(summary.count, 1);
+    store.close();
   });
 
   it("keeps a working marker off the list face when heads are requested", async () => {
