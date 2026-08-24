@@ -242,6 +242,14 @@ export class MemoryAuthorityStore implements AuthorityStore {
       thread_id: input.thread_id,
       title: input.title !== undefined ? input.title : (current?.title ?? null),
       pinned: input.pinned !== undefined ? input.pinned : (current?.pinned ?? false),
+      last_read_at:
+        input.last_read_at !== undefined
+          ? input.last_read_at
+          : (current?.last_read_at ?? null),
+      last_read_external_id:
+        input.last_read_external_id !== undefined
+          ? input.last_read_external_id
+          : (current?.last_read_external_id ?? null),
       updated_at: input.updated_at,
     };
     this.prefs.set(prefKey(input.org_id, input.thread_id), next);

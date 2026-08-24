@@ -440,6 +440,21 @@ button {
 .item-time {
   flex: 0 0 auto;
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.item.unread .item-title {
+  font-weight: 650;
+}
+
+.item-unread {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--g500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 25%, transparent);
 }
 
 .item-title {
@@ -780,6 +795,15 @@ button {
   font-weight: 600;
 }
 
+.chat-receipt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-receipt.is-read {
+  color: var(--accent);
+}
+
 .chat-reply {
   margin-left: auto;
   opacity: 0;
@@ -999,6 +1023,87 @@ button {
   flex-shrink: 0;
   background: var(--bg);
   padding: 8px 16px 14px;
+}
+
+.prompt-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.prompt-kicker,
+.prompt-count,
+.prompt-detail {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.prompt-head h2 {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.prompt-question {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.prompt-question legend {
+  padding: 0;
+  color: var(--text);
+  font-weight: 550;
+}
+
+.prompt-options {
+  display: grid;
+  gap: 6px;
+}
+
+.prompt-option {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #121812;
+}
+
+.prompt-option.is-on {
+  border-color: var(--g500);
+  background: var(--g900);
+}
+
+.prompt-option.is-emphasized {
+  border-color: var(--ai);
+}
+
+.prompt-option small {
+  color: var(--muted);
+}
+
+.prompt-custom {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.prompt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .thread-activity {

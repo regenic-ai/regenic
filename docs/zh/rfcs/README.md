@@ -14,6 +14,7 @@ Phase 0 先以已接纳的 RFC 定模型，再写业务代码。
 | [0005](0005-context-storage-lifecycle.md) | 上下文存储与生命周期 | 已接纳 |
 | [0006](0006-acl-agent-identity.md) | ACL 与 Agent 身份 | 已接纳 |
 | [0007](0007-daily-distillation.md) | 日蒸馏 | 已接纳 |
+| [0008](0008-thread-surface.md) | Thread Surface | 已接纳 |
 
 相关文档：
 
@@ -40,7 +41,7 @@ Phase 0 先以已接纳的 RFC 定模型，再写业务代码。
 
 ```
 0001 标准 → 0002 图谱 → 0003 协作 → 0004 API
-→ 0005 物理存储 → 0006 ACL → 0007 日蒸馏
+→ 0005 物理存储 → 0006 ACL → 0007 日蒸馏 → 0008 Thread Surface
 ```
 
 ## 讨论

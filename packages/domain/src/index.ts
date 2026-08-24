@@ -6,6 +6,7 @@
 export * from "./ingestion";
 export * from "./channel-driver";
 export * from "./message-contract";
+export * from "./thread-surface";
 export * from "./inbox-query";
 export * from "./ingestion-schema";
 export * from "./canonicalization";

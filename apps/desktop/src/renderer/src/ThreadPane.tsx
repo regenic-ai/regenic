@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { sendReply } from "./api";
+import { answerConversationPrompt, sendReply } from "./api";
 import { Composer, type ComposerDraft } from "./Composer";
+import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
 import { latestMessage, type InboxThread } from "./inbox";
 import {
@@ -19,7 +20,7 @@ import {
   type ThreadMessageListHandle,
 } from "./ThreadMessageList";
 import { ThreadTitleField } from "./ThreadTitleField";
-import type { InboxViewItem, PersonalEngineView } from "./types";
+import type { InboxViewItem, PersonalEngineView, PromptAnswerItem, ThreadPrompt } from "./types";
 
 export const ThreadPane = memo(function ThreadPane({
   thread,
@@ -75,7 +76,8 @@ export const ThreadPane = memo(function ThreadPane({
       ),
     };
   }, [thread, pending]);
-  const canReply = thread.can_send;
+  const prompts = thread.prompts;
+  const canReply = thread.can_send && prompts.length === 0;
   const syncNote = threadSyncLabel(thread.id, pull);
   const syncTone = threadSyncTone(thread.id, pull);
   const quoteMessage = useCallback((item: InboxViewItem) => {
@@ -93,6 +95,23 @@ export const ThreadPane = memo(function ThreadPane({
       current.filter((item) => !ackedOutbound(item, thread.messages)),
     );
   }, [thread.messages]);
+
+  const answerPrompt = async (prompt: ThreadPrompt, answers: PromptAnswerItem[]) => {
+    setSending(true);
+    setSendError(null);
+    try {
+      await answerConversationPrompt({
+        thread_id: thread.id,
+        prompt_id: prompt.prompt_id,
+        answers,
+      });
+      await onRefresh();
+    } catch (caught) {
+      setSendError(caught instanceof Error ? caught.message : "Could not send this answer");
+    } finally {
+      setSending(false);
+    }
+  };
 
   const send = async (draft: ComposerDraft) => {
     setSending(true);
@@ -187,21 +206,33 @@ export const ThreadPane = memo(function ThreadPane({
         onReply={quoteMessage}
       />
       <div className="composer-dock">
-        {activityNote ? <p className="thread-activity">{activityNote}</p> : null}
-        <Composer
-          key={thread.id}
-          disabled={!canReply}
-          hint={
-            canReply
-              ? `Send to ${threadTitle(thread)}`
-              : "Sending back to this channel is not available yet"
-          }
-          quote={quote}
-          sending={sending}
-          error={sendError}
-          onCancelQuote={() => setQuote(null)}
-          onSend={send}
-        />
+        {activityNote && prompts.length === 0 ? (
+          <p className="thread-activity">{activityNote}</p>
+        ) : null}
+        {prompts.length > 0 ? (
+          <ThreadPromptPanel
+            key={`${thread.id}:${prompts[0]?.prompt_id ?? "none"}`}
+            prompts={prompts}
+            submitting={sending}
+            error={sendError}
+            onAnswer={answerPrompt}
+          />
+        ) : (
+          <Composer
+            key={thread.id}
+            disabled={!canReply}
+            hint={
+              canReply
+                ? `Send to ${threadTitle(thread)}`
+                : "Sending back to this channel is not available yet"
+            }
+            quote={quote}
+            sending={sending}
+            error={sendError}
+            onCancelQuote={() => setQuote(null)}
+            onSend={send}
+          />
+        )}
       </div>
     </article>
   );

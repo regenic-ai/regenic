@@ -131,6 +131,15 @@ export function feishuCreateTimeToStartSeconds(
   return String(Math.floor(ms / 1000));
 }
 
+export function isFeishuSelfSender(
+  senderId: string | undefined,
+  selfUserId: string | undefined,
+): boolean {
+  const sender = senderId?.trim() ?? "";
+  const self = selfUserId?.trim() ?? "";
+  return sender.length > 0 && self.length > 0 && sender === self;
+}
+
 export function senderKind(
   senderType: string | undefined,
 ): "user" | "assistant" | undefined {

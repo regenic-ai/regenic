@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ackConversationAttention,
   createConversation,
   currentApiOrigin,
   fetchEngine,
@@ -15,6 +16,9 @@ import {
   applyPrefOverlay,
   evictThreadCache,
   groupInboxThreads,
+  latestInboundOf,
+  markInboxThreadRead,
+  messagesForAttentionAck,
   openedThreadView,
   orderThreadMessages,
   overlayThreadMessages,
@@ -103,6 +107,7 @@ export function ConsoleApp() {
   const threadLoadSeq = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
   const delayRef = useRef(POLL_MS);
+  const ackStampRef = useRef<Record<string, string>>({});
 
   const applyHeads = (nextHeads: InboxViewItem[]) => {
     const reused = reuseInboxList(inboxRef.current, nextHeads);
@@ -167,31 +172,30 @@ export function ConsoleApp() {
           since_id: cursor.since_id,
         });
         if (threadLoadSeq.current[threadId] !== seq) {
-          return;
+          return undefined;
         }
         if (delta.length === 0) {
           finishOpen();
-          return;
+          return current;
         }
+        const next = orderThreadMessages(
+          mergeInboxDelta(messagesRef.current[threadId] ?? current, delta),
+        );
         setMessagesByThread((prev) =>
-          rememberThreadMessages(
-            prev,
-            threadId,
-            orderThreadMessages(mergeInboxDelta(prev[threadId] ?? current, delta)),
-          ),
+          rememberThreadMessages(prev, threadId, next),
         );
         finishOpen();
-        return;
+        return next;
       }
       if (olderBusyRef.current.has(threadId)) {
-        return;
+        return current;
       }
       const items = await fetchInbox({
         thread_id: threadId,
         limit: THREAD_PAGE_SIZE,
       });
       if (threadLoadSeq.current[threadId] !== seq) {
-        return;
+        return undefined;
       }
       loadedThreadsRef.current.add(threadId);
       const merged = orderThreadMessages(
@@ -206,9 +210,10 @@ export function ConsoleApp() {
         rememberThreadMessages(prev, threadId, merged),
       );
       finishOpen();
+      return merged;
     } catch (caught) {
       if (threadLoadSeq.current[threadId] !== seq) {
-        return;
+        return undefined;
       }
       if (!loadedThreadsRef.current.has(threadId)) {
         setThreadError((prev) => ({
@@ -218,6 +223,7 @@ export function ConsoleApp() {
         }));
       }
       finishOpen();
+      return current;
     }
   };
 
@@ -312,10 +318,11 @@ export function ConsoleApp() {
         }
         const openId = selectedIdRef.current;
         if (openId) {
-          await ensureThread(
+          const loaded = await ensureThread(
             openId,
             loadedThreadsRef.current.has(openId) ? "poll" : "open",
           );
+          await ackOpenThread(openId, loaded);
         }
         delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
@@ -389,9 +396,48 @@ export function ConsoleApp() {
 
   useEffect(() => {
     if (selectedId) {
-      void ensureThread(selectedId, "open");
+      void ensureThread(selectedId, "open").then((loaded) =>
+        ackOpenThread(selectedId, loaded),
+      );
     }
   }, [selectedId]);
+
+  const ackOpenThread = async (
+    threadId: string,
+    loaded?: InboxViewItem[],
+  ) => {
+    const items = messagesForAttentionAck(
+      loaded,
+      messagesRef.current[threadId] ?? [],
+      inboxRef.current.filter((item) => item.thread_id === threadId),
+    );
+    const latest = latestInboundOf(items);
+    const stamp = `${latest?.event.external_id ?? "open"}@${
+      latest?.event.occurred_at ?? "now"
+    }`;
+    if (ackStampRef.current[threadId] === stamp) {
+      return;
+    }
+    ackStampRef.current[threadId] = stamp;
+    try {
+      await ackConversationAttention({
+        thread_id: threadId,
+        last_read_at: latest?.event.occurred_at ?? new Date().toISOString(),
+        last_read_external_id: latest?.event.external_id ?? null,
+      });
+      setInbox((current) => markInboxThreadRead(current, threadId));
+      setMessagesByThread((current) => {
+        const opened = current[threadId];
+        if (!opened) {
+          return current;
+        }
+        const next = markInboxThreadRead(opened, threadId);
+        return next === opened ? current : { ...current, [threadId]: next };
+      });
+    } catch {
+      delete ackStampRef.current[threadId];
+    }
+  };
 
   const listThreads = useMemo(() => {
     const grouped =

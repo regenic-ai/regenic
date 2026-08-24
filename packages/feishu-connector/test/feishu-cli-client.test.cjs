@@ -425,6 +425,43 @@ describe("LarkCliClient", () => {
     assert.equal(result.message_id, "om_sent");
   });
 
+  it("uploads an image through im images create as the user", async () => {
+    const calls = [];
+    const client = new LarkCliClient({
+      async spawn(input) {
+        calls.push(input);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: { image_key: "img_cli" },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const result = await client.uploadImage({
+      filename: "shot.png",
+      media_type: "image/png",
+      bytes: new Uint8Array([9]),
+    });
+    assert.equal(result.image_key, "img_cli");
+    assert.deepEqual(calls[0].command.slice(0, 5), [
+      "lark-cli",
+      "im",
+      "images",
+      "create",
+      "--as",
+    ]);
+    assert.equal(calls[0].command[calls[0].command.indexOf("--as") + 1], "user");
+    assert.equal(
+      calls[0].command[calls[0].command.indexOf("--data") + 1],
+      JSON.stringify({ image_type: "message" }),
+    );
+    assert.equal(calls[0].command[calls[0].command.indexOf("--file") + 1], "./shot.png");
+    assert.equal(typeof calls[0].cwd, "string");
+  });
+
   it("treats CLI ok:false and Feishu code!=0 as FeishuApiError", () => {
     assert.throws(
       () =>

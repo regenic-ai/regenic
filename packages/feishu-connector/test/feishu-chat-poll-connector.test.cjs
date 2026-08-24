@@ -13,18 +13,21 @@ const {
   FeishuChatEgress,
   FeishuChatPollConnector,
   extractFeishuText,
+  lastFeishuInbound,
   nextFeishuCursor,
   planFeishuHistoryRequest,
   needsRecentSeed,
+  resetFeishuAttention,
 } = require("../dist");
 
-function createConnector(client) {
+function createConnector(client, extras = {}) {
   return new FeishuChatPollConnector(client, {
     connector_id: "feishu-chat",
     org_id: "local-owner",
     chat_id: "oc_1",
     chat_name: "engineering",
     now: () => "2026-08-12T00:00:00.000Z",
+    ...extras,
   });
 }
 
@@ -111,6 +114,7 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(surface.conversation_label, "engineering");
     assert.equal(surface.conversation_kind, "group");
     assert.equal(surface.actor_label, "Ada");
+    assert.equal(surface.direction, "inbound");
     assert.equal(
       result.next_cursor,
       JSON.stringify({
@@ -121,6 +125,48 @@ describe("FeishuChatPollConnector", () => {
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
     assert.equal(result.has_more, true);
+  });
+
+  it("marks my Feishu history as outbound and remembers only newer peer inbound", async () => {
+    resetFeishuAttention();
+    const connector = createConnector(
+      {
+        async listMessages() {
+          return {
+            items: [
+              textItem({
+                message_id: "om_old",
+                create_time: "1723420860000",
+                sender: { id: "ou_peer", sender_type: "user", name: "Bea" },
+                body: { content: JSON.stringify({ text: "old peer" }) },
+              }),
+              textItem({
+                message_id: "om_mine",
+                create_time: "1723420900000",
+                sender: { id: "ou_me", sender_type: "user", name: "Me" },
+                body: { content: JSON.stringify({ text: "from phone" }) },
+              }),
+              textItem({
+                message_id: "om_new",
+                create_time: "1723420800000",
+                sender: { id: "ou_peer", sender_type: "user", name: "Bea" },
+                body: { content: JSON.stringify({ text: "listed last" }) },
+              }),
+            ],
+            has_more: false,
+          };
+        },
+      },
+      { self_user_id: "ou_me" },
+    );
+    const result = await connector.poll(null);
+    assert.equal(result.batch.records.length, 3);
+    const directions = result.batch.records.map((record) =>
+      JSON.parse(record.content.find((part) => part.role === "metadata").text)
+        .direction,
+    );
+    assert.deepEqual(directions, ["inbound", "outbound", "inbound"]);
+    assert.equal(lastFeishuInbound("oc_1"), "om_old");
   });
 
   it("keeps a start_time cursor after the history page is caught up", async () => {
@@ -465,23 +511,102 @@ describe("FeishuChatEgress", () => {
     assert.deepEqual(receipt, { accepted: true, rpc_id: "om_out" });
   });
 
-  it("rejects a send without a text body", async () => {
+  it("uploads an image and sends it as an image message", async () => {
+    const uploads = [];
+    const messages = [];
+    const texts = [];
+    const egress = new FeishuChatEgress(recordingClient(uploads, messages, texts), {
+      installation_id: "feishu-1",
+      chat_id: "oc_1",
+    });
+    const receipt = await egress.send({
+      installation_id: "feishu-1",
+      content: [{
+        role: "attachment",
+        media_type: "image/png",
+        source_filename: "shot.png",
+        bytes: new Uint8Array([1, 2, 3]),
+      }],
+    });
+    assert.deepEqual(uploads, [{
+      filename: "shot.png",
+      media_type: "image/png",
+      bytes: new Uint8Array([1, 2, 3]),
+    }]);
+    assert.equal(texts.length, 0);
+    assert.equal(messages[0].msg_type, "image");
+    assert.deepEqual(messages[0].content, { image_key: "img_shot.png" });
+    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_image" });
+  });
+
+  it("sends text and the image as separate IM messages", async () => {
+    const uploads = [];
+    const messages = [];
+    const texts = [];
+    const egress = new FeishuChatEgress(recordingClient(uploads, messages, texts), {
+      installation_id: "feishu-1",
+      chat_id: "oc_1",
+    });
+    const receipt = await egress.send({
+      installation_id: "feishu-1",
+      content: [
+        { role: "body", media_type: "text/plain", text: "Agent OS准备改成这样" },
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "tasks.png",
+          bytes: new Uint8Array([9]),
+        },
+      ],
+    });
+    assert.equal(texts[0].text, "Agent OS准备改成这样");
+    assert.equal(uploads.length, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].msg_type, "image");
+    assert.deepEqual(messages[0].content, { image_key: "img_tasks.png" });
+    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_text" });
+  });
+
+  it("rejects an attachment without bytes instead of sending text only", async () => {
     const egress = new FeishuChatEgress(
-      { async sendText() { return { message_id: "om_out" }; } },
+      recordingClient([], []),
       { installation_id: "feishu-1", chat_id: "oc_1" },
     );
     await assert.rejects(
       () =>
         egress.send({
           installation_id: "feishu-1",
-          content: [{
-            role: "attachment",
-            media_type: "image/png",
-            source_filename: "a.png",
-            bytes: new Uint8Array([1]),
-          }],
+          content: [
+            { role: "body", media_type: "text/plain", text: "hello" },
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "a.png",
+            },
+          ],
         }),
-      FeishuApiError,
+      /attachment without bytes/,
     );
   });
 });
+
+function recordingClient(uploads, messages, texts = []) {
+  return {
+    async sendText(input) {
+      texts.push(input);
+      return { message_id: "om_text" };
+    },
+    async sendMessage(input) {
+      messages.push(input);
+      return { message_id: "om_image" };
+    },
+    async uploadImage(input) {
+      uploads.push(input);
+      return { image_key: `img_${input.filename}` };
+    },
+    async uploadFile(input) {
+      uploads.push(input);
+      return { file_key: `file_${input.filename}` };
+    },
+  };
+}

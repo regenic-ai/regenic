@@ -14,6 +14,7 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 | [0005](0005-context-storage-lifecycle.md) | Context storage & lifecycle | Accepted |
 | [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Accepted |
 | [0007](0007-daily-distillation.md) | Daily distillation | Accepted |
+| [0008](0008-thread-surface.md) | Thread Surface | Accepted |
 
 Phase 0 closeout + product path:
 
@@ -47,6 +48,7 @@ Milestone: [Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/mi
 0005 Physical storage (Event / Blob / Digest / GC)
 0006 ACL + Agent identity (implements AccessPolicy for ops data)
 0007 Daily distillation (standards-machine intake)
+0008 Thread Surface (live prompts + attention)
 ```
 
 ## Review

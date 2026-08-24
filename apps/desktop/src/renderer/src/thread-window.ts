@@ -15,7 +15,11 @@ export function itemRevision(item: InboxViewItem): string {
     item.title ?? ""
   }\t${item.pinned ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
     item.conversation_label ?? ""
-  }\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}`;
+  }\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}\t${
+    item.unread ? "1" : "0"
+  }\t${item.can_receipt ? "1" : "0"}\t${item.receipt?.state ?? ""}\t${(
+    item.prompts ?? []
+  ).map((prompt) => prompt.prompt_id).join(",")}`;
 }
 
 export function inboxRevision(items: InboxViewItem[]): string {
@@ -194,7 +198,10 @@ export function sameInboxProps(
     previous.can_send !== next.can_send ||
     previous.await_reply !== next.await_reply ||
     previous.list_title !== next.list_title ||
-    previous.activity !== next.activity
+    previous.activity !== next.activity ||
+    previous.unread !== next.unread ||
+    previous.unread_count !== next.unread_count ||
+    promptRevision(previous) !== promptRevision(next)
   ) {
     return false;
   }
@@ -202,6 +209,10 @@ export function sameInboxProps(
     return false;
   }
   return Boolean(left.content_hash) || previous.body_text === next.body_text;
+}
+
+function promptRevision(item: InboxViewItem): string {
+  return (item.prompts ?? []).map((prompt) => prompt.prompt_id).join(",");
 }
 
 export function prefixOffsets(sizes: number[]): number[] {

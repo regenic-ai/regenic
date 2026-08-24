@@ -44,6 +44,7 @@ export async function callFeishuOpenApi(input: {
   token: string;
   params?: Record<string, string | number>;
   data?: unknown;
+  form?: FormData;
   base_url?: string;
   fetch?: typeof fetch;
   timeout_ms?: number;
@@ -56,11 +57,8 @@ export async function callFeishuOpenApi(input: {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${input.token}`,
   };
-  const body =
-    input.method === "POST" && input.data !== undefined
-      ? JSON.stringify(input.data)
-      : undefined;
-  if (body) {
+  const body = requestBody(input.method, input.form, input.data);
+  if (body && typeof body === "string") {
     headers["Content-Type"] = "application/json";
   }
   const timeoutMs = input.timeout_ms ?? 20_000;
@@ -100,6 +98,23 @@ export async function callFeishuOpenApi(input: {
     return payload.data;
   }
   return payload;
+}
+
+function requestBody(
+  method: "GET" | "POST",
+  form: FormData | undefined,
+  data: unknown,
+): string | FormData | undefined {
+  if (method !== "POST") {
+    return undefined;
+  }
+  if (form) {
+    return form;
+  }
+  if (data !== undefined) {
+    return JSON.stringify(data);
+  }
+  return undefined;
 }
 
 async function readJson(response: Response): Promise<unknown> {

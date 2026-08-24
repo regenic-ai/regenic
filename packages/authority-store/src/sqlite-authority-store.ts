@@ -134,6 +134,8 @@ interface PrefRow {
   thread_id: string;
   title: string | null;
   pinned: number;
+  last_read_at: string | null;
+  last_read_external_id: string | null;
   updated_at: string;
 }
 
@@ -379,7 +381,8 @@ export class SqliteAuthorityStore
     const rows = this.database
       .prepare(
         `
-          SELECT org_id, thread_id, title, pinned, updated_at
+          SELECT org_id, thread_id, title, pinned,
+                 last_read_at, last_read_external_id, updated_at
           FROM conversation_prefs WHERE org_id = ?
           ORDER BY pinned DESC, updated_at DESC
         `,
@@ -395,7 +398,8 @@ export class SqliteAuthorityStore
     const row = this.database
       .prepare(
         `
-          SELECT org_id, thread_id, title, pinned, updated_at
+          SELECT org_id, thread_id, title, pinned,
+                 last_read_at, last_read_external_id, updated_at
           FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
         `,
       )
@@ -411,7 +415,8 @@ export class SqliteAuthorityStore
       const current = this.database
         .prepare(
           `
-            SELECT org_id, thread_id, title, pinned, updated_at
+            SELECT org_id, thread_id, title, pinned,
+                   last_read_at, last_read_external_id, updated_at
             FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
           `,
         )
@@ -424,17 +429,28 @@ export class SqliteAuthorityStore
           input.pinned !== undefined
             ? input.pinned
             : Boolean(current?.pinned),
+        last_read_at:
+          input.last_read_at !== undefined
+            ? input.last_read_at
+            : (current?.last_read_at ?? null),
+        last_read_external_id:
+          input.last_read_external_id !== undefined
+            ? input.last_read_external_id
+            : (current?.last_read_external_id ?? null),
         updated_at: input.updated_at,
       };
       this.database
         .prepare(
           `
             INSERT INTO conversation_prefs (
-              org_id, thread_id, title, pinned, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
+              org_id, thread_id, title, pinned,
+              last_read_at, last_read_external_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(org_id, thread_id) DO UPDATE SET
               title = excluded.title,
               pinned = excluded.pinned,
+              last_read_at = excluded.last_read_at,
+              last_read_external_id = excluded.last_read_external_id,
               updated_at = excluded.updated_at
           `,
         )
@@ -443,6 +459,8 @@ export class SqliteAuthorityStore
           next.thread_id,
           next.title,
           next.pinned ? 1 : 0,
+          next.last_read_at,
+          next.last_read_external_id,
           next.updated_at,
         );
       return next;
@@ -1242,6 +1260,8 @@ export class SqliteAuthorityStore
       thread_id: row.thread_id,
       title: row.title,
       pinned: row.pinned === 1,
+      last_read_at: row.last_read_at,
+      last_read_external_id: row.last_read_external_id,
       updated_at: row.updated_at,
     };
   }

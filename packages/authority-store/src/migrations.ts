@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 7;
+export const LATEST_SCHEMA_VERSION = 8;
 
 export const MIGRATIONS = [
   {
@@ -164,6 +164,13 @@ export const MIGRATIONS = [
     sql: `
       CREATE INDEX source_heads_current_event_idx
         ON source_heads (current_event_id);
+    `,
+  },
+  {
+    version: 8,
+    sql: `
+      ALTER TABLE conversation_prefs ADD COLUMN last_read_at TEXT;
+      ALTER TABLE conversation_prefs ADD COLUMN last_read_external_id TEXT;
     `,
   },
 ] as const;

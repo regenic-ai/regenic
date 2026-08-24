@@ -105,6 +105,34 @@ export class PersonalController {
     return this.guard(() => this.inbox.updateConversationPrefs(body ?? {}));
   }
 
+  @Post("conversations/attention")
+  ackConversationAttention(
+    @Body()
+    body:
+      | {
+          thread_id?: string;
+          last_read_at?: string | null;
+          last_read_external_id?: string | null;
+        }
+      | undefined,
+  ) {
+    return this.guard(() => this.inbox.ackConversationAttention(body ?? {}));
+  }
+
+  @Post("conversations/prompts")
+  answerConversationPrompt(
+    @Body()
+    body:
+      | {
+          thread_id?: string;
+          prompt_id?: string;
+          answers?: Array<{ id?: string; selected?: string[]; custom?: string }>;
+        }
+      | undefined,
+  ) {
+    return this.guard(() => this.inbox.answerConversationPrompt(body ?? {}));
+  }
+
   @Post("connectors")
   installConnector(
     @Body()

@@ -30,6 +30,19 @@ export function roleLabel(
   return channel === "dsh" ? "DSH Agent" : "Assistant";
 }
 
+export function receiptCopy(item: InboxViewItem): string | undefined {
+  if (item.direction !== "outbound") {
+    return undefined;
+  }
+  if (item.receipt?.state === "read") {
+    return "Read";
+  }
+  if (item.receipt?.state === "sent" || item.can_receipt === true) {
+    return "Sent";
+  }
+  return undefined;
+}
+
 export function conversationKindLabel(kind: string | null | undefined): string | null {
   if (kind === "group") {
     return "Group";

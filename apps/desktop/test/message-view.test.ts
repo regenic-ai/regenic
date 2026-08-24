@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { InboxThread } from "../src/renderer/src/inbox.ts";
 import {
   readingMessages,
+  receiptCopy,
   threadActivityCopy,
   threadActivityOf,
   threadLoadedCountCopy,
@@ -68,9 +69,40 @@ function thread(
     can_send: true,
     await_reply: true,
     messages,
+    prompts: [],
+    unread: false,
+    unread_count: 0,
     ...extras,
   };
 }
+
+describe("receipt copy", () => {
+  it("shows Sent/Read only on outbound when the channel can receipt", () => {
+    assert.equal(
+      receiptCopy(item({ id: "in-1", external_id: "om_1", text: "hi", direction: "inbound" })),
+      undefined,
+    );
+    assert.equal(
+      receiptCopy(item({ id: "out-1", external_id: "oc:out:om_1", text: "hi" })),
+      undefined,
+    );
+    assert.equal(
+      receiptCopy({
+        ...item({ id: "out-2", external_id: "oc:out:om_2", text: "hi" }),
+        can_receipt: true,
+      }),
+      "Sent",
+    );
+    assert.equal(
+      receiptCopy({
+        ...item({ id: "out-3", external_id: "oc:out:om_3", text: "hi" }),
+        can_receipt: true,
+        receipt: { state: "read", read_count: 1 },
+      }),
+      "Read",
+    );
+  });
+});
 
 describe("reading messages", () => {
   it("hides a pulled user echo of the same outbound text", () => {

@@ -13,6 +13,7 @@ import type {
   FeishuListInput,
   FeishuSortType,
 } from "./feishu-cli-client";
+import { rememberFeishuInbound } from "./feishu-attention";
 import {
   FEISHU_SOURCE,
   collectFeishuUserIds,
@@ -21,6 +22,7 @@ import {
   feishuCreateTimeToIso,
   feishuCreateTimeToStartSeconds,
   feishuMentionNames,
+  isFeishuSelfSender,
   senderKind,
 } from "./feishu-message";
 
@@ -40,6 +42,7 @@ export interface FeishuChatPollConnectorOptions {
   chat_mode?: FeishuChatMode;
   page_size?: number;
   now?: () => string;
+  self_user_id?: string;
 }
 
 export class FeishuChatPollConnector {
@@ -58,6 +61,19 @@ export class FeishuChatPollConnector {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
+  private async selfUserId(): Promise<string | undefined> {
+    const configured = this.options.self_user_id?.trim();
+    if (configured) {
+      return configured;
+    }
+    try {
+      const id = await this.client.selfUserId?.();
+      return id?.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
     const state = decodeFeishuCursor(cursor);
     const request = planFeishuHistoryRequest(
@@ -67,7 +83,14 @@ export class FeishuChatPollConnector {
     );
     const page = await this.client.listMessages(request);
     const names = await this.resolveNames(page.items);
-    const records = page.items.flatMap((item) => this.toRecord(item, names));
+    const selfId = await this.selfUserId();
+    const records = page.items.flatMap((item) => this.toRecord(item, names, selfId));
+    for (const item of page.items) {
+      if (item.deleted || !item.message_id || isFeishuSelfSender(item.sender?.id, selfId)) {
+        continue;
+      }
+      rememberFeishuInbound(this.options.chat_id, item.message_id, item.create_time);
+    }
     const nextState = nextFeishuCursor(state, page, request.sort_type);
     const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {
@@ -124,6 +147,7 @@ export class FeishuChatPollConnector {
   private toRecord(
     item: FeishuHistoryItem,
     names: ReadonlyMap<string, string>,
+    selfId?: string,
   ): IngestBatch["records"] {
     if (item.deleted) {
       return [];
@@ -151,7 +175,7 @@ export class FeishuChatPollConnector {
       channelRecord({
         channel: this.source,
         kind,
-        direction: "inbound",
+        direction: isFeishuSelfSender(actorId, selfId) ? "outbound" : "inbound",
         external_id: `${chatId}:${item.message_id}`,
         occurred_at: feishuCreateTimeToIso(item.create_time, this.now()),
         actor_id: actorId,

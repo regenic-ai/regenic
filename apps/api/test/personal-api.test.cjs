@@ -10,6 +10,11 @@ const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
 const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
 const { decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
+const {
+  dshPromptStoreFor,
+  dropDshPromptStore,
+  questionPromptId,
+} = require("@regenic/dsh-connector");
 
 const roots = [];
 const previousEnv = {};
@@ -129,6 +134,7 @@ async function startSlackHistoryStub() {
 
 async function startDshWebStub() {
   const prompts = [];
+  const responds = [];
   const echoes = new Map();
   const extras = new Map();
   const created = [];
@@ -143,6 +149,11 @@ async function startDshWebStub() {
       const url = String(request.url ?? "");
       const sessionId = body.payload?.sessionId;
       response.setHeader("content-type", "application/json");
+      if (url.includes("/api/respond") || /\/respond(?:\?|$)/.test(url)) {
+        responds.push(body);
+        response.end(JSON.stringify({ accepted: true }));
+        return;
+      }
       if (url.includes("session.prompt")) {
         prompts.push(body);
         const text = (body.payload?.content ?? [])
@@ -259,6 +270,7 @@ async function startDshWebStub() {
   return {
     origin: `http://127.0.0.1:${address.port}`,
     prompts,
+    responds,
     created,
     push(sessionId, event) {
       const current = extras.get(sessionId) ?? [];
@@ -728,6 +740,16 @@ describe("personal /v1/me", () => {
           scope_id: "session-title",
           text: "只用一句话回复：pong",
         }),
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-title:8",
+          occurred_at: "2026-08-21T00:00:30.000Z",
+          actor_id: "assistant",
+          scope_id: "session-title",
+          text: "pong",
+        }),
       ],
     });
     authority.close();
@@ -779,8 +801,167 @@ describe("personal /v1/me", () => {
         body: JSON.stringify({ title: "x" }),
       });
       assert.equal(invalid.status, 400);
+
+      assert.equal(
+        again.find((item) => item.event.external_id === "session-title:8")?.unread,
+        true,
+      );
+      const read = await fetch(`${origin}/v1/me/conversations/attention`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-title",
+          last_read_at: "2026-08-21T00:00:00.000Z",
+          last_read_external_id: "session-title:8",
+        }),
+      });
+      const readBody = await read.json();
+      assert.ok(read.ok, JSON.stringify(readBody));
+      assert.equal(readBody.last_read_external_id, "session-title:8");
+      const afterRead = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.equal(
+        afterRead.find((item) => item.event.external_id === "session-title:8")?.unread,
+        false,
+      );
+
+      const slackPrompt = await fetch(`${origin}/v1/me/conversations/prompts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "slack:C123",
+          prompt_id: "q:nope",
+          answers: [{ id: "go", selected: ["Yes"] }],
+        }),
+      });
+      assert.equal(slackPrompt.status, 501);
     } finally {
       await app.close();
+    }
+  });
+
+  it("marks a thread unread from its latest inbound, even when the list face is outbound", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-unread-head",
+      received_at: "2026-08-24T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-unread:in",
+          occurred_at: "2026-08-24T10:00:00.000Z",
+          actor_id: "assistant",
+          scope_id: "session-unread",
+          text: "Need a decision",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-unread:out:1",
+          occurred_at: "2026-08-24T12:00:00.000Z",
+          actor_id: "user",
+          scope_id: "session-unread",
+          text: "ack",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      const row = heads.find((item) => item.thread_id === "dsh:session-unread");
+      assert.equal(row.direction, "outbound");
+      assert.equal(row.unread, true);
+      assert.equal(row.can_receipt, false);
+      assert.equal(row.receipt, undefined);
+      const read = await fetch(`${origin}/v1/me/conversations/attention`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-unread",
+          last_read_at: "2026-08-24T10:00:00.000Z",
+          last_read_external_id: "session-unread:in",
+        }),
+      });
+      assert.ok(read.ok, await read.text());
+      const after = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      assert.equal(
+        after.find((item) => item.thread_id === "dsh:session-unread")?.unread,
+        false,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("answers a live DSH prompt through respond, not session.prompt", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const dsh = await startDshWebStub();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    let installation;
+    try {
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: dsh.origin },
+        }),
+      });
+      installation = await created.json();
+      assert.equal(created.status, 201, JSON.stringify(installation));
+      const promptId = questionPromptId("rpc-q");
+      dshPromptStoreFor(installation.id).put("sess-a", {
+        prompt_id: promptId,
+        presentation: "choice",
+        questions: [{ id: "go", prompt: "Continue?", options: [{ label: "Yes" }] }],
+      });
+      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      assert.match(engine.inbox_digest, /&s=/);
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      const sess = heads.find((item) => item.thread_id === "dsh:sess-a");
+      assert.equal(sess.unread, true);
+      assert.equal(sess.prompts[0].prompt_id, promptId);
+
+      const answered = await fetch(`${origin}/v1/me/conversations/prompts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:sess-a",
+          prompt_id: promptId,
+          answers: [{ id: "go", selected: ["Yes"] }],
+        }),
+      });
+      const body = await answered.json();
+      assert.ok(answered.ok, JSON.stringify(body));
+      assert.equal(body.accepted, true);
+      assert.equal(dsh.responds.length, 1);
+      assert.equal(dsh.responds[0].type, "client-response");
+      assert.equal(dsh.responds[0].rpcId, "rpc-q");
+      assert.equal(dsh.prompts.length, 0);
+      const after = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      assert.equal(
+        (after.find((item) => item.thread_id === "dsh:sess-a")?.prompts ?? []).length,
+        0,
+      );
+    } finally {
+      if (installation?.id) {
+        dropDshPromptStore(installation.id);
+      }
+      await app.close();
+      await dsh.close();
     }
   });
 

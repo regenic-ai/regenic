@@ -29,6 +29,19 @@ export {
   feishuStreamKey,
 } from "./feishu-streams";
 import {
+  cacheFeishuReadStatus,
+  cachedFeishuReadStatus,
+  feishuAttentionOf,
+  markFeishuChatRead,
+  resolveFeishuInbound,
+} from "./feishu-attention";
+import {
+  cacheFeishuReceipt,
+  cachedFeishuReceipt,
+  feishuSentMessageId,
+  receiptFromReadUsers,
+} from "./feishu-receipts";
+import {
   larkCliCatalogHint,
   larkCliReady,
   listFeishuCatalogChats,
@@ -77,6 +90,8 @@ export const feishuChatDriver: ChannelDriver = {
       create: false,
       list_title: "conversation",
       hydrate_on_open: true,
+      attention: true,
+      receipts: true,
     };
   },
 
@@ -167,6 +182,102 @@ export const feishuChatDriver: ChannelDriver = {
       // Live chat list is optional. Config names still apply.
     }
     return labels;
+  },
+
+  async readAttention(installation, threads, _host, env) {
+    const attention = new Map();
+    if (!this.capabilities(installation).attention) {
+      return attention;
+    }
+    const chats = threads.filter((thread) => thread.source === FEISHU_SOURCE);
+    const missing: string[] = [];
+    const statuses = new Map<string, boolean>();
+    for (const thread of chats) {
+      const messageId = resolveFeishuInbound(
+        thread.target,
+        thread.latest_inbound?.external_id,
+      );
+      if (!messageId) {
+        continue;
+      }
+      const cached = cachedFeishuReadStatus(messageId);
+      if (cached !== undefined) {
+        statuses.set(messageId, cached);
+      } else {
+        missing.push(messageId);
+      }
+    }
+    if (missing.length > 0) {
+      try {
+        const live = await larkClient(env).readMessageStatus(missing);
+        for (const [id, isRead] of live) {
+          cacheFeishuReadStatus(id, isRead);
+          statuses.set(id, isRead);
+        }
+      } catch {
+        // Overlay stays empty for those chats. Core uses the local cursor.
+      }
+    }
+    for (const thread of chats) {
+      const messageId = resolveFeishuInbound(
+        thread.target,
+        thread.latest_inbound?.external_id,
+      );
+      const overlay = feishuAttentionOf(
+        thread.target,
+        messageId ? statuses.get(messageId) : undefined,
+      );
+      if (overlay) {
+        attention.set(`${thread.source}:${thread.target}`, overlay);
+      }
+    }
+    return attention;
+  },
+
+  async ackAttention(_installation, thread) {
+    if (thread.source === FEISHU_SOURCE) {
+      markFeishuChatRead(thread.target);
+    }
+  },
+
+  async readReceipts(installation, threads, _host, env) {
+    const receipts = new Map();
+    if (!this.capabilities(installation).receipts) {
+      return receipts;
+    }
+    const client = larkClient(env);
+    if (!client.readMessageUsers) {
+      return receipts;
+    }
+    const wanted: Array<{ external_id: string; messageId: string }> = [];
+    for (const thread of threads) {
+      if (thread.source !== FEISHU_SOURCE) {
+        continue;
+      }
+      for (const outbound of thread.outbound) {
+        const messageId = feishuSentMessageId(outbound.external_id);
+        if (messageId) {
+          wanted.push({ external_id: outbound.external_id, messageId });
+        }
+      }
+    }
+    const unique = [
+      ...new Map(wanted.map((item) => [item.messageId, item])).values(),
+    ].slice(0, 10);
+    for (const item of unique) {
+      const cached = cachedFeishuReceipt(item.messageId);
+      const receipt =
+        cached ?? receiptFromReadUsers(await client.readMessageUsers(item.messageId));
+      if (!cached) {
+        cacheFeishuReceipt(item.messageId, receipt);
+      }
+      for (const row of wanted) {
+        if (row.messageId === item.messageId) {
+          receipts.set(row.external_id, receipt);
+        }
+      }
+    }
+    return receipts;
   },
 
   async probeCatalog({ env }) {
