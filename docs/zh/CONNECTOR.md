@@ -76,7 +76,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 只是对驱动声明的展示。
 `list_title` 同样由驱动声明：聊天渠道设 `conversation`，列表标题用
 `conversation_label`（群名、频道名、单聊对方）；会话 Agent 设 `prompt`，
-列表标题用该会话第一条用户消息；不写则用可见消息脸。桌面不按渠道名分支。旧 Event 缺会话名时，驱动可实现
+列表标题用该会话第一条用户消息（跳过开头的 system 注入，找不到才回退到可见消息脸，避免退化成 session id）；不写则用可见消息脸。桌面不按渠道名分支。旧 Event 缺会话名时，驱动可实现
 `resolveConversationLabels`，inbox 装饰层补上，不改历史正文。
 
 对端只有不可见劳动、且还没有可见回复时，连接器可另发一条
@@ -228,7 +228,7 @@ Slack 真人映射为 `user`。
 | `sender_type=app`（或 `bot`），`msg_type` 为 `text` 或 `post` | `assistant` |
 | 图片、文件、卡片和其他 `msg_type` | 丢弃 |
 
-线程 id：`feishu:<chat_id>`。历史用 `lark-cli api --as user`，每页最多 50 条。会话列表缓存约 30 秒。每条记录带上群名或单聊对方、`group` / `direct`、以及发送者姓名。群里 `@` 用消息自带的 `mentions[]` 写成可读人名；`@所有人` 也在这一步翻译。搜不到的发送者再走 `contact +search-user`。表单用 `lark-cli im +chat-list --types=p2p,group` 列出群和单聊，不收 token，也不用手贴 `oc_…`。默认两种都同步。安装后可以改范围。
+线程 id：`feishu:<chat_id>`。登录仍用 `lark-cli`。拉历史用进程内 HTTP，带钥匙串里的 `user_access_token`；读不到 token 再回退 `lark-cli api --as user`。新会话和还在从旧往新翻的会话，先倒序取最近一页，再排队回填更早的。每页最多 50 条。会话列表缓存约 30 秒。每条记录带上群名或单聊对方、`group` / `direct`、以及发送者姓名。群里 `@` 用消息自带的 `mentions[]` 写成可读人名；`@所有人` 也在这一步翻译。搜不到的发送者再走 `contact +search-user`。表单用 `lark-cli im +chat-list --types=p2p,group` 列出群和单聊，不收 token，也不用手贴 `oc_…`。默认两种都同步。安装后可以改范围。
 
 ## 安装前置
 

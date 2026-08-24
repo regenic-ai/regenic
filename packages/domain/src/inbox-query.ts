@@ -46,7 +46,75 @@ export function matchesEventQuery(
       return false;
     }
   }
+  if (query?.before && !isBeforeEvent(event, query.before, query.before_id ?? "")) {
+    return false;
+  }
   return true;
+}
+
+export const INBOX_PAGE_MAX = 200;
+
+export function normalizeInboxLimit(value: unknown): number | undefined {
+  const limit =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isInteger(limit) || limit < 1) {
+    return undefined;
+  }
+  return Math.min(limit, INBOX_PAGE_MAX);
+}
+
+export function isBeforeEvent(
+  event: { occurred_at: string; id: string },
+  before: string,
+  beforeId = "",
+): boolean {
+  if (event.occurred_at < before) {
+    return true;
+  }
+  return event.occurred_at === before && event.id < beforeId;
+}
+
+export function takeRecentInboxItems<T extends { event: EventRecord }>(
+  items: T[],
+  query?: Pick<InboxQuery, "before" | "before_id" | "limit" | "heads">,
+): T[] {
+  if (query?.heads) {
+    return items;
+  }
+  let selected = items;
+  if (query?.before) {
+    selected = selected.filter((item) =>
+      isBeforeEvent(item.event, query.before as string, query.before_id ?? ""),
+    );
+  }
+  const limit = normalizeInboxLimit(query?.limit);
+  if (limit === undefined || selected.length <= limit) {
+    return selected;
+  }
+  const ranked = selected
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const byTime = compareOccurredAt(left.item.event, right.item.event);
+      if (byTime !== 0) {
+        return byTime;
+      }
+      return left.index - right.index;
+    });
+  return ranked.slice(ranked.length - limit).map((row) => row.item);
+}
+
+function compareOccurredAt(
+  left: { occurred_at: string; id: string },
+  right: { occurred_at: string; id: string },
+): number {
+  if (left.occurred_at !== right.occurred_at) {
+    return left.occurred_at < right.occurred_at ? -1 : 1;
+  }
+  return left.id < right.id ? -1 : 1;
 }
 
 export function latestByThread<T extends { event: EventRecord }>(items: T[]): T[] {
@@ -224,7 +292,7 @@ export function selectInboxItems(
       selected.filter((item) => currentThreads.has(eventThreadId(item.event))),
     );
   }
-  return selected;
+  return takeRecentInboxItems(selected, query);
 }
 
 function hasEventFilter(query: EventListQuery): boolean {
@@ -232,6 +300,7 @@ function hasEventFilter(query: EventListQuery): boolean {
     query.source ||
       query.target ||
       query.since ||
+      query.before ||
       (query.thread_ids && query.thread_ids.length > 0),
   );
 }

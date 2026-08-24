@@ -91,7 +91,9 @@ not a third `activity` value; it is presentation of the driver flag.
 `list_title` is the same kind of declaration: chat channels set
 `conversation` so the list title is `conversation_label` (group, channel,
 or DM counterpart). Session agents set `prompt` so the list title is the
-first user message. Omit it to keep the visible-message face. The desktop
+first user message (skip leading system injects; if none is found, keep
+the visible-message face so the row does not collapse to a session id).
+Omit it to keep the visible-message face. The desktop
 does not branch on channel name. When an old
 Event has no conversation name, a driver may implement
 `resolveConversationLabels` so inbox decoration can fill it without
@@ -260,7 +262,7 @@ Feishu `kind` map:
 | `sender_type=app` (or `bot`), `msg_type` `text` or `post` | `assistant` |
 | image, file, interactive, and other `msg_type` | dropped |
 
-Thread id: `feishu:<chat_id>`. History uses `lark-cli api` with `--as user`, up to 50 messages per page. The conversation list is cached for about 30 seconds. Each record stores the chat name, `group` or `direct`, and the sender name. Mentions in the body use the native `mentions[]` names (`@_user_1` becomes `@Ben`; `@all` becomes `@所有人`). `contact +search-user` is only for remaining sender ids. The form lists groups and p2p chats from `lark-cli im +chat-list --types=p2p,group`. It does not take tokens or a pasted `oc_…`. Default is both kinds. The set can be changed after install.
+Thread id: `feishu:<chat_id>`. Login stays on `lark-cli`. History uses in-process HTTP with the `user_access_token` from the CLI keychain, and falls back to `lark-cli api --as user` if the token cannot be read. New conversations, and ones still paging oldest-first, fetch the latest page first (`ByCreateTimeDesc`), then backfill older messages. Up to 50 messages per page. The conversation list is cached for about 30 seconds. Each record stores the chat name, `group` or `direct`, and the sender name. Mentions in the body use the native `mentions[]` names (`@_user_1` becomes `@Ben`; `@all` becomes `@所有人`). `contact +search-user` is only for remaining sender ids. The form lists groups and p2p chats from `lark-cli im +chat-list --types=p2p,group`. It does not take tokens or a pasted `oc_…`. Default is both kinds. The set can be changed after install.
 
 ## Setup
 

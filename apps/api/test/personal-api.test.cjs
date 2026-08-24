@@ -422,6 +422,20 @@ describe("personal /v1/me", () => {
       assert.equal(head[0].thread_id, "dsh:session-x");
       assert.equal(head[0].event.external_id, "session-x:2");
       assert.equal(head[0].body_text, "second");
+      const recent = await (
+        await fetch(
+          `${origin}/v1/me/inbox?thread_id=${encodeURIComponent("dsh:session-x")}&limit=1`,
+        )
+      ).json();
+      assert.equal(recent.length, 1);
+      assert.equal(recent[0].body_text, "second");
+      const older = await (
+        await fetch(
+          `${origin}/v1/me/inbox?thread_id=${encodeURIComponent("dsh:session-x")}&before=${encodeURIComponent(recent[0].event.occurred_at)}&before_id=${encodeURIComponent(recent[0].event.id)}&limit=1`,
+        )
+      ).json();
+      assert.equal(older.length, 1);
+      assert.equal(older[0].body_text, "first");
       for (let index = 1; index < one.length; index += 1) {
         assert.ok(
           one[index - 1].event.occurred_at <= one[index].event.occurred_at,
@@ -430,7 +444,11 @@ describe("personal /v1/me", () => {
       }
 
       const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
-      assert.equal(light.catalog.length, 0);
+      assert.deepEqual(
+        light.catalog.map((item) => item.connector_type),
+        ["slack-channel", "dsh-session", "feishu-chat"],
+      );
+      assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
 
       const full = await (await fetch(`${origin}/v1/me/engine`)).json();
@@ -553,6 +571,135 @@ describe("personal /v1/me", () => {
       assert.equal(heads[0].conversation_label, "只用一句话回复：pong");
       assert.equal(heads[0].body_text, undefined);
       assert.equal(heads[0].event.external_id, "session-x:50");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("titles DSH list heads from the first user message after system injects", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await authority.createInstallation({
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:9" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    });
+    const injects = Array.from({ length: 30 }, (_, index) =>
+      channelRecord({
+        channel: "dsh",
+        kind: "system",
+        direction: "inbound",
+        external_id: `session-long:${index + 1}`,
+        occurred_at: `2026-08-21T00:00:${String(index).padStart(2, "0")}.000Z`,
+        actor_id: "plugin",
+        scope_id: "session-long",
+        text: `injected context ${index + 1}: skill and memory preamble`,
+      }),
+    );
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-prompt-injects-1",
+      received_at: "2026-08-21T00:01:00.000Z",
+      records: [
+        ...injects,
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-long:31",
+          occurred_at: "2026-08-21T00:00:31.000Z",
+          actor_id: "user",
+          scope_id: "session-long",
+          text: "只用一句话回复：pong",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-long:32",
+          occurred_at: "2026-08-21T00:00:32.000Z",
+          actor_id: "assistant",
+          scope_id: "session-long",
+          text: "pong",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      assert.equal(heads.length, 1);
+      assert.equal(heads[0].list_title, "prompt");
+      assert.equal(heads[0].conversation_label, "只用一句话回复：pong");
+      assert.equal(heads[0].body_text, undefined);
+      assert.equal(heads[0].event.external_id, "session-long:32");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps a DSH list face when the first user prompt is still missing", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await authority.createInstallation({
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:9" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    });
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-prompt-missing-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "system",
+          direction: "inbound",
+          external_id: "session-bare:1",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "plugin",
+          scope_id: "session-bare",
+          text: "injected skill context",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-bare:2",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "assistant",
+          scope_id: "session-bare",
+          text: "这是对方给我的初稿：一、Bioby AI品牌端介绍",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      assert.equal(heads.length, 1);
+      assert.equal(heads[0].list_title, "prompt");
+      assert.equal(heads[0].conversation_label, null);
+      assert.equal(
+        heads[0].body_text,
+        "这是对方给我的初稿：一、Bioby AI品牌端介绍",
+      );
     } finally {
       await app.close();
     }
@@ -699,6 +846,10 @@ describe("personal /v1/me", () => {
       assert.equal(engine.inbox_count, 1);
       assert.match(engine.inbox_digest, /^1:/);
       assert.equal(engine.pull.interval_ms, 0);
+      assert.equal(engine.pull.phase, "idle");
+      assert.equal(Array.isArray(engine.pull.streams), true);
+      assert.equal(engine.pull.last_error_hint, null);
+      assert.equal(engine.pull.network.kind, "ok");
       assert.equal(engine.installations[0].id, "slack-1");
       assert.equal(engine.installations[0].connector_type, "slack-channel");
       assert.equal(engine.installations[0].label, "C123");
@@ -731,6 +882,10 @@ describe("personal /v1/me", () => {
       assert.equal(health.sqlite, "up");
       assert.equal(health.status, "ok");
       assert.equal(health.postgres, undefined);
+      assert.equal(typeof health.memory.rss_bytes, "number");
+      assert.ok(health.memory.rss_bytes > 0);
+      assert.equal(typeof engine.memory.rss_bytes, "number");
+      assert.ok(engine.memory.rss_bytes > 0);
     } finally {
       await app.close();
     }

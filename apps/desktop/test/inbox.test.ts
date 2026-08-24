@@ -4,10 +4,16 @@ import {
   groupInboxThreads,
   evictThreadCache,
   orderThreadMessages,
+  openedThreadView,
   overlayThreadMessages,
   sortInboxThreads,
   type InboxThread,
 } from "../src/renderer/src/inbox.ts";
+import {
+  applyOpenedAt,
+  createConversationTargets,
+  mergeDraftThreads,
+} from "../src/renderer/src/inbox-drafts.ts";
 import { reuseInboxList } from "../src/renderer/src/thread-window.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
 
@@ -42,6 +48,29 @@ function message(
     direction: "outbound",
     can_send: true,
     thread_id: threadId,
+  };
+}
+
+function install(input: {
+  id: string;
+  connector_type?: string;
+  channel?: string;
+  channel_label?: string;
+  label: string;
+  can_create: boolean;
+}) {
+  return {
+    id: input.id,
+    connector_type: input.connector_type ?? "dsh-session",
+    status: "enabled" as const,
+    label: input.label,
+    detail: null,
+    syncable: true,
+    can_reply: true,
+    can_create: input.can_create,
+    channel: input.channel,
+    channel_label: input.channel_label,
+    last_attempt: null,
   };
 }
 
@@ -161,6 +190,19 @@ describe("inbox sort", () => {
     );
   });
 
+  it("does not treat the list head as the opened transcript", () => {
+    const head = message("a", "2026-08-23T10:00:00.000Z", "feishu:oc_yiki");
+    const extra = message("b", "2026-08-23T10:01:00.000Z", "feishu:oc_yiki");
+    const [row] = groupInboxThreads([head]);
+    const opening = openedThreadView(row, undefined, true);
+    assert.deepEqual(opening.messages, []);
+    const failed = openedThreadView(row, undefined, false);
+    assert.deepEqual(failed.messages, []);
+    const loaded = openedThreadView(row, [head, extra], false);
+    assert.equal(loaded.messages.length, 2);
+    assert.equal(loaded.messages[1], extra);
+  });
+
   it("evicts older thread caches and keeps the open one", () => {
     const cache = Object.fromEntries(
       Array.from({ length: 10 }, (_, index) => [`dsh:${index}`, [message(String(index), "2026-08-23T10:00:00.000Z", `dsh:${index}`)]]),
@@ -169,5 +211,83 @@ describe("inbox sort", () => {
     assert.equal(Object.keys(next).length, 3);
     assert.ok(next["dsh:9"]);
     assert.ok(next["dsh:0"]);
+  });
+
+  it("merges a created draft until the store lists that thread", () => {
+    const older = thread({
+      id: "dsh:old",
+      occurred_at: "2026-08-21T00:00:00.000Z",
+    });
+    const merged = mergeDraftThreads([older], [
+      {
+        thread_id: "dsh:new",
+        channel: "dsh",
+        channel_label: "DSH",
+        can_send: true,
+        opened_at: "2026-08-23T12:00:00.000Z",
+      },
+    ]);
+    assert.equal(merged[0].id, "dsh:new");
+    assert.equal(merged[0].opened_at, "2026-08-23T12:00:00.000Z");
+    assert.equal(
+      mergeDraftThreads(merged, [
+        {
+          thread_id: "dsh:new",
+          channel: "dsh",
+          channel_label: "DSH",
+          can_send: true,
+        },
+      ]).length,
+      2,
+    );
+  });
+
+  it("stamps opened_at onto an existing thread without rewriting others", () => {
+    const older = thread({ id: "dsh:old" });
+    const created = thread({ id: "dsh:new" });
+    const stamped = applyOpenedAt([older, created], {
+      "dsh:new": "2026-08-23T12:00:00.000Z",
+    });
+    assert.equal(stamped[0], older);
+    assert.equal(stamped[1].opened_at, "2026-08-23T12:00:00.000Z");
+    assert.equal(applyOpenedAt(stamped, { "dsh:new": "2026-08-23T12:00:00.000Z" }), stamped);
+  });
+
+  it("lists one create target per installation that can open a thread", () => {
+    assert.deepEqual(createConversationTargets(null), []);
+    assert.deepEqual(
+      createConversationTargets({
+        kernel: "running",
+        org_id: "local-owner",
+        database_path: null,
+        inbox_count: 0,
+        installations: [
+          install({
+            id: "dsh-1",
+            channel: "dsh",
+            channel_label: "DSH",
+            label: "web",
+            can_create: true,
+          }),
+          install({
+            id: "dsh-1",
+            channel: "dsh",
+            channel_label: "DSH",
+            label: "dup",
+            can_create: true,
+          }),
+          install({
+            id: "feishu-1",
+            connector_type: "feishu-chat",
+            channel: "feishu",
+            channel_label: "Feishu",
+            label: "chats",
+            can_create: false,
+          }),
+        ],
+        catalog: [],
+      }),
+      [{ id: "dsh-1", channel: "dsh", channel_label: "DSH", label: "web" }],
+    );
   });
 });

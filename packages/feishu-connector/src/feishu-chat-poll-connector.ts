@@ -10,6 +10,8 @@ import type {
   FeishuChatMode,
   FeishuHistoryItem,
   FeishuImClient,
+  FeishuListInput,
+  FeishuSortType,
 } from "./feishu-cli-client";
 import {
   FEISHU_SOURCE,
@@ -25,6 +27,9 @@ import {
 export interface FeishuCursorState {
   page_token?: string;
   start_time?: string;
+  sort?: "asc" | "desc";
+  head_time?: string;
+  recent_seeded?: boolean;
 }
 
 export interface FeishuChatPollConnectorOptions {
@@ -55,15 +60,16 @@ export class FeishuChatPollConnector {
 
   async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
     const state = decodeFeishuCursor(cursor);
-    const page = await this.client.listMessages({
-      chat_id: this.options.chat_id,
-      page_size: this.pageSize,
-      page_token: state.page_token,
-      start_time: state.start_time,
-    });
+    const request = planFeishuHistoryRequest(
+      this.options.chat_id,
+      this.pageSize,
+      state,
+    );
+    const page = await this.client.listMessages(request);
     const names = await this.resolveNames(page.items);
     const records = page.items.flatMap((item) => this.toRecord(item, names));
-    const nextCursor = encodeFeishuCursor(nextFeishuCursor(state, page));
+    const nextState = nextFeishuCursor(state, page, request.sort_type);
+    const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: this.options.connector_id,
@@ -73,7 +79,11 @@ export class FeishuChatPollConnector {
       next_cursor: nextCursor,
       records,
     };
-    return { batch, next_cursor: nextCursor };
+    return {
+      batch,
+      next_cursor: nextCursor,
+      has_more: feishuHistoryHasMore(state, page, request.sort_type),
+    };
   }
 
   private async resolveNames(
@@ -196,9 +206,13 @@ export function decodeFeishuCursor(cursor: ConnectorCursor | null): FeishuCursor
   try {
     const parsed = JSON.parse(cursor.value) as unknown;
     if (isObject(parsed)) {
+      const sort = parsed.sort === "desc" || parsed.sort === "asc" ? parsed.sort : undefined;
       return {
         page_token: stringValue(parsed.page_token),
         start_time: stringValue(parsed.start_time),
+        sort,
+        head_time: stringValue(parsed.head_time),
+        recent_seeded: parsed.recent_seeded === true,
       };
     }
   } catch {
@@ -208,27 +222,120 @@ export function decodeFeishuCursor(cursor: ConnectorCursor | null): FeishuCursor
 }
 
 export function encodeFeishuCursor(state: FeishuCursorState): string | undefined {
-  if (!state.page_token && !state.start_time) {
+  if (
+    !state.page_token &&
+    !state.start_time &&
+    state.sort !== "desc" &&
+    !state.recent_seeded &&
+    !state.head_time
+  ) {
     return undefined;
   }
   return JSON.stringify({
     ...(state.page_token ? { page_token: state.page_token } : {}),
     ...(state.start_time ? { start_time: state.start_time } : {}),
+    ...(state.sort === "desc" ? { sort: "desc" } : {}),
+    ...(state.head_time &&
+    (state.sort === "desc" || state.head_time !== state.start_time)
+      ? { head_time: state.head_time }
+      : {}),
+    ...(state.recent_seeded ? { recent_seeded: true } : {}),
   });
+}
+
+export function needsRecentSeed(state: FeishuCursorState): boolean {
+  return !state.recent_seeded && state.sort !== "desc";
+}
+
+export function planFeishuHistoryRequest(
+  chatId: string,
+  pageSize: number,
+  state: FeishuCursorState,
+): FeishuListInput {
+  if (needsRecentSeed(state)) {
+    return {
+      chat_id: chatId,
+      page_size: pageSize,
+      sort_type: "ByCreateTimeDesc",
+    };
+  }
+  if (state.sort === "desc") {
+    return {
+      chat_id: chatId,
+      page_size: pageSize,
+      page_token: state.page_token,
+      sort_type: "ByCreateTimeDesc",
+    };
+  }
+  return {
+    chat_id: chatId,
+    page_size: pageSize,
+    page_token: state.page_token,
+    start_time: state.start_time,
+    sort_type: "ByCreateTimeAsc",
+  };
+}
+
+export function feishuHistoryHasMore(
+  current: FeishuCursorState,
+  page: { has_more: boolean },
+  sort: FeishuSortType = "ByCreateTimeAsc",
+): boolean {
+  if (needsRecentSeed(current) && sort === "ByCreateTimeDesc" && current.page_token) {
+    return true;
+  }
+  return page.has_more;
 }
 
 export function nextFeishuCursor(
   current: FeishuCursorState,
   page: { items: FeishuHistoryItem[]; has_more: boolean; page_token?: string },
+  sort: FeishuSortType = "ByCreateTimeAsc",
 ): FeishuCursorState {
+  const newest = newestStartTime(page.items);
+  const head = laterTime(current.head_time, newest);
+  if (needsRecentSeed(current) && sort === "ByCreateTimeDesc") {
+    if (current.page_token) {
+      return {
+        page_token: current.page_token,
+        start_time: current.start_time,
+        recent_seeded: true,
+        ...(head ? { head_time: head } : {}),
+      };
+    }
+    if (page.has_more && page.page_token) {
+      return {
+        page_token: page.page_token,
+        sort: "desc",
+        recent_seeded: true,
+        ...(head ? { head_time: head } : {}),
+      };
+    }
+    return head ? { start_time: head, recent_seeded: true } : { recent_seeded: true };
+  }
+  if (sort === "ByCreateTimeDesc") {
+    if (page.has_more && page.page_token) {
+      return {
+        page_token: page.page_token,
+        sort: "desc",
+        recent_seeded: true,
+        ...(head ? { head_time: head } : current.head_time ? { head_time: current.head_time } : {}),
+      };
+    }
+    const live = current.head_time ?? head;
+    return live ? { start_time: live, recent_seeded: true } : { recent_seeded: true };
+  }
   const lastStart = lastStartTime(page.items) ?? current.start_time;
   if (page.has_more && page.page_token) {
     return {
       page_token: page.page_token,
       ...(lastStart ? { start_time: lastStart } : {}),
+      recent_seeded: true,
+      ...(head && head !== lastStart ? { head_time: head } : {}),
     };
   }
-  return lastStart ? { start_time: lastStart } : {};
+  const liveStart = laterTime(lastStart, current.head_time);
+  return liveStart ? { start_time: liveStart, recent_seeded: true } : { recent_seeded: true };
 }
 
 function lastStartTime(items: FeishuHistoryItem[]): string | undefined {
@@ -239,6 +346,24 @@ function lastStartTime(items: FeishuHistoryItem[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function newestStartTime(items: FeishuHistoryItem[]): string | undefined {
+  let newest: string | undefined;
+  for (const item of items) {
+    newest = laterTime(newest, feishuCreateTimeToStartSeconds(item.create_time));
+  }
+  return newest;
+}
+
+export function laterTime(left?: string, right?: string): string | undefined {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  return Number(left) >= Number(right) ? left : right;
 }
 
 function emptyToUndefined(value: string | undefined): string | undefined {

@@ -613,6 +613,45 @@ button {
   color: var(--muted);
   font-size: 12px;
   user-select: text;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.thread-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ai);
+}
+
+.thread-sync.is-error {
+  color: var(--risk);
+}
+
+.thread-retry {
+  margin-top: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.thread-sync .dot {
+  animation: thread-sync-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes thread-sync-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .provenance {
@@ -1418,6 +1457,11 @@ button {
   color: var(--muted);
 }
 
+.check-options {
+  display: grid;
+  gap: 8px;
+}
+
 .check-list {
   margin: 0;
   padding: 0;
@@ -1512,6 +1556,11 @@ button {
 .action-error {
   color: var(--risk);
   margin: 12px 0 0;
+}
+
+.action-hint {
+  color: var(--risk);
+  margin: 6px 0 0;
 }
 
 .tray {

@@ -2,16 +2,16 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { FeishuMention } from "./feishu-message";
+import {
+  FeishuApiError,
+  callFeishuOpenApi,
+  feishuOpenApiBaseUrl,
+  isFeishuTokenError,
+  type FeishuSortType,
+} from "./feishu-openapi";
+import type { FeishuUserTokenSource } from "./feishu-user-token";
 
-export class FeishuApiError extends Error {
-  constructor(
-    message: string,
-    readonly code?: string,
-  ) {
-    super(message);
-    this.name = "FeishuApiError";
-  }
-}
+export { FeishuApiError, type FeishuSortType } from "./feishu-openapi";
 
 export interface FeishuSpawnResult {
   stdout: string;
@@ -55,6 +55,7 @@ export interface FeishuListInput {
   page_size: number;
   page_token?: string;
   start_time?: string;
+  sort_type?: FeishuSortType;
 }
 
 export type FeishuChatMode = "group" | "p2p";
@@ -92,6 +93,68 @@ export interface LarkCliClientOptions {
   env?: NodeJS.ProcessEnv;
   spawn?: FeishuSpawn;
   timeout_ms?: number;
+  userToken?: FeishuUserTokenSource;
+  fetch?: typeof fetch;
+}
+
+export const LARK_CLI_CONCURRENCY = 2;
+export const LARK_CLI_RETRIES = 2;
+
+let larkCliActive = 0;
+const larkCliWaiters: Array<() => void> = [];
+
+export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (larkCliActive >= LARK_CLI_CONCURRENCY) {
+    await new Promise<void>((resolve) => {
+      larkCliWaiters.push(resolve);
+    });
+  }
+  larkCliActive += 1;
+  try {
+    return await work();
+  } finally {
+    larkCliActive -= 1;
+    larkCliWaiters.shift()?.();
+  }
+}
+
+export function resetLarkCliSlot(): void {
+  larkCliActive = 0;
+  larkCliWaiters.length = 0;
+}
+
+export function isTransientLarkError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const code = error instanceof FeishuApiError ? error.code : undefined;
+  return (
+    /timed out|EAGAIN|ECONNRESET|socket hang up|rate.?limit|too many requests/i.test(
+      text,
+    ) ||
+    code === "99991400" ||
+    code === "99991429"
+  );
+}
+
+async function retryTransientLark<T>(work: () => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt <= LARK_CLI_RETRIES; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      last = error;
+      if (attempt === LARK_CLI_RETRIES || !isTransientLarkError(error)) {
+        throw error;
+      }
+      await delay(250 * (attempt + 1));
+    }
+  }
+  throw last;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export class LarkCliClient implements FeishuImClient {
@@ -110,11 +173,21 @@ export class LarkCliClient implements FeishuImClient {
     this.spawn = options.spawn ?? spawnLarkProcess;
   }
 
+  private runCli(input: {
+    command: string[];
+    env?: NodeJS.ProcessEnv;
+    timeout_ms: number;
+  }): Promise<FeishuSpawnResult> {
+    return retryTransientLark(() =>
+      withLarkCliSlot(() => this.spawn(input)),
+    );
+  }
+
   async listMessages(input: FeishuListInput): Promise<FeishuHistoryPage> {
     const params: Record<string, string | number> = {
       container_id_type: "chat",
       container_id: input.chat_id,
-      sort_type: "ByCreateTimeAsc",
+      sort_type: input.sort_type ?? "ByCreateTimeAsc",
       page_size: input.page_size,
     };
     if (input.page_token) {
@@ -153,7 +226,7 @@ export class LarkCliClient implements FeishuImClient {
     if (input.page_token) {
       argv.push("--page-token", input.page_token);
     }
-    const result = await this.spawn({
+    const result = await this.runCli({
       command: argv,
       env: this.options.env,
       timeout_ms: this.timeoutMs,
@@ -168,11 +241,32 @@ export class LarkCliClient implements FeishuImClient {
     types?: FeishuChatMode[],
   ): Promise<FeishuChat[]> {
     const key = normalizeChatTypes(types).join(",");
-    const now = Date.now();
     const cached = chatListCache.get(key);
-    if (cached && now - cached.at < CHAT_LIST_TTL_MS) {
+    if (cached && Date.now() - cached.at < CHAT_LIST_TTL_MS) {
       return cached.chats;
     }
+    const pending = chatListInflight.get(key);
+    if (pending) {
+      return pending;
+    }
+    const job = this.fetchAllChats(maxPages, types).then((chats) => {
+      chatListCache.set(key, { at: Date.now(), chats });
+      return chats;
+    });
+    chatListInflight.set(key, job);
+    try {
+      return await job;
+    } finally {
+      if (chatListInflight.get(key) === job) {
+        chatListInflight.delete(key);
+      }
+    }
+  }
+
+  private async fetchAllChats(
+    maxPages: number,
+    types?: FeishuChatMode[],
+  ): Promise<FeishuChat[]> {
     const chats: FeishuChat[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < maxPages; page += 1) {
@@ -187,7 +281,6 @@ export class LarkCliClient implements FeishuImClient {
       }
       pageToken = result.page_token;
     }
-    chatListCache.set(key, { at: now, chats });
     return chats;
   }
 
@@ -263,7 +356,7 @@ export class LarkCliClient implements FeishuImClient {
   }
 
   async authStatus(): Promise<boolean> {
-    const result = await this.spawn({
+    const result = await this.runCli({
       command: [this.command, "auth", "status", "--json"],
       env: this.options.env,
       timeout_ms: Math.min(this.timeoutMs, 2_000),
@@ -277,6 +370,10 @@ export class LarkCliClient implements FeishuImClient {
     params?: Record<string, string | number>;
     data?: Record<string, unknown>;
   }): Promise<unknown> {
+    const viaHttp = await this.requestViaHttp(input);
+    if (viaHttp !== undefined) {
+      return viaHttp;
+    }
     const argv = [
       this.command,
       "api",
@@ -293,7 +390,7 @@ export class LarkCliClient implements FeishuImClient {
     if (input.data) {
       argv.push("--data", JSON.stringify(input.data));
     }
-    const result = await this.spawn({
+    const result = await this.runCli({
       command: argv,
       env: this.options.env,
       timeout_ms: this.timeoutMs,
@@ -301,12 +398,68 @@ export class LarkCliClient implements FeishuImClient {
     return unwrapLarkCli(result);
   }
 
+  private async requestHttp(input: {
+    method: "GET" | "POST";
+    path: string;
+    params?: Record<string, string | number>;
+    data?: Record<string, unknown>;
+    token: string;
+  }): Promise<unknown> {
+    const brand = await this.options.userToken?.brand();
+    return callFeishuOpenApi({
+      method: input.method,
+      path: input.path,
+      params: input.params,
+      data: input.data,
+      token: input.token,
+      base_url: feishuOpenApiBaseUrl(brand),
+      fetch: this.options.fetch,
+      timeout_ms: Math.min(this.timeoutMs, 20_000),
+    });
+  }
+
+  private async requestViaHttp(input: {
+    method: "GET" | "POST";
+    path: string;
+    params?: Record<string, string | number>;
+    data?: Record<string, unknown>;
+  }): Promise<unknown | undefined> {
+    const source = this.options.userToken;
+    if (!source) {
+      return undefined;
+    }
+    const token = await source.token();
+    if (!token) {
+      return undefined;
+    }
+    try {
+      return await retryTransientLark(() => this.requestHttp({ ...input, token }));
+    } catch (error) {
+      if (isFeishuTokenError(error)) {
+        await source.refresh();
+        const next = await source.token();
+        if (next) {
+          try {
+            return await this.requestHttp({ ...input, token: next });
+          } catch {
+            return undefined;
+          }
+        }
+        return undefined;
+      }
+      if (isTransientLarkError(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
   private async lookupUserNames(ids: string[]): Promise<Map<string, string>> {
     if (ids.length === 0) {
       return new Map();
     }
     try {
-      const result = await this.spawn({
+      const result = await this.runCli({
         command: [
           this.command,
           "contact",
@@ -416,6 +569,7 @@ const USER_NAME_TTL_MS = 10 * 60 * 1000;
 const CHAT_LIST_TTL_MS = 30_000;
 const userNameCache = new Map<string, { name: string; at: number }>();
 const chatListCache = new Map<string, { at: number; chats: FeishuChat[] }>();
+const chatListInflight = new Map<string, Promise<FeishuChat[]>>();
 
 export function resetFeishuUserNameCache(): void {
   userNameCache.clear();
@@ -423,6 +577,7 @@ export function resetFeishuUserNameCache(): void {
 
 export function resetFeishuChatListCache(): void {
   chatListCache.clear();
+  chatListInflight.clear();
 }
 
 export function parseUserNamePage(value: unknown): Map<string, string> {

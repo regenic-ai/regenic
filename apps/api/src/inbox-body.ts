@@ -32,6 +32,39 @@ interface EncodedContentPart {
 
 export type AttachmentMode = "preview" | "meta";
 
+export async function resolveInboxBodies(
+  authority: AuthorityStore,
+  blobs: BlobStore,
+  hashes: readonly (string | undefined)[],
+  attachments: AttachmentMode = "preview",
+): Promise<Map<string, InboxBody>> {
+  const unique = [
+    ...new Set(hashes.filter((hash): hash is string => Boolean(hash))),
+  ];
+  const resolved = new Map<string, InboxBody>();
+  if (unique.length === 0) {
+    return resolved;
+  }
+  const [metas, bytes] = await Promise.all([
+    authority.findBlobs(unique),
+    blobs.getMany(unique),
+  ]);
+  for (const hash of unique) {
+    const meta = metas.get(hash);
+    if (!meta) {
+      resolved.set(hash, {});
+      continue;
+    }
+    const data = bytes.get(hash);
+    if (!data) {
+      resolved.set(hash, { media_type: meta.media_type });
+      continue;
+    }
+    resolved.set(hash, decodeInboxBody(data, meta.media_type, attachments));
+  }
+  return resolved;
+}
+
 export async function resolveInboxBody(
   authority: AuthorityStore,
   blobs: BlobStore,
@@ -41,16 +74,13 @@ export async function resolveInboxBody(
   if (!contentHash) {
     return {};
   }
-  const meta = await authority.findBlob(contentHash);
-  if (!meta) {
-    return {};
-  }
-  try {
-    const bytes = await blobs.get(contentHash);
-    return decodeInboxBody(bytes, meta.media_type, attachments);
-  } catch {
-    return { media_type: meta.media_type };
-  }
+  const resolved = await resolveInboxBodies(
+    authority,
+    blobs,
+    [contentHash],
+    attachments,
+  );
+  return resolved.get(contentHash) ?? {};
 }
 
 export function decodeInboxBody(

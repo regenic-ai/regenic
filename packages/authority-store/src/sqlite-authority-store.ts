@@ -6,6 +6,7 @@ import {
   AuthorityConflictError,
   conversationId,
   formatInboxDigest,
+  normalizeInboxLimit,
   threadExternalIdLike,
 } from "@regenic/domain";
 import type {
@@ -25,6 +26,7 @@ import type {
   EventRecord,
   EventRevision,
   IngestAttempt,
+  IngestCommitRequest,
   IngestQuarantine,
   IngestOperation,
   NewConnectorInstallation,
@@ -143,6 +145,7 @@ const INBOX_COLUMNS = `
 `;
 
 interface InsertEventInput extends SourceIdentity {
+  id?: string;
   operation: IngestOperation;
   content_hash?: string;
   content_media_type?: string;
@@ -153,27 +156,52 @@ interface InsertEventInput extends SourceIdentity {
   expected_head_id: string | null;
 }
 
+export interface SqliteOpenOptions {
+  readonly?: boolean;
+}
+
 export class SqliteAuthorityStore
   implements AuthorityStore, ConnectorRuntimeStore
 {
   private readonly database: Database.Database;
+  readonly readonly: boolean;
 
-  constructor(path: string) {
-    mkdirSync(dirname(path), { recursive: true });
-    this.database = new Database(path);
+  constructor(path: string, options: SqliteOpenOptions = {}) {
+    this.readonly = options.readonly === true;
+    if (!this.readonly) {
+      mkdirSync(dirname(path), { recursive: true });
+    }
+    this.database = new Database(
+      path,
+      this.readonly ? { fileMustExist: true } : undefined,
+    );
     try {
       this.database.pragma("busy_timeout = 5000");
       this.database.pragma("foreign_keys = ON");
-      this.database.pragma("journal_mode = WAL");
+      if (!this.readonly) {
+        this.database.pragma("journal_mode = WAL");
+      }
       this.database.function(
         "conversation_id",
         (source: string, externalId: string, fallbackId: string) =>
           conversationId(source, externalId, fallbackId),
       );
-      this.migrate();
+      if (this.readonly) {
+        // Keep OS-level write access so WAL readers can update -shm and see
+        // commits from the writer. query_only still blocks application writes.
+        this.database.pragma("query_only = ON");
+      } else {
+        this.migrate();
+      }
     } catch (error) {
       this.database.close();
       throw error;
+    }
+  }
+
+  private assertWritable(): void {
+    if (this.readonly) {
+      throw new Error("Authority database is open read-only");
     }
   }
 
@@ -212,9 +240,7 @@ export class SqliteAuthorityStore
         return [];
       }
       clauses.push(
-        `conversation_id(source, external_id, id) IN (${query.thread_ids
-          .map(() => "?")
-          .join(", ")})`,
+        `thread_id IN (${query.thread_ids.map(() => "?").join(", ")})`,
       );
       params.push(...query.thread_ids);
     }
@@ -235,6 +261,11 @@ export class SqliteAuthorityStore
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
+    this.assertWritable();
+    this.putDispositionWithinTransaction(decision);
+  }
+
+  private putDispositionWithinTransaction(decision: ArrangementDecision): void {
     this.database
       .prepare(
         `
@@ -279,7 +310,11 @@ export class SqliteAuthorityStore
     }
     const { sql, params } = this.inboxSql(orgId, query);
     const rows = this.database.prepare(sql).all(...params) as InboxRow[];
-    return rows.map((row) => this.toInboxItem(row));
+    const items = rows.map((row) => this.toInboxItem(row));
+    if (inboxUsesNewestFirst(query)) {
+      items.reverse();
+    }
+    return items;
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
@@ -287,10 +322,11 @@ export class SqliteAuthorityStore
       .prepare(
         `
           SELECT e.ingested_at AS latest_at, e.id AS latest_id
-          FROM message_dispositions d
-          JOIN events e ON e.id = d.event_id
-          JOIN source_heads h ON h.current_event_id = e.id
-          WHERE d.org_id = ? AND d.disposition = 'current_work'
+          FROM events e
+          JOIN message_dispositions d ON d.event_id = e.id
+          WHERE e.org_id = ?
+            AND d.disposition = 'current_work'
+            AND ${isCurrentHeadSql("e")}
           ORDER BY e.ingested_at DESC, e.id DESC
           LIMIT 1
         `,
@@ -300,12 +336,12 @@ export class SqliteAuthorityStore
       .prepare(
         `
           SELECT COUNT(*) AS count FROM (
-            SELECT conversation_id(e.source, e.external_id, e.id) AS thread_id
-            FROM message_dispositions d
-            JOIN events e ON e.id = d.event_id
-            JOIN source_heads h ON h.current_event_id = e.id
-            WHERE d.org_id = ?
-            GROUP BY thread_id
+            SELECT e.thread_id AS thread_id
+            FROM events e
+            JOIN message_dispositions d ON d.event_id = e.id
+            WHERE e.org_id = ?
+              AND ${isCurrentHeadSql("e")}
+            GROUP BY e.thread_id
             HAVING
               SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
               AND SUM(
@@ -370,6 +406,7 @@ export class SqliteAuthorityStore
   async putConversationPref(
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const current = this.database
         .prepare(
@@ -414,24 +451,62 @@ export class SqliteAuthorityStore
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
-    const row = this.database
-      .prepare(
-        `SELECT content_hash, media_type, byte_size, created_at
-         FROM blobs WHERE content_hash = ?`,
-      )
-      .get(contentHash) as BlobRow | undefined;
-    return row ?? null;
+    return (await this.findBlobs([contentHash])).get(contentHash) ?? null;
+  }
+
+  async findBlobs(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobRecord>> {
+    const unique = [
+      ...new Set(contentHashes.filter((hash) => hash.length > 0)),
+    ];
+    const found = new Map<string, BlobRecord>();
+    const chunkSize = 400;
+    for (let offset = 0; offset < unique.length; offset += chunkSize) {
+      const chunk = unique.slice(offset, offset + chunkSize);
+      const rows = this.database
+        .prepare(
+          `SELECT content_hash, media_type, byte_size, created_at
+           FROM blobs WHERE content_hash IN (${chunk.map(() => "?").join(", ")})`,
+        )
+        .all(...chunk) as BlobRow[];
+      for (const row of rows) {
+        found.set(row.content_hash, row);
+      }
+    }
+    return found;
   }
 
   async append(input: NewEvent): Promise<EventRecord> {
+    this.assertWritable();
     return this.insert({ ...input, operation: "create" });
   }
 
+  async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
+    this.assertWritable();
+    if (request.appends.length === 0 && request.dispositions.length === 0) {
+      return [];
+    }
+    return this.database
+      .transaction(() => {
+        const events = request.appends.map((input) =>
+          this.insertWithinTransaction({ ...input, operation: "create" }),
+        );
+        for (const decision of request.dispositions) {
+          this.putDispositionWithinTransaction(decision);
+        }
+        return events;
+      })
+      .immediate();
+  }
+
   async appendRevision(input: EventRevision): Promise<EventRecord> {
+    this.assertWritable();
     return this.insert({ ...input, operation: "revise" });
   }
 
   async markTombstone(input: TombstoneEvent): Promise<EventRecord> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const current = this.findCurrent(input);
       return this.insertWithinTransaction({
@@ -447,6 +522,7 @@ export class SqliteAuthorityStore
   async createInstallation(
     input: NewConnectorInstallation,
   ): Promise<ConnectorInstallation> {
+    this.assertWritable();
     const installation: ConnectorInstallation = {
       ...input,
       config: { ...input.config },
@@ -503,6 +579,7 @@ export class SqliteAuthorityStore
   async setInstallationStatus(
     input: SetConnectorInstallationStatus,
   ): Promise<ConnectorInstallation | null> {
+    this.assertWritable();
     const updated = this.database
       .prepare(
         `
@@ -517,6 +594,7 @@ export class SqliteAuthorityStore
   async updateInstallationConfig(
     input: SetConnectorInstallationConfig,
   ): Promise<ConnectorInstallation | null> {
+    this.assertWritable();
     const updated = this.database
       .prepare(
         `
@@ -534,6 +612,7 @@ export class SqliteAuthorityStore
   }
 
   async deleteInstallation(id: string, orgId: string): Promise<boolean> {
+    this.assertWritable();
     const removed = this.database.transaction(() => {
       const row = this.database
         .prepare(
@@ -574,6 +653,7 @@ export class SqliteAuthorityStore
     now: string;
     lease_duration_ms: number;
   }): Promise<ConnectorLease | null> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const installation = this.database
         .prepare(`SELECT status FROM connector_installations WHERE id = ?`)
@@ -641,6 +721,7 @@ export class SqliteAuthorityStore
   }
 
   async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
+    this.assertWritable();
     const released = this.database
       .prepare(
         `
@@ -661,6 +742,7 @@ export class SqliteAuthorityStore
   async resetCursor(
     input: ResetConnectorCursor,
   ): Promise<ConnectorStreamCursor | null> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const cursor = this.findCursorRow(input.installation_id, input.stream_key);
       if (!cursor) {
@@ -690,6 +772,7 @@ export class SqliteAuthorityStore
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
+    this.assertWritable();
     this.database
       .prepare(
         `
@@ -711,6 +794,8 @@ export class SqliteAuthorityStore
   }
 
   async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
+    this.assertWritable();
+
     const transaction = this.database.transaction(() => {
       const cursor = this.findCursorRow(input.installation_id, input.stream_key);
       if (!cursor || cursor.lease_owner !== input.lease_owner) {
@@ -910,7 +995,7 @@ export class SqliteAuthorityStore
 
   private insertWithinTransaction(input: InsertEventInput): EventRecord {
     const event: EventRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       org_id: input.org_id,
       source: input.source,
       external_id: input.external_id,
@@ -943,8 +1028,8 @@ export class SqliteAuthorityStore
         `
           INSERT INTO events (
             id, org_id, source, external_id, operation, content_hash,
-            parent_event_id, revision_id, occurred_at, ingested_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            parent_event_id, revision_id, occurred_at, ingested_at, thread_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -958,6 +1043,7 @@ export class SqliteAuthorityStore
         input.revision_id ?? null,
         event.occurred_at,
         event.ingested_at,
+        conversationId(event.source, event.external_id, event.id),
       );
     const headUpdate =
       input.expected_head_id === null
@@ -1006,36 +1092,23 @@ export class SqliteAuthorityStore
           SELECT * FROM (
             SELECT ${INBOX_COLUMNS},
               ROW_NUMBER() OVER (
-                PARTITION BY conversation_id(e.source, e.external_id, e.id),
-                  CASE
-                    WHEN d.reason_codes_json LIKE '%thread_status%' THEN 1
-                    ELSE 0
-                  END
+                PARTITION BY e.thread_id
                 ORDER BY e.occurred_at DESC, e.id DESC
               ) AS rn
             FROM message_dispositions d
             JOIN events e ON e.id = d.event_id
-            JOIN source_heads h ON h.current_event_id = e.id
             WHERE ${visible.clauses.join(" AND ")}
-              AND conversation_id(e.source, e.external_id, e.id) IN (
-                SELECT conversation_id(e2.source, e2.external_id, e2.id)
+              AND ${isCurrentHeadSql("e")}
+              AND d.reason_codes_json NOT LIKE '%thread_status%'
+              AND e.thread_id IN (
+                SELECT e2.thread_id
                 FROM message_dispositions d2
                 JOIN events e2 ON e2.id = d2.event_id
-                JOIN source_heads h2 ON h2.current_event_id = e2.id
                 WHERE ${current.clauses.join(" AND ")}
-              )
-              AND EXISTS (
-                SELECT 1
-                FROM message_dispositions d3
-                JOIN events e3 ON e3.id = d3.event_id
-                WHERE d3.org_id = e.org_id
-                  AND conversation_id(e3.source, e3.external_id, e3.id)
-                    = conversation_id(e.source, e.external_id, e.id)
-                  AND d3.reason_codes_json NOT LIKE '%thread_status%'
+                  AND ${isCurrentHeadSql("e2", "h2")}
               )
           ) ranked
           WHERE rn = 1
-            AND reason_codes_json NOT LIKE '%thread_status%'
           ORDER BY occurred_at ASC, id ASC
         `,
         params: [...visible.params, ...current.params],
@@ -1044,37 +1117,39 @@ export class SqliteAuthorityStore
     if (query?.siblings) {
       const { clauses, params } = this.inboxClauses(orgId, query, "any");
       if (!query.source && !query.target && !query.thread_ids) {
-        clauses.push(`conversation_id(e.source, e.external_id, e.id) IN (
-          SELECT conversation_id(e2.source, e2.external_id, e2.id)
+        clauses.push(`e.thread_id IN (
+          SELECT e2.thread_id
           FROM message_dispositions d2
           JOIN events e2 ON e2.id = d2.event_id
-          JOIN source_heads h2 ON h2.current_event_id = e2.id
           WHERE d2.org_id = ? AND d2.disposition = 'current_work'
+            AND ${isCurrentHeadSql("e2", "h2")}
         )`);
         params.push(orgId);
       }
+      const tail = inboxTail(query);
       return {
         sql: `
           SELECT ${INBOX_COLUMNS}
           FROM message_dispositions d
           JOIN events e ON e.id = d.event_id
           WHERE ${clauses.join(" AND ")}
-          ORDER BY e.occurred_at ASC, e.id ASC
+          ${tail.orderSql}
         `,
-        params,
+        params: [...params, ...tail.orderParams],
       };
     }
     const { clauses, params } = this.inboxClauses(orgId, query, "current_work");
+    const tail = inboxTail(query);
     return {
       sql: `
         SELECT ${INBOX_COLUMNS}
         FROM message_dispositions d
         JOIN events e ON e.id = d.event_id
-        JOIN source_heads h ON h.current_event_id = e.id
         WHERE ${clauses.join(" AND ")}
-        ORDER BY e.occurred_at ASC, e.id ASC
+          AND ${isCurrentHeadSql("e")}
+        ${tail.orderSql}
       `,
-      params,
+      params: [...params, ...tail.orderParams],
     };
   }
 
@@ -1103,9 +1178,7 @@ export class SqliteAuthorityStore
     }
     if (query?.thread_ids && query.thread_ids.length > 0) {
       clauses.push(
-        `conversation_id(${event}.source, ${event}.external_id, ${event}.id) IN (${query.thread_ids
-          .map(() => "?")
-          .join(", ")})`,
+        `${event}.thread_id IN (${query.thread_ids.map(() => "?").join(", ")})`,
       );
       params.push(...query.thread_ids);
     }
@@ -1114,6 +1187,12 @@ export class SqliteAuthorityStore
         `(${event}.ingested_at > ? OR (${event}.ingested_at = ? AND ${event}.id > ?))`,
       );
       params.push(query.since, query.since, query.since_id ?? "");
+    }
+    if (query?.before) {
+      clauses.push(
+        `(${event}.occurred_at < ? OR (${event}.occurred_at = ? AND ${event}.id < ?))`,
+      );
+      params.push(query.before, query.before, query.before_id ?? "");
     }
     return { clauses, params };
   }
@@ -1240,4 +1319,32 @@ export class SqliteAuthorityStore
       created_at: row.created_at,
     };
   }
+}
+
+function inboxUsesNewestFirst(query?: InboxQuery): boolean {
+  return Boolean(!query?.heads && normalizeInboxLimit(query?.limit));
+}
+
+function isCurrentHeadSql(event = "e", heads = "h"): string {
+  return `EXISTS (
+    SELECT 1 FROM source_heads ${heads}
+    WHERE ${heads}.current_event_id = ${event}.id
+  )`;
+}
+
+function inboxTail(query?: InboxQuery): {
+  orderSql: string;
+  orderParams: unknown[];
+} {
+  const limit = query?.heads ? undefined : normalizeInboxLimit(query?.limit);
+  if (limit !== undefined) {
+    return {
+      orderSql: "ORDER BY e.occurred_at DESC, e.id DESC LIMIT ?",
+      orderParams: [limit],
+    };
+  }
+  return {
+    orderSql: "ORDER BY e.occurred_at ASC, e.id ASC",
+    orderParams: [],
+  };
 }

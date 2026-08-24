@@ -5,6 +5,8 @@ import {
   readingMessages,
   threadActivityCopy,
   threadActivityOf,
+  threadLoadedCountCopy,
+  threadPaneEmptyCopy,
   threadPreview,
   threadTitle,
 } from "../src/renderer/src/message-view.ts";
@@ -118,6 +120,49 @@ describe("reading messages", () => {
     });
     const reading = readingMessages(thread([outbound, working]));
     assert.deepEqual(reading.map((entry) => entry.event.id), ["out-1"]);
+  });
+
+  it("does not treat a heads-only row with no body as readable", () => {
+    const head = item({
+      id: "head-1",
+      external_id: "oc_1:om_1",
+      text: "",
+    });
+    head.body_text = undefined;
+    assert.deepEqual(readingMessages(thread([head])), []);
+  });
+});
+
+describe("thread pane empty copy", () => {
+  it("says opening while the kernel is still reading the thread", () => {
+    assert.equal(threadPaneEmptyCopy(true), "Opening conversation…");
+    assert.equal(
+      threadPaneEmptyCopy(false),
+      "This conversation has no displayable messages.",
+    );
+    assert.equal(
+      threadPaneEmptyCopy(false, "Could not open this conversation."),
+      "Could not open this conversation.",
+    );
+  });
+
+  it("names a recent window instead of the whole history", () => {
+    assert.equal(
+      threadLoadedCountCopy({ opening: true, loaded: 0, hasOlder: false }),
+      "Opening…",
+    );
+    assert.equal(
+      threadLoadedCountCopy({ opening: true, loaded: 1, hasOlder: false }),
+      "1 messages",
+    );
+    assert.equal(
+      threadLoadedCountCopy({ opening: false, loaded: 50, hasOlder: true }),
+      "50 recent messages",
+    );
+    assert.equal(
+      threadLoadedCountCopy({ opening: false, loaded: 3, hasOlder: false }),
+      "3 messages",
+    );
   });
 });
 
@@ -336,6 +381,26 @@ describe("thread activity", () => {
       },
     );
     assert.equal(threadTitle(headsOnly), "只用一句话回复：pong");
+  });
+
+  it("falls back to the visible face when a prompt title is missing", () => {
+    const session = thread(
+      [
+        item({
+          id: "in-1",
+          external_id: "session-1:49",
+          text: "这是对方给我的初稿：一、Bioby AI品牌端介绍",
+          kind: "assistant",
+          direction: "inbound",
+        }),
+      ],
+      {
+        conversation_label: null,
+        list_title: "prompt",
+        label: "session-…af07",
+      },
+    );
+    assert.equal(threadTitle(session), "这是对方给我的初稿：一、Bioby AI品牌端介绍");
   });
 
   it("does not title the thread from a working marker", () => {

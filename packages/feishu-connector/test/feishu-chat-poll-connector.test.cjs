@@ -14,6 +14,8 @@ const {
   FeishuChatPollConnector,
   extractFeishuText,
   nextFeishuCursor,
+  planFeishuHistoryRequest,
+  needsRecentSeed,
 } = require("../dist");
 
 function createConnector(client) {
@@ -83,7 +85,7 @@ describe("FeishuChatPollConnector", () => {
     });
 
     const result = await connector.poll({
-      value: JSON.stringify({ page_token: "page-1" }),
+      value: JSON.stringify({ page_token: "page-1", recent_seeded: true }),
     });
 
     assert.deepEqual(calls, [
@@ -92,6 +94,7 @@ describe("FeishuChatPollConnector", () => {
         page_size: 50,
         page_token: "page-1",
         start_time: undefined,
+        sort_type: "ByCreateTimeAsc",
       },
     ]);
     assert.equal(result.batch.records.length, 2);
@@ -110,9 +113,14 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(surface.actor_label, "Ada");
     assert.equal(
       result.next_cursor,
-      JSON.stringify({ page_token: "page-2", start_time: "1723420860" }),
+      JSON.stringify({
+        page_token: "page-2",
+        start_time: "1723420860",
+        recent_seeded: true,
+      }),
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
+    assert.equal(result.has_more, true);
   });
 
   it("keeps a start_time cursor after the history page is caught up", async () => {
@@ -125,7 +133,109 @@ describe("FeishuChatPollConnector", () => {
       },
     });
     const result = await connector.poll(null);
-    assert.equal(result.next_cursor, JSON.stringify({ start_time: "1723420800" }));
+    assert.equal(
+      result.next_cursor,
+      JSON.stringify({ start_time: "1723420800", recent_seeded: true }),
+    );
+  });
+
+  it("seeds the latest page first on a new conversation", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        return {
+          items: [
+            textItem({
+              message_id: "om_new",
+              create_time: "1723500000000",
+            }),
+          ],
+          has_more: true,
+          page_token: "older",
+        };
+      },
+    });
+    const result = await connector.poll(null);
+    assert.deepEqual(calls, [
+      {
+        chat_id: "oc_1",
+        page_size: 50,
+        sort_type: "ByCreateTimeDesc",
+      },
+    ]);
+    assert.equal(result.batch.records[0].external_id, "oc_1:om_new");
+    assert.equal(
+      result.next_cursor,
+      JSON.stringify({
+        page_token: "older",
+        sort: "desc",
+        head_time: "1723500000",
+        recent_seeded: true,
+      }),
+    );
+    assert.equal(result.has_more, true);
+  });
+
+  it("seeds recent messages without dropping a mid-history asc cursor", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        return {
+          items: [
+            textItem({
+              message_id: "om_latest",
+              create_time: "1723600000000",
+            }),
+          ],
+          has_more: true,
+          page_token: "desc-2",
+        };
+      },
+    });
+    const result = await connector.poll({
+      value: JSON.stringify({ page_token: "asc-20", start_time: "100" }),
+    });
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      sort_type: "ByCreateTimeDesc",
+    });
+    assert.equal(
+      result.next_cursor,
+      JSON.stringify({
+        page_token: "asc-20",
+        start_time: "100",
+        head_time: "1723600000",
+        recent_seeded: true,
+      }),
+    );
+    assert.equal(result.has_more, true);
+  });
+
+  it("reseeds a live start_time cursor that never stored recent messages", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        return {
+          items: [textItem({ message_id: "om_recent", create_time: "1723600000000" })],
+          has_more: true,
+          page_token: "older",
+        };
+      },
+    });
+    const result = await connector.poll({
+      value: JSON.stringify({ start_time: "1723420800" }),
+    });
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      sort_type: "ByCreateTimeDesc",
+    });
+    assert.equal(result.batch.records[0].external_id, "oc_1:om_recent");
+    assert.equal(result.has_more, true);
   });
 
   it("settles a Feishu page through the shared connector runtime", async () => {
@@ -163,7 +273,10 @@ describe("FeishuChatPollConnector", () => {
 
     assert.equal(run.status, "completed");
     assert.equal(run.result.records[0].status, "accepted");
-    assert.equal(cursor.cursor, JSON.stringify({ start_time: "1723420800" }));
+    assert.equal(
+      cursor.cursor,
+      JSON.stringify({ start_time: "1723420800", recent_seeded: true }),
+    );
   });
 
   it("passes the reusable poll connector conformance suite", async () => {
@@ -185,7 +298,12 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(report.record_count, 1);
     assert.equal(
       report.next_cursor,
-      JSON.stringify({ page_token: "page-2", start_time: "1723420800" }),
+      JSON.stringify({
+        page_token: "page-2",
+        sort: "desc",
+        head_time: "1723420800",
+        recent_seeded: true,
+      }),
     );
   });
 
@@ -300,10 +418,27 @@ describe("FeishuChatPollConnector", () => {
   it("does not keep paging once has_more is false", () => {
     assert.deepEqual(
       nextFeishuCursor(
-        { page_token: "page-2", start_time: "100" },
+        { page_token: "page-2", start_time: "100", recent_seeded: true },
         { items: [], has_more: false },
+        "ByCreateTimeAsc",
       ),
-      { start_time: "100" },
+      { start_time: "100", recent_seeded: true },
+    );
+    assert.deepEqual(
+      nextFeishuCursor(
+        { page_token: "older", sort: "desc", head_time: "200", recent_seeded: true },
+        { items: [], has_more: false },
+        "ByCreateTimeDesc",
+      ),
+      { start_time: "200", recent_seeded: true },
+    );
+    assert.equal(needsRecentSeed({}), true);
+    assert.equal(needsRecentSeed({ page_token: "p1" }), true);
+    assert.equal(needsRecentSeed({ start_time: "100" }), true);
+    assert.equal(needsRecentSeed({ start_time: "100", recent_seeded: true }), false);
+    assert.deepEqual(
+      planFeishuHistoryRequest("oc_1", 50, {}),
+      { chat_id: "oc_1", page_size: 50, sort_type: "ByCreateTimeDesc" },
     );
   });
 });

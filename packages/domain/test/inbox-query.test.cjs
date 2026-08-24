@@ -5,8 +5,10 @@ const {
   formatInboxDigest,
   headsByThread,
   inboxDigest,
+  normalizeInboxLimit,
   selectInboxItems,
   summarizeInboxItems,
+  takeRecentInboxItems,
   threadExternalIdLike,
 } = require("../dist");
 
@@ -171,5 +173,46 @@ describe("inbox query helpers", () => {
     assert.deepEqual(headsByThread([working]), []);
     assert.deepEqual(selectInboxItems([working], { heads: true }), []);
     assert.equal(summarizeInboxItems([working]).count, 0);
+  });
+
+  it("takes the latest page and then the page before that cursor", () => {
+    const items = [1, 2, 3, 4].map((n) => ({
+      decision: { disposition: "current_work" },
+      event: {
+        id: `e${n}`,
+        org_id: "org",
+        source: "feishu",
+        external_id: `oc_1:om_${n}`,
+        occurred_at: `2026-08-23T00:0${n}:00.000Z`,
+        ingested_at: `2026-08-23T00:0${n}:00.000Z`,
+      },
+    }));
+    const recent = selectInboxItems(items, { limit: 2 });
+    assert.deepEqual(
+      recent.map((item) => item.event.id),
+      ["e3", "e4"],
+    );
+    const older = selectInboxItems(items, {
+      before: recent[0].event.occurred_at,
+      before_id: recent[0].event.id,
+      limit: 2,
+    });
+    assert.deepEqual(
+      older.map((item) => item.event.id),
+      ["e1", "e2"],
+    );
+    assert.deepEqual(
+      takeRecentInboxItems([items[3], items[0], items[2], items[1]], { limit: 2 }).map(
+        (item) => item.event.id,
+      ),
+      ["e3", "e4"],
+    );
+    assert.equal(normalizeInboxLimit(500), 200);
+    assert.equal(normalizeInboxLimit("12"), 12);
+    assert.equal(normalizeInboxLimit("nope"), undefined);
+    assert.deepEqual(
+      selectInboxItems(items, { heads: true, limit: 1 }).map((item) => item.event.id),
+      ["e4"],
+    );
   });
 });

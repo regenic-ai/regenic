@@ -16,6 +16,7 @@ import {
   dshSessionKey,
   dshSessionPlugin,
   dshSessionPluginConfigFromInstallation,
+  dshStreamKey,
   type DshFetch,
   type DshSpawn,
 } from "@regenic/dsh-connector";
@@ -175,7 +176,10 @@ async function syncSlack(
       fetch: fetchOverride,
       now,
     });
-    const connector = host.get("connectors").get(installation.id);
+    const connector = host.get("connectors").get(
+      installation.id,
+      `channel:${channelId}`,
+    );
     if (!connector) {
       throw new Error(`Slack connector failed to mount: ${installationId}`);
     }
@@ -305,7 +309,10 @@ async function syncDsh(
         createId,
       }),
     );
-    const connector = host.get("connectors").get(installation.id);
+    const connector = host.get("connectors").get(
+      installation.id,
+      dshStreamKey(sessionKey),
+    );
     if (!connector) {
       throw new Error(`DSH connector failed to mount: ${installationId}`);
     }
@@ -375,7 +382,10 @@ async function sendDsh(
         createId,
       }),
     );
-    const egress = host.get("egress").get(installation.id);
+    const egress = host.get("egress").get(
+      installation.id,
+      dshStreamKey(dshSessionKey(installation.config, installation.id)),
+    );
     if (!egress) {
       throw new Error(`DSH egress adapter failed to mount: ${installationId}`);
     }

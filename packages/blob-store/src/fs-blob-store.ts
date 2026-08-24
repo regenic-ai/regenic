@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { BlobStore } from "@regenic/domain";
+import {
+  collectAvailableBlobs,
+  putUniqueBlobs,
+  type BlobObject,
+  type BlobStore,
+} from "@regenic/domain";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -48,6 +53,13 @@ export class FsBlobStore implements BlobStore {
     }
   }
 
+  async putMany(items: readonly BlobObject[]): Promise<void> {
+    await putUniqueBlobs(
+      (hash, bytes, mediaType) => this.put(hash, bytes, mediaType),
+      items,
+    );
+  }
+
   async get(hash: string): Promise<Uint8Array> {
     this.assertHash(hash);
     const bytes = new Uint8Array(await readFile(this.pathFor(hash)));
@@ -56,6 +68,10 @@ export class FsBlobStore implements BlobStore {
       throw new BlobCorruptionError(hash);
     }
     return bytes;
+  }
+
+  async getMany(hashes: readonly string[]): Promise<Map<string, Uint8Array>> {
+    return collectAvailableBlobs((hash) => this.get(hash), hashes);
   }
 
   async delete(hash: string): Promise<void> {

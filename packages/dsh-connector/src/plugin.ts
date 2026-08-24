@@ -31,6 +31,7 @@ export interface DshSessionPluginConfig {
   now?: () => string;
   createId?: () => string;
   page_size?: number;
+  session_ids?: string[];
 }
 
 export function resolveDshTransport(
@@ -112,46 +113,62 @@ function numberConfig(
   return undefined;
 }
 
+export function dshStreamKey(sessionId: string): string {
+  return `session:${sessionId}`;
+}
+
+export function dshPluginSessionIds(config: DshSessionPluginConfig): string[] {
+  if (config.session_ids && config.session_ids.length > 0) {
+    return config.session_ids;
+  }
+  return [dshSessionKey(config, config.installation_id)];
+}
+
 export const dshSessionPlugin = definePlugin<DshSessionPluginConfig>({
   name: "dsh-session",
   inject: ["connectors", "egress"],
   apply(ctx, config) {
     const transport = resolveDshTransport(config);
-    const sessionId = dshSessionKey(config, config.installation_id);
-    const client = transport === "web"
-      ? createWebClient(config, sessionId)
-      : createCliClient(config);
-    const connector = new DshSessionPollConnector(client, {
-      connector_id: config.installation_id,
-      org_id: config.org_id,
-      session_id: sessionId,
-      page_size: config.page_size,
-      now: config.now,
-    });
-    const egress = new DshSessionEgress(client, {
-      installation_id: config.installation_id,
-      session_id: sessionId,
-    });
+    const sessionIds = dshPluginSessionIds(config);
+    const client =
+      transport === "web" ? createWebClient(config) : createCliClient(config);
     ctx.effect(() => {
-      const disposeConnector = ctx.get("connectors").register(
-        config.installation_id,
-        connector,
-      );
-      const disposeEgress = ctx.get("egress").register(config.installation_id, egress);
+      const disposers = sessionIds.flatMap((sessionId) => {
+        const connector = new DshSessionPollConnector(client, {
+          connector_id: config.installation_id,
+          org_id: config.org_id,
+          session_id: sessionId,
+          page_size: config.page_size,
+          now: config.now,
+        });
+        const egress = new DshSessionEgress(client, {
+          installation_id: config.installation_id,
+          session_id: sessionId,
+        });
+        return [
+          ctx.get("connectors").register(config.installation_id, connector, {
+            stream_key: dshStreamKey(sessionId),
+            thread_id: `dsh:${sessionId}`,
+          }),
+          ctx.get("egress").register(
+            config.installation_id,
+            egress,
+            dshStreamKey(sessionId),
+          ),
+        ];
+      });
       return () => {
-        disposeConnector();
-        disposeEgress();
+        for (const dispose of disposers.reverse()) {
+          dispose();
+        }
       };
     });
   },
 });
 
-function createWebClient(config: DshSessionPluginConfig, sessionId: string) {
+function createWebClient(config: DshSessionPluginConfig) {
   if (!config.base_url) {
     throw new Error("DSH web transport requires base_url");
-  }
-  if (!sessionId) {
-    throw new Error("DSH web transport requires session_id");
   }
   return new DshWebRpcClient({
     base_url: config.base_url,

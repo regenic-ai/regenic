@@ -140,11 +140,17 @@ export function threadTitle(thread: InboxThread): string {
     );
   }
   if (thread.list_title === "prompt") {
-    return (
+    const prompt =
       thread.conversation_label?.replace(/\s+/g, " ").trim() ||
-      firstUserLine(thread) ||
-      thread.label
-    );
+      firstUserLine(thread);
+    if (prompt) {
+      return prompt;
+    }
+    const face = threadFace(thread);
+    if (face.activity !== "working") {
+      return firstLine(face.body_text, 120) || thread.label;
+    }
+    return thread.label;
   }
   const conversation = thread.conversation_label?.replace(/\s+/g, " ").trim();
   if (conversation) {
@@ -219,6 +225,33 @@ function isReadable(item: InboxViewItem): boolean {
   }
   const text = item.body_text?.trim() ?? "";
   return text.length > 0 || (item.attachments?.length ?? 0) > 0;
+}
+
+export function threadPaneEmptyCopy(
+  opening: boolean,
+  error?: string | null,
+): string {
+  if (opening) {
+    return "Opening conversation…";
+  }
+  if (error) {
+    return error;
+  }
+  return "This conversation has no displayable messages.";
+}
+
+export function threadLoadedCountCopy(input: {
+  opening: boolean;
+  loaded: number;
+  hasOlder: boolean;
+}): string {
+  if (input.loaded === 0 && input.opening) {
+    return "Opening…";
+  }
+  if (input.hasOlder) {
+    return `${input.loaded} recent messages`;
+  }
+  return `${input.loaded} messages`;
 }
 
 export function sameSpeaker(left: InboxViewItem, right: InboxViewItem): boolean {

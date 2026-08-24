@@ -8,6 +8,8 @@ import {
   headsByThread,
   isThreadStatusItem,
   parseConversationThread,
+  takeRecentInboxItems,
+  normalizeInboxLimit,
   resolveMessageSurface,
   type ArrangementDecision,
   type AuthorityStore,
@@ -23,7 +25,12 @@ import {
   type MessageKind,
   type ThreadActivity,
 } from "@regenic/domain";
-import { resolveInboxBody, type InboxAttachment, type InboxBody } from "./inbox-body";
+import {
+  resolveInboxBodies,
+  resolveInboxBody,
+  type InboxAttachment,
+  type InboxBody,
+} from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
@@ -31,7 +38,8 @@ import {
   type ConnectorCatalogItem,
   type EngineInstallationView,
 } from "./personal-connector-view";
-import { pullStatus, type PullStatusView } from "./personal-pull-status";
+import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-status";
+import { processMemoryView } from "./process-memory";
 import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
@@ -83,6 +91,7 @@ export interface PersonalEngineView {
   database_path: string | null;
   inbox_count: number;
   inbox_digest: string;
+  memory: { rss_bytes: number; heap_used_bytes: number };
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
@@ -91,8 +100,11 @@ export interface PersonalEngineView {
 export interface InboxListQuery {
   since?: string;
   since_id?: string;
+  before?: string;
+  before_id?: string;
   heads?: boolean;
   thread_id?: string;
+  limit?: number;
 }
 
 export interface EngineQuery {
@@ -107,7 +119,10 @@ export class PersonalInboxService {
   ) {}
 
   async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
-    return this.loadThreadInbox(query);
+    return this.loadThreadInbox({
+      ...query,
+      limit: normalizeInboxLimit(query.limit),
+    });
   }
 
   async getInboxItem(eventId: string): Promise<InboxViewItem | null> {
@@ -146,7 +161,7 @@ export class PersonalInboxService {
       installations: EngineInstallationView[],
     ) => {
       if (!detailed) {
-        return [];
+        return connectorCatalog(installations, { env: process.env });
       }
       const probed = await this.drivers.probeCatalog(process.env);
       return connectorCatalog(installations, {
@@ -162,6 +177,7 @@ export class PersonalInboxService {
         database_path: options?.database ?? null,
         inbox_count: 0,
         inbox_digest: inboxDigest([]),
+        memory: processMemoryView(),
         pull: { ...pullStatus },
         installations: [],
         catalog: await catalogReady([]),
@@ -191,6 +207,7 @@ export class PersonalInboxService {
       database_path: options?.database ?? null,
       inbox_count: inbox.count,
       inbox_digest: inbox.digest,
+      memory: processMemoryView(),
       pull: { ...pullStatus },
       installations: views,
       catalog: await catalogReady(views),
@@ -204,6 +221,9 @@ export class PersonalInboxService {
     const authority = host.get("authority");
     const blobs = host.get("blobs");
     const orgId = this.runtime.orgId();
+    if (query.thread_id) {
+      preferThread(query.thread_id);
+    }
     const thread = parseThreadQuery(query.thread_id);
     const storeQuery = inboxStoreQuery(query, thread);
     const [records, installations, prefs] = await Promise.all([
@@ -220,26 +240,27 @@ export class PersonalInboxService {
     );
     const selected = selectInboxRecords(records, query);
     const attachments = query.heads ? "meta" : "preview";
-    const resolved = await Promise.all(
-      selected.map(async (item) => {
-        const threadId = conversationId(
-          item.event.source,
-          item.event.external_id,
-          item.event.id,
-        );
-        return {
-          item,
-          threadId,
-          body: await resolveListBody(
-            authority,
-            blobs,
-            item.event.content_hash,
-            attachments,
-            query.heads === true,
-          ),
-        };
-      }),
+    const bodies = await resolveInboxBodies(
+      authority,
+      blobs,
+      selected.map((item) => item.event.content_hash),
+      attachments,
     );
+    const resolved = selected.map((item) => {
+      const threadId = conversationId(
+        item.event.source,
+        item.event.external_id,
+        item.event.id,
+      );
+      const raw = item.event.content_hash
+        ? (bodies.get(item.event.content_hash) ?? {})
+        : {};
+      return {
+        item,
+        threadId,
+        body: query.heads === true ? listFaceBody(raw) : raw,
+      };
+    });
     const labels = await conversationLabelsFor(
       resolved,
       installations,
@@ -268,11 +289,8 @@ export class PersonalInboxService {
         view.list_title === "prompt" && prompt
           ? { ...view, conversation_label: prompt }
           : view;
-      if (
-        query.heads === true &&
-        (titled.list_title === "conversation" || titled.list_title === "prompt")
-      ) {
-        return { ...titled, body_text: undefined, attachments: undefined };
+      if (query.heads === true) {
+        return trimInboxHead(titled);
       }
       return titled;
     });
@@ -312,22 +330,7 @@ export class PersonalInboxService {
 
 const LIST_FACE_MAX = 120;
 
-async function resolveListBody(
-  authority: Parameters<typeof resolveInboxBody>[0],
-  blobs: Parameters<typeof resolveInboxBody>[1],
-  contentHash: string | undefined,
-  attachments: Parameters<typeof resolveInboxBody>[3],
-  heads: boolean,
-): Promise<InboxBody> {
-  const body = await resolveInboxBody(
-    authority,
-    blobs,
-    contentHash,
-    attachments,
-  );
-  if (!heads) {
-    return body;
-  }
+function listFaceBody(body: InboxBody): InboxBody {
   return {
     media_type: body.media_type,
     surface: body.surface,
@@ -402,7 +405,8 @@ async function conversationLabelsFor(
   return drivers.resolveConversationLabels(installations, missing);
 }
 
-const PROMPT_SCAN_LIMIT = 24;
+const PROMPT_USER_SCAN_LIMIT = 24;
+const PROMPT_READ_LIMIT = 128;
 
 async function promptLabelsFor(
   orgId: string,
@@ -508,27 +512,44 @@ async function firstUserTextIn(
   authority: AuthorityStore,
   blobs: BlobStore,
 ): Promise<string | undefined> {
-  let scanned = 0;
+  const cached = new Map(
+    resolved.map((row) => [row.item.event.id, row.body] as const),
+  );
+  const scanned: InboxItem[] = [];
+  const missing: Array<string | undefined> = [];
   for (const item of items) {
     if (isThreadStatusItem(item) || item.event.operation === "tombstone") {
       continue;
     }
-    scanned += 1;
-    if (scanned > PROMPT_SCAN_LIMIT) {
+    if (scanned.length >= PROMPT_READ_LIMIT) {
       break;
     }
-    const cached = resolved.find((row) => row.item.event.id === item.event.id);
+    scanned.push(item);
+    if (!cached.has(item.event.id)) {
+      missing.push(item.event.content_hash);
+    }
+  }
+  const extras =
+    missing.length > 0
+      ? await resolveInboxBodies(authority, blobs, missing, "meta")
+      : new Map<string, InboxBody>();
+  let users = 0;
+  for (const item of scanned) {
     const body =
-      cached?.body ??
-      (await resolveInboxBody(
-        authority,
-        blobs,
-        item.event.content_hash,
-        "meta",
-      ));
+      cached.get(item.event.id) ??
+      (item.event.content_hash
+        ? (extras.get(item.event.content_hash) ?? {})
+        : {});
     const surface = messageSurfaceOf(item.event, body);
+    if (surface.kind !== "user") {
+      continue;
+    }
+    users += 1;
+    if (users > PROMPT_USER_SCAN_LIMIT) {
+      break;
+    }
     const text = listFaceText(body.body_text);
-    if (surface.kind === "user" && text) {
+    if (text) {
       return text;
     }
   }
@@ -590,7 +611,7 @@ export function selectInboxRecords<T extends { event: EventRecord }>(
   if (query.heads) {
     selected = headsByThread(selected);
   }
-  return selected;
+  return takeRecentInboxItems(selected, query);
 }
 
 export function isAfterCursor(
@@ -604,7 +625,7 @@ export function isAfterCursor(
   return event.ingested_at === since && event.id > sinceId;
 }
 
-function inboxStoreQuery(
+export function inboxStoreQuery(
   query: InboxListQuery,
   thread?: ConversationThread,
 ): InboxQuery {
@@ -616,11 +637,25 @@ function inboxStoreQuery(
         }
       : { heads: true };
   }
+  if (query.thread_id && thread) {
+    return {
+      thread_ids: [query.thread_id],
+      since: query.since,
+      since_id: query.since_id,
+      before: query.before,
+      before_id: query.before_id,
+      limit: query.limit,
+      siblings: true,
+    };
+  }
   return {
     source: thread?.source,
     target: thread?.target,
     since: query.since,
     since_id: query.since_id,
+    before: query.before,
+    before_id: query.before_id,
+    limit: query.limit,
     siblings: true,
   };
 }
@@ -657,6 +692,18 @@ function threadOf(event: EventRecord): ConversationThread {
   } catch {
     return { source: event.source, target: event.external_id };
   }
+}
+
+export function trimInboxHead<T extends {
+  list_title?: string;
+  conversation_label?: string | null;
+  body_text?: string;
+  attachments?: InboxAttachment[];
+}>(item: T): T {
+  if (item.list_title === "prompt" && item.conversation_label) {
+    return { ...item, body_text: undefined, attachments: undefined };
+  }
+  return { ...item, attachments: undefined };
 }
 
 export { PersonalKernelStoppedError };

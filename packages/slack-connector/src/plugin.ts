@@ -35,6 +35,12 @@ export const slackChannelPlugin = definePlugin<SlackChannelPluginConfig>({
         now: config.now,
       },
     );
-    ctx.effect(() => ctx.get("connectors").register(config.installation_id, connector));
+    ctx.effect(() =>
+      ctx.get("connectors").register(config.installation_id, connector, {
+        stream_key: `channel:${config.channel_id}`,
+        thread_id: `slack:${config.channel_id}`,
+        label: config.channel_name ?? config.channel_id,
+      }),
+    );
   },
 });

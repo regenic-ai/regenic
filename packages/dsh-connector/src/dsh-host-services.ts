@@ -7,16 +7,15 @@ import {
   DshSessionPollConnector,
   type DshHistoryQuery,
 } from "./dsh-session-poll-connector";
-import { DshSessionEgress } from "./dsh-session-egress";
 import {
   createDshConversation,
   dshSessionDriver,
   dshWebRpcClient,
+  mountDshSessions,
 } from "./dsh-session-driver";
 import {
   dshSessionKey,
-  dshSessionPlugin,
-  dshSessionPluginConfigFromInstallation,
+  dshStreamKey,
   resolveEffectiveDshTransport,
 } from "./plugin";
 
@@ -125,13 +124,12 @@ export function createDshHostRpcServices(
         options.org_id,
         sessionId,
       );
-      const transport = resolveEffectiveDshTransport(installation.config, env);
-      const egress = transport === "web"
-        ? new DshSessionEgress(dshWebRpcClient(installation, env, clientExtras), {
-            installation_id: installation.id,
-            session_id: sessionId,
-          })
-        : await mountedEgress(host, installation, options);
+      const egress = await mountedSessionEgress(
+        host,
+        installation,
+        sessionId,
+        options,
+      );
       await egress.send({
         installation_id: installation.id,
         content: [{ role: "body", media_type: "text/plain", text }],
@@ -196,59 +194,35 @@ async function connectorForSession(
   options: DshHostServiceOptions,
 ): Promise<DshSessionPollConnector> {
   const env = options.env ?? process.env;
-  if (resolveEffectiveDshTransport(installation.config, env) === "web") {
-    return new DshSessionPollConnector(
-      dshWebRpcClient(installation, env, {
-        fetch: options.fetch,
-        access_token: options.access_token,
-      }),
-      {
-        connector_id: installation.id,
-        org_id: installation.org_id,
-        session_id: sessionId,
-        now: options.now,
-      },
-    );
-  }
-  return await mountDshSession(host, installation, options);
-}
-
-async function mountedEgress(
-  host: Host,
-  installation: { id: string; org_id: string; config: Record<string, unknown> },
-  options: DshHostServiceOptions,
-) {
-  await mountDshSession(host, installation, options);
-  const egress = host.get("egress").get(installation.id);
-  if (!egress) {
-    throw new DshApiError("DSH egress adapter failed to mount", "internal");
-  }
-  return egress;
-}
-
-async function mountDshSession(
-  host: Host,
-  installation: { id: string; org_id: string; config: Record<string, unknown> },
-  options: DshHostServiceOptions,
-) {
-  if (!host.get("connectors").get(installation.id)) {
-    await host.plugin(
-      dshSessionPlugin,
-      dshSessionPluginConfigFromInstallation(installation, {
-        spawn: options.spawn,
-        fetch: options.fetch,
-        access_token: options.access_token,
-        env: options.env,
-        now: options.now,
-        createId: options.createId,
-      }),
-    );
-  }
-  const connector = host.get("connectors").get(installation.id);
+  const streams = await mountDshSessions(host, installation, env, [sessionId], {
+    fetch: options.fetch,
+    access_token: options.access_token,
+  });
+  const connector = streams[0]?.connector ?? host.get("connectors").get(
+    installation.id,
+    dshStreamKey(sessionId),
+  );
   if (!(connector instanceof DshSessionPollConnector)) {
     throw new DshApiError("DSH connector failed to mount", "internal");
   }
   return connector;
+}
+
+async function mountedSessionEgress(
+  host: Host,
+  installation: { id: string; org_id: string; config: Record<string, unknown> },
+  sessionId: string,
+  options: DshHostServiceOptions,
+) {
+  await mountDshSessions(host, installation, options.env ?? process.env, [sessionId], {
+    fetch: options.fetch,
+    access_token: options.access_token,
+  });
+  const egress = host.get("egress").get(installation.id, dshStreamKey(sessionId));
+  if (!egress) {
+    throw new DshApiError("DSH egress adapter failed to mount", "internal");
+  }
+  return egress;
 }
 
 function configString(

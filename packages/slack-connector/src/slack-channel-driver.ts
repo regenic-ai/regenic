@@ -1,6 +1,7 @@
 import type { Host } from "@regenic/plugin-host";
 import {
   ChannelDriverError,
+  requireConnectorStream,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorStream,
@@ -111,7 +112,8 @@ async function mountChannel(
   if (!channelId) {
     throw new ChannelDriverError("invalid_config", "Slack installation is missing channel_id");
   }
-  if (!host.get("connectors").get(installation.id)) {
+  const streamKey = `channel:${channelId}`;
+  if (!host.get("connectors").getStream(installation.id, streamKey)) {
     const tokenEnv = slackTokenEnv(installation.credentials_ref);
     const token = env[tokenEnv];
     if (!token) {
@@ -129,11 +131,7 @@ async function mountChannel(
       endpoint: env.REGENIC_SLACK_API_ENDPOINT,
     });
   }
-  const connector = host.get("connectors").get(installation.id);
-  if (!connector) {
-    throw new ChannelDriverError("sync_failed", "Connector failed to mount");
-  }
-  return { stream_key: `channel:${channelId}`, connector };
+  return requireConnectorStream(host.get("connectors"), installation.id, streamKey);
 }
 
 function slackTokenEnv(credentialsRef: string | undefined): string {

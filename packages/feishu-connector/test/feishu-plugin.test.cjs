@@ -33,10 +33,45 @@ describe("feishuChatPlugin", () => {
     });
 
     assert.equal(connectors.get("feishu-1")?.source, "feishu");
+    assert.equal(connectors.getStream("feishu-1")?.stream_key, "chat:oc_1");
+    assert.equal(connectors.getStream("feishu-1")?.thread_id, "feishu:oc_1");
     assert.equal(egress.get("feishu-1")?.source, "feishu");
     await mounted.dispose();
     assert.equal(connectors.get("feishu-1"), undefined);
     assert.equal(egress.get("feishu-1"), undefined);
+    await host.dispose();
+  });
+
+  it("registers one stream per chat on the same installation", async () => {
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    const mounted = await host.plugin(feishuChatPlugin, {
+      installation_id: "feishu-1",
+      org_id: "local-owner",
+      chats: [
+        { chat_id: "oc_1", name: "Ada" },
+        { chat_id: "oc_2", name: "Ben" },
+      ],
+      async spawn() {
+        throw new Error("CLI should not run during register");
+      },
+    });
+    assert.equal(connectors.get("feishu-1"), undefined);
+    assert.deepEqual(
+      connectors.listStreams("feishu-1").map((stream) => stream.thread_id),
+      ["feishu:oc_1", "feishu:oc_2"],
+    );
+    assert.equal(egress.get("feishu-1", "chat:oc_2")?.source, "feishu");
+    await mounted.dispose();
+    assert.equal(connectors.listStreams("feishu-1").length, 0);
     await host.dispose();
   });
 });
@@ -57,6 +92,7 @@ describe("feishuChatDriver", () => {
       reply: true,
       create: false,
       list_title: "conversation",
+      hydrate_on_open: true,
     });
     const picked = feishuChatDriver.install({
       id: "feishu-2",
@@ -145,6 +181,49 @@ describe("feishuChatDriver", () => {
     assert.deepEqual(created.config, { selection: "all", kinds: ["p2p"] });
   });
 
+  it("mounts resolved chats through the host connector registry", async () => {
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    const streams = await feishuChatDriver.resolveStreams(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "pick", chat_ids: ["oc_1"], chat_names: ["Ada"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+      },
+      host,
+      {},
+    );
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].thread_id, "feishu:oc_1");
+    assert.equal(connectors.getStream("feishu-1", "chat:oc_1")?.label, "Ada");
+    const again = await feishuChatDriver.resolveStreams(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "pick", chat_ids: ["oc_1"], chat_names: ["Ada"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+      },
+      host,
+      {},
+    );
+    assert.equal(again.length, 1);
+    assert.equal(connectors.listStreams("feishu-1").length, 1);
+    await host.dispose();
+  });
+
   it("resolves all conversations including p2p", async () => {
     const chats = await resolveFeishuChatTargets(
       { selection: "all" },
@@ -176,8 +255,29 @@ describe("feishuChatDriver", () => {
       { async listMessages() { return { items: [], has_more: false }; } },
     );
     assert.equal(streams.length, 2);
+    assert.equal(streams[0].thread_id, "feishu:oc_g");
+    assert.equal(streams[0].label, "Team");
+    assert.equal(streams[1].thread_id, "feishu:oc_p");
     assert.deepEqual(streams[0].pace, FEISHU_STREAM_PACE);
     assert.deepEqual(streams[1].pace, FEISHU_STREAM_PACE);
+  });
+
+  it("does not list chats when picked names are already stored", async () => {
+    let listed = 0;
+    const chats = await resolveFeishuChatTargets(
+      { selection: "pick", chat_ids: ["oc_1", "oc_2"], chat_names: ["Ada", "Ben"] },
+      {
+        async listAllChats() {
+          listed += 1;
+          return [];
+        },
+      },
+    );
+    assert.equal(listed, 0);
+    assert.deepEqual(chats, [
+      { chat_id: "oc_1", name: "Ada" },
+      { chat_id: "oc_2", name: "Ben" },
+    ]);
   });
 
   it("requires a picked conversation and cannot create a conversation", async () => {

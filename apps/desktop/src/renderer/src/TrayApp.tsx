@@ -47,7 +47,7 @@ export function TrayApp() {
         }
         delayRef.current = skip ? IDLE_POLL_MS : POLL_MS;
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !digestRef.current) {
           setEngine(null);
           setInbox([]);
         }

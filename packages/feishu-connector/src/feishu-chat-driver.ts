@@ -1,5 +1,6 @@
 import {
   ChannelDriverError,
+  requireConnectorStream,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorStream,
@@ -8,16 +9,25 @@ import {
   type JsonValue,
   type NewConnectorInstallation,
 } from "@regenic/domain";
+import type { Host } from "@regenic/plugin-host";
 import {
   LarkCliClient,
   feishuChatOptionLabel,
+  spawnLarkProcess,
   type FeishuChat,
   type FeishuChatMode,
   type FeishuImClient,
 } from "./feishu-cli-client";
-import { FeishuChatEgress } from "./feishu-chat-egress";
-import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
+import { createLarkUserTokenSource } from "./feishu-user-token";
 import { FEISHU_SOURCE } from "./feishu-message";
+import { feishuChatPlugin } from "./plugin";
+import { feishuStreamKey } from "./feishu-streams";
+
+export {
+  FEISHU_STREAM_PACE,
+  createFeishuStreams,
+  feishuStreamKey,
+} from "./feishu-streams";
 import {
   larkCliCatalogHint,
   larkCliReady,
@@ -66,6 +76,7 @@ export const feishuChatDriver: ChannelDriver = {
       reply: true,
       create: false,
       list_title: "conversation",
+      hydrate_on_open: true,
     };
   },
 
@@ -80,30 +91,39 @@ export const feishuChatDriver: ChannelDriver = {
     );
   },
 
-  async resolveStreams(installation, _host, env) {
+  async resolveStreams(installation, host, env) {
     const client = larkClient(env);
     const chats = await resolveFeishuChatTargets(installation.config, client);
-    return createFeishuStreams(installation, chats, client);
+    return mountFeishuChats(host, installation, chats, env, client);
   },
 
-  async resolveThreadStream(installation, thread, _host, env) {
+  async resolveThreadStream(installation, thread, host, env) {
     const client = larkClient(env);
     const chats = await resolveFeishuChatTargets(installation.config, client);
     const chat =
       chats.find((item) => item.chat_id === thread.target) ??
       { chat_id: thread.target };
-    const stream = createFeishuStreams(installation, [chat], client)[0];
-    if (!stream) {
-      throw new ChannelDriverError("sync_failed", "Feishu thread stream failed to mount");
-    }
-    return stream;
+    const streams = await mountFeishuChats(host, installation, [chat], env, client);
+    return (
+      streams[0] ??
+      requireConnectorStream(
+        host.get("connectors"),
+        installation.id,
+        feishuStreamKey(thread.target),
+      )
+    );
   },
 
-  async bindEgress(installation, thread, _host, env) {
-    return new FeishuChatEgress(larkClient(env), {
-      installation_id: installation.id,
-      chat_id: thread.target,
-    });
+  async bindEgress(installation, thread, host, env) {
+    await this.resolveThreadStream(installation, thread, host, env);
+    const egress = host.get("egress").get(
+      installation.id,
+      feishuStreamKey(thread.target),
+    );
+    if (!egress) {
+      throw new ChannelDriverError("send_failed", "Feishu egress adapter failed to mount");
+    }
+    return egress;
   },
 
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt) {
@@ -235,6 +255,12 @@ export async function resolveFeishuChatTargets(
   }
   const ids = feishuPickedChatIds(config);
   const names = configStringList(config, "chat_names");
+  if (names.length === ids.length) {
+    return ids.map((chat_id, index) => ({
+      chat_id,
+      name: names[index],
+    }));
+  }
   const listed = await client.listAllChats(10, ["group", "p2p"]).catch(() => []);
   const byId = new Map(listed.map((chat) => [chat.chat_id, chat]));
   return ids.map((chat_id, index) => {
@@ -247,33 +273,45 @@ export async function resolveFeishuChatTargets(
   });
 }
 
-export const FEISHU_STREAM_PACE = {
-  idle_ms: 15_000,
-  catch_up_pages: 5,
-} as const;
-
-export function createFeishuStreams(
+async function mountFeishuChats(
+  host: Host,
   installation: ConnectorInstallation,
   chats: FeishuChat[],
+  env: NodeJS.ProcessEnv,
   client: FeishuImClient,
-): ConnectorStream[] {
-  return chats.map((chat) => ({
-    stream_key: `chat:${chat.chat_id}`,
-    pace: { ...FEISHU_STREAM_PACE },
-    connector: new FeishuChatPollConnector(client, {
-      connector_id: installation.id,
+): Promise<ConnectorStream[]> {
+  const registry = host.get("connectors");
+  const existing = new Set(
+    registry.listStreams(installation.id).map((stream) => stream.stream_key),
+  );
+  const missing = chats.filter(
+    (chat) => !existing.has(feishuStreamKey(chat.chat_id)),
+  );
+  if (missing.length > 0) {
+    await host.plugin(feishuChatPlugin, {
+      installation_id: installation.id,
       org_id: installation.org_id,
-      chat_id: chat.chat_id,
-      chat_name: chat.name,
-      chat_mode: chat.chat_mode,
-    }),
-  }));
+      chats: missing,
+      command: env.REGENIC_LARK_CLI,
+      env,
+      client,
+    });
+  }
+  const wanted = new Set(chats.map((chat) => feishuStreamKey(chat.chat_id)));
+  return registry
+    .listStreams(installation.id)
+    .filter((stream) => wanted.has(stream.stream_key));
 }
 
 function larkClient(env: NodeJS.ProcessEnv): LarkCliClient {
   return new LarkCliClient({
     command: env.REGENIC_LARK_CLI,
     env,
+    userToken: createLarkUserTokenSource({
+      command: env.REGENIC_LARK_CLI,
+      env,
+      spawn: spawnLarkProcess,
+    }),
   });
 }
 

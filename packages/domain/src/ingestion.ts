@@ -135,6 +135,7 @@ export interface ConnectorCursor {
 export interface PollResult {
   batch: IngestBatch;
   next_cursor?: string;
+  has_more?: boolean;
 }
 
 export interface BackfillRange {
@@ -158,11 +159,54 @@ export interface ChannelConnector {
   syncMembers(scope: ExternalScopeRef): Promise<MembershipBatch>;
 }
 
+export interface BlobObject {
+  hash: string;
+  bytes: Uint8Array;
+  mediaType: string;
+}
+
 export interface BlobStore {
   put(hash: string, bytes: Uint8Array, mediaType: string): Promise<void>;
+  putMany(items: readonly BlobObject[]): Promise<void>;
   get(hash: string): Promise<Uint8Array>;
+  getMany(hashes: readonly string[]): Promise<Map<string, Uint8Array>>;
   delete(hash: string): Promise<void>;
   exists(hash: string): Promise<boolean>;
+}
+
+export async function collectAvailableBlobs(
+  get: (hash: string) => Promise<Uint8Array>,
+  hashes: readonly string[],
+): Promise<Map<string, Uint8Array>> {
+  const found = new Map<string, Uint8Array>();
+  await Promise.all(
+    [...new Set(hashes.filter((hash) => hash.length > 0))].map(async (hash) => {
+      try {
+        found.set(hash, await get(hash));
+      } catch {
+        // Missing or unreadable blobs stay absent; callers treat that as empty.
+      }
+    }),
+  );
+  return found;
+}
+
+export async function putUniqueBlobs(
+  put: (hash: string, bytes: Uint8Array, mediaType: string) => Promise<void>,
+  items: readonly BlobObject[],
+): Promise<void> {
+  const seen = new Set<string>();
+  const unique: BlobObject[] = [];
+  for (const item of items) {
+    if (seen.has(item.hash)) {
+      continue;
+    }
+    seen.add(item.hash);
+    unique.push(item);
+  }
+  await Promise.all(
+    unique.map((item) => put(item.hash, item.bytes, item.mediaType)),
+  );
 }
 
 export interface SourceIdentity {
@@ -195,11 +239,17 @@ export interface EventRecord extends SourceIdentity {
 }
 
 export interface NewEvent extends SourceIdentity {
+  id?: string;
   content_hash: string;
   content_media_type: string;
   content_byte_size: number;
   occurred_at: string;
   expected_head_id: string | null;
+}
+
+export interface IngestCommitRequest {
+  appends: NewEvent[];
+  dispositions: ArrangementDecision[];
 }
 
 export interface EventRevision extends NewEvent {
@@ -233,7 +283,10 @@ export interface EventListQuery {
   target?: string;
   since?: string;
   since_id?: string;
+  before?: string;
+  before_id?: string;
   thread_ids?: string[];
+  limit?: number;
 }
 
 export interface InboxQuery extends EventListQuery {
@@ -248,12 +301,16 @@ export interface InboxSummary {
 
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
+  findBlobs(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobRecord>>;
   findBySourceIdentity(identity: SourceIdentity): Promise<EventRecord | null>;
   getEvent(orgId: string, eventId: string): Promise<EventRecord | null>;
   listEvents(orgId: string, query?: EventListQuery): Promise<EventRecord[]>;
   append(input: NewEvent): Promise<EventRecord>;
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
+  commitIngest(request: IngestCommitRequest): Promise<EventRecord[]>;
   putDisposition(decision: ArrangementDecision): Promise<void>;
   getDisposition(eventId: string): Promise<ArrangementDecision | null>;
   listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]>;

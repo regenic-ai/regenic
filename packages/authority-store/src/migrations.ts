@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 5;
+export const LATEST_SCHEMA_VERSION = 7;
 
 export const MIGRATIONS = [
   {
@@ -144,6 +144,26 @@ export const MIGRATIONS = [
     sql: `
       CREATE INDEX events_org_ingested_idx
         ON events (org_id, ingested_at, id);
+    `,
+  },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE events ADD COLUMN thread_id TEXT;
+
+      UPDATE events
+      SET thread_id = conversation_id(source, external_id, id)
+      WHERE thread_id IS NULL OR thread_id = '';
+
+      CREATE INDEX events_org_thread_occurred_idx
+        ON events (org_id, thread_id, occurred_at, id);
+    `,
+  },
+  {
+    version: 7,
+    sql: `
+      CREATE INDEX source_heads_current_event_idx
+        ON source_heads (current_event_id);
     `,
   },
 ] as const;

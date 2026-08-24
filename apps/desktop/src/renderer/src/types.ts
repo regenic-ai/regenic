@@ -166,10 +166,39 @@ export interface ConnectorSyncView {
   installation: EngineInstallationView;
 }
 
+export interface LocalNetworkWatch {
+  kind: "ok" | "proxy" | "blocked";
+  proxy: string | null;
+  hint: string | null;
+}
+
+export type PullPhase = "idle" | "pulling";
+export type PullStreamPhase = "idle" | "pulling" | "catching_up" | "error";
+
+export interface PullStreamStatus {
+  stream_key: string;
+  thread_id: string | null;
+  label: string | null;
+  phase: PullStreamPhase;
+  last_error: string | null;
+}
+
 export interface PullStatusView {
   interval_ms: number;
   last_tick_at: string | null;
   last_error: string | null;
+  last_error_hint: string | null;
+  network: LocalNetworkWatch;
+  phase: PullPhase;
+  catching_up_count: number;
+  last_accepted_count: number;
+  last_pages: number;
+  streams: PullStreamStatus[];
+}
+
+export interface ProcessMemoryView {
+  rss_bytes: number;
+  heap_used_bytes: number;
 }
 
 export interface PersonalEngineView {
@@ -178,6 +207,7 @@ export interface PersonalEngineView {
   database_path: string | null;
   inbox_count: number;
   inbox_digest?: string;
+  memory?: ProcessMemoryView;
   pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
