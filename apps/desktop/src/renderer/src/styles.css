@@ -1514,6 +1514,11 @@ button {
   margin: 12px 0 0;
 }
 
+.action-hint {
+  color: var(--risk);
+  margin: 6px 0 0;
+}
+
 .tray {
   height: 100%;
   display: flex;

@@ -106,6 +106,16 @@ export function connectorActionError(message: string): string {
   return message;
 }
 
+export function networkWatchLabel(kind: string | undefined): string {
+  if (kind === "proxy") {
+    return "Attention";
+  }
+  if (kind === "blocked") {
+    return "Blocked";
+  }
+  return "Clear";
+}
+
 export function attemptSummary(
   attempt: {
     status: string;

@@ -23,6 +23,7 @@ import {
   engineChip,
   formatChatTime,
   installationStatusLabel,
+  networkWatchLabel,
 } from "./format";
 import {
   applyPrefOverlay,
@@ -93,7 +94,7 @@ function engineRevision(
   const catalog = (engine.catalog ?? [])
     .map((item) => `${item.connector_type}:${item.installed}:${item.setup_ready ? 1 : 0}`)
     .join(",");
-  return `${engine.kernel}|${engine.inbox_count}|${engine.pull?.last_error ?? ""}|${installs}|${catalog}${
+  return `${engine.kernel}|${engine.inbox_count}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${installs}|${catalog}${
     detailed ? `|${engine.pull?.last_tick_at ?? ""}` : ""
   }`;
 }
@@ -250,7 +251,7 @@ export function ConsoleApp() {
         delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
           const merged =
-            !detailed && current?.catalog?.length && !nextEngine.catalog?.length
+            current?.catalog?.length && !nextEngine.catalog?.length
               ? { ...nextEngine, catalog: current.catalog }
               : nextEngine;
           return engineRevision(current, detailed) === engineRevision(merged, detailed)
@@ -1225,9 +1226,21 @@ function EnginePage({
               ? ` · ${formatChatTime(engine.pull.last_tick_at)}`
               : ""}
           </strong>
+          <span>Network</span>
+          <strong>
+            {networkWatchLabel(engine.pull?.network?.kind)}
+            {engine.pull?.network?.kind !== "ok" && engine.pull?.network?.proxy
+              ? ` · ${engine.pull.network.proxy}`
+              : ""}
+          </strong>
         </div>
         {engine.pull?.last_error ? (
           <p className="action-error">{engine.pull.last_error}</p>
+        ) : null}
+        {engine.pull?.last_error_hint || engine.pull?.network?.hint ? (
+          <p className="action-hint">
+            {engine.pull.last_error_hint ?? engine.pull.network?.hint}
+          </p>
         ) : null}
       </section>
       <section className="card">

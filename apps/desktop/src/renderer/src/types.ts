@@ -166,10 +166,18 @@ export interface ConnectorSyncView {
   installation: EngineInstallationView;
 }
 
+export interface LocalNetworkWatch {
+  kind: "ok" | "proxy" | "blocked";
+  proxy: string | null;
+  hint: string | null;
+}
+
 export interface PullStatusView {
   interval_ms: number;
   last_tick_at: string | null;
   last_error: string | null;
+  last_error_hint: string | null;
+  network: LocalNetworkWatch;
 }
 
 export interface PersonalEngineView {

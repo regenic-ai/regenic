@@ -22,6 +22,7 @@ export * from "./memory-ingestion-stores";
 export * from "./memory-connector-runtime-store";
 export * from "./plugin-services";
 export * from "./plugin";
+export * from "./local-network";
 
 /** @unstable RFC 0001 */
 export type ActorType = "human" | "agent" | "system";

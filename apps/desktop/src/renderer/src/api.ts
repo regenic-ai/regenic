@@ -112,10 +112,16 @@ export async function fetchEngine(
   return {
     ...engine,
     inbox_digest: engine.inbox_digest,
-    pull: engine.pull ?? {
-      interval_ms: 0,
-      last_tick_at: null,
-      last_error: null,
+    pull: {
+      interval_ms: engine.pull?.interval_ms ?? 0,
+      last_tick_at: engine.pull?.last_tick_at ?? null,
+      last_error: engine.pull?.last_error ?? null,
+      last_error_hint: engine.pull?.last_error_hint ?? null,
+      network: engine.pull?.network ?? {
+        kind: "ok",
+        proxy: null,
+        hint: null,
+      },
     },
     installations: (engine.installations ?? []).map((item) => ({
       ...item,

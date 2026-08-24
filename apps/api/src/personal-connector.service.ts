@@ -24,7 +24,7 @@ import {
 } from "./personal-connector-view";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
-import { pullStatus } from "./personal-pull-status";
+import { applyPullOutcome, pullStatus } from "./personal-pull-status";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export { PersonalConnectorError } from "./personal-errors";
@@ -110,9 +110,14 @@ export class PersonalConnectorService
       installationId,
       clampPages(maxPages),
       options,
-    ).finally(() => {
-      this.inflight.delete(installationId);
-    });
+    )
+      .catch(async (error) => {
+        await applyPullOutcome([error]);
+        throw error;
+      })
+      .finally(() => {
+        this.inflight.delete(installationId);
+      });
     this.inflight.set(installationId, job);
     return job;
   }
@@ -349,6 +354,7 @@ export class PersonalConnectorService
     try {
       const store = this.runtime.requireHost().get("authority");
       const installations = await store.listInstallations(this.runtime.orgId());
+      const errors: unknown[] = [];
       for (const installation of installations) {
         if (
           installation.status !== "enabled" ||
@@ -357,12 +363,20 @@ export class PersonalConnectorService
         ) {
           continue;
         }
-        await this.catchUp(installation.id, { skipIdle: true });
+        try {
+          await this.sync(
+            installation.id,
+            DEFAULT_MAX_PAGES,
+            { skipIdle: true },
+          );
+        } catch (error) {
+          errors.push(error);
+        }
       }
       pullStatus.last_tick_at = new Date().toISOString();
+      await applyPullOutcome(errors);
     } catch (error) {
-      pullStatus.last_error =
-        error instanceof Error ? error.message : "Connector pull failed";
+      await applyPullOutcome([error]);
     } finally {
       this.ticking = false;
     }
@@ -378,10 +392,8 @@ export class PersonalConnectorService
         options?.skipIdle ? DEFAULT_MAX_PAGES : MAX_PAGES_CAP,
         options,
       );
-      pullStatus.last_error = null;
     } catch (error) {
-      pullStatus.last_error =
-        error instanceof Error ? error.message : "Connector pull failed";
+      await applyPullOutcome([error]);
     }
   }
 

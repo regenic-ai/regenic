@@ -430,7 +430,11 @@ describe("personal /v1/me", () => {
       }
 
       const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
-      assert.equal(light.catalog.length, 0);
+      assert.deepEqual(
+        light.catalog.map((item) => item.connector_type),
+        ["slack-channel", "dsh-session", "feishu-chat"],
+      );
+      assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
 
       const full = await (await fetch(`${origin}/v1/me/engine`)).json();
@@ -699,6 +703,8 @@ describe("personal /v1/me", () => {
       assert.equal(engine.inbox_count, 1);
       assert.match(engine.inbox_digest, /^1:/);
       assert.equal(engine.pull.interval_ms, 0);
+      assert.equal(engine.pull.last_error_hint, null);
+      assert.equal(engine.pull.network.kind, "ok");
       assert.equal(engine.installations[0].id, "slack-1");
       assert.equal(engine.installations[0].connector_type, "slack-channel");
       assert.equal(engine.installations[0].label, "C123");

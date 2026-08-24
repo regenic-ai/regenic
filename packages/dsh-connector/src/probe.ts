@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
-import type { ConnectorCatalogProbe } from "@regenic/domain";
+import {
+  LOCAL_NETWORK_BLOCKED_HINT,
+  LOCAL_PROXY_HINT,
+  watchLocalFetchFailure,
+  type ConnectorCatalogProbe,
+  type LocalNetworkKind,
+  type TcpConnect,
+} from "@regenic/domain";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
 
 const PROBE_TTL_MS = 20_000;
@@ -21,16 +28,23 @@ export interface DshWebProbe {
   hosted: boolean;
   up: boolean;
   command_present: boolean;
+  network_kind?: LocalNetworkKind;
 }
 
 let cache: { at: number; probe: DshWebProbe } | null = null;
 
 export function dshWebCatalogHint(input: DshWebProbe): string {
-  if (input.hosted) {
-    return input.up ? DSH_CLUSTER_READY_HINT : DSH_CLUSTER_DOWN_HINT;
-  }
   if (input.up) {
-    return DSH_WEB_READY_HINT;
+    return input.hosted ? DSH_CLUSTER_READY_HINT : DSH_WEB_READY_HINT;
+  }
+  if (input.network_kind === "proxy") {
+    return LOCAL_PROXY_HINT;
+  }
+  if (input.network_kind === "blocked") {
+    return LOCAL_NETWORK_BLOCKED_HINT;
+  }
+  if (input.hosted) {
+    return DSH_CLUSTER_DOWN_HINT;
   }
   if (!input.command_present) {
     return DSH_WEB_MISSING_HINT;
@@ -47,6 +61,7 @@ export async function probeDshCatalog(options: {
   fetch?: typeof fetch;
   probeCommand?: (command: string) => Promise<boolean>;
   now?: () => number;
+  connect?: TcpConnect;
 } = {}): Promise<ConnectorCatalogProbe> {
   const probe = await probeDshWeb(options);
   return {
@@ -68,6 +83,7 @@ export async function probeDshWeb(options: {
   fetch?: typeof fetch;
   probeCommand?: (command: string) => Promise<boolean>;
   now?: () => number;
+  connect?: TcpConnect;
 } = {}): Promise<DshWebProbe> {
   const now = options.now?.() ?? Date.now();
   const ttl = cache?.probe.up ? PROBE_TTL_MS : PROBE_FAIL_TTL_MS;
@@ -87,16 +103,32 @@ async function runDshWebProbe(options: {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   probeCommand?: (command: string) => Promise<boolean>;
+  connect?: TcpConnect;
 }): Promise<DshWebProbe> {
   const env = options.env ?? process.env;
   const hosted = Boolean(env.REGENIC_DSH_BASE_URL?.trim());
   const url = dshProbeUrl(env);
-  const up = await probeLocalService(url, options.fetch ?? fetch);
+  const reached = await probeLocalService(url, options.fetch ?? fetch);
+  const networkKind = reached.up
+    ? "ok"
+    : (
+        await watchLocalFetchFailure({
+          error: reached.error ?? new Error("fetch failed"),
+          url,
+          env,
+          connect: options.connect,
+        })
+      ).kind;
   const commandPresent =
-    hosted || up
+    hosted || reached.up
       ? true
       : await (options.probeCommand ?? probeLocalCommand)("dsh");
-  return { hosted, up, command_present: commandPresent };
+  return {
+    hosted,
+    up: reached.up,
+    command_present: commandPresent,
+    network_kind: networkKind,
+  };
 }
 
 export function dshWebProbeUrl(baseUrl: string): string {
@@ -118,7 +150,7 @@ function dshProbeUrl(env: NodeJS.ProcessEnv): string {
 async function probeLocalService(
   url: string,
   fetchImpl: typeof fetch,
-): Promise<boolean> {
+): Promise<{ up: boolean; error?: unknown }> {
   try {
     await fetchImpl(dshWebProbeUrl(url), {
       method: "POST",
@@ -131,9 +163,9 @@ async function probeLocalService(
       }),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return true;
-  } catch {
-    return false;
+    return { up: true };
+  } catch (error) {
+    return { up: false, error };
   }
 }
 
