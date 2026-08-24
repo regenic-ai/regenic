@@ -314,10 +314,11 @@ export class SqliteAuthorityStore
       .prepare(
         `
           SELECT e.ingested_at AS latest_at, e.id AS latest_id
-          FROM message_dispositions d
-          JOIN events e ON e.id = d.event_id
-          JOIN source_heads h ON h.current_event_id = e.id
-          WHERE d.org_id = ? AND d.disposition = 'current_work'
+          FROM events e
+          JOIN message_dispositions d ON d.event_id = e.id
+          WHERE e.org_id = ?
+            AND d.disposition = 'current_work'
+            AND ${isCurrentHeadSql("e")}
           ORDER BY e.ingested_at DESC, e.id DESC
           LIMIT 1
         `,
@@ -328,10 +329,10 @@ export class SqliteAuthorityStore
         `
           SELECT COUNT(*) AS count FROM (
             SELECT e.thread_id AS thread_id
-            FROM message_dispositions d
-            JOIN events e ON e.id = d.event_id
-            JOIN source_heads h ON h.current_event_id = e.id
-            WHERE d.org_id = ?
+            FROM events e
+            JOIN message_dispositions d ON d.event_id = e.id
+            WHERE e.org_id = ?
+              AND ${isCurrentHeadSql("e")}
             GROUP BY e.thread_id
             HAVING
               SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
@@ -1053,15 +1054,15 @@ export class SqliteAuthorityStore
               ) AS rn
             FROM message_dispositions d
             JOIN events e ON e.id = d.event_id
-            JOIN source_heads h ON h.current_event_id = e.id
             WHERE ${visible.clauses.join(" AND ")}
+              AND ${isCurrentHeadSql("e")}
               AND d.reason_codes_json NOT LIKE '%thread_status%'
               AND e.thread_id IN (
                 SELECT e2.thread_id
                 FROM message_dispositions d2
                 JOIN events e2 ON e2.id = d2.event_id
-                JOIN source_heads h2 ON h2.current_event_id = e2.id
                 WHERE ${current.clauses.join(" AND ")}
+                  AND ${isCurrentHeadSql("e2", "h2")}
               )
           ) ranked
           WHERE rn = 1
@@ -1077,8 +1078,8 @@ export class SqliteAuthorityStore
           SELECT e2.thread_id
           FROM message_dispositions d2
           JOIN events e2 ON e2.id = d2.event_id
-          JOIN source_heads h2 ON h2.current_event_id = e2.id
           WHERE d2.org_id = ? AND d2.disposition = 'current_work'
+            AND ${isCurrentHeadSql("e2", "h2")}
         )`);
         params.push(orgId);
       }
@@ -1101,8 +1102,8 @@ export class SqliteAuthorityStore
         SELECT ${INBOX_COLUMNS}
         FROM message_dispositions d
         JOIN events e ON e.id = d.event_id
-        JOIN source_heads h ON h.current_event_id = e.id
         WHERE ${clauses.join(" AND ")}
+          AND ${isCurrentHeadSql("e")}
         ${tail.orderSql}
       `,
       params: [...params, ...tail.orderParams],
@@ -1279,6 +1280,13 @@ export class SqliteAuthorityStore
 
 function inboxUsesNewestFirst(query?: InboxQuery): boolean {
   return Boolean(!query?.heads && normalizeInboxLimit(query?.limit));
+}
+
+function isCurrentHeadSql(event = "e", heads = "h"): string {
+  return `EXISTS (
+    SELECT 1 FROM source_heads ${heads}
+    WHERE ${heads}.current_event_id = ${event}.id
+  )`;
 }
 
 function inboxTail(query?: InboxQuery): {

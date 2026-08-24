@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 6);
+    assert.equal(authorityStore.schemaVersion, 7);
     authorityStore.close();
   });
 
@@ -217,12 +217,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 7");
+    database.pragma("user_version = 8");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 7 is newer than supported 6/,
+      /schema 8 is newer than supported 7/,
     );
   });
 
@@ -451,7 +451,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 6);
+    assert.equal(store.schemaVersion, 7);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);
@@ -504,7 +504,29 @@ describe("local ingestion persistence", () => {
       }
     });
     seed();
+    const latestPlan = db
+      .prepare(
+        `
+          EXPLAIN QUERY PLAN
+          SELECT e.ingested_at, e.id
+          FROM events e
+          JOIN message_dispositions d ON d.event_id = e.id
+          WHERE e.org_id = 'local-owner'
+            AND d.disposition = 'current_work'
+            AND EXISTS (
+              SELECT 1 FROM source_heads h
+              WHERE h.current_event_id = e.id
+            )
+          ORDER BY e.ingested_at DESC, e.id DESC
+          LIMIT 1
+        `,
+      )
+      .all()
+      .map((row) => row.detail)
+      .join("\n");
     db.close();
+    assert.match(latestPlan, /source_heads_current_event_idx/);
+    assert.doesNotMatch(latestPlan, /\bSCAN h\b/);
 
     const heads = await store.listInbox("local-owner", { heads: true });
     const summary = await store.summarizeInbox("local-owner");

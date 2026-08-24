@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 6;
+export const LATEST_SCHEMA_VERSION = 7;
 
 export const MIGRATIONS = [
   {
@@ -157,6 +157,13 @@ export const MIGRATIONS = [
 
       CREATE INDEX events_org_thread_occurred_idx
         ON events (org_id, thread_id, occurred_at, id);
+    `,
+  },
+  {
+    version: 7,
+    sql: `
+      CREATE INDEX source_heads_current_event_idx
+        ON source_heads (current_event_id);
     `,
   },
 ] as const;
