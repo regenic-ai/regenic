@@ -76,7 +76,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 只是对驱动声明的展示。
 `list_title` 同样由驱动声明：聊天渠道设 `conversation`，列表标题用
 `conversation_label`（群名、频道名、单聊对方）；会话 Agent 设 `prompt`，
-列表标题用该会话第一条用户消息；不写则用可见消息脸。桌面不按渠道名分支。旧 Event 缺会话名时，驱动可实现
+列表标题用该会话第一条用户消息（跳过开头的 system 注入，找不到才回退到可见消息脸，避免退化成 session id）；不写则用可见消息脸。桌面不按渠道名分支。旧 Event 缺会话名时，驱动可实现
 `resolveConversationLabels`，inbox 装饰层补上，不改历史正文。
 
 对端只有不可见劳动、且还没有可见回复时，连接器可另发一条

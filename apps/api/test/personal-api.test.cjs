@@ -562,6 +562,135 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("titles DSH list heads from the first user message after system injects", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await authority.createInstallation({
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:9" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    });
+    const injects = Array.from({ length: 30 }, (_, index) =>
+      channelRecord({
+        channel: "dsh",
+        kind: "system",
+        direction: "inbound",
+        external_id: `session-long:${index + 1}`,
+        occurred_at: `2026-08-21T00:00:${String(index).padStart(2, "0")}.000Z`,
+        actor_id: "plugin",
+        scope_id: "session-long",
+        text: `injected context ${index + 1}: skill and memory preamble`,
+      }),
+    );
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-prompt-injects-1",
+      received_at: "2026-08-21T00:01:00.000Z",
+      records: [
+        ...injects,
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-long:31",
+          occurred_at: "2026-08-21T00:00:31.000Z",
+          actor_id: "user",
+          scope_id: "session-long",
+          text: "只用一句话回复：pong",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-long:32",
+          occurred_at: "2026-08-21T00:00:32.000Z",
+          actor_id: "assistant",
+          scope_id: "session-long",
+          text: "pong",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      assert.equal(heads.length, 1);
+      assert.equal(heads[0].list_title, "prompt");
+      assert.equal(heads[0].conversation_label, "只用一句话回复：pong");
+      assert.equal(heads[0].body_text, undefined);
+      assert.equal(heads[0].event.external_id, "session-long:32");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps a DSH list face when the first user prompt is still missing", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await authority.createInstallation({
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:9" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    });
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "dsh-prompt-missing-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "system",
+          direction: "inbound",
+          external_id: "session-bare:1",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "plugin",
+          scope_id: "session-bare",
+          text: "injected skill context",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "assistant",
+          direction: "inbound",
+          external_id: "session-bare:2",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "assistant",
+          scope_id: "session-bare",
+          text: "这是对方给我的初稿：一、Bioby AI品牌端介绍",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      assert.equal(heads.length, 1);
+      assert.equal(heads[0].list_title, "prompt");
+      assert.equal(heads[0].conversation_label, null);
+      assert.equal(
+        heads[0].body_text,
+        "这是对方给我的初稿：一、Bioby AI品牌端介绍",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("persists a conversation title and pin across inbox reads", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

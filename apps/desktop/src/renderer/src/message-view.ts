@@ -140,11 +140,17 @@ export function threadTitle(thread: InboxThread): string {
     );
   }
   if (thread.list_title === "prompt") {
-    return (
+    const prompt =
       thread.conversation_label?.replace(/\s+/g, " ").trim() ||
-      firstUserLine(thread) ||
-      thread.label
-    );
+      firstUserLine(thread);
+    if (prompt) {
+      return prompt;
+    }
+    const face = threadFace(thread);
+    if (face.activity !== "working") {
+      return firstLine(face.body_text, 120) || thread.label;
+    }
+    return thread.label;
   }
   const conversation = thread.conversation_label?.replace(/\s+/g, " ").trim();
   if (conversation) {

@@ -338,6 +338,26 @@ describe("thread activity", () => {
     assert.equal(threadTitle(headsOnly), "只用一句话回复：pong");
   });
 
+  it("falls back to the visible face when a prompt title is missing", () => {
+    const session = thread(
+      [
+        item({
+          id: "in-1",
+          external_id: "session-1:49",
+          text: "这是对方给我的初稿：一、Bioby AI品牌端介绍",
+          kind: "assistant",
+          direction: "inbound",
+        }),
+      ],
+      {
+        conversation_label: null,
+        list_title: "prompt",
+        label: "session-…af07",
+      },
+    );
+    assert.equal(threadTitle(session), "这是对方给我的初稿：一、Bioby AI品牌端介绍");
+  });
+
   it("does not title the thread from a working marker", () => {
     const titled = thread([
       item({

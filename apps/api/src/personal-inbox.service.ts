@@ -270,7 +270,8 @@ export class PersonalInboxService {
           : view;
       if (
         query.heads === true &&
-        (titled.list_title === "conversation" || titled.list_title === "prompt")
+        (titled.list_title === "conversation" ||
+          (titled.list_title === "prompt" && titled.conversation_label))
       ) {
         return { ...titled, body_text: undefined, attachments: undefined };
       }
@@ -402,7 +403,8 @@ async function conversationLabelsFor(
   return drivers.resolveConversationLabels(installations, missing);
 }
 
-const PROMPT_SCAN_LIMIT = 24;
+const PROMPT_USER_SCAN_LIMIT = 24;
+const PROMPT_READ_LIMIT = 128;
 
 async function promptLabelsFor(
   orgId: string,
@@ -508,13 +510,14 @@ async function firstUserTextIn(
   authority: AuthorityStore,
   blobs: BlobStore,
 ): Promise<string | undefined> {
-  let scanned = 0;
+  let reads = 0;
+  let users = 0;
   for (const item of items) {
     if (isThreadStatusItem(item) || item.event.operation === "tombstone") {
       continue;
     }
-    scanned += 1;
-    if (scanned > PROMPT_SCAN_LIMIT) {
+    reads += 1;
+    if (reads > PROMPT_READ_LIMIT) {
       break;
     }
     const cached = resolved.find((row) => row.item.event.id === item.event.id);
@@ -527,8 +530,15 @@ async function firstUserTextIn(
         "meta",
       ));
     const surface = messageSurfaceOf(item.event, body);
+    if (surface.kind !== "user") {
+      continue;
+    }
+    users += 1;
+    if (users > PROMPT_USER_SCAN_LIMIT) {
+      break;
+    }
     const text = listFaceText(body.body_text);
-    if (surface.kind === "user" && text) {
+    if (text) {
       return text;
     }
   }

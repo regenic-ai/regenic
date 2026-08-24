@@ -91,7 +91,9 @@ not a third `activity` value; it is presentation of the driver flag.
 `list_title` is the same kind of declaration: chat channels set
 `conversation` so the list title is `conversation_label` (group, channel,
 or DM counterpart). Session agents set `prompt` so the list title is the
-first user message. Omit it to keep the visible-message face. The desktop
+first user message (skip leading system injects; if none is found, keep
+the visible-message face so the row does not collapse to a session id).
+Omit it to keep the visible-message face. The desktop
 does not branch on channel name. When an old
 Event has no conversation name, a driver may implement
 `resolveConversationLabels` so inbox decoration can fill it without
