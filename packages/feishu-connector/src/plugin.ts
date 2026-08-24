@@ -3,6 +3,7 @@ import { definePlugin } from "@regenic/plugin-host";
 import {
   LarkCliClient,
   spawnLarkProcess,
+  type FeishuChat,
   type FeishuImClient,
   type FeishuSpawn,
 } from "./feishu-cli-client";
@@ -11,13 +12,14 @@ import {
   type FeishuUserTokenSource,
 } from "./feishu-user-token";
 import { FeishuChatEgress } from "./feishu-chat-egress";
-import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
+import { createFeishuStreams, feishuStreamKey } from "./feishu-streams";
 
 export interface FeishuChatPluginConfig {
   installation_id: string;
   org_id: string;
-  chat_id: string;
+  chat_id?: string;
   chat_name?: string;
+  chats?: FeishuChat[];
   command?: string;
   env?: NodeJS.ProcessEnv;
   spawn?: FeishuSpawn;
@@ -32,6 +34,7 @@ export const feishuChatPlugin = definePlugin<FeishuChatPluginConfig>({
   name: "feishu-chat",
   inject: ["connectors", "egress"],
   apply(ctx, config) {
+    const chats = pluginChats(config);
     const client =
       config.client ??
       new LarkCliClient({
@@ -49,28 +52,54 @@ export const feishuChatPlugin = definePlugin<FeishuChatPluginConfig>({
                 spawn: spawnLarkProcess,
               })),
       });
-    const connector = new FeishuChatPollConnector(client, {
-      connector_id: config.installation_id,
-      org_id: config.org_id,
-      chat_id: config.chat_id,
-      chat_name: config.chat_name,
-      page_size: config.page_size,
-      now: config.now,
-    });
-    const egress = new FeishuChatEgress(client, {
-      installation_id: config.installation_id,
-      chat_id: config.chat_id,
-    });
+    const streams = createFeishuStreams(
+      {
+        id: config.installation_id,
+        org_id: config.org_id,
+      },
+      chats,
+      client,
+      config.page_size,
+      config.now,
+    );
     ctx.effect(() => {
-      const disposeConnector = ctx.get("connectors").register(
-        config.installation_id,
-        connector,
-      );
-      const disposeEgress = ctx.get("egress").register(config.installation_id, egress);
+      const disposers = streams.flatMap((stream) => {
+        const chatId = stream.thread_id?.slice("feishu:".length) ?? "";
+        const connector = ctx.get("connectors").register(
+          config.installation_id,
+          stream.connector,
+          {
+            stream_key: stream.stream_key,
+            thread_id: stream.thread_id,
+            label: stream.label,
+            pace: stream.pace,
+          },
+        );
+        const egress = ctx.get("egress").register(
+          config.installation_id,
+          new FeishuChatEgress(client, {
+            installation_id: config.installation_id,
+            chat_id: chatId,
+          }),
+          feishuStreamKey(chatId),
+        );
+        return [connector, egress];
+      });
       return () => {
-        disposeConnector();
-        disposeEgress();
+        for (const dispose of disposers.reverse()) {
+          dispose();
+        }
       };
     });
   },
 });
+
+function pluginChats(config: FeishuChatPluginConfig): FeishuChat[] {
+  if (config.chats && config.chats.length > 0) {
+    return config.chats;
+  }
+  if (config.chat_id) {
+    return [{ chat_id: config.chat_id, name: config.chat_name }];
+  }
+  throw new Error("Feishu plugin requires chat_id or chats");
+}

@@ -218,18 +218,21 @@ export class PersonalConnectorService
     } catch {
       return;
     }
-    if (thread.source !== "feishu") {
-      return;
-    }
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installations = await store.listInstallations(this.runtime.orgId());
+    if (!this.drivers.hydrateOnOpen(installations, thread)) {
+      return;
+    }
     for (const installation of installations) {
       if (installation.status !== "enabled") {
         continue;
       }
       const driver = this.drivers.get(installation.connector_type);
       if (!driver?.matchesThread(installation, thread)) {
+        continue;
+      }
+      if (!driver.capabilities(installation).hydrate_on_open) {
         continue;
       }
       let stream: ConnectorStream;
@@ -1042,10 +1045,7 @@ export function shouldHydrateOpenedInbox(query: {
   heads?: boolean;
 }): boolean {
   return Boolean(
-    query.thread_id?.startsWith("feishu:") &&
-      !query.since &&
-      !query.before &&
-      !query.heads,
+    query.thread_id && !query.since && !query.before && !query.heads,
   );
 }
 

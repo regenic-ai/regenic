@@ -22,9 +22,7 @@ function withEnv(overrides, run) {
       process.env[key] = value;
     }
   }
-  try {
-    return run();
-  } finally {
+  const restore = () => {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) {
         delete process.env[key];
@@ -32,6 +30,17 @@ function withEnv(overrides, run) {
         process.env[key] = value;
       }
     }
+  };
+  try {
+    const result = run();
+    if (result && typeof result.then === "function") {
+      return Promise.resolve(result).finally(restore);
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
   }
 }
 
@@ -56,10 +65,40 @@ describe("dshSessionPlugin", () => {
     });
 
     assert.equal(connectors.get("dsh-1")?.source, "dsh");
+    assert.equal(connectors.getStream("dsh-1")?.stream_key, "session:dsh-main");
+    assert.equal(connectors.getStream("dsh-1")?.thread_id, "dsh:dsh-main");
     assert.equal(egress.get("dsh-1")?.source, "dsh");
     await mounted.dispose();
     assert.equal(connectors.get("dsh-1"), undefined);
     assert.equal(egress.get("dsh-1"), undefined);
+    await host.dispose();
+  });
+
+  it("registers one stream per session on the same installation", async () => {
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    const mounted = await host.plugin(dshSessionPlugin, {
+      installation_id: "dsh-1",
+      org_id: "local-owner",
+      transport: "cli",
+      session_ids: ["sess-a", "sess-b"],
+    });
+    assert.equal(connectors.get("dsh-1"), undefined);
+    assert.deepEqual(
+      connectors.listStreams("dsh-1").map((stream) => stream.thread_id),
+      ["dsh:sess-a", "dsh:sess-b"],
+    );
+    assert.equal(egress.get("dsh-1", "session:sess-b")?.source, "dsh");
+    await mounted.dispose();
+    assert.equal(connectors.listStreams("dsh-1").length, 0);
     await host.dispose();
   });
 
@@ -199,6 +238,40 @@ describe("dshSessionPlugin", () => {
         await_reply: true,
         list_title: "prompt",
       });
+    });
+  });
+
+  it("mounts a cli session through the host connector registry", async () => {
+    await withEnv({ REGENIC_DSH_BASE_URL: undefined }, async () => {
+      const host = await createHost();
+      const connectors = new MemoryConnectorRegistry();
+      const egress = new MemoryEgressRegistry();
+      await host.plugin(definePlugin({
+        name: "registries",
+        apply(ctx) {
+          ctx.provide("connectors", connectors);
+          ctx.provide("egress", egress);
+        },
+      }));
+      const installation = {
+        id: "dsh-1",
+        org_id: "local-owner",
+        connector_type: "dsh-session",
+        status: "enabled",
+        config: { transport: "cli", mailbox: "dsh-main" },
+        created_at: "2026-08-21T00:00:00.000Z",
+      };
+      const streams = await dshSessionDriver.resolveStreams(installation, host, {});
+      assert.equal(streams.length, 1);
+      assert.equal(streams[0].thread_id, "dsh:dsh-main");
+      assert.equal(
+        connectors.getStream("dsh-1", "session:dsh-main")?.thread_id,
+        "dsh:dsh-main",
+      );
+      const again = await dshSessionDriver.resolveStreams(installation, host, {});
+      assert.equal(again.length, 1);
+      assert.equal(connectors.listStreams("dsh-1").length, 1);
+      await host.dispose();
     });
   });
 

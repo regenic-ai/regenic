@@ -25,8 +25,41 @@ describe("slackChannelPlugin", () => {
     });
 
     assert.equal(registry.get("slack-1")?.source, "slack");
+    assert.equal(registry.getStream("slack-1")?.stream_key, "channel:C123");
+    assert.equal(registry.getStream("slack-1")?.thread_id, "slack:C123");
     await slack.dispose();
     assert.equal(registry.get("slack-1"), undefined);
+    await host.dispose();
+  });
+
+  it("mounts the channel through the host connector registry", async () => {
+    const host = await createHost();
+    const registry = new MemoryConnectorRegistry();
+    await host.plugin(definePlugin({
+      name: "connectors",
+      apply(ctx) {
+        ctx.provide("connectors", registry);
+      },
+    }));
+    const installation = {
+      id: "slack-1",
+      org_id: "local-owner",
+      connector_type: "slack-channel",
+      status: "enabled",
+      config: { channel_id: "C123", channel_name: "eng" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    const streams = await slackChannelDriver.resolveStreams(installation, host, {
+      REGENIC_SLACK_TOKEN: "xoxb-test",
+    });
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].thread_id, "slack:C123");
+    assert.equal(registry.getStream("slack-1", "channel:C123")?.label, "eng");
+    const again = await slackChannelDriver.resolveStreams(installation, host, {
+      REGENIC_SLACK_TOKEN: "xoxb-test",
+    });
+    assert.equal(again.length, 1);
+    assert.equal(registry.listStreams("slack-1").length, 1);
     await host.dispose();
   });
 

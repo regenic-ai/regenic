@@ -92,7 +92,7 @@ describe("opened inbox hydrate", () => {
     );
     assert.equal(shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", heads: true }), false);
     assert.equal(shouldHydrateOpenedInbox({ heads: true }), false);
-    assert.equal(shouldHydrateOpenedInbox({ thread_id: "dsh:session-x" }), false);
+    assert.equal(shouldHydrateOpenedInbox({ thread_id: "dsh:session-x" }), true);
   });
 
   it("does not wait for hydrate when the local thread already has a page", () => {

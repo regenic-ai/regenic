@@ -36,6 +36,11 @@ export interface ChannelCapabilities {
    * Omit it to keep the visible-message face.
    */
   list_title?: ListTitleMode;
+  /**
+   * Opening a conversation should pull a recent page through this driver.
+   * Chat history sources set this. Session journals leave it unset.
+   */
+  hydrate_on_open?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -55,7 +60,7 @@ export interface ConnectorStreamPace {
 
 export interface ConnectorStream {
   stream_key: string;
-  connector: Pick<ChannelConnector, "poll">;
+  connector: Pick<ChannelConnector, "poll" | "source">;
   pace?: ConnectorStreamPace;
   thread_id?: string;
   label?: string;
@@ -304,6 +309,16 @@ export class ChannelDriverRegistry {
 
   canCreate(installations: ConnectorInstallation[]): boolean {
     return Boolean(this.findCreatable(installations));
+  }
+
+  hydrateOnOpen(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): boolean {
+    const found = this.findForThread(installations, thread);
+    return Boolean(
+      found && found.driver.capabilities(found.installation).hydrate_on_open,
+    );
   }
 }
 

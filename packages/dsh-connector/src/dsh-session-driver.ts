@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Host } from "@regenic/plugin-host";
 import {
   ChannelDriverError,
+  requireConnectorStream,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorStream,
@@ -9,15 +10,13 @@ import {
   type DeliveryReceipt,
   type JsonValue,
   type NewConnectorInstallation,
-  type RegisteredEgress,
 } from "@regenic/domain";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
-import { DshSessionEgress } from "./dsh-session-egress";
-import { DshSessionPollConnector } from "./dsh-session-poll-connector";
 import {
   dshSessionKey,
   dshSessionPlugin,
   dshSessionPluginConfigFromInstallation,
+  dshStreamKey,
   resolveEffectiveDshTransport,
 } from "./plugin";
 import { loopbackHttpUrl, resolveOperatorDshBaseUrl } from "./dsh-url";
@@ -106,12 +105,11 @@ export const dshSessionDriver: ChannelDriver = {
     if (transport === "cli") {
       return [await mountInstalled(host, installation, env)];
     }
-    const client = dshWebRpcClient(installation, env);
     const pinned = configString(installation.config, "session_id");
-    const sessionIds = pinned ? [pinned] : await client.listAllSessionIds();
-    return sessionIds.map((sessionId) =>
-      sessionStream(installation, client, sessionId),
-    );
+    const sessionIds = pinned
+      ? [pinned]
+      : await dshWebRpcClient(installation, env).listAllSessionIds();
+    return mountDshSessions(host, installation, env, sessionIds);
   },
 
   async resolveThreadStream(installation, thread, host, env) {
@@ -119,23 +117,24 @@ export const dshSessionDriver: ChannelDriver = {
     if (transport === "cli") {
       return mountInstalled(host, installation, env);
     }
-    return sessionStream(installation, dshWebRpcClient(installation, env), thread.target);
+    const streams = await mountDshSessions(host, installation, env, [thread.target]);
+    return streams[0] ?? requireConnectorStream(
+      host.get("connectors"),
+      installation.id,
+      dshStreamKey(thread.target),
+    );
   },
 
   async bindEgress(installation, thread, host, env) {
-    const transport = resolveEffectiveDshTransport(installation.config, env);
-    if (transport === "cli") {
-      await mountInstalled(host, installation, env);
-      const egress = host.get("egress").get(installation.id);
-      if (!egress) {
-        throw new ChannelDriverError("send_failed", "DSH egress adapter failed to mount");
-      }
-      return egress;
+    await this.resolveThreadStream(installation, thread, host, env);
+    const egress = host.get("egress").get(
+      installation.id,
+      dshStreamKey(thread.target),
+    );
+    if (!egress) {
+      throw new ChannelDriverError("send_failed", "DSH egress adapter failed to mount");
     }
-    return new DshSessionEgress(dshWebRpcClient(installation, env), {
-      installation_id: installation.id,
-      session_id: thread.target,
-    });
+    return egress;
   },
 
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt) {
@@ -147,19 +146,41 @@ export const dshSessionDriver: ChannelDriver = {
   },
 };
 
-function sessionStream(
-  installation: ConnectorInstallation,
-  client: DshWebRpcClient,
-  sessionId: string,
-): ConnectorStream {
-  return {
-    stream_key: `session:${sessionId}`,
-    connector: new DshSessionPollConnector(client, {
-      connector_id: installation.id,
-      org_id: installation.org_id,
-      session_id: sessionId,
-    }),
-  };
+export async function mountDshSessions(
+  host: Host,
+  installation: { id: string; org_id: string; config: Record<string, unknown> },
+  env: NodeJS.ProcessEnv,
+  sessionIds: string[],
+  extras: { fetch?: DshFetch; access_token?: string } = {},
+): Promise<ConnectorStream[]> {
+  if (sessionIds.length === 0) {
+    return [];
+  }
+  const registry = host.get("connectors");
+  const existing = new Set(
+    registry.listStreams(installation.id).map((stream) => stream.stream_key),
+  );
+  const missing = sessionIds.filter(
+    (sessionId) => !existing.has(dshStreamKey(sessionId)),
+  );
+  if (missing.length > 0) {
+    const pluginConfig = dshSessionPluginConfigFromInstallation(installation, {
+      env,
+      access_token: extras.access_token ?? env.REGENIC_DSH_TOKEN,
+      fetch: extras.fetch,
+    });
+    if (pluginConfig.transport === "web" && !pluginConfig.base_url) {
+      pluginConfig.base_url = resolveDshWebBaseUrl(installation, env);
+    }
+    await host.plugin(dshSessionPlugin, {
+      ...pluginConfig,
+      session_ids: missing,
+    });
+  }
+  const wanted = new Set(sessionIds.map((sessionId) => dshStreamKey(sessionId)));
+  return registry
+    .listStreams(installation.id)
+    .filter((stream) => wanted.has(stream.stream_key));
 }
 
 async function mountInstalled(
@@ -167,25 +188,16 @@ async function mountInstalled(
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
 ): Promise<ConnectorStream> {
-  if (!host.get("connectors").get(installation.id)) {
-    await host.plugin(dshSessionPlugin, {
-      ...dshSessionPluginConfigFromInstallation(installation, {
-        env,
-        access_token: env.REGENIC_DSH_TOKEN,
-      }),
-      command: "dsh",
-      workdir: undefined,
-      base_url: resolveDshWebBaseUrl(installation, env),
-    });
-  }
-  const connector = host.get("connectors").get(installation.id);
-  if (!connector) {
-    throw new ChannelDriverError("sync_failed", "Connector failed to mount");
-  }
-  return {
-    stream_key: `session:${dshSessionKey(installation.config, installation.id)}`,
-    connector,
-  };
+  const sessionId = dshSessionKey(installation.config, installation.id);
+  const streams = await mountDshSessions(host, installation, env, [sessionId]);
+  return (
+    streams[0] ??
+    requireConnectorStream(
+      host.get("connectors"),
+      installation.id,
+      dshStreamKey(sessionId),
+    )
+  );
 }
 
 export async function createDshConversation(
