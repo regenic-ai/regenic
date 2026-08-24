@@ -23,8 +23,9 @@ import {
   estimateMessageHeight,
   prefixOffsets,
   isStuckToEnd,
+  shouldLoadOlder,
+  shouldRearmLoadOlder,
   THREAD_OVERSCAN,
-  THREAD_STICK_PX,
 } from "./thread-window";
 import type { InboxViewItem } from "./types";
 
@@ -60,6 +61,10 @@ export const ThreadMessageList = memo(
   const stickRef = useRef(true);
   const pinRef = useRef<{ first: string; last: string; height: number } | null>(null);
   const expectPrependRef = useRef(false);
+  const loadArmedRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
+  const onLoadOlderRef = useRef(onLoadOlder);
+  onLoadOlderRef.current = onLoadOlder;
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const measureFrame = useRef<number | null>(null);
@@ -113,6 +118,8 @@ export const ThreadMessageList = memo(
     stickRef.current = true;
     pinRef.current = null;
     expectPrependRef.current = false;
+    loadArmedRef.current = true;
+    lastScrollTopRef.current = 0;
     syncLayout(true);
   }, [threadId, syncLayout]);
 
@@ -155,13 +162,29 @@ export const ThreadMessageList = memo(
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
-    if (!node || items.length === 0 || !hasOlder || loadingOlder || opening) {
+    if (!node || items.length === 0) {
       return;
     }
-    if (node.scrollTop <= THREAD_STICK_PX) {
-      onLoadOlder?.();
+    lastScrollTopRef.current = node.scrollTop;
+    if (shouldRearmLoadOlder(node.scrollTop)) {
+      loadArmedRef.current = true;
     }
-  }, [items, hasOlder, loadingOlder, opening, onLoadOlder]);
+    if (
+      shouldLoadOlder({
+        hasOlder,
+        loadingOlder,
+        opening,
+        scrollTop: node.scrollTop,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+        scrolledUp: false,
+        armed: loadArmedRef.current,
+      })
+    ) {
+      loadArmedRef.current = false;
+      onLoadOlderRef.current?.();
+    }
+  }, [items, hasOlder, loadingOlder, opening]);
 
   useLayoutEffect(() => {
     return () => {
@@ -221,14 +244,27 @@ export const ThreadMessageList = memo(
           return;
         }
         stickRef.current = isStuckToEnd(node);
+        const scrollTop = node.scrollTop;
+        const scrolledUp = scrollTop < lastScrollTopRef.current;
+        lastScrollTopRef.current = scrollTop;
+        if (shouldRearmLoadOlder(scrollTop)) {
+          loadArmedRef.current = true;
+        }
         syncLayout();
         if (
-          hasOlder &&
-          !loadingOlder &&
-          !opening &&
-          node.scrollTop <= THREAD_STICK_PX
+          shouldLoadOlder({
+            hasOlder,
+            loadingOlder,
+            opening,
+            scrollTop,
+            scrollHeight: node.scrollHeight,
+            clientHeight: node.clientHeight,
+            scrolledUp,
+            armed: loadArmedRef.current,
+          })
         ) {
-          onLoadOlder?.();
+          loadArmedRef.current = false;
+          onLoadOlderRef.current?.();
         }
       }}
     >

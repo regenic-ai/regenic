@@ -13,7 +13,11 @@ import {
   olderInboxCursor,
   reuseInboxItems,
   reuseInboxList,
+  shouldLoadOlder,
+  shouldRearmLoadOlder,
+  THREAD_LOAD_OLDER_PX,
   THREAD_PAGE_SIZE,
+  THREAD_STICK_PX,
 } from "../src/renderer/src/thread-window.ts";
 import { groupInboxThreads } from "../src/renderer/src/inbox.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
@@ -202,6 +206,54 @@ describe("thread window", () => {
     );
     assert.equal(
       isStuckToEnd({ scrollHeight: 10_000, scrollTop: 100, clientHeight: 80 }),
+      false,
+    );
+  });
+
+  it("loads older history only after an upward scroll reaches the top", () => {
+    const tall = {
+      hasOlder: true,
+      loadingOlder: false,
+      opening: false,
+      scrollHeight: 8_000,
+      clientHeight: 640,
+      scrolledUp: true,
+      armed: true,
+    };
+    assert.equal(shouldLoadOlder({ ...tall, scrollTop: 0 }), true);
+    assert.equal(shouldLoadOlder({ ...tall, scrollTop: THREAD_LOAD_OLDER_PX }), true);
+    assert.equal(shouldLoadOlder({ ...tall, scrollTop: THREAD_STICK_PX }), false);
+    assert.equal(shouldLoadOlder({ ...tall, scrollTop: 0, scrolledUp: false }), false);
+    assert.equal(shouldLoadOlder({ ...tall, scrollTop: 0, armed: false }), false);
+    assert.equal(shouldRearmLoadOlder(THREAD_STICK_PX), true);
+    assert.equal(shouldRearmLoadOlder(0), false);
+  });
+
+  it("fills a short thread without waiting for another scroll", () => {
+    assert.equal(
+      shouldLoadOlder({
+        hasOlder: true,
+        loadingOlder: false,
+        opening: false,
+        scrollTop: 0,
+        scrollHeight: 400,
+        clientHeight: 640,
+        scrolledUp: false,
+        armed: false,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldLoadOlder({
+        hasOlder: true,
+        loadingOlder: true,
+        opening: false,
+        scrollTop: 0,
+        scrollHeight: 400,
+        clientHeight: 640,
+        scrolledUp: false,
+        armed: false,
+      }),
       false,
     );
   });

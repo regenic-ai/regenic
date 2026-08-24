@@ -3,6 +3,8 @@ import type { InboxViewItem } from "./types";
 
 export const THREAD_OVERSCAN = 10;
 export const THREAD_STICK_PX = 96;
+export const THREAD_LOAD_OLDER_PX = 12;
+export const THREAD_LOAD_OLDER_REARM_PX = 80;
 export const THREAD_PAGE_SIZE = 50;
 
 export type InboxReuse = KeyedReuse<InboxViewItem>;
@@ -223,6 +225,33 @@ export function isStuckToEnd(node: {
   clientHeight: number;
 }): boolean {
   return node.scrollHeight - node.scrollTop - node.clientHeight <= THREAD_STICK_PX;
+}
+
+export function shouldRearmLoadOlder(scrollTop: number): boolean {
+  return scrollTop > THREAD_LOAD_OLDER_REARM_PX;
+}
+
+export function shouldLoadOlder(input: {
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  opening: boolean;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  scrolledUp: boolean;
+  armed: boolean;
+}): boolean {
+  if (!input.hasOlder || input.loadingOlder || input.opening) {
+    return false;
+  }
+  if (input.scrollHeight <= input.clientHeight + 1) {
+    return true;
+  }
+  return (
+    input.armed &&
+    input.scrolledUp &&
+    input.scrollTop <= THREAD_LOAD_OLDER_PX
+  );
 }
 
 function lastIndexAtMost(offsets: number[], value: number): number {
