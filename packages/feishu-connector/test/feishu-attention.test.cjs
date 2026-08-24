@@ -33,9 +33,17 @@ describe("Feishu attention", () => {
 
   it("uses a store inbound hint only when the poll cache is empty", () => {
     assert.equal(resolveFeishuInbound("oc_1", "om_store"), "om_store");
+    assert.equal(resolveFeishuInbound("oc_1", "oc_1:om_store"), "om_store");
+    assert.equal(resolveFeishuInbound("oc_1", "oc_1:out:om_sent"), undefined);
     assert.equal(resolveFeishuInbound("oc_1", "not-om"), undefined);
     rememberFeishuInbound("oc_1", "om_live");
-    assert.equal(resolveFeishuInbound("oc_1", "om_store"), "om_live");
+    assert.equal(resolveFeishuInbound("oc_1", "oc_1:om_store"), "om_live");
+  });
+
+  it("keeps the newest inbound when a desc page writes older ids last", () => {
+    rememberFeishuInbound("oc_1", "om_new", "1723420860000");
+    rememberFeishuInbound("oc_1", "om_old", "1723420800000");
+    assert.equal(lastFeishuInbound("oc_1"), "om_new");
   });
 
   it("remembers the latest inbound om_ and falls back when no overlay exists", () => {

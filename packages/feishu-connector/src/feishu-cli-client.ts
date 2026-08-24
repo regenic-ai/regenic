@@ -108,6 +108,7 @@ export interface FeishuImClient {
   resolveUserNames?(ids: string[]): Promise<Map<string, string>>;
   readMessageStatus?(messageIds: string[]): Promise<Map<string, boolean>>;
   readMessageUsers?(messageId: string): Promise<unknown>;
+  selfUserId?(): Promise<string | undefined>;
 }
 
 export interface LarkCliClientOptions {
@@ -193,6 +194,11 @@ export class LarkCliClient implements FeishuImClient {
       throw new Error("lark-cli timeout_ms must be a positive integer");
     }
     this.spawn = options.spawn ?? spawnLarkProcess;
+  }
+
+  async selfUserId(): Promise<string | undefined> {
+    const id = (await this.options.userToken?.identity())?.user_open_id?.trim();
+    return id || undefined;
   }
 
   private runCli(input: {

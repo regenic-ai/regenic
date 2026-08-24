@@ -1,26 +1,58 @@
 import type { ThreadAttention } from "@regenic/domain";
 
-const lastInbound = new Map<string, string>();
+const lastInbound = new Map<string, { id: string; at: number }>();
 const localRead = new Set<string>();
 const statusCache = new Map<string, { at: number; is_read: boolean }>();
 const STATUS_TTL_MS = 15_000;
 
-export function rememberFeishuInbound(chatId: string, messageId: string): void {
-  const id = messageId.trim();
-  if (!chatId.trim() || !id.startsWith("om_")) {
+export function rememberFeishuInbound(
+  chatId: string,
+  messageId: string,
+  createTime?: string,
+): void {
+  const id = feishuMessageId(messageId);
+  if (!chatId.trim() || !id) {
     return;
   }
-  lastInbound.set(chatId, id);
+  const at = feishuCreateTimeMs(createTime) ?? 0;
+  const current = lastInbound.get(chatId);
+  if (current && current.at > at) {
+    return;
+  }
+  lastInbound.set(chatId, { id, at });
   localRead.delete(chatId);
 }
 
 export function lastFeishuInbound(chatId: string): string | undefined {
-  return lastInbound.get(chatId);
+  return lastInbound.get(chatId)?.id;
 }
 
+/** Accepts `om_…` or store ids `oc_…:om_…`. Rejects console outbound `:out:`. */
 export function feishuMessageId(value?: string): string | undefined {
   const id = value?.trim() ?? "";
-  return id.startsWith("om_") ? id : undefined;
+  if (!id || id.includes(":out:")) {
+    return undefined;
+  }
+  if (id.startsWith("om_")) {
+    return id;
+  }
+  const cut = id.lastIndexOf(":");
+  if (cut < 0) {
+    return undefined;
+  }
+  const messageId = id.slice(cut + 1).trim();
+  return messageId.startsWith("om_") ? messageId : undefined;
+}
+
+function feishuCreateTimeMs(createTime: string | undefined): number | undefined {
+  if (!createTime) {
+    return undefined;
+  }
+  const n = Number(createTime);
+  if (!Number.isFinite(n) || n <= 0) {
+    return undefined;
+  }
+  return n < 1e12 ? n * 1000 : n;
 }
 
 /** Live poll cache first; store-derived inbound id is only a hint. */

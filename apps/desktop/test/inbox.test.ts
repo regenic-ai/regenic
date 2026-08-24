@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
   groupInboxThreads,
   evictThreadCache,
+  latestInboundOf,
   markInboxThreadRead,
+  messagesForAttentionAck,
   orderThreadMessages,
   openedThreadView,
   overlayThreadMessages,
@@ -315,6 +317,17 @@ describe("inbox sort", () => {
       "dsh:sess": [message("later", "2026-08-24T10:01:00.000Z", "dsh:sess")],
     });
     assert.equal(overlaid[0].prompts[0]?.prompt_id, "q:rpc");
+  });
+
+  it("acks from the just-loaded page, not a stale opened list", () => {
+    const stale = message("old", "2026-08-24T10:00:00.000Z", "feishu:oc_1");
+    stale.direction = "inbound";
+    const incoming = message("new", "2026-08-24T12:00:00.000Z", "feishu:oc_1");
+    incoming.direction = "inbound";
+    const outbound = message("out", "2026-08-24T12:01:00.000Z", "feishu:oc_1");
+    outbound.direction = "outbound";
+    const items = messagesForAttentionAck([stale, incoming, outbound], [stale], []);
+    assert.equal(latestInboundOf(items)?.event.id, "new");
   });
 
   it("clears unread on a thread without changing other rows", () => {

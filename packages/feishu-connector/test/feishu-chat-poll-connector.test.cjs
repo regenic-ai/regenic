@@ -13,18 +13,21 @@ const {
   FeishuChatEgress,
   FeishuChatPollConnector,
   extractFeishuText,
+  lastFeishuInbound,
   nextFeishuCursor,
   planFeishuHistoryRequest,
   needsRecentSeed,
+  resetFeishuAttention,
 } = require("../dist");
 
-function createConnector(client) {
+function createConnector(client, extras = {}) {
   return new FeishuChatPollConnector(client, {
     connector_id: "feishu-chat",
     org_id: "local-owner",
     chat_id: "oc_1",
     chat_name: "engineering",
     now: () => "2026-08-12T00:00:00.000Z",
+    ...extras,
   });
 }
 
@@ -111,6 +114,7 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(surface.conversation_label, "engineering");
     assert.equal(surface.conversation_kind, "group");
     assert.equal(surface.actor_label, "Ada");
+    assert.equal(surface.direction, "inbound");
     assert.equal(
       result.next_cursor,
       JSON.stringify({
@@ -121,6 +125,48 @@ describe("FeishuChatPollConnector", () => {
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
     assert.equal(result.has_more, true);
+  });
+
+  it("marks my Feishu history as outbound and remembers only newer peer inbound", async () => {
+    resetFeishuAttention();
+    const connector = createConnector(
+      {
+        async listMessages() {
+          return {
+            items: [
+              textItem({
+                message_id: "om_old",
+                create_time: "1723420860000",
+                sender: { id: "ou_peer", sender_type: "user", name: "Bea" },
+                body: { content: JSON.stringify({ text: "old peer" }) },
+              }),
+              textItem({
+                message_id: "om_mine",
+                create_time: "1723420900000",
+                sender: { id: "ou_me", sender_type: "user", name: "Me" },
+                body: { content: JSON.stringify({ text: "from phone" }) },
+              }),
+              textItem({
+                message_id: "om_new",
+                create_time: "1723420800000",
+                sender: { id: "ou_peer", sender_type: "user", name: "Bea" },
+                body: { content: JSON.stringify({ text: "listed last" }) },
+              }),
+            ],
+            has_more: false,
+          };
+        },
+      },
+      { self_user_id: "ou_me" },
+    );
+    const result = await connector.poll(null);
+    assert.equal(result.batch.records.length, 3);
+    const directions = result.batch.records.map((record) =>
+      JSON.parse(record.content.find((part) => part.role === "metadata").text)
+        .direction,
+    );
+    assert.deepEqual(directions, ["inbound", "outbound", "inbound"]);
+    assert.equal(lastFeishuInbound("oc_1"), "om_old");
   });
 
   it("keeps a start_time cursor after the history page is caught up", async () => {

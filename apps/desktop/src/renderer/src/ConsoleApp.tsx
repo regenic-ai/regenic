@@ -16,7 +16,9 @@ import {
   applyPrefOverlay,
   evictThreadCache,
   groupInboxThreads,
+  latestInboundOf,
   markInboxThreadRead,
+  messagesForAttentionAck,
   openedThreadView,
   orderThreadMessages,
   overlayThreadMessages,
@@ -57,24 +59,6 @@ const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
 const FULL_REFRESH_MS = 45_000;
 const HOST_POLL_MS = 5000;
-
-function latestInboundOf(items: InboxViewItem[]): InboxViewItem | undefined {
-  let best: InboxViewItem | undefined;
-  for (const item of items) {
-    if (item.direction !== "inbound") {
-      continue;
-    }
-    if (
-      !best ||
-      item.event.occurred_at > best.event.occurred_at ||
-      (item.event.occurred_at === best.event.occurred_at &&
-        item.event.external_id > best.event.external_id)
-    ) {
-      best = item;
-    }
-  }
-  return best;
-}
 
 export function ConsoleApp() {
   const [nav, setNav] = useState<NavId>("inbox");
@@ -188,31 +172,30 @@ export function ConsoleApp() {
           since_id: cursor.since_id,
         });
         if (threadLoadSeq.current[threadId] !== seq) {
-          return;
+          return undefined;
         }
         if (delta.length === 0) {
           finishOpen();
-          return;
+          return current;
         }
+        const next = orderThreadMessages(
+          mergeInboxDelta(messagesRef.current[threadId] ?? current, delta),
+        );
         setMessagesByThread((prev) =>
-          rememberThreadMessages(
-            prev,
-            threadId,
-            orderThreadMessages(mergeInboxDelta(prev[threadId] ?? current, delta)),
-          ),
+          rememberThreadMessages(prev, threadId, next),
         );
         finishOpen();
-        return;
+        return next;
       }
       if (olderBusyRef.current.has(threadId)) {
-        return;
+        return current;
       }
       const items = await fetchInbox({
         thread_id: threadId,
         limit: THREAD_PAGE_SIZE,
       });
       if (threadLoadSeq.current[threadId] !== seq) {
-        return;
+        return undefined;
       }
       loadedThreadsRef.current.add(threadId);
       const merged = orderThreadMessages(
@@ -227,9 +210,10 @@ export function ConsoleApp() {
         rememberThreadMessages(prev, threadId, merged),
       );
       finishOpen();
+      return merged;
     } catch (caught) {
       if (threadLoadSeq.current[threadId] !== seq) {
-        return;
+        return undefined;
       }
       if (!loadedThreadsRef.current.has(threadId)) {
         setThreadError((prev) => ({
@@ -239,6 +223,7 @@ export function ConsoleApp() {
         }));
       }
       finishOpen();
+      return current;
     }
   };
 
@@ -333,11 +318,11 @@ export function ConsoleApp() {
         }
         const openId = selectedIdRef.current;
         if (openId) {
-          await ensureThread(
+          const loaded = await ensureThread(
             openId,
             loadedThreadsRef.current.has(openId) ? "poll" : "open",
           );
-          await ackOpenThread(openId);
+          await ackOpenThread(openId, loaded);
         }
         delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
@@ -411,14 +396,21 @@ export function ConsoleApp() {
 
   useEffect(() => {
     if (selectedId) {
-      void ensureThread(selectedId, "open").then(() => ackOpenThread(selectedId));
+      void ensureThread(selectedId, "open").then((loaded) =>
+        ackOpenThread(selectedId, loaded),
+      );
     }
   }, [selectedId]);
 
-  const ackOpenThread = async (threadId: string) => {
-    const opened = messagesRef.current[threadId] ?? [];
-    const heads = inboxRef.current.filter((item) => item.thread_id === threadId);
-    const items = opened.length > 0 ? opened : heads;
+  const ackOpenThread = async (
+    threadId: string,
+    loaded?: InboxViewItem[],
+  ) => {
+    const items = messagesForAttentionAck(
+      loaded,
+      messagesRef.current[threadId] ?? [],
+      inboxRef.current.filter((item) => item.thread_id === threadId),
+    );
     const latest = latestInboundOf(items);
     const stamp = `${latest?.event.external_id ?? "open"}@${
       latest?.event.occurred_at ?? "now"

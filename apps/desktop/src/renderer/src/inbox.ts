@@ -258,6 +258,38 @@ export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
 }
 
+export function messagesForAttentionAck(
+  loaded: InboxViewItem[] | undefined,
+  opened: InboxViewItem[],
+  heads: InboxViewItem[],
+): InboxViewItem[] {
+  if (loaded && loaded.length > 0) {
+    return loaded;
+  }
+  if (opened.length > 0) {
+    return opened;
+  }
+  return heads;
+}
+
+export function latestInboundOf(items: InboxViewItem[]): InboxViewItem | undefined {
+  let best: InboxViewItem | undefined;
+  for (const item of items) {
+    if (item.direction !== "inbound") {
+      continue;
+    }
+    if (
+      !best ||
+      item.event.occurred_at > best.event.occurred_at ||
+      (item.event.occurred_at === best.event.occurred_at &&
+        item.event.external_id > best.event.external_id)
+    ) {
+      best = item;
+    }
+  }
+  return best;
+}
+
 export function markInboxThreadRead(
   items: InboxViewItem[],
   threadId: string,
