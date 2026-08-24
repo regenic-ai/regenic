@@ -50,34 +50,23 @@ export class FeishuChatEgress implements EgressAdapter {
     requireAttachmentClient(this.client, parts);
     const chatId = this.options.chat_id;
     let rpcId: string | undefined;
-    if (parts.images.length > 0) {
-      const imageKeys: string[] = [];
-      for (const image of parts.images) {
-        const uploaded = await this.client.uploadImage!(image);
-        imageKeys.push(uploaded.image_key);
-      }
-      const message =
-        parts.text || imageKeys.length > 1
-          ? await this.client.sendMessage!({
-              chat_id: chatId,
-              msg_type: "post",
-              content: feishuPostContent(parts.text, imageKeys),
-              uuid: randomUUID(),
-            })
-          : await this.client.sendMessage!({
-              chat_id: chatId,
-              msg_type: "image",
-              content: { image_key: imageKeys[0] as string },
-              uuid: randomUUID(),
-            });
-      rpcId = message.message_id;
-    } else if (parts.text) {
+    if (parts.text) {
       const message = await this.client.sendText({
         chat_id: chatId,
         text: parts.text,
         uuid: randomUUID(),
       });
       rpcId = message.message_id;
+    }
+    for (const image of parts.images) {
+      const uploaded = await this.client.uploadImage!(image);
+      const message = await this.client.sendMessage!({
+        chat_id: chatId,
+        msg_type: "image",
+        content: { image_key: uploaded.image_key },
+        uuid: randomUUID(),
+      });
+      rpcId ??= message.message_id;
     }
     for (const file of parts.files) {
       const uploaded = await this.client.uploadFile!(file);
@@ -131,25 +120,6 @@ export function outgoingPartsFromContent(content: ContentPart[]): FeishuOutgoing
     images,
     files,
   };
-}
-
-export function feishuPostContent(
-  text: string,
-  imageKeys: string[],
-): Record<string, unknown> {
-  const blocks: Array<Array<Record<string, string>>> = [];
-  if (text) {
-    for (const line of text.split(/\r?\n/)) {
-      blocks.push([{ tag: "text", text: line }]);
-    }
-  }
-  for (const imageKey of imageKeys) {
-    blocks.push([{ tag: "img", image_key: imageKey }]);
-  }
-  if (blocks.length === 0) {
-    throw new FeishuApiError("Feishu post needs text or an image");
-  }
-  return { zh_cn: { content: blocks } };
 }
 
 function requireAttachmentClient(

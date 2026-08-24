@@ -337,10 +337,9 @@ export class LarkCliClient implements FeishuImClient {
   }
 
   async uploadImage(input: FeishuUploadFile): Promise<{ image_key: string }> {
-    const payload = await this.upload({
-      path: "/open-apis/im/v1/images",
+    const payload = await this.uploadResource({
+      resource: "images",
       fields: { image_type: "message" },
-      file_field: "image",
       file: input,
     });
     const imageKey = stringField(payload, "image_key");
@@ -352,13 +351,12 @@ export class LarkCliClient implements FeishuImClient {
 
   async uploadFile(input: FeishuUploadFile): Promise<{ file_key: string }> {
     const filename = uploadFilename(input.filename, "attachment");
-    const payload = await this.upload({
-      path: "/open-apis/im/v1/files",
+    const payload = await this.uploadResource({
+      resource: "files",
       fields: {
         file_type: feishuFileType(input.media_type, filename),
         file_name: filename,
       },
-      file_field: "file",
       file: { ...input, filename },
     });
     const fileKey = stringField(payload, "file_key");
@@ -459,43 +457,27 @@ export class LarkCliClient implements FeishuImClient {
     return unwrapLarkCli(result);
   }
 
-  private async upload(input: {
-    path: string;
+  private async uploadResource(input: {
+    resource: "images" | "files";
     fields: Record<string, string>;
-    file_field: string;
     file: FeishuUploadFile;
   }): Promise<unknown> {
     if (input.file.bytes.byteLength === 0) {
       throw new FeishuApiError("Feishu upload rejected an empty file");
     }
-    const viaHttp = await this.requestViaHttp({
-      method: "POST",
-      path: input.path,
-      form: toUploadForm(input.fields, input.file_field, input.file),
-      timeout_ms: this.timeoutMs,
-    });
-    if (viaHttp !== undefined) {
-      return viaHttp;
-    }
-    return this.uploadViaCli(input);
-  }
-
-  private async uploadViaCli(input: {
-    path: string;
-    fields: Record<string, string>;
-    file_field: string;
-    file: FeishuUploadFile;
-  }): Promise<unknown> {
     const directory = await mkdtemp(join(tmpdir(), "regenic-feishu-"));
-    const filename = uploadFilename(input.file.filename, "upload");
+    const filename = uploadFilename(
+      input.file.filename,
+      input.resource === "images" ? "image.png" : "upload",
+    );
     try {
       await writeFile(join(directory, filename), input.file.bytes);
       const result = await this.runCli({
         command: [
           this.command,
-          "api",
-          "POST",
-          input.path,
+          "im",
+          input.resource,
+          "create",
           "--as",
           "user",
           "--format",
@@ -503,7 +485,7 @@ export class LarkCliClient implements FeishuImClient {
           "--data",
           JSON.stringify(input.fields),
           "--file",
-          `${input.file_field}=./${filename}`,
+          `./${filename}`,
         ],
         env: this.options.env,
         timeout_ms: this.timeoutMs,
@@ -885,25 +867,6 @@ export function uploadFilename(name: string, fallback: string): string {
   const base = name.replace(/[/\\]/g, "").replace(/^\.+/g, "").trim();
   const cleaned = (base.length > 0 ? base : fallback).slice(0, 120);
   return cleaned.length > 0 ? cleaned : fallback;
-}
-
-function toUploadForm(
-  fields: Record<string, string>,
-  fileField: string,
-  file: FeishuUploadFile,
-): FormData {
-  const form = new FormData();
-  for (const [key, value] of Object.entries(fields)) {
-    form.append(key, value);
-  }
-  form.append(
-    fileField,
-    new Blob([Buffer.from(file.bytes)], {
-      type: file.media_type || "application/octet-stream",
-    }),
-    uploadFilename(file.filename, fileField),
-  );
-  return form;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

@@ -468,7 +468,8 @@ describe("FeishuChatEgress", () => {
   it("uploads an image and sends it as an image message", async () => {
     const uploads = [];
     const messages = [];
-    const egress = new FeishuChatEgress(recordingClient(uploads, messages), {
+    const texts = [];
+    const egress = new FeishuChatEgress(recordingClient(uploads, messages, texts), {
       installation_id: "feishu-1",
       chat_id: "oc_1",
     });
@@ -486,22 +487,24 @@ describe("FeishuChatEgress", () => {
       media_type: "image/png",
       bytes: new Uint8Array([1, 2, 3]),
     }]);
+    assert.equal(texts.length, 0);
     assert.equal(messages[0].msg_type, "image");
     assert.deepEqual(messages[0].content, { image_key: "img_shot.png" });
     assert.deepEqual(receipt, { accepted: true, rpc_id: "om_image" });
   });
 
-  it("keeps text and images in one post so the image is not dropped", async () => {
+  it("sends text and the image as separate IM messages", async () => {
     const uploads = [];
     const messages = [];
-    const egress = new FeishuChatEgress(recordingClient(uploads, messages), {
+    const texts = [];
+    const egress = new FeishuChatEgress(recordingClient(uploads, messages, texts), {
       installation_id: "feishu-1",
       chat_id: "oc_1",
     });
     const receipt = await egress.send({
       installation_id: "feishu-1",
       content: [
-        { role: "body", media_type: "text/plain", text: "这个时间是你改了么" },
+        { role: "body", media_type: "text/plain", text: "Agent OS准备改成这样" },
         {
           role: "attachment",
           media_type: "image/png",
@@ -510,18 +513,12 @@ describe("FeishuChatEgress", () => {
         },
       ],
     });
+    assert.equal(texts[0].text, "Agent OS准备改成这样");
     assert.equal(uploads.length, 1);
     assert.equal(messages.length, 1);
-    assert.equal(messages[0].msg_type, "post");
-    assert.deepEqual(messages[0].content, {
-      zh_cn: {
-        content: [
-          [{ tag: "text", text: "这个时间是你改了么" }],
-          [{ tag: "img", image_key: "img_tasks.png" }],
-        ],
-      },
-    });
-    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_image" });
+    assert.equal(messages[0].msg_type, "image");
+    assert.deepEqual(messages[0].content, { image_key: "img_tasks.png" });
+    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_text" });
   });
 
   it("rejects an attachment without bytes instead of sending text only", async () => {
@@ -547,9 +544,10 @@ describe("FeishuChatEgress", () => {
   });
 });
 
-function recordingClient(uploads, messages) {
+function recordingClient(uploads, messages, texts = []) {
   return {
-    async sendText() {
+    async sendText(input) {
+      texts.push(input);
       return { message_id: "om_text" };
     },
     async sendMessage(input) {
