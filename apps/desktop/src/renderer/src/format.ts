@@ -103,6 +103,11 @@ export function connectorActionError(message: string): string {
   return message;
 }
 
+export {
+  diskWatchCopy,
+  memoryWatchCopy,
+} from "../../shared/host-watch.ts";
+
 export function networkWatchLabel(kind: string | undefined): string {
   if (kind === "proxy") {
     return "Attention";

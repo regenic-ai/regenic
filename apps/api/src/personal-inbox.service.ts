@@ -39,6 +39,7 @@ import {
   type EngineInstallationView,
 } from "./personal-connector-view";
 import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-status";
+import { processMemoryView } from "./process-memory";
 import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
@@ -90,6 +91,7 @@ export interface PersonalEngineView {
   database_path: string | null;
   inbox_count: number;
   inbox_digest: string;
+  memory: { rss_bytes: number; heap_used_bytes: number };
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
@@ -175,6 +177,7 @@ export class PersonalInboxService {
         database_path: options?.database ?? null,
         inbox_count: 0,
         inbox_digest: inboxDigest([]),
+        memory: processMemoryView(),
         pull: { ...pullStatus },
         installations: [],
         catalog: await catalogReady([]),
@@ -204,6 +207,7 @@ export class PersonalInboxService {
       database_path: options?.database ?? null,
       inbox_count: inbox.count,
       inbox_digest: inbox.digest,
+      memory: processMemoryView(),
       pull: { ...pullStatus },
       installations: views,
       catalog: await catalogReady(views),

@@ -39,7 +39,7 @@ Electron 主进程默认拉起或复用本机 sidecar（`apps/api`，`127.0.0.1`
 
 `/v1/me` 默认只在回环监听时开放（`LISTEN_HOST` 为 `127.0.0.1` / `localhost` / `::1`）。Sealos 等 `0.0.0.0` 部署默认没有这条个人面；要让桌面连远程内核，远程进程设 `REGENIC_PERSONAL_API=1`。`REGENIC_PERSONAL_API=0` 可在本机也关掉。桌面 sidecar 会丢掉父进程里的 `REGENIC_PERSONAL_API`，以免外壳 `=0` 把内核个人面关掉。个人模式 CORS 只回显 `file://`、`null` 和本机 Origin，不回显任意网站。安装 DSH 时不接收 `command` / `workdir`。本机表单里的 `base_url` 必须是回环 URL。托管 API（Sealos 等）用环境变量 `REGENIC_DSH_BASE_URL` 指向集群内网 dsh web（例如 `http://regenic-dsh:3080`），目录不再要公网地址；已存的 CLI 安装也会按 web 认会话、允许回复。
 
-默认数据：若仓库里已有 `regenic.db` 则开发时用它；否则 `~/.regenic/regenic.db` 与 `~/.regenic/blobs`。
+默认数据：若仓库里已有 `regenic.db` 则开发时用它；否则 `~/.regenic/regenic.db` 与 `~/.regenic/blobs`。引擎 Kernel 卡片的 Disk 同时显示我们自己的库/附件大小，以及这块盘还剩多少。Memory 由桌面主进程用 pid / `ps` 采样内核和自身，不经过 sidecar 的 HTTP；内核涨得太高或进程没了，顶栏也会标出来。
 
 ## `/v1/me`
 

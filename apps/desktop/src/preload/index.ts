@@ -22,4 +22,5 @@ contextBridge.exposeInMainWorld("regenic", {
   },
   showConsole: () => ipcRenderer.invoke("regenic:show-console"),
   quitApp: () => ipcRenderer.invoke("regenic:quit"),
+  getHostStats: () => ipcRenderer.invoke("regenic:get-host-stats"),
 });

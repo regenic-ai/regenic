@@ -2,6 +2,7 @@ import { Controller, Get } from "@nestjs/common";
 import { Client } from "pg";
 import { isPersonalApiEnabled, loadEnv } from "@regenic/config";
 import type { StandardPlaceholder } from "@regenic/domain";
+import { processMemoryView } from "./process-memory";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 async function probeDsh(baseUrl: string | undefined): Promise<"up" | "down" | undefined> {
@@ -37,6 +38,7 @@ export class HealthController {
         mode: isPersonalApiEnabled(env) ? "personal" : "service",
         sqlite,
         ...(dsh ? { dsh } : {}),
+        memory: processMemoryView(),
         domain: "@regenic/domain",
       };
     }
@@ -58,6 +60,7 @@ export class HealthController {
       service: "api",
       mode: "service",
       postgres,
+      memory: processMemoryView(),
       domain: "@regenic/domain",
     };
   }

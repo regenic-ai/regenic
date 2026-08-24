@@ -23,6 +23,8 @@ import {
   engineChip,
   formatChatTime,
   installationStatusLabel,
+  diskWatchCopy,
+  memoryWatchCopy,
   networkWatchLabel,
   pullStatusLabel,
   threadSyncLabel,
@@ -73,6 +75,7 @@ import {
 } from "./thread-window";
 import { BrandBadge, BrandLockup } from "./Brand";
 import { EngineIcon, InboxIcon, PencilIcon, PinIcon, SettingsIcon } from "./Icons";
+import type { HostStats } from "../../shared/host-watch.ts";
 import type {
   ConnectorCatalogItem,
   CreatedConversation,
@@ -87,6 +90,7 @@ import type {
 const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
 const FULL_REFRESH_MS = 45_000;
+const HOST_POLL_MS = 5000;
 
 function engineRevision(
   engine: PersonalEngineView | null,
@@ -135,6 +139,7 @@ export function ConsoleApp() {
   const [prefOverlay, setPrefOverlay] = useState<Record<string, ConversationPrefOverlay>>(
     {},
   );
+  const [host, setHost] = useState<HostStats | null>(null);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const prefOverlayRef = useRef(prefOverlay);
@@ -419,6 +424,33 @@ export function ConsoleApp() {
   }, [nav, refresh]);
 
   useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (typeof window.regenic?.getHostStats !== "function") {
+        return;
+      }
+      try {
+        const next = await window.regenic.getHostStats();
+        if (!cancelled) {
+          setHost(next);
+        }
+      } catch {
+        if (!cancelled) {
+          setHost(null);
+        }
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => {
+      void load();
+    }, HOST_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     if (selectedId) {
       void ensureThread(selectedId, "open");
     }
@@ -539,6 +571,9 @@ export function ConsoleApp() {
         </div>
         <div className="search">Search (soon)</div>
         <EngineChip state={chip} />
+        {host && host.memory.kind !== "ok" ? (
+          <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
+        ) : null}
         <span className="chip">{listThreads.length} current work</span>
       </header>
       <nav className="rail" aria-label="Main">
@@ -594,7 +629,12 @@ export function ConsoleApp() {
           />
         ) : null}
         {nav === "engine" ? (
-          <EnginePage engine={engine} error={error} onChanged={refresh} />
+          <EnginePage
+            engine={engine}
+            host={host}
+            error={error}
+            onChanged={refresh}
+          />
         ) : null}
         {nav === "settings" ? <SettingsPage onChanged={refresh} /> : null}
       </div>
@@ -1363,10 +1403,12 @@ function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem
 
 function EnginePage({
   engine,
+  host,
   error,
   onChanged,
 }: {
   engine: PersonalEngineView | null;
+  host: HostStats | null;
   error: string | null;
   onChanged: () => Promise<void>;
 }) {
@@ -1439,6 +1481,10 @@ function EnginePage({
               ? ` · ${engine.pull.network.proxy}`
               : ""}
           </strong>
+          <span>Disk</span>
+          <strong>{host ? diskWatchCopy(host.disk) : "—"}</strong>
+          <span>Memory</span>
+          <strong>{host ? memoryWatchCopy(host.memory) : "—"}</strong>
         </div>
         {engine.pull?.last_error ? (
           <p className="action-error">{engine.pull.last_error}</p>
@@ -1447,6 +1493,10 @@ function EnginePage({
           <p className="action-hint">
             {engine.pull.last_error_hint ?? engine.pull.network?.hint}
           </p>
+        ) : null}
+        {host?.disk.hint ? <p className="action-hint">{host.disk.hint}</p> : null}
+        {host?.memory.hint ? (
+          <p className="action-hint">{host.memory.hint}</p>
         ) : null}
       </section>
       <section className="card">

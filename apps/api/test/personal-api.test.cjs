@@ -882,6 +882,10 @@ describe("personal /v1/me", () => {
       assert.equal(health.sqlite, "up");
       assert.equal(health.status, "ok");
       assert.equal(health.postgres, undefined);
+      assert.equal(typeof health.memory.rss_bytes, "number");
+      assert.ok(health.memory.rss_bytes > 0);
+      assert.equal(typeof engine.memory.rss_bytes, "number");
+      assert.ok(engine.memory.rss_bytes > 0);
     } finally {
       await app.close();
     }

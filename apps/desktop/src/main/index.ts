@@ -13,6 +13,8 @@ import {
 } from "electron";
 import appIconPng from "../brand/app-icon.png?asset";
 import trayPng from "../brand/tray-mark.png?asset";
+import { collectHostStats, resetHostStatCache } from "./host-stats";
+import { portFromHttpOrigin } from "../shared/host-watch";
 import {
   LOCAL_KERNEL_ORIGIN,
   loadKernelPreference,
@@ -28,6 +30,7 @@ let mainWindow: BrowserWindow | null = null;
 let trayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let sidecar: ChildProcess | null = null;
+let lastOwnedSidecarPid: number | null = null;
 let apiOrigin = `http://127.0.0.1:${DEFAULT_PORT}`;
 let quitting = false;
 let lastInboxCount: number | null = null;
@@ -149,6 +152,13 @@ async function pickKernelPort(): Promise<{ reuse: string } | { port: number; ori
   throw new Error("No free local port for the personal kernel");
 }
 
+function electronAppBytes(): number {
+  return app.getAppMetrics().reduce((sum, metric) => {
+    const kb = metric.memory?.workingSetSize ?? 0;
+    return sum + kb * 1024;
+  }, 0);
+}
+
 function sidecarEnv(
   port: number,
   database: string,
@@ -189,6 +199,7 @@ function broadcastOrigin(): void {
 function stopOwnedSidecar(): void {
   sidecar?.kill();
   sidecar = null;
+  lastOwnedSidecarPid = null;
 }
 
 function spawnSidecar(port: number): void {
@@ -201,6 +212,7 @@ function spawnSidecar(port: number): void {
     env: sidecarEnv(port, database, blobRoot),
     stdio: ["ignore", "pipe", "pipe"],
   });
+  lastOwnedSidecarPid = sidecar.pid ?? null;
   sidecar.stdout?.on("data", (chunk) => {
     process.stdout.write(`[kernel] ${chunk}`);
   });
@@ -260,6 +272,7 @@ async function connectSavedKernel(): Promise<void> {
 }
 
 async function applyKernelPreference(preference: KernelPreference): Promise<void> {
+  resetHostStatCache();
   if (preference.mode === "custom" && preference.origin) {
     await assertPersonalKernel(preference.origin);
     saveKernelPreference(settingsFile(), preference);
@@ -449,6 +462,13 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("regenic:get-api-origin", async () => apiOrigin);
   ipcMain.handle("regenic:get-kernel-settings", async () => kernelView());
+  ipcMain.handle("regenic:get-host-stats", async () =>
+    collectHostStats(resolveDataPaths(), {
+      sidecarPid: sidecar?.pid ?? lastOwnedSidecarPid,
+      listenPort: portFromHttpOrigin(apiOrigin),
+      appBytes: electronAppBytes,
+    }),
+  );
   ipcMain.handle(
     "regenic:set-kernel-settings",
     async (_event, input: { mode?: string; origin?: string }) => {

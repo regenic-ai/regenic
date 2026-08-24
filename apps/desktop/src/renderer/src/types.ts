@@ -196,12 +196,18 @@ export interface PullStatusView {
   streams: PullStreamStatus[];
 }
 
+export interface ProcessMemoryView {
+  rss_bytes: number;
+  heap_used_bytes: number;
+}
+
 export interface PersonalEngineView {
   kernel: "running" | "stopped";
   org_id: string;
   database_path: string | null;
   inbox_count: number;
   inbox_digest?: string;
+  memory?: ProcessMemoryView;
   pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
