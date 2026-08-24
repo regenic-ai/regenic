@@ -6,12 +6,25 @@ import type {
   EgressCapabilities,
   SendIntent,
 } from "@regenic/domain";
-import { FeishuApiError, type FeishuImClient } from "./feishu-cli-client";
+import {
+  FeishuApiError,
+  type FeishuImClient,
+  type FeishuUploadFile,
+  uploadFilename,
+} from "./feishu-cli-client";
 import { FEISHU_SOURCE } from "./feishu-message";
+
+const IMAGE_MEDIA = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 export interface FeishuChatEgressOptions {
   installation_id: string;
   chat_id: string;
+}
+
+export interface FeishuOutgoingParts {
+  text: string;
+  images: FeishuUploadFile[];
+  files: FeishuUploadFile[];
 }
 
 export class FeishuChatEgress implements EgressAdapter {
@@ -30,29 +43,152 @@ export class FeishuChatEgress implements EgressAdapter {
     if (intent.installation_id !== this.options.installation_id) {
       throw new FeishuApiError("Send intent installation does not match the Feishu adapter");
     }
-    const text = textFromContentParts(intent.content);
-    const result = await this.client.sendText({
-      chat_id: this.options.chat_id,
-      text,
-      uuid: randomUUID(),
-    });
-    return { accepted: true, rpc_id: result.message_id };
+    const parts = outgoingPartsFromContent(intent.content);
+    if (!parts.text && parts.images.length === 0 && parts.files.length === 0) {
+      throw new FeishuApiError("Feishu send needs a text body or attachment");
+    }
+    requireAttachmentClient(this.client, parts);
+    const chatId = this.options.chat_id;
+    let rpcId: string | undefined;
+    if (parts.images.length > 0) {
+      const imageKeys: string[] = [];
+      for (const image of parts.images) {
+        const uploaded = await this.client.uploadImage!(image);
+        imageKeys.push(uploaded.image_key);
+      }
+      const message =
+        parts.text || imageKeys.length > 1
+          ? await this.client.sendMessage!({
+              chat_id: chatId,
+              msg_type: "post",
+              content: feishuPostContent(parts.text, imageKeys),
+              uuid: randomUUID(),
+            })
+          : await this.client.sendMessage!({
+              chat_id: chatId,
+              msg_type: "image",
+              content: { image_key: imageKeys[0] as string },
+              uuid: randomUUID(),
+            });
+      rpcId = message.message_id;
+    } else if (parts.text) {
+      const message = await this.client.sendText({
+        chat_id: chatId,
+        text: parts.text,
+        uuid: randomUUID(),
+      });
+      rpcId = message.message_id;
+    }
+    for (const file of parts.files) {
+      const uploaded = await this.client.uploadFile!(file);
+      const message = await this.client.sendMessage!({
+        chat_id: chatId,
+        msg_type: "file",
+        content: { file_key: uploaded.file_key },
+        uuid: randomUUID(),
+      });
+      rpcId ??= message.message_id;
+    }
+    if (!rpcId) {
+      throw new FeishuApiError("Feishu send did not return message_id");
+    }
+    return { accepted: true, rpc_id: rpcId };
   }
 }
 
 export function textFromContentParts(content: ContentPart[]): string {
+  return outgoingPartsFromContent(content).text;
+}
+
+export function outgoingPartsFromContent(content: ContentPart[]): FeishuOutgoingParts {
   const texts: string[] = [];
+  const images: FeishuUploadFile[] = [];
+  const files: FeishuUploadFile[] = [];
   for (const part of content) {
-    if (part.role !== "body" || typeof part.text !== "string") {
+    if (part.role === "body" && typeof part.text === "string" && part.text.trim()) {
+      texts.push(part.text);
       continue;
     }
-    if (part.text.trim()) {
-      texts.push(part.text);
+    if (part.role !== "attachment") {
+      continue;
+    }
+    if (!part.bytes || part.bytes.byteLength === 0) {
+      throw new FeishuApiError("Feishu send dropped an attachment without bytes");
+    }
+    const attachment: FeishuUploadFile = {
+      filename: uploadFilename(part.source_filename ?? "", fallbackFilename(part.media_type)),
+      media_type: normalizeMediaType(part.media_type),
+      bytes: part.bytes,
+    };
+    if (IMAGE_MEDIA.has(attachment.media_type)) {
+      images.push(attachment);
+    } else {
+      files.push(attachment);
     }
   }
-  const text = texts.join("\n").trim();
-  if (!text) {
-    throw new FeishuApiError("Feishu send accepts a text body only");
+  return {
+    text: texts.join("\n").trim(),
+    images,
+    files,
+  };
+}
+
+export function feishuPostContent(
+  text: string,
+  imageKeys: string[],
+): Record<string, unknown> {
+  const blocks: Array<Array<Record<string, string>>> = [];
+  if (text) {
+    for (const line of text.split(/\r?\n/)) {
+      blocks.push([{ tag: "text", text: line }]);
+    }
   }
-  return text;
+  for (const imageKey of imageKeys) {
+    blocks.push([{ tag: "img", image_key: imageKey }]);
+  }
+  if (blocks.length === 0) {
+    throw new FeishuApiError("Feishu post needs text or an image");
+  }
+  return { zh_cn: { content: blocks } };
+}
+
+function requireAttachmentClient(
+  client: FeishuImClient,
+  parts: FeishuOutgoingParts,
+): void {
+  if (parts.images.length === 0 && parts.files.length === 0) {
+    return;
+  }
+  if (
+    typeof client.uploadImage !== "function" ||
+    typeof client.uploadFile !== "function" ||
+    typeof client.sendMessage !== "function"
+  ) {
+    throw new FeishuApiError("Feishu send cannot deliver attachments");
+  }
+}
+
+function normalizeMediaType(mediaType: string): string {
+  const value = mediaType.trim().toLowerCase();
+  return value === "image/jpg" ? "image/jpeg" : value;
+}
+
+function fallbackFilename(mediaType: string): string {
+  const type = normalizeMediaType(mediaType);
+  if (type === "image/png") {
+    return "image.png";
+  }
+  if (type === "image/jpeg") {
+    return "image.jpg";
+  }
+  if (type === "image/gif") {
+    return "image.gif";
+  }
+  if (type === "image/webp") {
+    return "image.webp";
+  }
+  if (type === "application/pdf") {
+    return "attachment.pdf";
+  }
+  return "attachment";
 }

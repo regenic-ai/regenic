@@ -425,6 +425,86 @@ describe("LarkCliClient", () => {
     assert.equal(result.message_id, "om_sent");
   });
 
+  it("uploads an image over HTTP with the same user token used to send", async () => {
+    const spawned = [];
+    const fetched = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn(input) {
+        spawned.push(input);
+        throw new Error("CLI should not run when HTTP upload works");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url, init) {
+        fetched.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({ code: 0, data: { image_key: "img_http" } });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const result = await client.uploadImage({
+      filename: "shot.png",
+      media_type: "image/png",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    assert.equal(spawned.length, 0);
+    assert.equal(result.image_key, "img_http");
+    assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/im\/v1\/images/);
+    assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
+    assert.equal(fetched[0].init.headers["Content-Type"], undefined);
+    assert.equal(fetched[0].init.body instanceof FormData, true);
+    assert.equal(fetched[0].init.body.get("image_type"), "message");
+    const image = fetched[0].init.body.get("image");
+    assert.equal(image.name, "shot.png");
+  });
+
+  it("uploads an image through lark-cli when HTTP is unavailable", async () => {
+    const calls = [];
+    const client = new LarkCliClient({
+      async spawn(input) {
+        calls.push(input);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: { image_key: "img_cli" },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const result = await client.uploadImage({
+      filename: "shot.png",
+      media_type: "image/png",
+      bytes: new Uint8Array([9]),
+    });
+    assert.equal(result.image_key, "img_cli");
+    assert.equal(calls[0].command.includes("/open-apis/im/v1/images"), true);
+    assert.equal(calls[0].command.includes("--as"), true);
+    assert.equal(calls[0].command[calls[0].command.indexOf("--as") + 1], "user");
+    const fileFlag = calls[0].command[calls[0].command.indexOf("--file") + 1];
+    assert.equal(fileFlag, "image=./shot.png");
+    assert.equal(typeof calls[0].cwd, "string");
+  });
+
   it("treats CLI ok:false and Feishu code!=0 as FeishuApiError", () => {
     assert.throws(
       () =>

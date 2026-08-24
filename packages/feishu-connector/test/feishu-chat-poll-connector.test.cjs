@@ -465,23 +465,104 @@ describe("FeishuChatEgress", () => {
     assert.deepEqual(receipt, { accepted: true, rpc_id: "om_out" });
   });
 
-  it("rejects a send without a text body", async () => {
+  it("uploads an image and sends it as an image message", async () => {
+    const uploads = [];
+    const messages = [];
+    const egress = new FeishuChatEgress(recordingClient(uploads, messages), {
+      installation_id: "feishu-1",
+      chat_id: "oc_1",
+    });
+    const receipt = await egress.send({
+      installation_id: "feishu-1",
+      content: [{
+        role: "attachment",
+        media_type: "image/png",
+        source_filename: "shot.png",
+        bytes: new Uint8Array([1, 2, 3]),
+      }],
+    });
+    assert.deepEqual(uploads, [{
+      filename: "shot.png",
+      media_type: "image/png",
+      bytes: new Uint8Array([1, 2, 3]),
+    }]);
+    assert.equal(messages[0].msg_type, "image");
+    assert.deepEqual(messages[0].content, { image_key: "img_shot.png" });
+    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_image" });
+  });
+
+  it("keeps text and images in one post so the image is not dropped", async () => {
+    const uploads = [];
+    const messages = [];
+    const egress = new FeishuChatEgress(recordingClient(uploads, messages), {
+      installation_id: "feishu-1",
+      chat_id: "oc_1",
+    });
+    const receipt = await egress.send({
+      installation_id: "feishu-1",
+      content: [
+        { role: "body", media_type: "text/plain", text: "这个时间是你改了么" },
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "tasks.png",
+          bytes: new Uint8Array([9]),
+        },
+      ],
+    });
+    assert.equal(uploads.length, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].msg_type, "post");
+    assert.deepEqual(messages[0].content, {
+      zh_cn: {
+        content: [
+          [{ tag: "text", text: "这个时间是你改了么" }],
+          [{ tag: "img", image_key: "img_tasks.png" }],
+        ],
+      },
+    });
+    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_image" });
+  });
+
+  it("rejects an attachment without bytes instead of sending text only", async () => {
     const egress = new FeishuChatEgress(
-      { async sendText() { return { message_id: "om_out" }; } },
+      recordingClient([], []),
       { installation_id: "feishu-1", chat_id: "oc_1" },
     );
     await assert.rejects(
       () =>
         egress.send({
           installation_id: "feishu-1",
-          content: [{
-            role: "attachment",
-            media_type: "image/png",
-            source_filename: "a.png",
-            bytes: new Uint8Array([1]),
-          }],
+          content: [
+            { role: "body", media_type: "text/plain", text: "hello" },
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "a.png",
+            },
+          ],
         }),
-      FeishuApiError,
+      /attachment without bytes/,
     );
   });
 });
+
+function recordingClient(uploads, messages) {
+  return {
+    async sendText() {
+      return { message_id: "om_text" };
+    },
+    async sendMessage(input) {
+      messages.push(input);
+      return { message_id: "om_image" };
+    },
+    async uploadImage(input) {
+      uploads.push(input);
+      return { image_key: `img_${input.filename}` };
+    },
+    async uploadFile(input) {
+      uploads.push(input);
+      return { file_key: `file_${input.filename}` };
+    },
+  };
+}

@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type { FeishuMention } from "./feishu-message";
 import {
   FeishuApiError,
@@ -23,7 +25,21 @@ export type FeishuSpawn = (input: {
   command: string[];
   env?: NodeJS.ProcessEnv;
   timeout_ms: number;
+  cwd?: string;
 }) => Promise<FeishuSpawnResult>;
+
+export interface FeishuUploadFile {
+  filename: string;
+  media_type: string;
+  bytes: Uint8Array;
+}
+
+export interface FeishuSendMessageInput {
+  chat_id: string;
+  msg_type: string;
+  content: Record<string, unknown>;
+  uuid?: string;
+}
 
 export interface FeishuHistoryItem {
   message_id: string;
@@ -85,6 +101,9 @@ export interface FeishuImClient {
     text: string;
     uuid?: string;
   }): Promise<{ message_id: string }>;
+  sendMessage?(input: FeishuSendMessageInput): Promise<{ message_id: string }>;
+  uploadImage?(input: FeishuUploadFile): Promise<{ image_key: string }>;
+  uploadFile?(input: FeishuUploadFile): Promise<{ file_key: string }>;
   resolveUserNames?(ids: string[]): Promise<Map<string, string>>;
 }
 
@@ -177,6 +196,7 @@ export class LarkCliClient implements FeishuImClient {
     command: string[];
     env?: NodeJS.ProcessEnv;
     timeout_ms: number;
+    cwd?: string;
   }): Promise<FeishuSpawnResult> {
     return retryTransientLark(() =>
       withLarkCliSlot(() => this.spawn(input)),
@@ -289,14 +309,23 @@ export class LarkCliClient implements FeishuImClient {
     text: string;
     uuid?: string;
   }): Promise<{ message_id: string }> {
+    return this.sendMessage({
+      chat_id: input.chat_id,
+      msg_type: "text",
+      content: { text: input.text },
+      uuid: input.uuid,
+    });
+  }
+
+  async sendMessage(input: FeishuSendMessageInput): Promise<{ message_id: string }> {
     const payload = await this.request({
       method: "POST",
       path: "/open-apis/im/v1/messages",
       params: { receive_id_type: "chat_id" },
       data: {
         receive_id: input.chat_id,
-        msg_type: "text",
-        content: JSON.stringify({ text: input.text }),
+        msg_type: input.msg_type,
+        content: JSON.stringify(input.content),
         ...(input.uuid ? { uuid: input.uuid } : {}),
       },
     });
@@ -305,6 +334,38 @@ export class LarkCliClient implements FeishuImClient {
       throw new FeishuApiError("lark-cli send did not return message_id");
     }
     return { message_id: messageId };
+  }
+
+  async uploadImage(input: FeishuUploadFile): Promise<{ image_key: string }> {
+    const payload = await this.upload({
+      path: "/open-apis/im/v1/images",
+      fields: { image_type: "message" },
+      file_field: "image",
+      file: input,
+    });
+    const imageKey = stringField(payload, "image_key");
+    if (!imageKey) {
+      throw new FeishuApiError("Feishu image upload did not return image_key");
+    }
+    return { image_key: imageKey };
+  }
+
+  async uploadFile(input: FeishuUploadFile): Promise<{ file_key: string }> {
+    const filename = uploadFilename(input.filename, "attachment");
+    const payload = await this.upload({
+      path: "/open-apis/im/v1/files",
+      fields: {
+        file_type: feishuFileType(input.media_type, filename),
+        file_name: filename,
+      },
+      file_field: "file",
+      file: { ...input, filename },
+    });
+    const fileKey = stringField(payload, "file_key");
+    if (!fileKey) {
+      throw new FeishuApiError("Feishu file upload did not return file_key");
+    }
+    return { file_key: fileKey };
   }
 
   private async fillP2pNames(chats: FeishuChat[]): Promise<void> {
@@ -398,12 +459,70 @@ export class LarkCliClient implements FeishuImClient {
     return unwrapLarkCli(result);
   }
 
+  private async upload(input: {
+    path: string;
+    fields: Record<string, string>;
+    file_field: string;
+    file: FeishuUploadFile;
+  }): Promise<unknown> {
+    if (input.file.bytes.byteLength === 0) {
+      throw new FeishuApiError("Feishu upload rejected an empty file");
+    }
+    const viaHttp = await this.requestViaHttp({
+      method: "POST",
+      path: input.path,
+      form: toUploadForm(input.fields, input.file_field, input.file),
+      timeout_ms: this.timeoutMs,
+    });
+    if (viaHttp !== undefined) {
+      return viaHttp;
+    }
+    return this.uploadViaCli(input);
+  }
+
+  private async uploadViaCli(input: {
+    path: string;
+    fields: Record<string, string>;
+    file_field: string;
+    file: FeishuUploadFile;
+  }): Promise<unknown> {
+    const directory = await mkdtemp(join(tmpdir(), "regenic-feishu-"));
+    const filename = uploadFilename(input.file.filename, "upload");
+    try {
+      await writeFile(join(directory, filename), input.file.bytes);
+      const result = await this.runCli({
+        command: [
+          this.command,
+          "api",
+          "POST",
+          input.path,
+          "--as",
+          "user",
+          "--format",
+          "json",
+          "--data",
+          JSON.stringify(input.fields),
+          "--file",
+          `${input.file_field}=./${filename}`,
+        ],
+        env: this.options.env,
+        timeout_ms: this.timeoutMs,
+        cwd: directory,
+      });
+      return unwrapLarkCli(result);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
   private async requestHttp(input: {
     method: "GET" | "POST";
     path: string;
     params?: Record<string, string | number>;
     data?: Record<string, unknown>;
+    form?: FormData;
     token: string;
+    timeout_ms?: number;
   }): Promise<unknown> {
     const brand = await this.options.userToken?.brand();
     return callFeishuOpenApi({
@@ -411,10 +530,11 @@ export class LarkCliClient implements FeishuImClient {
       path: input.path,
       params: input.params,
       data: input.data,
+      form: input.form,
       token: input.token,
       base_url: feishuOpenApiBaseUrl(brand),
       fetch: this.options.fetch,
-      timeout_ms: Math.min(this.timeoutMs, 20_000),
+      timeout_ms: input.timeout_ms ?? Math.min(this.timeoutMs, 20_000),
     });
   }
 
@@ -423,6 +543,8 @@ export class LarkCliClient implements FeishuImClient {
     path: string;
     params?: Record<string, string | number>;
     data?: Record<string, unknown>;
+    form?: FormData;
+    timeout_ms?: number;
   }): Promise<unknown | undefined> {
     const source = this.options.userToken;
     if (!source) {
@@ -737,13 +859,51 @@ function parseMentions(value: unknown): FeishuMention[] | undefined {
 }
 
 function readMessageId(value: unknown): string | undefined {
-  if (isObject(value) && typeof value.message_id === "string") {
-    return value.message_id;
+  return stringField(value, "message_id");
+}
+
+function stringField(value: unknown, name: string): string | undefined {
+  if (isObject(value) && typeof value[name] === "string") {
+    return stringValue(value[name]);
   }
-  if (isObject(value) && isObject(value.data) && typeof value.data.message_id === "string") {
-    return value.data.message_id;
+  if (isObject(value) && isObject(value.data) && typeof value.data[name] === "string") {
+    return stringValue(value.data[name]);
   }
   return undefined;
+}
+
+export function feishuFileType(mediaType: string, filename: string): string {
+  const type = mediaType.trim().toLowerCase();
+  const name = filename.trim().toLowerCase();
+  if (type === "application/pdf" || name.endsWith(".pdf")) {
+    return "pdf";
+  }
+  return "stream";
+}
+
+export function uploadFilename(name: string, fallback: string): string {
+  const base = name.replace(/[/\\]/g, "").replace(/^\.+/g, "").trim();
+  const cleaned = (base.length > 0 ? base : fallback).slice(0, 120);
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+function toUploadForm(
+  fields: Record<string, string>,
+  fileField: string,
+  file: FeishuUploadFile,
+): FormData {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, value);
+  }
+  form.append(
+    fileField,
+    new Blob([Buffer.from(file.bytes)], {
+      type: file.media_type || "application/octet-stream",
+    }),
+    uploadFilename(file.filename, fileField),
+  );
+  return form;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -758,6 +918,7 @@ export async function spawnLarkProcess(input: {
   command: string[];
   env?: NodeJS.ProcessEnv;
   timeout_ms: number;
+  cwd?: string;
 }): Promise<FeishuSpawnResult> {
   const [bin, ...args] = input.command;
   if (!bin) {
@@ -766,6 +927,7 @@ export async function spawnLarkProcess(input: {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
       env: { ...process.env, ...input.env },
+      cwd: input.cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
