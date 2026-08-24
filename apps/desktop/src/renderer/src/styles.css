@@ -1447,6 +1447,11 @@ button {
   color: var(--muted);
 }
 
+.check-options {
+  display: grid;
+  gap: 8px;
+}
+
 .check-list {
   margin: 0;
   padding: 0;

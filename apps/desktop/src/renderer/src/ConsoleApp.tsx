@@ -1670,54 +1670,65 @@ function ConnectorSettingsForm({
       }}
     >
       <PrerequisiteList items={prerequisites} />
-      {fields.map((field) => (
-        <label key={field.key} className="field">
+      {fields.map((field) => {
+        const body = field.multiple ? (
+          <CheckOptionList
+            field={field}
+            selected={splitValues(values[field.key])}
+            onToggle={(value) =>
+              setValues((current) => ({
+                ...current,
+                [field.key]: toggleCsvValue(current[field.key], value),
+              }))
+            }
+          />
+        ) : field.options ? (
+          <select
+            value={values[field.key] ?? field.default ?? ""}
+            onChange={(event) =>
+              setValues((current) => ({
+                ...current,
+                [field.key]: event.target.value,
+              }))
+            }
+          >
+            {field.options.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            value={values[field.key] ?? ""}
+            placeholder={field.placeholder}
+            required={field.required}
+            onChange={(event) =>
+              setValues((current) => ({
+                ...current,
+                [field.key]: event.target.value,
+              }))
+            }
+          />
+        );
+        const heading = (
           <span>
             {field.label}
             {field.required ? " *" : ""}
           </span>
-          {field.multiple ? (
-            <CheckOptionList
-              field={field}
-              selected={splitValues(values[field.key])}
-              onToggle={(value) =>
-                setValues((current) => ({
-                  ...current,
-                  [field.key]: toggleCsvValue(current[field.key], value),
-                }))
-              }
-            />
-          ) : field.options ? (
-            <select
-              value={values[field.key] ?? field.default ?? ""}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  [field.key]: event.target.value,
-                }))
-              }
-            >
-              {field.options.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              value={values[field.key] ?? ""}
-              placeholder={field.placeholder}
-              required={field.required}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  [field.key]: event.target.value,
-                }))
-              }
-            />
-          )}
-        </label>
-      ))}
+        );
+        return field.multiple ? (
+          <div key={field.key} className="field">
+            {heading}
+            {body}
+          </div>
+        ) : (
+          <label key={field.key} className="field">
+            {heading}
+            {body}
+          </label>
+        );
+      })}
       <button
         type="submit"
         className="primary"
@@ -1744,29 +1755,70 @@ function CheckOptionList({
   selected: string[];
   onToggle: (value: string) => void;
 }) {
-  if (!field.options || field.options.length === 0) {
+  const [query, setQuery] = useState("");
+  const options = field.options ?? [];
+  if (options.length === 0) {
     return (
       <p className="field-empty">{field.placeholder ?? "No options yet"}</p>
     );
   }
+  const searchable = options.length > 4;
+  const visible = filterCheckOptions(options, query);
   return (
-    <ul className="check-list">
-      {field.options.map((option) => {
-        const checked = selected.includes(option.value);
-        return (
-          <li key={option.value}>
-            <label className={`check-item${checked ? " active" : ""}`}>
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={() => onToggle(option.value)}
-              />
-              <span>{option.label}</span>
-            </label>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="check-options">
+      {searchable ? (
+        <input
+          type="search"
+          value={query}
+          placeholder={`Search ${field.label.toLowerCase()}`}
+          aria-label={`Search ${field.label.toLowerCase()}`}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+            }
+          }}
+        />
+      ) : null}
+      {visible.length === 0 ? (
+        <p className="field-empty">No matches</p>
+      ) : (
+        <ul className="check-list">
+          {visible.map((option) => {
+            const checked = selected.includes(option.value);
+            return (
+              <li key={option.value}>
+                <label className={`check-item${checked ? " active" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggle(option.value)}
+                  />
+                  <span>{option.label}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function filterCheckOptions(
+  options: { value: string; label: string }[],
+  query: string,
+): { value: string; label: string }[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return options;
+  }
+  return options.filter(
+    (option) =>
+      option.label.toLowerCase().includes(needle) ||
+      option.value.toLowerCase().includes(needle),
   );
 }
 
