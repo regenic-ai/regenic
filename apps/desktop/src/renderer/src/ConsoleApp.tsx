@@ -16,6 +16,7 @@ import {
   applyPrefOverlay,
   evictThreadCache,
   groupInboxThreads,
+  markInboxThreadRead,
   openedThreadView,
   orderThreadMessages,
   overlayThreadMessages,
@@ -431,6 +432,15 @@ export function ConsoleApp() {
         thread_id: threadId,
         last_read_at: latest?.event.occurred_at ?? new Date().toISOString(),
         last_read_external_id: latest?.event.external_id ?? null,
+      });
+      setInbox((current) => markInboxThreadRead(current, threadId));
+      setMessagesByThread((current) => {
+        const opened = current[threadId];
+        if (!opened) {
+          return current;
+        }
+        const next = markInboxThreadRead(opened, threadId);
+        return next === opened ? current : { ...current, [threadId]: next };
       });
     } catch {
       delete ackStampRef.current[threadId];

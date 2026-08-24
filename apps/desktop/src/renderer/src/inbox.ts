@@ -258,6 +258,21 @@ export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
 }
 
+export function markInboxThreadRead(
+  items: InboxViewItem[],
+  threadId: string,
+): InboxViewItem[] {
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.thread_id !== threadId || item.unread !== true) {
+      return item;
+    }
+    changed = true;
+    return { ...item, unread: false, unread_count: 0 };
+  });
+  return changed ? next : items;
+}
+
 function rebuildInboxThreads(
   items: InboxViewItem[],
   previous: InboxThread[],
@@ -493,8 +508,9 @@ function threadSurface(
   const prompts = fromMessages ?? fallback?.prompts ?? [];
   const unread =
     prompts.length > 0 ||
-    messages.some((item) => item.unread === true) ||
-    fallback?.unread === true;
+    (messages.length > 0
+      ? messages.some((item) => item.unread === true)
+      : fallback?.unread === true);
   const counts = [
     ...messages.map((item) => item.unread_count ?? 0),
     fallback?.unread_count ?? 0,

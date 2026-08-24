@@ -107,6 +107,7 @@ export interface FeishuImClient {
   uploadFile?(input: FeishuUploadFile): Promise<{ file_key: string }>;
   resolveUserNames?(ids: string[]): Promise<Map<string, string>>;
   readMessageStatus?(messageIds: string[]): Promise<Map<string, boolean>>;
+  readMessageUsers?(messageId: string): Promise<unknown>;
 }
 
 export interface LarkCliClientOptions {
@@ -414,6 +415,22 @@ export class LarkCliClient implements FeishuImClient {
       }
     }
     return names;
+  }
+
+  async readMessageUsers(messageId: string): Promise<unknown> {
+    const id = messageId.trim();
+    if (!id.startsWith("om_")) {
+      return { items: [] };
+    }
+    try {
+      return await this.request({
+        method: "GET",
+        path: `/open-apis/im/v1/messages/${encodeURIComponent(id)}/read_users`,
+        params: { user_id_type: "open_id", page_size: 50 },
+      });
+    } catch {
+      return { items: [] };
+    }
   }
 
   async readMessageStatus(messageIds: string[]): Promise<Map<string, boolean>> {

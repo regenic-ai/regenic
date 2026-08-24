@@ -5,6 +5,7 @@ import type {
   EngineInstallationView,
   InboxViewItem,
   KernelSettingsView,
+  MessageReceipt,
   PersonalEngineView,
   PromptAnswerItem,
   ReplyAttachmentInput,
@@ -119,7 +120,24 @@ export async function fetchInbox(
         : item.unread === true
           ? 1
           : 0,
+    can_receipt: item.can_receipt === true,
+    receipt: normalizeReceipt(item.receipt),
   }));
+}
+
+function normalizeReceipt(value: InboxViewItem["receipt"]): MessageReceipt | undefined {
+  if (!value || (value.state !== "sent" && value.state !== "read")) {
+    return undefined;
+  }
+  return {
+    state: value.state,
+    ...(typeof value.read_at === "string" && value.read_at.trim()
+      ? { read_at: value.read_at.trim() }
+      : {}),
+    ...(typeof value.read_count === "number" && value.read_count > 0
+      ? { read_count: value.read_count }
+      : {}),
+  };
 }
 
 function normalizePrompts(value: InboxViewItem["prompts"]): ThreadPrompt[] {

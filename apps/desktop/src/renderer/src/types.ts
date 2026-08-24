@@ -41,6 +41,13 @@ export type MessageDirection = "inbound" | "outbound";
 export type ThreadActivity = "awaiting_user" | "working";
 export type ListTitleMode = "conversation" | "face" | "prompt";
 export type PromptPresentation = "choice" | "approval" | "plan_review";
+export type ReceiptState = "sent" | "read";
+
+export interface MessageReceipt {
+  state: ReceiptState;
+  read_at?: string;
+  read_count?: number;
+}
 
 export interface PromptOption {
   label: string;
@@ -101,6 +108,8 @@ export interface InboxViewItem {
   prompts?: ThreadPrompt[];
   unread?: boolean;
   unread_count?: number;
+  can_receipt?: boolean;
+  receipt?: MessageReceipt;
 }
 
 export interface IngestAttempt {

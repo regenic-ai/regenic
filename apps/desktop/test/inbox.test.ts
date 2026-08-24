@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   groupInboxThreads,
   evictThreadCache,
+  markInboxThreadRead,
   orderThreadMessages,
   openedThreadView,
   overlayThreadMessages,
@@ -314,6 +315,19 @@ describe("inbox sort", () => {
       "dsh:sess": [message("later", "2026-08-24T10:01:00.000Z", "dsh:sess")],
     });
     assert.equal(overlaid[0].prompts[0]?.prompt_id, "q:rpc");
+  });
+
+  it("clears unread on a thread without changing other rows", () => {
+    const unread = message("in", "2026-08-24T10:00:00.000Z", "feishu:oc_1");
+    unread.unread = true;
+    unread.unread_count = 1;
+    unread.thread_id = "feishu:oc_1";
+    const other = message("other", "2026-08-24T09:00:00.000Z", "feishu:oc_2");
+    other.unread = true;
+    other.thread_id = "feishu:oc_2";
+    const next = markInboxThreadRead([unread, other], "feishu:oc_1");
+    assert.equal(next[0].unread, false);
+    assert.equal(next[1].unread, true);
   });
 });
 

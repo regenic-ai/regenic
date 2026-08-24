@@ -36,6 +36,12 @@ import {
   resolveFeishuInbound,
 } from "./feishu-attention";
 import {
+  cacheFeishuReceipt,
+  cachedFeishuReceipt,
+  feishuSentMessageId,
+  receiptFromReadUsers,
+} from "./feishu-receipts";
+import {
   larkCliCatalogHint,
   larkCliReady,
   listFeishuCatalogChats,
@@ -85,6 +91,7 @@ export const feishuChatDriver: ChannelDriver = {
       list_title: "conversation",
       hydrate_on_open: true,
       attention: true,
+      receipts: true,
     };
   },
 
@@ -231,6 +238,46 @@ export const feishuChatDriver: ChannelDriver = {
     if (thread.source === FEISHU_SOURCE) {
       markFeishuChatRead(thread.target);
     }
+  },
+
+  async readReceipts(installation, threads, _host, env) {
+    const receipts = new Map();
+    if (!this.capabilities(installation).receipts) {
+      return receipts;
+    }
+    const client = larkClient(env);
+    if (!client.readMessageUsers) {
+      return receipts;
+    }
+    const wanted: Array<{ external_id: string; messageId: string }> = [];
+    for (const thread of threads) {
+      if (thread.source !== FEISHU_SOURCE) {
+        continue;
+      }
+      for (const outbound of thread.outbound) {
+        const messageId = feishuSentMessageId(outbound.external_id);
+        if (messageId) {
+          wanted.push({ external_id: outbound.external_id, messageId });
+        }
+      }
+    }
+    const unique = [
+      ...new Map(wanted.map((item) => [item.messageId, item])).values(),
+    ].slice(0, 10);
+    for (const item of unique) {
+      const cached = cachedFeishuReceipt(item.messageId);
+      const receipt =
+        cached ?? receiptFromReadUsers(await client.readMessageUsers(item.messageId));
+      if (!cached) {
+        cacheFeishuReceipt(item.messageId, receipt);
+      }
+      for (const row of wanted) {
+        if (row.messageId === item.messageId) {
+          receipts.set(row.external_id, receipt);
+        }
+      }
+    }
+    return receipts;
   },
 
   async probeCatalog({ env }) {

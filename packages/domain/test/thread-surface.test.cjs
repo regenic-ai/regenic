@@ -4,6 +4,7 @@ const {
   ChannelDriverRegistry,
   collectLatestInbound,
   computeThreadUnread,
+  normalizeMessageReceipt,
   normalizePromptAnswers,
   withSurfaceGeneration,
 } = require("../dist");
@@ -52,12 +53,26 @@ describe("thread surface", () => {
     assert.equal(fromWait.unread, true);
   });
 
-  it("prefers a source overlay when the kernel has no pending prompt", () => {
-    const overlay = computeThreadUnread({
+  it("does not let a source 'read' overlay hide a never-opened inbound", () => {
+    const hidden = computeThreadUnread({
       source: { unread: false, unread_count: 0 },
       latestInbound: { external_id: "om_new", occurred_at: "2026-08-24T12:00:00.000Z" },
     });
-    assert.equal(overlay.unread, false);
+    assert.equal(hidden.unread, true);
+    const opened = computeThreadUnread({
+      source: { unread: true, unread_count: 3 },
+      latestInbound: { external_id: "om_new", occurred_at: "2026-08-24T12:00:00.000Z" },
+      pref: {
+        last_read_at: "2026-08-24T12:00:00.000Z",
+        last_read_external_id: "om_new",
+      },
+    });
+    assert.equal(opened.unread, false);
+    const sourceOnly = computeThreadUnread({
+      source: { unread: true, unread_count: 2 },
+    });
+    assert.equal(sourceOnly.unread, true);
+    assert.equal(sourceOnly.unread_count, 2);
   });
 
   it("picks the latest inbound on the thread, not the list face", () => {
@@ -176,5 +191,70 @@ describe("thread surface", () => {
     assert.equal(answered.accepted, true);
     assert.equal(drivers.canPrompt([installation], thread), true);
     assert.equal(drivers.canAttention([installation], thread), false);
+    assert.equal(drivers.canReceipt([installation], thread), false);
+  });
+
+  it("keeps peer-read receipts off the unread cursor", () => {
+    assert.deepEqual(normalizeMessageReceipt({ state: "read", read_count: 2 }), {
+      state: "read",
+      read_count: 2,
+    });
+    assert.equal(normalizeMessageReceipt({ state: "opened" }), undefined);
+    const unread = computeThreadUnread({
+      latestInbound: { external_id: "in:1", occurred_at: "2026-08-24T10:00:00.000Z" },
+    });
+    assert.equal(unread.unread, true);
+  });
+
+  it("reads receipts through the driver, not a channel name", async () => {
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "chat",
+        source: "chat",
+        capabilities: () => ({
+          sync: true,
+          reply: true,
+          create: false,
+          receipts: true,
+        }),
+        matchesThread: (_installation, thread) => thread.source === "chat",
+        ownsThread: () => true,
+        canReply: () => true,
+        async readReceipts(_installation, threads) {
+          const receipts = new Map();
+          receipts.set(threads[0].outbound[0].external_id, {
+            state: "read",
+            read_count: 1,
+          });
+          return receipts;
+        },
+      }),
+    );
+    const installation = {
+      id: "c1",
+      org_id: "local-owner",
+      connector_type: "chat",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-24T00:00:00.000Z",
+    };
+    const thread = { source: "chat", target: "oc_1" };
+    assert.equal(drivers.canReceipt([installation], thread), true);
+    const receipts = await drivers.readReceipts(
+      [installation],
+      [
+        {
+          ...thread,
+          outbound: [
+            { external_id: "oc_1:out:om_1", occurred_at: "2026-08-24T12:00:00.000Z" },
+          ],
+        },
+      ],
+      {},
+    );
+    assert.deepEqual(receipts.get("oc_1:out:om_1"), {
+      state: "read",
+      read_count: 1,
+    });
   });
 });

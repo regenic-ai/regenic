@@ -29,12 +29,14 @@ import {
   type MessageDirection,
   type MessageKind,
   type PromptAnswer,
+  type MessageReceipt,
   type ThreadActivity,
   type ThreadAttention,
   type ThreadAttentionQuery,
   type ThreadInboundCursor,
   type ThreadInboundScan,
   type ThreadPrompt,
+  type ThreadReceiptQuery,
 } from "@regenic/domain";
 import {
   resolveInboxBodies,
@@ -80,6 +82,8 @@ export interface InboxViewItem {
   prompts: ThreadPrompt[];
   unread: boolean;
   unread_count: number;
+  can_receipt: boolean;
+  receipt?: MessageReceipt;
 }
 
 export interface ConversationPrefView {
@@ -190,11 +194,16 @@ export class PersonalInboxService {
       authority,
       blobs,
     );
-    const [prompts, attention] = await Promise.all([
+    const [prompts, attention, receipts] = await Promise.all([
       this.drivers.listPromptsForThreads(installations, [thread], host),
       this.drivers.readAttention(
         installations,
         withInboundHint([thread], inboundByThread),
+        host,
+      ),
+      this.drivers.readReceipts(
+        installations,
+        receiptQueriesOf([{ item, threadId, body }]),
         host,
       ),
     ]);
@@ -208,6 +217,8 @@ export class PersonalInboxService {
       prompts,
       attention,
       inboundByThread,
+      new Set(),
+      receipts,
     );
   }
 
@@ -374,13 +385,25 @@ export class PersonalInboxService {
           )
         : inboundFromPage;
     const awaitingUser = awaitingUserThreads(resolved);
-    const [livePrompts, attention] = await Promise.all([
+    const [livePrompts, attention, receiptPage] = await Promise.all([
       this.drivers.listPromptsForThreads(installations, threads, host),
       this.drivers.readAttention(
         installations,
         withInboundHint(threads, inboundByThread),
         host,
       ),
+      loadInboxReceipts({
+        heads: query.heads === true,
+        thread,
+        since: query.since,
+        resolved,
+        installations,
+        drivers: this.drivers,
+        host,
+        authority,
+        blobs,
+        orgId,
+      }),
     ]);
     const prompts = await promptLabelsFor(
       orgId,
@@ -392,7 +415,8 @@ export class PersonalInboxService {
       query.heads === true,
       siblings,
     );
-    return resolved.map(({ item, threadId, body }) => {
+    const includeReceipts = query.heads !== true;
+    return [...resolved, ...receiptPage.extras].map(({ item, threadId, body }) => {
       const view = decorateInboxItem(
         item,
         body,
@@ -404,6 +428,8 @@ export class PersonalInboxService {
         attention,
         inboundByThread,
         awaitingUser,
+        receiptPage.receipts,
+        includeReceipts,
       );
       const prompt = prompts.get(threadId);
       const titled =
@@ -592,11 +618,14 @@ function decorateInboxItem(
   attentionByThread: ReadonlyMap<string, ThreadAttention> = new Map(),
   inboundByThread: ReadonlyMap<string, ThreadInboundCursor> = new Map(),
   awaitingUser: ReadonlySet<string> = new Set(),
+  receiptsByOutbound: ReadonlyMap<string, MessageReceipt> = new Map(),
+  includeReceipts = true,
 ): InboxViewItem {
   const surface = messageSurfaceOf(item.event, body);
   const thread = threadOf(item.event);
   const threadId = threadIdOf(thread);
   const prompts = promptsByThread.get(threadId) ?? [];
+  const canReceipt = drivers.canReceipt(installations, thread);
   const attention = computeThreadUnread({
     source: attentionByThread.get(threadId),
     pref,
@@ -626,6 +655,15 @@ function decorateInboxItem(
     prompts,
     unread: attention.unread,
     unread_count: attention.unread_count ?? (attention.unread ? 1 : 0),
+    can_receipt: canReceipt,
+    receipt: includeReceipts
+      ? outboundReceipt(
+          surface.direction,
+          item.event.external_id,
+          canReceipt,
+          receiptsByOutbound,
+        )
+      : undefined,
   };
 }
 
@@ -1002,6 +1040,156 @@ function inboundScansOf(
       activity: surface.activity,
     };
   });
+}
+
+const RECEIPT_SCAN_LIMIT = 20;
+
+type InboxResolvedRow = {
+  item: { decision: ArrangementDecision; event: EventRecord };
+  threadId: string;
+  body: InboxBody;
+};
+
+async function loadInboxReceipts(input: {
+  heads: boolean;
+  thread?: ConversationThread;
+  since?: string;
+  resolved: InboxResolvedRow[];
+  installations: ConnectorInstallation[];
+  drivers: ChannelDriverRegistry;
+  host: Parameters<ChannelDriverRegistry["readReceipts"]>[2];
+  authority: AuthorityStore;
+  blobs: BlobStore;
+  orgId: string;
+}): Promise<{
+  receipts: ReadonlyMap<string, MessageReceipt>;
+  extras: InboxResolvedRow[];
+}> {
+  if (input.heads) {
+    return { receipts: new Map(), extras: [] };
+  }
+  const siblingOutbound =
+    input.thread && input.drivers.canReceipt(input.installations, input.thread)
+      ? await input.authority.listInbox(input.orgId, {
+          siblings: true,
+          thread_ids: [threadIdOf(input.thread)],
+        })
+      : [];
+  const queries =
+    siblingOutbound.length > 0
+      ? receiptQueriesFromOutboundEvents(siblingOutbound)
+      : receiptQueriesOf(input.resolved);
+  const receipts = await input.drivers.readReceipts(
+    input.installations,
+    queries,
+    input.host,
+  );
+  if (!input.since || siblingOutbound.length === 0) {
+    return { receipts, extras: [] };
+  }
+  const seen = new Set(input.resolved.map((row) => row.item.event.id));
+  const extras = siblingOutbound.filter(
+    (item) =>
+      !seen.has(item.event.id) &&
+      isLocalOutboundId(item.event.external_id) &&
+      receipts.get(item.event.external_id)?.state === "read",
+  );
+  if (extras.length === 0) {
+    return { receipts, extras: [] };
+  }
+  const bodies = await resolveInboxBodies(
+    input.authority,
+    input.blobs,
+    extras.map((item) => item.event.content_hash),
+    "preview",
+  );
+  return {
+    receipts,
+    extras: extras.map((item) => ({
+      item,
+      threadId: conversationId(
+        item.event.source,
+        item.event.external_id,
+        item.event.id,
+      ),
+      body: item.event.content_hash
+        ? (bodies.get(item.event.content_hash) ?? {})
+        : {},
+    })),
+  };
+}
+
+function receiptQueriesOf(resolved: InboxResolvedRow[]): ThreadReceiptQuery[] {
+  const groups = new Map<string, ThreadReceiptQuery>();
+  for (const row of resolved) {
+    const surface = messageSurfaceOf(row.item.event, row.body);
+    if (surface.direction !== "outbound") {
+      continue;
+    }
+    const thread = threadOf(row.item.event);
+    const current = groups.get(row.threadId) ?? { ...thread, outbound: [] };
+    current.outbound.push({
+      external_id: row.item.event.external_id,
+      occurred_at: row.item.event.occurred_at,
+    });
+    groups.set(row.threadId, current);
+  }
+  return [...groups.values()].map((query) => ({
+    ...query,
+    outbound: newestOutbound(query.outbound),
+  }));
+}
+
+function receiptQueriesFromOutboundEvents(
+  items: Array<{ event: EventRecord }>,
+): ThreadReceiptQuery[] {
+  const groups = new Map<string, ThreadReceiptQuery>();
+  for (const { event } of items) {
+    if (!isLocalOutboundId(event.external_id)) {
+      continue;
+    }
+    const thread = threadOf(event);
+    const threadId = threadIdOf(thread);
+    const current = groups.get(threadId) ?? { ...thread, outbound: [] };
+    current.outbound.push({
+      external_id: event.external_id,
+      occurred_at: event.occurred_at,
+    });
+    groups.set(threadId, current);
+  }
+  return [...groups.values()].map((query) => ({
+    ...query,
+    outbound: newestOutbound(query.outbound),
+  }));
+}
+
+function newestOutbound<T extends { occurred_at: string; external_id: string }>(
+  items: T[],
+): T[] {
+  return items
+    .slice()
+    .sort((left, right) =>
+      left.occurred_at === right.occurred_at
+        ? left.external_id < right.external_id
+          ? 1
+          : -1
+        : left.occurred_at < right.occurred_at
+          ? 1
+          : -1,
+    )
+    .slice(0, RECEIPT_SCAN_LIMIT);
+}
+
+function outboundReceipt(
+  direction: MessageDirection,
+  externalId: string,
+  canReceipt: boolean,
+  receipts: ReadonlyMap<string, MessageReceipt>,
+): MessageReceipt | undefined {
+  if (direction !== "outbound") {
+    return undefined;
+  }
+  return receipts.get(externalId) ?? (canReceipt ? { state: "sent" } : undefined);
 }
 
 function withInboundHint(

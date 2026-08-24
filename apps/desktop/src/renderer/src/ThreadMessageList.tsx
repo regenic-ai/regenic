@@ -12,6 +12,7 @@ import { formatChatTime } from "./format";
 import { MessageBody } from "./MessageBody";
 import {
   messageRole,
+  receiptCopy,
   roleLabel,
   sameSpeaker,
   speakerMark,
@@ -384,6 +385,7 @@ const ChatRow = memo(function ChatRow({
   canReply: boolean;
   onReply: (item: InboxViewItem) => void;
 }) {
+  const receipt = receiptCopy(item);
   return (
     <div className={`chat-row chat-row-${role}${follow ? " is-follow" : ""}`}>
       <ChatAvatar role={role} label={item.actor_label} />
@@ -391,6 +393,11 @@ const ChatRow = memo(function ChatRow({
         <div className="chat-meta">
           <strong>{roleLabel(role, channel, item.actor_label)}</strong>
           <span>{formatChatTime(item.event.occurred_at)}</span>
+          {receipt ? (
+            <span className={`chat-receipt is-${item.receipt?.state ?? "sent"}`}>
+              {receipt}
+            </span>
+          ) : null}
           {canReply ? (
             <button type="button" className="chat-reply" onClick={() => onReply(item)}>
               Reply

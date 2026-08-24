@@ -881,6 +881,8 @@ describe("personal /v1/me", () => {
       const row = heads.find((item) => item.thread_id === "dsh:session-unread");
       assert.equal(row.direction, "outbound");
       assert.equal(row.unread, true);
+      assert.equal(row.can_receipt, false);
+      assert.equal(row.receipt, undefined);
       const read = await fetch(`${origin}/v1/me/conversations/attention`, {
         method: "POST",
         headers: { "content-type": "application/json" },

@@ -110,7 +110,12 @@ export function TrayApp() {
                       {thread.channel_label}
                     </span>
                     <span className="item-title">{threadTitle(thread)}</span>
-                    <span>{latest ? formatChatTime(latest.event.occurred_at) : ""}</span>
+                    <span className="item-time">
+                      {thread.unread ? (
+                        <span className="item-unread" aria-label="Unread" />
+                      ) : null}
+                      {latest ? formatChatTime(latest.event.occurred_at) : ""}
+                    </span>
                   </div>
                 </div>
               </div>

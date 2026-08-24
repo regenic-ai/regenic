@@ -7,6 +7,7 @@ import type {
 } from "./ingestion";
 import type {
   AttentionAck,
+  MessageReceipt,
   PromptAnswer,
   ThreadAttention,
   ThreadInboundCursor,
@@ -26,6 +27,11 @@ export interface ConversationThread {
 /** Store-derived inbound cursor. Connectors may use it as an opaque hint. */
 export interface ThreadAttentionQuery extends ConversationThread {
   latest_inbound?: ThreadInboundCursor;
+}
+
+/** Outbound ids are opaque. Connectors recognize their own message ids. */
+export interface ThreadReceiptQuery extends ConversationThread {
+  outbound: Array<{ external_id: string; occurred_at: string }>;
 }
 
 export type ListTitleMode = "conversation" | "face" | "prompt";
@@ -64,10 +70,15 @@ export interface ChannelCapabilities {
    */
   prompts?: boolean;
   /**
-   * This install can report and ack source read state.
-   * Chat channels may set this. Absence falls back to the local cursor.
+   * This install can report and ack whether I have seen inbound.
+   * Absence still uses the local last_read cursor.
    */
   attention?: boolean;
+  /**
+   * This install can report whether the peer has read my outbound.
+   * Session agents omit it. Chat channels set it only when a real API exists.
+   */
+  receipts?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -185,6 +196,12 @@ export interface ChannelDriver {
     host: Host,
     env: NodeJS.ProcessEnv,
   ): Promise<void>;
+  readReceipts?(
+    installation: ConnectorInstallation,
+    threads: ThreadReceiptQuery[],
+    host: Host,
+    env: NodeJS.ProcessEnv,
+  ): Promise<Map<string, MessageReceipt>>;
   surfaceGeneration?(
     installation: ConnectorInstallation,
     host: Host,
@@ -398,6 +415,16 @@ export class ChannelDriverRegistry {
     );
   }
 
+  canReceipt(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): boolean {
+    const found = this.findForThread(installations, thread);
+    return Boolean(
+      found && found.driver.capabilities(found.installation).receipts,
+    );
+  }
+
   async listPrompts(
     installations: ConnectorInstallation[],
     thread: ConversationThread,
@@ -558,6 +585,66 @@ export class ChannelDriverRegistry {
     } catch {
       // Local cursor still stands. Source ack is best-effort.
     }
+  }
+
+  async readReceipts(
+    installations: ConnectorInstallation[],
+    threads: ThreadReceiptQuery[],
+    host: Host,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<Map<string, MessageReceipt>> {
+    const receipts = new Map<string, MessageReceipt>();
+    const groups = new Map<
+      string,
+      {
+        installation: ConnectorInstallation;
+        driver: ChannelDriver;
+        threads: ThreadReceiptQuery[];
+      }
+    >();
+    for (const thread of threads) {
+      if (thread.outbound.length === 0) {
+        continue;
+      }
+      const found = this.findForThread(installations, thread);
+      if (
+        !found?.driver.readReceipts ||
+        !found.driver.capabilities(found.installation).receipts
+      ) {
+        continue;
+      }
+      const group = groups.get(found.installation.id);
+      if (group) {
+        group.threads.push(thread);
+      } else {
+        groups.set(found.installation.id, {
+          installation: found.installation,
+          driver: found.driver,
+          threads: [thread],
+        });
+      }
+    }
+    await Promise.all(
+      [...groups.values()].map(async (group) => {
+        try {
+          const part = await group.driver.readReceipts?.(
+            group.installation,
+            group.threads,
+            host,
+            env,
+          );
+          if (!part) {
+            return;
+          }
+          for (const [id, value] of part) {
+            receipts.set(id, value);
+          }
+        } catch {
+          // Receipt lookup must not block inbox.
+        }
+      }),
+    );
+    return receipts;
   }
 
   surfaceGeneration(

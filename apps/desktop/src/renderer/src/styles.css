@@ -795,6 +795,15 @@ button {
   font-weight: 600;
 }
 
+.chat-receipt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-receipt.is-read {
+  color: var(--accent);
+}
+
 .chat-reply {
   margin-left: auto;
   opacity: 0;

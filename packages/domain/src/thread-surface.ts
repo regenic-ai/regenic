@@ -47,6 +47,38 @@ export interface ThreadAttention {
   mentioned?: boolean;
 }
 
+/** Peer read of my outbound. Not the same as my unread of their inbound. */
+export type ReceiptState = "sent" | "read";
+
+export interface MessageReceipt {
+  state: ReceiptState;
+  read_at?: string;
+  read_count?: number;
+}
+
+export function isReceiptState(value: unknown): value is ReceiptState {
+  return value === "sent" || value === "read";
+}
+
+export function normalizeMessageReceipt(value: unknown): MessageReceipt | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as { state?: unknown; read_at?: unknown; read_count?: unknown };
+  if (!isReceiptState(record.state)) {
+    return undefined;
+  }
+  return {
+    state: record.state,
+    ...(typeof record.read_at === "string" && record.read_at.trim()
+      ? { read_at: record.read_at.trim() }
+      : {}),
+    ...(typeof record.read_count === "number" && record.read_count > 0
+      ? { read_count: record.read_count }
+      : {}),
+  };
+}
+
 export interface AttentionAck {
   last_read_at?: string;
   last_read_external_id?: string;
@@ -151,27 +183,42 @@ export function computeThreadUnread(input: {
 }): ThreadAttention {
   if ((input.prompts?.length ?? 0) > 0 || input.activity === "awaiting_user") {
     const count = Math.max(1, input.source?.unread_count ?? 1);
-    return { unread: true, unread_count: count };
+    return { unread: true, unread_count: count, mentioned: input.source?.mentioned };
   }
-  if (input.source) {
+  if (input.latestInbound) {
+    const local = unreadFromLocalCursor(input.pref, input.latestInbound);
+    if (local.unread) {
+      return {
+        unread: true,
+        unread_count: Math.max(1, input.source?.unread_count ?? 1),
+        mentioned: input.source?.mentioned,
+      };
+    }
+    return { unread: false, mentioned: input.source?.mentioned };
+  }
+  if (input.source?.unread) {
     return {
-      unread: input.source.unread,
-      unread_count: input.source.unread_count,
+      unread: true,
+      unread_count: Math.max(1, input.source.unread_count ?? 1),
       mentioned: input.source.mentioned,
     };
   }
-  if (!input.latestInbound) {
-    return { unread: false };
-  }
-  const readId = input.pref?.last_read_external_id?.trim() ?? "";
-  const readAt = input.pref?.last_read_at?.trim() ?? "";
+  return { unread: false, mentioned: input.source?.mentioned };
+}
+
+function unreadFromLocalCursor(
+  pref: Pick<ConversationPref, "last_read_at" | "last_read_external_id"> | null | undefined,
+  latestInbound: ThreadInboundCursor,
+): ThreadAttention {
+  const readId = pref?.last_read_external_id?.trim() ?? "";
+  const readAt = pref?.last_read_at?.trim() ?? "";
   if (!readId && !readAt) {
     return { unread: true, unread_count: 1 };
   }
-  if (readId && readId === input.latestInbound.external_id) {
+  if (readId && readId === latestInbound.external_id) {
     return { unread: false };
   }
-  if (readAt && input.latestInbound.occurred_at <= readAt) {
+  if (readAt && latestInbound.occurred_at <= readAt) {
     return { unread: false };
   }
   return { unread: true, unread_count: 1 };

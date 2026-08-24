@@ -17,7 +17,9 @@ export function itemRevision(item: InboxViewItem): string {
     item.conversation_label ?? ""
   }\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}\t${
     item.unread ? "1" : "0"
-  }\t${(item.prompts ?? []).map((prompt) => prompt.prompt_id).join(",")}`;
+  }\t${item.can_receipt ? "1" : "0"}\t${item.receipt?.state ?? ""}\t${(
+    item.prompts ?? []
+  ).map((prompt) => prompt.prompt_id).join(",")}`;
 }
 
 export function inboxRevision(items: InboxViewItem[]): string {
