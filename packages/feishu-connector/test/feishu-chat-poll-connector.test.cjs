@@ -113,6 +113,7 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({ page_token: "page-2", start_time: "1723420860" }),
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
+    assert.equal(result.has_more, true);
   });
 
   it("keeps a start_time cursor after the history page is caught up", async () => {

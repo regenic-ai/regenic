@@ -131,7 +131,7 @@ export class SlackChannelPollConnector {
         this.toRecord(message),
       ),
     };
-    return { batch, next_cursor: nextCursor };
+    return { batch, next_cursor: nextCursor, has_more: Boolean(nextCursor) };
   }
 
   private toRecord(message: SlackHistoryMessage): IngestBatch["records"] {

@@ -422,6 +422,20 @@ describe("personal /v1/me", () => {
       assert.equal(head[0].thread_id, "dsh:session-x");
       assert.equal(head[0].event.external_id, "session-x:2");
       assert.equal(head[0].body_text, "second");
+      const recent = await (
+        await fetch(
+          `${origin}/v1/me/inbox?thread_id=${encodeURIComponent("dsh:session-x")}&limit=1`,
+        )
+      ).json();
+      assert.equal(recent.length, 1);
+      assert.equal(recent[0].body_text, "second");
+      const older = await (
+        await fetch(
+          `${origin}/v1/me/inbox?thread_id=${encodeURIComponent("dsh:session-x")}&before=${encodeURIComponent(recent[0].event.occurred_at)}&before_id=${encodeURIComponent(recent[0].event.id)}&limit=1`,
+        )
+      ).json();
+      assert.equal(older.length, 1);
+      assert.equal(older[0].body_text, "first");
       for (let index = 1; index < one.length; index += 1) {
         assert.ok(
           one[index - 1].event.occurred_at <= one[index].event.occurred_at,
@@ -832,6 +846,8 @@ describe("personal /v1/me", () => {
       assert.equal(engine.inbox_count, 1);
       assert.match(engine.inbox_digest, /^1:/);
       assert.equal(engine.pull.interval_ms, 0);
+      assert.equal(engine.pull.phase, "idle");
+      assert.equal(Array.isArray(engine.pull.streams), true);
       assert.equal(engine.pull.last_error_hint, null);
       assert.equal(engine.pull.network.kind, "ok");
       assert.equal(engine.installations[0].id, "slack-1");

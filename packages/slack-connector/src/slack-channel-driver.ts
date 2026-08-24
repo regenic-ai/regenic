@@ -133,7 +133,12 @@ async function mountChannel(
   if (!connector) {
     throw new ChannelDriverError("sync_failed", "Connector failed to mount");
   }
-  return { stream_key: `channel:${channelId}`, connector };
+  return {
+    stream_key: `channel:${channelId}`,
+    thread_id: `slack:${channelId}`,
+    label: configString(installation.config, "channel_name") ?? channelId,
+    connector,
+  };
 }
 
 function slackTokenEnv(credentialsRef: string | undefined): string {

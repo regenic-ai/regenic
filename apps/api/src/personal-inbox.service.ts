@@ -8,6 +8,8 @@ import {
   headsByThread,
   isThreadStatusItem,
   parseConversationThread,
+  takeRecentInboxItems,
+  normalizeInboxLimit,
   resolveMessageSurface,
   type ArrangementDecision,
   type AuthorityStore,
@@ -31,7 +33,7 @@ import {
   type ConnectorCatalogItem,
   type EngineInstallationView,
 } from "./personal-connector-view";
-import { pullStatus, type PullStatusView } from "./personal-pull-status";
+import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-status";
 import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
@@ -91,8 +93,11 @@ export interface PersonalEngineView {
 export interface InboxListQuery {
   since?: string;
   since_id?: string;
+  before?: string;
+  before_id?: string;
   heads?: boolean;
   thread_id?: string;
+  limit?: number;
 }
 
 export interface EngineQuery {
@@ -107,7 +112,10 @@ export class PersonalInboxService {
   ) {}
 
   async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
-    return this.loadThreadInbox(query);
+    return this.loadThreadInbox({
+      ...query,
+      limit: normalizeInboxLimit(query.limit),
+    });
   }
 
   async getInboxItem(eventId: string): Promise<InboxViewItem | null> {
@@ -146,7 +154,7 @@ export class PersonalInboxService {
       installations: EngineInstallationView[],
     ) => {
       if (!detailed) {
-        return connectorCatalog(installations, { env: process.env });
+        return [];
       }
       const probed = await this.drivers.probeCatalog(process.env);
       return connectorCatalog(installations, {
@@ -204,6 +212,9 @@ export class PersonalInboxService {
     const authority = host.get("authority");
     const blobs = host.get("blobs");
     const orgId = this.runtime.orgId();
+    if (query.thread_id) {
+      preferThread(query.thread_id);
+    }
     const thread = parseThreadQuery(query.thread_id);
     const storeQuery = inboxStoreQuery(query, thread);
     const [records, installations, prefs] = await Promise.all([
@@ -268,12 +279,8 @@ export class PersonalInboxService {
         view.list_title === "prompt" && prompt
           ? { ...view, conversation_label: prompt }
           : view;
-      if (
-        query.heads === true &&
-        (titled.list_title === "conversation" ||
-          (titled.list_title === "prompt" && titled.conversation_label))
-      ) {
-        return { ...titled, body_text: undefined, attachments: undefined };
+      if (query.heads === true) {
+        return trimInboxHead(titled);
       }
       return titled;
     });
@@ -600,7 +607,7 @@ export function selectInboxRecords<T extends { event: EventRecord }>(
   if (query.heads) {
     selected = headsByThread(selected);
   }
-  return selected;
+  return takeRecentInboxItems(selected, query);
 }
 
 export function isAfterCursor(
@@ -631,6 +638,9 @@ function inboxStoreQuery(
     target: thread?.target,
     since: query.since,
     since_id: query.since_id,
+    before: query.before,
+    before_id: query.before_id,
+    limit: query.limit,
     siblings: true,
   };
 }
@@ -667,6 +677,18 @@ function threadOf(event: EventRecord): ConversationThread {
   } catch {
     return { source: event.source, target: event.external_id };
   }
+}
+
+export function trimInboxHead<T extends {
+  list_title?: string;
+  conversation_label?: string | null;
+  body_text?: string;
+  attachments?: InboxAttachment[];
+}>(item: T): T {
+  if (item.list_title === "prompt" && item.conversation_label) {
+    return { ...item, body_text: undefined, attachments: undefined };
+  }
+  return { ...item, attachments: undefined };
 }
 
 export { PersonalKernelStoppedError };

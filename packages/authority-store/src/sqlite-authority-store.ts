@@ -6,6 +6,7 @@ import {
   AuthorityConflictError,
   conversationId,
   formatInboxDigest,
+  normalizeInboxLimit,
   threadExternalIdLike,
 } from "@regenic/domain";
 import type {
@@ -153,27 +154,50 @@ interface InsertEventInput extends SourceIdentity {
   expected_head_id: string | null;
 }
 
+export interface SqliteOpenOptions {
+  readonly?: boolean;
+}
+
 export class SqliteAuthorityStore
   implements AuthorityStore, ConnectorRuntimeStore
 {
   private readonly database: Database.Database;
+  readonly readonly: boolean;
 
-  constructor(path: string) {
-    mkdirSync(dirname(path), { recursive: true });
-    this.database = new Database(path);
+  constructor(path: string, options: SqliteOpenOptions = {}) {
+    this.readonly = options.readonly === true;
+    if (!this.readonly) {
+      mkdirSync(dirname(path), { recursive: true });
+    }
+    this.database = new Database(
+      path,
+      this.readonly ? { readonly: true, fileMustExist: true } : undefined,
+    );
     try {
       this.database.pragma("busy_timeout = 5000");
       this.database.pragma("foreign_keys = ON");
-      this.database.pragma("journal_mode = WAL");
+      if (!this.readonly) {
+        this.database.pragma("journal_mode = WAL");
+      }
       this.database.function(
         "conversation_id",
         (source: string, externalId: string, fallbackId: string) =>
           conversationId(source, externalId, fallbackId),
       );
-      this.migrate();
+      if (this.readonly) {
+        this.database.pragma("query_only = ON");
+      } else {
+        this.migrate();
+      }
     } catch (error) {
       this.database.close();
       throw error;
+    }
+  }
+
+  private assertWritable(): void {
+    if (this.readonly) {
+      throw new Error("Authority database is open read-only");
     }
   }
 
@@ -235,6 +259,7 @@ export class SqliteAuthorityStore
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
+    this.assertWritable();
     this.database
       .prepare(
         `
@@ -279,7 +304,11 @@ export class SqliteAuthorityStore
     }
     const { sql, params } = this.inboxSql(orgId, query);
     const rows = this.database.prepare(sql).all(...params) as InboxRow[];
-    return rows.map((row) => this.toInboxItem(row));
+    const items = rows.map((row) => this.toInboxItem(row));
+    if (inboxUsesNewestFirst(query)) {
+      items.reverse();
+    }
+    return items;
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
@@ -370,6 +399,7 @@ export class SqliteAuthorityStore
   async putConversationPref(
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const current = this.database
         .prepare(
@@ -424,14 +454,17 @@ export class SqliteAuthorityStore
   }
 
   async append(input: NewEvent): Promise<EventRecord> {
+    this.assertWritable();
     return this.insert({ ...input, operation: "create" });
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
+    this.assertWritable();
     return this.insert({ ...input, operation: "revise" });
   }
 
   async markTombstone(input: TombstoneEvent): Promise<EventRecord> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const current = this.findCurrent(input);
       return this.insertWithinTransaction({
@@ -447,6 +480,7 @@ export class SqliteAuthorityStore
   async createInstallation(
     input: NewConnectorInstallation,
   ): Promise<ConnectorInstallation> {
+    this.assertWritable();
     const installation: ConnectorInstallation = {
       ...input,
       config: { ...input.config },
@@ -503,6 +537,7 @@ export class SqliteAuthorityStore
   async setInstallationStatus(
     input: SetConnectorInstallationStatus,
   ): Promise<ConnectorInstallation | null> {
+    this.assertWritable();
     const updated = this.database
       .prepare(
         `
@@ -517,6 +552,7 @@ export class SqliteAuthorityStore
   async updateInstallationConfig(
     input: SetConnectorInstallationConfig,
   ): Promise<ConnectorInstallation | null> {
+    this.assertWritable();
     const updated = this.database
       .prepare(
         `
@@ -534,6 +570,7 @@ export class SqliteAuthorityStore
   }
 
   async deleteInstallation(id: string, orgId: string): Promise<boolean> {
+    this.assertWritable();
     const removed = this.database.transaction(() => {
       const row = this.database
         .prepare(
@@ -574,6 +611,7 @@ export class SqliteAuthorityStore
     now: string;
     lease_duration_ms: number;
   }): Promise<ConnectorLease | null> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const installation = this.database
         .prepare(`SELECT status FROM connector_installations WHERE id = ?`)
@@ -641,6 +679,7 @@ export class SqliteAuthorityStore
   }
 
   async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
+    this.assertWritable();
     const released = this.database
       .prepare(
         `
@@ -661,6 +700,7 @@ export class SqliteAuthorityStore
   async resetCursor(
     input: ResetConnectorCursor,
   ): Promise<ConnectorStreamCursor | null> {
+    this.assertWritable();
     const transaction = this.database.transaction(() => {
       const cursor = this.findCursorRow(input.installation_id, input.stream_key);
       if (!cursor) {
@@ -690,6 +730,7 @@ export class SqliteAuthorityStore
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
+    this.assertWritable();
     this.database
       .prepare(
         `
@@ -711,6 +752,8 @@ export class SqliteAuthorityStore
   }
 
   async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
+    this.assertWritable();
+
     const transaction = this.database.transaction(() => {
       const cursor = this.findCursorRow(input.installation_id, input.stream_key);
       if (!cursor || cursor.lease_owner !== input.lease_owner) {
@@ -1053,18 +1096,20 @@ export class SqliteAuthorityStore
         )`);
         params.push(orgId);
       }
+      const tail = inboxTail(query);
       return {
         sql: `
           SELECT ${INBOX_COLUMNS}
           FROM message_dispositions d
           JOIN events e ON e.id = d.event_id
           WHERE ${clauses.join(" AND ")}
-          ORDER BY e.occurred_at ASC, e.id ASC
+          ${tail.orderSql}
         `,
-        params,
+        params: [...params, ...tail.orderParams],
       };
     }
     const { clauses, params } = this.inboxClauses(orgId, query, "current_work");
+    const tail = inboxTail(query);
     return {
       sql: `
         SELECT ${INBOX_COLUMNS}
@@ -1072,9 +1117,9 @@ export class SqliteAuthorityStore
         JOIN events e ON e.id = d.event_id
         JOIN source_heads h ON h.current_event_id = e.id
         WHERE ${clauses.join(" AND ")}
-        ORDER BY e.occurred_at ASC, e.id ASC
+        ${tail.orderSql}
       `,
-      params,
+      params: [...params, ...tail.orderParams],
     };
   }
 
@@ -1114,6 +1159,12 @@ export class SqliteAuthorityStore
         `(${event}.ingested_at > ? OR (${event}.ingested_at = ? AND ${event}.id > ?))`,
       );
       params.push(query.since, query.since, query.since_id ?? "");
+    }
+    if (query?.before) {
+      clauses.push(
+        `(${event}.occurred_at < ? OR (${event}.occurred_at = ? AND ${event}.id < ?))`,
+      );
+      params.push(query.before, query.before, query.before_id ?? "");
     }
     return { clauses, params };
   }
@@ -1240,4 +1291,25 @@ export class SqliteAuthorityStore
       created_at: row.created_at,
     };
   }
+}
+
+function inboxUsesNewestFirst(query?: InboxQuery): boolean {
+  return Boolean(!query?.heads && normalizeInboxLimit(query?.limit));
+}
+
+function inboxTail(query?: InboxQuery): {
+  orderSql: string;
+  orderParams: unknown[];
+} {
+  const limit = query?.heads ? undefined : normalizeInboxLimit(query?.limit);
+  if (limit !== undefined) {
+    return {
+      orderSql: "ORDER BY e.occurred_at DESC, e.id DESC LIMIT ?",
+      orderParams: [limit],
+    };
+  }
+  return {
+    orderSql: "ORDER BY e.occurred_at ASC, e.id ASC",
+    orderParams: [],
+  };
 }

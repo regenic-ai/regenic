@@ -358,6 +358,24 @@ describe("local ingestion persistence", () => {
     assert.equal(heads.length, threads.size);
     assert.ok(heads.length >= 2);
     assert.ok(thread.length >= 2);
+    const recent = await authorityStore.listInbox("local-owner", {
+      siblings: true,
+      source: "dsh",
+      target: "session-x",
+      limit: 1,
+    });
+    assert.equal(recent.length, 1);
+    assert.equal(recent[0].event.external_id, "session-x:2");
+    const older = await authorityStore.listInbox("local-owner", {
+      siblings: true,
+      source: "dsh",
+      target: "session-x",
+      before: recent[0].event.occurred_at,
+      before_id: recent[0].event.id,
+      limit: 1,
+    });
+    assert.equal(older.length, 1);
+    assert.equal(older[0].event.external_id, "session-x:1");
     assert.equal(summary.count, heads.length);
     assert.equal(summary.digest.startsWith(`${heads.length}:`), true);
     assert.ok(current.length >= heads.length);

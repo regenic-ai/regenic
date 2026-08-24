@@ -24,6 +24,9 @@ import {
   formatChatTime,
   installationStatusLabel,
   networkWatchLabel,
+  pullStatusLabel,
+  threadSyncLabel,
+  threadSyncTone,
 } from "./format";
 import {
   applyPrefOverlay,
@@ -48,6 +51,7 @@ import {
   sameUtterance,
   threadActivityCopy,
   threadActivityOf,
+  threadLoadedCountCopy,
   threadTitle,
 } from "./message-view";
 import {
@@ -55,10 +59,14 @@ import {
   type ThreadMessageListHandle,
 } from "./ThreadMessageList";
 import {
+  hasOlderPage,
   inboxCursor,
   mergeInboxDelta,
+  mergeOlderInbox,
+  olderInboxCursor,
   reuseInboxItems,
   reuseInboxList,
+  THREAD_PAGE_SIZE,
   type InboxReuse,
 } from "./thread-window";
 import { BrandBadge, BrandLockup } from "./Brand";
@@ -94,9 +102,15 @@ function engineRevision(
   const catalog = (engine.catalog ?? [])
     .map((item) => `${item.connector_type}:${item.installed}:${item.setup_ready ? 1 : 0}`)
     .join(",");
-  return `${engine.kernel}|${engine.inbox_count}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${installs}|${catalog}${
+  return `${engine.kernel}|${engine.inbox_count}|${engine.pull?.phase ?? ""}|${engine.pull?.catching_up_count ?? 0}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${pullStreamRevision(engine)}|${installs}|${catalog}${
     detailed ? `|${engine.pull?.last_tick_at ?? ""}` : ""
   }`;
+}
+
+function pullStreamRevision(engine: PersonalEngineView): string {
+  return (engine.pull?.streams ?? [])
+    .map((item) => `${item.thread_id ?? item.stream_key}:${item.phase}`)
+    .join(",");
 }
 
 export function ConsoleApp() {
@@ -110,6 +124,11 @@ export function ConsoleApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [loadingOlderId, setLoadingOlderId] = useState<string | null>(null);
+  const [hasOlderByThread, setHasOlderByThread] = useState<Record<string, boolean>>(
+    {},
+  );
   const [prefOverlay, setPrefOverlay] = useState<Record<string, ConversationPrefOverlay>>(
     {},
   );
@@ -133,6 +152,9 @@ export function ConsoleApp() {
   const reuseHintRef = useRef<InboxReuse | undefined>(undefined);
   const groupedInboxRef = useRef<InboxViewItem[] | null>(null);
   const loadedThreadsRef = useRef(new Set<string>());
+  const olderBusyRef = useRef(new Set<string>());
+  const hasOlderRef = useRef(hasOlderByThread);
+  hasOlderRef.current = hasOlderByThread;
   const threadLoadSeq = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
   const delayRef = useRef(POLL_MS);
@@ -169,39 +191,93 @@ export function ConsoleApp() {
     const current = messagesRef.current[threadId] ?? [];
     const loaded = loadedThreadsRef.current.has(threadId);
     const cursor = inboxCursor(current);
-    if (loaded && cursor && (mode === "poll" || current.length > 1)) {
-      const delta = await fetchInbox({
+    if (mode === "open" && !loaded) {
+      setOpeningId(threadId);
+    }
+    try {
+      if (loaded && cursor && (mode === "poll" || current.length > 1)) {
+        const delta = await fetchInbox({
+          thread_id: threadId,
+          since: cursor.since,
+          since_id: cursor.since_id,
+        });
+        if (threadLoadSeq.current[threadId] !== seq) {
+          return;
+        }
+        if (delta.length === 0) {
+          return;
+        }
+        setMessagesByThread((prev) =>
+          rememberThreadMessages(
+            prev,
+            threadId,
+            orderThreadMessages(mergeInboxDelta(prev[threadId] ?? current, delta)),
+          ),
+        );
+        return;
+      }
+      const items = await fetchInbox({
         thread_id: threadId,
-        since: cursor.since,
-        since_id: cursor.since_id,
+        limit: THREAD_PAGE_SIZE,
       });
       if (threadLoadSeq.current[threadId] !== seq) {
         return;
       }
-      if (delta.length === 0) {
+      loadedThreadsRef.current.add(threadId);
+      setHasOlderByThread((prev) => ({
+        ...prev,
+        [threadId]: hasOlderPage(items.length),
+      }));
+      setMessagesByThread((prev) =>
+        rememberThreadMessages(
+          prev,
+          threadId,
+          orderThreadMessages(reuseInboxItems(prev[threadId] ?? [], items)),
+        ),
+      );
+    } finally {
+      if (mode === "open") {
+        setOpeningId((currentId) => (currentId === threadId ? null : currentId));
+      }
+    }
+  };
+
+  const loadOlder = async (threadId: string) => {
+    if (olderBusyRef.current.has(threadId) || hasOlderRef.current[threadId] === false) {
+      return;
+    }
+    const current = messagesRef.current[threadId] ?? [];
+    const cursor = olderInboxCursor(current);
+    if (!cursor) {
+      return;
+    }
+    olderBusyRef.current.add(threadId);
+    setLoadingOlderId(threadId);
+    try {
+      const page = await fetchInbox({
+        thread_id: threadId,
+        before: cursor.before,
+        before_id: cursor.before_id,
+        limit: THREAD_PAGE_SIZE,
+      });
+      setHasOlderByThread((prev) => ({
+        ...prev,
+        [threadId]: hasOlderPage(page.length),
+      }));
+      if (page.length === 0) {
         return;
       }
       setMessagesByThread((prev) =>
         rememberThreadMessages(
           prev,
           threadId,
-          orderThreadMessages(mergeInboxDelta(prev[threadId] ?? current, delta)),
+          mergeOlderInbox(prev[threadId] ?? current, page),
         ),
       );
-      return;
+    } finally {
+      olderBusyRef.current.delete(threadId);
+      setLoadingOlderId((currentId) => (currentId === threadId ? null : currentId));
     }
-    const items = await fetchInbox({ thread_id: threadId });
-    if (threadLoadSeq.current[threadId] !== seq) {
-      return;
-    }
-    loadedThreadsRef.current.add(threadId);
-    setMessagesByThread((prev) =>
-      rememberThreadMessages(
-        prev,
-        threadId,
-        orderThreadMessages(reuseInboxItems(prev[threadId] ?? [], items)),
-      ),
-    );
   };
 
   const rememberThreadMessages = (
@@ -218,6 +294,17 @@ export function ConsoleApp() {
         loadedThreadsRef.current.delete(id);
       }
     }
+    setHasOlderByThread((prev) => {
+      let changed = false;
+      const pruned = { ...prev };
+      for (const id of Object.keys(pruned)) {
+        if (!next[id]) {
+          delete pruned[id];
+          changed = true;
+        }
+      }
+      return changed ? pruned : prev;
+    });
     return next;
   };
 
@@ -262,7 +349,6 @@ export function ConsoleApp() {
       } while (refreshAgain.current);
     } catch {
       setError(`Cannot reach the kernel at ${currentApiOrigin()}`);
-      setEngine(null);
     } finally {
       refreshInFlight.current = false;
     }
@@ -438,6 +524,15 @@ export function ConsoleApp() {
             threads={listThreads}
             selected={selected}
             error={error}
+            pull={engine?.pull}
+            openingId={openingId}
+            hasOlder={selected ? hasOlderByThread[selected.id] === true : false}
+            loadingOlder={loadingOlderId === selectedId}
+            onLoadOlder={() => {
+              if (selectedId) {
+                void loadOlder(selectedId);
+              }
+            }}
             createTargets={createTargets}
             creating={creating}
             onCreate={startConversation}
@@ -565,6 +660,11 @@ function InboxWorkspace({
   threads,
   selected,
   error,
+  pull,
+  openingId,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
   createTargets,
   creating,
   onCreate,
@@ -576,6 +676,11 @@ function InboxWorkspace({
   threads: InboxThread[];
   selected: InboxThread | null;
   error: string | null;
+  pull?: PersonalEngineView["pull"];
+  openingId: string | null;
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder: () => void;
   createTargets: CreateTarget[];
   creating: boolean;
   onCreate: (installationId: string) => Promise<CreatedConversation | undefined>;
@@ -744,6 +849,11 @@ function InboxWorkspace({
         {selected ? (
           <ThreadPane
             thread={selected}
+            pull={pull}
+            opening={openingId === selected.id}
+            hasOlder={hasOlder}
+            loadingOlder={loadingOlder}
+            onLoadOlder={onLoadOlder}
             onRefresh={onRefresh}
             onRename={renameSelected}
             onPin={pinSelected}
@@ -969,11 +1079,21 @@ function ThreadTitleField({
 
 const ThreadPane = memo(function ThreadPane({
   thread,
+  pull,
+  opening,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
   onRefresh,
   onRename,
   onPin,
 }: {
   thread: InboxThread;
+  pull?: PersonalEngineView["pull"];
+  opening: boolean;
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder: () => void;
   onRefresh: () => Promise<void>;
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
@@ -1008,6 +1128,8 @@ const ThreadPane = memo(function ThreadPane({
     };
   }, [thread, pending]);
   const canReply = thread.can_send;
+  const syncNote = threadSyncLabel(thread.id, pull);
+  const syncTone = threadSyncTone(thread.id, pull);
   const quoteMessage = useCallback((item: InboxViewItem) => {
     setQuote(item);
   }, []);
@@ -1081,8 +1203,24 @@ const ThreadPane = memo(function ThreadPane({
             </button>
           </div>
           <p className="thread-sub">
-            {thread.messages.length} messages
+            {threadLoadedCountCopy({
+              opening,
+              loaded: thread.messages.length,
+              hasOlder,
+            })}
             {thread.conversation_label ? "" : ` · ${thread.label}`}
+            {loadingOlder ? (
+              <span className="thread-sync">
+                <span className="dot" />
+                Loading earlier messages
+              </span>
+            ) : null}
+            {syncNote ? (
+              <span className={`thread-sync${syncTone === "error" ? " is-error" : ""}`}>
+                <span className="dot" />
+                {syncNote}
+              </span>
+            ) : null}
           </p>
         </div>
       </header>
@@ -1092,6 +1230,10 @@ const ThreadPane = memo(function ThreadPane({
         items={merged}
         channel={thread.channel}
         canReply={canReply}
+        opening={opening}
+        hasOlder={hasOlder}
+        loadingOlder={loadingOlder}
+        onLoadOlder={onLoadOlder}
         onReply={quoteMessage}
       />
       <div className="composer-dock">
@@ -1219,11 +1361,12 @@ function EnginePage({
           <strong>{engine.inbox_count}</strong>
           <span>Live pull</span>
           <strong>
-            {engine.pull?.interval_ms
-              ? `every ${Math.round(engine.pull.interval_ms / 1000)}s`
-              : "off"}
+            {pullStatusLabel(engine.pull)}
             {engine.pull?.last_tick_at
               ? ` · ${formatChatTime(engine.pull.last_tick_at)}`
+              : ""}
+            {engine.pull?.last_accepted_count
+              ? ` · +${engine.pull.last_accepted_count}`
               : ""}
           </strong>
           <span>Network</span>

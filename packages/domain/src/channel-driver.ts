@@ -57,6 +57,8 @@ export interface ConnectorStream {
   stream_key: string;
   connector: Pick<ChannelConnector, "poll">;
   pace?: ConnectorStreamPace;
+  thread_id?: string;
+  label?: string;
 }
 
 export class ChannelDriverError extends Error {

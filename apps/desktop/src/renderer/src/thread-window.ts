@@ -3,6 +3,7 @@ import type { InboxViewItem } from "./types";
 
 export const THREAD_OVERSCAN = 10;
 export const THREAD_STICK_PX = 96;
+export const THREAD_PAGE_SIZE = 50;
 
 export type InboxReuse = KeyedReuse<InboxViewItem>;
 
@@ -43,8 +44,60 @@ export function mergeInboxDelta(
   const replacements = new Map(delta.map((item) => [item.event.id, item]));
   const updated = previous.map((item) => replacements.get(item.event.id) ?? item);
   const seen = new Set(previous.map((item) => item.event.id));
-  const appended = delta.filter((item) => !seen.has(item.event.id));
+  const oldest = previous[0];
+  const appended = delta.filter((item) => {
+    if (seen.has(item.event.id)) {
+      return false;
+    }
+    return !isBeforeEvent(item.event, oldest.event.occurred_at, oldest.event.id);
+  });
   return appended.length === 0 ? updated : [...updated, ...appended];
+}
+
+export function mergeOlderInbox(
+  previous: InboxViewItem[],
+  older: InboxViewItem[],
+): InboxViewItem[] {
+  if (older.length === 0) {
+    return previous;
+  }
+  if (previous.length === 0) {
+    return older;
+  }
+  const seen = new Set(previous.map((item) => item.event.id));
+  const prepend = older.filter((item) => !seen.has(item.event.id));
+  return prepend.length === 0 ? previous : [...prepend, ...previous];
+}
+
+export function olderInboxCursor(
+  items: InboxViewItem[],
+): { before: string; before_id: string } | null {
+  const first = items[0];
+  if (!first) {
+    return null;
+  }
+  return {
+    before: first.event.occurred_at,
+    before_id: first.event.id,
+  };
+}
+
+export function hasOlderPage(
+  pageLength: number,
+  limit = THREAD_PAGE_SIZE,
+): boolean {
+  return pageLength >= limit;
+}
+
+function isBeforeEvent(
+  event: { occurred_at: string; id: string },
+  before: string,
+  beforeId: string,
+): boolean {
+  if (event.occurred_at < before) {
+    return true;
+  }
+  return event.occurred_at === before && event.id < beforeId;
 }
 
 export function inboxCursor(

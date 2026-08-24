@@ -6,10 +6,14 @@ import {
   inboxRevision,
   isStuckToEnd,
   prefixOffsets,
+  hasOlderPage,
   inboxCursor,
   mergeInboxDelta,
+  mergeOlderInbox,
+  olderInboxCursor,
   reuseInboxItems,
   reuseInboxList,
+  THREAD_PAGE_SIZE,
 } from "../src/renderer/src/thread-window.ts";
 import { groupInboxThreads } from "../src/renderer/src/inbox.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
@@ -146,12 +150,49 @@ describe("thread window", () => {
     const first = [item("a", "one"), item("b", "two")];
     const edited = { ...first[1], body_text: "two edited", event: { ...first[1].event } };
     const extra = item("c", "three", "feishu:oc_2");
+    extra.event.occurred_at = "2026-08-23T00:00:01.000Z";
+    extra.event.ingested_at = "2026-08-23T00:00:01.000Z";
     const merged = mergeInboxDelta(first, [edited, extra]);
     assert.equal(merged[0], first[0]);
     assert.equal(merged[1], edited);
     assert.equal(merged[2], extra);
     const cursor = inboxCursor(merged);
     assert.equal(cursor?.since_id, "c");
+  });
+
+  it("does not pull older catch-up events into a recent window", () => {
+    const recent = [
+      item("m50", "new"),
+      item("m51", "newer"),
+    ];
+    recent[0].event.occurred_at = "2026-08-23T10:00:00.000Z";
+    recent[1].event.occurred_at = "2026-08-23T11:00:00.000Z";
+    const older = item("m1", "old");
+    older.event.occurred_at = "2026-07-01T00:00:00.000Z";
+    const merged = mergeInboxDelta(recent, [older]);
+    assert.deepEqual(
+      merged.map((entry) => entry.event.id),
+      ["m50", "m51"],
+    );
+  });
+
+  it("prepends an older page and keeps a before cursor on the oldest row", () => {
+    const recent = [item("m2", "two"), item("m3", "three")];
+    recent[0].event.occurred_at = "2026-08-23T10:00:00.000Z";
+    recent[1].event.occurred_at = "2026-08-23T11:00:00.000Z";
+    const older = item("m1", "one");
+    older.event.occurred_at = "2026-08-23T09:00:00.000Z";
+    const merged = mergeOlderInbox(recent, [older]);
+    assert.deepEqual(
+      merged.map((entry) => entry.event.id),
+      ["m1", "m2", "m3"],
+    );
+    assert.deepEqual(olderInboxCursor(merged), {
+      before: "2026-08-23T09:00:00.000Z",
+      before_id: "m1",
+    });
+    assert.equal(hasOlderPage(THREAD_PAGE_SIZE), true);
+    assert.equal(hasOlderPage(THREAD_PAGE_SIZE - 1), false);
   });
 
   it("detects a stick-to-end scroll position", () => {

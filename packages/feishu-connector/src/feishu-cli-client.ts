@@ -94,6 +94,66 @@ export interface LarkCliClientOptions {
   timeout_ms?: number;
 }
 
+export const LARK_CLI_CONCURRENCY = 2;
+export const LARK_CLI_RETRIES = 2;
+
+let larkCliActive = 0;
+const larkCliWaiters: Array<() => void> = [];
+
+export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
+  if (larkCliActive >= LARK_CLI_CONCURRENCY) {
+    await new Promise<void>((resolve) => {
+      larkCliWaiters.push(resolve);
+    });
+  }
+  larkCliActive += 1;
+  try {
+    return await work();
+  } finally {
+    larkCliActive -= 1;
+    larkCliWaiters.shift()?.();
+  }
+}
+
+export function resetLarkCliSlot(): void {
+  larkCliActive = 0;
+  larkCliWaiters.length = 0;
+}
+
+export function isTransientLarkError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const code = error instanceof FeishuApiError ? error.code : undefined;
+  return (
+    /timed out|EAGAIN|ECONNRESET|socket hang up|rate.?limit|too many requests/i.test(
+      text,
+    ) ||
+    code === "99991400" ||
+    code === "99991429"
+  );
+}
+
+async function retryTransientLark<T>(work: () => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (let attempt = 0; attempt <= LARK_CLI_RETRIES; attempt += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      last = error;
+      if (attempt === LARK_CLI_RETRIES || !isTransientLarkError(error)) {
+        throw error;
+      }
+      await delay(250 * (attempt + 1));
+    }
+  }
+  throw last;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export class LarkCliClient implements FeishuImClient {
   private readonly command: string;
   private readonly timeoutMs: number;
@@ -108,6 +168,16 @@ export class LarkCliClient implements FeishuImClient {
       throw new Error("lark-cli timeout_ms must be a positive integer");
     }
     this.spawn = options.spawn ?? spawnLarkProcess;
+  }
+
+  private runCli(input: {
+    command: string[];
+    env?: NodeJS.ProcessEnv;
+    timeout_ms: number;
+  }): Promise<FeishuSpawnResult> {
+    return retryTransientLark(() =>
+      withLarkCliSlot(() => this.spawn(input)),
+    );
   }
 
   async listMessages(input: FeishuListInput): Promise<FeishuHistoryPage> {
@@ -153,7 +223,7 @@ export class LarkCliClient implements FeishuImClient {
     if (input.page_token) {
       argv.push("--page-token", input.page_token);
     }
-    const result = await this.spawn({
+    const result = await this.runCli({
       command: argv,
       env: this.options.env,
       timeout_ms: this.timeoutMs,
@@ -263,7 +333,7 @@ export class LarkCliClient implements FeishuImClient {
   }
 
   async authStatus(): Promise<boolean> {
-    const result = await this.spawn({
+    const result = await this.runCli({
       command: [this.command, "auth", "status", "--json"],
       env: this.options.env,
       timeout_ms: Math.min(this.timeoutMs, 2_000),
@@ -293,7 +363,7 @@ export class LarkCliClient implements FeishuImClient {
     if (input.data) {
       argv.push("--data", JSON.stringify(input.data));
     }
-    const result = await this.spawn({
+    const result = await this.runCli({
       command: argv,
       env: this.options.env,
       timeout_ms: this.timeoutMs,
@@ -306,7 +376,7 @@ export class LarkCliClient implements FeishuImClient {
       return new Map();
     }
     try {
-      const result = await this.spawn({
+      const result = await this.runCli({
         command: [
           this.command,
           "contact",

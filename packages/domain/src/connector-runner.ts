@@ -32,6 +32,7 @@ export type ConnectorPollRunResult =
       attempt_id: string;
       result: IngestBatchResult;
       next_cursor?: string;
+      has_more?: boolean;
     };
 
 export class ConnectorRunner {
@@ -109,6 +110,7 @@ export class ConnectorRunner {
           records: [],
         },
         next_cursor: nextCursor,
+        has_more: pollResult.has_more,
       };
     }
 
@@ -163,6 +165,7 @@ export class ConnectorRunner {
       attempt_id: attemptId,
       result,
       next_cursor: nextCursor,
+      has_more: pollResult.has_more,
     };
   }
 

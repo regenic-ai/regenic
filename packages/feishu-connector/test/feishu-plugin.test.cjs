@@ -176,6 +176,9 @@ describe("feishuChatDriver", () => {
       { async listMessages() { return { items: [], has_more: false }; } },
     );
     assert.equal(streams.length, 2);
+    assert.equal(streams[0].thread_id, "feishu:oc_g");
+    assert.equal(streams[0].label, "Team");
+    assert.equal(streams[1].thread_id, "feishu:oc_p");
     assert.deepEqual(streams[0].pace, FEISHU_STREAM_PACE);
     assert.deepEqual(streams[1].pace, FEISHU_STREAM_PACE);
   });

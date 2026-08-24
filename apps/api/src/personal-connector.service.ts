@@ -24,7 +24,20 @@ import {
 } from "./personal-connector-view";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
-import { applyPullOutcome, pullStatus } from "./personal-pull-status";
+import {
+  applyPullOutcome,
+  beginPull,
+  finishPull,
+  preferredThreadId,
+  publishPullStreams,
+  pullStatus,
+  type PullStreamStatus,
+} from "./personal-pull-status";
+import {
+  lastCatchUpKey,
+  selectStreamsForTick,
+  shouldKeepCatchingUp,
+} from "./personal-stream-pace";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export { PersonalConnectorError } from "./personal-errors";
@@ -70,6 +83,13 @@ export class PersonalConnectorService
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly streamIdleUntil = new Map<string, number>();
   private readonly streamCatchingUp = new Set<string>();
+  private readonly streamMeta = new Map<
+    string,
+    { thread_id: string | null; label: string | null }
+  >();
+  private readonly streamErrors = new Map<string, string>();
+  private readonly streamPulling = new Set<string>();
+  private lastCatchUpCursor: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
 
@@ -100,7 +120,7 @@ export class PersonalConnectorService
   async sync(
     installationId: string,
     maxPages = DEFAULT_MAX_PAGES,
-    options?: { skipIdle?: boolean },
+    options?: { skipIdle?: boolean; capCatchUp?: boolean },
   ): Promise<ConnectorSyncView> {
     const existing = this.inflight.get(installationId);
     if (existing) {
@@ -367,7 +387,7 @@ export class PersonalConnectorService
           await this.sync(
             installation.id,
             DEFAULT_MAX_PAGES,
-            { skipIdle: true },
+            { skipIdle: true, capCatchUp: true },
           );
         } catch (error) {
           errors.push(error);
@@ -384,7 +404,7 @@ export class PersonalConnectorService
 
   private async catchUp(
     installationId: string,
-    options?: { skipIdle?: boolean },
+    options?: { skipIdle?: boolean; capCatchUp?: boolean },
   ): Promise<void> {
     try {
       await this.sync(
@@ -400,7 +420,7 @@ export class PersonalConnectorService
   private async runSync(
     installationId: string,
     maxPages: number,
-    options?: { skipIdle?: boolean },
+    options?: { skipIdle?: boolean; capCatchUp?: boolean },
   ): Promise<ConnectorSyncView> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
@@ -420,6 +440,8 @@ export class PersonalConnectorService
         400,
       );
     }
+    beginPull();
+    this.publishStreams();
     try {
       const streams = await driver.resolveStreams(
         installation,
@@ -430,6 +452,7 @@ export class PersonalConnectorService
       const now = Date.now();
       const planned = streams.flatMap((stream) => {
         const key = streamPaceKey(installation.id, stream.stream_key);
+        this.rememberStreamMeta(key, stream);
         const idleMs = streamIdleMs(stream);
         if (
           options?.skipIdle &&
@@ -438,12 +461,37 @@ export class PersonalConnectorService
         ) {
           return [];
         }
-        const pages = this.streamCatchingUp.has(key)
+        const catchingUp = this.streamCatchingUp.has(key);
+        const pages = catchingUp
           ? Math.max(maxPages, streamCatchUpPages(stream, maxPages))
           : maxPages;
-        return [{ stream, pages, key, idleMs }];
+        return [{ stream, pages, key, idleMs, catchingUp }];
       });
-      const batches = await mapLimit(planned, STREAM_CONCURRENCY, async (item) => {
+      const selected = options?.capCatchUp
+        ? selectStreamsForTick(
+            planned.map((item) => ({
+              key: item.key,
+              catchingUp: item.catchingUp,
+              threadId: item.stream.thread_id,
+              item,
+            })),
+            {
+              rotateFrom: this.lastCatchUpCursor,
+              preferredThreadId: preferredThreadId(),
+            },
+          ).map((entry) => entry.item)
+        : planned;
+      this.lastCatchUpCursor = lastCatchUpKey(
+        selected.map((item) => ({
+          key: item.key,
+          catchingUp: item.catchingUp,
+        })),
+      );
+      for (const item of selected) {
+        this.streamPulling.add(item.key);
+      }
+      this.publishStreams();
+      const batches = await mapLimit(selected, STREAM_CONCURRENCY, async (item) => {
         try {
           const pages = await this.exclusiveStream(
             installation.id,
@@ -452,41 +500,59 @@ export class PersonalConnectorService
               pollStream(host, store, installation, item.stream, item.pages),
             { skipIfBusy: true },
           );
-          return {
+          const result = {
             key: item.key,
             pages: pages ?? [],
             pagesBudget: item.pages,
             idleMs: item.idleMs,
-            error: null,
+            error: null as unknown,
           };
+          this.streamPulling.delete(item.key);
+          this.rememberStreamPace(result);
+          this.publishStreams();
+          return result;
         } catch (error) {
-          return {
+          const result = {
             key: item.key,
             pages: [] as ConnectorPollRunResult[],
             pagesBudget: item.pages,
             idleMs: item.idleMs,
             error,
           };
+          this.streamPulling.delete(item.key);
+          this.rememberStreamPace(result);
+          this.publishStreams();
+          return result;
         }
       });
       const runs = batches.flatMap((batch) => batch.pages);
-      for (const batch of batches) {
-        this.rememberStreamPace(batch);
-      }
       const firstError = batches.find((batch) => batch.error)?.error;
       if (runs.length === 0 && firstError) {
         throw firstError;
       }
       const last = runs.at(-1);
+      const summary = summarizeRuns(runs);
+      finishPull({
+        accepted: summary.accepted_count,
+        pages: runs.length,
+        catchingUp: this.streamCatchingUp.size,
+      });
+      this.publishStreams();
       return {
         installation_id: installation.id,
         pages_attempted: runs.length,
-        streams_attempted: options?.skipIdle ? planned.length : streams.length,
-        ...summarizeRuns(runs),
+        streams_attempted: options?.skipIdle ? selected.length : streams.length,
+        ...summary,
         last_run_status: last?.status ?? "idle",
         installation: await this.viewOf(store, installation),
       };
     } catch (error) {
+      finishPull({
+        accepted: 0,
+        pages: 0,
+        catchingUp: this.streamCatchingUp.size,
+      });
+      this.publishStreams();
       throw wrapDriverError(error, "sync_failed");
     }
   }
@@ -538,17 +604,63 @@ export class PersonalConnectorService
       streams.map((stream) => streamPaceKey(installationId, stream.stream_key)),
     );
     const prefix = `${installationId}:`;
-    for (const key of this.streamIdleUntil.keys()) {
+    for (const key of [
+      ...this.streamIdleUntil.keys(),
+      ...this.streamCatchingUp,
+      ...this.streamMeta.keys(),
+      ...this.streamErrors.keys(),
+      ...this.streamPulling,
+    ]) {
       if (key.startsWith(prefix) && !live.has(key)) {
         this.streamIdleUntil.delete(key);
         this.streamCatchingUp.delete(key);
+        this.streamMeta.delete(key);
+        this.streamErrors.delete(key);
+        this.streamPulling.delete(key);
       }
     }
-    for (const key of this.streamCatchingUp) {
-      if (key.startsWith(prefix) && !live.has(key)) {
-        this.streamCatchingUp.delete(key);
+  }
+
+  private rememberStreamMeta(key: string, stream: ConnectorStream): void {
+    this.streamMeta.set(key, {
+      thread_id: stream.thread_id ?? null,
+      label: stream.label ?? null,
+    });
+  }
+
+  private publishStreams(): void {
+    const preferred = preferredThreadId();
+    const keys = new Set([
+      ...this.streamCatchingUp,
+      ...this.streamPulling,
+      ...this.streamErrors.keys(),
+    ]);
+    if (preferred) {
+      for (const [key, meta] of this.streamMeta) {
+        if (meta.thread_id === preferred) {
+          keys.add(key);
+        }
       }
     }
+    const streams: PullStreamStatus[] = [...keys].map((key) => {
+      const meta = this.streamMeta.get(key);
+      const error = this.streamErrors.get(key) ?? null;
+      const phase = this.streamPulling.has(key)
+        ? "pulling"
+        : error
+          ? "error"
+          : this.streamCatchingUp.has(key)
+            ? "catching_up"
+            : "idle";
+      return {
+        stream_key: key,
+        thread_id: meta?.thread_id ?? null,
+        label: meta?.label ?? null,
+        phase,
+        last_error: error,
+      };
+    });
+    publishPullStreams(streams);
   }
 
   private rememberStreamPace(input: {
@@ -556,19 +668,26 @@ export class PersonalConnectorService
     pages: ConnectorPollRunResult[];
     pagesBudget: number;
     idleMs?: number;
+    error?: unknown;
   }): void {
-    if (input.pages.length === 0) {
-      return;
+    if (input.error) {
+      this.streamErrors.set(input.key, errorMessage(input.error));
+    } else {
+      this.streamErrors.delete(input.key);
     }
-    if (input.pages.some((page) => page.status === "retryable_failure")) {
-      this.streamCatchingUp.add(input.key);
-      this.streamIdleUntil.delete(input.key);
+    if (input.pages.length === 0 && !input.error) {
       return;
     }
     const summary = summarizeRuns(input.pages);
-    const progressed =
-      summary.accepted_count > 0 || summary.quarantined_count > 0;
-    if (progressed && input.pages.length >= input.pagesBudget) {
+    if (
+      shouldKeepCatchingUp({
+        pages: input.pages,
+        pagesBudget: input.pagesBudget,
+        acceptedCount: summary.accepted_count,
+        quarantinedCount: summary.quarantined_count,
+        error: input.error,
+      })
+    ) {
       this.streamCatchingUp.add(input.key);
       this.streamIdleUntil.delete(input.key);
       return;
@@ -680,7 +799,10 @@ async function pollStream(
         409,
       );
     }
-    if (run.status !== "completed" || !run.next_cursor) {
+    if (run.status !== "completed") {
+      break;
+    }
+    if (run.has_more === false || !run.next_cursor) {
       break;
     }
     if (seenCursors.has(run.next_cursor)) {
@@ -756,6 +878,10 @@ function clampPages(value: number): number {
     return DEFAULT_MAX_PAGES;
   }
   return Math.min(value, MAX_PAGES_CAP);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Connector pull failed";
 }
 
 function summarizeRuns(runs: ConnectorPollRunResult[]): {

@@ -73,7 +73,7 @@ export class FeishuChatPollConnector {
       next_cursor: nextCursor,
       records,
     };
-    return { batch, next_cursor: nextCursor };
+    return { batch, next_cursor: nextCursor, has_more: page.has_more };
   }
 
   private async resolveNames(

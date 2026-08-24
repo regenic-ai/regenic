@@ -172,12 +172,28 @@ export interface LocalNetworkWatch {
   hint: string | null;
 }
 
+export type PullPhase = "idle" | "pulling";
+export type PullStreamPhase = "idle" | "pulling" | "catching_up" | "error";
+
+export interface PullStreamStatus {
+  stream_key: string;
+  thread_id: string | null;
+  label: string | null;
+  phase: PullStreamPhase;
+  last_error: string | null;
+}
+
 export interface PullStatusView {
   interval_ms: number;
   last_tick_at: string | null;
   last_error: string | null;
   last_error_hint: string | null;
   network: LocalNetworkWatch;
+  phase: PullPhase;
+  catching_up_count: number;
+  last_accepted_count: number;
+  last_pages: number;
+  streams: PullStreamStatus[];
 }
 
 export interface PersonalEngineView {

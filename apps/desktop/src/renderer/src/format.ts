@@ -1,5 +1,12 @@
 import { firstLine } from "./message-view";
-import type { EngineChipState, PersonalEngineView } from "./types";
+import type { EngineChipState } from "./types";
+
+export {
+  engineChip,
+  pullStatusLabel,
+  threadSyncLabel,
+  threadSyncTone,
+} from "./pull-copy.ts";
 
 export function previewText(text: string | undefined, fallback: string): string {
   return firstLine(text, 88) || fallback;
@@ -34,16 +41,6 @@ export function formatChatTime(iso: string): string {
       ? { hour: "numeric", minute: "2-digit" }
       : { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" },
   ).format(date);
-}
-
-export function engineChip(engine: PersonalEngineView | null): EngineChipState {
-  if (!engine || engine.kernel === "stopped") {
-    return "stopped";
-  }
-  if (engine.installations.some((item) => item.last_attempt?.status === "running")) {
-    return "syncing";
-  }
-  return "running";
 }
 
 export function chipLabel(state: EngineChipState): string {

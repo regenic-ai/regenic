@@ -1,10 +1,11 @@
 const assert = require("node:assert/strict");
-const { describe, it } = require("node:test");
+const { afterEach, describe, it } = require("node:test");
 const {
   FeishuApiError,
   LARK_CLI_INSTALL_HINT,
   LARK_CLI_LOGIN_HINT,
   LarkCliClient,
+  isTransientLarkError,
   feishuChatOptionLabel,
   larkCliCatalogHint,
   larkCliUserReady,
@@ -16,9 +17,14 @@ const {
   resetFeishuChatListCache,
   resetFeishuUserNameCache,
   resetLarkCliProbeCache,
+  resetLarkCliSlot,
   resolveLarkCommand,
   unwrapLarkCli,
 } = require("../dist");
+
+afterEach(() => {
+  resetLarkCliSlot();
+});
 
 describe("LarkCliClient", () => {
   it("lists messages as the user and unwraps the CLI envelope", async () => {
@@ -72,6 +78,47 @@ describe("LarkCliClient", () => {
     assert.equal(page.items[0].message_id, "om_1");
     assert.equal(page.has_more, true);
     assert.equal(page.page_token, "next");
+  });
+
+  it("retries a timed-out history page and then succeeds", async () => {
+    let calls = 0;
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn() {
+        calls += 1;
+        if (calls === 1) {
+          throw new FeishuApiError("lark-cli timed out after 60000ms");
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: { items: [{ message_id: "om_2", msg_type: "text" }], has_more: false },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const page = await client.listMessages({ chat_id: "oc_1", page_size: 50 });
+    assert.equal(calls, 2);
+    assert.equal(page.items[0].message_id, "om_2");
+  });
+
+  it("does not retry an auth failure", async () => {
+    let calls = 0;
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn() {
+        calls += 1;
+        throw new FeishuApiError("user unauthorized", "230027");
+      },
+    });
+    await assert.rejects(
+      () => client.listMessages({ chat_id: "oc_1", page_size: 50 }),
+      FeishuApiError,
+    );
+    assert.equal(calls, 1);
+    assert.equal(isTransientLarkError(new FeishuApiError("user unauthorized", "230027")), false);
   });
 
   it("lists groups and p2p chats through +chat-list", async () => {

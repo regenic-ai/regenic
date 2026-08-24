@@ -56,8 +56,11 @@ export async function fetchInbox(
   query: {
     since?: string;
     since_id?: string;
+    before?: string;
+    before_id?: string;
     heads?: boolean;
     thread_id?: string;
+    limit?: number;
   } = {},
 ): Promise<InboxViewItem[]> {
   const params = new URLSearchParams();
@@ -67,11 +70,20 @@ export async function fetchInbox(
   if (query.since_id) {
     params.set("since_id", query.since_id);
   }
+  if (query.before) {
+    params.set("before", query.before);
+  }
+  if (query.before_id) {
+    params.set("before_id", query.before_id);
+  }
   if (query.heads) {
     params.set("heads", "1");
   }
   if (query.thread_id) {
     params.set("thread_id", query.thread_id);
+  }
+  if (query.limit) {
+    params.set("limit", String(query.limit));
   }
   const encoded = params.toString();
   const suffix = encoded ? `?${encoded}` : "";
@@ -122,6 +134,11 @@ export async function fetchEngine(
         proxy: null,
         hint: null,
       },
+      phase: engine.pull?.phase === "pulling" ? "pulling" : "idle",
+      catching_up_count: engine.pull?.catching_up_count ?? 0,
+      last_accepted_count: engine.pull?.last_accepted_count ?? 0,
+      last_pages: engine.pull?.last_pages ?? 0,
+      streams: Array.isArray(engine.pull?.streams) ? engine.pull.streams : [],
     },
     installations: (engine.installations ?? []).map((item) => ({
       ...item,

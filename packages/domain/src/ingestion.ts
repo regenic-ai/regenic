@@ -135,6 +135,7 @@ export interface ConnectorCursor {
 export interface PollResult {
   batch: IngestBatch;
   next_cursor?: string;
+  has_more?: boolean;
 }
 
 export interface BackfillRange {
@@ -233,7 +234,10 @@ export interface EventListQuery {
   target?: string;
   since?: string;
   since_id?: string;
+  before?: string;
+  before_id?: string;
   thread_ids?: string[];
+  limit?: number;
 }
 
 export interface InboxQuery extends EventListQuery {

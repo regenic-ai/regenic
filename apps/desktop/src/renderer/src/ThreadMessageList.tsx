@@ -15,6 +15,7 @@ import {
   roleLabel,
   sameSpeaker,
   speakerMark,
+  threadPaneEmptyCopy,
   type MessageRole,
 } from "./message-view";
 import {
@@ -23,6 +24,7 @@ import {
   prefixOffsets,
   isStuckToEnd,
   THREAD_OVERSCAN,
+  THREAD_STICK_PX,
 } from "./thread-window";
 import type { InboxViewItem } from "./types";
 
@@ -36,12 +38,28 @@ export const ThreadMessageList = memo(
     items: InboxViewItem[];
     channel: string;
     canReply: boolean;
+    opening?: boolean;
+    hasOlder?: boolean;
+    loadingOlder?: boolean;
+    onLoadOlder?: () => void;
     onReply: (item: InboxViewItem) => void;
-  }>(function ThreadMessageList({ threadId, items, channel, canReply, onReply }, ref) {
+  }>(function ThreadMessageList({
+    threadId,
+    items,
+    channel,
+    canReply,
+    opening = false,
+    hasOlder = false,
+    loadingOlder = false,
+    onLoadOlder,
+    onReply,
+  }, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const sizesRef = useRef(new Map<string, number>());
   const offsetsRef = useRef<number[]>([0]);
   const stickRef = useRef(true);
+  const pinRef = useRef<{ first: string; last: string; height: number } | null>(null);
+  const expectPrependRef = useRef(false);
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const measureFrame = useRef<number | null>(null);
@@ -93,12 +111,57 @@ export const ThreadMessageList = memo(
   useLayoutEffect(() => {
     sizesRef.current = new Map();
     stickRef.current = true;
+    pinRef.current = null;
+    expectPrependRef.current = false;
     syncLayout(true);
   }, [threadId, syncLayout]);
 
   useLayoutEffect(() => {
+    if (loadingOlder) {
+      expectPrependRef.current = true;
+    }
+  }, [loadingOlder]);
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    const first = items[0]?.event.id ?? "";
+    const last = items[items.length - 1]?.event.id ?? "";
+    const prev = pinRef.current;
+    const prepended = Boolean(
+      expectPrependRef.current &&
+        node &&
+        prev &&
+        first &&
+        first !== prev.first &&
+        last === prev.last,
+    );
+    if (prepended) {
+      stickRef.current = false;
+      expectPrependRef.current = false;
+    } else if (!loadingOlder) {
+      expectPrependRef.current = false;
+    }
     syncLayout(stickRef.current);
-  }, [items, syncLayout]);
+    if (prepended && node && prev) {
+      node.scrollTop += node.scrollHeight - prev.height;
+      syncLayout(false);
+    }
+    pinRef.current = {
+      first,
+      last,
+      height: node?.scrollHeight ?? 0,
+    };
+  }, [items, loadingOlder, syncLayout]);
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    if (!node || items.length === 0 || !hasOlder || loadingOlder || opening) {
+      return;
+    }
+    if (node.scrollTop <= THREAD_STICK_PX) {
+      onLoadOlder?.();
+    }
+  }, [items, hasOlder, loadingOlder, opening, onLoadOlder]);
 
   useLayoutEffect(() => {
     return () => {
@@ -141,7 +204,7 @@ export const ThreadMessageList = memo(
   if (items.length === 0) {
     return (
       <div className="thread-scroll">
-        <p className="muted">This conversation has no displayable messages.</p>
+        <p className="muted">{threadPaneEmptyCopy(opening)}</p>
       </div>
     );
   }
@@ -159,6 +222,14 @@ export const ThreadMessageList = memo(
         }
         stickRef.current = isStuckToEnd(node);
         syncLayout();
+        if (
+          hasOlder &&
+          !loadingOlder &&
+          !opening &&
+          node.scrollTop <= THREAD_STICK_PX
+        ) {
+          onLoadOlder?.();
+        }
       }}
     >
       <ol className="thread-messages is-windowed" style={{ height: `${layout.total}px` }}>
