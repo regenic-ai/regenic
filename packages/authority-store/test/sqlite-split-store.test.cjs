@@ -91,6 +91,104 @@ describe("sqlite read/write split", () => {
     await store.close();
   });
 
+  it("lets the reader see a full thread as soon as the writer commits", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const service = new IngestionService(
+      new FsBlobStore(join(root, "blobs")),
+      store,
+    );
+    for (let index = 0; index < 23; index += 1) {
+      await service.ingest(createBatch(`oc_yiki:om_${index}`));
+    }
+    const inbox = await store.listInbox("local-owner");
+    assert.equal(inbox.length, 23);
+    await store.close();
+  });
+
+  it("commits one page of creates in a single writer transaction", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const service = new IngestionService(
+      new FsBlobStore(join(root, "blobs")),
+      store,
+    );
+    const result = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "page-23",
+      received_at: "2026-08-24T00:00:00.000Z",
+      records: Array.from({ length: 23 }, (_, index) => ({
+        operation: "create",
+        source: "regenic",
+        external_id: `oc_yiki:om_${index}`,
+        occurred_at: `2026-08-24T00:00:00.${String(index).padStart(3, "0")}Z`,
+        actor: { id: "local-owner" },
+        scope: { id: "personal" },
+        type: "text",
+        content: [
+          {
+            role: "body",
+            media_type: "text/plain",
+            text: `Page body ${index}.`,
+          },
+        ],
+      })),
+    });
+    const inbox = await store.listInbox("local-owner");
+    const hashes = inbox.map((item) => item.event.content_hash).filter(Boolean);
+    const blobs = await store.findBlobs(hashes);
+    assert.equal(result.valid, true);
+    assert.equal(result.records.filter((record) => record.status === "accepted").length, 23);
+    assert.equal(inbox.length, 23);
+    assert.equal(blobs.size, hashes.length);
+    await store.close();
+  });
+
+  it("rolls back a page when one append conflicts", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const existing = {
+      org_id: "local-owner",
+      source: "regenic",
+      external_id: "already-there",
+      content_hash: "b".repeat(64),
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      occurred_at: "2026-08-24T00:00:00.000Z",
+      expected_head_id: null,
+    };
+    await store.append(existing);
+    await assert.rejects(
+      () =>
+        store.commitIngest({
+          appends: [
+            {
+              id: "kept-if-committed",
+              org_id: "local-owner",
+              source: "regenic",
+              external_id: "new-event",
+              content_hash: "c".repeat(64),
+              content_media_type: "text/plain",
+              content_byte_size: 1,
+              occurred_at: "2026-08-24T00:00:01.000Z",
+              expected_head_id: null,
+            },
+            {
+              ...existing,
+              id: "conflict",
+            },
+          ],
+          dispositions: [],
+        }),
+      AuthorityConflictError,
+    );
+    assert.equal((await store.listEvents("local-owner")).length, 1);
+    assert.equal(await store.getEvent("local-owner", "kept-if-committed"), null);
+    await store.close();
+  });
+
   it("does not make inbox wait when the writer is busy", async () => {
     const root = await createRoot();
     const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));

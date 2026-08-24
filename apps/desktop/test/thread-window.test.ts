@@ -10,9 +10,11 @@ import {
   inboxCursor,
   mergeInboxDelta,
   mergeOlderInbox,
+  mergeRecentInbox,
   olderInboxCursor,
   reuseInboxItems,
   reuseInboxList,
+  shouldFetchInboxDelta,
   shouldLoadOlder,
   shouldRearmLoadOlder,
   THREAD_LOAD_OLDER_PX,
@@ -197,6 +199,33 @@ describe("thread window", () => {
     });
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE), true);
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE - 1), false);
+  });
+
+  it("keeps prepended history when a recent page is refetched", () => {
+    const older = item("m1", "one");
+    older.event.occurred_at = "2026-08-23T09:00:00.000Z";
+    const mid = item("m2", "two");
+    mid.event.occurred_at = "2026-08-23T10:00:00.000Z";
+    const newer = item("m3", "three");
+    newer.event.occurred_at = "2026-08-23T11:00:00.000Z";
+    const merged = mergeRecentInbox([older, mid], [mid, newer]);
+    assert.deepEqual(
+      merged.map((entry) => entry.event.id),
+      ["m1", "m2", "m3"],
+    );
+    assert.equal(merged[0], older);
+    assert.equal(merged[1], mid);
+  });
+
+  it("refetches a thin open window instead of polling only new ingest", () => {
+    assert.equal(
+      shouldFetchInboxDelta({ loaded: true, loadedCount: 1, hasCursor: true }),
+      false,
+    );
+    assert.equal(
+      shouldFetchInboxDelta({ loaded: true, loadedCount: 23, hasCursor: true }),
+      true,
+    );
   });
 
   it("detects a stick-to-end scroll position", () => {

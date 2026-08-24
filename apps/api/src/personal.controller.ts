@@ -16,6 +16,7 @@ import {
   PersonalConnectorError,
   PersonalConnectorService,
   shouldHydrateOpenedInbox,
+  shouldWaitForOpenedHydrate,
 } from "./personal-connector.service";
 import {
   PersonalInboxService,
@@ -55,9 +56,15 @@ export class PersonalController {
       limit: limit?.trim() ? Number(limit) : undefined,
     };
     return this.guard(async () => {
-      if (shouldHydrateOpenedInbox(query) && query.thread_id) {
-        await this.connectors.hydrateOpenedThread(query.thread_id);
+      const local = await this.inbox.listInbox(query);
+      if (
+        !shouldHydrateOpenedInbox(query) ||
+        !query.thread_id ||
+        !shouldWaitForOpenedHydrate(local.length)
+      ) {
+        return local;
       }
+      await this.connectors.hydrateOpenedThread(query.thread_id);
       return this.inbox.listInbox(query);
     });
   }

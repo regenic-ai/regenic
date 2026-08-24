@@ -1,6 +1,7 @@
 import type { ArrangementDecision, InboxItem } from "./arrangement";
 import type {
   AuthorityStore,
+  BlobObject,
   BlobRecord,
   BlobStore,
   ConversationPref,
@@ -10,11 +11,16 @@ import type {
   EventRevision,
   InboxQuery,
   InboxSummary,
+  IngestCommitRequest,
   NewEvent,
   SourceIdentity,
   TombstoneEvent,
 } from "./ingestion";
-import { AuthorityConflictError } from "./ingestion";
+import {
+  AuthorityConflictError,
+  collectAvailableBlobs,
+  putUniqueBlobs,
+} from "./ingestion";
 import {
   eventThreadId,
   matchesEventQuery,
@@ -45,6 +51,13 @@ export class MemoryBlobStore implements BlobStore {
     }
   }
 
+  async putMany(items: readonly BlobObject[]): Promise<void> {
+    await putUniqueBlobs(
+      (hash, bytes, mediaType) => this.put(hash, bytes, mediaType),
+      items,
+    );
+  }
+
   async get(hash: string): Promise<Uint8Array> {
     const blob = this.blobs.get(hash);
     if (!blob) {
@@ -52,6 +65,10 @@ export class MemoryBlobStore implements BlobStore {
     }
 
     return new Uint8Array(blob.bytes);
+  }
+
+  async getMany(hashes: readonly string[]): Promise<Map<string, Uint8Array>> {
+    return collectAvailableBlobs((hash) => this.get(hash), hashes);
   }
 
   async delete(hash: string): Promise<void> {
@@ -82,6 +99,19 @@ export class MemoryAuthorityStore implements AuthorityStore {
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
     const blob = this.blobs.get(contentHash);
     return blob ? { ...blob } : null;
+  }
+
+  async findBlobs(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobRecord>> {
+    const found = new Map<string, BlobRecord>();
+    for (const hash of new Set(contentHashes.filter((item) => item.length > 0))) {
+      const blob = this.blobs.get(hash);
+      if (blob) {
+        found.set(hash, { ...blob });
+      }
+    }
+    return found;
   }
 
   async findBySourceIdentity(
@@ -222,6 +252,19 @@ export class MemoryAuthorityStore implements AuthorityStore {
     return this.addContentEvent(input, "create");
   }
 
+  async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
+    const events = request.appends.map((input) =>
+      this.addContentEvent(input, "create"),
+    );
+    for (const decision of request.dispositions) {
+      this.dispositions.set(decision.event_id, {
+        ...decision,
+        reason_codes: [...decision.reason_codes],
+      });
+    }
+    return events;
+  }
+
   async appendRevision(input: EventRevision): Promise<EventRecord> {
     return this.addContentEvent(input, "revise");
   }
@@ -266,10 +309,10 @@ export class MemoryAuthorityStore implements AuthorityStore {
   private addEvent(
     input: SourceIdentity &
       Pick<EventRecord, "operation" | "occurred_at"> &
-      Partial<Pick<EventRecord, "content_hash" | "parent_event_id">>,
+      Partial<Pick<EventRecord, "id" | "content_hash" | "parent_event_id">>,
   ): EventRecord {
     const event: EventRecord = {
-      id: `event-${this.nextId++}`,
+      id: input.id ?? `event-${this.nextId++}`,
       org_id: input.org_id,
       source: input.source,
       external_id: input.external_id,

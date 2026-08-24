@@ -3,13 +3,18 @@ const { afterEach, describe, it } = require("node:test");
 const { LOCAL_PROXY_HINT } = require("@regenic/domain");
 const {
   applyPullOutcome,
+  PREFER_THREAD_MS,
   preferThread,
   preferredThreadId,
   publishPullStreams,
   pullStatus,
   resetPullStatus,
 } = require("../dist/personal-pull-status");
-const { shouldHydrateOpenedInbox } = require("../dist/personal-connector.service");
+const {
+  shouldHydrateOpenedInbox,
+  shouldPollOpenedHydrate,
+  shouldWaitForOpenedHydrate,
+} = require("../dist/personal-connector.service");
 
 afterEach(() => {
   resetPullStatus({});
@@ -66,6 +71,12 @@ describe("pull status network watch", () => {
     assert.equal(pullStatus.streams[0].thread_id, "feishu:oc_hot");
     assert.equal(pullStatus.catching_up_count, 1);
   });
+
+  it("expires a preferred thread so an old open does not own catch-up", () => {
+    preferThread("feishu:oc_hot", 1_000);
+    assert.equal(preferredThreadId(1_000), "feishu:oc_hot");
+    assert.equal(preferredThreadId(1_000 + PREFER_THREAD_MS), null);
+  });
 });
 
 describe("opened inbox hydrate", () => {
@@ -82,5 +93,17 @@ describe("opened inbox hydrate", () => {
     assert.equal(shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", heads: true }), false);
     assert.equal(shouldHydrateOpenedInbox({ heads: true }), false);
     assert.equal(shouldHydrateOpenedInbox({ thread_id: "dsh:session-x" }), false);
+  });
+
+  it("does not wait for hydrate when the local thread already has a page", () => {
+    assert.equal(shouldWaitForOpenedHydrate(0), true);
+    assert.equal(shouldWaitForOpenedHydrate(1), false);
+    assert.equal(shouldWaitForOpenedHydrate(23), false);
+  });
+
+  it("does not poll hydrate again when the stream is already busy", () => {
+    assert.equal(shouldPollOpenedHydrate({ localCount: 0, streamBusy: false }), true);
+    assert.equal(shouldPollOpenedHydrate({ localCount: 0, streamBusy: true }), false);
+    assert.equal(shouldPollOpenedHydrate({ localCount: 1, streamBusy: false }), false);
   });
 });

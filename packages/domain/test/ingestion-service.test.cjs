@@ -5,6 +5,7 @@ const {
   IngestionService,
   MemoryAuthorityStore,
   MemoryBlobStore,
+  canonicalizeRecordContent,
   channelRecord,
 } = require("../dist");
 
@@ -282,5 +283,98 @@ describe("IngestionService", () => {
     assert.equal(echoed.records[0].status, "duplicate");
     assert.equal(echoed.records[0].event_id, outbound.records[0].event_id);
     assert.equal(authorityStore.allEvents().length, 1);
+  });
+
+  it("commits a page of creates and arranges them together", async () => {
+    const { authorityStore, blobStore, service } = createHarness();
+    const batch = {
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "page-1",
+      received_at: "2026-08-24T00:00:00.000Z",
+      records: [1, 2, 3].map((index) => ({
+        operation: "create",
+        source: "regenic",
+        external_id: `oc_yiki:om_${index}`,
+        occurred_at: `2026-08-24T00:00:0${index}.000Z`,
+        actor: { id: "local-owner" },
+        scope: { id: "personal" },
+        type: "text",
+        content: [
+          {
+            role: "body",
+            media_type: "text/plain",
+            text: `Please confirm page ${index}.`,
+          },
+        ],
+      })),
+    };
+
+    const result = await service.ingest(batch);
+    const events = authorityStore.allEvents();
+
+    assert.equal(result.valid, true);
+    assert.deepEqual(
+      result.records.map((record) => record.status),
+      ["accepted", "accepted", "accepted"],
+    );
+    assert.equal(events.length, 3);
+    assert.equal(blobStore.size, 3);
+    assert.equal((await authorityStore.listInbox("local-owner")).length, 3);
+    for (const event of events) {
+      const decision = await authorityStore.getDisposition(event.id);
+      assert.equal(decision?.disposition, "current_work");
+      assert.deepEqual(decision?.reason_codes, ["actionable"]);
+    }
+  });
+
+  it("treats an echo in the same page as the local outbound", async () => {
+    const { authorityStore, service } = createHarness();
+    const result = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "dsh-session",
+      org_id: "local-owner",
+      delivery_id: "mixed-1",
+      received_at: "2026-08-21T00:00:02.000Z",
+      records: [
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:out:rpc-1",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "session-x",
+          text: "你是哪个模型",
+        }),
+        channelRecord({
+          channel: "dsh",
+          kind: "user",
+          direction: "outbound",
+          external_id: "session-x:57",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "user",
+          scope_id: "session-x",
+          text: "你是哪个模型",
+        }),
+      ],
+    });
+
+    assert.equal(result.records[0].status, "accepted");
+    assert.equal(result.records[1].status, "duplicate");
+    assert.equal(result.records[1].event_id, result.records[0].event_id);
+    assert.equal(authorityStore.allEvents().length, 1);
+  });
+
+  it("reads stored blobs in one getMany call", async () => {
+    const { blobStore, service } = createHarness();
+    const batch = createBatch();
+    await service.ingest(batch);
+    const hash = canonicalizeRecordContent(batch.records[0]).hash;
+    const stored = await blobStore.getMany(["missing", hash, hash]);
+    assert.equal(stored.size, 1);
+    assert.equal(stored.has("missing"), false);
+    assert.deepEqual(stored.get(hash), await blobStore.get(hash));
   });
 });

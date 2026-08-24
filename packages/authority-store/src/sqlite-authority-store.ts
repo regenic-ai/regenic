@@ -26,6 +26,7 @@ import type {
   EventRecord,
   EventRevision,
   IngestAttempt,
+  IngestCommitRequest,
   IngestQuarantine,
   IngestOperation,
   NewConnectorInstallation,
@@ -144,6 +145,7 @@ const INBOX_COLUMNS = `
 `;
 
 interface InsertEventInput extends SourceIdentity {
+  id?: string;
   operation: IngestOperation;
   content_hash?: string;
   content_media_type?: string;
@@ -171,7 +173,7 @@ export class SqliteAuthorityStore
     }
     this.database = new Database(
       path,
-      this.readonly ? { readonly: true, fileMustExist: true } : undefined,
+      this.readonly ? { fileMustExist: true } : undefined,
     );
     try {
       this.database.pragma("busy_timeout = 5000");
@@ -185,6 +187,8 @@ export class SqliteAuthorityStore
           conversationId(source, externalId, fallbackId),
       );
       if (this.readonly) {
+        // Keep OS-level write access so WAL readers can update -shm and see
+        // commits from the writer. query_only still blocks application writes.
         this.database.pragma("query_only = ON");
       } else {
         this.migrate();
@@ -258,6 +262,10 @@ export class SqliteAuthorityStore
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
     this.assertWritable();
+    this.putDispositionWithinTransaction(decision);
+  }
+
+  private putDispositionWithinTransaction(decision: ArrangementDecision): void {
     this.database
       .prepare(
         `
@@ -443,18 +451,53 @@ export class SqliteAuthorityStore
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
-    const row = this.database
-      .prepare(
-        `SELECT content_hash, media_type, byte_size, created_at
-         FROM blobs WHERE content_hash = ?`,
-      )
-      .get(contentHash) as BlobRow | undefined;
-    return row ?? null;
+    return (await this.findBlobs([contentHash])).get(contentHash) ?? null;
+  }
+
+  async findBlobs(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobRecord>> {
+    const unique = [
+      ...new Set(contentHashes.filter((hash) => hash.length > 0)),
+    ];
+    const found = new Map<string, BlobRecord>();
+    const chunkSize = 400;
+    for (let offset = 0; offset < unique.length; offset += chunkSize) {
+      const chunk = unique.slice(offset, offset + chunkSize);
+      const rows = this.database
+        .prepare(
+          `SELECT content_hash, media_type, byte_size, created_at
+           FROM blobs WHERE content_hash IN (${chunk.map(() => "?").join(", ")})`,
+        )
+        .all(...chunk) as BlobRow[];
+      for (const row of rows) {
+        found.set(row.content_hash, row);
+      }
+    }
+    return found;
   }
 
   async append(input: NewEvent): Promise<EventRecord> {
     this.assertWritable();
     return this.insert({ ...input, operation: "create" });
+  }
+
+  async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
+    this.assertWritable();
+    if (request.appends.length === 0 && request.dispositions.length === 0) {
+      return [];
+    }
+    return this.database
+      .transaction(() => {
+        const events = request.appends.map((input) =>
+          this.insertWithinTransaction({ ...input, operation: "create" }),
+        );
+        for (const decision of request.dispositions) {
+          this.putDispositionWithinTransaction(decision);
+        }
+        return events;
+      })
+      .immediate();
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
@@ -952,7 +995,7 @@ export class SqliteAuthorityStore
 
   private insertWithinTransaction(input: InsertEventInput): EventRecord {
     const event: EventRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       org_id: input.org_id,
       source: input.source,
       external_id: input.external_id,

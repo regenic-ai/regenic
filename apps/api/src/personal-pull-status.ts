@@ -31,17 +31,26 @@ export interface PullStatusView {
 }
 
 const MAX_STREAM_VIEWS = 24;
+export const PREFER_THREAD_MS = 2 * 60 * 1000;
 
 export const pullStatus: PullStatusView = emptyPullStatus();
 
 let preferredThread: string | null = null;
+let preferredUntil = 0;
 
-export function preferThread(threadId: string | null | undefined): void {
+export function preferThread(
+  threadId: string | null | undefined,
+  now = Date.now(),
+): void {
   const next = threadId?.trim() || null;
   preferredThread = next;
+  preferredUntil = next ? now + PREFER_THREAD_MS : 0;
 }
 
-export function preferredThreadId(): string | null {
+export function preferredThreadId(now = Date.now()): string | null {
+  if (!preferredThread || now >= preferredUntil) {
+    return null;
+  }
   return preferredThread;
 }
 
@@ -61,7 +70,7 @@ export function finishPull(input: {
 }
 
 export function publishPullStreams(streams: PullStreamStatus[]): void {
-  const preferred = preferredThread;
+  const preferred = preferredThreadId();
   const ranked = [...streams].sort((left, right) => {
     const leftPreferred = preferred && left.thread_id === preferred ? 0 : 1;
     const rightPreferred = preferred && right.thread_id === preferred ? 0 : 1;
@@ -103,6 +112,7 @@ export function resetPullStatus(
   env: NodeJS.ProcessEnv = process.env,
 ): PullStatusView {
   preferredThread = null;
+  preferredUntil = 0;
   Object.assign(pullStatus, emptyPullStatus(env));
   return pullStatus;
 }

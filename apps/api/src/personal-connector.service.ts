@@ -187,13 +187,19 @@ export class PersonalConnectorService
     preferThread(id);
     const existing = this.hydrating.get(id);
     if (existing) {
-      await existing;
+      try {
+        await Promise.race([existing, delay(HYDRATE_WAIT_MS)]);
+      } catch {
+        return;
+      }
       return;
     }
     if ((this.hydrateCooldown.get(id) ?? 0) > Date.now()) {
       return;
     }
-    this.hydrateCooldown.set(id, Date.now() + HYDRATE_COOLDOWN_MS);
+    if (this.isThreadStreamBusy(id)) {
+      return;
+    }
     const job = this.runHydrateOpenedThread(id).finally(() => {
       this.hydrating.delete(id);
     });
@@ -201,7 +207,7 @@ export class PersonalConnectorService
     try {
       await Promise.race([job, delay(HYDRATE_WAIT_MS)]);
     } catch {
-      this.hydrateCooldown.delete(id);
+      return;
     }
   }
 
@@ -246,13 +252,18 @@ export class PersonalConnectorService
           installation.id,
           stream.stream_key,
           () => pollStream(host, store, installation, stream, 1),
+          { skipIfBusy: true },
         );
+        if (pages === undefined) {
+          return;
+        }
         this.rememberStreamPace({
           key,
-          pages: pages ?? [],
+          pages,
           pagesBudget: 1,
           idleMs: streamIdleMs(stream),
         });
+        this.hydrateCooldown.set(threadId, Date.now() + HYDRATE_COOLDOWN_MS);
       } catch (error) {
         this.rememberStreamPace({
           key,
@@ -797,6 +808,22 @@ export class PersonalConnectorService
     this.streamIdleUntil.delete(input.key);
   }
 
+  private isThreadStreamBusy(threadId: string): boolean {
+    for (const [key, meta] of this.streamMeta) {
+      if (meta.thread_id !== threadId) {
+        continue;
+      }
+      if (
+        this.streamPulling.has(key) ||
+        this.streamCatchingUp.has(key) ||
+        this.streamLocks.has(key)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private exclusiveStream<T>(
     installationId: string,
     streamKey: string,
@@ -1020,4 +1047,15 @@ export function shouldHydrateOpenedInbox(query: {
       !query.before &&
       !query.heads,
   );
+}
+
+export function shouldWaitForOpenedHydrate(localCount: number): boolean {
+  return localCount === 0;
+}
+
+export function shouldPollOpenedHydrate(input: {
+  localCount: number;
+  streamBusy: boolean;
+}): boolean {
+  return input.localCount === 0 && !input.streamBusy;
 }

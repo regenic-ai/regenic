@@ -227,10 +227,17 @@ function isReadable(item: InboxViewItem): boolean {
   return text.length > 0 || (item.attachments?.length ?? 0) > 0;
 }
 
-export function threadPaneEmptyCopy(opening: boolean): string {
-  return opening
-    ? "Opening conversation…"
-    : "This conversation has no displayable messages.";
+export function threadPaneEmptyCopy(
+  opening: boolean,
+  error?: string | null,
+): string {
+  if (opening) {
+    return "Opening conversation…";
+  }
+  if (error) {
+    return error;
+  }
+  return "This conversation has no displayable messages.";
 }
 
 export function threadLoadedCountCopy(input: {
@@ -238,7 +245,7 @@ export function threadLoadedCountCopy(input: {
   loaded: number;
   hasOlder: boolean;
 }): string {
-  if (input.opening && input.loaded === 0) {
+  if (input.loaded === 0 && input.opening) {
     return "Opening…";
   }
   if (input.hasOlder) {

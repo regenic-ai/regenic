@@ -56,6 +56,34 @@ export function mergeInboxDelta(
   return appended.length === 0 ? updated : [...updated, ...appended];
 }
 
+export function mergeRecentInbox(
+  previous: InboxViewItem[],
+  recent: InboxViewItem[],
+): InboxViewItem[] {
+  if (recent.length === 0) {
+    return previous;
+  }
+  if (previous.length === 0) {
+    return recent;
+  }
+  const oldestRecent = recent[0];
+  const recentIds = new Set(recent.map((item) => item.event.id));
+  const older = previous.filter(
+    (item) =>
+      !recentIds.has(item.event.id) &&
+      isBeforeEvent(
+        item.event,
+        oldestRecent.event.occurred_at,
+        oldestRecent.event.id,
+      ),
+  );
+  const reusedRecent = reuseInboxItems(
+    previous.filter((item) => recentIds.has(item.event.id)),
+    recent,
+  );
+  return older.length === 0 ? reusedRecent : [...older, ...reusedRecent];
+}
+
 export function mergeOlderInbox(
   previous: InboxViewItem[],
   older: InboxViewItem[],
@@ -100,6 +128,14 @@ function isBeforeEvent(
     return true;
   }
   return event.occurred_at === before && event.id < beforeId;
+}
+
+export function shouldFetchInboxDelta(input: {
+  loaded: boolean;
+  loadedCount: number;
+  hasCursor: boolean;
+}): boolean {
+  return input.loaded && input.hasCursor && input.loadedCount > 1;
 }
 
 export function inboxCursor(

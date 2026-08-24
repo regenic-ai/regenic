@@ -224,6 +224,31 @@ export function overlayThreadMessages(
   return changed ? next : threads;
 }
 
+export function openedThreadView(
+  thread: InboxThread,
+  opened: InboxViewItem[] | undefined,
+  _opening = false,
+): InboxThread {
+  if (opened) {
+    const messages = orderMessages(opened);
+    if (messages === thread.messages || sameMessageList(messages, thread.messages)) {
+      return thread;
+    }
+    return {
+      ...thread,
+      messages,
+      can_send: messages.some((item) => item.can_send) || thread.can_send,
+      await_reply:
+        messages.some((item) => item.await_reply === true) ||
+        thread.await_reply === true,
+    };
+  }
+  if (thread.messages.length > 0) {
+    return { ...thread, messages: [] };
+  }
+  return thread;
+}
+
 export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
 }

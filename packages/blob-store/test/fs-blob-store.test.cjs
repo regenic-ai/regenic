@@ -101,4 +101,25 @@ describe("FsBlobStore", () => {
 
     assert.equal(await store.exists(hash), false);
   });
+
+  it("reads many blobs and omits missing or corrupt hashes", async () => {
+    const { root, store } = await createStore();
+    const first = Buffer.from("first body", "utf8");
+    const second = Buffer.from("second body", "utf8");
+    const firstHash = digest(first);
+    const secondHash = digest(second);
+    await store.putMany([
+      { hash: firstHash, bytes: first, mediaType: "text/plain" },
+      { hash: secondHash, bytes: second, mediaType: "text/plain" },
+    ]);
+    await writeFile(
+      join(root, secondHash.slice(0, 2), secondHash.slice(2, 4), secondHash),
+      "corrupted body",
+    );
+
+    const found = await store.getMany([firstHash, secondHash, "0".repeat(64)]);
+    assert.equal(found.size, 1);
+    assert.deepEqual(found.get(firstHash), new Uint8Array(first));
+    assert.equal(found.has(secondHash), false);
+  });
 });

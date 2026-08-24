@@ -40,9 +40,11 @@ export const ThreadMessageList = memo(
     channel: string;
     canReply: boolean;
     opening?: boolean;
+    error?: string | null;
     hasOlder?: boolean;
     loadingOlder?: boolean;
     onLoadOlder?: () => void;
+    onRetry?: () => void;
     onReply: (item: InboxViewItem) => void;
   }>(function ThreadMessageList({
     threadId,
@@ -50,9 +52,11 @@ export const ThreadMessageList = memo(
     channel,
     canReply,
     opening = false,
+    error = null,
     hasOlder = false,
     loadingOlder = false,
     onLoadOlder,
+    onRetry,
     onReply,
   }, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -227,7 +231,12 @@ export const ThreadMessageList = memo(
   if (items.length === 0) {
     return (
       <div className="thread-scroll">
-        <p className="muted">{threadPaneEmptyCopy(opening)}</p>
+        <p className="muted">{threadPaneEmptyCopy(opening, error)}</p>
+        {error && !opening && onRetry ? (
+          <button type="button" className="thread-retry" onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
       </div>
     );
   }

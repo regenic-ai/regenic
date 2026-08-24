@@ -140,12 +140,20 @@ describe("thread pane empty copy", () => {
       threadPaneEmptyCopy(false),
       "This conversation has no displayable messages.",
     );
+    assert.equal(
+      threadPaneEmptyCopy(false, "Could not open this conversation."),
+      "Could not open this conversation.",
+    );
   });
 
   it("names a recent window instead of the whole history", () => {
     assert.equal(
       threadLoadedCountCopy({ opening: true, loaded: 0, hasOlder: false }),
       "Opening…",
+    );
+    assert.equal(
+      threadLoadedCountCopy({ opening: true, loaded: 1, hasOlder: false }),
+      "1 messages",
     );
     assert.equal(
       threadLoadedCountCopy({ opening: false, loaded: 50, hasOlder: true }),

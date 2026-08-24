@@ -4,6 +4,7 @@ import {
   groupInboxThreads,
   evictThreadCache,
   orderThreadMessages,
+  openedThreadView,
   overlayThreadMessages,
   sortInboxThreads,
   type InboxThread,
@@ -159,6 +160,19 @@ describe("inbox sort", () => {
       orderThreadMessages([newer, older]).map((item) => item.event.id),
       ["a", "c"],
     );
+  });
+
+  it("does not treat the list head as the opened transcript", () => {
+    const head = message("a", "2026-08-23T10:00:00.000Z", "feishu:oc_yiki");
+    const extra = message("b", "2026-08-23T10:01:00.000Z", "feishu:oc_yiki");
+    const [row] = groupInboxThreads([head]);
+    const opening = openedThreadView(row, undefined, true);
+    assert.deepEqual(opening.messages, []);
+    const failed = openedThreadView(row, undefined, false);
+    assert.deepEqual(failed.messages, []);
+    const loaded = openedThreadView(row, [head, extra], false);
+    assert.equal(loaded.messages.length, 2);
+    assert.equal(loaded.messages[1], extra);
   });
 
   it("evicts older thread caches and keeps the open one", () => {

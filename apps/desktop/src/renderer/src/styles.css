@@ -630,6 +630,16 @@ button {
   color: var(--risk);
 }
 
+.thread-retry {
+  margin-top: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
 .thread-sync .dot {
   animation: thread-sync-pulse 1.2s ease-in-out infinite;
 }

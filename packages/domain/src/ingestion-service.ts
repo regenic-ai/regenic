@@ -1,16 +1,20 @@
+import { randomUUID } from "node:crypto";
 import { ArrangementService } from "./arrangement-service";
 import {
   canonicalizeRecordContent,
   ContentUnavailableError,
+  type CanonicalContent,
 } from "./canonicalization";
 import type {
   AuthorityStore,
+  BlobObject,
   BlobStore,
   EventRecord,
   IngestBatchResult,
   IngestErrorCode,
   IngestRecord,
   IngestRecordResult,
+  NewEvent,
   SourceIdentity,
 } from "./ingestion";
 import { AuthorityConflictError } from "./ingestion";
@@ -34,6 +38,43 @@ export type IngestSubmissionResult =
       issues: IngestValidationIssue[];
     };
 
+type InspectedRecord =
+  | { kind: "result"; result: IngestRecordResult }
+  | {
+      kind: "create";
+      identity: SourceIdentity;
+      record: IngestRecord;
+      canonical: CanonicalContent;
+    }
+  | {
+      kind: "revise";
+      identity: SourceIdentity;
+      record: IngestRecord;
+      canonical: CanonicalContent;
+      current: EventRecord;
+    }
+  | {
+      kind: "tombstone";
+      identity: SourceIdentity;
+      record: IngestRecord;
+      current: EventRecord | null;
+    }
+  | {
+      kind: "create_after_tombstone";
+      identity: SourceIdentity;
+      record: IngestRecord;
+      canonical: CanonicalContent;
+      current: EventRecord;
+    };
+
+interface PlannedCreate {
+  index: number;
+  eventId: string;
+  identity: SourceIdentity;
+  record: IngestRecord;
+  canonical: CanonicalContent;
+}
+
 export class IngestionService {
   private readonly arrangement: ArrangementService;
 
@@ -55,11 +96,44 @@ export class IngestionService {
     }
 
     const batch = validation.data;
-    const records: IngestRecordResult[] = [];
+    const records: IngestRecordResult[] = new Array(batch.records.length);
+    const overlay = new PendingIngestOverlay();
+    const pendingCreates: PlannedCreate[] = [];
 
-    for (const record of batch.records) {
-      records.push(await this.ingestRecord(batch.org_id, record));
+    const flushCreates = async () => {
+      if (pendingCreates.length === 0) {
+        return;
+      }
+      const planned = pendingCreates.splice(0, pendingCreates.length);
+      await this.commitCreates(planned, records);
+    };
+
+    for (const [index, record] of batch.records.entries()) {
+      const inspected = await this.inspectRecord(batch.org_id, record, overlay);
+      if (inspected.kind === "result") {
+        records[index] = inspected.result;
+        continue;
+      }
+      if (inspected.kind === "create") {
+        const eventId = randomUUID();
+        overlay.rememberCreate(
+          inspected.identity,
+          previewCreate(eventId, inspected.identity, inspected.record, inspected.canonical),
+          inspected.record,
+        );
+        pendingCreates.push({
+          index,
+          eventId,
+          identity: inspected.identity,
+          record: inspected.record,
+          canonical: inspected.canonical,
+        });
+        continue;
+      }
+      await flushCreates();
+      records[index] = await this.ingestRecord(batch.org_id, record);
     }
+    await flushCreates();
 
     return {
       valid: true,
@@ -73,15 +147,32 @@ export class IngestionService {
     orgId: string,
     record: IngestRecord,
   ): Promise<IngestRecordResult> {
+    const inspected = await this.inspectRecord(orgId, record);
+    if (inspected.kind === "result") {
+      return inspected.result;
+    }
+    return this.persistInspected(inspected);
+  }
+
+  private async inspectRecord(
+    orgId: string,
+    record: IngestRecord,
+    overlay?: PendingIngestOverlay,
+  ): Promise<InspectedRecord> {
     const identity: SourceIdentity = {
       org_id: orgId,
       source: record.source,
       external_id: record.external_id,
     };
-    const current = await this.authorityStore.findBySourceIdentity(identity);
+    const overlayCurrent = overlay?.current(identity);
+    const current =
+      overlayCurrent ?? (await this.authorityStore.findBySourceIdentity(identity));
 
     if (record.operation === "tombstone") {
-      return this.ingestTombstone(identity, record, current);
+      if (current?.operation === "tombstone") {
+        return this.replayedInspected(record, current, overlayCurrent);
+      }
+      return { kind: "tombstone", identity, record, current };
     }
 
     let canonical;
@@ -90,21 +181,34 @@ export class IngestionService {
     } catch (error) {
       if (error instanceof ContentUnavailableError) {
         return {
-          external_id: record.external_id,
-          status: "quarantined",
-          error_code: "content_unavailable",
+          kind: "result",
+          result: {
+            external_id: record.external_id,
+            status: "quarantined",
+            error_code: "content_unavailable",
+          },
         };
       }
       throw error;
     }
 
     if (current?.content_hash === canonical.hash) {
-      return this.replayed(record, current);
+      return this.replayedInspected(record, current, overlayCurrent);
     }
 
+    const overlayEcho = overlay?.findEcho(record);
+    if (overlayEcho) {
+      return {
+        kind: "result",
+        result: duplicateResult(record, overlayEcho),
+      };
+    }
     const echoed = await this.findEchoedOutbound(orgId, record);
     if (echoed) {
-      return this.replayed(record, echoed);
+      return {
+        kind: "result",
+        result: await this.replayed(record, echoed),
+      };
     }
 
     if (
@@ -113,63 +217,175 @@ export class IngestionService {
       (current.operation !== "tombstone" || current.parent_event_id !== undefined)
     ) {
       return {
-        external_id: record.external_id,
-        status: "quarantined",
-        error_code: "source_identity_conflict",
+        kind: "result",
+        result: {
+          external_id: record.external_id,
+          status: "quarantined",
+          error_code: "source_identity_conflict",
+        },
       };
     }
 
     if (record.operation === "revise" && !current) {
       return {
-        external_id: record.external_id,
-        status: "quarantined",
-        error_code: "source_identity_conflict",
+        kind: "result",
+        result: {
+          external_id: record.external_id,
+          status: "quarantined",
+          error_code: "source_identity_conflict",
+        },
       };
     }
 
-    await this.blobStore.put(
-      canonical.hash,
-      canonical.bytes,
-      canonical.media_type,
+    if (record.operation === "revise" && current) {
+      return { kind: "revise", identity, record, canonical, current };
+    }
+
+    if (current) {
+      return {
+        kind: "create_after_tombstone",
+        identity,
+        record,
+        canonical,
+        current,
+      };
+    }
+
+    return { kind: "create", identity, record, canonical };
+  }
+
+  private async replayedInspected(
+    record: IngestRecord,
+    event: EventRecord,
+    overlayCurrent: EventRecord | undefined,
+  ): Promise<InspectedRecord> {
+    if (overlayCurrent) {
+      return {
+        kind: "result",
+        result: duplicateResult(record, event),
+      };
+    }
+    return {
+      kind: "result",
+      result: await this.replayed(record, event),
+    };
+  }
+
+  private async commitCreates(
+    creates: PlannedCreate[],
+    records: IngestRecordResult[],
+  ): Promise<void> {
+    const blobs = new Map<string, BlobObject>();
+    for (const item of creates) {
+      if (!blobs.has(item.canonical.hash)) {
+        blobs.set(item.canonical.hash, {
+          hash: item.canonical.hash,
+          bytes: item.canonical.bytes,
+          mediaType: item.canonical.media_type,
+        });
+      }
+    }
+    await this.blobStore.putMany([...blobs.values()]);
+
+    const appends: NewEvent[] = creates.map((item) => ({
+      id: item.eventId,
+      ...item.identity,
+      content_hash: item.canonical.hash,
+      content_media_type: item.canonical.media_type,
+      content_byte_size: item.canonical.bytes.byteLength,
+      occurred_at: item.record.occurred_at,
+      expected_head_id: null,
+    }));
+    const dispositions = creates.map((item) =>
+      this.arrangement.decide(
+        previewCreate(item.eventId, item.identity, item.record, item.canonical),
+        item.record,
+      ),
     );
 
     try {
-      if (record.operation === "revise" && current) {
+      const events = await this.authorityStore.commitIngest({
+        appends,
+        dispositions,
+      });
+      for (const [index, item] of creates.entries()) {
+        records[item.index] = {
+          external_id: item.record.external_id,
+          status: "accepted",
+          event_id: events[index]?.id ?? item.eventId,
+        };
+      }
+    } catch (error) {
+      if (error instanceof AuthorityConflictError) {
+        for (const item of creates) {
+          records[item.index] = await this.ingestRecord(
+            item.identity.org_id,
+            item.record,
+          );
+        }
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async persistInspected(
+    inspected: Exclude<InspectedRecord, { kind: "result" }>,
+  ): Promise<IngestRecordResult> {
+    if (inspected.kind === "tombstone") {
+      return this.ingestTombstone(
+        inspected.identity,
+        inspected.record,
+        inspected.current,
+      );
+    }
+
+    await this.blobStore.put(
+      inspected.canonical.hash,
+      inspected.canonical.bytes,
+      inspected.canonical.media_type,
+    );
+
+    try {
+      if (inspected.kind === "revise") {
         const event = await this.authorityStore.appendRevision({
-          ...identity,
-          content_hash: canonical.hash,
-          content_media_type: canonical.media_type,
-          content_byte_size: canonical.bytes.byteLength,
-          occurred_at: record.occurred_at,
-          expected_head_id: current.id,
-          parent_event_id: current.id,
-          revision_id: record.revision_id,
+          ...inspected.identity,
+          content_hash: inspected.canonical.hash,
+          content_media_type: inspected.canonical.media_type,
+          content_byte_size: inspected.canonical.bytes.byteLength,
+          occurred_at: inspected.record.occurred_at,
+          expected_head_id: inspected.current.id,
+          parent_event_id: inspected.current.id,
+          revision_id: inspected.record.revision_id,
         });
-        return this.accepted(record, event);
+        return this.accepted(inspected.record, event);
       }
 
       const event = await this.authorityStore.append({
-        ...identity,
-        content_hash: canonical.hash,
-        content_media_type: canonical.media_type,
-        content_byte_size: canonical.bytes.byteLength,
-        occurred_at: record.occurred_at,
-        expected_head_id: current?.id ?? null,
+        ...inspected.identity,
+        content_hash: inspected.canonical.hash,
+        content_media_type: inspected.canonical.media_type,
+        content_byte_size: inspected.canonical.bytes.byteLength,
+        occurred_at: inspected.record.occurred_at,
+        expected_head_id:
+          inspected.kind === "create_after_tombstone"
+            ? inspected.current.id
+            : null,
       });
 
-      if (current?.operation === "tombstone") {
+      if (inspected.kind === "create_after_tombstone") {
         const tombstone = await this.authorityStore.markTombstone({
-          ...identity,
-          occurred_at: current.occurred_at,
+          ...inspected.identity,
+          occurred_at: inspected.current.occurred_at,
           expected_head_id: event.id,
         });
-        return this.accepted(record, tombstone);
+        return this.accepted(inspected.record, tombstone);
       }
 
-      return this.accepted(record, event);
+      return this.accepted(inspected.record, event);
     } catch (error) {
       if (error instanceof AuthorityConflictError) {
-        return this.concurrentUpdate(record);
+        return this.concurrentUpdate(inspected.record);
       }
       throw error;
     }
@@ -218,11 +434,7 @@ export class IngestionService {
     if (!(await this.authorityStore.getDisposition(event.id))) {
       await this.arrangement.remember(event, record);
     }
-    return {
-      external_id: record.external_id,
-      status: "duplicate",
-      event_id: event.id,
-    };
+    return duplicateResult(record, event);
   }
 
   private async findEchoedOutbound(
@@ -278,6 +490,94 @@ export class IngestionService {
       error_code: "concurrent_source_update",
     };
   }
+}
+
+class PendingIngestOverlay {
+  private readonly byKey = new Map<string, EventRecord>();
+  private readonly pending: Array<{ event: EventRecord; record: IngestRecord }> =
+    [];
+
+  current(identity: SourceIdentity): EventRecord | undefined {
+    return this.byKey.get(identityKey(identity));
+  }
+
+  rememberCreate(
+    identity: SourceIdentity,
+    event: EventRecord,
+    record: IngestRecord,
+  ): void {
+    this.byKey.set(identityKey(identity), event);
+    this.pending.push({ event, record });
+  }
+
+  findEcho(record: IngestRecord): EventRecord | null {
+    if (isLocalOutboundId(record.external_id)) {
+      return null;
+    }
+    if (surfaceFromParts(record.content ?? [])?.kind !== "user") {
+      return null;
+    }
+    const incoming = normalizeUtterance(recordBodyText(record));
+    if (!incoming) {
+      return null;
+    }
+    const conversation = conversationId(record.source, record.external_id);
+    for (const item of this.pending) {
+      if (
+        item.record.source !== record.source ||
+        !isLocalOutboundId(item.record.external_id)
+      ) {
+        continue;
+      }
+      if (
+        conversationId(
+          item.event.source,
+          item.event.external_id,
+          item.event.id,
+        ) !== conversation
+      ) {
+        continue;
+      }
+      const existing = normalizeUtterance(recordBodyText(item.record));
+      if (existing && existing === incoming) {
+        return item.event;
+      }
+    }
+    return null;
+  }
+}
+
+function previewCreate(
+  eventId: string,
+  identity: SourceIdentity,
+  record: IngestRecord,
+  canonical: CanonicalContent,
+): EventRecord {
+  return {
+    id: eventId,
+    org_id: identity.org_id,
+    source: identity.source,
+    external_id: identity.external_id,
+    operation: "create",
+    content_hash: canonical.hash,
+    occurred_at: record.occurred_at,
+    ingested_at: record.occurred_at,
+  };
+}
+
+function duplicateResult(
+  record: IngestRecord,
+  event: EventRecord,
+): IngestRecordResult {
+  return {
+    external_id: record.external_id,
+    status: "duplicate",
+    event_id: event.id,
+  };
+}
+
+function identityKey(identity: SourceIdentity): string {
+  return JSON.stringify([identity.org_id, identity.source, identity.external_id]);
 }
 
 function recordBodyText(record: IngestRecord): string | undefined {

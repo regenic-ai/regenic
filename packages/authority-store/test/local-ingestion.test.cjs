@@ -360,6 +360,11 @@ describe("local ingestion persistence", () => {
     assert.equal(heads.length, threads.size);
     assert.ok(heads.length >= 2);
     assert.ok(thread.length >= 2);
+    const byThreadId = await authorityStore.listInbox("local-owner", {
+      siblings: true,
+      thread_ids: ["dsh:session-x"],
+    });
+    assert.equal(byThreadId.length, thread.length);
     const recent = await authorityStore.listInbox("local-owner", {
       siblings: true,
       source: "dsh",

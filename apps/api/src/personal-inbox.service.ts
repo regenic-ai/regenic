@@ -25,7 +25,12 @@ import {
   type MessageKind,
   type ThreadActivity,
 } from "@regenic/domain";
-import { resolveInboxBody, type InboxAttachment, type InboxBody } from "./inbox-body";
+import {
+  resolveInboxBodies,
+  resolveInboxBody,
+  type InboxAttachment,
+  type InboxBody,
+} from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
@@ -231,26 +236,27 @@ export class PersonalInboxService {
     );
     const selected = selectInboxRecords(records, query);
     const attachments = query.heads ? "meta" : "preview";
-    const resolved = await Promise.all(
-      selected.map(async (item) => {
-        const threadId = conversationId(
-          item.event.source,
-          item.event.external_id,
-          item.event.id,
-        );
-        return {
-          item,
-          threadId,
-          body: await resolveListBody(
-            authority,
-            blobs,
-            item.event.content_hash,
-            attachments,
-            query.heads === true,
-          ),
-        };
-      }),
+    const bodies = await resolveInboxBodies(
+      authority,
+      blobs,
+      selected.map((item) => item.event.content_hash),
+      attachments,
     );
+    const resolved = selected.map((item) => {
+      const threadId = conversationId(
+        item.event.source,
+        item.event.external_id,
+        item.event.id,
+      );
+      const raw = item.event.content_hash
+        ? (bodies.get(item.event.content_hash) ?? {})
+        : {};
+      return {
+        item,
+        threadId,
+        body: query.heads === true ? listFaceBody(raw) : raw,
+      };
+    });
     const labels = await conversationLabelsFor(
       resolved,
       installations,
@@ -320,22 +326,7 @@ export class PersonalInboxService {
 
 const LIST_FACE_MAX = 120;
 
-async function resolveListBody(
-  authority: Parameters<typeof resolveInboxBody>[0],
-  blobs: Parameters<typeof resolveInboxBody>[1],
-  contentHash: string | undefined,
-  attachments: Parameters<typeof resolveInboxBody>[3],
-  heads: boolean,
-): Promise<InboxBody> {
-  const body = await resolveInboxBody(
-    authority,
-    blobs,
-    contentHash,
-    attachments,
-  );
-  if (!heads) {
-    return body;
-  }
+function listFaceBody(body: InboxBody): InboxBody {
   return {
     media_type: body.media_type,
     surface: body.surface,
@@ -517,25 +508,34 @@ async function firstUserTextIn(
   authority: AuthorityStore,
   blobs: BlobStore,
 ): Promise<string | undefined> {
-  let reads = 0;
-  let users = 0;
+  const cached = new Map(
+    resolved.map((row) => [row.item.event.id, row.body] as const),
+  );
+  const scanned: InboxItem[] = [];
+  const missing: Array<string | undefined> = [];
   for (const item of items) {
     if (isThreadStatusItem(item) || item.event.operation === "tombstone") {
       continue;
     }
-    reads += 1;
-    if (reads > PROMPT_READ_LIMIT) {
+    if (scanned.length >= PROMPT_READ_LIMIT) {
       break;
     }
-    const cached = resolved.find((row) => row.item.event.id === item.event.id);
+    scanned.push(item);
+    if (!cached.has(item.event.id)) {
+      missing.push(item.event.content_hash);
+    }
+  }
+  const extras =
+    missing.length > 0
+      ? await resolveInboxBodies(authority, blobs, missing, "meta")
+      : new Map<string, InboxBody>();
+  let users = 0;
+  for (const item of scanned) {
     const body =
-      cached?.body ??
-      (await resolveInboxBody(
-        authority,
-        blobs,
-        item.event.content_hash,
-        "meta",
-      ));
+      cached.get(item.event.id) ??
+      (item.event.content_hash
+        ? (extras.get(item.event.content_hash) ?? {})
+        : {});
     const surface = messageSurfaceOf(item.event, body);
     if (surface.kind !== "user") {
       continue;
@@ -621,7 +621,7 @@ export function isAfterCursor(
   return event.ingested_at === since && event.id > sinceId;
 }
 
-function inboxStoreQuery(
+export function inboxStoreQuery(
   query: InboxListQuery,
   thread?: ConversationThread,
 ): InboxQuery {
@@ -632,6 +632,17 @@ function inboxStoreQuery(
           thread_ids: [`${thread.source}:${thread.target}`],
         }
       : { heads: true };
+  }
+  if (query.thread_id && thread) {
+    return {
+      thread_ids: [query.thread_id],
+      since: query.since,
+      since_id: query.since_id,
+      before: query.before,
+      before_id: query.before_id,
+      limit: query.limit,
+      siblings: true,
+    };
   }
   return {
     source: thread?.source,

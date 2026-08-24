@@ -9,12 +9,12 @@ export interface ArrangementStore {
 export class ArrangementService {
   constructor(private readonly store: ArrangementStore) {}
 
-  async remember(
+  decide(
     event: EventRecord,
     record: Pick<IngestRecord, "type" | "content" | "weight_hints">,
     now?: string,
-  ): Promise<ArrangementDecision> {
-    const decision = arrangeMessage({
+  ): ArrangementDecision {
+    return arrangeMessage({
       event,
       type: record.type,
       kind: surfaceFromParts(record.content ?? [])?.kind,
@@ -22,6 +22,14 @@ export class ArrangementService {
       weight_hints: record.weight_hints,
       now,
     });
+  }
+
+  async remember(
+    event: EventRecord,
+    record: Pick<IngestRecord, "type" | "content" | "weight_hints">,
+    now?: string,
+  ): Promise<ArrangementDecision> {
+    const decision = this.decide(event, record, now);
     await this.store.putDisposition(decision);
     return decision;
   }

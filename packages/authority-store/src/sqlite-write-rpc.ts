@@ -4,6 +4,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "append",
   "appendRevision",
   "markTombstone",
+  "commitIngest",
   "putDisposition",
   "putConversationPref",
   "createInstallation",

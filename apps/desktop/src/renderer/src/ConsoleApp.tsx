@@ -34,6 +34,7 @@ import {
   filterInboxThreads,
   groupInboxThreads,
   latestMessage,
+  openedThreadView,
   orderThreadMessages,
   overlayThreadMessages,
   prunePrefOverlay,
@@ -64,8 +65,9 @@ import {
   mergeInboxDelta,
   mergeOlderInbox,
   olderInboxCursor,
-  reuseInboxItems,
+  mergeRecentInbox,
   reuseInboxList,
+  shouldFetchInboxDelta,
   THREAD_PAGE_SIZE,
   type InboxReuse,
 } from "./thread-window";
@@ -125,6 +127,7 @@ export function ConsoleApp() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const [threadError, setThreadError] = useState<Record<string, string>>({});
   const [loadingOlderId, setLoadingOlderId] = useState<string | null>(null);
   const [hasOlderByThread, setHasOlderByThread] = useState<Record<string, boolean>>(
     {},
@@ -193,9 +196,29 @@ export function ConsoleApp() {
     const cursor = inboxCursor(current);
     if (mode === "open" && !loaded) {
       setOpeningId(threadId);
+      setThreadError((prev) => {
+        if (!prev[threadId]) {
+          return prev;
+        }
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
     }
+    const finishOpen = () => {
+      if (mode === "open" && threadLoadSeq.current[threadId] === seq) {
+        setOpeningId((currentId) => (currentId === threadId ? null : currentId));
+      }
+    };
     try {
-      if (loaded && cursor && (mode === "poll" || current.length > 1)) {
+      if (
+        cursor &&
+        shouldFetchInboxDelta({
+          loaded,
+          loadedCount: current.length,
+          hasCursor: true,
+        })
+      ) {
         const delta = await fetchInbox({
           thread_id: threadId,
           since: cursor.since,
@@ -205,6 +228,7 @@ export function ConsoleApp() {
           return;
         }
         if (delta.length === 0) {
+          finishOpen();
           return;
         }
         setMessagesByThread((prev) =>
@@ -214,6 +238,10 @@ export function ConsoleApp() {
             orderThreadMessages(mergeInboxDelta(prev[threadId] ?? current, delta)),
           ),
         );
+        finishOpen();
+        return;
+      }
+      if (olderBusyRef.current.has(threadId)) {
         return;
       }
       const items = await fetchInbox({
@@ -224,21 +252,30 @@ export function ConsoleApp() {
         return;
       }
       loadedThreadsRef.current.add(threadId);
+      const merged = orderThreadMessages(
+        mergeRecentInbox(messagesRef.current[threadId] ?? current, items),
+      );
+      const keptOlder = merged.length > items.length;
       setHasOlderByThread((prev) => ({
         ...prev,
-        [threadId]: hasOlderPage(items.length),
+        [threadId]: keptOlder ? prev[threadId] === true : hasOlderPage(items.length),
       }));
       setMessagesByThread((prev) =>
-        rememberThreadMessages(
-          prev,
-          threadId,
-          orderThreadMessages(reuseInboxItems(prev[threadId] ?? [], items)),
-        ),
+        rememberThreadMessages(prev, threadId, merged),
       );
-    } finally {
-      if (mode === "open") {
-        setOpeningId((currentId) => (currentId === threadId ? null : currentId));
+      finishOpen();
+    } catch (caught) {
+      if (threadLoadSeq.current[threadId] !== seq) {
+        return;
       }
+      if (!loadedThreadsRef.current.has(threadId)) {
+        setThreadError((prev) => ({
+          ...prev,
+          [threadId]:
+            caught instanceof Error ? caught.message : "Could not open this conversation.",
+        }));
+      }
+      finishOpen();
     }
   };
 
@@ -332,8 +369,11 @@ export function ConsoleApp() {
           lastFullRef.current = Date.now();
         }
         const openId = selectedIdRef.current;
-        if (openId && loadedThreadsRef.current.has(openId)) {
-          await ensureThread(openId, "poll");
+        if (openId) {
+          await ensureThread(
+            openId,
+            loadedThreadsRef.current.has(openId) ? "poll" : "open",
+          );
         }
         delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
@@ -402,7 +442,17 @@ export function ConsoleApp() {
     () => overlayThreadMessages(listThreads, messagesByThread),
     [listThreads, messagesByThread],
   );
-  const selected = threads.find((thread) => thread.id === selectedId) ?? null;
+  const selected = useMemo(() => {
+    const thread = threads.find((item) => item.id === selectedId) ?? null;
+    if (!thread) {
+      return null;
+    }
+    return openedThreadView(
+      thread,
+      messagesByThread[thread.id],
+      openingId === thread.id,
+    );
+  }, [threads, selectedId, messagesByThread, openingId]);
   const chip = engineChip(engine);
   const createTargets = createConversationTargets(engine);
 
@@ -526,6 +576,7 @@ export function ConsoleApp() {
             error={error}
             pull={engine?.pull}
             openingId={openingId}
+            openError={selected ? threadError[selected.id] ?? null : null}
             hasOlder={selected ? hasOlderByThread[selected.id] === true : false}
             loadingOlder={loadingOlderId === selectedId}
             onLoadOlder={() => {
@@ -662,6 +713,7 @@ function InboxWorkspace({
   error,
   pull,
   openingId,
+  openError,
   hasOlder,
   loadingOlder,
   onLoadOlder,
@@ -678,6 +730,7 @@ function InboxWorkspace({
   error: string | null;
   pull?: PersonalEngineView["pull"];
   openingId: string | null;
+  openError: string | null;
   hasOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
@@ -851,9 +904,13 @@ function InboxWorkspace({
             thread={selected}
             pull={pull}
             opening={openingId === selected.id}
+            openError={openError}
             hasOlder={hasOlder}
             loadingOlder={loadingOlder}
             onLoadOlder={onLoadOlder}
+            onRetry={() => {
+              void onRefresh();
+            }}
             onRefresh={onRefresh}
             onRename={renameSelected}
             onPin={pinSelected}
@@ -1081,9 +1138,11 @@ const ThreadPane = memo(function ThreadPane({
   thread,
   pull,
   opening,
+  openError,
   hasOlder,
   loadingOlder,
   onLoadOlder,
+  onRetry,
   onRefresh,
   onRename,
   onPin,
@@ -1091,9 +1150,11 @@ const ThreadPane = memo(function ThreadPane({
   thread: InboxThread;
   pull?: PersonalEngineView["pull"];
   opening: boolean;
+  openError: string | null;
   hasOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
+  onRetry: () => void;
   onRefresh: () => Promise<void>;
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
@@ -1205,7 +1266,7 @@ const ThreadPane = memo(function ThreadPane({
           <p className="thread-sub">
             {threadLoadedCountCopy({
               opening,
-              loaded: thread.messages.length,
+              loaded: merged.length,
               hasOlder,
             })}
             {thread.conversation_label ? "" : ` · ${thread.label}`}
@@ -1231,9 +1292,11 @@ const ThreadPane = memo(function ThreadPane({
         channel={thread.channel}
         canReply={canReply}
         opening={opening}
+        error={openError}
         hasOlder={hasOlder}
         loadingOlder={loadingOlder}
         onLoadOlder={onLoadOlder}
+        onRetry={onRetry}
         onReply={quoteMessage}
       />
       <div className="composer-dock">

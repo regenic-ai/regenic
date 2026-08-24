@@ -15,6 +15,7 @@ import type {
   InboxQuery,
   InboxSummary,
   IngestAttempt,
+  IngestCommitRequest,
   IngestQuarantine,
   NewConnectorInstallation,
   NewEvent,
@@ -55,6 +56,12 @@ export class SqliteSplitAuthorityStore
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
     return this.reader.findBlob(contentHash);
+  }
+
+  async findBlobs(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobRecord>> {
+    return this.reader.findBlobs(contentHashes);
   }
 
   async findBySourceIdentity(
@@ -132,6 +139,10 @@ export class SqliteSplitAuthorityStore
 
   async markTombstone(input: TombstoneEvent): Promise<EventRecord> {
     return this.writer.call("markTombstone", [input]);
+  }
+
+  async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
+    return this.writer.call("commitIngest", [request]);
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
