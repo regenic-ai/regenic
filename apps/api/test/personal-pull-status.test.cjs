@@ -9,6 +9,7 @@ const {
   pullStatus,
   resetPullStatus,
 } = require("../dist/personal-pull-status");
+const { shouldHydrateOpenedInbox } = require("../dist/personal-connector.service");
 
 afterEach(() => {
   resetPullStatus({});
@@ -64,5 +65,22 @@ describe("pull status network watch", () => {
     assert.equal(preferredThreadId(), "feishu:oc_hot");
     assert.equal(pullStatus.streams[0].thread_id, "feishu:oc_hot");
     assert.equal(pullStatus.catching_up_count, 1);
+  });
+});
+
+describe("opened inbox hydrate", () => {
+  it("only hydrates a thread open, not heads or incremental polls", () => {
+    assert.equal(shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1" }), true);
+    assert.equal(
+      shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", since: "2026-08-24T00:00:00.000Z" }),
+      false,
+    );
+    assert.equal(
+      shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", before: "2026-08-24T00:00:00.000Z" }),
+      false,
+    );
+    assert.equal(shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", heads: true }), false);
+    assert.equal(shouldHydrateOpenedInbox({ heads: true }), false);
+    assert.equal(shouldHydrateOpenedInbox({ thread_id: "dsh:session-x" }), false);
   });
 });

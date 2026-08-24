@@ -15,6 +15,7 @@ import { PersonalApiGuard } from "./personal-api.guard";
 import {
   PersonalConnectorError,
   PersonalConnectorService,
+  shouldHydrateOpenedInbox,
 } from "./personal-connector.service";
 import {
   PersonalInboxService,
@@ -44,17 +45,21 @@ export class PersonalController {
     @Query("thread_id") threadId?: string,
     @Query("limit") limit?: string,
   ) {
-    return this.guard(() =>
-      this.inbox.listInbox({
-        since: since?.trim() || undefined,
-        since_id: sinceId?.trim() || undefined,
-        before: before?.trim() || undefined,
-        before_id: beforeId?.trim() || undefined,
-        heads: heads === "1" || heads === "true",
-        thread_id: threadId?.trim() || undefined,
-        limit: limit?.trim() ? Number(limit) : undefined,
-      }),
-    );
+    const query = {
+      since: since?.trim() || undefined,
+      since_id: sinceId?.trim() || undefined,
+      before: before?.trim() || undefined,
+      before_id: beforeId?.trim() || undefined,
+      heads: heads === "1" || heads === "true",
+      thread_id: threadId?.trim() || undefined,
+      limit: limit?.trim() ? Number(limit) : undefined,
+    };
+    return this.guard(async () => {
+      if (shouldHydrateOpenedInbox(query) && query.thread_id) {
+        await this.connectors.hydrateOpenedThread(query.thread_id);
+      }
+      return this.inbox.listInbox(query);
+    });
   }
 
   @Get("inbox/:event_id")

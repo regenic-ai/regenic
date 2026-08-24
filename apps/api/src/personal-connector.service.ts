@@ -10,6 +10,7 @@ import {
   ConnectorRunner,
   channelLabel,
   normalizeListTitle,
+  parseConversationThread,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -28,6 +29,7 @@ import {
   applyPullOutcome,
   beginPull,
   finishPull,
+  preferThread,
   preferredThreadId,
   publishPullStreams,
   pullStatus,
@@ -45,6 +47,8 @@ export { PersonalConnectorError } from "./personal-errors";
 const DEFAULT_MAX_PAGES = 1;
 const MAX_PAGES_CAP = 5;
 const STREAM_CONCURRENCY = 4;
+const HYDRATE_COOLDOWN_MS = 15_000;
+const HYDRATE_WAIT_MS = 12_000;
 const FOLLOW_TRIES = 6;
 const FOLLOW_WAIT_MS = 750;
 const DEFAULT_PULL_MS = 3_000;
@@ -89,6 +93,8 @@ export class PersonalConnectorService
   >();
   private readonly streamErrors = new Map<string, string>();
   private readonly streamPulling = new Set<string>();
+  private readonly hydrating = new Map<string, Promise<void>>();
+  private readonly hydrateCooldown = new Map<string, number>();
   private lastCatchUpCursor: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
@@ -171,6 +177,97 @@ export class PersonalConnectorService
         throw wrapDriverError(error, "sync_failed");
       }
     });
+  }
+
+  async hydrateOpenedThread(threadId: string): Promise<void> {
+    const id = threadId.trim();
+    if (!id || !shouldHydrateOpenedInbox({ thread_id: id })) {
+      return;
+    }
+    preferThread(id);
+    const existing = this.hydrating.get(id);
+    if (existing) {
+      await existing;
+      return;
+    }
+    if ((this.hydrateCooldown.get(id) ?? 0) > Date.now()) {
+      return;
+    }
+    this.hydrateCooldown.set(id, Date.now() + HYDRATE_COOLDOWN_MS);
+    const job = this.runHydrateOpenedThread(id).finally(() => {
+      this.hydrating.delete(id);
+    });
+    this.hydrating.set(id, job);
+    try {
+      await Promise.race([job, delay(HYDRATE_WAIT_MS)]);
+    } catch {
+      this.hydrateCooldown.delete(id);
+    }
+  }
+
+  private async runHydrateOpenedThread(threadId: string): Promise<void> {
+    let thread: ConversationThread;
+    try {
+      thread = parseConversationThread(threadId);
+    } catch {
+      return;
+    }
+    if (thread.source !== "feishu") {
+      return;
+    }
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installations = await store.listInstallations(this.runtime.orgId());
+    for (const installation of installations) {
+      if (installation.status !== "enabled") {
+        continue;
+      }
+      const driver = this.drivers.get(installation.connector_type);
+      if (!driver?.matchesThread(installation, thread)) {
+        continue;
+      }
+      let stream: ConnectorStream;
+      try {
+        stream = await driver.resolveThreadStream(
+          installation,
+          thread,
+          host,
+          process.env,
+        );
+      } catch {
+        continue;
+      }
+      const key = streamPaceKey(installation.id, stream.stream_key);
+      this.rememberStreamMeta(key, stream);
+      this.streamPulling.add(key);
+      this.publishStreams();
+      try {
+        const pages = await this.exclusiveStream(
+          installation.id,
+          stream.stream_key,
+          () => pollStream(host, store, installation, stream, 1),
+        );
+        this.rememberStreamPace({
+          key,
+          pages: pages ?? [],
+          pagesBudget: 1,
+          idleMs: streamIdleMs(stream),
+        });
+      } catch (error) {
+        this.rememberStreamPace({
+          key,
+          pages: [],
+          pagesBudget: 1,
+          idleMs: streamIdleMs(stream),
+          error,
+        });
+        throw error;
+      } finally {
+        this.streamPulling.delete(key);
+        this.publishStreams();
+      }
+      return;
+    }
   }
 
   private async followStream(
@@ -908,5 +1005,19 @@ function summarizeRuns(runs: ConnectorPollRunResult[]): {
       return acc;
     },
     { accepted_count: 0, duplicate_count: 0, quarantined_count: 0 },
+  );
+}
+
+export function shouldHydrateOpenedInbox(query: {
+  thread_id?: string;
+  since?: string;
+  before?: string;
+  heads?: boolean;
+}): boolean {
+  return Boolean(
+    query.thread_id?.startsWith("feishu:") &&
+      !query.since &&
+      !query.before &&
+      !query.heads,
   );
 }

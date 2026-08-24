@@ -1,0 +1,127 @@
+export class FeishuApiError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "FeishuApiError";
+  }
+}
+
+export type FeishuSortType = "ByCreateTimeAsc" | "ByCreateTimeDesc";
+
+export const FEISHU_OPEN_API_CN = "https://open.feishu.cn";
+export const FEISHU_OPEN_API_LARK = "https://open.larksuite.com";
+
+const TOKEN_CODES = new Set([
+  "99991663",
+  "99991664",
+  "99991668",
+  "99991677",
+  "99991679",
+]);
+
+export function feishuOpenApiBaseUrl(brand?: string): string {
+  const value = brand?.trim().toLowerCase();
+  if (value === "lark" || value === "larksuite") {
+    return FEISHU_OPEN_API_LARK;
+  }
+  return FEISHU_OPEN_API_CN;
+}
+
+export function isFeishuTokenError(error: unknown): boolean {
+  const code = error instanceof FeishuApiError ? error.code : undefined;
+  if (code && TOKEN_CODES.has(code)) {
+    return true;
+  }
+  const text = error instanceof Error ? error.message : String(error);
+  return /token invalid|invalid.*token|user unauthorized|access token/i.test(text);
+}
+
+export async function callFeishuOpenApi(input: {
+  method: "GET" | "POST";
+  path: string;
+  token: string;
+  params?: Record<string, string | number>;
+  data?: unknown;
+  base_url?: string;
+  fetch?: typeof fetch;
+  timeout_ms?: number;
+}): Promise<unknown> {
+  const fetchFn = input.fetch ?? fetch;
+  const url = new URL(input.path, input.base_url ?? FEISHU_OPEN_API_CN);
+  for (const [key, value] of Object.entries(input.params ?? {})) {
+    url.searchParams.set(key, String(value));
+  }
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${input.token}`,
+  };
+  const body =
+    input.method === "POST" && input.data !== undefined
+      ? JSON.stringify(input.data)
+      : undefined;
+  if (body) {
+    headers["Content-Type"] = "application/json";
+  }
+  const timeoutMs = input.timeout_ms ?? 20_000;
+  const signal =
+    timeoutMs > 0 && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+      ? AbortSignal.timeout(timeoutMs)
+      : undefined;
+  let response: Response;
+  try {
+    response = await fetchFn(url.toString(), {
+      method: input.method,
+      headers,
+      body,
+      signal,
+    });
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    if (/aborted|timeout|TimeoutError/i.test(text)) {
+      throw new FeishuApiError(`Feishu HTTP timed out after ${timeoutMs}ms`);
+    }
+    throw new FeishuApiError(`Feishu HTTP request failed: ${text}`);
+  }
+  const payload = await readJson(response);
+  if (isObject(payload) && typeof payload.code === "number" && payload.code !== 0) {
+    throw new FeishuApiError(
+      stringValue(payload.msg) ?? `Feishu API error ${payload.code}`,
+      String(payload.code),
+    );
+  }
+  if (!response.ok) {
+    throw new FeishuApiError(
+      `Feishu HTTP ${response.status}`,
+      String(response.status),
+    );
+  }
+  if (isObject(payload) && "data" in payload) {
+    return payload.data;
+  }
+  return payload;
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (text.trim().length === 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new FeishuApiError(
+      response.ok
+        ? "Feishu HTTP returned invalid JSON"
+        : `Feishu HTTP ${response.status}`,
+    );
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}

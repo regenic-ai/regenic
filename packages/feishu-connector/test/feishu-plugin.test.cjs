@@ -183,6 +183,24 @@ describe("feishuChatDriver", () => {
     assert.deepEqual(streams[1].pace, FEISHU_STREAM_PACE);
   });
 
+  it("does not list chats when picked names are already stored", async () => {
+    let listed = 0;
+    const chats = await resolveFeishuChatTargets(
+      { selection: "pick", chat_ids: ["oc_1", "oc_2"], chat_names: ["Ada", "Ben"] },
+      {
+        async listAllChats() {
+          listed += 1;
+          return [];
+        },
+      },
+    );
+    assert.equal(listed, 0);
+    assert.deepEqual(chats, [
+      { chat_id: "oc_1", name: "Ada" },
+      { chat_id: "oc_2", name: "Ben" },
+    ]);
+  });
+
   it("requires a picked conversation and cannot create a conversation", async () => {
     assert.throws(
       () =>

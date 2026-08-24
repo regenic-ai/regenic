@@ -154,7 +154,7 @@ export class PersonalInboxService {
       installations: EngineInstallationView[],
     ) => {
       if (!detailed) {
-        return [];
+        return connectorCatalog(installations, { env: process.env });
       }
       const probed = await this.drivers.probeCatalog(process.env);
       return connectorCatalog(installations, {

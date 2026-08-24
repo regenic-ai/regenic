@@ -11,10 +11,12 @@ import {
 import {
   LarkCliClient,
   feishuChatOptionLabel,
+  spawnLarkProcess,
   type FeishuChat,
   type FeishuChatMode,
   type FeishuImClient,
 } from "./feishu-cli-client";
+import { createLarkUserTokenSource } from "./feishu-user-token";
 import { FeishuChatEgress } from "./feishu-chat-egress";
 import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
 import { FEISHU_SOURCE } from "./feishu-message";
@@ -235,6 +237,12 @@ export async function resolveFeishuChatTargets(
   }
   const ids = feishuPickedChatIds(config);
   const names = configStringList(config, "chat_names");
+  if (names.length === ids.length) {
+    return ids.map((chat_id, index) => ({
+      chat_id,
+      name: names[index],
+    }));
+  }
   const listed = await client.listAllChats(10, ["group", "p2p"]).catch(() => []);
   const byId = new Map(listed.map((chat) => [chat.chat_id, chat]));
   return ids.map((chat_id, index) => {
@@ -276,6 +284,11 @@ function larkClient(env: NodeJS.ProcessEnv): LarkCliClient {
   return new LarkCliClient({
     command: env.REGENIC_LARK_CLI,
     env,
+    userToken: createLarkUserTokenSource({
+      command: env.REGENIC_LARK_CLI,
+      env,
+      spawn: spawnLarkProcess,
+    }),
   });
 }
 

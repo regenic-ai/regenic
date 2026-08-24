@@ -1,6 +1,15 @@
 import "@regenic/domain";
 import { definePlugin } from "@regenic/plugin-host";
-import { LarkCliClient, type FeishuImClient, type FeishuSpawn } from "./feishu-cli-client";
+import {
+  LarkCliClient,
+  spawnLarkProcess,
+  type FeishuImClient,
+  type FeishuSpawn,
+} from "./feishu-cli-client";
+import {
+  createLarkUserTokenSource,
+  type FeishuUserTokenSource,
+} from "./feishu-user-token";
 import { FeishuChatEgress } from "./feishu-chat-egress";
 import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
 
@@ -16,6 +25,7 @@ export interface FeishuChatPluginConfig {
   page_size?: number;
   now?: () => string;
   client?: FeishuImClient;
+  userToken?: FeishuUserTokenSource;
 }
 
 export const feishuChatPlugin = definePlugin<FeishuChatPluginConfig>({
@@ -29,6 +39,15 @@ export const feishuChatPlugin = definePlugin<FeishuChatPluginConfig>({
         env: config.env,
         spawn: config.spawn,
         timeout_ms: config.timeout_ms,
+        userToken:
+          config.userToken ??
+          (config.spawn
+            ? undefined
+            : createLarkUserTokenSource({
+                command: config.command,
+                env: config.env,
+                spawn: spawnLarkProcess,
+              })),
       });
     const connector = new FeishuChatPollConnector(client, {
       connector_id: config.installation_id,
