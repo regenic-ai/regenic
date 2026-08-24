@@ -12,6 +12,7 @@ import {
   type FeishuSortType,
 } from "./feishu-openapi";
 import type { FeishuUserTokenSource } from "./feishu-user-token";
+import { parseFeishuReadStatus } from "./feishu-attention";
 
 export { FeishuApiError, type FeishuSortType } from "./feishu-openapi";
 
@@ -105,6 +106,7 @@ export interface FeishuImClient {
   uploadImage?(input: FeishuUploadFile): Promise<{ image_key: string }>;
   uploadFile?(input: FeishuUploadFile): Promise<{ file_key: string }>;
   resolveUserNames?(ids: string[]): Promise<Map<string, string>>;
+  readMessageStatus?(messageIds: string[]): Promise<Map<string, boolean>>;
 }
 
 export interface LarkCliClientOptions {
@@ -412,6 +414,23 @@ export class LarkCliClient implements FeishuImClient {
       }
     }
     return names;
+  }
+
+  async readMessageStatus(messageIds: string[]): Promise<Map<string, boolean>> {
+    const ids = [...new Set(messageIds.filter((id) => id.startsWith("om_")))].slice(0, 50);
+    if (ids.length === 0) {
+      return new Map();
+    }
+    try {
+      const payload = await this.request({
+        method: "POST",
+        path: "/open-apis/im/v1/messages/read_status",
+        data: { message_ids: ids },
+      });
+      return parseFeishuReadStatus(payload);
+    } catch {
+      return new Map();
+    }
   }
 
   async authStatus(): Promise<boolean> {

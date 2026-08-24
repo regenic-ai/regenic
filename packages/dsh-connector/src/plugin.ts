@@ -4,6 +4,8 @@ import { DshCliClient, type DshSpawn } from "./dsh-cli-client";
 import { DshCliSessionClient } from "./dsh-cli-session-client";
 import { FileDshRunLog, MemoryDshRunLog, type DshRunLog } from "./dsh-run-log";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
+import { DshMuxSubscriber, type DshMuxOpen } from "./dsh-mux-client";
+import { dropDshPromptStore, dshPromptStoreFor } from "./dsh-prompt-store";
 import { DshSessionEgress } from "./dsh-session-egress";
 import { DshSessionPollConnector } from "./dsh-session-poll-connector";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
@@ -32,6 +34,7 @@ export interface DshSessionPluginConfig {
   createId?: () => string;
   page_size?: number;
   session_ids?: string[];
+  mux_open?: DshMuxOpen;
 }
 
 export function resolveDshTransport(
@@ -133,6 +136,10 @@ export const dshSessionPlugin = definePlugin<DshSessionPluginConfig>({
     const client =
       transport === "web" ? createWebClient(config) : createCliClient(config);
     ctx.effect(() => {
+      const mux =
+        transport === "web" && client instanceof DshWebRpcClient
+          ? retainDshMux(config.installation_id, client, config.mux_open)
+          : undefined;
       const disposers = sessionIds.flatMap((sessionId) => {
         const connector = new DshSessionPollConnector(client, {
           connector_id: config.installation_id,
@@ -161,10 +168,48 @@ export const dshSessionPlugin = definePlugin<DshSessionPluginConfig>({
         for (const dispose of disposers.reverse()) {
           dispose();
         }
+        mux?.();
       };
     });
   },
 });
+
+const muxRefs = new Map<
+  string,
+  { mux: DshMuxSubscriber; refs: number }
+>();
+
+function retainDshMux(
+  installationId: string,
+  client: DshWebRpcClient,
+  open?: DshMuxOpen,
+): () => void {
+  let entry = muxRefs.get(installationId);
+  if (!entry) {
+    const mux = new DshMuxSubscriber(
+      client,
+      dshPromptStoreFor(installationId),
+      open,
+    );
+    mux.start();
+    entry = { mux, refs: 0 };
+    muxRefs.set(installationId, entry);
+  }
+  entry.refs += 1;
+  return () => {
+    const current = muxRefs.get(installationId);
+    if (!current) {
+      return;
+    }
+    current.refs -= 1;
+    if (current.refs > 0) {
+      return;
+    }
+    current.mux.stop();
+    muxRefs.delete(installationId);
+    dropDshPromptStore(installationId);
+  };
+}
 
 function createWebClient(config: DshSessionPluginConfig) {
   if (!config.base_url) {

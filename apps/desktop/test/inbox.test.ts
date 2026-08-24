@@ -96,6 +96,9 @@ function thread(input: {
     can_send: true,
     opened_at: input.opened_at,
     messages,
+    prompts: [],
+    unread: false,
+    unread_count: 0,
   };
 }
 
@@ -289,5 +292,57 @@ describe("inbox sort", () => {
       }),
       [{ id: "dsh-1", channel: "dsh", channel_label: "DSH", label: "web" }],
     );
+  });
+
+  it("carries live prompts and unread from inbox heads", () => {
+    const head = message("q1", "2026-08-24T10:00:00.000Z", "dsh:sess");
+    head.prompts = [
+      {
+        prompt_id: "q:rpc",
+        presentation: "choice",
+        questions: [{ id: "go", prompt: "Continue?" }],
+      },
+    ];
+    head.unread = true;
+    head.unread_count = 1;
+    const [row] = groupInboxThreads([head]);
+    assert.equal(row.unread, true);
+    assert.equal(row.prompts[0]?.prompt_id, "q:rpc");
+    const opened = openedThreadView(row, [head], false);
+    assert.equal(opened.prompts[0]?.prompt_id, "q:rpc");
+    const overlaid = overlayThreadMessages([row], {
+      "dsh:sess": [message("later", "2026-08-24T10:01:00.000Z", "dsh:sess")],
+    });
+    assert.equal(overlaid[0].prompts[0]?.prompt_id, "q:rpc");
+  });
+});
+
+describe("prompt answers", () => {
+  it("keeps single-select custom exclusive of a picked option", async () => {
+    const { togglePromptOption, typePromptCustom } = await import(
+      "../src/renderer/src/thread-prompts.ts"
+    );
+    const question = {
+      id: "mode",
+      prompt: "Which?",
+      options: [{ label: "A" }],
+    };
+    const picked = togglePromptOption({}, question, "A");
+    assert.deepEqual(picked.mode.selected, ["A"]);
+    const typed = typePromptCustom(picked, question, "Other");
+    assert.deepEqual(typed.mode.selected, []);
+    assert.equal(typed.mode.custom, "Other");
+    const multi = {
+      id: "mode",
+      prompt: "Which?",
+      multi_select: true,
+    };
+    const both = typePromptCustom(
+      togglePromptOption({}, multi, "A"),
+      multi,
+      "Also",
+    );
+    assert.deepEqual(both.mode.selected, ["A"]);
+    assert.equal(both.mode.custom, "Also");
   });
 });

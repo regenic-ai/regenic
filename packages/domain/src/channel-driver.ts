@@ -5,10 +5,27 @@ import type {
   ConnectorInstallation,
   NewConnectorInstallation,
 } from "./ingestion";
+import type {
+  AttentionAck,
+  PromptAnswer,
+  ThreadAttention,
+  ThreadInboundCursor,
+  ThreadPrompt,
+} from "./thread-surface";
+import {
+  formatSurfaceGeneration,
+  normalizePromptAnswers,
+  threadIdOf,
+} from "./thread-surface";
 
 export interface ConversationThread {
   source: string;
   target: string;
+}
+
+/** Store-derived inbound cursor. Connectors may use it as an opaque hint. */
+export interface ThreadAttentionQuery extends ConversationThread {
+  latest_inbound?: ThreadInboundCursor;
 }
 
 export type ListTitleMode = "conversation" | "face" | "prompt";
@@ -41,6 +58,16 @@ export interface ChannelCapabilities {
    * Chat history sources set this. Session journals leave it unset.
    */
   hydrate_on_open?: boolean;
+  /**
+   * This install can list and answer live thread prompts.
+   * Session agents that pause for a human set this.
+   */
+  prompts?: boolean;
+  /**
+   * This install can report and ack source read state.
+   * Chat channels may set this. Absence falls back to the local cursor.
+   */
+  attention?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -132,6 +159,36 @@ export interface ChannelDriver {
     threads: ConversationThread[],
     env: NodeJS.ProcessEnv,
   ): Promise<Map<string, string>>;
+  listPrompts?(
+    installation: ConnectorInstallation,
+    thread: ConversationThread,
+    host: Host,
+    env: NodeJS.ProcessEnv,
+  ): Promise<ThreadPrompt[]>;
+  answerPrompt?(
+    installation: ConnectorInstallation,
+    thread: ConversationThread,
+    answer: PromptAnswer,
+    host: Host,
+    env: NodeJS.ProcessEnv,
+  ): Promise<{ accepted: boolean }>;
+  readAttention?(
+    installation: ConnectorInstallation,
+    threads: ThreadAttentionQuery[],
+    host: Host,
+    env: NodeJS.ProcessEnv,
+  ): Promise<Map<string, ThreadAttention>>;
+  ackAttention?(
+    installation: ConnectorInstallation,
+    thread: ConversationThread,
+    ack: AttentionAck,
+    host: Host,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void>;
+  surfaceGeneration?(
+    installation: ConnectorInstallation,
+    host: Host,
+  ): string;
 }
 
 export class ChannelDriverRegistry {
@@ -320,6 +377,223 @@ export class ChannelDriverRegistry {
       found && found.driver.capabilities(found.installation).hydrate_on_open,
     );
   }
+
+  canPrompt(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): boolean {
+    const found = this.findForThread(installations, thread);
+    return Boolean(
+      found && found.driver.capabilities(found.installation).prompts,
+    );
+  }
+
+  canAttention(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): boolean {
+    const found = this.findForThread(installations, thread);
+    return Boolean(
+      found && found.driver.capabilities(found.installation).attention,
+    );
+  }
+
+  async listPrompts(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+    host: Host,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<ThreadPrompt[]> {
+    const found = this.findForThread(installations, thread);
+    if (
+      !found?.driver.listPrompts ||
+      !found.driver.capabilities(found.installation).prompts
+    ) {
+      return [];
+    }
+    try {
+      return await found.driver.listPrompts(
+        found.installation,
+        thread,
+        host,
+        env,
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  async listPromptsForThreads(
+    installations: ConnectorInstallation[],
+    threads: ConversationThread[],
+    host: Host,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<Map<string, ThreadPrompt[]>> {
+    const prompts = new Map<string, ThreadPrompt[]>();
+    await Promise.all(
+      uniqueThreads(threads).map(async (thread) => {
+        const listed = await this.listPrompts(installations, thread, host, env);
+        if (listed.length > 0) {
+          prompts.set(threadIdOf(thread), listed);
+        }
+      }),
+    );
+    return prompts;
+  }
+
+  async answerPrompt(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+    answer: PromptAnswer,
+    host: Host,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<{ accepted: boolean }> {
+    const found = this.findForThread(installations, thread);
+    if (
+      !found?.driver.answerPrompt ||
+      !found.driver.capabilities(found.installation).prompts
+    ) {
+      throw new ChannelDriverError(
+        "unsupported_channel",
+        "This conversation cannot answer a live prompt",
+      );
+    }
+    const listed = found.driver.listPrompts
+      ? await found.driver
+          .listPrompts(found.installation, thread, host, env)
+          .catch(() => [] as ThreadPrompt[])
+      : [];
+    const prompt = listed.find((item) => item.prompt_id === answer.prompt_id);
+    return found.driver.answerPrompt(
+      found.installation,
+      thread,
+      {
+        ...answer,
+        answers: normalizePromptAnswers(prompt?.questions ?? [], answer.answers),
+      },
+      host,
+      env,
+    );
+  }
+
+  async readAttention(
+    installations: ConnectorInstallation[],
+    threads: ThreadAttentionQuery[],
+    host: Host,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<Map<string, ThreadAttention>> {
+    const attention = new Map<string, ThreadAttention>();
+    const groups = new Map<
+      string,
+      {
+        installation: ConnectorInstallation;
+        driver: ChannelDriver;
+        threads: ThreadAttentionQuery[];
+      }
+    >();
+    for (const thread of uniqueThreads(threads)) {
+      const found = this.findForThread(installations, thread);
+      if (
+        !found?.driver.readAttention ||
+        !found.driver.capabilities(found.installation).attention
+      ) {
+        continue;
+      }
+      const group = groups.get(found.installation.id);
+      if (group) {
+        group.threads.push(thread);
+      } else {
+        groups.set(found.installation.id, {
+          installation: found.installation,
+          driver: found.driver,
+          threads: [thread],
+        });
+      }
+    }
+    await Promise.all(
+      [...groups.values()].map(async (group) => {
+        try {
+          const part = await group.driver.readAttention?.(
+            group.installation,
+            group.threads,
+            host,
+            env,
+          );
+          if (!part) {
+            return;
+          }
+          for (const [id, value] of part) {
+            attention.set(id, value);
+          }
+        } catch {
+          // A source overlay failure must not block inbox.
+        }
+      }),
+    );
+    return attention;
+  }
+
+  async ackAttention(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+    ack: AttentionAck,
+    host: Host,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<void> {
+    const found = this.findForThread(installations, thread);
+    if (
+      !found?.driver.ackAttention ||
+      !found.driver.capabilities(found.installation).attention
+    ) {
+      return;
+    }
+    try {
+      await found.driver.ackAttention(
+        found.installation,
+        thread,
+        ack,
+        host,
+        env,
+      );
+    } catch {
+      // Local cursor still stands. Source ack is best-effort.
+    }
+  }
+
+  surfaceGeneration(
+    installations: ConnectorInstallation[],
+    host: Host,
+  ): string {
+    return formatSurfaceGeneration(
+      this.list().flatMap((driver) =>
+        installations
+          .filter(
+            (installation) =>
+              installation.connector_type === driver.connector_type &&
+              installation.status === "enabled",
+          )
+          .map((installation) => driver.surfaceGeneration?.(installation, host)),
+      ),
+    );
+  }
+}
+
+function uniqueThreads<T extends ConversationThread>(threads: T[]): T[] {
+  const seen = new Map<string, T>();
+  for (const thread of threads) {
+    const id = threadIdOf(thread);
+    const current = seen.get(id);
+    if (!current || hasInboundHint(thread)) {
+      seen.set(id, thread);
+    }
+  }
+  return [...seen.values()];
+}
+
+function hasInboundHint(thread: ConversationThread): boolean {
+  return Boolean(
+    (thread as ThreadAttentionQuery).latest_inbound?.external_id?.trim(),
+  );
 }
 
 export function parseConversationThread(threadId: string): ConversationThread {

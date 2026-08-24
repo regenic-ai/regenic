@@ -40,6 +40,35 @@ export type MessageKind = "user" | "assistant" | "system";
 export type MessageDirection = "inbound" | "outbound";
 export type ThreadActivity = "awaiting_user" | "working";
 export type ListTitleMode = "conversation" | "face" | "prompt";
+export type PromptPresentation = "choice" | "approval" | "plan_review";
+
+export interface PromptOption {
+  label: string;
+  description?: string;
+  emphasized?: boolean;
+}
+
+export interface PromptQuestion {
+  id: string;
+  prompt: string;
+  options?: PromptOption[];
+  multi_select?: boolean;
+  allow_custom?: boolean;
+}
+
+export interface ThreadPrompt {
+  prompt_id: string;
+  presentation: PromptPresentation;
+  title?: string;
+  detail?: string;
+  questions: PromptQuestion[];
+}
+
+export interface PromptAnswerItem {
+  id: string;
+  selected: string[];
+  custom?: string;
+}
 
 export function normalizeListTitle(value: unknown): ListTitleMode {
   if (value === "conversation" || value === "prompt") {
@@ -69,6 +98,9 @@ export interface InboxViewItem {
   conversation_kind?: string | null;
   actor_label?: string | null;
   activity?: ThreadActivity;
+  prompts?: ThreadPrompt[];
+  unread?: boolean;
+  unread_count?: number;
 }
 
 export interface IngestAttempt {

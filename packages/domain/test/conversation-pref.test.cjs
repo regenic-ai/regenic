@@ -12,6 +12,16 @@ describe("conversation prefs", () => {
       updated_at: "2026-08-22T00:00:00.000Z",
     });
     assert.equal(first.pinned, false);
+    assert.equal(first.last_read_at, null);
+    const read = await store.putConversationPref({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      last_read_external_id: "sess-a:3",
+      last_read_at: "2026-08-22T00:00:30.000Z",
+      updated_at: "2026-08-22T00:00:30.000Z",
+    });
+    assert.equal(read.title, "Release");
+    assert.equal(read.last_read_external_id, "sess-a:3");
     const pinned = await store.putConversationPref({
       org_id: "local-owner",
       thread_id: "dsh:session-a",

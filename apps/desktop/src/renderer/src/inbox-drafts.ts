@@ -73,6 +73,9 @@ export function mergeDraftThreads(
       pinned: draft.pinned === true,
       opened_at: draft.opened_at,
       messages: [],
+      prompts: [],
+      unread: false,
+      unread_count: 0,
     }));
   return extras.length === 0 ? threads : [...extras, ...threads];
 }

@@ -3,14 +3,19 @@ import {
   ChannelDriverError,
   ChannelDriverRegistry,
   channelLabel,
+  collectLatestInbound,
+  computeThreadUnread,
   conversationId,
   inboxDigest,
   headsByThread,
+  isLocalOutboundId,
   isThreadStatusItem,
   parseConversationThread,
   takeRecentInboxItems,
   normalizeInboxLimit,
   resolveMessageSurface,
+  threadIdOf,
+  withSurfaceGeneration,
   type ArrangementDecision,
   type AuthorityStore,
   type BlobStore,
@@ -23,7 +28,13 @@ import {
   type ListTitleMode,
   type MessageDirection,
   type MessageKind,
+  type PromptAnswer,
   type ThreadActivity,
+  type ThreadAttention,
+  type ThreadAttentionQuery,
+  type ThreadInboundCursor,
+  type ThreadInboundScan,
+  type ThreadPrompt,
 } from "@regenic/domain";
 import {
   resolveInboxBodies,
@@ -66,12 +77,17 @@ export interface InboxViewItem {
   conversation_kind: string | null;
   actor_label: string | null;
   activity?: ThreadActivity;
+  prompts: ThreadPrompt[];
+  unread: boolean;
+  unread_count: number;
 }
 
 export interface ConversationPrefView {
   thread_id: string;
   title: string | null;
   pinned: boolean;
+  last_read_at: string | null;
+  last_read_external_id: string | null;
   updated_at: string;
 }
 
@@ -79,6 +95,18 @@ export interface ConversationPrefInput {
   thread_id?: string;
   title?: string | null;
   pinned?: boolean;
+}
+
+export interface ConversationAttentionInput {
+  thread_id?: string;
+  last_read_at?: string | null;
+  last_read_external_id?: string | null;
+}
+
+export interface ConversationPromptInput {
+  thread_id?: string;
+  prompt_id?: string;
+  answers?: Array<{ id?: string; selected?: string[]; custom?: string }>;
 }
 
 const MAX_TITLE_LENGTH = 120;
@@ -150,7 +178,37 @@ export class PersonalInboxService {
       installations,
       this.drivers,
     );
-    return decorateInboxItem(item, body, installations, this.drivers, pref, labels);
+    const thread = threadOf(event);
+    const siblings = await authority.listInbox(orgId, {
+      siblings: true,
+      thread_ids: [threadId],
+    });
+    const inboundByThread = await latestInboundByThread(
+      [item],
+      siblings,
+      new Map([[event.id, body]]),
+      authority,
+      blobs,
+    );
+    const [prompts, attention] = await Promise.all([
+      this.drivers.listPromptsForThreads(installations, [thread], host),
+      this.drivers.readAttention(
+        installations,
+        withInboundHint([thread], inboundByThread),
+        host,
+      ),
+    ]);
+    return decorateInboxItem(
+      item,
+      body,
+      installations,
+      this.drivers,
+      pref,
+      labels,
+      prompts,
+      attention,
+      inboundByThread,
+    );
   }
 
   async getEngine(query: EngineQuery = {}): Promise<PersonalEngineView> {
@@ -176,7 +234,7 @@ export class PersonalInboxService {
         org_id: orgId,
         database_path: options?.database ?? null,
         inbox_count: 0,
-        inbox_digest: inboxDigest([]),
+        inbox_digest: withSurfaceGeneration(inboxDigest([]), ""),
         memory: processMemoryView(),
         pull: { ...pullStatus },
         installations: [],
@@ -206,7 +264,10 @@ export class PersonalInboxService {
       org_id: orgId,
       database_path: options?.database ?? null,
       inbox_count: inbox.count,
-      inbox_digest: inbox.digest,
+      inbox_digest: withSurfaceGeneration(
+        inbox.digest,
+        this.drivers.surfaceGeneration(installations, host),
+      ),
       memory: processMemoryView(),
       pull: { ...pullStatus },
       installations: views,
@@ -266,6 +327,61 @@ export class PersonalInboxService {
       installations,
       this.drivers,
     );
+    const threads = [
+      ...new Map(
+        resolved.map(({ item }) => {
+          const thread = threadOf(item.event);
+          return [threadIdOf(thread), thread] as const;
+        }),
+      ).values(),
+    ];
+    const promptTitleIds = [
+      ...new Set(
+        resolved
+          .filter(
+            ({ item }) =>
+              this.drivers.listTitle(installations, threadOf(item.event)) ===
+              "prompt",
+          )
+          .map(({ threadId }) => threadId),
+      ),
+    ];
+    const inboundFromPage = collectLatestInbound(inboundScansOf(resolved));
+    const missingInbound = threads
+      .map((thread) => threadIdOf(thread))
+      .filter((id) => !inboundFromPage.has(id));
+    const siblingIds =
+      query.heads === true
+        ? [...new Set([...promptTitleIds, ...missingInbound])]
+        : [];
+    const siblings =
+      siblingIds.length > 0
+        ? await authority.listInbox(orgId, {
+            siblings: true,
+            thread_ids: siblingIds,
+          })
+        : [];
+    const inboundByThread =
+      missingInbound.length > 0
+        ? await latestInboundByThread(
+            resolved.map((row) => row.item),
+            siblings,
+            new Map(
+              resolved.map((row) => [row.item.event.id, row.body] as const),
+            ),
+            authority,
+            blobs,
+          )
+        : inboundFromPage;
+    const awaitingUser = awaitingUserThreads(resolved);
+    const [livePrompts, attention] = await Promise.all([
+      this.drivers.listPromptsForThreads(installations, threads, host),
+      this.drivers.readAttention(
+        installations,
+        withInboundHint(threads, inboundByThread),
+        host,
+      ),
+    ]);
     const prompts = await promptLabelsFor(
       orgId,
       resolved,
@@ -274,6 +390,7 @@ export class PersonalInboxService {
       authority,
       blobs,
       query.heads === true,
+      siblings,
     );
     return resolved.map(({ item, threadId, body }) => {
       const view = decorateInboxItem(
@@ -283,6 +400,10 @@ export class PersonalInboxService {
         this.drivers,
         prefsByThread.get(threadId) ?? null,
         labels,
+        livePrompts,
+        attention,
+        inboundByThread,
+        awaitingUser,
       );
       const prompt = prompts.get(threadId);
       const titled =
@@ -326,6 +447,112 @@ export class PersonalInboxService {
     });
     return toPrefView(pref);
   }
+
+  async ackConversationAttention(
+    input: ConversationAttentionInput,
+  ): Promise<ConversationPrefView> {
+    const host = this.runtime.requireHost();
+    const threadId = input.thread_id?.trim() ?? "";
+    const thread = requireThreadId(threadId);
+    const lastReadAt =
+      input.last_read_at !== undefined
+        ? normalizeStamp(input.last_read_at)
+        : new Date().toISOString();
+    const lastReadId =
+      input.last_read_external_id !== undefined
+        ? normalizeCursor(input.last_read_external_id)
+        : null;
+    const pref = await host.get("authority").putConversationPref({
+      org_id: this.runtime.orgId(),
+      thread_id: threadId,
+      last_read_at: lastReadAt,
+      last_read_external_id: lastReadId,
+      updated_at: new Date().toISOString(),
+    });
+    const installations = await host
+      .get("authority")
+      .listInstallations(this.runtime.orgId());
+    await this.drivers.ackAttention(
+      installations,
+      thread,
+      {
+        last_read_at: pref.last_read_at ?? undefined,
+        last_read_external_id: pref.last_read_external_id ?? undefined,
+      },
+      host,
+    );
+    return toPrefView(pref);
+  }
+
+  async answerConversationPrompt(
+    input: ConversationPromptInput,
+  ): Promise<{ accepted: true; thread_id: string; prompt_id: string }> {
+    const host = this.runtime.requireHost();
+    const threadId = input.thread_id?.trim() ?? "";
+    const thread = requireThreadId(threadId);
+    const promptId = input.prompt_id?.trim() ?? "";
+    if (!promptId) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "prompt_id is required",
+        400,
+      );
+    }
+    const answer: PromptAnswer = {
+      prompt_id: promptId,
+      answers: (input.answers ?? []).flatMap((item) => {
+        const id = item.id?.trim() ?? "";
+        if (!id) {
+          return [];
+        }
+        return [
+          {
+            id,
+            selected: Array.isArray(item.selected)
+              ? item.selected
+                  .filter((label) => typeof label === "string" && label.trim())
+                  .map((label) => label.trim())
+              : [],
+            ...(typeof item.custom === "string" && item.custom.trim()
+              ? { custom: item.custom.trim() }
+              : {}),
+          },
+        ];
+      }),
+    };
+    const installations = await host
+      .get("authority")
+      .listInstallations(this.runtime.orgId());
+    try {
+      const result = await this.drivers.answerPrompt(
+        installations,
+        thread,
+        answer,
+        host,
+      );
+      if (result.accepted === false) {
+        throw new PersonalConnectorError(
+          "send_failed",
+          "This conversation rejected the prompt answer",
+          400,
+        );
+      }
+      return {
+        accepted: true,
+        thread_id: threadId,
+        prompt_id: promptId,
+      };
+    } catch (error) {
+      if (error instanceof ChannelDriverError) {
+        throw new PersonalConnectorError(
+          error.code,
+          error.message,
+          error.code === "unsupported_channel" ? 501 : 400,
+        );
+      }
+      throw error;
+    }
+  }
 }
 
 const LIST_FACE_MAX = 120;
@@ -361,10 +588,22 @@ function decorateInboxItem(
   drivers: ChannelDriverRegistry,
   pref: ConversationPref | null,
   labels: ReadonlyMap<string, string> = new Map(),
+  promptsByThread: ReadonlyMap<string, ThreadPrompt[]> = new Map(),
+  attentionByThread: ReadonlyMap<string, ThreadAttention> = new Map(),
+  inboundByThread: ReadonlyMap<string, ThreadInboundCursor> = new Map(),
+  awaitingUser: ReadonlySet<string> = new Set(),
 ): InboxViewItem {
   const surface = messageSurfaceOf(item.event, body);
   const thread = threadOf(item.event);
-  const threadId = `${thread.source}:${thread.target}`;
+  const threadId = threadIdOf(thread);
+  const prompts = promptsByThread.get(threadId) ?? [];
+  const attention = computeThreadUnread({
+    source: attentionByThread.get(threadId),
+    pref,
+    latestInbound: inboundByThread.get(threadId),
+    activity: awaitingUser.has(threadId) ? "awaiting_user" : surface.activity,
+    prompts,
+  });
   return {
     ...item,
     ...body,
@@ -384,6 +623,9 @@ function decorateInboxItem(
     conversation_kind: surface.conversation_kind ?? null,
     actor_label: surface.actor_label ?? null,
     activity: surface.activity,
+    prompts,
+    unread: attention.unread,
+    unread_count: attention.unread_count ?? (attention.unread ? 1 : 0),
   };
 }
 
@@ -420,6 +662,7 @@ async function promptLabelsFor(
   authority: AuthorityStore,
   blobs: BlobStore,
   heads: boolean,
+  preloadedSiblings: InboxItem[] = [],
 ): Promise<Map<string, string>> {
   const promptIds = [
     ...new Set(
@@ -437,10 +680,20 @@ async function promptLabelsFor(
   if (!heads) {
     return firstUserLabelsFrom(resolved);
   }
-  const siblings = await authority.listInbox(orgId, {
-    siblings: true,
-    thread_ids: promptIds,
-  });
+  const have = new Set(
+    preloadedSiblings.map((item) =>
+      conversationId(item.event.source, item.event.external_id, item.event.id),
+    ),
+  );
+  const missingIds = promptIds.filter((id) => !have.has(id));
+  const extra =
+    missingIds.length > 0
+      ? await authority.listInbox(orgId, {
+          siblings: true,
+          thread_ids: missingIds,
+        })
+      : [];
+  const siblings = [...preloadedSiblings, ...extra];
   const groups = new Map<string, InboxItem[]>();
   for (const item of siblings) {
     const id = conversationId(
@@ -681,8 +934,197 @@ function toPrefView(pref: ConversationPref): ConversationPrefView {
     thread_id: pref.thread_id,
     title: pref.title,
     pinned: pref.pinned,
+    last_read_at: pref.last_read_at,
+    last_read_external_id: pref.last_read_external_id,
     updated_at: pref.updated_at,
   };
+}
+
+function requireThreadId(threadId: string): ConversationThread {
+  try {
+    return parseConversationThread(threadId);
+  } catch (error) {
+    const message =
+      error instanceof ChannelDriverError
+        ? error.message
+        : "thread_id must look like source:target";
+    throw new PersonalConnectorError("invalid_config", message, 400);
+  }
+}
+
+function normalizeStamp(value: string | null): string | null {
+  const stamp = (value ?? "").trim();
+  if (!stamp) {
+    return null;
+  }
+  const at = Date.parse(stamp);
+  return Number.isFinite(at) ? new Date(at).toISOString() : stamp;
+}
+
+function normalizeCursor(value: string | null): string | null {
+  const cursor = (value ?? "").replace(/\s+/g, " ").trim();
+  return cursor.length > 0 ? cursor : null;
+}
+
+const INBOUND_SCAN_LIMIT = 32;
+
+function awaitingUserThreads(
+  resolved: Array<{
+    item: { event: EventRecord };
+    threadId: string;
+    body: InboxBody;
+  }>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const row of resolved) {
+    if (messageSurfaceOf(row.item.event, row.body).activity === "awaiting_user") {
+      ids.add(row.threadId);
+    }
+  }
+  return ids;
+}
+
+function inboundScansOf(
+  resolved: Array<{
+    item: { event: EventRecord };
+    threadId: string;
+    body: InboxBody;
+  }>,
+): ThreadInboundScan[] {
+  return resolved.map(({ item, threadId, body }) => {
+    const surface = messageSurfaceOf(item.event, body);
+    return {
+      thread_id: threadId,
+      external_id: item.event.external_id,
+      occurred_at: item.event.occurred_at,
+      operation: item.event.operation,
+      direction: surface.direction,
+      activity: surface.activity,
+    };
+  });
+}
+
+function withInboundHint(
+  threads: ConversationThread[],
+  inboundByThread: ReadonlyMap<string, ThreadInboundCursor>,
+): ThreadAttentionQuery[] {
+  return threads.map((thread) => {
+    const latest_inbound = inboundByThread.get(threadIdOf(thread));
+    return latest_inbound ? { ...thread, latest_inbound } : thread;
+  });
+}
+
+async function latestInboundByThread(
+  page: Array<{ event: EventRecord }>,
+  siblings: InboxItem[],
+  cachedBodies: ReadonlyMap<string, InboxBody>,
+  authority: AuthorityStore,
+  blobs: BlobStore,
+): Promise<Map<string, ThreadInboundCursor>> {
+  const cached = collectLatestInbound(
+    page.flatMap((item) => {
+      const body = cachedBodies.get(item.event.id);
+      if (!body) {
+        return [];
+      }
+      const surface = messageSurfaceOf(item.event, body);
+      return [
+        {
+          thread_id: conversationId(
+            item.event.source,
+            item.event.external_id,
+            item.event.id,
+          ),
+          external_id: item.event.external_id,
+          occurred_at: item.event.occurred_at,
+          operation: item.event.operation,
+          direction: surface.direction,
+          activity: surface.activity,
+        } satisfies ThreadInboundScan,
+      ];
+    }),
+  );
+  const missing = new Set<string>();
+  const byThread = new Map<string, InboxItem[]>();
+  for (const item of siblings) {
+    const threadId = conversationId(
+      item.event.source,
+      item.event.external_id,
+      item.event.id,
+    );
+    if (cached.has(threadId)) {
+      continue;
+    }
+    missing.add(threadId);
+    const bucket = byThread.get(threadId);
+    if (bucket) {
+      bucket.push(item);
+    } else {
+      byThread.set(threadId, [item]);
+    }
+  }
+  if (missing.size === 0) {
+    return cached;
+  }
+  const candidates: InboxItem[] = [];
+  for (const threadId of missing) {
+    const bucket = (byThread.get(threadId) ?? [])
+      .slice()
+      .sort(byEventTime)
+      .reverse();
+    let taken = 0;
+    for (const item of bucket) {
+      if (item.event.operation === "tombstone") {
+        continue;
+      }
+      if (
+        isLocalOutboundId(item.event.external_id) &&
+        !cachedBodies.has(item.event.id)
+      ) {
+        continue;
+      }
+      candidates.push(item);
+      taken += 1;
+      if (taken >= INBOUND_SCAN_LIMIT) {
+        break;
+      }
+    }
+  }
+  const needed = candidates.filter(
+    (item) => item.event.content_hash && !cachedBodies.has(item.event.id),
+  );
+  const extras =
+    needed.length > 0
+      ? await resolveInboxBodies(
+          authority,
+          blobs,
+          needed.map((item) => item.event.content_hash),
+          "meta",
+        )
+      : new Map<string, InboxBody>();
+  const fromSiblings = collectLatestInbound(
+    candidates.map((item) => {
+      const body =
+        cachedBodies.get(item.event.id) ??
+        (item.event.content_hash
+          ? (extras.get(item.event.content_hash) ?? {})
+          : {});
+      const surface = messageSurfaceOf(item.event, body);
+      return {
+        thread_id: conversationId(
+          item.event.source,
+          item.event.external_id,
+          item.event.id,
+        ),
+        external_id: item.event.external_id,
+        occurred_at: item.event.occurred_at,
+        operation: item.event.operation,
+        direction: surface.direction,
+        activity: surface.activity,
+      };
+    }),
+  );
+  return new Map([...fromSiblings, ...cached]);
 }
 
 function threadOf(event: EventRecord): ConversationThread {

@@ -13,6 +13,7 @@ import type {
   FeishuListInput,
   FeishuSortType,
 } from "./feishu-cli-client";
+import { rememberFeishuInbound } from "./feishu-attention";
 import {
   FEISHU_SOURCE,
   collectFeishuUserIds,
@@ -68,6 +69,11 @@ export class FeishuChatPollConnector {
     const page = await this.client.listMessages(request);
     const names = await this.resolveNames(page.items);
     const records = page.items.flatMap((item) => this.toRecord(item, names));
+    for (const item of page.items) {
+      if (!item.deleted && item.message_id) {
+        rememberFeishuInbound(this.options.chat_id, item.message_id);
+      }
+    }
     const nextState = nextFeishuCursor(state, page, request.sort_type);
     const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {

@@ -68,6 +68,9 @@ function thread(
     can_send: true,
     await_reply: true,
     messages,
+    prompts: [],
+    unread: false,
+    unread_count: 0,
     ...extras,
   };
 }

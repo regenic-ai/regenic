@@ -133,6 +133,50 @@ export class DshWebRpcClient {
     return { accepted: true, rpc_id };
   }
 
+  async respond(input: {
+    rpc_id: string;
+    value: unknown;
+  }): Promise<{ accepted: boolean; reason?: string }> {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (this.options.access_token) {
+      headers.authorization = `Bearer ${this.options.access_token}`;
+    }
+    const url = `${this.baseUrl}/api/respond`;
+    let response: DshFetchResponse;
+    try {
+      response = await this.fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          type: "client-response",
+          rpcId: input.rpc_id,
+          result: { ok: true, value: input.value },
+        }),
+      });
+    } catch (error) {
+      throw new DshApiError(
+        `Cannot reach DSH web at ${this.baseUrl} (is \`dsh web\` running?): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "unavailable",
+      );
+    }
+    if (!response.ok) {
+      throw new DshApiError(`DSH HTTP ${response.status}`, "internal");
+    }
+    return parseRespondReceipt(await response.json());
+  }
+
+  muxUrl(): string {
+    return `${this.baseUrl.replace(/^http/i, "ws")}/api/events.mux`;
+  }
+
+  accessToken(): string | undefined {
+    return this.options.access_token;
+  }
+
   private async call(
     method: string,
     payload: Record<string, unknown>,
@@ -287,7 +331,26 @@ function parseServerResponse(
   );
 }
 
-export function promptContent(input: {
+export function parseRespondReceipt(body: unknown): {
+  accepted: boolean;
+  reason?: string;
+} {
+  if (!isObject(body)) {
+    throw new DshApiError("DSH respond receipt is invalid");
+  }
+  if (body.accepted === true) {
+    return { accepted: true };
+  }
+  if (body.accepted === false) {
+    return {
+      accepted: false,
+      reason: typeof body.reason === "string" ? body.reason : "not-pending",
+    };
+  }
+  throw new DshApiError("DSH respond receipt is invalid");
+}
+
+function promptContent(input: {
   text?: string;
   content?: DshPromptPart[];
 }): DshPromptPart[] {

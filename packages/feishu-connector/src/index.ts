@@ -1,3 +1,4 @@
+export * from "./feishu-attention";
 export * from "./feishu-chat-driver";
 export * from "./feishu-chat-egress";
 export * from "./feishu-chat-poll-connector";

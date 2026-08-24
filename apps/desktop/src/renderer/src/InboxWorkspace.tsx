@@ -131,7 +131,7 @@ export function InboxWorkspace({
               key={thread.id}
               className={`item${selected?.id === thread.id ? " selected" : ""}${
                 thread.pinned ? " pinned" : ""
-              }`}
+              }${thread.unread ? " unread" : ""}`}
               role="button"
               tabIndex={0}
               onClick={() => {
@@ -160,6 +160,9 @@ export function InboxWorkspace({
                       ) : null}
                     </span>
                     <span className="item-time">
+                      {thread.unread ? (
+                        <span className="item-unread" aria-label="Unread" />
+                      ) : null}
                       {latest ? formatChatTime(latest.event.occurred_at) : ""}
                     </span>
                   </div>

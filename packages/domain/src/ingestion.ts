@@ -267,6 +267,8 @@ export interface ConversationPref {
   thread_id: string;
   title: string | null;
   pinned: boolean;
+  last_read_at: string | null;
+  last_read_external_id: string | null;
   updated_at: string;
 }
 
@@ -275,6 +277,8 @@ export interface ConversationPrefPatch {
   thread_id: string;
   title?: string | null;
   pinned?: boolean;
+  last_read_at?: string | null;
+  last_read_external_id?: string | null;
   updated_at: string;
 }
 

@@ -10,8 +10,14 @@ import {
   type DeliveryReceipt,
   type JsonValue,
   type NewConnectorInstallation,
+  type PromptAnswer,
 } from "@regenic/domain";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
+import {
+  dshPromptStoreFor,
+  dshRespondValue,
+  parseDshPromptId,
+} from "./dsh-prompt-store";
 import {
   dshSessionKey,
   dshSessionPlugin,
@@ -89,6 +95,7 @@ export const dshSessionDriver: ChannelDriver = {
       create: !pinned,
       await_reply: true,
       list_title: "prompt",
+      prompts: true,
     };
   },
 
@@ -144,7 +151,51 @@ export const dshSessionDriver: ChannelDriver = {
   async probeCatalog({ env }) {
     return probeDshCatalog({ env });
   },
+
+  async listPrompts(installation, thread) {
+    if (!this.capabilities(installation).prompts) {
+      return [];
+    }
+    return dshPromptStoreFor(installation.id).list(thread.target);
+  },
+
+  async answerPrompt(installation, thread, answer, _host, env) {
+    return answerDshPrompt(installation, thread, answer, env);
+  },
+
+  surfaceGeneration(installation) {
+    if (!this.capabilities(installation).prompts) {
+      return "";
+    }
+    return `dsh:${installation.id}:${dshPromptStoreFor(installation.id).generation()}`;
+  },
 };
+
+export async function answerDshPrompt(
+  installation: { id: string; config: Record<string, unknown> },
+  thread: ConversationThread,
+  answer: PromptAnswer,
+  env: NodeJS.ProcessEnv,
+  extras: { fetch?: DshFetch; access_token?: string } = {},
+): Promise<{ accepted: boolean }> {
+  const parsed = parseDshPromptId(answer.prompt_id);
+  if (!parsed) {
+    throw new ChannelDriverError("invalid_config", "DSH prompt_id is invalid");
+  }
+  const store = dshPromptStoreFor(installation.id);
+  const receipt = await dshWebRpcClient(installation, env, extras).respond({
+    rpc_id: parsed.rpcId,
+    value: dshRespondValue(thread.target, parsed, answer),
+  });
+  if (receipt.accepted || receipt.reason === "not-pending") {
+    store.remove(thread.target, answer.prompt_id);
+    return { accepted: true };
+  }
+  throw new ChannelDriverError(
+    "send_failed",
+    receipt.reason ?? "DSH rejected the prompt answer",
+  );
+}
 
 export async function mountDshSessions(
   host: Host,

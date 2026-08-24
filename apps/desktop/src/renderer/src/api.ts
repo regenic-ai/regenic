@@ -6,8 +6,10 @@ import type {
   InboxViewItem,
   KernelSettingsView,
   PersonalEngineView,
+  PromptAnswerItem,
   ReplyAttachmentInput,
   ReplyView,
+  ThreadPrompt,
 } from "./types";
 import { normalizeListTitle } from "./types";
 
@@ -109,7 +111,28 @@ export async function fetchInbox(
     actor_label: item.actor_label ?? null,
     pref_updated_at: item.pref_updated_at ?? null,
     activity: item.activity,
+    prompts: normalizePrompts(item.prompts),
+    unread: item.unread === true,
+    unread_count:
+      typeof item.unread_count === "number" && item.unread_count > 0
+        ? item.unread_count
+        : item.unread === true
+          ? 1
+          : 0,
   }));
+}
+
+function normalizePrompts(value: InboxViewItem["prompts"]): ThreadPrompt[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter(
+    (item): item is ThreadPrompt =>
+      Boolean(item) &&
+      typeof item.prompt_id === "string" &&
+      item.prompt_id.trim().length > 0 &&
+      Array.isArray(item.questions),
+  );
 }
 
 export async function fetchEngine(
@@ -271,6 +294,52 @@ export async function updateConversationPrefs(input: {
     );
   }
   return body as ConversationPrefView;
+}
+
+export async function ackConversationAttention(input: {
+  thread_id: string;
+  last_read_at?: string | null;
+  last_read_external_id?: string | null;
+}): Promise<ConversationPrefView> {
+  const response = await fetch(`${origin()}/v1/me/conversations/attention`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as
+    | ConversationPrefView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `conversation attention ${response.status}`,
+    );
+  }
+  return body as ConversationPrefView;
+}
+
+export async function answerConversationPrompt(input: {
+  thread_id: string;
+  prompt_id: string;
+  answers: PromptAnswerItem[];
+}): Promise<{ accepted: true; thread_id: string; prompt_id: string }> {
+  const response = await fetch(`${origin()}/v1/me/conversations/prompts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as
+    | { accepted: true; thread_id: string; prompt_id: string }
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `conversation prompt ${response.status}`,
+    );
+  }
+  return body as { accepted: true; thread_id: string; prompt_id: string };
 }
 
 export async function sendReply(input: {

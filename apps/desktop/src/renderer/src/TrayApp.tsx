@@ -98,7 +98,12 @@ export function TrayApp() {
           recent.map((thread) => {
             const latest = latestMessage(thread);
             return (
-              <div className={`item${thread.pinned ? " pinned" : ""}`} key={thread.id}>
+              <div
+                className={`item${thread.pinned ? " pinned" : ""}${
+                  thread.unread ? " unread" : ""
+                }`}
+                key={thread.id}
+              >
                 <div className="item-copy">
                   <div className="item-meta">
                     <span className={`channel-tag channel-${thread.channel}`}>

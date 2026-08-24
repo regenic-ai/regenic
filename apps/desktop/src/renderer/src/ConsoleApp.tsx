@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ackConversationAttention,
   createConversation,
   currentApiOrigin,
   fetchEngine,
@@ -56,6 +57,24 @@ const IDLE_POLL_MS = 8000;
 const FULL_REFRESH_MS = 45_000;
 const HOST_POLL_MS = 5000;
 
+function latestInboundOf(items: InboxViewItem[]): InboxViewItem | undefined {
+  let best: InboxViewItem | undefined;
+  for (const item of items) {
+    if (item.direction !== "inbound") {
+      continue;
+    }
+    if (
+      !best ||
+      item.event.occurred_at > best.event.occurred_at ||
+      (item.event.occurred_at === best.event.occurred_at &&
+        item.event.external_id > best.event.external_id)
+    ) {
+      best = item;
+    }
+  }
+  return best;
+}
+
 export function ConsoleApp() {
   const [nav, setNav] = useState<NavId>("inbox");
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
@@ -103,6 +122,7 @@ export function ConsoleApp() {
   const threadLoadSeq = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
   const delayRef = useRef(POLL_MS);
+  const ackStampRef = useRef<Record<string, string>>({});
 
   const applyHeads = (nextHeads: InboxViewItem[]) => {
     const reused = reuseInboxList(inboxRef.current, nextHeads);
@@ -316,6 +336,7 @@ export function ConsoleApp() {
             openId,
             loadedThreadsRef.current.has(openId) ? "poll" : "open",
           );
+          await ackOpenThread(openId);
         }
         delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
@@ -389,9 +410,32 @@ export function ConsoleApp() {
 
   useEffect(() => {
     if (selectedId) {
-      void ensureThread(selectedId, "open");
+      void ensureThread(selectedId, "open").then(() => ackOpenThread(selectedId));
     }
   }, [selectedId]);
+
+  const ackOpenThread = async (threadId: string) => {
+    const opened = messagesRef.current[threadId] ?? [];
+    const heads = inboxRef.current.filter((item) => item.thread_id === threadId);
+    const items = opened.length > 0 ? opened : heads;
+    const latest = latestInboundOf(items);
+    const stamp = `${latest?.event.external_id ?? "open"}@${
+      latest?.event.occurred_at ?? "now"
+    }`;
+    if (ackStampRef.current[threadId] === stamp) {
+      return;
+    }
+    ackStampRef.current[threadId] = stamp;
+    try {
+      await ackConversationAttention({
+        thread_id: threadId,
+        last_read_at: latest?.event.occurred_at ?? new Date().toISOString(),
+        last_read_external_id: latest?.event.external_id ?? null,
+      });
+    } catch {
+      delete ackStampRef.current[threadId];
+    }
+  };
 
   const listThreads = useMemo(() => {
     const grouped =

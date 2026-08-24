@@ -1,5 +1,5 @@
 import type { InboxReuse } from "./thread-window";
-import type { InboxViewItem, ListTitleMode } from "./types";
+import type { InboxViewItem, ListTitleMode, ThreadPrompt } from "./types";
 
 export interface InboxThread {
   id: string;
@@ -17,6 +17,9 @@ export interface InboxThread {
   list_title?: ListTitleMode;
   messages: InboxViewItem[];
   opened_at?: string;
+  prompts: ThreadPrompt[];
+  unread: boolean;
+  unread_count: number;
 }
 
 export type PinFilter = "all" | "pinned" | "unpinned";
@@ -219,6 +222,7 @@ export function overlayThreadMessages(
       await_reply:
         messages.some((item) => item.await_reply === true) || thread.await_reply === true,
       list_title: threadListTitle(messages, thread.list_title),
+      ...threadSurface(messages, thread),
     };
   });
   return changed ? next : threads;
@@ -241,6 +245,7 @@ export function openedThreadView(
       await_reply:
         messages.some((item) => item.await_reply === true) ||
         thread.await_reply === true,
+      ...threadSurface(messages, thread),
     };
   }
   if (thread.messages.length > 0) {
@@ -341,6 +346,7 @@ function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
     await_reply: ordered.some((item) => item.await_reply === true),
     list_title: threadListTitle(ordered),
     messages: ordered,
+    ...threadSurface(ordered),
   };
 }
 
@@ -477,6 +483,24 @@ function conversationField(
     }
   }
   return null;
+}
+
+function threadSurface(
+  messages: InboxViewItem[],
+  fallback?: Pick<InboxThread, "prompts" | "unread" | "unread_count">,
+): Pick<InboxThread, "prompts" | "unread" | "unread_count"> {
+  const fromMessages = messages.find((item) => (item.prompts?.length ?? 0) > 0)?.prompts;
+  const prompts = fromMessages ?? fallback?.prompts ?? [];
+  const unread =
+    prompts.length > 0 ||
+    messages.some((item) => item.unread === true) ||
+    fallback?.unread === true;
+  const counts = [
+    ...messages.map((item) => item.unread_count ?? 0),
+    fallback?.unread_count ?? 0,
+  ];
+  const unread_count = unread ? Math.max(1, ...counts) : 0;
+  return { prompts, unread, unread_count };
 }
 
 function threadLabel(id: string, latest: InboxViewItem): string {

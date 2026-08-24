@@ -61,8 +61,8 @@ The following are not allowed:
 - Mapping an unknown native type to `message`.
 - Putting bodies or secrets in `attrs`, logs, or quarantine metadata.
 - Adding per-channel switches in the API or desktop. The desktop reads
-  `can_send`, `can_create`, `await_reply`, `list_title`, and
-  `surface.activity`.
+  `can_send`, `can_create`, `await_reply`, `list_title`,
+  `surface.activity`, and inbox `prompts` / `unread`.
 
 ## Message format
 
@@ -74,7 +74,7 @@ Send and display shape is defined by `message-contract` in `@regenic/domain`.
 | `kind` | `user` \| `assistant` \| `system` | Mapped from the native event |
 | `direction` | `inbound` \| `outbound` | Reads are inbound. Console replies are outbound |
 | `content` | `ContentPart[]` | `body` plus optional `attachment` parts |
-| `capabilities` | `{ sync, reply, create, await_reply?, list_title? }` | Returned by `ChannelDriver.capabilities()` |
+| `capabilities` | `{ sync, reply, create, await_reply?, list_title?, prompts?, attention? }` | Returned by `ChannelDriver.capabilities()` |
 
 `channelRecord()` attaches surface metadata (`channel`, `kind`, `direction`,
 and optional `conversation_label` / `conversation_kind` / `actor_label` /
@@ -98,6 +98,18 @@ does not branch on channel name. When an old
 Event has no conversation name, a driver may implement
 `resolveConversationLabels` so inbox decoration can fill it without
 rewriting history.
+`prompts` / `attention` are a second channel-agnostic seam (Thread
+Surface): list and answer live decisions, or report/ack source read
+state. Store keeps Events and `last_read_*`. Core computes unread from
+the latest inbound plus that cursor, and normalizes answer shape.
+Connectors only translate their control plane (mux / `read_status`) and
+must not teach the kernel `om_` or a mux `rpcId`. The kernel resolves
+`installation + thread`. The desktop only reads inbox `prompts` /
+`unread`. It does not branch on `dsh` / `feishu`. Prompts are not
+Events. Answers go to `POST /v1/me/conversations/prompts` and must not
+take another trip through egress. Local read cursors live on
+`conversation_prefs.last_read_*`; a missing source overlay still uses
+that cursor. See [RFC 0008](rfcs/0008-thread-surface.md).
 
 When the other side has only invisible labor and no visible reply yet, a
 connector may emit a `type: "thread_status"` record with
@@ -131,8 +143,13 @@ interface ChannelDriver {
   install(input): NewConnectorInstallation;
   matchesThread(installation, thread): boolean;
   ownsThread(installation, thread): boolean;
-  capabilities(installation): { sync; reply; create; await_reply?; list_title? };
+  capabilities(installation): { sync; reply; create; await_reply?; list_title?; prompts?; attention? };
   resolveConversationLabels?(installation, threads, env): Promise<Map<string, string>>;
+  listPrompts?(installation, thread, host, env): Promise<ThreadPrompt[]>;
+  answerPrompt?(installation, thread, answer, host, env): Promise<{ accepted: boolean }>;
+  readAttention?(installation, threads, host, env): Promise<Map<string, ThreadAttention>>;
+  ackAttention?(installation, thread, ack, host, env): Promise<void>;
+  surfaceGeneration?(installation, host): string;
   canReply(installation): boolean;
   createThread(installation, host, env): Promise<ConversationThread>;
   resolveStreams(installation, host, env): Promise<ConnectorStream[]>;
@@ -147,8 +164,11 @@ interface ChannelDriver {
 | `install` | Persist non-secret config. Slack requires `channel_id`. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
-| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply` and `list_title`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH sets `prompt` (first user message). |
+| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `prompts`, and `attention`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH sets `prompt` (first user message). `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it. |
 | `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Feishu uses install `chat_names` or the live chat list (a nameless p2p chat resolves `p2p_target_id`). Slack uses `channel_name`. A lookup failure must not block inbox. |
+| `listPrompts` / `answerPrompt` | Optional. Live pending decisions. DSH web mounts mux, maps `question/requested` / `approval/requested` to a channel-agnostic Prompt, and answers on `/api/respond`. `not-pending` is treated as settled. |
+| `readAttention` / `ackAttention` | Optional. Source read overlay. Feishu calls user-identity `read_status` on the latest inbound `om_`; on failure the kernel uses the local cursor. Ack writes local state first and does not pretend the official chat list already has an unread count. |
+| `surfaceGeneration` | Optional. Live surface generation, appended to `inbox_digest` as `&s=` so a new approval is visible to desktop polling. |
 | `canReply` | Same value as `capabilities().reply`. |
 | `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` per selected conversation, or every visible group and/or p2p chat when `selection=all`. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
 | `createThread` | Required when `create` is true. Otherwise throw `unsupported_channel`. |
