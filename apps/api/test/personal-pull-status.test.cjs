@@ -12,7 +12,6 @@ const {
 } = require("../dist/personal-pull-status");
 const {
   shouldHydrateOpenedInbox,
-  shouldPollOpenedHydrate,
   shouldWaitForOpenedHydrate,
 } = require("../dist/personal-connector.service");
 
@@ -99,11 +98,5 @@ describe("opened inbox hydrate", () => {
     assert.equal(shouldWaitForOpenedHydrate(0), true);
     assert.equal(shouldWaitForOpenedHydrate(1), false);
     assert.equal(shouldWaitForOpenedHydrate(23), false);
-  });
-
-  it("does not poll hydrate again when the stream is already busy", () => {
-    assert.equal(shouldPollOpenedHydrate({ localCount: 0, streamBusy: false }), true);
-    assert.equal(shouldPollOpenedHydrate({ localCount: 0, streamBusy: true }), false);
-    assert.equal(shouldPollOpenedHydrate({ localCount: 1, streamBusy: false }), false);
   });
 });

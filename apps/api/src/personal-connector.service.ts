@@ -1052,10 +1052,3 @@ export function shouldHydrateOpenedInbox(query: {
 export function shouldWaitForOpenedHydrate(localCount: number): boolean {
   return localCount === 0;
 }
-
-export function shouldPollOpenedHydrate(input: {
-  localCount: number;
-  streamBusy: boolean;
-}): boolean {
-  return input.localCount === 0 && !input.streamBusy;
-}
