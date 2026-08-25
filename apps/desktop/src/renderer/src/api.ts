@@ -11,6 +11,7 @@ import type {
   ReplyAttachmentInput,
   ReplyView,
   ThreadPrompt,
+  WhatsAppImportView,
 } from "./types";
 import { normalizeListTitle } from "./types";
 
@@ -268,6 +269,28 @@ export async function uninstallConnector(id: string): Promise<void> {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `uninstall ${response.status}`);
   }
+}
+
+export async function importWhatsAppExport(
+  content: string,
+  fileName: string,
+): Promise<WhatsAppImportView> {
+  const response = await fetch(`${origin()}/v1/me/imports/whatsapp`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content, file_name: fileName }),
+  });
+  const body = (await response.json()) as
+    | WhatsAppImportView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `WhatsApp import ${response.status}`,
+    );
+  }
+  return body as WhatsAppImportView;
 }
 
 export async function createConversation(input: {

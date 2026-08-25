@@ -26,6 +26,7 @@ import {
   PersonalReplyService,
   type ReplyInput,
 } from "./personal-reply.service";
+import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
 
 @Controller("v1/me")
 @UseGuards(PersonalApiGuard)
@@ -34,6 +35,7 @@ export class PersonalController {
     private readonly inbox: PersonalInboxService,
     private readonly connectors: PersonalConnectorService,
     private readonly replies: PersonalReplyService,
+    private readonly whatsapp: PersonalWhatsAppImportService,
   ) {}
 
   @Get("inbox")
@@ -90,6 +92,11 @@ export class PersonalController {
   @Post("replies")
   sendReply(@Body() body: ReplyInput) {
     return this.guard(() => this.replies.send(body ?? {}));
+  }
+
+  @Post("imports/whatsapp")
+  importWhatsApp(@Body() body: { content?: string; file_name?: string } | undefined) {
+    return this.guard(() => this.whatsapp.import(body?.content, body?.file_name));
   }
 
   @Post("conversations")

@@ -37,7 +37,7 @@ What you can use now is **one person, data on this machine**. Shared use across 
 | Feishu | Read groups and direct messages, send text. Sign in as yourself with official `lark-cli` | works |
 | Slack | Read one channel | read only, no reply |
 | File import | CSV / JSONL, with a map of which column is which | CLI |
-| WhatsApp | A read-only JSONL file you export yourself | CLI |
+| WhatsApp | Read-only Purr WA CSV or Export v1 JSONL selected by the user | desktop + CLI |
 | Export | Message JSONL, daily Markdown, a citation list for another tool | CLI |
 
 ## Installation & Quick Start
@@ -248,7 +248,9 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 
 ### Personal WhatsApp export
 
-Personal WhatsApp only accepts a read-only JSONL file you export yourself. This version does not take browser cookies, scan chats in the background, or send messages. Each exported message has stable `chat_id` and `message_id` values.
+Personal WhatsApp is a user-triggered, read-only flow. The desktop imports one or more CSV files from the reviewed open-source [Purr WA Export](https://github.com/0xheycat/purr-wa), or WhatsApp Personal Export v1 JSONL. Regenic does not receive browser cookies, scan chats in the background, or send messages.
+
+For the complete one-time setup, per-export steps, manual/automatic boundary, known `@lid` limitation, and acceptance checks, see [Personal WhatsApp Bridge](docs/en/WHATSAPP_PERSONAL.md) and [WhatsApp test and acceptance](docs/en/WHATSAPP_PERSONAL_TESTING.md).
 
 ```bash
 pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \

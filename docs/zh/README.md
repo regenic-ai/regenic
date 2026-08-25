@@ -4,6 +4,7 @@
 - [消息编排](MESSAGE_ORCHESTRATION.md)
 - [连接器](CONNECTOR.md)
 - [个人 WhatsApp Bridge](WHATSAPP_PERSONAL.md)
+- [个人 WhatsApp 测试与验收](WHATSAPP_PERSONAL_TESTING.md)
 - [技术栈](TECH_STACK.md)
 - [桌面端](DESKTOP.md)
 - [采集架构](INGESTION_ARCHITECTURE.md)

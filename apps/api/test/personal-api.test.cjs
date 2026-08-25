@@ -15,6 +15,7 @@ const {
   dropDshPromptStore,
   questionPromptId,
 } = require("@regenic/dsh-connector");
+const { createPurrWhatsAppImport } = require("@regenic/whatsapp-personal");
 
 const roots = [];
 const previousEnv = {};
@@ -340,9 +341,10 @@ describe("personal /v1/me", () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
     const service = new IngestionService(
       new FsBlobStore(blobRoot),
-      new SqliteAuthorityStore(database),
+      authority,
     );
     await service.ingest({
       schema_version: INGEST_SCHEMA_VERSION,
@@ -392,6 +394,7 @@ describe("personal /v1/me", () => {
         }),
       ],
     });
+    authority.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
       const all = await (await fetch(`${origin}/v1/me/inbox`)).json();
@@ -516,6 +519,162 @@ describe("personal /v1/me", () => {
         ["session-x:49", "assistant", "pong"],
         ["session-x:7", "user", "只用一句话回复：pong"],
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("imports an explicit WhatsApp Personal Export v1 file without egress", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const imported = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: `${JSON.stringify({
+            schema_version: "1.0",
+            kind: "whatsapp_personal_message",
+            message_id: "message-1",
+            chat_id: "chat-1",
+            chat_name: "Family",
+            sender_id: "contact-1",
+            sender_name: "Alex",
+            direction: "incoming",
+            sent_at: "2026-08-21T00:00:00.000Z",
+            text: "Please call me.",
+          })}\n`,
+        }),
+      });
+      const result = await imported.json();
+      assert.equal(imported.status, 201, JSON.stringify(result));
+      assert.equal(result.accepted_count, 1);
+      assert.equal(result.invalid_line_count, 0);
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const item = inbox.find((entry) => entry.event.source === "whatsapp-personal");
+      assert.equal(item.body_text, "Please call me.");
+      assert.equal(item.can_send, false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("imports a user-selected Purr WA CSV without egress", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const content = [
+      "datetime,sender,fromMe,type,text",
+      '"21/08/2026 14:30","Alex",0,chat,"Please call me."',
+      '"21/08/2026 14:31","You",1,chat,"Calling now."',
+    ].join("\n");
+    const fileName = "Family_15550001_c_us.csv";
+    const converted = createPurrWhatsAppImport({
+      data: content,
+      file_name: fileName,
+      org_id: "local-owner",
+      local_principal_id: "local-owner",
+      received_at: "2026-08-21T15:00:00.000Z",
+    });
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      ...converted.batches[0],
+      records: converted.batches[0].records.map((record) => ({
+        ...record,
+        content: record.content.filter((part) => part.role === "body"),
+      })),
+    });
+    authority.close();
+
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const imported = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content,
+          file_name: fileName,
+        }),
+      });
+      const result = await imported.json();
+      assert.equal(imported.status, 201, JSON.stringify(result));
+      assert.equal(result.accepted_count, 2);
+      assert.equal(result.invalid_line_count, 0);
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const items = inbox.filter(
+        (entry) => entry.event.source === "whatsapp-personal",
+      );
+      assert.equal(items.length, 2);
+      assert.equal(items.every((item) => item.can_send === false), true);
+      const incoming = items.find((item) => item.direction === "inbound");
+      const outgoing = items.find((item) => item.direction === "outbound");
+      assert.equal(incoming.kind, "user");
+      assert.equal(incoming.actor_label, "Alex");
+      assert.equal(incoming.conversation_label, "Family");
+      assert.equal(incoming.conversation_kind, "direct");
+      assert.equal(outgoing.kind, "user");
+      assert.equal(outgoing.actor_label, null);
+
+      const replayed = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content,
+          file_name: fileName,
+        }),
+      });
+      const replayedResult = await replayed.json();
+      assert.equal(replayed.status, 201, JSON.stringify(replayedResult));
+      assert.equal(replayedResult.accepted_count, 0);
+      assert.equal(replayedResult.duplicate_count, 2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects WhatsApp import content larger than 20 MiB", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const response = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "x".repeat(20 * 1024 * 1024 + 1) }),
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 413, JSON.stringify(body));
+      assert.equal(body.error.code, "invalid_config");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a Purr CSV file with no valid message batch", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const response = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "time,sender,fromMe,type,text\n21/08/2026 14:30,Alex,0,chat,Hello",
+          file_name: "Family_15550001_c_us.csv",
+        }),
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 400, JSON.stringify(body));
+      assert.equal(body.error.code, "invalid_config");
     } finally {
       await app.close();
     }
