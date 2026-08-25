@@ -45,7 +45,7 @@ describe("WhatsApp multi-file import", () => {
     });
     assert.equal(
       whatsAppImportSummary(result),
-      "Processed 2 of 3 files · 5 new · 2 duplicates · 0 invalid lines.",
+      "Imported 2/3 files · 5 new · 2 duplicates · 0 invalid lines",
     );
   });
 });

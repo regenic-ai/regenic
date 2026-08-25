@@ -129,19 +129,19 @@ export function EnginePage({
       </section>
       <section className="card">
         <div className="card-head">
-          <h2>WhatsApp personal export</h2>
+          <h2>{t("engine.whatsapp.title")}</h2>
           <button
             type="button"
             className="ghost"
             disabled={importingWhatsApp}
             onClick={() => whatsAppFileRef.current?.click()}
           >
-            {importingWhatsApp ? "Importing…" : "Import files"}
+            {importingWhatsApp
+              ? t("engine.whatsapp.importing")
+              : t("engine.whatsapp.import")}
           </button>
         </div>
-        <p className="muted">
-          Import Purr WA CSV or WhatsApp Personal Export v1 JSONL files you selected yourself. This is read-only and never accesses browser cookies or sends messages.
-        </p>
+        <p className="muted">{t("engine.whatsapp.lead")}</p>
         <input
           ref={whatsAppFileRef}
           type="file"
@@ -170,12 +170,18 @@ export function EnginePage({
                 if (result.failures.length > 0) {
                   const first = result.failures[0];
                   setActionError(
-                    `${result.failures.length} file${result.failures.length === 1 ? "" : "s"} failed. ${first.file_name}: ${connectorActionError(first.message)}`,
+                    t("engine.whatsapp.fileFailures", {
+                      count: result.failures.length,
+                      file: first.file_name,
+                      message: connectorActionError(first.message),
+                    }),
                   );
                 }
               } catch (caught) {
                 setActionError(
-                  caught instanceof Error ? connectorActionError(caught.message) : "WhatsApp import failed",
+                  caught instanceof Error
+                    ? connectorActionError(caught.message)
+                    : t("engine.whatsapp.failed"),
                 );
               } finally {
                 setImportingWhatsApp(false);
