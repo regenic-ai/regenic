@@ -287,11 +287,11 @@ Feishu `kind` map:
 
 | Native message | `kind` |
 | --- | --- |
-| `sender_type=user`, `msg_type` `text` or `post` | `user` |
-| `sender_type=app` (or `bot`), `msg_type` `text` or `post` | `assistant` |
-| image, file, interactive, and other `msg_type` | dropped |
+| `sender_type=user`, `msg_type` `text` / `post` / `image` / `file` / `audio` / `media` | `user` |
+| `sender_type=app` (or `bot`), same | `assistant` |
+| interactive cards and other `msg_type` | dropped |
 
-Thread id: `feishu:<chat_id>`. Login stays on `lark-cli`. History uses in-process HTTP with the `user_access_token` from the CLI keychain, and falls back to `lark-cli api --as user` if the token cannot be read. New conversations, and ones still paging oldest-first, fetch the latest page first (`ByCreateTimeDesc`), then backfill older messages. Up to 50 messages per page. The conversation list is cached for about 30 seconds. Each record stores the chat name, `group` or `direct`, and the sender name. Mentions in the body use the native `mentions[]` names (`@_user_1` becomes `@Ben`; `@all` becomes `@所有人`). `contact +search-user` is only for remaining sender ids. The form lists groups and p2p chats from `lark-cli im +chat-list --types=p2p,group`. It does not take tokens or a pasted `oc_…`. Default is both kinds. The set can be changed after install.
+Thread id: `feishu:<chat_id>`. Login stays on `lark-cli`. History uses in-process HTTP with the `user_access_token` from the CLI keychain, and falls back to `lark-cli api --as user` if the token cannot be read. Images and files download through `im/v1/messages/:id/resources/:file_key` into `attachment` parts; `img` nodes inside `post` are included. Already-synced conversations re-fetch the latest page once to backfill media that used to be dropped. New conversations, and ones still paging oldest-first, fetch the latest page first (`ByCreateTimeDesc`), then backfill older messages. Up to 50 messages per page. The conversation list is cached for about 30 seconds. Each record stores the chat name, `group` or `direct`, and the sender name. Mentions in the body use the native `mentions[]` names (`@_user_1` becomes `@Ben`; `@all` becomes `@所有人`). `contact +search-user` is only for remaining sender ids. The form lists groups and p2p chats from `lark-cli im +chat-list --types=p2p,group`. It does not take tokens or a pasted `oc_…`. Default is both kinds. The set can be changed after install.
 
 ## Setup
 

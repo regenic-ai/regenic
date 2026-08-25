@@ -135,6 +135,63 @@ describe("LarkCliClient", () => {
     assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
   });
 
+  it("downloads a message image over HTTP as the user", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const fetched = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn() {
+        throw new Error("CLI should not run when HTTP works");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url, init) {
+        fetched.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get(name) {
+              if (name === "content-type") {
+                return "image/png";
+              }
+              if (name === "content-disposition") {
+                return 'attachment; filename="shot.png"';
+              }
+              return null;
+            },
+          },
+          async arrayBuffer() {
+            return png.buffer;
+          },
+        };
+      },
+    });
+    const file = await client.downloadResource({
+      message_id: "om_img",
+      file_key: "img_shot",
+      type: "image",
+    });
+    assert.match(
+      fetched[0].url,
+      /open\.feishu\.cn\/open-apis\/im\/v1\/messages\/om_img\/resources\/img_shot/,
+    );
+    assert.match(fetched[0].url, /type=image/);
+    assert.equal(file.media_type, "image/png");
+    assert.equal(file.filename, "shot.png");
+    assert.deepEqual(Array.from(file.bytes), Array.from(png));
+  });
+
   it("retries a timed-out history page and then succeeds", async () => {
     let calls = 0;
     const client = new LarkCliClient({

@@ -3,6 +3,7 @@ import {
   INGEST_SCHEMA_VERSION,
   channelRecord,
   type ConnectorCursor,
+  type ContentPart,
   type IngestBatch,
   type PollResult,
 } from "@regenic/domain";
@@ -17,6 +18,7 @@ import { rememberFeishuInbound } from "./feishu-attention";
 import {
   FEISHU_SOURCE,
   collectFeishuUserIds,
+  extractFeishuMedia,
   extractFeishuText,
   feishuConversationKind,
   feishuCreateTimeToIso,
@@ -24,7 +26,11 @@ import {
   feishuMentionNames,
   isFeishuSelfSender,
   senderKind,
+  sniffMediaType,
+  type FeishuMediaRef,
 } from "./feishu-message";
+
+export const MAX_FEISHU_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 export interface FeishuCursorState {
   page_token?: string;
@@ -32,6 +38,7 @@ export interface FeishuCursorState {
   sort?: "asc" | "desc";
   head_time?: string;
   recent_seeded?: boolean;
+  media_synced?: boolean;
 }
 
 export interface FeishuChatPollConnectorOptions {
@@ -84,7 +91,10 @@ export class FeishuChatPollConnector {
     const page = await this.client.listMessages(request);
     const names = await this.resolveNames(page.items);
     const selfId = await this.selfUserId();
-    const records = page.items.flatMap((item) => this.toRecord(item, names, selfId));
+    const records: IngestBatch["records"] = [];
+    for (const item of page.items) {
+      records.push(...(await this.toRecord(item, names, selfId)));
+    }
     for (const item of page.items) {
       if (item.deleted || !item.message_id || isFeishuSelfSender(item.sender?.id, selfId)) {
         continue;
@@ -144,11 +154,11 @@ export class FeishuChatPollConnector {
     return names;
   }
 
-  private toRecord(
+  private async toRecord(
     item: FeishuHistoryItem,
     names: ReadonlyMap<string, string>,
     selfId?: string,
-  ): IngestBatch["records"] {
+  ): Promise<IngestBatch["records"]> {
     if (item.deleted) {
       return [];
     }
@@ -160,9 +170,11 @@ export class FeishuChatPollConnector {
       names,
       item.mentions,
     );
-    if (!kind || !actorId || !text) {
+    const media = extractFeishuMedia(item.msg_type, item.body?.content);
+    if (!kind || !actorId || (!text && media.length === 0)) {
       return [];
     }
+    const attachments = await this.resolveAttachments(item.message_id, media);
     const chatId = this.options.chat_id;
     const rootId = emptyToUndefined(item.root_id);
     const parentId = emptyToUndefined(item.parent_id);
@@ -190,8 +202,51 @@ export class FeishuChatPollConnector {
             ? `${chatId}:${parentId ?? rootId}`
             : undefined,
         text,
+        content: attachments,
       }),
     ];
+  }
+
+  private async resolveAttachments(
+    messageId: string,
+    refs: FeishuMediaRef[],
+  ): Promise<ContentPart[]> {
+    const parts: ContentPart[] = [];
+    for (const ref of refs) {
+      parts.push(await this.resolveAttachment(messageId, ref));
+    }
+    return parts;
+  }
+
+  private async resolveAttachment(
+    messageId: string,
+    ref: FeishuMediaRef,
+  ): Promise<ContentPart> {
+    const filename = ref.filename ?? (ref.kind === "image" ? "image.png" : "attachment");
+    const fallbackType =
+      ref.media_type ?? (ref.kind === "image" ? "image/png" : "application/octet-stream");
+    const download = this.client.downloadResource;
+    if (!download) {
+      return placeholderAttachment(filename, fallbackType);
+    }
+    try {
+      const file = await download({
+        message_id: messageId,
+        file_key: ref.key,
+        type: ref.kind,
+      });
+      if (file.bytes.byteLength === 0 || file.bytes.byteLength > MAX_FEISHU_ATTACHMENT_BYTES) {
+        return placeholderAttachment(file.filename ?? filename, file.media_type || fallbackType);
+      }
+      return {
+        role: "attachment",
+        media_type: sniffMediaType(file.bytes, file.media_type || fallbackType),
+        source_filename: file.filename ?? filename,
+        bytes: file.bytes,
+      };
+    } catch {
+      return placeholderAttachment(filename, fallbackType);
+    }
   }
 
   private actorLabel(
@@ -237,6 +292,7 @@ export function decodeFeishuCursor(cursor: ConnectorCursor | null): FeishuCursor
         sort,
         head_time: stringValue(parsed.head_time),
         recent_seeded: parsed.recent_seeded === true,
+        media_synced: parsed.media_synced === true,
       };
     }
   } catch {
@@ -251,7 +307,8 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
     !state.start_time &&
     state.sort !== "desc" &&
     !state.recent_seeded &&
-    !state.head_time
+    !state.head_time &&
+    !state.media_synced
   ) {
     return undefined;
   }
@@ -264,6 +321,7 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
       ? { head_time: state.head_time }
       : {}),
     ...(state.recent_seeded ? { recent_seeded: true } : {}),
+    ...(state.media_synced ? { media_synced: true } : {}),
   });
 }
 
@@ -271,12 +329,20 @@ export function needsRecentSeed(state: FeishuCursorState): boolean {
   return !state.recent_seeded && state.sort !== "desc";
 }
 
+export function needsMediaReseed(state: FeishuCursorState): boolean {
+  return (
+    state.recent_seeded === true &&
+    state.media_synced !== true &&
+    state.sort !== "desc"
+  );
+}
+
 export function planFeishuHistoryRequest(
   chatId: string,
   pageSize: number,
   state: FeishuCursorState,
 ): FeishuListInput {
-  if (needsRecentSeed(state)) {
+  if (needsRecentSeed(state) || needsMediaReseed(state)) {
     return {
       chat_id: chatId,
       page_size: pageSize,
@@ -305,7 +371,11 @@ export function feishuHistoryHasMore(
   page: { has_more: boolean },
   sort: FeishuSortType = "ByCreateTimeAsc",
 ): boolean {
-  if (needsRecentSeed(current) && sort === "ByCreateTimeDesc" && current.page_token) {
+  if (
+    (needsRecentSeed(current) || needsMediaReseed(current)) &&
+    sort === "ByCreateTimeDesc" &&
+    current.page_token
+  ) {
     return true;
   }
   return page.has_more;
@@ -320,46 +390,74 @@ export function nextFeishuCursor(
   const head = laterTime(current.head_time, newest);
   if (needsRecentSeed(current) && sort === "ByCreateTimeDesc") {
     if (current.page_token) {
-      return {
+      return stampMediaSynced({
         page_token: current.page_token,
         start_time: current.start_time,
         recent_seeded: true,
         ...(head ? { head_time: head } : {}),
-      };
+      });
     }
     if (page.has_more && page.page_token) {
-      return {
+      return stampMediaSynced({
         page_token: page.page_token,
         sort: "desc",
         recent_seeded: true,
         ...(head ? { head_time: head } : {}),
-      };
+      });
     }
-    return head ? { start_time: head, recent_seeded: true } : { recent_seeded: true };
+    return stampMediaSynced(
+      head ? { start_time: head, recent_seeded: true } : { recent_seeded: true },
+    );
+  }
+  if (needsMediaReseed(current) && sort === "ByCreateTimeDesc") {
+    const live = laterTime(current.start_time, head);
+    return stampMediaSynced({
+      ...(current.page_token ? { page_token: current.page_token } : {}),
+      ...(live ? { start_time: live } : {}),
+      recent_seeded: true,
+      ...(head && head !== live ? { head_time: head } : {}),
+    });
   }
   if (sort === "ByCreateTimeDesc") {
     if (page.has_more && page.page_token) {
-      return {
+      return stampMediaSynced({
         page_token: page.page_token,
         sort: "desc",
         recent_seeded: true,
         ...(head ? { head_time: head } : current.head_time ? { head_time: current.head_time } : {}),
-      };
+      });
     }
     const live = current.head_time ?? head;
-    return live ? { start_time: live, recent_seeded: true } : { recent_seeded: true };
+    return stampMediaSynced(
+      live ? { start_time: live, recent_seeded: true } : { recent_seeded: true },
+    );
   }
   const lastStart = lastStartTime(page.items) ?? current.start_time;
   if (page.has_more && page.page_token) {
-    return {
+    return stampMediaSynced({
       page_token: page.page_token,
       ...(lastStart ? { start_time: lastStart } : {}),
       recent_seeded: true,
       ...(head && head !== lastStart ? { head_time: head } : {}),
-    };
+    });
   }
   const liveStart = laterTime(lastStart, current.head_time);
-  return liveStart ? { start_time: liveStart, recent_seeded: true } : { recent_seeded: true };
+  return stampMediaSynced(
+    liveStart ? { start_time: liveStart, recent_seeded: true } : { recent_seeded: true },
+  );
+}
+
+function stampMediaSynced(state: FeishuCursorState): FeishuCursorState {
+  return { ...state, media_synced: true };
+}
+
+function placeholderAttachment(filename: string, mediaType: string): ContentPart {
+  return {
+    role: "attachment",
+    media_type: mediaType,
+    source_filename: filename,
+    bytes: new Uint8Array(),
+  };
 }
 
 function lastStartTime(items: FeishuHistoryItem[]): string | undefined {

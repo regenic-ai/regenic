@@ -266,6 +266,24 @@ export function estimateMessageHeight(
   return 36 + (follow ? 2 : 20) + body + files + (follow ? 10 : 18);
 }
 
+export function paddingYFromStyle(style: {
+  paddingTop: string;
+  paddingBottom: string;
+}): number {
+  return (
+    (Number.parseFloat(style.paddingTop) || 0) +
+    (Number.parseFloat(style.paddingBottom) || 0)
+  );
+}
+
+export function endScrollTop(
+  contentHeight: number,
+  clientHeight: number,
+  paddingY = 0,
+): number {
+  return Math.max(0, contentHeight + paddingY - clientHeight);
+}
+
 export function isStuckToEnd(node: {
   scrollHeight: number;
   scrollTop: number;

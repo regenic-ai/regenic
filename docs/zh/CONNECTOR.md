@@ -235,11 +235,11 @@ Slack 真人映射为 `user`。
 
 | 原生消息 | `kind` |
 | --- | --- |
-| `sender_type=user`，`msg_type` 为 `text` 或 `post` | `user` |
-| `sender_type=app`（或 `bot`），`msg_type` 为 `text` 或 `post` | `assistant` |
-| 图片、文件、卡片和其他 `msg_type` | 丢弃 |
+| `sender_type=user`，`msg_type` 为 `text` / `post` / `image` / `file` / `audio` / `media` | `user` |
+| `sender_type=app`（或 `bot`），同上 | `assistant` |
+| 卡片和其他 `msg_type` | 丢弃 |
 
-线程 id：`feishu:<chat_id>`。登录仍用 `lark-cli`。拉历史用进程内 HTTP，带钥匙串里的 `user_access_token`；读不到 token 再回退 `lark-cli api --as user`。新会话和还在从旧往新翻的会话，先倒序取最近一页，再排队回填更早的。每页最多 50 条。会话列表缓存约 30 秒。每条记录带上群名或单聊对方、`group` / `direct`、以及发送者姓名。群里 `@` 用消息自带的 `mentions[]` 写成可读人名；`@所有人` 也在这一步翻译。搜不到的发送者再走 `contact +search-user`。表单用 `lark-cli im +chat-list --types=p2p,group` 列出群和单聊，不收 token，也不用手贴 `oc_…`。默认两种都同步。安装后可以改范围。
+线程 id：`feishu:<chat_id>`。登录仍用 `lark-cli`。拉历史用进程内 HTTP，带钥匙串里的 `user_access_token`；读不到 token 再回退 `lark-cli api --as user`。图片和文件走 `im/v1/messages/:id/resources/:file_key` 下载进 `attachment`；富文本 post 里的 `img` 一并收下。已同步过的会话会再倒序拉最近一页，补上以前丢掉的媒体。新会话和还在从旧往新翻的会话，先倒序取最近一页，再排队回填更早的。每页最多 50 条。会话列表缓存约 30 秒。每条记录带上群名或单聊对方、`group` / `direct`、以及发送者姓名。群里 `@` 用消息自带的 `mentions[]` 写成可读人名；`@所有人` 也在这一步翻译。搜不到的发送者再走 `contact +search-user`。表单用 `lark-cli im +chat-list --types=p2p,group` 列出群和单聊，不收 token，也不用手贴 `oc_…`。默认两种都同步。安装后可以改范围。
 
 ## 安装前置
 
