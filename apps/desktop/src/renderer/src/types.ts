@@ -355,3 +355,11 @@ export interface ReplyView {
   rpc_id?: string;
   item: InboxViewItem;
 }
+
+export interface WhatsAppImportView {
+  file_hash: string;
+  accepted_count: number;
+  duplicate_count: number;
+  invalid_line_count: number;
+  errors: Array<{ line: number; code: string; message: string }>;
+}

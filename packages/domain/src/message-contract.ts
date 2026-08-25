@@ -36,6 +36,7 @@ export const CHANNELS: Record<string, ChannelDescriptor> = {
   dsh: { id: "dsh", label: "DSH" },
   slack: { id: "slack", label: "Slack" },
   feishu: { id: "feishu", label: "Feishu" },
+  "whatsapp-personal": { id: "whatsapp-personal", label: "WhatsApp" },
 };
 
 export function isLocalOutboundId(externalId: string): boolean {

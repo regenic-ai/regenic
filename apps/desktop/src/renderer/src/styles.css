@@ -1014,6 +1014,27 @@ button {
   min-width: 0;
 }
 
+.chat-row-outbound {
+  grid-template-columns: minmax(0, 1fr) 36px;
+}
+
+.chat-row-outbound .chat-avatar {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.chat-row-outbound .chat-main {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: end;
+  border-color: #285f22;
+  background: var(--g900);
+}
+
+.chat-row-outbound .chat-meta {
+  justify-content: flex-end;
+}
+
 .chat-row.is-follow {
   margin-top: -8px;
 }
@@ -1066,8 +1087,22 @@ button {
 
 
 .chat-main {
+  width: fit-content;
+  max-width: min(78%, 68ch);
   min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
   user-select: text;
+}
+
+.chat-row-inbound .chat-main {
+  justify-self: start;
+}
+
+.chat-row-assistant .chat-main {
+  border-color: #3a2f64;
 }
 
 .chat-meta {

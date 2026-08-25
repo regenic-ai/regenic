@@ -1390,6 +1390,7 @@ export class SqliteAuthorityStore
           FROM message_dispositions d
           JOIN events e ON e.id = d.event_id
           WHERE ${clauses.join(" AND ")}
+            AND ${isCurrentHeadSql("e")}
           ${tail.orderSql}
         `,
         params: [...params, ...tail.orderParams],

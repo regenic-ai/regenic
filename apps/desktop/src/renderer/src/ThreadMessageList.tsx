@@ -431,7 +431,9 @@ const ChatRow = memo(function ChatRow({
 }) {
   const receipt = receiptCopy(item);
   return (
-    <div className={`chat-row chat-row-${role}${follow ? " is-follow" : ""}`}>
+    <div
+      className={`chat-row chat-row-${role} chat-row-${item.direction}${follow ? " is-follow" : ""}`}
+    >
       <ChatAvatar role={role} label={item.actor_label} />
       <div className="chat-main">
         <div className="chat-meta">

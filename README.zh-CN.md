@@ -37,7 +37,7 @@
 | 飞书 | 读群和单聊，回文字。用官方 `lark-cli` 登录你自己的账号 | 能用 |
 | Slack | 读一个频道 | 只能读，不能回 |
 | 文件导入 | CSV / JSONL，用一份对照表说明哪一列是什么 | CLI |
-| WhatsApp | 你自己导出的只读 JSONL | CLI |
+| WhatsApp | 用户明确选择的只读 Purr WA CSV 或 Export v1 JSONL | 桌面端 + CLI |
 | 导出 | 消息记录 JSONL、按日整理的 Markdown、给外部用的引用清单 | CLI |
 
 ## 安装与快速开始
@@ -248,7 +248,9 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 
 ### 个人 WhatsApp 导出
 
-个人 WhatsApp 只接受你自己导出的只读 JSONL。现在这一版不收浏览器 Cookie、不在后台扫聊天，也不发消息。每条都有稳定的 `chat_id` 和 `message_id`。
+个人 WhatsApp 是由用户明确触发的只读流程。桌面端可一次导入多份经审计的开源 [Purr WA Export](https://github.com/0xheycat/purr-wa) CSV，也支持 WhatsApp Personal Export v1 JSONL。Regenic 不接收浏览器 Cookie、不在后台扫描聊天，也不发送消息。
+
+一次性设置、每次导出步骤、手动/自动边界、已知 `@lid` 限制和验收清单见[个人 WhatsApp Bridge](docs/zh/WHATSAPP_PERSONAL.md)与[WhatsApp 测试与验收](docs/zh/WHATSAPP_PERSONAL_TESTING.md)。
 
 ```bash
 pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \

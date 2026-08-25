@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  channelRecord,
   INGEST_SCHEMA_VERSION,
   type IngestBatch,
   type IngestOperation,
@@ -24,6 +25,7 @@ export interface WhatsAppPersonalExportMessage {
   reply_to_message_id?: string;
   operation?: IngestOperation;
   revision_id?: string;
+  message_kind?: "user" | "system";
 }
 
 export interface WhatsAppPersonalImportInput {
@@ -94,6 +96,9 @@ function parseMessage(value: unknown): WhatsAppPersonalExportMessage {
     !isNonEmptyString(value.sender_id) ||
     !isIsoTimestamp(value.sent_at) ||
     (value.direction !== "incoming" && value.direction !== "outgoing") ||
+    (value.message_kind !== undefined &&
+      value.message_kind !== "user" &&
+      value.message_kind !== "system") ||
     (operation !== "create" && operation !== "revise" && operation !== "tombstone")
   ) {
     throw new Error("Export line does not match WhatsApp Personal Export v1");
@@ -115,34 +120,61 @@ function parseMessage(value: unknown): WhatsAppPersonalExportMessage {
     reply_to_message_id: optionalString(value.reply_to_message_id),
     operation,
     revision_id: optionalString(value.revision_id),
+    message_kind:
+      value.message_kind === "system" || value.message_kind === "user"
+        ? value.message_kind
+        : undefined,
   };
 }
 
 function toRecord(message: WhatsAppPersonalExportMessage, localPrincipalId: string): IngestRecord {
   const operation = message.operation ?? "create";
   const isReply = Boolean(message.reply_to_message_id);
-  return {
-    operation,
-    source: WHATSAPP_PERSONAL_SOURCE,
+  const kind = message.message_kind ?? "user";
+  const record = channelRecord({
+    channel: WHATSAPP_PERSONAL_SOURCE,
+    kind,
+    direction: message.direction === "outgoing" ? "outbound" : "inbound",
     external_id: `${message.chat_id}:${message.message_id}`,
-    revision_id: message.revision_id,
     occurred_at: message.sent_at,
-    actor: message.direction === "outgoing"
-      ? { id: localPrincipalId }
-      : { id: message.sender_id, display_name: message.sender_name },
-    scope: { id: message.chat_id, name: message.chat_name },
+    actor_id:
+      message.direction === "outgoing" ? localPrincipalId : message.sender_id,
+    actor_label:
+      kind === "system"
+        ? "WhatsApp"
+        : message.direction === "incoming"
+          ? message.sender_name
+          : undefined,
+    scope_id: message.chat_id,
+    scope_name: message.chat_name,
+    conversation_kind: whatsappConversationKind(message.chat_id),
     type: isReply ? "thread_reply" : "message",
-    thread: isReply ? { id: message.chat_id } : undefined,
-    parent_external_id: isReply ? `${message.chat_id}:${message.reply_to_message_id}` : undefined,
-    content: operation === "tombstone"
-      ? undefined
-      : [{ role: "body", media_type: "text/plain", text: message.text! }],
-    direction_tags: [message.direction],
-    attrs: {
-      export_schema_version: WHATSAPP_PERSONAL_EXPORT_SCHEMA_VERSION,
-      platform: "whatsapp-web",
-    },
+    thread_id: isReply ? message.chat_id : undefined,
+    parent_external_id: isReply
+      ? `${message.chat_id}:${message.reply_to_message_id}`
+      : undefined,
+    text: operation === "tombstone" ? undefined : message.text,
+  });
+  record.operation = operation;
+  record.revision_id = message.revision_id;
+  record.attrs = {
+    export_schema_version: WHATSAPP_PERSONAL_EXPORT_SCHEMA_VERSION,
+    platform: "whatsapp-web",
   };
+  if (operation === "tombstone") {
+    record.content = undefined;
+  }
+  return record;
+}
+
+function whatsappConversationKind(chatId: string): string | undefined {
+  if (chatId.endsWith("@g.us")) {
+    return "group";
+  }
+  if (chatId.endsWith("@c.us") || chatId.endsWith("@lid")) {
+    return "direct";
+  }
+  return undefined;
 }
 
 function toBytes(data: string | Uint8Array): Uint8Array {

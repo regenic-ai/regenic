@@ -79,6 +79,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | POST | `/v1/me/work-items/:id/complete` | dismiss 的别名；不冒充 DSH 退出 |
 | GET/POST | `/v1/me/prefs` | `inbox_sort`：`attention` 或 `normal` |
 | POST | `/v1/me/replies` | 把回复发回原渠道。API 按 installation + thread 找 `ChannelDriver`，再 `egress.send`。入库后 follow 该线程直到出现新的 inbound / `working` / `awaiting_user` 或短暂超时；驱动 `canReply: false` 时 501 |
+| POST | `/v1/me/imports/whatsapp` | 显式导入用户选择的 UTF-8 Purr WA CSV 或 WhatsApp Personal Export v1 JSONL。本机个人 API 每份最多校验 20 MiB，返回入库统计和坏行，且绝不发送消息。桌面端可一次选择多份文件并逐份调用。 |
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |
 
 不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 3 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。同 tick 有限并行。流上的 `pace` 由连接器声明：飞书追上后约 15 秒再扫，DSH 不写 `pace`，仍每 tick 跟。对话窗发送后会更快跟当前 DSH session。引擎 Sync 只是漏了再追平。凭证只读环境变量。
