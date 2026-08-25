@@ -16,6 +16,8 @@ import type {
   SourceIdentity,
   TombstoneEvent,
 } from "./ingestion";
+import { MemoryWorkStore } from "./memory-work-store";
+import type { WorkStore } from "./work";
 import {
   AuthorityConflictError,
   collectAvailableBlobs,
@@ -88,7 +90,10 @@ function prefKey(orgId: string, threadId: string): string {
   return `${orgId}\0${threadId}`;
 }
 
-export class MemoryAuthorityStore implements AuthorityStore {
+export class MemoryAuthorityStore
+  extends MemoryWorkStore
+  implements AuthorityStore, WorkStore
+{
   private readonly currentBySource = new Map<string, EventRecord>();
   private readonly events: EventRecord[] = [];
   private readonly blobs = new Map<string, BlobRecord>();

@@ -11,8 +11,10 @@ import {
   sameUtterance,
   threadActivityCopy,
   threadActivityOf,
+  threadFacetLabel,
   threadLoadedCountCopy,
   threadTitle,
+  workStatusLabel,
 } from "./message-view";
 import { PinIcon } from "./Icons";
 import {
@@ -34,6 +36,7 @@ export const ThreadPane = memo(function ThreadPane({
   onRefresh,
   onRename,
   onPin,
+  onRunWork,
 }: {
   thread: InboxThread;
   pull?: PersonalEngineView["pull"];
@@ -46,6 +49,7 @@ export const ThreadPane = memo(function ThreadPane({
   onRefresh: () => Promise<void>;
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
+  onRunWork?: () => Promise<void>;
 }) {
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
@@ -149,6 +153,29 @@ export const ThreadPane = memo(function ThreadPane({
               <span className="kind-tag">
                 {conversationKindLabel(thread.conversation_kind)}
               </span>
+            ) : null}
+            {threadFacetLabel(thread.thread_facet) ? (
+              <span className="kind-tag">
+                {threadFacetLabel(thread.thread_facet)}
+              </span>
+            ) : null}
+            {workStatusLabel(thread.work?.status) ? (
+              <span className={`kind-tag work-${thread.work?.status ?? ""}`}>
+                {workStatusLabel(thread.work?.status)}
+              </span>
+            ) : null}
+            {onRunWork &&
+            thread.work &&
+            (thread.work.status === "open" || thread.work.status === "failed") ? (
+              <button
+                type="button"
+                className="ghost thread-run"
+                onClick={() => {
+                  void onRunWork();
+                }}
+              >
+                Run
+              </button>
             ) : null}
             <h1>
               <ThreadTitleField

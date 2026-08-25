@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   groupInboxThreads,
+  groupThreadsByAttention,
   evictThreadCache,
   latestInboundOf,
   markInboxThreadRead,
@@ -9,6 +10,7 @@ import {
   orderThreadMessages,
   openedThreadView,
   overlayThreadMessages,
+  resolveThreadAttention,
   sortInboxThreads,
   type InboxThread,
 } from "../src/renderer/src/inbox.ts";
@@ -106,6 +108,59 @@ function thread(input: {
 }
 
 describe("inbox sort", () => {
+  it("ranks attention before recency when asked", () => {
+    const quiet = thread({
+      id: "feishu:old",
+      occurred_at: "2026-08-25T12:00:00.000Z",
+    });
+    const waiting = {
+      ...thread({
+        id: "feishu:need",
+        occurred_at: "2026-08-25T10:00:00.000Z",
+      }),
+      attention: "waiting_you" as const,
+      work: { id: "work-1", status: "waiting_human" as const },
+    };
+    const running = {
+      ...thread({
+        id: "feishu:run",
+        occurred_at: "2026-08-25T13:00:00.000Z",
+      }),
+      attention: "running" as const,
+      work: { id: "work-2", status: "running" as const },
+    };
+    const sorted = sortInboxThreads([quiet, running, waiting], "attention");
+    assert.equal(sorted[0].id, "feishu:need");
+    assert.equal(sorted[1].id, "feishu:run");
+    assert.equal(sorted[2].id, "feishu:old");
+    const normal = sortInboxThreads([quiet, running, waiting], "normal");
+    assert.equal(normal[0].id, "feishu:run");
+  });
+
+  it("uses unread and prompts even when attention is missing", () => {
+    const olderUnread = {
+      ...thread({
+        id: "feishu:old",
+        occurred_at: "2026-08-25T09:00:00.000Z",
+      }),
+      unread: true,
+    };
+    const newerQuiet = thread({
+      id: "feishu:new",
+      occurred_at: "2026-08-25T13:00:00.000Z",
+    });
+    assert.equal(resolveThreadAttention(olderUnread), "unread");
+    assert.equal(sortInboxThreads([newerQuiet, olderUnread], "attention")[0].id, "feishu:old");
+    assert.equal(sortInboxThreads([newerQuiet, olderUnread], "normal")[0].id, "feishu:new");
+    const grouped = groupThreadsByAttention(
+      sortInboxThreads([newerQuiet, olderUnread], "attention"),
+    );
+    assert.deepEqual(
+      grouped.map((section) => section.label),
+      ["Unread", "The rest"],
+    );
+  });
+
   it("puts a just-opened empty conversation above older unpinned threads", () => {
     const older = thread({
       id: "dsh:old",

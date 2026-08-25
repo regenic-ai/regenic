@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
+  attentionOf,
   channelLabel,
   collectLatestInbound,
   computeThreadUnread,
@@ -11,12 +12,15 @@ import {
   isLocalOutboundId,
   isThreadStatusItem,
   parseConversationThread,
+  projectThreadFacet,
+  recordClassFromType,
   takeRecentInboxItems,
   normalizeInboxLimit,
   resolveMessageSurface,
   threadIdOf,
   withSurfaceGeneration,
   type ArrangementDecision,
+  type AttentionClass,
   type AuthorityStore,
   type BlobStore,
   type ConnectorInstallation,
@@ -30,13 +34,16 @@ import {
   type MessageKind,
   type PromptAnswer,
   type MessageReceipt,
+  type RecordClass,
   type ThreadActivity,
   type ThreadAttention,
   type ThreadAttentionQuery,
+  type ThreadFacet,
   type ThreadInboundCursor,
   type ThreadInboundScan,
   type ThreadPrompt,
   type ThreadReceiptQuery,
+  type WorkFace,
 } from "@regenic/domain";
 import {
   resolveInboxBodies,
@@ -57,6 +64,7 @@ import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
 } from "./personal-runtime.service";
+import { PersonalWorkService, type WorkInboxFace } from "./personal-work.service";
 
 export interface InboxViewItem {
   decision: ArrangementDecision;
@@ -84,6 +92,10 @@ export interface InboxViewItem {
   unread_count: number;
   can_receipt: boolean;
   receipt?: MessageReceipt;
+  record_class: RecordClass;
+  thread_facet: ThreadFacet;
+  attention: AttentionClass;
+  work?: WorkFace;
 }
 
 export interface ConversationPrefView {
@@ -148,6 +160,7 @@ export class PersonalInboxService {
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
+    private readonly work: PersonalWorkService,
   ) {}
 
   async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
@@ -194,7 +207,7 @@ export class PersonalInboxService {
       authority,
       blobs,
     );
-    const [prompts, attention, receipts] = await Promise.all([
+    const [prompts, attention, receipts, bound] = await Promise.all([
       this.drivers.listPromptsForThreads(installations, [thread], host),
       this.drivers.readAttention(
         installations,
@@ -206,7 +219,22 @@ export class PersonalInboxService {
         receiptQueriesOf([{ item, threadId, body }]),
         host,
       ),
+      this.work.boundPromptThreads(),
     ]);
+    const agentId = bound.get(threadId);
+    if (agentId) {
+      try {
+        const extra = await this.drivers.listPromptsForThreads(
+          installations,
+          [parseConversationThread(agentId)],
+          host,
+        );
+        mergePromptMap(prompts, extra, threadId, agentId);
+      } catch {
+        // Bound executor prompts stay optional. The source row still renders.
+      }
+    }
+    const faces = await this.work.inboxFaces([threadId], prompts);
     return decorateInboxItem(
       item,
       body,
@@ -219,6 +247,8 @@ export class PersonalInboxService {
       inboundByThread,
       new Set(),
       receipts,
+      true,
+      faces.get(threadId),
     );
   }
 
@@ -416,7 +446,35 @@ export class PersonalInboxService {
       siblings,
     );
     const includeReceipts = query.heads !== true;
-    return [...resolved, ...receiptPage.extras].map(({ item, threadId, body }) => {
+    const [hidden, bound] = await Promise.all([
+      this.work.hiddenThreadIds(),
+      this.work.boundPromptThreads(),
+    ]);
+    const agentThreads = [...new Set(bound.values())].flatMap((id) => {
+      try {
+        return [parseConversationThread(id)];
+      } catch {
+        return [];
+      }
+    });
+    if (agentThreads.length > 0) {
+      const extra = await this.drivers.listPromptsForThreads(
+        installations,
+        agentThreads,
+        host,
+      );
+      for (const [sourceId, agentId] of bound) {
+        mergePromptMap(livePrompts, extra, sourceId, agentId);
+      }
+    }
+    const faces = await this.work.inboxFaces(
+      [...resolved, ...receiptPage.extras].map((row) => row.threadId),
+      livePrompts,
+    );
+    return [...resolved, ...receiptPage.extras].flatMap(({ item, threadId, body }) => {
+      if (query.heads === true && hidden.has(threadId)) {
+        return [];
+      }
       const view = decorateInboxItem(
         item,
         body,
@@ -430,6 +488,7 @@ export class PersonalInboxService {
         awaitingUser,
         receiptPage.receipts,
         includeReceipts,
+        faces.get(threadId),
       );
       const prompt = prompts.get(threadId);
       const titled =
@@ -507,6 +566,7 @@ export class PersonalInboxService {
       },
       host,
     );
+    await this.work.ackDoneThread(threadId);
     return toPrefView(pref);
   }
 
@@ -549,10 +609,20 @@ export class PersonalInboxService {
     const installations = await host
       .get("authority")
       .listInstallations(this.runtime.orgId());
+    const sourcePrompts = await this.drivers.listPrompts(
+      installations,
+      thread,
+      host,
+    );
+    const target = await this.work.promptTargetThread(
+      threadId,
+      promptId,
+      sourcePrompts.some((item) => item.prompt_id === promptId),
+    );
     try {
       const result = await this.drivers.answerPrompt(
         installations,
-        thread,
+        target,
         answer,
         host,
       );
@@ -563,6 +633,7 @@ export class PersonalInboxService {
           400,
         );
       }
+      await this.work.afterPrompt(threadId, answer);
       return {
         accepted: true,
         thread_id: threadId,
@@ -620,6 +691,7 @@ function decorateInboxItem(
   awaitingUser: ReadonlySet<string> = new Set(),
   receiptsByOutbound: ReadonlyMap<string, MessageReceipt> = new Map(),
   includeReceipts = true,
+  workFace?: WorkInboxFace,
 ): InboxViewItem {
   const surface = messageSurfaceOf(item.event, body);
   const thread = threadOf(item.event);
@@ -664,7 +736,46 @@ function decorateInboxItem(
           receiptsByOutbound,
         )
       : undefined,
+    record_class:
+      workFace?.record_class ?? recordClassFromType(surface.type),
+    thread_facet:
+      workFace?.thread_facet ??
+      projectThreadFacet({
+        type: surface.type,
+        await_reply: drivers.awaitReply(installations, thread),
+        prompts: prompts.length > 0,
+        hint: surface.thread_facet,
+      }),
+    attention: attentionOf({
+      prompts: prompts.length,
+      awaiting_user:
+        awaitingUser.has(threadId) || surface.activity === "awaiting_user",
+      unread: attention.unread,
+      work_status: workFace?.work?.status,
+      can_write_back: workFace?.work?.can_write_back,
+      has_result: workFace?.work?.has_result,
+      activity: surface.activity,
+    }),
+    work: workFace?.work,
   };
+}
+
+function mergePromptMap(
+  dest: Map<string, ThreadPrompt[]>,
+  extra: ReadonlyMap<string, ThreadPrompt[]>,
+  sourceId: string,
+  agentId: string,
+): void {
+  const added = extra.get(agentId) ?? [];
+  if (added.length === 0) {
+    return;
+  }
+  const current = dest.get(sourceId) ?? [];
+  const seen = new Set(current.map((item) => item.prompt_id));
+  dest.set(sourceId, [
+    ...current,
+    ...added.filter((item) => !seen.has(item.prompt_id)),
+  ]);
 }
 
 async function conversationLabelsFor(

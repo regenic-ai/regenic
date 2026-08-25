@@ -43,12 +43,35 @@ export function receiptCopy(item: InboxViewItem): string | undefined {
   return undefined;
 }
 
+export function threadFacetLabel(facet: string | null | undefined): string | null {
+  if (facet === "ticket") {
+    return "Ticket";
+  }
+  if (facet === "agent") {
+    return "Agent";
+  }
+  return null;
+}
+
+export function workStatusLabel(status: string | null | undefined): string | null {
+  switch (status) {
+    case "running":
+      return "Running";
+    case "waiting_human":
+      return "Waiting";
+    case "failed":
+      return "Failed";
+    default:
+      return null;
+  }
+}
+
 export function conversationKindLabel(kind: string | null | undefined): string | null {
   if (kind === "group") {
     return "Group";
   }
   if (kind === "direct") {
-    return "Direct";
+    return null;
   }
   if (kind && kind.trim()) {
     return kind.trim();
@@ -189,6 +212,34 @@ export function threadPreview(thread: InboxThread): string {
     return firstLine(face.body_text, 96) || thread.label;
   }
   return thread.label;
+}
+
+export function listPreview(thread: InboxThread, title: string): string | null {
+  const latest = lastVisibleMessage(thread);
+  if (!latest) {
+    return null;
+  }
+  const line = firstLine(latest.body_text, 88);
+  if (!line) {
+    return null;
+  }
+  const heading = title.replace(/\s+/g, " ").trim();
+  if (!heading || sameListLine(heading, line)) {
+    return null;
+  }
+  return line;
+}
+
+function sameListLine(title: string, line: string): boolean {
+  if (title === line) {
+    return true;
+  }
+  if (!title.startsWith(line) && !line.startsWith(title)) {
+    return false;
+  }
+  const shorter = Math.min(title.length, line.length);
+  const longer = Math.max(title.length, line.length);
+  return shorter / longer > 0.72;
 }
 
 function firstUserLine(thread: InboxThread): string {

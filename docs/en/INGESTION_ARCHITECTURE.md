@@ -14,6 +14,8 @@ The design rule:
 
 > Adapters translate. The ingestion core validates, authorizes, deduplicates, stores, and audits.
 
+The connector output is the L1 envelope: `IngestRecord` carries identity, time, author, body, and idempotency (`org_id`, `source`, `external_id`). L2 `record_class` is mapped from `type` here. Thread facet, WorkItem, and executors sit above this pipeline. See [Message orchestration · Layers](MESSAGE_ORCHESTRATION.md).
+
 A connector never writes Event, Blob, identity, or access-policy records directly. Source-specific behavior stays outside product invariants, so adding a source does not duplicate boundary, storage, or reliability logic.
 
 For collaboration sources, agent turns are provenance-bearing records, not authority. See [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md).

@@ -92,6 +92,7 @@ describe("message contract", () => {
       kind: "system",
       direction: "inbound",
       activity: "working",
+      type: "thread_status",
     });
     assert.deepEqual(
       resolveMessageSurface({
@@ -104,6 +105,7 @@ describe("message contract", () => {
         kind: "system",
         direction: "inbound",
         activity: "working",
+        type: "thread_status",
       },
     );
   });

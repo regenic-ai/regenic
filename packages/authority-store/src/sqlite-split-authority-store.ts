@@ -27,12 +27,16 @@ import type {
   SettleIngestAttempt,
   SourceIdentity,
   TombstoneEvent,
+  Recipe,
+  WorkItem,
+  WorkRun,
+  WorkStore,
 } from "@regenic/domain";
 import { SqliteAuthorityStore } from "./sqlite-authority-store";
 import { SqliteWriteClient } from "./sqlite-write-client";
 
 export class SqliteSplitAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore
+  implements AuthorityStore, ConnectorRuntimeStore, WorkStore
 {
   private constructor(
     private readonly reader: SqliteAuthorityStore,
@@ -153,6 +157,73 @@ export class SqliteSplitAuthorityStore
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
     return this.writer.call("putConversationPref", [input]);
+  }
+
+  async listRecipes(orgId: string): Promise<Recipe[]> {
+    return this.reader.listRecipes(orgId);
+  }
+
+  async getRecipe(orgId: string, id: string): Promise<Recipe | null> {
+    return this.reader.getRecipe(orgId, id);
+  }
+
+  async putRecipe(recipe: Recipe): Promise<Recipe> {
+    return this.writer.call("putRecipe", [recipe]);
+  }
+
+  async deleteRecipe(orgId: string, id: string): Promise<boolean> {
+    return this.writer.call("deleteRecipe", [orgId, id]);
+  }
+
+  async listWorkItems(orgId: string): Promise<WorkItem[]> {
+    return this.reader.listWorkItems(orgId);
+  }
+
+  async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
+    return this.reader.getWorkItem(orgId, id);
+  }
+
+  async getWorkItemByThread(
+    orgId: string,
+    threadId: string,
+  ): Promise<WorkItem | null> {
+    return this.reader.getWorkItemByThread(orgId, threadId);
+  }
+
+  async putWorkItem(item: WorkItem): Promise<WorkItem> {
+    return this.writer.call("putWorkItem", [item]);
+  }
+
+  async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
+    return this.reader.listWorkRuns(orgId, workItemId);
+  }
+
+  async getWorkRun(orgId: string, id: string): Promise<WorkRun | null> {
+    return this.reader.getWorkRun(orgId, id);
+  }
+
+  async getActiveWorkRun(
+    orgId: string,
+    workItemId: string,
+  ): Promise<WorkRun | null> {
+    return this.reader.getActiveWorkRun(orgId, workItemId);
+  }
+
+  async putWorkRun(run: WorkRun): Promise<WorkRun> {
+    return this.writer.call("putWorkRun", [run]);
+  }
+
+  async getUiPref(orgId: string, key: string): Promise<string | null> {
+    return this.reader.getUiPref(orgId, key);
+  }
+
+  async putUiPref(
+    orgId: string,
+    key: string,
+    value: string,
+    updatedAt: string,
+  ): Promise<void> {
+    await this.writer.call("putUiPref", [orgId, key, value, updatedAt]);
   }
 
   async createInstallation(

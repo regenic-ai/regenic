@@ -9,7 +9,7 @@
 - **English:** [../en/CONNECTOR.md](../en/CONNECTOR.md)
 - **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) ·
   [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) ·
-  RFC 0004、0005、0006
+  RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
 - **状态：** Phase 1
 
 ## 连接器是什么
@@ -55,7 +55,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 ## 消息格式
 
-收发形状由 `@regenic/domain` 的 `message-contract` 定义。
+连接器停在 L0：只翻译本渠道的 wire。交出去的是 L1 信封（`IngestRecord`：身份、时间、作者、正文、幂等）和 L2 封闭 `record_class`（`utterance` / `task` / `status` / `prompt`，由 `type` 映射）。L3 发言者只写在 `utterance` 上。L4 线程面由内核投影，L5 WorkItem 由策略开单，L6 执行器另挂。见[消息编排 · 分层](MESSAGE_ORCHESTRATION.md)与 [RFC 0009](rfcs/0009-work-orchestration.md)。不得在安装上标注「人聊 / Agent」。
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |

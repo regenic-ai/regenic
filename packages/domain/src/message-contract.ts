@@ -1,4 +1,5 @@
 import type { ContentPart, IngestRecord } from "./ingestion";
+import type { ThreadFacet } from "./thread-facet";
 
 export const SURFACE_MEDIA_TYPE = "application/vnd.regenic.surface+json";
 
@@ -15,6 +16,8 @@ export interface MessageSurface {
   conversation_kind?: string;
   actor_label?: string;
   activity?: ThreadActivity;
+  thread_facet?: ThreadFacet;
+  type?: string;
 }
 
 export interface ChannelDescriptor {
@@ -95,6 +98,7 @@ export function channelRecord(input: {
   scope_id: string;
   scope_name?: string;
   conversation_kind?: string;
+  thread_facet?: ThreadFacet;
   type?: string;
   parent_external_id?: string;
   thread_id?: string;
@@ -112,6 +116,8 @@ export function channelRecord(input: {
       : {}),
     ...(input.actor_label ? { actor_label: input.actor_label } : {}),
     ...(input.activity ? { activity: input.activity } : {}),
+    ...(input.thread_facet ? { thread_facet: input.thread_facet } : {}),
+    ...(input.type ? { type: input.type } : {}),
   };
   const body = input.content ?? [];
   const hasBody = body.some((part) => part.role === "body");
@@ -259,6 +265,10 @@ function readSurface(
     ...(conversationKind ? { conversation_kind: conversationKind } : {}),
     ...(actorLabel ? { actor_label: actorLabel } : {}),
     ...(activity ? { activity } : {}),
+    ...(value.thread_facet ? { thread_facet: value.thread_facet } : {}),
+    ...(typeof value.type === "string" && value.type.trim()
+      ? { type: value.type.trim() }
+      : {}),
   };
 }
 

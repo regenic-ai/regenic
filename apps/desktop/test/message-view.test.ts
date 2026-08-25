@@ -8,8 +8,12 @@ import {
   threadActivityOf,
   threadLoadedCountCopy,
   threadPaneEmptyCopy,
+  conversationKindLabel,
+  listPreview,
+  threadFacetLabel,
   threadPreview,
   threadTitle,
+  workStatusLabel,
 } from "../src/renderer/src/message-view.ts";
 import type { InboxViewItem, ThreadActivity } from "../src/renderer/src/types.ts";
 
@@ -350,6 +354,13 @@ describe("thread activity", () => {
     );
     assert.equal(threadTitle(chat), "Ada");
     assert.equal(threadPreview(chat), "写邮件的功能里加个颜色呗");
+    assert.equal(listPreview(chat, "Ada"), "写邮件的功能里加个颜色呗");
+    assert.equal(threadFacetLabel("chat"), null);
+    assert.equal(threadFacetLabel("agent"), "Agent");
+    assert.equal(conversationKindLabel("direct"), null);
+    assert.equal(conversationKindLabel("group"), "Group");
+    assert.equal(workStatusLabel("open"), null);
+    assert.equal(workStatusLabel("waiting_human"), "Waiting");
   });
 
   it("does not fall back to the first message when conversation title is missing", () => {
@@ -376,6 +387,10 @@ describe("thread activity", () => {
   });
 
   it("titles a prompt-mode thread from the first user message, not the last reply", () => {
+    const extras = {
+      conversation_label: "只用一句话回复：pong",
+      list_title: "prompt" as const,
+    };
     const session = thread(
       [
         item({
@@ -391,12 +406,32 @@ describe("thread activity", () => {
           direction: "inbound",
         }),
       ],
-      {
-        conversation_label: "只用一句话回复：pong",
-        list_title: "prompt",
-      },
+      extras,
     );
     assert.equal(threadTitle(session), "只用一句话回复：pong");
+    assert.equal(listPreview(session, "只用一句话回复：pong"), "pong");
+    assert.equal(listPreview(thread([session.messages[0]], extras), "只用一句话回复：pong"), null);
+    const answered = thread(
+      [
+        item({
+          id: "out-2",
+          external_id: "session-1:80",
+          text: "2,228.00 美元是多少欧元",
+        }),
+        item({
+          id: "in-2",
+          external_id: "session-1:81",
+          text: "2,228.00 美元大约是 2,050 欧元",
+          kind: "assistant",
+          direction: "inbound",
+        }),
+      ],
+      extras,
+    );
+    assert.equal(
+      listPreview(answered, "2,228.00 美元是多少欧元"),
+      "2,228.00 美元大约是 2,050 欧元",
+    );
     const headsOnly = thread(
       [
         item({

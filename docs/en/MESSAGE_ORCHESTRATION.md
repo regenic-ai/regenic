@@ -1,10 +1,32 @@
 # Message orchestration
 
 - **简体中文:** [../zh/MESSAGE_ORCHESTRATION.md](../zh/MESSAGE_ORCHESTRATION.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [CONNECTOR.md](CONNECTOR.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006
+- **Related:** [PRODUCT.md](PRODUCT.md) · [CONNECTOR.md](CONNECTOR.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md)
 - **Status:** Public architecture for Phase 1+
 
 Regenic orchestrates **messages**. It does not host the apps where those messages were written.
+
+## Layers
+
+Channel wire, shared meaning, and execution stay on separate layers. Contract: [RFC 0009](rfcs/0009-work-orchestration.md).
+
+```text
+L0 protocol plugin    Feishu / Slack / CRM / DSH wire only
+L1 envelope           IngestRecord: identity, time, author, body, idempotency
+L2 record class       utterance | task | status | prompt     ← shared across N channels
+L3 speaker            utterance only: user | assistant | system
+L4 thread facet       kernel projection: chat | agent | ticket
+L5 handling           policy may open a WorkItem (optional)
+L6 execution          TaskExecutor plugin (DSH / Cursor / internal)
+```
+
+A connector install is L0. It is not a lane. One Feishu install can emit a DM (`utterance` + `user` + `chat`), a group bot (`utterance` + `assistant` + `chat`), and an approval (`task` + `ticket`) on the same wire. The kernel projects L4. Policy opens L5 only for a `task` or a matching Recipe. Most chat never becomes a WorkItem.
+
+Speaker (L3) applies only to `utterance`. A person inside an agent session is still `user`. A bot inside a human group is still `assistant`. Those facts do not move to the install.
+
+L6 reaches the channel only through `ExecutorContext`. The default open-source tree mounts `dsh`. Cursor follows. A private Agent OS stays an internal plugin package.
+
+Kernel and desktop read `record_class`, `thread_facet`, `attention`, and `work`. They do not classify chat / agent / ticket by connector name.
 
 ## Message flow
 
@@ -60,6 +82,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 | `ingest` | Ingest service (the only Event / Blob writer) |
 | `connectors` | Registry of mounted `ChannelConnector`s |
 | `egress` | Registry of mounted `EgressAdapter`s |
+| `executors` | Registry of mounted `TaskExecutor`s |
 
 **Kernel**
 
@@ -81,6 +104,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 | Ranker / layer | Scoring after D0 (durability, sensitivity, “need to know”). D0 filter/layer is kernel | Promote personal labels to org truth |
 | Dispatcher policy | Map rank + standard + habits → outside current work \| pending \| defer | Send without a send grant |
 | Model | Propose only | Own scoring, quota, or ACL |
+| Executor (`TaskExecutor`) | Run one work item from a Recipe; public DSH, other agents later | Classify by connector name; weld a private runtime into the kernel |
 | Identity / secrets / search / notify | Fill a capability seam | Change the message format |
 
 Each seam has a definition, a provider, and consumers. Swapping one connector for another must not fork the kernel. Adding a source later is a plugin, not a rewrite.
@@ -108,6 +132,7 @@ Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: `
 | Agent send | Explicit send grant |
 | Swap SQLite for Postgres | `AuthorityStore` provider; message format unchanged |
 | Add a model | `ModelProvider` plugin; propose only |
+| Add an executor | `TaskExecutor` plugin + Recipe match; kernel stays on the port |
 
 If a change needs a new field on `IngestBatch` or a new kernel invariant, it is not a plugin. Write an RFC.
 

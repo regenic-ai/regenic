@@ -12,7 +12,7 @@ This page is for people who implement a connector.
 - **简体中文:** [../zh/CONNECTOR.md](../zh/CONNECTOR.md)
 - **Related:** [Message orchestration](MESSAGE_ORCHESTRATION.md) ·
   [Ingestion](INGESTION_ARCHITECTURE.md) · [Technology stack](TECH_STACK.md) ·
-  RFC 0004, 0005, 0006
+  RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md)
 - **Status:** Phase 1
 
 ## What a connector is
@@ -67,7 +67,7 @@ The following are not allowed:
 
 ## Message format
 
-Send and display shape is defined by `message-contract` in `@regenic/domain`.
+A connector stops at L0: it translates one channel's wire. What it hands over is the L1 envelope (`IngestRecord`: identity, time, author, body, idempotency) and a closed L2 `record_class` (`utterance` / `task` / `status` / `prompt`, mapped from `type`). Speaker (L3) is written only on `utterance`. Thread facet (L4) is a kernel projection. A WorkItem (L5) is opened by policy. Execution (L6) is a separate plugin. See [Message orchestration · Layers](MESSAGE_ORCHESTRATION.md) and [RFC 0009](rfcs/0009-work-orchestration.md). Do not label an install as human-chat or agent.
 
 | Name | Type | Description |
 | --- | --- | --- |

@@ -359,7 +359,7 @@ describe("personal /v1/me", () => {
           occurred_at: "2026-08-21T00:00:00.000Z",
           actor_id: "user",
           scope_id: "session-x",
-          text: "first",
+          text: "first prompt for the desk",
         }),
       ],
     });
@@ -388,14 +388,14 @@ describe("personal /v1/me", () => {
           occurred_at: "2026-08-21T00:02:00.000Z",
           actor_id: "user",
           scope_id: "session-y",
-          text: "other thread",
+          text: "other thread stays current",
         }),
       ],
     });
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
       const all = await (await fetch(`${origin}/v1/me/inbox`)).json();
-      assert.ok(all.length >= 3);
+      assert.ok(all.length >= 2);
       const first = [...all].sort((left, right) => {
         if (left.event.ingested_at === right.event.ingested_at) {
           return left.event.id < right.event.id ? -1 : 1;
@@ -447,7 +447,7 @@ describe("personal /v1/me", () => {
         )
       ).json();
       assert.equal(older.length, 1);
-      assert.equal(older[0].body_text, "first");
+      assert.equal(older[0].body_text, "first prompt for the desk");
       for (let index = 1; index < one.length; index += 1) {
         assert.ok(
           one[index - 1].event.occurred_at <= one[index].event.occurred_at,
@@ -870,7 +870,7 @@ describe("personal /v1/me", () => {
           occurred_at: "2026-08-24T12:00:00.000Z",
           actor_id: "user",
           scope_id: "session-unread",
-          text: "ack",
+          text: "Working through the decision now",
         }),
       ],
     });
@@ -1680,6 +1680,50 @@ describe("personal /v1/me", () => {
       } finally {
         store.close();
       }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("binds a recipe, remembers inbox sort, and exposes executor catalog", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const executors = await (await fetch(`${origin}/v1/me/executors`)).json();
+      assert.equal(executors[0].executor_type, "dsh");
+      const created = await (
+        await fetch(`${origin}/v1/me/recipes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "Feishu tasks",
+            match: { record_class: "task", source: "feishu" },
+            executor_type: "dsh",
+            can_write_back: true,
+          }),
+        })
+      ).json();
+      assert.equal(created.executor_type, "dsh");
+      assert.equal(created.can_write_back, true);
+      const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+      assert.equal(recipes.length, 1);
+      const prefs = await (
+        await fetch(`${origin}/v1/me/prefs`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ inbox_sort: "attention" }),
+        })
+      ).json();
+      assert.equal(prefs.inbox_sort, "attention");
+      const remembered = await (await fetch(`${origin}/v1/me/prefs`)).json();
+      assert.equal(remembered.inbox_sort, "attention");
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.ok(inbox[0].record_class);
+      assert.ok(inbox[0].thread_facet);
+      assert.ok(inbox[0].attention);
     } finally {
       await app.close();
     }

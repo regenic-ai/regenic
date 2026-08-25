@@ -2,17 +2,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatChatTime } from "./format";
 import {
   filterInboxThreads,
+  groupThreadsByAttention,
   latestMessage,
   threadChannels,
   type InboxThread,
   type PinFilter,
 } from "./inbox";
 import type { CreateTarget } from "./inbox-drafts";
-import { conversationKindLabel, threadTitle } from "./message-view";
+import {
+  conversationKindLabel,
+  listPreview,
+  threadFacetLabel,
+  threadTitle,
+  workStatusLabel,
+} from "./message-view";
 import { PencilIcon, PinIcon } from "./Icons";
 import { ThreadPane } from "./ThreadPane";
 import { ThreadTitleField } from "./ThreadTitleField";
-import type { CreatedConversation, PersonalEngineView } from "./types";
+import type { CreatedConversation, InboxSortMode, PersonalEngineView } from "./types";
 
 export function InboxWorkspace({
   threads,
@@ -31,6 +38,9 @@ export function InboxWorkspace({
   onRefresh,
   onRename,
   onPin,
+  sortMode,
+  onSortMode,
+  onRunWork,
 }: {
   threads: InboxThread[];
   selected: InboxThread | null;
@@ -48,6 +58,9 @@ export function InboxWorkspace({
   onRefresh: () => Promise<void>;
   onRename: (thread: InboxThread, title: string | null) => Promise<void>;
   onPin: (thread: InboxThread, pinned: boolean) => Promise<void>;
+  sortMode: InboxSortMode;
+  onSortMode: (mode: InboxSortMode) => void;
+  onRunWork: (thread: InboxThread) => Promise<void>;
 }) {
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
   const [channelFilter, setChannelFilter] = useState("all");
@@ -67,146 +80,120 @@ export function InboxWorkspace({
   return (
     <div className="columns">
       <aside className="list">
-        <div className="list-head">
-          <span>Current work</span>
-        </div>
-        {threads.length > 0 || canCreate ? (
-          <div className="list-toolbar">
-            {channels.length > 1 ? (
-              <FilterRow
-                label="Channel"
-                options={[{ id: "all", label: "All" }, ...channels]}
-                value={channelFilter}
-                onChange={setChannelFilter}
-              />
-            ) : null}
-            <div className="list-toolbar-actions">
-              {threads.length > 0 ? (
+        <div className="list-chrome">
+          <div className="list-head">
+            <span>Current work</span>
+            {threads.length > 0 ? (
+              <div className="sort-toggle" role="group" aria-label="Sort">
                 <button
                   type="button"
-                  className={`filter-chip list-pin${pinFilter === "pinned" ? " active" : ""}`}
-                  aria-pressed={pinFilter === "pinned"}
-                  aria-label={pinFilter === "pinned" ? "Show all conversations" : "Show pinned only"}
-                  title={pinFilter === "pinned" ? "Showing pinned" : "Pinned only"}
-                  onClick={() =>
-                    setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
-                  }
+                  className={sortMode === "attention" ? "active" : ""}
+                  aria-pressed={sortMode === "attention"}
+                  onClick={() => onSortMode("attention")}
                 >
-                  <PinIcon filled={pinFilter === "pinned"} />
+                  Attention
                 </button>
-              ) : null}
-              <NewConversationButton
-                targets={createTargets}
-                creating={creating}
-                channelFilter={channelFilter}
-                onCreate={async (installationId) => {
-                  const created = await onCreate(installationId);
-                  if (
-                    created &&
-                    channelFilter !== "all" &&
-                    channelFilter !== created.channel
-                  ) {
-                    setChannelFilter(created.channel);
-                  }
-                }}
-              />
-            </div>
-          </div>
-        ) : null}
-        {error ? <div className="page-empty">{error}</div> : null}
-        {!error && threads.length === 0 ? (
-          <div className="page-empty">
-            {canCreate
-              ? `No current work yet. Start a new ${createTargets[0].channel_label} conversation.`
-              : "Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own."}
-          </div>
-        ) : null}
-        {!error && threads.length > 0 && visible.length === 0 ? (
-          <div className="page-empty">No conversations match these filters.</div>
-        ) : null}
-        {visible.map((thread) => {
-          const latest = latestMessage(thread);
-          return (
-            <div
-              key={thread.id}
-              className={`item${selected?.id === thread.id ? " selected" : ""}${
-                thread.pinned ? " pinned" : ""
-              }${thread.unread ? " unread" : ""}`}
-              role="button"
-              tabIndex={0}
-              onClick={() => {
-                onSelect(thread.id);
-                if (renamingId && renamingId !== thread.id) {
-                  setRenamingId(null);
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && event.target === event.currentTarget) {
-                  onSelect(thread.id);
-                }
-              }}
-            >
-              <div className="item-main">
-                <div className="item-copy">
-                  <div className="item-top">
-                    <span className="item-tags">
-                      <span className={`channel-tag channel-${thread.channel}`}>
-                        {thread.channel_label}
-                      </span>
-                      {conversationKindLabel(thread.conversation_kind) ? (
-                        <span className="kind-tag">
-                          {conversationKindLabel(thread.conversation_kind)}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="item-time">
-                      {thread.unread ? (
-                        <span className="item-unread" aria-label="Unread" />
-                      ) : null}
-                      {latest ? formatChatTime(latest.event.occurred_at) : ""}
-                    </span>
-                  </div>
-                  <ThreadTitleField
-                    className="item-title"
-                    value={threadTitle(thread)}
-                    editing={renamingId === thread.id}
-                    onEditingChange={(editing) =>
-                      setRenamingId(editing ? thread.id : null)
-                    }
-                    onSave={(title) => onRename(thread, title)}
-                  />
-                </div>
+                <button
+                  type="button"
+                  className={sortMode === "normal" ? "active" : ""}
+                  aria-pressed={sortMode === "normal"}
+                  onClick={() => onSortMode("normal")}
+                >
+                  Normal
+                </button>
               </div>
-              <div className="item-tools">
-                <button
-                  type="button"
-                  className={`item-tool${thread.pinned ? " is-on" : ""}`}
-                  aria-label={thread.pinned ? "Unpin" : "Pin"}
-                  title={thread.pinned ? "Unpin" : "Pin"}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onPin(thread, !thread.pinned);
+            ) : null}
+          </div>
+          {threads.length > 0 || canCreate ? (
+            <div className="list-toolbar">
+              {channels.length > 1 ? (
+                <FilterRow
+                  label="Channel"
+                  options={[{ id: "all", label: "All" }, ...channels]}
+                  value={channelFilter}
+                  onChange={setChannelFilter}
+                />
+              ) : null}
+              <div className="list-toolbar-actions">
+                {threads.length > 0 ? (
+                  <button
+                    type="button"
+                    className={`item-tool list-pin${pinFilter === "pinned" ? " is-on" : ""}`}
+                    aria-pressed={pinFilter === "pinned"}
+                    aria-label={pinFilter === "pinned" ? "Show all conversations" : "Show pinned only"}
+                    title={pinFilter === "pinned" ? "Showing pinned" : "Pinned only"}
+                    onClick={() =>
+                      setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
+                    }
+                  >
+                    <PinIcon filled={pinFilter === "pinned"} />
+                  </button>
+                ) : null}
+                <NewConversationButton
+                  targets={createTargets}
+                  creating={creating}
+                  channelFilter={channelFilter}
+                  onCreate={async (installationId) => {
+                    const created = await onCreate(installationId);
+                    if (
+                      created &&
+                      channelFilter !== "all" &&
+                      channelFilter !== created.channel
+                    ) {
+                      setChannelFilter(created.channel);
+                    }
                   }}
-                >
-                  <PinIcon filled={thread.pinned} />
-                </button>
-                <button
-                  type="button"
-                  className="item-tool"
-                  aria-label="Rename"
-                  title="Rename"
-                  onClick={(event) => {
-                    event.stopPropagation();
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <div className="list-body">
+          {error ? <div className="page-empty">{error}</div> : null}
+          {!error && threads.length === 0 ? (
+            <div className="page-empty">
+              {canCreate
+                ? `No current work yet. Start a new ${createTargets[0].channel_label} conversation.`
+                : "Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own."}
+            </div>
+          ) : null}
+          {!error && threads.length > 0 && visible.length === 0 ? (
+            <div className="page-empty">No conversations match these filters.</div>
+          ) : null}
+          {(sortMode === "attention"
+            ? groupThreadsByAttention(visible)
+            : [{ key: "all", label: null, items: visible }]
+          ).map((section) => (
+            <div key={section.key} className="list-section">
+              {section.label ? (
+                <div className="list-section-label">{section.label}</div>
+              ) : null}
+              {section.items.map((thread) => (
+                <WorkRow
+                  key={thread.id}
+                  thread={thread}
+                  selected={selected?.id === thread.id}
+                  renaming={renamingId === thread.id}
+                  onSelect={() => {
+                    onSelect(thread.id);
+                    if (renamingId && renamingId !== thread.id) {
+                      setRenamingId(null);
+                    }
+                  }}
+                  onRename={(title) => onRename(thread, title)}
+                  onPin={(pinned) => onPin(thread, pinned)}
+                  onStartRename={() => {
                     onSelect(thread.id);
                     setRenamingId(thread.id);
                   }}
-                >
-                  <PencilIcon />
-                </button>
-              </div>
+                  onEditingChange={(editing) =>
+                    setRenamingId(editing ? thread.id : null)
+                  }
+                />
+              ))}
             </div>
-          );
-        })}
+          ))}
+        </div>
       </aside>
       <section className="thread">
         {selected ? (
@@ -224,11 +211,111 @@ export function InboxWorkspace({
             onRefresh={onRefresh}
             onRename={renameSelected}
             onPin={pinSelected}
+            onRunWork={() => onRunWork(selected)}
           />
         ) : (
           <div className="thread-empty">Select a conversation on the left.</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function WorkRow({
+  thread,
+  selected,
+  renaming,
+  onSelect,
+  onRename,
+  onPin,
+  onStartRename,
+  onEditingChange,
+}: {
+  thread: InboxThread;
+  selected: boolean;
+  renaming: boolean;
+  onSelect: () => void;
+  onRename: (title: string | null) => Promise<void>;
+  onPin: (pinned: boolean) => Promise<void>;
+  onStartRename: () => void;
+  onEditingChange: (editing: boolean) => void;
+}) {
+  const latest = latestMessage(thread);
+  const title = threadTitle(thread);
+  const preview = listPreview(thread, title);
+  const facet = threadFacetLabel(thread.thread_facet);
+  const work = workStatusLabel(thread.work?.status);
+  const kind = conversationKindLabel(thread.conversation_kind);
+  return (
+    <div
+      className={`item${selected ? " selected" : ""}${thread.pinned ? " pinned" : ""}${
+        thread.unread ? " unread" : ""
+      }${thread.work?.status ? ` work-${thread.work.status}` : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.target === event.currentTarget) {
+          onSelect();
+        }
+      }}
+    >
+      <div className="item-main">
+        <div className="item-copy">
+          <div className="item-top">
+            <span className="item-tags">
+              <span className={`channel-tag channel-${thread.channel}`}>
+                {thread.channel_label}
+              </span>
+              {kind ? <span className="kind-tag">{kind}</span> : null}
+              {facet ? <span className="kind-tag">{facet}</span> : null}
+              {work ? (
+                <span className={`kind-tag work-${thread.work?.status ?? ""}`}>
+                  {work}
+                </span>
+              ) : null}
+            </span>
+            <span className="item-time">
+              {thread.unread ? <span className="item-unread" aria-label="Unread" /> : null}
+              {latest ? formatChatTime(latest.event.occurred_at) : ""}
+            </span>
+          </div>
+          <ThreadTitleField
+            className="item-title"
+            value={title}
+            editing={renaming}
+            onEditingChange={onEditingChange}
+            onSave={onRename}
+          />
+          {preview ? <div className="item-preview">{preview}</div> : null}
+        </div>
+      </div>
+      <div className="item-tools">
+        <button
+          type="button"
+          className={`item-tool${thread.pinned ? " is-on" : ""}`}
+          aria-label={thread.pinned ? "Unpin" : "Pin"}
+          title={thread.pinned ? "Unpin" : "Pin"}
+          onClick={(event) => {
+            event.stopPropagation();
+            void onPin(!thread.pinned);
+          }}
+        >
+          <PinIcon filled={thread.pinned} />
+        </button>
+        <button
+          type="button"
+          className="item-tool"
+          aria-label="Rename"
+          title="Rename"
+          onClick={(event) => {
+            event.stopPropagation();
+            onStartRename();
+          }}
+        >
+          <PencilIcon />
+        </button>
+      </div>
     </div>
   );
 }

@@ -17,6 +17,7 @@ import {
   pullStatusLabel,
 } from "./format";
 import type { HostStats } from "../../shared/host-watch.ts";
+import { RecipeSettings } from "./RecipeSettings";
 import type { PersonalEngineView } from "./types";
 
 export function EnginePage({
@@ -205,6 +206,16 @@ export function EnginePage({
         ))}
         {actionError ? <p className="action-error">{actionError}</p> : null}
       </section>
+      <RecipeSettings
+        sources={[
+          ...new Map(
+            engine.installations.map((item) => [
+              item.channel ?? item.connector_type,
+              item.channel_label ?? item.label,
+            ]),
+          ).entries(),
+        ].map(([id, label]) => ({ id, label }))}
+      />
     </div>
   );
 }

@@ -1,13 +1,14 @@
 # 技术栈
 
 - **English:** [../en/TECH_STACK.md](../en/TECH_STACK.md)
-- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [连接器](CONNECTOR.md) · [路线图](ROADMAP.md) · [桌面端](DESKTOP.md) · RFC 0004、0005、0006、0007
+- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [连接器](CONNECTOR.md) · [路线图](ROADMAP.md) · [桌面端](DESKTOP.md) · RFC 0004、0005、0006、0007、0008、0009
 
 个人版默认**本地优先**，随后是组织层。领域模型和接口形状尽量共用；
 换的是各阶段的**默认实现**，不是另起一套产品。
 
 连接器、模型、存储做成**插件**（端口加驱动）。插件宿主是 `@regenic/plugin-host`（内部用 [Cordis](https://github.com/cordiverse/cordis) 做可逆装卸）。业务包只依赖这层 API，不直接依赖 `cordis`。内核语义固定：
-消息格式（`IngestBatch`）、Event / Blob / Digest / Standard、ACL、接入 → 过滤 → 分层 → 调度。
+消息格式（`IngestBatch`）、Event / Blob / Digest / Standard、ACL、记录类 / 线程面 / WorkItem、接入 → 过滤 → 分层 → 调度。
+执行走 `ctx.executors` 上的 `TaskExecutor`。
 详见[消息编排](MESSAGE_ORCHESTRATION.md)。
 
 ## 1. 各阶段默认
@@ -37,6 +38,7 @@
 | 对象存储 | `BlobStore` |
 | 渠道接入 | `ChannelConnector`（连接器） |
 | 渠道发送 | `EgressAdapter`（发送路径；Phase 2） |
+| 托管执行 | `TaskExecutor`（公开默认 `dsh`） |
 | 上下文发布 | `ContextConsumer`（未来；仅 Evidence Bundle） |
 | 模型 | `ModelProvider` |
 | 身份 | `IdentityProvider` |

@@ -325,7 +325,7 @@ export class PersonalConnectorService
   }
 
   async createConversation(
-    input: { installation_id?: string } = {},
+    input: { installation_id?: string; source?: string } = {},
   ): Promise<CreatedConversationView> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
@@ -351,7 +351,7 @@ export class PersonalConnectorService
       }
       found = { installation, driver };
     } else {
-      found = this.drivers.findCreatable(installations);
+      found = this.drivers.findCreatable(installations, input.source);
       if (!found) {
         throw new PersonalConnectorError(
           "unsupported_channel",

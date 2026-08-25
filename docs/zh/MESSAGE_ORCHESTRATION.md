@@ -1,10 +1,32 @@
 # 消息编排
 
 - **English:** [../en/MESSAGE_ORCHESTRATION.md](../en/MESSAGE_ORCHESTRATION.md)
-- **相关：** [产品](PRODUCT.md) · [连接器](CONNECTOR.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006
+- **相关：** [产品](PRODUCT.md) · [连接器](CONNECTOR.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
 - **状态：** Phase 1 起的公开架构
 
 Regenic 编排的是**消息**。它不托管这些消息当初被写下的那些应用。
+
+## 分层
+
+渠道 wire、共用语义和执行分属不同层。契约见 [RFC 0009](rfcs/0009-work-orchestration.md)。
+
+```text
+L0 协议插件     只懂飞书 / Slack / CRM / DSH 的 wire
+L1 信封         IngestRecord：身份、时间、作者、正文、幂等
+L2 记录类       utterance | task | status | prompt     ← N 渠道的共同点
+L3 发言者       仅 utterance：user | assistant | system
+L4 线程面       内核投影：chat | agent | ticket
+L5 处理         策略才开 WorkItem（可有可无）
+L6 执行         TaskExecutor 插件（DSH / Cursor / 内部）
+```
+
+连接器安装停在 L0，不是一条 lane。同一个飞书安装可以同时放出单聊（`utterance` + `user` + `chat`）、群机器人（`utterance` + `assistant` + `chat`）和审批（`task` + `ticket`）。L4 由内核投影。L5 只在 `task` 或 Recipe 命中时开单。多数人聊不会变成 WorkItem。
+
+发言者（L3）只作用于 `utterance`。Agent 会话里的人仍是 `user`。人群里的机器人仍是 `assistant`。这两件事不写到安装上。
+
+L6 碰渠道只走 `ExecutorContext`。默认开源树挂 `dsh`。Cursor 后接。私有 Agent OS 只留在内部插件包。
+
+内核和桌面读 `record_class`、`thread_facet`、`attention`、`work`，不按连接器名判断人聊 / Agent / 工单。
 
 ## 消息怎么走
 
@@ -60,6 +82,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 | `ingest` | 采集服务（唯一写 Event / Blob 的入口） |
 | `connectors` | 已挂载的 `ChannelConnector` 注册表 |
 | `egress` | 已挂载的 `EgressAdapter` 注册表 |
+| `executors` | 已挂载的 `TaskExecutor` 注册表 |
 
 **内核**
 
@@ -81,6 +104,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 | 排序 / 分层 | D0 之后的打分（耐久、敏感、「该知道」）。D0 过滤 / 分层在内核 | 用个人标签冒充组织事实 |
 | 调度策略 | 排序 + 标准 + 习惯 → 不进入当前工作 \| pending \| defer | 没有发送授权就发送 |
 | 模型 | 只提案 | 染指打分、配额、ACL |
+| 执行器（`TaskExecutor`） | 按 Recipe 跑一条工单；公开 DSH，其它 Agent 后接 | 按连接器名分类；把私有运行时焊进内核 |
 | 身份 / 密钥 / 检索 / 通知 | 填一条能力缝 | 改消息格式 |
 
 每条缝都有定义、提供方和消费者。换一个连接器，不得分叉内核。以后加来源是插件，不是重写产品。
@@ -108,6 +132,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 | Agent 发 | 显式发送授权 |
 | SQLite 换成 Postgres | `AuthorityStore` 提供方；消息格式不变 |
 | 加模型 | `ModelProvider` 插件；只提案 |
+| 加执行器 | `TaskExecutor` 插件 + Recipe 匹配；内核只认端口 |
 
 若改动需要新的 `IngestBatch` 字段或新的内核不变量，那就不是插件。应写成 RFC。
 

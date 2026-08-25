@@ -1,7 +1,7 @@
 # Technology stack
 
 - **简体中文:** [../zh/TECH_STACK.md](../zh/TECH_STACK.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md) · [CONNECTOR.md](CONNECTOR.md) · [ROADMAP.md](ROADMAP.md) · [Desktop](../zh/DESKTOP.md) · RFC 0004, 0005, 0006, 0007
+- **Related:** [PRODUCT.md](PRODUCT.md) · [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md) · [CONNECTOR.md](CONNECTOR.md) · [ROADMAP.md](ROADMAP.md) · [Desktop](../zh/DESKTOP.md) · RFC 0004, 0005, 0006, 0007, 0008, 0009
 
 The Personal edition is **local-first**; Org follows. The domain model and API
 shapes stay shared; what changes by phase is the **default drivers**, not a
@@ -11,7 +11,8 @@ Connectors, models, and stores are **plugins** (a port plus a driver). The plugi
 host is `@regenic/plugin-host` (Cordis underneath, for reversible mount/unmount).
 Capability packages depend on that API, never on `cordis` directly. The kernel
 stays fixed: message format (`IngestBatch`), Event / Blob / Digest / Standard,
-ACL, and connect → filter → layer → dispatch. See
+ACL, record class / thread facet / WorkItem, and connect → filter → layer → dispatch.
+Execution is a `TaskExecutor` on `ctx.executors`. See
 [MESSAGE_ORCHESTRATION.md](MESSAGE_ORCHESTRATION.md).
 
 ## 1. Defaults by phase
@@ -41,6 +42,7 @@ into — not the authority store, and not the org database.
 | Object storage | `BlobStore` |
 | Channel ingest | `ChannelConnector` (connector) |
 | Channel send | `EgressAdapter` (send path; Phase 2) |
+| Hosted run | `TaskExecutor` (public default `dsh`) |
 | Context publication | `ContextConsumer` (future; evidence bundles only) |
 | Models | `ModelProvider` |
 | Identity | `IdentityProvider` |

@@ -5,6 +5,9 @@ import {
   currentApiOrigin,
   fetchEngine,
   fetchInbox,
+  fetchUiPrefs,
+  runWorkItem,
+  saveUiPrefs,
   updateConversationPrefs,
 } from "./api";
 import { BrandBadge } from "./Brand";
@@ -50,6 +53,7 @@ import {
 import type { HostStats } from "../../shared/host-watch.ts";
 import type {
   CreatedConversation,
+  InboxSortMode,
   InboxViewItem,
   NavId,
   PersonalEngineView,
@@ -81,6 +85,7 @@ export function ConsoleApp() {
     {},
   );
   const [host, setHost] = useState<HostStats | null>(null);
+  const [sortMode, setSortMode] = useState<InboxSortMode>("normal");
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const prefOverlayRef = useRef(prefOverlay);
@@ -362,6 +367,20 @@ export function ConsoleApp() {
   }, [refresh]);
 
   useEffect(() => {
+    let cancelled = false;
+    void fetchUiPrefs()
+      .then((prefs) => {
+        if (!cancelled) {
+          setSortMode(prefs.inbox_sort);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (nav === "engine") {
       void refresh();
     }
@@ -451,8 +470,9 @@ export function ConsoleApp() {
         applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
         prefOverlay,
       ),
+      sortMode,
     );
-  }, [inbox, drafts, prefOverlay]);
+  }, [inbox, drafts, prefOverlay, sortMode]);
   const threads = useMemo(
     () => overlayThreadMessages(listThreads, messagesByThread),
     [listThreads, messagesByThread],
@@ -544,6 +564,25 @@ export function ConsoleApp() {
     (thread: InboxThread, pinned: boolean) => persistPrefs(thread, { pinned }),
     [persistPrefs],
   );
+  const changeSortMode = useCallback((mode: InboxSortMode) => {
+    setSortMode(mode);
+    void saveUiPrefs({ inbox_sort: mode }).catch(() => undefined);
+  }, []);
+  const runSelectedWork = useCallback(
+    async (thread: InboxThread) => {
+      if (!thread.work?.id) {
+        return;
+      }
+      try {
+        await runWorkItem(thread.work.id);
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Cannot start this work item");
+      }
+    },
+    [refresh],
+  );
 
   return (
     <div className="shell">
@@ -609,6 +648,9 @@ export function ConsoleApp() {
             onRefresh={refresh}
             onRename={renameThread}
             onPin={pinThread}
+            sortMode={sortMode}
+            onSortMode={changeSortMode}
+            onRunWork={runSelectedWork}
           />
         ) : null}
         {nav === "engine" ? (

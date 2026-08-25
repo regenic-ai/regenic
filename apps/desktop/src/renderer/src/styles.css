@@ -215,12 +215,42 @@ button {
   display: grid;
   grid-template-columns: minmax(280px, 36%) 1fr;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: visible;
   border-right: 1px solid var(--line);
-  overflow: auto;
   background: var(--surface);
+}
+
+.list-chrome {
+  flex: 0 0 auto;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.list-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.list-section-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 14px 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .list-head {
@@ -235,11 +265,38 @@ button {
   gap: 8px;
 }
 
+.sort-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.sort-toggle button {
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.sort-toggle button:hover {
+  color: var(--text);
+}
+
+.sort-toggle button.active {
+  background: var(--g900);
+  color: var(--g300);
+}
+
 .list-new {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
   color: var(--g500);
   font-weight: 650;
-  padding: 2px 6px;
-  border-radius: 6px;
 }
 
 .list-new:hover:not(:disabled) {
@@ -260,7 +317,6 @@ button {
 .list-toolbar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
   padding: 0 14px 10px;
   min-width: 0;
@@ -269,21 +325,27 @@ button {
 .list-toolbar .filter-row {
   flex: 1;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .list-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex-shrink: 0;
   margin-left: auto;
 }
 
+.list-toolbar:has(.filter-row) .list-toolbar-actions {
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
 .list-pin {
   width: 22px;
-  padding: 0;
-  display: grid;
-  place-items: center;
+  height: 22px;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .list-new-wrap {
@@ -435,6 +497,7 @@ button {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .item-time {
@@ -458,14 +521,36 @@ button {
 }
 
 .item-title {
+  display: block;
   min-width: 0;
   color: var(--text);
   font-weight: 550;
   line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-preview {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item.unread .item-preview {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+}
+
+.item.work-waiting_human,
+.item.work-failed {
+  box-shadow: inset 2px 0 0 var(--risk);
+}
+
+.item.work-running {
+  box-shadow: inset 2px 0 0 var(--ai);
 }
 
 .item-title.is-editing,
@@ -526,6 +611,53 @@ button {
   font-weight: 650;
   letter-spacing: 0.04em;
   line-height: 16px;
+}
+
+.kind-tag.work-running {
+  color: var(--ai);
+  border-color: color-mix(in srgb, var(--ai) 35%, var(--line));
+  background: color-mix(in srgb, var(--ai) 12%, transparent);
+}
+
+.kind-tag.work-waiting_human,
+.kind-tag.work-failed {
+  color: var(--risk);
+  border-color: color-mix(in srgb, var(--risk) 40%, var(--line));
+  background: color-mix(in srgb, var(--risk) 12%, transparent);
+}
+
+.recipe-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.recipe-list li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recipe-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.recipe-form .field:first-of-type,
+.recipe-form .check-item,
+.recipe-form .install-actions {
+  grid-column: 1 / -1;
+}
+
+.thread-run {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
 }
 
 .thread-title-row {
