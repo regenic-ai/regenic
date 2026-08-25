@@ -1694,6 +1694,17 @@ describe("personal /v1/me", () => {
     try {
       const executors = await (await fetch(`${origin}/v1/me/executors`)).json();
       assert.equal(executors[0].executor_type, "dsh");
+      assert.equal(executors[0].source, "dsh");
+      const emptyMatch = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Too broad",
+          match: {},
+          executor_type: "dsh",
+        }),
+      });
+      assert.equal(emptyMatch.status, 400);
       const created = await (
         await fetch(`${origin}/v1/me/recipes`, {
           method: "POST",

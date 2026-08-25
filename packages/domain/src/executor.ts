@@ -23,6 +23,7 @@ export interface ExecutorCatalogEntry {
   executor_type: string;
   label: string;
   description?: string;
+  source?: string;
   fields: ExecutorCatalogField[];
 }
 
@@ -34,7 +35,7 @@ export interface ExecutorContext {
   listPrompts(thread: ConversationThread): Promise<ThreadPrompt[]>;
   latestVisible(
     threadId: string,
-  ): Promise<{ kind: MessageKind; text?: string } | null>;
+  ): Promise<{ kind: MessageKind; text?: string; activity?: string } | null>;
 }
 
 export interface ExecutorStartInput {

@@ -32,8 +32,11 @@ export function workSubjectFromEvent(input: {
   prompts?: boolean;
   hint?: ThreadFacet;
   prior_facet?: ThreadFacet;
-}): RecipeSubject {
+}): RecipeSubject | undefined {
   const record_class = recordClassFromType(input.type);
+  if (!record_class) {
+    return undefined;
+  }
   const projected = projectThreadFacet({
     record_class,
     type: input.type,
@@ -62,12 +65,14 @@ export function openOrUpdateWorkItem(input: {
   }
   const current = input.existing;
   if (current) {
+    const newHead =
+      Boolean(input.head_event_id) &&
+      input.head_event_id !== current.head_event_id;
     const reopen =
-      current.status === "done" ||
-      current.status === "skipped" ||
-      (current.status === "failed" &&
-        Boolean(input.head_event_id) &&
-        input.head_event_id !== current.head_event_id);
+      newHead &&
+      (current.status === "done" ||
+        current.status === "skipped" ||
+        current.status === "failed");
     const next = {
       ...current,
       head_event_id: input.head_event_id ?? current.head_event_id,

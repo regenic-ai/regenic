@@ -737,7 +737,7 @@ function decorateInboxItem(
         )
       : undefined,
     record_class:
-      workFace?.record_class ?? recordClassFromType(surface.type),
+      workFace?.record_class ?? recordClassFromType(surface.type) ?? "utterance",
     thread_facet:
       workFace?.thread_facet ??
       projectThreadFacet({

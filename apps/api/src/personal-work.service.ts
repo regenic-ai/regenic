@@ -18,6 +18,7 @@ import {
   normalizeInboxSort,
   openOrUpdateWorkItem,
   parseConversationThread,
+  recipeSpecificity,
   selectRecipeForSubject,
   toReplyParts,
   workFaceOf,
@@ -445,6 +446,9 @@ export class PersonalWorkService
       hint: surface?.thread_facet,
       prior_facet: existing?.thread_facet,
     });
+    if (!subject) {
+      return;
+    }
     const recipe = selectRecipeForSubject(input.recipes, subject);
     const next = openOrUpdateWorkItem({
       existing,
@@ -631,7 +635,7 @@ export class PersonalWorkService
           .listInstallations(this.runtime.orgId());
         const found = this.drivers.findCreatable(
           installations,
-          executor.executor_type,
+          executor.catalog().source,
         );
         if (!found) {
           throw new PersonalConnectorError(
@@ -716,6 +720,15 @@ export class PersonalWorkService
     summary: string,
     content?: ContentPart[],
   ): Promise<void> {
+    const recipe = item.recipe_id
+      ? await this.runtime
+          .requireHost()
+          .get("authority")
+          .getRecipe(item.org_id, item.recipe_id)
+      : null;
+    if (!recipe?.can_write_back) {
+      return;
+    }
     const thread = parseConversationThread(item.thread_id);
     const text =
       content
@@ -730,31 +743,57 @@ export class PersonalWorkService
 
   private async latestVisible(
     threadId: string,
-  ): Promise<{ kind: import("@regenic/domain").MessageKind; text?: string } | null> {
+  ): Promise<{
+    kind: import("@regenic/domain").MessageKind;
+    text?: string;
+    activity?: string;
+  } | null> {
     const host = this.runtime.requireHost();
     const items = await host.get("authority").listInbox(this.runtime.orgId(), {
       thread_ids: [threadId],
       siblings: true,
     });
-    const visible = [...items].reverse().find((row) => {
-      const codes = row.decision.reason_codes;
-      return !codes.includes("thread_status") && row.event.operation !== "tombstone";
-    });
-    if (!visible) {
+    const live = [...items].reverse().find((row) => row.event.operation !== "tombstone");
+    if (!live) {
       return null;
+    }
+    const hashes = [live.event.content_hash];
+    const visible = items
+      .slice()
+      .reverse()
+      .find((row) => {
+        const codes = row.decision.reason_codes;
+        return !codes.includes("thread_status") && row.event.operation !== "tombstone";
+      });
+    if (visible && visible.event.id !== live.event.id) {
+      hashes.push(visible.event.content_hash);
     }
     const bodies = await resolveInboxBodies(
       host.get("authority"),
       host.get("blobs"),
-      [visible.event.content_hash],
+      hashes,
       "meta",
     );
-    const body = visible.event.content_hash
-      ? (bodies.get(visible.event.content_hash) ?? {})
+    const liveBody = live.event.content_hash
+      ? (bodies.get(live.event.content_hash) ?? {})
       : {};
+    if (
+      liveBody.surface?.activity === "working" ||
+      liveBody.surface?.type === "thread_status" ||
+      live.decision.reason_codes.includes("thread_status")
+    ) {
+      return {
+        kind: liveBody.surface?.kind ?? "system",
+        activity: "working",
+      };
+    }
+    const body = visible?.event.content_hash
+      ? (bodies.get(visible.event.content_hash) ?? liveBody)
+      : liveBody;
     return {
       kind: body.surface?.kind ?? "assistant",
       text: body.body_text,
+      activity: body.surface?.activity,
     };
   }
 
@@ -839,6 +878,13 @@ function normalizeRecipe(
     );
   }
   const match = normalizeMatch(input.match ?? existing?.match ?? {});
+  if (recipeSpecificity(match) === 0) {
+    throw new PersonalConnectorError(
+      "invalid_config",
+      "Recipe match needs a source, class, facet, or thread",
+      400,
+    );
+  }
   return {
     id: existing?.id ?? input.id?.trim() ?? `recipe-${randomUUID()}`,
     org_id: orgId,

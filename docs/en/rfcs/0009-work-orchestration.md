@@ -89,7 +89,9 @@ type RecordClass = "utterance" | "task" | "status" | "prompt";
 | `status` | Invisible labor / `working` | Event (not a list face) |
 | `prompt` | A live pending decision | Not stored (RFC 0008) |
 
-Map from `IngestRecord.type`: `task` → `task`; `thread_status` → `status`; `prompt` → `prompt`; `message` / `thread_reply` / default → `utterance`. A connector may hint `thread_facet` on the surface. It must not stamp the install as a lane.
+Map from `IngestRecord.type`: `task` → `task`; `thread_status` → `status`; `prompt` → `prompt`; `message` / `thread_reply` / missing → `utterance`. An unknown native type is not mapped; it is quarantined and does not open a WorkItem. A connector may hint `thread_facet` on the surface. It must not stamp the install as a lane.
+
+A Recipe with an empty `match` does not match any subject. At least one of `thread_id`, `source`, `record_class`, or `thread_facet` is required.
 
 ## 6. Speaker
 
@@ -146,9 +148,9 @@ interface ResultEnvelope {
 }
 ```
 
-Open a work item when `record_class = task` or an enabled Recipe matches. Most chat utterances never become a WorkItem. Agent turns update an existing Run; they do not open a new item.
+Open a work item when `record_class = task` or an enabled Recipe matches. Most chat utterances never become a WorkItem. Agent turns update an existing Run; they do not open a new item. A finished item reopens only when a new `head_event_id` arrives.
 
-Recipe match, finest first: `thread_id` > `source` + class + facet > class + facet > class.
+Recipe match, finest first: `thread_id` > `source` + class + facet > class + facet > class. An empty match matches nothing.
 
 `can_write_back` is required for egress. Seeing a digest is not send grant.
 

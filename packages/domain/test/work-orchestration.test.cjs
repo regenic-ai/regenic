@@ -24,7 +24,8 @@ describe("recordClassFromType", () => {
     assert.equal(recordClassFromType("task"), "task");
     assert.equal(recordClassFromType("thread_status"), "status");
     assert.equal(recordClassFromType("prompt"), "prompt");
-    assert.equal(recordClassFromType("unknown-native"), "utterance");
+    assert.equal(recordClassFromType("unknown-native"), undefined);
+    assert.equal(recordClassFromType(undefined), "utterance");
   });
 });
 
@@ -53,6 +54,7 @@ describe("recipe match", () => {
     ];
     assert.equal(matchRecipe(recipes, subject).id, "thread");
     assert.ok(recipeSpecificity({ thread_id: "x" }) > recipeSpecificity({ source: "feishu" }));
+    assert.equal(matchRecipe([makeRecipe("empty", {})], subject), undefined);
   });
 });
 
@@ -66,7 +68,16 @@ describe("work policy", () => {
       source: "feishu",
       thread_id: "feishu:oc_1",
     });
+    assert.ok(subject);
     assert.equal(selectRecipeForSubject([recipe], subject).id, "r1");
+    assert.equal(
+      workSubjectFromEvent({
+        type: "unknown-native",
+        source: "feishu",
+        thread_id: "feishu:oc_1",
+      }),
+      undefined,
+    );
     const opened = openOrUpdateWorkItem({
       org_id: "local-owner",
       subject,
@@ -101,9 +112,24 @@ describe("work reopen and hidden executor threads", () => {
         thread_id: "feishu:oc_1",
       },
       recipe,
+      head_event_id: "evt-1",
       now: "2026-08-25T00:00:00.000Z",
     });
     const done = { ...first, status: "done" };
+    const sameHead = openOrUpdateWorkItem({
+      existing: done,
+      org_id: "local-owner",
+      subject: {
+        record_class: "task",
+        thread_facet: "ticket",
+        source: "feishu",
+        thread_id: "feishu:oc_1",
+      },
+      recipe,
+      head_event_id: "evt-1",
+      now: "2026-08-25T01:00:00.000Z",
+    });
+    assert.equal(sameHead.status, "done");
     const reopened = openOrUpdateWorkItem({
       existing: done,
       org_id: "local-owner",
@@ -114,6 +140,7 @@ describe("work reopen and hidden executor threads", () => {
         thread_id: "feishu:oc_1",
       },
       recipe,
+      head_event_id: "evt-2",
       now: "2026-08-25T01:00:00.000Z",
     });
     assert.equal(reopened.status, "open");

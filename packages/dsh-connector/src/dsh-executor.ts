@@ -21,6 +21,7 @@ export const dshTaskExecutor: TaskExecutor = {
       executor_type: "dsh",
       label: "DSH",
       description: "Run the work item in a local DSH session",
+      source: "dsh",
       fields: [],
     };
   },
@@ -68,6 +69,13 @@ export const dshTaskExecutor: TaskExecutor = {
       };
     }
     const latest = await ctx.latestVisible(agentThreadId);
+    if (latest?.activity === "working") {
+      return {
+        external_run_id: agentThreadId,
+        agent_thread_id: agentThreadId,
+        status: "running",
+      };
+    }
     if (latest?.kind === "assistant" && latest.text?.trim()) {
       return {
         external_run_id: agentThreadId,

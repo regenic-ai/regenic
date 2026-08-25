@@ -89,7 +89,9 @@ type RecordClass = "utterance" | "task" | "status" | "prompt";
 | `status` | 对端不可见劳动 / `working` | Event（不进列表脸） |
 | `prompt` | 活的待决决策 | 不入库（RFC 0008） |
 
-从现有 `IngestRecord.type` 映射：`task` → `task`；`thread_status` → `status`；`prompt` → `prompt`；`message` / `thread_reply` / 缺省 → `utterance`。连接器可在 surface 上提示 `thread_facet`，不得把安装标成一种 lane。
+从现有 `IngestRecord.type` 映射：`task` → `task`；`thread_status` → `status`；`prompt` → `prompt`；`message` / `thread_reply` / 缺省 → `utterance`。未知原生类型不映射成 utterance，也不开 WorkItem。连接器可在 surface 上提示 `thread_facet`，不得把安装标成一种 lane。
+
+`match` 全空的 Recipe 不命中任何主体。至少要有 `thread_id`、`source`、`record_class`、`thread_facet` 之一。
 
 ## 6. 发言者
 
@@ -146,9 +148,9 @@ interface ResultEnvelope {
 }
 ```
 
-开单：`record_class = task`，或存在匹配且启用的 Recipe。多数人聊 `utterance` 不开单。Agent 回合默认更新已有 Run，不再开新单。
+开单：`record_class = task`，或存在匹配且启用的 Recipe。多数人聊 `utterance` 不开单。Agent 回合默认更新已有 Run，不再开新单。已完成的单只有出现新的 `head_event_id` 才重开。
 
-匹配从细到粗：`thread_id` > `source` + class + facet > class + facet > class。`executor_config` 只属于该执行器（skillId、档位等），不是内核一等字段。
+匹配从细到粗：`thread_id` > `source` + class + facet > class + facet > class。空 match 不命中。`executor_config` 只属于该执行器（skillId、档位等），不是内核一等字段。
 
 没有 `can_write_back` 不得 egress。蒸馏或看过 Digest ≠ 发送权。
 

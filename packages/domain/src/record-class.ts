@@ -24,9 +24,9 @@ export function isRecordClass(value: unknown): value is RecordClass {
   );
 }
 
-export function recordClassFromType(type: string | undefined): RecordClass {
+export function recordClassFromType(type: string | undefined): RecordClass | undefined {
   if (!type) {
     return "utterance";
   }
-  return TYPE_TO_CLASS[type] ?? "utterance";
+  return TYPE_TO_CLASS[type];
 }

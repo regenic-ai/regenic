@@ -27,6 +27,9 @@ export function recipeSpecificity(match: RecipeMatch): number {
 }
 
 export function recipeMatches(match: RecipeMatch, subject: RecipeSubject): boolean {
+  if (recipeSpecificity(match) === 0) {
+    return false;
+  }
   if (match.thread_id && match.thread_id !== subject.thread_id) {
     return false;
   }

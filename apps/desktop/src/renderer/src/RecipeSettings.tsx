@@ -66,13 +66,23 @@ export function RecipeSettings({
     if (!draft.name.trim() || !draft.executor_type) {
       return;
     }
+    const match = draftMatch(draft);
+    if (
+      !match.thread_id &&
+      !match.source &&
+      !match.record_class &&
+      !match.thread_facet
+    ) {
+      setError("Pick a source, class, facet, or thread. An empty match never fires.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       await saveRecipe(
         {
           name: draft.name.trim(),
-          match: draftMatch(draft),
+          match,
           executor_type: draft.executor_type,
           executor_config: draft.config,
           can_write_back: draft.can_write_back,

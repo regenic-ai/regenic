@@ -156,6 +156,7 @@ export interface ExecutorCatalogEntry {
   executor_type: string;
   label: string;
   description?: string;
+  source?: string;
   fields: ExecutorCatalogField[];
 }
 

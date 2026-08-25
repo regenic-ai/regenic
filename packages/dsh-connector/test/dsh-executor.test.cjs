@@ -64,5 +64,18 @@ describe("dshTaskExecutor", () => {
     );
     assert.equal(done.status, "completed");
     assert.equal(done.result.summary, "done");
+
+    const working = await dshTaskExecutor.status(
+      { id: "run-1", agent_thread_id: "dsh:session-1", status: "running" },
+      {
+        org_id: "local-owner",
+        env: {},
+        createThread: async () => ({ source: "dsh", target: "session-1" }),
+        sendText: async () => undefined,
+        listPrompts: async () => [],
+        latestVisible: async () => ({ kind: "system", activity: "working" }),
+      },
+    );
+    assert.equal(working.status, "running");
   });
 });
