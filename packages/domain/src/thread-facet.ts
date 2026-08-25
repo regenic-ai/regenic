@@ -18,14 +18,14 @@ export function projectThreadFacet(input: {
   prompts?: boolean;
   hint?: ThreadFacet;
 }): ThreadFacet {
-  if (input.hint) {
-    return input.hint;
-  }
   const recordClass = input.record_class ?? recordClassFromType(input.type);
   if (recordClass === "task") {
     return "ticket";
   }
-  if (input.await_reply || input.prompts) {
+  if (input.hint) {
+    return input.hint;
+  }
+  if (input.prompts) {
     return "agent";
   }
   return "chat";

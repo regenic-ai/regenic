@@ -37,6 +37,7 @@ export const ThreadPane = memo(function ThreadPane({
   onRename,
   onPin,
   onRunWork,
+  onCompleteWork,
 }: {
   thread: InboxThread;
   pull?: PersonalEngineView["pull"];
@@ -50,6 +51,7 @@ export const ThreadPane = memo(function ThreadPane({
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
   onRunWork?: () => Promise<void>;
+  onCompleteWork?: () => Promise<void>;
 }) {
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
@@ -175,6 +177,20 @@ export const ThreadPane = memo(function ThreadPane({
                 }}
               >
                 Run
+              </button>
+            ) : null}
+            {onCompleteWork &&
+            thread.work &&
+            (thread.work.status === "running" ||
+              thread.work.status === "waiting_human") ? (
+              <button
+                type="button"
+                className="ghost thread-run"
+                onClick={() => {
+                  void onCompleteWork();
+                }}
+              >
+                Mark done
               </button>
             ) : null}
             <h1>

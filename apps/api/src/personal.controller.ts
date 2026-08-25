@@ -168,6 +168,11 @@ export class PersonalController {
     return this.guard(() => this.work.runWorkItem(id));
   }
 
+  @Post("work-items/:id/complete")
+  completeWorkItem(@Param("id") id: string) {
+    return this.guard(() => this.work.completeWorkItem(id));
+  }
+
   @Get("prefs")
   getPrefs() {
     return this.guard(() => this.work.getPrefs());

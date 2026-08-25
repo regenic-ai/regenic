@@ -157,6 +157,7 @@ export interface ExecutorCatalogEntry {
   label: string;
   description?: string;
   source?: string;
+  attach?: "interactive" | "absentee";
   fields: ExecutorCatalogField[];
 }
 

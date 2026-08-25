@@ -69,11 +69,12 @@ export function RecipeSettings({
     const match = draftMatch(draft);
     if (
       !match.thread_id &&
-      !match.source &&
-      !match.record_class &&
-      !match.thread_facet
+      match.record_class !== "task" &&
+      !(match.source && match.record_class && match.record_class !== "utterance")
     ) {
-      setError("Pick a source, class, facet, or thread. An empty match never fires.");
+      setError(
+        "Bind a thread, a task class, or source plus a non-utterance class. Facet-only and chat-wide matches never auto-start.",
+      );
       return;
     }
     setBusy(true);
@@ -103,8 +104,9 @@ export function RecipeSettings({
     <section className="card">
       <h2>Recipes</h2>
       <p className="muted">
-        Bind a source, record class, or thread to an installed executor. Classification
-        stays on the record, not the connector install. Write-back needs an explicit grant.
+        Bind a thread, a task class, or source plus a non-chat class to an installed
+        executor. Classification stays on the record, not the connector install.
+        Write-back needs an explicit grant. The executor does not finish from a chat bubble.
       </p>
       {recipes.length === 0 ? (
         <p className="muted">No recipes yet. New matching work stays in the list until you bind one.</p>

@@ -10,9 +10,11 @@ import {
   INBOX_SORT_PREF_KEY,
   channelRecord,
   conversationId,
+  currentJobOnSession,
   formatWorkEvidence,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
+  recipeAllowsAutoStart,
   isRecordClass,
   isThreadFacet,
   normalizeInboxSort,
@@ -41,6 +43,7 @@ import {
   type TaskExecutor,
   type ThreadFacet,
   type ThreadPrompt,
+  type Transcript,
   type WorkFace,
   type WorkItem,
   type WorkRun,
@@ -196,12 +199,11 @@ export class PersonalWorkService
       authority.listRecipes(orgId),
     ]);
     const recipesById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
-    const itemsByThread = new Map(items.map((item) => [item.thread_id, item]));
     const runsByItem = latestRunsByItem(runs);
     const wanted = new Set(threadIds);
     const faces = new Map<string, WorkInboxFace>();
     for (const threadId of wanted) {
-      const item = itemsByThread.get(threadId);
+      const item = currentJobOnSession(items, threadId);
       if (!item) {
         continue;
       }
@@ -217,6 +219,21 @@ export class PersonalWorkService
       });
     }
     return faces;
+  }
+
+  async activeSessionIds(): Promise<Set<string>> {
+    if (!this.runtime.isReady()) {
+      return new Set();
+    }
+    const items = await this.runtime
+      .requireHost()
+      .get("authority")
+      .listWorkItems(this.runtime.orgId());
+    return new Set(
+      items
+        .filter((item) => isActiveWorkStatus(item.status))
+        .map((item) => item.thread_id),
+    );
   }
 
   async hiddenThreadIds(): Promise<Set<string>> {
@@ -353,6 +370,44 @@ export class PersonalWorkService
     };
   }
 
+  async completeWorkItem(id: string): Promise<WorkRunView> {
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const item = await host.get("authority").getWorkItem(orgId, id);
+    if (!item) {
+      throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
+    const recipe = item.recipe_id
+      ? await host.get("authority").getRecipe(orgId, item.recipe_id)
+      : null;
+    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
+    const transcript = run?.agent_thread_id
+      ? await this.readTranscript(run.agent_thread_id)
+      : null;
+    const handle: ExecutorRunHandle = {
+      external_run_id: run?.external_run_id ?? item.id,
+      agent_thread_id: run?.agent_thread_id,
+      status: "completed",
+      result: { summary: transcript?.text?.trim() || "Done" },
+      transcript: transcript ?? undefined,
+    };
+    if (run && recipe) {
+      await this.applyHandle(item, recipe, run, handle);
+    } else {
+      await host.get("authority").putWorkItem({
+        ...item,
+        status: "done",
+        updated_at: new Date().toISOString(),
+      });
+    }
+    return {
+      work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
+      run: run
+        ? ((await host.get("authority").getWorkRun(orgId, run.id)) ?? run)
+        : undefined,
+    };
+  }
+
   private async reconcileInbox(): Promise<void> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
@@ -429,9 +484,8 @@ export class PersonalWorkService
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    let thread: ConversationThread;
     try {
-      thread = parseConversationThread(input.threadId);
+      parseConversationThread(input.threadId);
     } catch {
       return;
     }
@@ -441,10 +495,12 @@ export class PersonalWorkService
       type: surface?.type,
       source: input.event.source,
       thread_id: input.threadId,
-      await_reply: this.drivers.awaitReply(input.installations, thread),
-      prompts: this.drivers.canPrompt(input.installations, thread),
+      prompts: false,
       hint: surface?.thread_facet,
-      prior_facet: existing?.thread_facet,
+      prior_facet:
+        existing && isActiveWorkStatus(existing.status)
+          ? existing.thread_facet
+          : undefined,
     });
     if (!subject) {
       return;
@@ -462,18 +518,6 @@ export class PersonalWorkService
       return;
     }
     const saved = await authority.putWorkItem(next);
-    if (isActiveWorkStatus(saved.status)) {
-      const current = await authority.getDisposition(input.event.id);
-      if (current?.disposition !== "current_work") {
-        await forceDisposition(
-          authority,
-          input.event,
-          "current_work",
-          "work_item",
-          saved.updated_at,
-        );
-      }
-    }
     if (saved.status === "open" && recipe) {
       const active = await authority.getActiveWorkRun(orgId, saved.id);
       if (!active) {
@@ -599,36 +643,18 @@ export class PersonalWorkService
         status = "failed";
       }
     }
-    const saved = await host.get("authority").putWorkItem({
+    await host.get("authority").putWorkItem({
       ...item,
       status,
       updated_at: now,
     });
-    if (
-      saved.head_event_id &&
-      saved.status === "done" &&
-      recipe.can_write_back
-    ) {
-      const event = await host
-        .get("authority")
-        .getEvent(saved.org_id, saved.head_event_id);
-      if (event) {
-        await forceDisposition(
-          host.get("authority"),
-          event,
-          "outside_current_work",
-          "work_done",
-          now,
-        );
-      }
-    }
   }
 
   private contextFor(executor: TaskExecutor): ExecutorContext {
     return {
       org_id: this.runtime.orgId(),
       env: process.env,
-      createThread: async () => {
+      spawnSysout: async () => {
         const host = this.runtime.requireHost();
         const installations = await host
           .get("authority")
@@ -650,7 +676,7 @@ export class PersonalWorkService
           process.env,
         );
       },
-      sendText: async (thread, text) => {
+      writeStdin: async (thread, text) => {
         await this.sendText(thread, text);
       },
       listPrompts: async (thread) => {
@@ -660,7 +686,7 @@ export class PersonalWorkService
           .listInstallations(this.runtime.orgId());
         return this.drivers.listPrompts(installations, thread, host);
       },
-      latestVisible: async (threadId) => this.latestVisible(threadId),
+      readTranscript: async (sysoutId) => this.readTranscript(sysoutId),
     };
   }
 
@@ -741,13 +767,9 @@ export class PersonalWorkService
     await this.sendText(thread, text, { writeBack: true });
   }
 
-  private async latestVisible(
+  private async readTranscript(
     threadId: string,
-  ): Promise<{
-    kind: import("@regenic/domain").MessageKind;
-    text?: string;
-    activity?: string;
-  } | null> {
+  ): Promise<Transcript | null> {
     const host = this.runtime.requireHost();
     const items = await host.get("authority").listInbox(this.runtime.orgId(), {
       thread_ids: [threadId],
@@ -878,10 +900,10 @@ function normalizeRecipe(
     );
   }
   const match = normalizeMatch(input.match ?? existing?.match ?? {});
-  if (recipeSpecificity(match) === 0) {
+  if (recipeSpecificity(match) === 0 || !recipeAllowsAutoStart(match)) {
     throw new PersonalConnectorError(
       "invalid_config",
-      "Recipe match needs a source, class, facet, or thread",
+      "Recipe match needs a thread, a task class, or source plus a non-utterance class",
       400,
     );
   }

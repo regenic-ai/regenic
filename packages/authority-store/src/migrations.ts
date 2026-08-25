@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 9;
+export const LATEST_SCHEMA_VERSION = 10;
 
 export const MIGRATIONS = [
   {
@@ -230,6 +230,40 @@ export const MIGRATIONS = [
         updated_at TEXT NOT NULL,
         PRIMARY KEY (org_id, key)
       );
+    `,
+  },
+  {
+    version: 10,
+    sql: `
+      CREATE TABLE work_items_v10 (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        unit_key TEXT NOT NULL,
+        head_event_id TEXT REFERENCES events(id),
+        record_class TEXT NOT NULL,
+        thread_facet TEXT NOT NULL,
+        status TEXT NOT NULL,
+        recipe_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (org_id, thread_id, unit_key)
+      );
+
+      INSERT INTO work_items_v10 (
+        id, org_id, thread_id, unit_key, head_event_id, record_class,
+        thread_facet, status, recipe_id, created_at, updated_at
+      )
+      SELECT
+        id, org_id, thread_id, COALESCE(head_event_id, id), head_event_id,
+        record_class, thread_facet, status, recipe_id, created_at, updated_at
+      FROM work_items;
+
+      DROP TABLE work_items;
+      ALTER TABLE work_items_v10 RENAME TO work_items;
+
+      CREATE INDEX work_items_org_status_idx ON work_items (org_id, status, updated_at);
+      CREATE INDEX work_items_session_idx ON work_items (org_id, thread_id, updated_at);
     `,
   },
 ] as const;

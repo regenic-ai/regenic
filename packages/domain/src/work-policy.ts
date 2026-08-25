@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExecutorRunHandle } from "./executor";
+import { recipeAllowsAutoStart } from "./recipe-trigger";
 import { recordClassFromType, type RecordClass } from "./record-class";
 import { matchRecipe, type RecipeSubject } from "./recipe-match";
 import {
@@ -21,7 +22,10 @@ export function shouldOpenWorkItem(input: {
   record_class: RecordClass;
   recipe?: Recipe;
 }): boolean {
-  return input.record_class === "task" || input.recipe !== undefined;
+  if (input.record_class === "task") {
+    return true;
+  }
+  return input.recipe !== undefined && recipeAllowsAutoStart(input.recipe.match);
 }
 
 export function workSubjectFromEvent(input: {
@@ -40,7 +44,6 @@ export function workSubjectFromEvent(input: {
   const projected = projectThreadFacet({
     record_class,
     type: input.type,
-    await_reply: input.await_reply,
     prompts: input.prompts,
     hint: input.hint,
   });
@@ -64,26 +67,17 @@ export function openOrUpdateWorkItem(input: {
     return input.existing ?? undefined;
   }
   const current = input.existing;
-  if (current) {
-    const newHead =
-      Boolean(input.head_event_id) &&
-      input.head_event_id !== current.head_event_id;
-    const reopen =
-      newHead &&
-      (current.status === "done" ||
-        current.status === "skipped" ||
-        current.status === "failed");
+  const unit_key = input.head_event_id ?? current?.unit_key ?? `job:${input.subject.thread_id}`;
+  if (current && isActiveWorkStatus(current.status)) {
     const next = {
       ...current,
       head_event_id: input.head_event_id ?? current.head_event_id,
       record_class: input.subject.record_class,
       thread_facet: input.subject.thread_facet,
       recipe_id: input.recipe?.id ?? current.recipe_id,
-      status: reopen ? "open" : current.status,
       updated_at: input.now,
     };
     if (
-      !reopen &&
       next.head_event_id === current.head_event_id &&
       next.record_class === current.record_class &&
       next.thread_facet === current.thread_facet &&
@@ -93,10 +87,17 @@ export function openOrUpdateWorkItem(input: {
     }
     return next;
   }
+  if (current && current.head_event_id && current.head_event_id === input.head_event_id) {
+    return current;
+  }
+  if (current && !input.head_event_id) {
+    return current;
+  }
   return {
     id: `work-${randomUUID()}`,
     org_id: input.org_id,
     thread_id: input.subject.thread_id,
+    unit_key,
     head_event_id: input.head_event_id,
     record_class: input.subject.record_class,
     thread_facet: input.subject.thread_facet,
@@ -111,7 +112,11 @@ export function selectRecipeForSubject(
   recipes: Recipe[],
   subject: RecipeSubject,
 ): Recipe | undefined {
-  return matchRecipe(recipes, subject);
+  const matched = matchRecipe(recipes, subject);
+  if (!matched || !recipeAllowsAutoStart(matched.match)) {
+    return undefined;
+  }
+  return matched;
 }
 
 export function workStatusFromRun(status: WorkRunStatus): WorkItemStatus {

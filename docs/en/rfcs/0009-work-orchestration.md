@@ -111,13 +111,14 @@ A bot in a human group is `utterance + assistant` on a `chat` thread. A person t
 type ThreadFacet = "chat" | "agent" | "ticket";
 ```
 
-The kernel projects per thread (a connector may hint; the hint is not an install attribute):
+The kernel projects per record (a connector may hint; the hint is not an install attribute):
 
-1. A `task` head on the thread → `ticket`
-2. Else the thread declares `await_reply` or has live `prompts` → `agent`
-3. Else → `chat`
+1. `record_class = task` → `ticket`
+2. Else a per-record hint → use the hint
+3. Else live prompts on that head → `agent`
+4. Else → `chat`
 
-The same connector may emit more than one facet. `list_title` / `hydrate_on_open` / `attention` / `receipts` stay protocol capabilities (RFC 0008), not facet labels.
+`await_reply` / `list_title` / `hydrate_on_open` / `attention` / `receipts` stay protocol capabilities (RFC 0008), not facet labels. A capability is not a type.
 
 ## 8. WorkItem / Recipe / Run
 
@@ -148,15 +149,21 @@ interface ResultEnvelope {
 }
 ```
 
-Open a work item when `record_class = task` or an enabled Recipe matches. Most chat utterances never become a WorkItem. Agent turns update an existing Run; they do not open a new item. A finished item reopens only when a new `head_event_id` arrives.
+Identity is three objects (POSIX session / job / inferior):
 
-Recipe match, finest first: `thread_id` > `source` + class + facet > class + facet > class. An empty match matches nothing.
+| Object | Meaning | Not |
+| --- | --- | --- |
+| Session | Source conversation; list face | Work item primary key |
+| Job (`WorkItem`) | One work unit, `unit_key` | One item for the life of a thread |
+| Inferior (`WorkRun`) | One execution; sysout stays off the list by default | A user-opened agent chat |
+
+Open a work item when `record_class = task`, or a Recipe satisfies the auto-start Specification (`thread_id`, or `record_class=task`, or `source` plus a non-utterance class). Empty, source-only, utterance-only, and facet-only matches do not auto-start.
+
+A finished job plus a new `head_event_id` opens a **new** job. The list face is the current foreground job.
 
 `can_write_back` is required for egress. Seeing a digest is not send grant.
 
-`executor_config` belongs to the plugin (skill id, intelligence level). It is not a kernel field.
-
-One source thread, one work row. The bound executor session is hidden from the list unless the user opened that agent chat themselves.
+`executor_config` belongs to the plugin. It is not a kernel field.
 
 ## 9. TaskExecutor
 
@@ -171,11 +178,13 @@ interface TaskExecutor {
 }
 ```
 
-The kernel looks up `ctx.executors`. The executor reaches the channel only through `ExecutorContext` (`createThread` / `sendText` / `listPrompts` / `latestVisible`). It does not import a private HTTP client.
+The kernel looks up `ctx.executors`. The executor reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`). It does not import a private HTTP client.
+
+Completion is `WaitStatus` (wait / notify), orthogonal to transcript. Reading a chat bubble must not complete a run. Public DSH is absentee: without notify it stays running until a human `POST /v1/me/work-items/:id/complete` (session leader reaps). Write-back happens only on explicit `exited`.
 
 Public default: `dsh`. Cursor later. A private Agent OS is an internal plugin package; the default open-source tree does not register it.
 
-Suspend maps to Thread Surface prompts. Answers use `POST /v1/me/conversations/prompts`, never egress. Prompts on a bound executor thread decorate the source work row.
+Suspend maps to Thread Surface prompts. Answers use `POST /v1/me/conversations/prompts`, never egress. Prompts on a bound inferior decorate the source session row.
 
 ## 10. List
 
@@ -198,6 +207,7 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. It do
 | DELETE | `/v1/me/recipes/:id` | Delete |
 | GET | `/v1/me/executors` | Mounted executor catalog |
 | POST | `/v1/me/work-items/:id/run` | Manual start |
+| POST | `/v1/me/work-items/:id/complete` | Human reap; may write back |
 | GET/POST | `/v1/me/prefs` | `inbox_sort` |
 
 ## 12. Acceptance

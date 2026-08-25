@@ -41,6 +41,7 @@ export function InboxWorkspace({
   sortMode,
   onSortMode,
   onRunWork,
+  onCompleteWork,
 }: {
   threads: InboxThread[];
   selected: InboxThread | null;
@@ -61,6 +62,7 @@ export function InboxWorkspace({
   sortMode: InboxSortMode;
   onSortMode: (mode: InboxSortMode) => void;
   onRunWork: (thread: InboxThread) => Promise<void>;
+  onCompleteWork: (thread: InboxThread) => Promise<void>;
 }) {
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
   const [channelFilter, setChannelFilter] = useState("all");
@@ -212,6 +214,7 @@ export function InboxWorkspace({
             onRename={renameSelected}
             onPin={pinSelected}
             onRunWork={() => onRunWork(selected)}
+            onCompleteWork={() => onCompleteWork(selected)}
           />
         ) : (
           <div className="thread-empty">Select a conversation on the left.</div>

@@ -1695,6 +1695,7 @@ describe("personal /v1/me", () => {
       const executors = await (await fetch(`${origin}/v1/me/executors`)).json();
       assert.equal(executors[0].executor_type, "dsh");
       assert.equal(executors[0].source, "dsh");
+      assert.equal(executors[0].attach, "absentee");
       const emptyMatch = await fetch(`${origin}/v1/me/recipes`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1705,6 +1706,21 @@ describe("personal /v1/me", () => {
         }),
       });
       assert.equal(emptyMatch.status, 400);
+      const sourceOnly = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "All chat",
+          match: { source: "feishu" },
+          executor_type: "dsh",
+        }),
+      });
+      assert.equal(sourceOnly.status, 400);
+      const missingComplete = await fetch(
+        `${origin}/v1/me/work-items/work-missing/complete`,
+        { method: "POST" },
+      );
+      assert.equal(missingComplete.status, 404);
       const created = await (
         await fetch(`${origin}/v1/me/recipes`, {
           method: "POST",

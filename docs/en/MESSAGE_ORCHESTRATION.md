@@ -20,11 +20,11 @@ L5 handling           policy may open a WorkItem (optional)
 L6 execution          TaskExecutor plugin (DSH / Cursor / internal)
 ```
 
-A connector install is L0. It is not a lane. One Feishu install can emit a DM (`utterance` + `user` + `chat`), a group bot (`utterance` + `assistant` + `chat`), and an approval (`task` + `ticket`) on the same wire. The kernel projects L4. Policy opens L5 only for a `task` or a matching Recipe. Most chat never becomes a WorkItem.
+A connector install is L0. It is not a lane. One Feishu install can emit a DM (`utterance` + `user` + `chat`), a group bot (`utterance` + `assistant` + `chat`), and an approval (`task` + `ticket`) on the same wire. The kernel projects L4. Policy opens an L5 Job only for a `task` or a Recipe that satisfies the auto-start Specification. A session may have many jobs; the list shows the foreground face. Most chat never becomes a WorkItem.
 
 Speaker (L3) applies only to `utterance`. A person inside an agent session is still `user`. A bot inside a human group is still `assistant`. Those facts do not move to the install.
 
-L6 reaches the channel only through `ExecutorContext`. The default open-source tree mounts `dsh`. Cursor follows. A private Agent OS stays an internal plugin package.
+L6 reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `readTranscript`). Completion is `WaitStatus`, not a chat bubble. The default open-source tree mounts absentee `dsh`. Cursor follows. A private Agent OS stays an internal plugin package.
 
 Kernel and desktop read `record_class`, `thread_facet`, `attention`, and `work`. They do not classify chat / agent / ticket by connector name.
 
@@ -104,7 +104,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 | Ranker / layer | Scoring after D0 (durability, sensitivity, “need to know”). D0 filter/layer is kernel | Promote personal labels to org truth |
 | Dispatcher policy | Map rank + standard + habits → outside current work \| pending \| defer | Send without a send grant |
 | Model | Propose only | Own scoring, quota, or ACL |
-| Executor (`TaskExecutor`) | Run one work item from a Recipe; public DSH, other agents later | Classify by connector name; weld a private runtime into the kernel |
+| Executor (`TaskExecutor`) | Run one Job from a Recipe; public absentee DSH, other agents later | Complete from transcript; classify by connector name; weld a private runtime into the kernel |
 | Identity / secrets / search / notify | Fill a capability seam | Change the message format |
 
 Each seam has a definition, a provider, and consumers. Swapping one connector for another must not fork the kernel. Adding a source later is a plugin, not a rewrite.

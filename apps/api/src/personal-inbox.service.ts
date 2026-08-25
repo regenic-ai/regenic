@@ -328,7 +328,7 @@ export class PersonalInboxService {
     }
     const thread = parseThreadQuery(query.thread_id);
     const storeQuery = inboxStoreQuery(query, thread);
-    const [records, installations, prefs] = await Promise.all([
+    const [records, installations, prefs, jobSessions] = await Promise.all([
       authority.listInbox(orgId, storeQuery),
       authority.listInstallations(orgId),
       thread
@@ -336,11 +336,29 @@ export class PersonalInboxService {
             .getConversationPref(orgId, query.thread_id ?? "")
             .then((pref) => (pref ? [pref] : []))
         : authority.listConversationPrefs(orgId),
+      query.heads === true && !query.thread_id
+        ? this.work.activeSessionIds()
+        : Promise.resolve(new Set<string>()),
     ]);
     const prefsByThread = new Map(
       prefs.map((pref) => [pref.thread_id, pref] as const),
     );
-    const selected = selectInboxRecords(records, query);
+    let selected = selectInboxRecords(records, query);
+    if (jobSessions.size > 0) {
+      const have = new Set(
+        selected.map((item) =>
+          conversationId(item.event.source, item.event.external_id, item.event.id),
+        ),
+      );
+      const missing = [...jobSessions].filter((id) => !have.has(id));
+      if (missing.length > 0) {
+        const extras = await authority.listInbox(orgId, {
+          siblings: true,
+          thread_ids: missing,
+        });
+        selected = [...selected, ...headsByThread(extras)];
+      }
+    }
     const attachments = query.heads ? "meta" : "preview";
     const bodies = await resolveInboxBodies(
       authority,
@@ -742,7 +760,6 @@ function decorateInboxItem(
       workFace?.thread_facet ??
       projectThreadFacet({
         type: surface.type,
-        await_reply: drivers.awaitReply(installations, thread),
         prompts: prompts.length > 0,
         hint: surface.thread_facet,
       }),

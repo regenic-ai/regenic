@@ -111,13 +111,14 @@ type RecordClass = "utterance" | "task" | "status" | "prompt";
 type ThreadFacet = "chat" | "agent" | "ticket";
 ```
 
-内核按线程投影（连接器可提示，不可当安装属性）：
+内核按记录投影（连接器可提示，不可当安装属性）：
 
-1. 线程上有 `task` 头 → `ticket`
-2. 否则该线程声明 `await_reply` 或有活的 `prompts` → `agent`
-3. 否则 → `chat`
+1. `record_class = task` → `ticket`
+2. 否则记录带 hint → 用 hint
+3. 否则该头上有**活的** prompts → `agent`
+4. 否则 → `chat`
 
-同一连接器可以同时放出多种线程面。`list_title` / `hydrate_on_open` / `attention` / `receipts` 仍是协议能力（RFC 0008），不是 facet 标签。
+`await_reply` / `list_title` / `hydrate_on_open` / `attention` / `receipts` 仍是协议能力（RFC 0008），不是 facet。能力不是类型。
 
 ## 8. WorkItem / Recipe / Run
 
@@ -148,13 +149,19 @@ interface ResultEnvelope {
 }
 ```
 
-开单：`record_class = task`，或存在匹配且启用的 Recipe。多数人聊 `utterance` 不开单。Agent 回合默认更新已有 Run，不再开新单。已完成的单只有出现新的 `head_event_id` 才重开。
+身份拆成三个对象（POSIX session / job / inferior）：
 
-匹配从细到粗：`thread_id` > `source` + class + facet > class + facet > class。空 match 不命中。`executor_config` 只属于该执行器（skillId、档位等），不是内核一等字段。
+| 对象 | 是什么 | 不是什么 |
+| --- | --- | --- |
+| Session | 来源对话，列表脸 | 工单主键 |
+| Job (`WorkItem`) | 一个工作单元，`unit_key` | 一条线程一辈子一张单 |
+| Inferior (`WorkRun`) | 一次执行；sysout 默认不进列表 | 用户自己开的 Agent 闲聊 |
+
+开单：`record_class = task`，或 Recipe 满足 **AutoStart Specification**（`thread_id`，或 `record_class=task`，或 `source` + 非 utterance 的 class）。空 match、只写 source、只写 utterance、只写 facet 都不自动开跑。
+
+同一 Session 上已完成的 Job 遇到新 `head_event_id` 开**新 Job**，不复活旧单。列表脸取当前前台 Job。
 
 没有 `can_write_back` 不得 egress。蒸馏或看过 Digest ≠ 发送权。
-
-一行一单：编排绑在来源线程上，不并排再挂执行会话（用户自己开的 Agent 闲聊除外）。
 
 ## 9. TaskExecutor
 
@@ -169,11 +176,13 @@ interface TaskExecutor {
 }
 ```
 
-内核查 `ctx.executors`。执行器碰渠道只走 `ExecutorContext`（`createThread` / `sendText` / `listPrompts` / `latestVisible`），不自带私有 HTTP 客户端。
+内核查 `ctx.executors`。执行器碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`），不自带私有 HTTP 客户端。
+
+完成契约是 `WaitStatus`（wait / notify），与 transcript 正交。读气泡不得结单。DSH 公开默认是 absentee 附着：没有 notify 就保持 running，由人 `POST /v1/me/work-items/:id/complete` 收工（会话首领 reap）。写回只发生在显式 `exited`。
 
 公开默认：`dsh`。Cursor 后接。私有 Agent OS 只作内部插件包，默认开源构建不挂载。
 
-挂起映射为渠道无关 Prompt，走 `POST /v1/me/conversations/prompts`，禁止再走 egress。内核经 `installation + thread` 解析，并把绑定执行线程上的 Prompt 装饰到来源工单那一行。
+挂起映射为渠道无关 Prompt，走 `POST /v1/me/conversations/prompts`，禁止再走 egress。绑定 inferior 上的 Prompt 装饰到来源 Session 那一行。
 
 ## 10. 列表
 
@@ -196,6 +205,7 @@ interface TaskExecutor {
 | DELETE | `/v1/me/recipes/:id` | 删除 |
 | GET | `/v1/me/executors` | 已挂载执行器目录 |
 | POST | `/v1/me/work-items/:id/run` | 手动启动 |
+| POST | `/v1/me/work-items/:id/complete` | 人 reap：显式结单，可写回 |
 | GET/POST | `/v1/me/prefs` | `inbox_sort` |
 
 ## 12. 验收

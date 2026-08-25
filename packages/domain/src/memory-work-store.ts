@@ -1,3 +1,4 @@
+import { currentJobOnSession } from "./job-control";
 import type {
   Recipe,
   WorkItem,
@@ -52,12 +53,11 @@ export class MemoryWorkStore implements WorkStore {
     orgId: string,
     threadId: string,
   ): Promise<WorkItem | null> {
-    for (const item of this.items.values()) {
-      if (item.org_id === orgId && item.thread_id === threadId) {
-        return { ...item };
-      }
-    }
-    return null;
+    const found = currentJobOnSession(
+      [...this.items.values()].filter((item) => item.org_id === orgId),
+      threadId,
+    );
+    return found ? { ...found } : null;
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {

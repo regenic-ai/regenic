@@ -1,5 +1,7 @@
 import {
+  handleFromWait,
   parseConversationThread,
+  waitFromTranscript,
   type ExecutorContext,
   type ExecutorResumeInput,
   type ExecutorRunHandle,
@@ -22,17 +24,18 @@ export const dshTaskExecutor: TaskExecutor = {
       label: "DSH",
       description: "Run the work item in a local DSH session",
       source: "dsh",
+      attach: "absentee",
       fields: [],
     };
   },
 
   async start(input: ExecutorStartInput, ctx: ExecutorContext) {
-    const thread = await ctx.createThread();
-    const agentThreadId = `${thread.source}:${thread.target}`;
-    await ctx.sendText(thread, input.evidence_text);
+    const thread = await ctx.spawnSysout();
+    const sysoutId = `${thread.source}:${thread.target}`;
+    await ctx.writeStdin(thread, input.evidence_text);
     return {
-      external_run_id: agentThreadId,
-      agent_thread_id: agentThreadId,
+      external_run_id: sysoutId,
+      agent_thread_id: sysoutId,
       status: "running" as const,
     };
   },
@@ -42,8 +45,8 @@ export const dshTaskExecutor: TaskExecutor = {
   },
 
   async status(run: WorkRun, ctx: ExecutorContext): Promise<ExecutorRunHandle> {
-    const agentThreadId = run.agent_thread_id ?? run.external_run_id;
-    if (!agentThreadId) {
+    const sysoutId = run.agent_thread_id ?? run.external_run_id;
+    if (!sysoutId) {
       return {
         external_run_id: run.id,
         status: run.status === "waiting_human" ? "waiting_human" : "running",
@@ -51,45 +54,20 @@ export const dshTaskExecutor: TaskExecutor = {
     }
     let thread;
     try {
-      thread = parseConversationThread(agentThreadId);
+      thread = parseConversationThread(sysoutId);
     } catch {
       return {
-        external_run_id: agentThreadId,
-        agent_thread_id: agentThreadId,
+        external_run_id: sysoutId,
+        agent_thread_id: sysoutId,
         status: "failed",
       };
     }
     const prompts = await ctx.listPrompts(thread);
-    if (prompts.length > 0) {
-      return {
-        external_run_id: agentThreadId,
-        agent_thread_id: agentThreadId,
-        status: "waiting_human",
-        prompts,
-      };
-    }
-    const latest = await ctx.latestVisible(agentThreadId);
-    if (latest?.activity === "working") {
-      return {
-        external_run_id: agentThreadId,
-        agent_thread_id: agentThreadId,
-        status: "running",
-      };
-    }
-    if (latest?.kind === "assistant" && latest.text?.trim()) {
-      return {
-        external_run_id: agentThreadId,
-        agent_thread_id: agentThreadId,
-        status: "completed",
-        result: { summary: latest.text.trim() },
-      };
-    }
-    return {
-      external_run_id: agentThreadId,
-      agent_thread_id: agentThreadId,
-      status: "running",
-      ...(prompts.length > 0 ? { prompts } : {}),
-    };
+    const transcript = await ctx.readTranscript(sysoutId);
+    return handleFromWait(waitFromTranscript({ prompts, transcript }), {
+      external_run_id: sysoutId,
+      sysout_id: sysoutId,
+    });
   },
 };
 

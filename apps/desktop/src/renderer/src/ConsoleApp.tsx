@@ -6,6 +6,7 @@ import {
   fetchEngine,
   fetchInbox,
   fetchUiPrefs,
+  completeWorkItem,
   runWorkItem,
   saveUiPrefs,
   updateConversationPrefs,
@@ -583,6 +584,21 @@ export function ConsoleApp() {
     },
     [refresh],
   );
+  const completeSelectedWork = useCallback(
+    async (thread: InboxThread) => {
+      if (!thread.work?.id) {
+        return;
+      }
+      try {
+        await completeWorkItem(thread.work.id);
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Cannot complete this work item");
+      }
+    },
+    [refresh],
+  );
 
   return (
     <div className="shell">
@@ -651,6 +667,7 @@ export function ConsoleApp() {
             sortMode={sortMode}
             onSortMode={changeSortMode}
             onRunWork={runSelectedWork}
+            onCompleteWork={completeSelectedWork}
           />
         ) : null}
         {nav === "engine" ? (

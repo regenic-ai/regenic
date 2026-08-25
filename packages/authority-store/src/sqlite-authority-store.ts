@@ -551,7 +551,12 @@ export class SqliteAuthorityStore
     threadId: string,
   ): Promise<WorkItem | null> {
     const row = this.database
-      .prepare(`SELECT * FROM work_items WHERE org_id = ? AND thread_id = ?`)
+      .prepare(
+        `SELECT * FROM work_items WHERE org_id = ? AND thread_id = ?
+         ORDER BY CASE WHEN status IN ('open', 'running', 'waiting_human') THEN 0 ELSE 1 END,
+                  updated_at DESC, id DESC
+         LIMIT 1`,
+      )
       .get(orgId, threadId) as WorkItemRow | undefined;
     return row ? toWorkItem(row) : null;
   }
@@ -562,11 +567,12 @@ export class SqliteAuthorityStore
       .prepare(
         `
           INSERT INTO work_items (
-            id, org_id, thread_id, head_event_id, record_class, thread_facet,
+            id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
             status, recipe_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
+            unit_key = excluded.unit_key,
             head_event_id = excluded.head_event_id,
             record_class = excluded.record_class,
             thread_facet = excluded.thread_facet,
@@ -579,6 +585,7 @@ export class SqliteAuthorityStore
         item.id,
         item.org_id,
         item.thread_id,
+        item.unit_key,
         item.head_event_id ?? null,
         item.record_class,
         item.thread_facet,
@@ -1175,7 +1182,16 @@ export class SqliteAuthorityStore
         this.database.exec(migration.sql);
         this.database.pragma(`user_version = ${migration.version}`);
       });
-      applyMigration.immediate();
+      if (migration.version === 10) {
+        this.database.pragma("foreign_keys = OFF");
+      }
+      try {
+        applyMigration.immediate();
+      } finally {
+        if (migration.version === 10) {
+          this.database.pragma("foreign_keys = ON");
+        }
+      }
     }
   }
 
@@ -1609,6 +1625,7 @@ interface WorkItemRow {
   id: string;
   org_id: string;
   thread_id: string;
+  unit_key: string;
   head_event_id: string | null;
   record_class: WorkItem["record_class"];
   thread_facet: WorkItem["thread_facet"];
@@ -1652,6 +1669,7 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     id: row.id,
     org_id: row.org_id,
     thread_id: row.thread_id,
+    unit_key: row.unit_key,
     head_event_id: row.head_event_id ?? undefined,
     record_class: row.record_class,
     thread_facet: row.thread_facet,

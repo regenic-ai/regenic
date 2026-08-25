@@ -47,6 +47,8 @@ export interface WorkItem {
   id: string;
   org_id: string;
   thread_id: string;
+  /** Work-unit identity. A session may have many jobs over time. */
+  unit_key: string;
   head_event_id?: string;
   record_class: RecordClass;
   thread_facet: ThreadFacet;
@@ -110,6 +112,7 @@ export interface WorkStore {
   deleteRecipe(orgId: string, id: string): Promise<boolean>;
   listWorkItems(orgId: string): Promise<WorkItem[]>;
   getWorkItem(orgId: string, id: string): Promise<WorkItem | null>;
+  /** Foreground job on the session, not a unique thread identity. */
   getWorkItemByThread(
     orgId: string,
     threadId: string,

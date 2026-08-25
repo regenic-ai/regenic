@@ -1,6 +1,11 @@
 import type { JsonValue } from "./ingestion";
 import type { ConversationThread } from "./channel-driver";
-import type { MessageKind } from "./message-contract";
+import type {
+  AttachMode,
+  InferiorRef,
+  Transcript,
+  WaitStatus,
+} from "./job-control";
 import type { PromptAnswer, ThreadPrompt } from "./thread-surface";
 import type { Recipe, ResultEnvelope, WorkItem, WorkRun, WorkRunStatus } from "./work";
 
@@ -24,18 +29,18 @@ export interface ExecutorCatalogEntry {
   label: string;
   description?: string;
   source?: string;
+  attach?: AttachMode;
   fields: ExecutorCatalogField[];
 }
 
 export interface ExecutorContext {
   org_id: string;
   env: NodeJS.ProcessEnv;
-  createThread(): Promise<ConversationThread>;
-  sendText(thread: ConversationThread, text: string): Promise<void>;
+  /** Absentee sysout. Not a Session. */
+  spawnSysout(): Promise<ConversationThread>;
+  writeStdin(thread: ConversationThread, text: string): Promise<void>;
   listPrompts(thread: ConversationThread): Promise<ThreadPrompt[]>;
-  latestVisible(
-    threadId: string,
-  ): Promise<{ kind: MessageKind; text?: string; activity?: string } | null>;
+  readTranscript(sysoutId: string): Promise<Transcript | null>;
 }
 
 export interface ExecutorStartInput {
@@ -57,6 +62,38 @@ export interface ExecutorRunHandle {
   status: WorkRunStatus;
   result?: ResultEnvelope;
   prompts?: ThreadPrompt[];
+  transcript?: Transcript;
+}
+
+export function handleFromWait(
+  wait: WaitStatus,
+  ref: InferiorRef,
+): ExecutorRunHandle {
+  const transcript = wait.transcript;
+  if (wait.state === "waiting_human") {
+    return {
+      external_run_id: ref.external_run_id,
+      agent_thread_id: ref.sysout_id,
+      status: "waiting_human",
+      prompts: wait.prompts,
+      transcript,
+    };
+  }
+  if (wait.state === "exited") {
+    return {
+      external_run_id: ref.external_run_id,
+      agent_thread_id: ref.sysout_id,
+      status: wait.ok ? "completed" : "failed",
+      result: wait.result,
+      transcript,
+    };
+  }
+  return {
+    external_run_id: ref.external_run_id,
+    agent_thread_id: ref.sysout_id,
+    status: "running",
+    transcript,
+  };
 }
 
 export interface TaskExecutor {

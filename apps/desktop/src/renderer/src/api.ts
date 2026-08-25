@@ -477,6 +477,18 @@ export async function runWorkItem(id: string): Promise<void> {
   }
 }
 
+export async function completeWorkItem(id: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/work-items/${id}/complete`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `work complete ${response.status}`);
+  }
+}
+
 export async function fetchUiPrefs(): Promise<UiPrefsView> {
   const response = await fetch(`${origin()}/v1/me/prefs`);
   if (!response.ok) {
