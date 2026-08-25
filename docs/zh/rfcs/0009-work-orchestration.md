@@ -180,7 +180,38 @@ interface TaskExecutor {
 
 完成契约是 `WaitStatus`（wait / notify）。气泡里的字不是退出。公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在 `exited` 上 reap Job。写回只发生在这次真退出。人只回答 Prompt；不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss` 从当前工作拿掉。Dismiss 不是 `exited`，也不写回。被拿掉的 Inferior 记 `cancelled`，不是 `failed`。之后的 status tick 不得把这次 run 救活，也不得写回。
 
-公开默认：`dsh`。Cursor 后接。私有 Agent OS 只作内部插件包，默认开源构建不挂载。
+公开默认：`dsh`。Cursor 与私有 Agent OS（如 bioby-agent）后接，同一目录合同。私有运行时只作内部插件包，默认开源构建不挂载。
+
+### 调用目录
+
+规则页的「调用参数」不是内核字段，也不是固定 Prompt 框。每个 `TaskExecutor.catalog()` 声明自己的表；桌面只渲染 `GET /v1/me/executors`，内核把 `Recipe.executor_config` 当不透明袋，**不读 key**。换执行器 = 换插件 + 换字段表，禁止 `if (executor_type === "dsh")`。
+
+```ts
+interface ExecutorCatalogField {
+  key: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  default?: string;
+  hint?: string;
+  kind?: "text" | "textarea" | "select";
+  options?: Array<{ value: string; label: string }>;
+}
+
+interface ExecutorCatalogEntry {
+  executor_type: string;
+  label: string;
+  description?: string;
+  params_label?: string;
+  source?: string;
+  attach?: AttachMode;
+  fields: ExecutorCatalogField[];
+}
+```
+
+拼 stdin / HTTP / Agent 目标是插件自己的事。DSH 用 `skill` / `prompt`；Cursor、bioby-agent 各自声明 repo、模型、目标或约束。旧 DSH 配方里的 `instruction` 只在 DSH 插件内映射为 `prompt`。
+
+连接器 ≠ 执行器。同一插件包可以同时挂 L0 `ChannelDriver` 和 L6 `TaskExecutor`（DSH 已如此：Engine 装渠道，host 再 `executors.register`）。bioby-agent 按同样方式接入，不把私有 HTTP 写进内核或规则页。
 
 挂起映射为渠道无关 Prompt，走 `POST /v1/me/conversations/prompts`，禁止再走 egress。绑定 inferior 上的 Prompt 装饰到来源 Session 那一行。
 
@@ -213,7 +244,7 @@ interface TaskExecutor {
 
 1. 内核与桌面不按连接器名判断人聊 / Agent / 工单。
 2. 默认开源构建没有私有 Agent 依赖。
-3. 换执行器 = 换插件 + Recipe 选择，不改内核。
+3. 换执行器 = 换插件 + Recipe 选择，不改内核。规则页调用参数只来自 `catalog().fields`，不按 key 特判。
 4. 列表能在 Attention 与正常排序之间切换，刷新后保持。
 5. 一条来源任务在列表里是一行；机器进度画在这行上。
 6. 连接器测试可以点名飞书或 DSH；内核的 L4/L5/L6 测试不可以。

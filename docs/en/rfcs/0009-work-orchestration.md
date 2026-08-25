@@ -182,7 +182,38 @@ The kernel looks up `ctx.executors`. The executor reaches the channel only throu
 
 Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is durable `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. The kernel reaps the job on `exited`. Write-back happens only on that real exit. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back. The abandoned inferior is `cancelled`, not `failed`. A later status tick must not resurrect that run or write back.
 
-Public default: `dsh`. Cursor later. A private Agent OS is an internal plugin package; the default open-source tree does not register it.
+Public default: `dsh`. Cursor and a private Agent OS (for example bioby-agent) come later under the same catalog contract. A private runtime is an internal plugin package; the default open-source tree does not register it.
+
+### Invoke catalog
+
+The Recipes “invoke” section is not a kernel field and not a fixed Prompt box. Each `TaskExecutor.catalog()` owns its form. The desktop only renders `GET /v1/me/executors`. The kernel stores `Recipe.executor_config` as an opaque bag and **never reads the keys**. Swapping an executor swaps the plugin and the fieldset. No `if (executor_type === "dsh")`.
+
+```ts
+interface ExecutorCatalogField {
+  key: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  default?: string;
+  hint?: string;
+  kind?: "text" | "textarea" | "select";
+  options?: Array<{ value: string; label: string }>;
+}
+
+interface ExecutorCatalogEntry {
+  executor_type: string;
+  label: string;
+  description?: string;
+  params_label?: string;
+  source?: string;
+  attach?: AttachMode;
+  fields: ExecutorCatalogField[];
+}
+```
+
+Composing stdin, HTTP, or an agent goal is the plugin’s job. DSH uses `skill` / `prompt`. Cursor or bioby-agent declare their own repo, model, goal, or constraints. A legacy DSH `instruction` maps to `prompt` only inside the DSH plugin.
+
+A connector is not an executor. One plugin package may register both an L0 `ChannelDriver` and an L6 `TaskExecutor` (DSH already does: Engine installs the channel, then the host `executors.register`s). bioby-agent attaches the same way. Private HTTP stays out of the kernel and the Recipes page.
 
 Suspend maps to Thread Surface prompts. Answers use `POST /v1/me/conversations/prompts`, never egress. Prompts on a bound inferior decorate the source session row.
 
@@ -215,7 +246,7 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recip
 
 1. Kernel and desktop never classify chat / agent / ticket by connector name.
 2. Default open-source build has no private Agent dependency.
-3. Swapping an executor is a plugin + Recipe choice.
+3. Swapping an executor is a plugin + Recipe choice. The Recipes invoke form renders only `catalog().fields` and does not special-case keys.
 4. Sort mode persists across refresh.
 5. A source task is one list row; machine progress lives on that row.
 6. A connector test may name Feishu or DSH. A kernel test of L4/L5/L6 may not.

@@ -41,7 +41,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 - 会话名下可出最后一条预览；标题和正文相同时不重复。
 - 排序：`normal` 为置顶 + 最近活动；`attention` 为等人 / 运行中 / 未读优先，并在档位不同时分组。选择写入 `ui_prefs.inbox_sort`。
 - 渠道滤、置顶针、New 钉在列表顶，只有会话列表滚动。
-- Recipes 单独一页：用白话说明「这类工作出现时用哪个执行器」。默认看所有 task，或某一来源的 task，或从 Current work 绑一条会话。facet 只在 Advanced。匹配到的会话在 Current work 里 **Start run**；DSH 日志出现 `turn/end` 后内核 reap。聊天回复不是退出。人不想跟的 Job 从当前工作 **拿掉**，不冒充执行器结束。没有 `can_write_back` 不得 egress；写回只发生在真 `exited`。
+- Recipes 单独一页：用白话说明「这类工作出现时用哪个执行器」。调用参数只渲染 `GET /v1/me/executors` 的 `catalog().fields`，不按执行器名特判。DSH 用 `skill` / `prompt` 拼进新会话，再带上工单原文；Cursor / bioby-agent 后接同一合同。默认看所有 task，或某一来源的 task，或一条会话。匹配到的会话在 Current work 里 **Start run**；DSH 日志出现 `turn/end` 后内核 reap。聊天回复不是退出。人不想跟的 Job 从当前工作 **拿掉**，不冒充执行器结束。没有 `can_write_back` 不得 egress；写回只发生在真 `exited`。
 
 ## 进程
 

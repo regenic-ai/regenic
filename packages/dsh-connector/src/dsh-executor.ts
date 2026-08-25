@@ -6,10 +6,62 @@ import {
   type ExecutorResumeInput,
   type ExecutorRunHandle,
   type ExecutorStartInput,
+  type JsonValue,
   type TaskExecutor,
   type ThreadPrompt,
   type WorkRun,
 } from "@regenic/domain";
+
+export const DSH_PROMPT_FIELD = "prompt";
+export const DSH_SKILL_FIELD = "skill";
+/** @deprecated Use DSH_PROMPT_FIELD. */
+export const DSH_INSTRUCTION_FIELD = DSH_PROMPT_FIELD;
+
+export function dshConfigText(
+  config: Record<string, JsonValue> | undefined,
+  ...keys: string[]
+): string {
+  for (const key of keys) {
+    const value = config?.[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+export function dshPromptOf(config: Record<string, JsonValue> | undefined): string {
+  return dshConfigText(config, DSH_PROMPT_FIELD, "instruction");
+}
+
+export function dshSkillOf(config: Record<string, JsonValue> | undefined): string {
+  return dshConfigText(config, DSH_SKILL_FIELD);
+}
+
+/** @deprecated Use dshPromptOf. */
+export function dshInstructionOf(
+  config: Record<string, JsonValue> | undefined,
+): string {
+  return dshPromptOf(config);
+}
+
+export function composeDshStdin(input: {
+  skill?: string;
+  prompt?: string;
+  instruction?: string;
+  evidence_text: string;
+}): string {
+  const skill = input.skill?.trim() ?? "";
+  const prompt = (input.prompt ?? input.instruction)?.trim() ?? "";
+  const blocks = [
+    ...(skill ? [`SKILL ${skill}`] : []),
+    ...(prompt ? [prompt] : []),
+  ];
+  if (blocks.length === 0) {
+    return input.evidence_text;
+  }
+  return [...blocks, "", "WORK", input.evidence_text].join("\n");
+}
 
 export const dshTaskExecutor: TaskExecutor = {
   executor_type: "dsh",
@@ -22,17 +74,39 @@ export const dshTaskExecutor: TaskExecutor = {
     return {
       executor_type: "dsh",
       label: "DSH",
-      description: "Run the work item in a local DSH session",
+      description: "Skill and prompt go on stdin ahead of the work evidence.",
       source: "dsh",
       attach: "absentee",
-      fields: [],
+      fields: [
+        {
+          key: DSH_SKILL_FIELD,
+          label: "Skill",
+          kind: "text",
+          hint: "Optional DSH skill or preset for this run.",
+          placeholder: "review",
+        },
+        {
+          key: DSH_PROMPT_FIELD,
+          label: "Prompt",
+          kind: "textarea",
+          hint: "Task instruction sent before the work evidence.",
+          placeholder: "What this run should do.",
+        },
+      ],
     };
   },
 
   async start(input: ExecutorStartInput, ctx: ExecutorContext) {
     const thread = await ctx.spawnSysout();
     const sysoutId = `${thread.source}:${thread.target}`;
-    await ctx.writeStdin(thread, input.evidence_text);
+    await ctx.writeStdin(
+      thread,
+      composeDshStdin({
+        skill: dshSkillOf(input.recipe.executor_config),
+        prompt: dshPromptOf(input.recipe.executor_config),
+        evidence_text: input.evidence_text,
+      }),
+    );
     return {
       external_run_id: sysoutId,
       agent_thread_id: sysoutId,

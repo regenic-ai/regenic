@@ -711,6 +711,11 @@ export function ConsoleApp() {
         {nav === "recipes" ? (
           <RecipesPage
             sources={recipeSources}
+            conversations={listThreads.map((thread) => ({
+              id: thread.id,
+              label: threadTitle(thread),
+              source: thread.source || thread.channel,
+            }))}
             seed={recipeSeed}
             onSeedConsumed={consumeRecipeSeed}
             onBound={() => setNav("inbox")}
