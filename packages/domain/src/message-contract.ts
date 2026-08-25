@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ContentPart, IngestRecord } from "./ingestion";
 import type { ThreadFacet } from "./thread-facet";
 
@@ -71,6 +72,66 @@ export function bodyTextFromStored(
     return Buffer.from(bytes).toString("utf8");
   }
   return undefined;
+}
+
+export function attachmentDigestsFromParts(
+  parts: Array<{
+    role?: string;
+    bytes?: Uint8Array;
+    bytes_base64?: string;
+  }>,
+): string[] {
+  const digests: string[] = [];
+  const seen = new Set<string>();
+  for (const part of parts) {
+    if (part.role !== "attachment") {
+      continue;
+    }
+    const bytes = part.bytes
+      ? part.bytes
+      : part.bytes_base64
+        ? Buffer.from(part.bytes_base64, "base64")
+        : undefined;
+    if (!bytes || bytes.byteLength === 0) {
+      continue;
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (seen.has(digest)) {
+      continue;
+    }
+    seen.add(digest);
+    digests.push(digest);
+  }
+  return digests;
+}
+
+export function attachmentDigestsFromStored(
+  bytes: Uint8Array,
+  mediaType: string,
+): string[] {
+  if (mediaType !== "application/vnd.regenic.content-parts+json") {
+    return [];
+  }
+  try {
+    const parts = JSON.parse(Buffer.from(bytes).toString("utf8")) as Array<{
+      role?: string;
+      bytes_base64?: string;
+    }>;
+    return Array.isArray(parts) ? attachmentDigestsFromParts(parts) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function attachmentsCoveredBy(
+  incoming: readonly string[],
+  existing: readonly string[],
+): boolean {
+  if (incoming.length === 0 || existing.length === 0) {
+    return false;
+  }
+  const have = new Set(existing);
+  return incoming.every((digest) => have.has(digest));
 }
 
 export function conversationId(
