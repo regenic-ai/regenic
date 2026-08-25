@@ -83,7 +83,7 @@ export function MenuSelect({
     <div className="menu-select" ref={rootRef}>
       <button
         type="button"
-        className={`menu-select-btn${selected ? "" : " is-placeholder"}`}
+        className={`menu-select-btn${selected ? "" : " is-placeholder"}${open ? " is-open" : ""}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}

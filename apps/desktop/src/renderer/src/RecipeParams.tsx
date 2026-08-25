@@ -20,7 +20,9 @@ export function RecipeParams({
   return (
     <fieldset className="recipe-params">
       <legend>{catalog.params_label ?? fallbackTitle}</legend>
-      {catalog.description ? <p className="muted">{catalog.description}</p> : null}
+      {catalog.description ? (
+        <p className="recipe-params-lead">{catalog.description}</p>
+      ) : null}
       {catalog.fields.map((field) => {
         const kind = field.kind ?? (field.options?.length ? "select" : "text");
         const value = values[field.key] ?? field.default ?? "";

@@ -42,6 +42,7 @@ export const en = {
   "thread.startRun": "Start run",
   "thread.dismiss": "Remove from current work",
   "thread.bindRecipe": "Bind recipe",
+  "thread.reply": "Reply",
   "thread.startRunTitle": "Start the executor for this job",
   "thread.dismissTitle": "Stop tracking this job. The executor is not marked finished.",
   "thread.bindRecipeTitle": "Create a recipe for this conversation",
@@ -205,6 +206,7 @@ export const en = {
   "settings.applyError": "Could not apply kernel address",
   "settings.unavailable": "Desktop settings are not available",
 
+  "engine.eyebrow": "Runtime",
   "engine.title": "Engine",
   "engine.lead":
     "Local authority store and connectors. Enabled connectors pull while the kernel is running. Use Sync only to catch up after a miss.",
@@ -275,7 +277,7 @@ export const en = {
   "connector.installing": "Installing…",
   "connector.installed": "{count} installed",
   "connector.notInstalled": "Not installed",
-  "connector.credentials": " · credentials {hint}",
+  "connector.credentials": "Credentials · {hint}",
   "connector.close": "Close",
   "connector.prereqFirst": "Finish prerequisites first",
   "connector.fillRequired": "Fill required fields",
@@ -305,6 +307,8 @@ export const en = {
 
   "composer.message": "Message",
   "composer.sendMessage": "Send a message",
+  "composer.sendTo": "Send to {name}",
+  "composer.unavailable": "Sending back to this channel is not available yet",
   "composer.cancelReply": "Cancel reply",
   "composer.attach": "Attach image or file",
   "composer.sending": "Sending",
@@ -362,6 +366,7 @@ export const zh: Record<MessageKey, string> = {
   "thread.startRun": "开始执行",
   "thread.dismiss": "从当前工作拿掉",
   "thread.bindRecipe": "绑定规则",
+  "thread.reply": "回复",
   "thread.startRunTitle": "用执行器处理后台跑这条工单",
   "thread.dismissTitle": "不再跟这条工单。执行器不会被标成已完成。",
   "thread.bindRecipeTitle": "为这条会话设一条规则",
@@ -515,6 +520,7 @@ export const zh: Record<MessageKey, string> = {
   "settings.applyError": "内核地址应用失败",
   "settings.unavailable": "桌面设置不可用",
 
+  "engine.eyebrow": "运行时",
   "engine.title": "引擎",
   "engine.lead":
     "本机数据和连接器。内核在跑时，已启用的连接器会自己拉消息。漏了再点同步即可。",
@@ -583,7 +589,7 @@ export const zh: Record<MessageKey, string> = {
   "connector.installing": "安装中…",
   "connector.installed": "已安装 {count} 个",
   "connector.notInstalled": "未安装",
-  "connector.credentials": " · 凭证 {hint}",
+  "connector.credentials": "凭证 · {hint}",
   "connector.close": "关闭",
   "connector.prereqFirst": "请先做完准备工作",
   "connector.fillRequired": "请填必填项",
@@ -613,6 +619,8 @@ export const zh: Record<MessageKey, string> = {
 
   "composer.message": "消息",
   "composer.sendMessage": "发消息",
+  "composer.sendTo": "发给 {name}",
+  "composer.unavailable": "这条渠道暂时还不能回写",
   "composer.cancelReply": "取消引用",
   "composer.attach": "添加图片或文件",
   "composer.sending": "发送中",

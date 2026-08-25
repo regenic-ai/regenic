@@ -148,76 +148,35 @@ export const ThreadPane = memo(function ThreadPane({
     }
   };
   const workHint = workNextStepCopy(thread);
+  const heading = threadTitle(thread);
+  const subLabel = thread.conversation_label || thread.label;
+  const showSubLabel = Boolean(subLabel && subLabel !== heading);
+  const canRun =
+    Boolean(onRunWork) &&
+    Boolean(thread.work) &&
+    (thread.work?.status === "open" ||
+      thread.work?.status === "failed" ||
+      thread.work?.status === "skipped");
+  const canDismiss =
+    Boolean(onDismissWork) &&
+    Boolean(thread.work) &&
+    (thread.work?.status === "open" ||
+      thread.work?.status === "running" ||
+      thread.work?.status === "waiting_human");
+  const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
+  const kind = conversationKindLabel(thread.conversation_kind);
+  const facet = threadFacetLabel(thread.thread_facet);
+  const work = workStatusLabel(thread.work?.status);
 
   return (
     <article className="thread-pane">
       <header className="thread-head">
         <div className="thread-head-main">
-          <div className="thread-title-row">
-            <span className={`channel-tag channel-lg channel-${thread.channel}`}>
-              {thread.channel_label}
-            </span>
-            {conversationKindLabel(thread.conversation_kind) ? (
-              <span className="kind-tag">
-                {conversationKindLabel(thread.conversation_kind)}
-              </span>
-            ) : null}
-            {threadFacetLabel(thread.thread_facet) ? (
-              <span className="kind-tag">
-                {threadFacetLabel(thread.thread_facet)}
-              </span>
-            ) : null}
-            {workStatusLabel(thread.work?.status) ? (
-              <span className={`kind-tag work-${thread.work?.status ?? ""}`}>
-                {workStatusLabel(thread.work?.status)}
-              </span>
-            ) : null}
-            {onRunWork &&
-            thread.work &&
-            (thread.work.status === "open" ||
-              thread.work.status === "failed" ||
-              thread.work.status === "skipped") ? (
-              <button
-                type="button"
-                className="primary thread-run"
-                title={t("thread.startRunTitle")}
-                onClick={() => {
-                  void onRunWork();
-                }}
-              >
-                {t("thread.startRun")}
-              </button>
-            ) : null}
-            {onDismissWork &&
-            thread.work &&
-            (thread.work.status === "open" ||
-              thread.work.status === "running" ||
-              thread.work.status === "waiting_human") ? (
-              <button
-                type="button"
-                className="ghost thread-run"
-                title={t("thread.dismissTitle")}
-                onClick={() => {
-                  void onDismissWork();
-                }}
-              >
-                {t("thread.dismiss")}
-              </button>
-            ) : null}
-            {onBindRecipe && !thread.work?.recipe_id ? (
-              <button
-                type="button"
-                className="ghost thread-run"
-                title={t("thread.bindRecipeTitle")}
-                onClick={onBindRecipe}
-              >
-                {t("thread.bindRecipe")}
-              </button>
-            ) : null}
+          <div className="thread-identity">
             <h1>
               <ThreadTitleField
                 className="thread-title"
-                value={threadTitle(thread)}
+                value={heading}
                 onSave={onRename}
               />
             </h1>
@@ -233,13 +192,65 @@ export const ThreadPane = memo(function ThreadPane({
               <PinIcon filled={thread.pinned} />
             </button>
           </div>
+          <div className="thread-meta-row">
+            <div className="thread-tags">
+              <span className={`channel-tag channel-${thread.channel}`}>
+                {thread.channel_label}
+              </span>
+              {kind ? <span className="kind-tag">{kind}</span> : null}
+              {facet ? <span className="kind-tag">{facet}</span> : null}
+              {work ? (
+                <span className={`kind-tag work-${thread.work?.status ?? ""}`}>
+                  {work}
+                </span>
+              ) : null}
+            </div>
+            {canRun || canDismiss || canBind ? (
+              <div className="thread-actions">
+                {canBind ? (
+                  <button
+                    type="button"
+                    className="ghost thread-run"
+                    title={t("thread.bindRecipeTitle")}
+                    onClick={onBindRecipe}
+                  >
+                    {t("thread.bindRecipe")}
+                  </button>
+                ) : null}
+                {canDismiss ? (
+                  <button
+                    type="button"
+                    className="ghost thread-run"
+                    title={t("thread.dismissTitle")}
+                    onClick={() => {
+                      void onDismissWork?.();
+                    }}
+                  >
+                    {t("thread.dismiss")}
+                  </button>
+                ) : null}
+                {canRun ? (
+                  <button
+                    type="button"
+                    className="primary thread-run"
+                    title={t("thread.startRunTitle")}
+                    onClick={() => {
+                      void onRunWork?.();
+                    }}
+                  >
+                    {t("thread.startRun")}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
           <p className="thread-sub">
             {threadLoadedCountCopy({
               opening,
               loaded: merged.length,
               hasOlder,
             })}
-            {thread.conversation_label ? "" : ` · ${thread.label}`}
+            {showSubLabel ? ` · ${subLabel}` : ""}
             {loadingOlder ? (
               <span className="thread-sync">
                 <span className="dot" />
@@ -288,8 +299,8 @@ export const ThreadPane = memo(function ThreadPane({
             disabled={!canReply}
             hint={
               canReply
-                ? `Send to ${threadTitle(thread)}`
-                : "Sending back to this channel is not available yet"
+                ? t("composer.sendTo", { name: heading })
+                : t("composer.unavailable")
             }
             quote={quote}
             sending={sending}

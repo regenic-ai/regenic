@@ -64,56 +64,94 @@ export function EnginePage({
 
   if (error || !engine) {
     return (
-      <div className="page">
-        <h1>{t("engine.title")}</h1>
-        <p className="muted">{error ?? t("engine.disconnected")}</p>
+      <div className="page page-wide">
+        <header className="page-hero">
+          <p className="page-eyebrow">{t("engine.eyebrow")}</p>
+          <h1>{t("engine.title")}</h1>
+          <p className="page-lead">{error ?? t("engine.disconnected")}</p>
+        </header>
       </div>
     );
   }
 
   const syncable = engine.installations.filter((item) => item.syncable);
+  const pullCopy = [
+    pullStatusLabel(engine.pull),
+    engine.pull?.last_tick_at ? formatChatTime(engine.pull.last_tick_at) : "",
+    engine.pull?.last_accepted_count ? `+${engine.pull.last_accepted_count}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const networkCopy = [
+    networkWatchLabel(engine.pull?.network?.kind),
+    engine.pull?.network?.kind !== "ok" && engine.pull?.network?.proxy
+      ? engine.pull.network.proxy
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div className="page page-wide">
       <header className="page-hero">
+        <p className="page-eyebrow">{t("engine.eyebrow")}</p>
         <h1>{t("engine.title")}</h1>
         <p className="page-lead">{t("engine.lead")}</p>
       </header>
-      <section className="card">
-        <h2>{t("engine.kernel")}</h2>
-        <div className="kv">
-          <span>{t("engine.status")}</span>
-          <strong>{engine.kernel === "running" ? t("engine.running") : t("engine.stopped")}</strong>
-          <span>{t("engine.org")}</span>
-          <strong>{engine.org_id}</strong>
-          <span>{t("engine.database")}</span>
-          <strong>
-            <code>{engine.database_path ?? "—"}</code>
-          </strong>
-          <span>{t("engine.currentWork")}</span>
-          <strong>{engine.inbox_count}</strong>
-          <span>{t("engine.livePull")}</span>
-          <strong>
-            {pullStatusLabel(engine.pull)}
-            {engine.pull?.last_tick_at
-              ? ` · ${formatChatTime(engine.pull.last_tick_at)}`
-              : ""}
-            {engine.pull?.last_accepted_count
-              ? ` · +${engine.pull.last_accepted_count}`
-              : ""}
-          </strong>
-          <span>{t("engine.network")}</span>
-          <strong>
-            {networkWatchLabel(engine.pull?.network?.kind)}
-            {engine.pull?.network?.kind !== "ok" && engine.pull?.network?.proxy
-              ? ` · ${engine.pull.network.proxy}`
-              : ""}
-          </strong>
-          <span>{t("engine.disk")}</span>
-          <strong>{host ? diskWatchCopy(host.disk) : "—"}</strong>
-          <span>{t("engine.memory")}</span>
-          <strong>{host ? memoryWatchCopy(host.memory) : "—"}</strong>
+      <section className="card engine-kernel">
+        <div className="card-head">
+          <h2>{t("engine.kernel")}</h2>
+          <span className={`chip ${engine.kernel === "running" ? "running" : "stopped"}`}>
+            <span className="dot" />
+            {engine.kernel === "running" ? t("engine.running") : t("engine.stopped")}
+          </span>
         </div>
+        <div className="engine-stats">
+          <EngineStat
+            label={t("engine.currentWork")}
+            value={String(engine.inbox_count)}
+            tone="ok"
+          />
+          <EngineStat
+            label={t("engine.livePull")}
+            value={pullCopy}
+            tone={
+              engine.pull?.last_error
+                ? "risk"
+                : engine.pull?.phase === "pulling" ||
+                    (engine.pull?.catching_up_count ?? 0) > 0
+                  ? "warn"
+                  : "ok"
+            }
+          />
+          <EngineStat
+            label={t("engine.network")}
+            value={networkCopy}
+            tone={watchTone(engine.pull?.network?.kind)}
+          />
+          <EngineStat
+            label={t("engine.disk")}
+            value={host ? diskWatchCopy(host.disk) : "—"}
+            tone={watchTone(host?.disk.kind)}
+          />
+          <EngineStat
+            label={t("engine.memory")}
+            value={host ? memoryWatchCopy(host.memory) : "—"}
+            tone={watchTone(host?.memory.kind)}
+          />
+        </div>
+        <dl className="engine-meta">
+          <div>
+            <dt>{t("engine.org")}</dt>
+            <dd>{engine.org_id}</dd>
+          </div>
+          <div>
+            <dt>{t("engine.database")}</dt>
+            <dd>
+              <code>{engine.database_path ?? "—"}</code>
+            </dd>
+          </div>
+        </dl>
         {engine.pull?.last_error ? (
           <p className="action-error">{engine.pull.last_error}</p>
         ) : null}
@@ -127,12 +165,12 @@ export function EnginePage({
           <p className="action-hint">{host.memory.hint}</p>
         ) : null}
       </section>
-      <section className="card">
+      <section className="card engine-import">
         <div className="card-head">
           <h2>{t("engine.whatsapp.title")}</h2>
           <button
             type="button"
-            className="ghost"
+            className="primary"
             disabled={importingWhatsApp}
             onClick={() => whatsAppFileRef.current?.click()}
           >
@@ -191,7 +229,7 @@ export function EnginePage({
         />
         {whatsAppStatus ? <p className="action-hint">{whatsAppStatus}</p> : null}
       </section>
-      <section className="card">
+      <section className="card engine-connectors">
         <div className="card-head">
           <h2>{t("engine.connectors")}</h2>
           {syncable.length > 1 ? (
@@ -284,4 +322,34 @@ export function EnginePage({
       </section>
     </div>
   );
+}
+
+function EngineStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "ok" | "warn" | "risk";
+}) {
+  return (
+    <div className={`engine-stat${tone ? ` is-${tone}` : ""}`}>
+      <span className="engine-stat-label">{label}</span>
+      <strong className="engine-stat-value">{value}</strong>
+    </div>
+  );
+}
+
+function watchTone(kind?: string): "ok" | "warn" | "risk" | undefined {
+  if (kind === "critical" || kind === "blocked") {
+    return "risk";
+  }
+  if (kind === "attention" || kind === "proxy") {
+    return "warn";
+  }
+  if (kind === "ok") {
+    return "ok";
+  }
+  return undefined;
 }

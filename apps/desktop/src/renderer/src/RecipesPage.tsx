@@ -140,7 +140,7 @@ export function RecipesPage({
 
   const listCard =
     recipes.length === 0 ? null : (
-      <section className="card">
+      <section className="card recipe-saved">
         <div className="card-head">
           <h2>{t("recipes.yours")}</h2>
           {draft.id ? (
@@ -217,8 +217,10 @@ export function RecipesPage({
     );
 
   const formCard = (
-    <section className="card" ref={formRef}>
-      <h2>{formTitle(draft, returnToWork, t)}</h2>
+    <section className="card recipe-editor" ref={formRef}>
+      <header className="recipe-editor-head">
+        <h2>{formTitle(draft, returnToWork, t)}</h2>
+      </header>
       {executors.length === 0 ? (
         <p className="muted">{t("recipes.noExecutor")}</p>
       ) : (
@@ -229,184 +231,203 @@ export function RecipesPage({
             void save();
           }}
         >
-          <fieldset className="recipe-scope">
-            <legend>{t("recipes.watchLegend")}</legend>
-            <div className="seg">
-              {scopeChoices(t).map((choice) => (
-                <button
-                  key={choice.id}
-                  type="button"
-                  className={draft.scope === choice.id ? "active" : undefined}
-                  onClick={() =>
-                    setDraft((current) =>
-                      withSuggestedName({ ...current, scope: choice.id }),
-                    )
-                  }
-                >
-                  {choice.label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          <div
+            className={`recipe-form-grid${catalog?.fields.length ? "" : " is-single"}`}
+          >
+            <div className="recipe-col">
+              <section className="recipe-block">
+                <h3>{t("recipes.when")}</h3>
+                <fieldset className="recipe-scope">
+                  <legend>{t("recipes.watchLegend")}</legend>
+                  <div className="seg">
+                    {scopeChoices(t).map((choice) => (
+                      <button
+                        key={choice.id}
+                        type="button"
+                        className={draft.scope === choice.id ? "active" : undefined}
+                        onClick={() =>
+                          setDraft((current) =>
+                            withSuggestedName({ ...current, scope: choice.id }),
+                          )
+                        }
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
 
-          {draft.scope === "source" ? (
-            <div className="field">
-              <span>{t("recipes.source")}</span>
-              <MenuSelect
-                value={draft.source}
-                placeholder={t("recipes.chooseSource")}
-                options={sources.map((source) => ({
-                  value: source.id,
-                  label: source.label,
-                }))}
-                onChange={(source) =>
-                  setDraft((current) => withSuggestedName({ ...current, source }))
-                }
-              />
-            </div>
-          ) : null}
+                {draft.scope === "source" ? (
+                  <div className="field">
+                    <span>{t("recipes.source")}</span>
+                    <MenuSelect
+                      value={draft.source}
+                      placeholder={t("recipes.chooseSource")}
+                      options={sources.map((source) => ({
+                        value: source.id,
+                        label: source.label,
+                      }))}
+                      onChange={(source) =>
+                        setDraft((current) => withSuggestedName({ ...current, source }))
+                      }
+                    />
+                  </div>
+                ) : null}
 
-          {draft.scope === "thread" ? (
-            <div className="field">
-              <span>{t("recipes.conversation")}</span>
-              {conversationOptions.length === 0 && !draft.thread_id ? (
-                <p className="field-empty">{t("recipes.noConversation")}</p>
-              ) : (
-                <MenuSelect
-                  value={draft.thread_id}
-                  placeholder={t("recipes.chooseConversation")}
-                  searchable={conversationOptions.length > 6}
-                  options={conversationOptions}
-                  onChange={(thread_id) => {
-                    const picked = conversationOptions.find((item) => item.id === thread_id);
-                    setDraft((current) =>
-                      withSuggestedName({
+                {draft.scope === "thread" ? (
+                  <div className="field">
+                    <span>{t("recipes.conversation")}</span>
+                    {conversationOptions.length === 0 && !draft.thread_id ? (
+                      <p className="field-empty">{t("recipes.noConversation")}</p>
+                    ) : (
+                      <MenuSelect
+                        value={draft.thread_id}
+                        placeholder={t("recipes.chooseConversation")}
+                        searchable={conversationOptions.length > 6}
+                        options={conversationOptions}
+                        onChange={(thread_id) => {
+                          const picked = conversationOptions.find(
+                            (item) => item.id === thread_id,
+                          );
+                          setDraft((current) =>
+                            withSuggestedName({
+                              ...current,
+                              thread_id,
+                              thread_title: picked?.label ?? thread_id,
+                              source: picked?.source ?? current.source,
+                            }),
+                          );
+                        }}
+                      />
+                    )}
+                  </div>
+                ) : null}
+
+                <div className="field">
+                  <span>{t("recipes.facet")}</span>
+                  <MenuSelect
+                    value={draft.thread_facet}
+                    options={[
+                      { value: "", label: t("recipes.facetNone") },
+                      { value: "ticket", label: t("recipes.facetTicket") },
+                      { value: "agent", label: t("recipes.facetAgent") },
+                      { value: "chat", label: t("recipes.facetChat") },
+                    ]}
+                    onChange={(thread_facet) =>
+                      setDraft((current) => ({
                         ...current,
-                        thread_id,
-                        thread_title: picked?.label ?? thread_id,
-                        source: picked?.source ?? current.source,
-                      }),
-                    );
-                  }}
-                />
-              )}
-            </div>
-          ) : null}
+                        thread_facet: thread_facet as ThreadFacet | "",
+                      }))
+                    }
+                  />
+                </div>
+              </section>
 
-          <div className="field">
-            <span>{t("recipes.facet")}</span>
-            <MenuSelect
-              value={draft.thread_facet}
-              options={[
-                { value: "", label: t("recipes.facetNone") },
-                { value: "ticket", label: t("recipes.facetTicket") },
-                { value: "agent", label: t("recipes.facetAgent") },
-                { value: "chat", label: t("recipes.facetChat") },
-              ]}
-              onChange={(thread_facet) =>
-                setDraft((current) => ({
-                  ...current,
-                  thread_facet: thread_facet as ThreadFacet | "",
-                }))
-              }
-            />
+              <section className="recipe-block">
+                <h3>{t("recipes.then")}</h3>
+                <div className="field">
+                  <span>{t("recipes.runWith")}</span>
+                  {executors.length === 1 ? (
+                    <p className="recipe-chip">{executors[0].label}</p>
+                  ) : (
+                    <MenuSelect
+                      value={draft.executor_type}
+                      options={executors.map((item) => ({
+                        value: item.executor_type,
+                        label: item.label,
+                      }))}
+                      onChange={(executor_type) =>
+                        setDraft((current) =>
+                          withSuggestedName({
+                            ...current,
+                            executor_type,
+                            config: configFromCatalog(
+                              executors.find((item) => item.executor_type === executor_type),
+                            ),
+                          }),
+                        )
+                      }
+                    />
+                  )}
+                </div>
+              </section>
+            </div>
+
+            {catalog?.fields.length ? (
+              <section className="recipe-block recipe-block-how">
+                <h3>{t("recipes.how")}</h3>
+                <RecipeParams
+                  catalog={catalog}
+                  values={draft.config}
+                  fallbackTitle={t("recipes.params")}
+                  onChange={(key, value) =>
+                    setDraft((current) => ({
+                      ...current,
+                      config: { ...current.config, [key]: value },
+                    }))
+                  }
+                />
+              </section>
+            ) : null}
           </div>
 
-          <div className="field">
-            <span>{t("recipes.runWith")}</span>
-            {executors.length === 1 ? (
-              <p className="recipe-chip">{executors[0].label}</p>
-            ) : (
-              <MenuSelect
-                value={draft.executor_type}
-                options={executors.map((item) => ({
-                  value: item.executor_type,
-                  label: item.label,
-                }))}
-                onChange={(executor_type) =>
-                  setDraft((current) =>
-                    withSuggestedName({
-                      ...current,
-                      executor_type,
-                      config: configFromCatalog(
-                        executors.find((item) => item.executor_type === executor_type),
-                      ),
-                    }),
-                  )
+          <div className="recipe-form-foot">
+            <div className="recipe-switches">
+              <SwitchRow
+                checked={draft.can_write_back}
+                onChange={(can_write_back) =>
+                  setDraft((current) => ({ ...current, can_write_back }))
+                }
+              >
+                {t("recipes.writeBackCheck")}
+              </SwitchRow>
+              {draft.id ? (
+                <SwitchRow
+                  checked={draft.enabled}
+                  onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
+                >
+                  {t("recipes.enabledCheck")}
+                </SwitchRow>
+              ) : null}
+            </div>
+
+            <label className="field">
+              <span>{t("recipes.name")}</span>
+              <input
+                value={draft.name}
+                placeholder={suggestedName}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    name: event.target.value,
+                    nameTouched: true,
+                  }))
                 }
               />
-            )}
-          </div>
+            </label>
 
-          {catalog ? (
-            <RecipeParams
-              catalog={catalog}
-              values={draft.config}
-              fallbackTitle={t("recipes.params")}
-              onChange={(key, value) =>
-                setDraft((current) => ({
-                  ...current,
-                  config: { ...current.config, [key]: value },
-                }))
-              }
-            />
-          ) : null}
-
-          <div className="recipe-switches">
-            <SwitchRow
-              checked={draft.can_write_back}
-              onChange={(can_write_back) =>
-                setDraft((current) => ({ ...current, can_write_back }))
-              }
-            >
-              {t("recipes.writeBackCheck")}
-            </SwitchRow>
-            {draft.id ? (
-              <SwitchRow
-                checked={draft.enabled}
-                onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
+            <div className="install-actions">
+              {draft.id || returnToWork ? (
+                <button type="button" className="ghost" onClick={resetDraft}>
+                  {t("recipes.cancel")}
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                className="primary"
+                disabled={
+                  busy || !draft.executor_type || (draft.scope === "thread" && !draft.thread_id)
+                }
               >
-                {t("recipes.enabledCheck")}
-              </SwitchRow>
-            ) : null}
-          </div>
-
-          <label className="field">
-            <span>{t("recipes.name")}</span>
-            <input
-              value={draft.name}
-              placeholder={suggestedName}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  name: event.target.value,
-                  nameTouched: true,
-                }))
-              }
-            />
-          </label>
-
-          <div className="install-actions">
-            {draft.id || returnToWork ? (
-              <button type="button" className="ghost" onClick={resetDraft}>
-                {t("recipes.cancel")}
+                {busy
+                  ? t("recipes.saving")
+                  : draft.id
+                    ? t("recipes.update")
+                    : returnToWork
+                      ? t("recipes.bindBack")
+                      : t("recipes.save")}
               </button>
-            ) : null}
-            <button
-              type="submit"
-              className="primary"
-              disabled={
-                busy || !draft.executor_type || (draft.scope === "thread" && !draft.thread_id)
-              }
-            >
-              {busy
-                ? t("recipes.saving")
-                : draft.id
-                  ? t("recipes.update")
-                  : returnToWork
-                    ? t("recipes.bindBack")
-                    : t("recipes.save")}
-            </button>
+            </div>
           </div>
         </form>
       )}
@@ -417,9 +438,29 @@ export function RecipesPage({
   return (
     <div className="page page-wide">
       <header className="page-hero">
+        <p className="page-eyebrow">{t("recipes.eyebrow")}</p>
         <h1>{t("recipes.title")}</h1>
         <p className="page-lead">{t("recipes.lead")}</p>
       </header>
+      {recipes.length === 0 ? (
+        <ol className="step-grid">
+          <li>
+            <span className="step-index">1</span>
+            <strong>{t("recipes.step1Title")}</strong>
+            {t("recipes.step1Body")}
+          </li>
+          <li>
+            <span className="step-index">2</span>
+            <strong>{t("recipes.step2Title")}</strong>
+            {t("recipes.step2Body")}
+          </li>
+          <li>
+            <span className="step-index">3</span>
+            <strong>{t("recipes.step3Title")}</strong>
+            {t("recipes.step3Body")}
+          </li>
+        </ol>
+      ) : null}
       {formFirst ? formCard : null}
       {listCard}
       {formFirst ? null : formCard}
