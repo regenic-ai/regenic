@@ -340,9 +340,10 @@ describe("personal /v1/me", () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
     const service = new IngestionService(
       new FsBlobStore(blobRoot),
-      new SqliteAuthorityStore(database),
+      authority,
     );
     await service.ingest({
       schema_version: INGEST_SCHEMA_VERSION,
@@ -392,6 +393,7 @@ describe("personal /v1/me", () => {
         }),
       ],
     });
+    authority.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
       const all = await (await fetch(`${origin}/v1/me/inbox`)).json();
