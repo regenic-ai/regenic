@@ -92,6 +92,11 @@ export class FsBlobStore implements BlobStore {
     }
   }
 
+  async clear(): Promise<void> {
+    await rm(this.root, { recursive: true, force: true });
+    await mkdir(this.root, { recursive: true });
+  }
+
   private pathFor(hash: string): string {
     return join(this.root, hash.slice(0, 2), hash.slice(2, 4), hash);
   }

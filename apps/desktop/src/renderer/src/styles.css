@@ -2579,6 +2579,64 @@ button {
   border-color: #3a2a16;
 }
 
+.primary.danger {
+  background: var(--risk);
+  color: var(--on-accent);
+}
+
+.store-footprint {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+
+.store-stat {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 42%, var(--surface));
+}
+
+.store-stat-value {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.store-stat-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.store-confirm {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #3a2a16;
+  border-radius: 10px;
+  background: var(--danger-soft);
+}
+
+.store-confirm p {
+  margin: 0 0 12px;
+  color: var(--text);
+}
+
+.action-ok {
+  color: var(--g300);
+  margin: 12px 0 0;
+}
+
+@media (max-width: 860px) {
+  .store-footprint {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 .install strong {
   color: var(--text);
   font-size: 14px;

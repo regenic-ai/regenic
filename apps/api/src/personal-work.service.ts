@@ -51,7 +51,7 @@ import {
   type WorkRun,
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
-import { PersonalConnectorError } from "./personal-errors";
+import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
@@ -92,6 +92,7 @@ export class PersonalWorkService implements OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
   private backgroundStarted = false;
+  private maintenanceHold = false;
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -116,11 +117,39 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
   }
 
+  async pauseForMaintenance(): Promise<void> {
+    this.maintenanceHold = true;
+    try {
+      await this.waitForQuiet();
+    } catch (error) {
+      this.maintenanceHold = false;
+      throw error;
+    }
+  }
+
+  resumeAfterMaintenance(): void {
+    this.maintenanceHold = false;
+  }
+
+  private async waitForQuiet(timeoutMs = 10_000): Promise<void> {
+    const started = Date.now();
+    while (this.ticking) {
+      if (Date.now() - started > timeoutMs) {
+        throw storeBusyError();
+      }
+      await delay(50);
+    }
+  }
+
   async afterConnectorTick(): Promise<void> {
-    if (this.ticking || !this.runtime.isReady()) {
+    if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
       return;
     }
     this.ticking = true;
+    if (this.maintenanceHold) {
+      this.ticking = false;
+      return;
+    }
     try {
       await this.reconcileInbox();
       await this.refreshRuns();
@@ -901,6 +930,12 @@ export class PersonalWorkService implements OnModuleDestroy {
     );
     return bodies.get(head.event.content_hash)?.body_text;
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function latestRunsByItem(runs: WorkRun[]): Map<string, WorkRun> {

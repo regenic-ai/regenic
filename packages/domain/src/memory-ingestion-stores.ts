@@ -14,6 +14,8 @@ import type {
   IngestCommitRequest,
   NewEvent,
   SourceIdentity,
+  StoreClearResult,
+  StoreFootprint,
   TombstoneEvent,
 } from "./ingestion";
 import { MemoryWorkStore } from "./memory-work-store";
@@ -79,6 +81,10 @@ export class MemoryBlobStore implements BlobStore {
 
   async exists(hash: string): Promise<boolean> {
     return this.blobs.has(hash);
+  }
+
+  async clear(): Promise<void> {
+    this.blobs.clear();
   }
 
   get size(): number {
@@ -259,6 +265,73 @@ export class MemoryAuthorityStore
     };
     this.prefs.set(prefKey(input.org_id, input.thread_id), next);
     return { ...next };
+  }
+
+  async summarizeStore(orgId: string): Promise<StoreFootprint> {
+    return this.storeFootprint(orgId);
+  }
+
+  async clearOperationalData(
+    orgId: string,
+    _now: string,
+  ): Promise<StoreClearResult> {
+    const before = this.storeFootprint(orgId);
+    const hashes = new Set(
+      this.events.flatMap((event) =>
+        event.org_id === orgId && event.content_hash ? [event.content_hash] : [],
+      ),
+    );
+    const keptEvents = this.events.filter((event) => event.org_id !== orgId);
+    this.events.length = 0;
+    this.events.push(...keptEvents);
+    for (const [key, event] of [...this.currentBySource]) {
+      if (event.org_id === orgId) {
+        this.currentBySource.delete(key);
+      }
+    }
+    for (const [eventId, decision] of [...this.dispositions]) {
+      if (decision.org_id === orgId) {
+        this.dispositions.delete(eventId);
+      }
+    }
+    for (const [key, pref] of [...this.prefs]) {
+      if (pref.org_id === orgId) {
+        this.prefs.delete(key);
+      }
+    }
+    this.dropOperationalWork(orgId);
+    for (const hash of hashes) {
+      if (!this.events.some((event) => event.content_hash === hash)) {
+        this.blobs.delete(hash);
+      }
+    }
+    const after = this.storeFootprint(orgId);
+    return {
+      cleared: {
+        events: before.events,
+        conversations: before.conversations,
+        work_items: before.work_items,
+        blobs: before.blobs,
+      },
+      kept: {
+        recipes: after.recipes,
+        connectors: after.connectors,
+      },
+    };
+  }
+
+  private storeFootprint(orgId: string): StoreFootprint {
+    const events = this.events.filter((event) => event.org_id === orgId);
+    return {
+      events: events.length,
+      conversations: new Set(events.map((event) => eventThreadId(event))).size,
+      work_items: this.workItemCount(orgId),
+      blobs: new Set(
+        events.flatMap((event) => (event.content_hash ? [event.content_hash] : [])),
+      ).size,
+      recipes: this.recipeCount(orgId),
+      connectors: 0,
+    };
   }
 
   async append(input: NewEvent): Promise<EventRecord> {

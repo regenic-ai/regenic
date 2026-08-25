@@ -770,4 +770,102 @@ describe("local ingestion persistence", () => {
     assert.equal(matched[0].event.external_id, "a_b:1");
     authorityStore.close();
   });
+
+  it("clears operational data and keeps connectors and recipes", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest(createBatch());
+    await authorityStore.createInstallation({
+      id: "keep-connector",
+      org_id: "local-owner",
+      connector_type: "fake-poll",
+      status: "enabled",
+      config: { scope: "personal" },
+      created_at: "2026-08-26T00:00:00.000Z",
+    });
+    await authorityStore.acquireLease({
+      installation_id: "keep-connector",
+      stream_key: "personal",
+      lease_owner: "worker-a",
+      now: "2026-08-26T00:00:00.000Z",
+      lease_duration_ms: 30_000,
+    });
+    await authorityStore.beginAttempt({
+      id: "attempt-clear",
+      org_id: "local-owner",
+      connector_installation_id: "keep-connector",
+      stream_key: "personal",
+      delivery_id: "page-1",
+      started_at: "2026-08-26T00:00:00.000Z",
+    });
+    await authorityStore.settleAttempt({
+      attempt_id: "attempt-clear",
+      installation_id: "keep-connector",
+      stream_key: "personal",
+      lease_owner: "worker-a",
+      finished_at: "2026-08-26T00:00:01.000Z",
+      accepted_count: 1,
+      duplicate_count: 0,
+      quarantined_count: 0,
+      retryable_failure_count: 0,
+      next_cursor: "cursor-keep",
+      quarantines: [],
+    });
+    await authorityStore.putRecipe({
+      id: "keep-recipe",
+      org_id: "local-owner",
+      name: "Keep me",
+      match: { record_class: "task" },
+      executor_type: "dsh",
+      executor_config: {},
+      can_write_back: false,
+      enabled: true,
+      created_at: "2026-08-26T00:00:00.000Z",
+      updated_at: "2026-08-26T00:00:00.000Z",
+    });
+    await authorityStore.putWorkItem({
+      id: "drop-work",
+      org_id: "local-owner",
+      thread_id: "regenic:source-event-1",
+      unit_key: "unit-1",
+      record_class: "utterance",
+      thread_facet: "chat",
+      status: "open",
+      created_at: "2026-08-26T00:00:00.000Z",
+      updated_at: "2026-08-26T00:00:00.000Z",
+    });
+    const before = await authorityStore.summarizeStore("local-owner");
+    assert.ok(before.events >= 1);
+    assert.ok(before.conversations >= 1);
+    assert.equal(before.work_items, 1);
+    assert.equal(before.recipes, 1);
+    assert.equal(before.connectors, 1);
+
+    const cleared = await authorityStore.clearOperationalData(
+      "local-owner",
+      "2026-08-26T00:01:00.000Z",
+    );
+    const after = await authorityStore.summarizeStore("local-owner");
+    const cursor = await authorityStore.getCursor("keep-connector", "personal");
+    const recipes = await authorityStore.listRecipes("local-owner");
+    const installations = await authorityStore.listInstallations("local-owner");
+    const attempts = await authorityStore.listAttempts("keep-connector");
+
+    assert.equal(cleared.cleared.events, before.events);
+    assert.equal(cleared.cleared.work_items, 1);
+    assert.equal(cleared.kept.recipes, 1);
+    assert.equal(cleared.kept.connectors, 1);
+    assert.equal(after.events, 0);
+    assert.equal(after.conversations, 0);
+    assert.equal(after.work_items, 0);
+    assert.equal(after.blobs, 0);
+    assert.equal(after.recipes, 1);
+    assert.equal(after.connectors, 1);
+    assert.equal(recipes[0].id, "keep-recipe");
+    assert.equal(installations[0].id, "keep-connector");
+    assert.equal(attempts.length, 0);
+    assert.equal(cursor.cursor, undefined);
+    assert.ok(cursor.cursor_version > 1);
+    authorityStore.close();
+  });
 });

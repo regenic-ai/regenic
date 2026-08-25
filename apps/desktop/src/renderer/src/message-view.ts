@@ -218,7 +218,7 @@ export function threadTitle(thread: InboxThread): string {
       return prompt;
     }
     const face = threadFace(thread);
-    if (face.activity !== "working") {
+    if (face && face.activity !== "working") {
       return firstLine(face.body_text, 120) || thread.label;
     }
     return thread.label;
@@ -231,7 +231,7 @@ export function threadTitle(thread: InboxThread): string {
     return thread.label;
   }
   const face = threadFace(thread);
-  if (face.activity === "working") {
+  if (!face || face.activity === "working") {
     return thread.label;
   }
   return firstLine(face.body_text, 120) || thread.label;
@@ -292,7 +292,7 @@ function lastVisibleMessage(thread: InboxThread): InboxViewItem | undefined {
   return undefined;
 }
 
-export function threadFace(thread: InboxThread): InboxViewItem {
+export function threadFace(thread: InboxThread): InboxViewItem | undefined {
   const visible = thread.messages.filter((item) => item.activity !== "working");
   const pool = visible.length > 0 ? visible : thread.messages;
   const user = pool.find((item) => messageRole(item) === "user");

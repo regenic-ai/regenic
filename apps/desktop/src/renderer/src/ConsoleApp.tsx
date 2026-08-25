@@ -109,6 +109,7 @@ export function ConsoleApp() {
   selectedIdRef.current = selectedId;
   const refreshInFlight = useRef(false);
   const refreshAgain = useRef(false);
+  const workspaceEpoch = useRef(0);
   const inboxDigestRef = useRef<string | null>(null);
   const openedAtRef = useRef<Record<string, string>>({});
   const reuseHintRef = useRef<InboxReuse | undefined>(undefined);
@@ -251,6 +252,7 @@ export function ConsoleApp() {
     }
     olderBusyRef.current.add(threadId);
     setLoadingOlderId(threadId);
+    const epoch = workspaceEpoch.current;
     try {
       const page = await fetchInbox({
         thread_id: threadId,
@@ -258,6 +260,9 @@ export function ConsoleApp() {
         before_id: cursor.before_id,
         limit: THREAD_PAGE_SIZE,
       });
+      if (workspaceEpoch.current !== epoch) {
+        return;
+      }
       setHasOlderByThread((prev) => ({
         ...prev,
         [threadId]: hasOlderPage(page.length),
@@ -315,8 +320,12 @@ export function ConsoleApp() {
     try {
       do {
         refreshAgain.current = false;
+        const epoch = workspaceEpoch.current;
         const detailed = navRef.current === "engine";
         const nextEngine = await fetchEngine({ detailed });
+        if (workspaceEpoch.current !== epoch) {
+          continue;
+        }
         const digest = nextEngine.inbox_digest ?? "";
         const now = Date.now();
         const skipHeads =
@@ -325,7 +334,11 @@ export function ConsoleApp() {
           inboxRef.current.length > 0 &&
           now - lastFullRef.current < FULL_REFRESH_MS;
         if (!skipHeads) {
-          applyHeads(await fetchInbox({ heads: true }));
+          const heads = await fetchInbox({ heads: true });
+          if (workspaceEpoch.current !== epoch) {
+            continue;
+          }
+          applyHeads(heads);
           inboxDigestRef.current = digest || inboxDigestRef.current;
           lastFullRef.current = Date.now();
         }
@@ -335,7 +348,13 @@ export function ConsoleApp() {
             openId,
             loadedThreadsRef.current.has(openId) ? "poll" : "open",
           );
+          if (workspaceEpoch.current !== epoch) {
+            continue;
+          }
           await ackOpenThread(openId, loaded);
+        }
+        if (workspaceEpoch.current !== epoch) {
+          continue;
         }
         delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
@@ -355,6 +374,46 @@ export function ConsoleApp() {
       refreshInFlight.current = false;
     }
   }, []);
+
+  const resetWorkspace = useCallback(async () => {
+    workspaceEpoch.current += 1;
+    const openIds = new Set(
+      [
+        ...Object.keys(threadLoadSeq.current),
+        ...loadedThreadsRef.current,
+        ...Object.keys(messagesRef.current),
+        selectedIdRef.current,
+      ].filter((id): id is string => Boolean(id)),
+    );
+    for (const id of openIds) {
+      threadLoadSeq.current[id] = (threadLoadSeq.current[id] ?? 0) + 1;
+    }
+    inboxRef.current = [];
+    messagesRef.current = {};
+    draftsRef.current = [];
+    selectedIdRef.current = null;
+    prefOverlayRef.current = {};
+    loadedThreadsRef.current.clear();
+    olderBusyRef.current.clear();
+    inboxDigestRef.current = null;
+    groupedRef.current = [];
+    groupedInboxRef.current = null;
+    openedAtRef.current = {};
+    ackStampRef.current = {};
+    lastFullRef.current = 0;
+    reuseHintRef.current = undefined;
+    setInbox([]);
+    setMessagesByThread({});
+    setDrafts([]);
+    setSelectedId(null);
+    setOpeningId(null);
+    setRecipeSeed(null);
+    setPrefOverlay({});
+    setHasOlderByThread({});
+    setThreadError({});
+    refreshAgain.current = true;
+    await refresh();
+  }, [refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -731,7 +790,9 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
-        {nav === "settings" ? <SettingsPage onChanged={refresh} /> : null}
+        {nav === "settings" ? (
+          <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
+        ) : null}
       </div>
     </div>
   );

@@ -350,6 +350,28 @@ export interface PersonalEngineView {
   catalog: ConnectorCatalogItem[];
 }
 
+export interface StoreView {
+  events: number;
+  conversations: number;
+  work_items: number;
+  blobs: number;
+  recipes: number;
+  connectors: number;
+}
+
+export interface StoreClearView {
+  cleared: {
+    events: number;
+    conversations: number;
+    work_items: number;
+    blobs: number;
+  };
+  kept: {
+    recipes: number;
+    connectors: number;
+  };
+}
+
 export type EngineChipState = "running" | "syncing" | "stopped";
 
 export interface ReplyAttachmentInput {

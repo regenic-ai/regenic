@@ -499,4 +499,15 @@ describe("thread activity", () => {
     ]);
     assert.equal(threadTitle(titled), "Optimize the outline");
   });
+
+  it("titles an empty prompt-mode draft from its label", () => {
+    const draft = thread([], {
+      label: "New conversation",
+      list_title: "prompt",
+      conversation_label: null,
+    });
+    assert.equal(threadTitle(draft), "New conversation");
+    assert.equal(threadPreview(draft), "New conversation");
+    assert.equal(listPreview(draft, "New conversation"), null);
+  });
 });
