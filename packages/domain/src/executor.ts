@@ -16,18 +16,29 @@ export interface ExecutorCapabilities {
   prompts?: boolean;
 }
 
+/**
+ * Invoke schema owned by one TaskExecutor. The kernel stores values in
+ * Recipe.executor_config and never reads the keys. The desktop only renders
+ * this catalog. DSH, Cursor, and a connector-mounted agent each declare
+ * their own fields.
+ */
 export interface ExecutorCatalogField {
   key: string;
   label: string;
   required?: boolean;
   placeholder?: string;
   default?: string;
+  hint?: string;
+  kind?: "text" | "textarea" | "select";
+  options?: Array<{ value: string; label: string }>;
 }
 
 export interface ExecutorCatalogEntry {
   executor_type: string;
   label: string;
   description?: string;
+  /** Section title above invoke fields. Desktop falls back to its own copy. */
+  params_label?: string;
   source?: string;
   attach?: AttachMode;
   fields: ExecutorCatalogField[];

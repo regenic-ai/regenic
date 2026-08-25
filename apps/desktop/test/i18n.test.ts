@@ -13,6 +13,8 @@ describe("desktop locale", () => {
   it("keeps English as the default catalog", () => {
     assert.equal(translate("en", "settings.language"), "Language");
     assert.equal(translate("zh", "settings.language"), "语言");
+    assert.equal(translate("zh", "recipes.params"), "调用参数");
+    assert.equal(translate("en", "recipes.prompt"), "Prompt");
     assert.equal(translate("en", "tray.workCount", { count: 3 }), "3 current work");
     assert.equal(translate("zh", "tray.workCount", { count: 3 }), "3 条当前工作");
     assert.equal(translate("zh", "engine.whatsapp.title"), "WhatsApp 个人导出");

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { formatChatTime } from "./format";
+import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
 import {
   messageRole,
@@ -429,6 +430,7 @@ const ChatRow = memo(function ChatRow({
   canReply: boolean;
   onReply: (item: InboxViewItem) => void;
 }) {
+  const { t } = useLocale();
   const receipt = receiptCopy(item);
   return (
     <div
@@ -446,7 +448,7 @@ const ChatRow = memo(function ChatRow({
           ) : null}
           {canReply ? (
             <button type="button" className="chat-reply" onClick={() => onReply(item)}>
-              Reply
+              {t("thread.reply")}
             </button>
           ) : null}
         </div>

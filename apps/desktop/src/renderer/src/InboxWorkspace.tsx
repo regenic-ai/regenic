@@ -88,69 +88,67 @@ export function InboxWorkspace({
       <aside className="list">
         <div className="list-chrome">
           <div className="list-head">
-            <span>{t("inbox.title")}</span>
-            {threads.length > 0 ? (
-              <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
-                <button
-                  type="button"
-                  className={sortMode === "attention" ? "active" : ""}
-                  aria-pressed={sortMode === "attention"}
-                  onClick={() => onSortMode("attention")}
-                >
-                  {t("inbox.attention")}
-                </button>
-                <button
-                  type="button"
-                  className={sortMode === "normal" ? "active" : ""}
-                  aria-pressed={sortMode === "normal"}
-                  onClick={() => onSortMode("normal")}
-                >
-                  {t("inbox.normal")}
-                </button>
-              </div>
-            ) : null}
-          </div>
-          {threads.length > 0 || canCreate ? (
-            <div className="list-toolbar">
-              {channels.length > 1 ? (
-                <FilterRow
-                  label={t("inbox.channel")}
-                  options={[{ id: "all", label: t("inbox.all") }, ...channels]}
-                  value={channelFilter}
-                  onChange={setChannelFilter}
-                />
-              ) : null}
-              <div className="list-toolbar-actions">
-                {threads.length > 0 ? (
+            <span className="list-title">{t("inbox.title")}</span>
+            <div className="list-head-actions">
+              {threads.length > 0 ? (
+                <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
                   <button
                     type="button"
-                    className={`item-tool list-pin${pinFilter === "pinned" ? " is-on" : ""}`}
-                    aria-pressed={pinFilter === "pinned"}
-                    aria-label={pinFilter === "pinned" ? t("inbox.showAll") : t("inbox.pinOnly")}
-                    title={pinFilter === "pinned" ? t("inbox.showingPinned") : t("inbox.pinnedOnly")}
-                    onClick={() =>
-                      setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
-                    }
+                    className={sortMode === "attention" ? "active" : ""}
+                    aria-pressed={sortMode === "attention"}
+                    onClick={() => onSortMode("attention")}
                   >
-                    <PinIcon filled={pinFilter === "pinned"} />
+                    {t("inbox.attention")}
                   </button>
-                ) : null}
-                <NewConversationButton
-                  targets={createTargets}
-                  creating={creating}
-                  channelFilter={channelFilter}
-                  onCreate={async (installationId) => {
-                    const created = await onCreate(installationId);
-                    if (
-                      created &&
-                      channelFilter !== "all" &&
-                      channelFilter !== created.channel
-                    ) {
-                      setChannelFilter(created.channel);
-                    }
-                  }}
-                />
-              </div>
+                  <button
+                    type="button"
+                    className={sortMode === "normal" ? "active" : ""}
+                    aria-pressed={sortMode === "normal"}
+                    onClick={() => onSortMode("normal")}
+                  >
+                    {t("inbox.normal")}
+                  </button>
+                </div>
+              ) : null}
+              {threads.length > 0 ? (
+                <button
+                  type="button"
+                  className={`item-tool list-pin${pinFilter === "pinned" ? " is-on" : ""}`}
+                  aria-pressed={pinFilter === "pinned"}
+                  aria-label={pinFilter === "pinned" ? t("inbox.showAll") : t("inbox.pinOnly")}
+                  title={pinFilter === "pinned" ? t("inbox.showingPinned") : t("inbox.pinnedOnly")}
+                  onClick={() =>
+                    setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
+                  }
+                >
+                  <PinIcon filled={pinFilter === "pinned"} />
+                </button>
+              ) : null}
+              <NewConversationButton
+                targets={createTargets}
+                creating={creating}
+                channelFilter={channelFilter}
+                onCreate={async (installationId) => {
+                  const created = await onCreate(installationId);
+                  if (
+                    created &&
+                    channelFilter !== "all" &&
+                    channelFilter !== created.channel
+                  ) {
+                    setChannelFilter(created.channel);
+                  }
+                }}
+              />
+            </div>
+          </div>
+          {channels.length > 1 ? (
+            <div className="list-toolbar">
+              <FilterRow
+                label={t("inbox.channel")}
+                options={[{ id: "all", label: t("inbox.all") }, ...channels]}
+                value={channelFilter}
+                onChange={setChannelFilter}
+              />
             </div>
           ) : null}
         </div>
@@ -272,6 +270,19 @@ function WorkRow({
       <div className="item-main">
         <div className="item-copy">
           <div className="item-top">
+            <ThreadTitleField
+              className="item-title"
+              value={title}
+              editing={renaming}
+              onEditingChange={onEditingChange}
+              onSave={onRename}
+            />
+            <span className="item-time">
+              {thread.unread ? <span className="item-unread" aria-label={t("inbox.unreadAria")} /> : null}
+              {latest ? formatChatTime(latest.event.occurred_at) : ""}
+            </span>
+          </div>
+          <div className="item-meta">
             <span className="item-tags">
               <span className={`channel-tag channel-${thread.channel}`}>
                 {thread.channel_label}
@@ -284,19 +295,8 @@ function WorkRow({
                 </span>
               ) : null}
             </span>
-            <span className="item-time">
-              {thread.unread ? <span className="item-unread" aria-label={t("inbox.unreadAria")} /> : null}
-              {latest ? formatChatTime(latest.event.occurred_at) : ""}
-            </span>
+            {preview ? <div className="item-preview">{preview}</div> : null}
           </div>
-          <ThreadTitleField
-            className="item-title"
-            value={title}
-            editing={renaming}
-            onEditingChange={onEditingChange}
-            onSave={onRename}
-          />
-          {preview ? <div className="item-preview">{preview}</div> : null}
         </div>
       </div>
       <div className="item-tools">
@@ -381,6 +381,7 @@ function NewConversationButton({
           void onCreate(preferred.id);
         }}
       >
+        <span className="list-new-mark" aria-hidden="true">+</span>
         {creating ? t("inbox.starting") : t("inbox.newChannel", { channel: preferred.channel_label })}
       </button>
     );
@@ -395,6 +396,7 @@ function NewConversationButton({
         aria-haspopup="menu"
         onClick={() => setOpen((current) => !current)}
       >
+        <span className="list-new-mark" aria-hidden="true">+</span>
         {creating ? t("inbox.starting") : t("inbox.newMenu")}
       </button>
       {open ? (

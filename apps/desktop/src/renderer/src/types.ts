@@ -152,12 +152,16 @@ export interface ExecutorCatalogField {
   required?: boolean;
   placeholder?: string;
   default?: string;
+  hint?: string;
+  kind?: "text" | "textarea" | "select";
+  options?: Array<{ value: string; label: string }>;
 }
 
 export interface ExecutorCatalogEntry {
   executor_type: string;
   label: string;
   description?: string;
+  params_label?: string;
   source?: string;
   attach?: "interactive" | "absentee";
   fields: ExecutorCatalogField[];
@@ -192,6 +196,12 @@ export interface RecipeSeed {
 export interface RecipeSourceOption {
   id: string;
   label: string;
+}
+
+export interface RecipeConversationOption {
+  id: string;
+  label: string;
+  source?: string;
 }
 
 export interface UiPrefsView {

@@ -40,18 +40,20 @@ export function ConnectorKind({
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
   return (
-    <div className="connector-kind">
+    <div className={`connector-kind${kind.installed ? " is-installed" : ""}`}>
       <div className="install">
         <div>
           <strong>{kind.title}</strong>
           <div className="muted">{kind.description}</div>
-          <div className="muted">
+          <div className="install-meta">
             <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
               {kind.installed
                 ? t("connector.installed", { count: kind.instance_count })
                 : t("connector.notInstalled")}
             </span>
-            {t("connector.credentials", { hint: kind.credential_hint })}
+            <span className="muted">
+              {t("connector.credentials", { hint: kind.credential_hint })}
+            </span>
           </div>
           <PrerequisiteList
             items={visiblePrerequisites(kind, defaultFieldValues(kind))}
@@ -60,7 +62,7 @@ export function ConnectorKind({
         <div className="install-actions">
           <button
             type="button"
-            className="primary"
+            className={kind.installed ? "ghost" : "primary"}
             disabled={busyId !== null || syncingAll}
             onClick={onOpenInstall}
           >
@@ -457,15 +459,16 @@ function ConnectorRow({
     <div className="install-block">
       <div className="install install-instance">
         <div>
-          <strong>
+          <strong title={installation.id}>
             {connectorLabel(installation.connector_type)} · {installation.label}
           </strong>
-          <div className="muted">
+          <div className="install-meta">
             <span className={`chip ${statusChip}`.trim()}>
               {installationStatusLabel(installation.status)}
             </span>
-            {installation.detail ? ` · ${installation.detail}` : ""}
-            {` · ${installation.id}`}
+            {installation.detail ? (
+              <span className="muted">{installation.detail}</span>
+            ) : null}
           </div>
           <div className="muted">{attemptSummary(installation.last_attempt)}</div>
         </div>

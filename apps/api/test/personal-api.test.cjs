@@ -2120,6 +2120,9 @@ describe("personal /v1/me", () => {
       assert.equal(executors[0].executor_type, "dsh");
       assert.equal(executors[0].source, "dsh");
       assert.equal(executors[0].attach, "absentee");
+      assert.equal(executors[0].fields[0].key, "skill");
+      assert.equal(executors[0].fields[1].key, "prompt");
+      assert.equal(executors[0].fields[1].kind, "textarea");
       const emptyMatch = await fetch(`${origin}/v1/me/recipes`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2158,14 +2161,18 @@ describe("personal /v1/me", () => {
             name: "Feishu tasks",
             match: { record_class: "task", source: "feishu" },
             executor_type: "dsh",
+            executor_config: { skill: "review", prompt: "Reply with a decision." },
             can_write_back: true,
           }),
         })
       ).json();
       assert.equal(created.executor_type, "dsh");
       assert.equal(created.can_write_back, true);
+      assert.equal(created.executor_config.skill, "review");
+      assert.equal(created.executor_config.prompt, "Reply with a decision.");
       const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
       assert.equal(recipes.length, 1);
+      assert.equal(recipes[0].executor_config.prompt, "Reply with a decision.");
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",

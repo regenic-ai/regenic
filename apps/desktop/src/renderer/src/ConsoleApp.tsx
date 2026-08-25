@@ -638,11 +638,13 @@ export function ConsoleApp() {
           <BrandBadge />
         </div>
         <div className="search">{t("chrome.searchSoon")}</div>
-        <EngineChip state={chip} />
-        {host && host.memory.kind !== "ok" ? (
-          <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
-        ) : null}
-        <span className="chip">{t("chrome.currentWorkCount", { count: listThreads.length })}</span>
+        <div className="titlebar-meta">
+          <EngineChip state={chip} />
+          {host && host.memory.kind !== "ok" ? (
+            <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
+          ) : null}
+          <span className="chip">{t("chrome.currentWorkCount", { count: listThreads.length })}</span>
+        </div>
       </header>
       <nav className="rail" aria-label="Main">
         <div className="rail-top">
@@ -711,6 +713,11 @@ export function ConsoleApp() {
         {nav === "recipes" ? (
           <RecipesPage
             sources={recipeSources}
+            conversations={listThreads.map((thread) => ({
+              id: thread.id,
+              label: threadTitle(thread),
+              source: thread.source || thread.channel,
+            }))}
             seed={recipeSeed}
             onSeedConsumed={consumeRecipeSeed}
             onBound={() => setNav("inbox")}

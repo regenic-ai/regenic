@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { dshTaskExecutor } = require("../dist");
+const { composeDshStdin, dshPromptOf, dshSkillOf, dshTaskExecutor } = require("../dist");
 
 function ctx(overrides = {}) {
   return {
@@ -40,7 +40,56 @@ describe("dshTaskExecutor", () => {
     assert.match(sent[0], /please handle the ticket/);
     assert.equal(dshTaskExecutor.catalog().executor_type, "dsh");
     assert.equal(dshTaskExecutor.catalog().attach, "absentee");
+    assert.equal(dshTaskExecutor.catalog().fields[0].key, "skill");
+    assert.equal(dshTaskExecutor.catalog().fields[0].kind, "text");
+    assert.equal(dshTaskExecutor.catalog().fields[1].key, "prompt");
+    assert.equal(dshTaskExecutor.catalog().fields[1].kind, "textarea");
+    assert.ok(dshTaskExecutor.catalog().fields[1].hint);
     assert.equal(dshTaskExecutor.capabilities().prompts, true);
+  });
+
+  it("composes skill and prompt ahead of the work evidence", async () => {
+    assert.equal(dshPromptOf({ prompt: "  reply in three lines  " }), "reply in three lines");
+    assert.equal(dshPromptOf({ instruction: "legacy playbook" }), "legacy playbook");
+    assert.equal(dshSkillOf({ skill: " review " }), "review");
+    assert.equal(
+      composeDshStdin({
+        skill: "review",
+        prompt: "Check the repo, then reply.",
+        evidence_text: "please handle the ticket",
+      }),
+      "SKILL review\nCheck the repo, then reply.\n\nWORK\nplease handle the ticket",
+    );
+    assert.equal(
+      composeDshStdin({
+        instruction: "Check the repo, then reply.",
+        evidence_text: "please handle the ticket",
+      }),
+      "Check the repo, then reply.\n\nWORK\nplease handle the ticket",
+    );
+    assert.equal(
+      composeDshStdin({ evidence_text: "please handle the ticket" }),
+      "please handle the ticket",
+    );
+
+    const sent = [];
+    await dshTaskExecutor.start(
+      {
+        work_item: { id: "w1", thread_id: "feishu:oc_1" },
+        recipe: {
+          id: "r1",
+          executor_type: "dsh",
+          executor_config: { skill: "review", prompt: "Reply with a decision." },
+        },
+        evidence_text: "please handle the ticket",
+      },
+      ctx({
+        writeStdin: async (_thread, text) => {
+          sent.push(text);
+        },
+      }),
+    );
+    assert.match(sent[0], /^SKILL review\nReply with a decision\.\n\nWORK\nplease handle the ticket$/);
   });
 
   it("maps a live prompt to waiting_human and DSH turn/end to exit", async () => {
