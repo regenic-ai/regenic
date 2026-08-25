@@ -73,6 +73,26 @@ describe("message contract", () => {
     );
   });
 
+  it("keeps a DSH turn boundary on the stored surface", () => {
+    const record = channelRecord({
+      channel: "dsh",
+      kind: "system",
+      direction: "inbound",
+      external_id: "sess-1:9",
+      occurred_at: "2026-08-21T00:00:00.000Z",
+      actor_id: "assistant",
+      scope_id: "sess-1",
+      type: "thread_status",
+      turn: { state: "ended", ok: true, reason: "completed" },
+      text: "",
+    });
+    assert.deepEqual(surfaceFromParts(record.content).turn, {
+      state: "ended",
+      ok: true,
+      reason: "completed",
+    });
+  });
+
   it("keeps connector activity on the stored surface", () => {
     const record = channelRecord({
       channel: "dsh",

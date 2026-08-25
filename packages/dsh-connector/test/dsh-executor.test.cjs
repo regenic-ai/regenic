@@ -43,7 +43,7 @@ describe("dshTaskExecutor", () => {
     assert.equal(dshTaskExecutor.capabilities().prompts, true);
   });
 
-  it("maps a live prompt to waiting_human and never completes from transcript", async () => {
+  it("maps a live prompt to waiting_human and DSH turn/end to exit", async () => {
     const waiting = await dshTaskExecutor.status(
       { id: "run-1", agent_thread_id: "dsh:session-1", status: "running" },
       ctx({
@@ -58,19 +58,59 @@ describe("dshTaskExecutor", () => {
     const spoken = await dshTaskExecutor.status(
       { id: "run-1", agent_thread_id: "dsh:session-1", status: "running" },
       ctx({
-        readTranscript: async () => ({ kind: "assistant", text: "done" }),
+        readTranscript: async () => ({
+          kind: "assistant",
+          text: "The travel request is approved.",
+        }),
       }),
     );
     assert.equal(spoken.status, "running");
-    assert.equal(spoken.transcript.text, "done");
     assert.equal(spoken.result, undefined);
+
+    const ended = await dshTaskExecutor.status(
+      { id: "run-1", agent_thread_id: "dsh:session-1", status: "running" },
+      ctx({
+        readTranscript: async () => ({
+          kind: "assistant",
+          text: "The travel request is approved.",
+          turn: { state: "ended", ok: true, reason: "completed" },
+        }),
+      }),
+    );
+    assert.equal(ended.status, "completed");
+    assert.equal(ended.result.summary, "The travel request is approved.");
+
+    const failed = await dshTaskExecutor.status(
+      { id: "run-1", agent_thread_id: "dsh:session-1", status: "running" },
+      ctx({
+        readTranscript: async () => ({
+          kind: "assistant",
+          text: "provider down",
+          turn: { state: "ended", ok: false, reason: "error" },
+        }),
+      }),
+    );
+    assert.equal(failed.status, "failed");
 
     const working = await dshTaskExecutor.status(
       { id: "run-1", agent_thread_id: "dsh:session-1", status: "running" },
       ctx({
-        readTranscript: async () => ({ kind: "system", activity: "working" }),
+        readTranscript: async () => ({
+          kind: "assistant",
+          text: "Looking now.",
+          turn: { state: "open" },
+        }),
       }),
     );
     assert.equal(working.status, "running");
+    assert.equal(working.result, undefined);
+
+    const onlyOurAsk = await dshTaskExecutor.status(
+      { id: "run-1", agent_thread_id: "dsh:session-1", status: "running" },
+      ctx({
+        readTranscript: async () => ({ kind: "user", text: "please handle" }),
+      }),
+    );
+    assert.equal(onlyOurAsk.status, "running");
   });
 });

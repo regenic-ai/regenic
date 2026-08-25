@@ -1,7 +1,7 @@
 import {
   handleFromWait,
   parseConversationThread,
-  waitFromTranscript,
+  waitFromAbsentee,
   type ExecutorContext,
   type ExecutorResumeInput,
   type ExecutorRunHandle,
@@ -64,7 +64,7 @@ export const dshTaskExecutor: TaskExecutor = {
     }
     const prompts = await ctx.listPrompts(thread);
     const transcript = await ctx.readTranscript(sysoutId);
-    return handleFromWait(waitFromTranscript({ prompts, transcript }), {
+    return handleFromWait(waitFromAbsentee({ prompts, transcript }), {
       external_run_id: sysoutId,
       sysout_id: sysoutId,
     });

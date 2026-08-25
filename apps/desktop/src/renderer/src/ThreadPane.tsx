@@ -39,7 +39,7 @@ export const ThreadPane = memo(function ThreadPane({
   onRename,
   onPin,
   onRunWork,
-  onCompleteWork,
+  onDismissWork,
   onBindRecipe,
 }: {
   thread: InboxThread;
@@ -54,7 +54,7 @@ export const ThreadPane = memo(function ThreadPane({
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
   onRunWork?: () => Promise<void>;
-  onCompleteWork?: () => Promise<void>;
+  onDismissWork?: () => Promise<void>;
   onBindRecipe?: () => void;
 }) {
   const { t } = useLocale();
@@ -174,7 +174,9 @@ export const ThreadPane = memo(function ThreadPane({
             ) : null}
             {onRunWork &&
             thread.work &&
-            (thread.work.status === "open" || thread.work.status === "failed") ? (
+            (thread.work.status === "open" ||
+              thread.work.status === "failed" ||
+              thread.work.status === "skipped") ? (
               <button
                 type="button"
                 className="primary thread-run"
@@ -186,19 +188,20 @@ export const ThreadPane = memo(function ThreadPane({
                 {t("thread.startRun")}
               </button>
             ) : null}
-            {onCompleteWork &&
+            {onDismissWork &&
             thread.work &&
-            (thread.work.status === "running" ||
+            (thread.work.status === "open" ||
+              thread.work.status === "running" ||
               thread.work.status === "waiting_human") ? (
               <button
                 type="button"
-                className="primary thread-run"
-                title={t("thread.markDoneTitle")}
+                className="ghost thread-run"
+                title={t("thread.dismissTitle")}
                 onClick={() => {
-                  void onCompleteWork();
+                  void onDismissWork();
                 }}
               >
-                {t("thread.markDone")}
+                {t("thread.dismiss")}
               </button>
             ) : null}
             {onBindRecipe && !thread.work?.recipe_id ? (

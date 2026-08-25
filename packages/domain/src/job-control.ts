@@ -1,4 +1,4 @@
-import type { MessageKind } from "./message-contract";
+import type { MessageKind, MessageTurn } from "./message-contract";
 import type { ThreadPrompt } from "./thread-surface";
 import {
   isActiveWorkStatus,
@@ -14,10 +14,14 @@ export interface Transcript {
   kind: MessageKind;
   text?: string;
   activity?: string;
+  turn?: MessageTurn;
 }
 
 /**
- * wait(2) / sd_notify. Transcript is observational and never implies exit.
+ * wait(2) / sd_notify.
+ * The words in a bubble are not exit. Public DSH notify is turn/end, or a
+ * dead session. An open turn or working bit stays running. Humans dismiss
+ * a job; they do not fake exited.
  */
 export type WaitStatus =
   | { state: "running"; transcript?: Transcript }
@@ -51,6 +55,58 @@ export function waitFromTranscript(input: {
     };
   }
   return { state: "running", transcript: input.transcript ?? undefined };
+}
+
+/**
+ * Public absentee wait. Speech is still not exit; DSH turn/end (or a gone
+ * session) is notify. An open turn stays running even after an assistant face.
+ */
+export function waitFromAbsentee(input: {
+  prompts: ThreadPrompt[];
+  transcript: Transcript | null;
+  alive?: boolean;
+}): WaitStatus {
+  const transcript = input.transcript ?? undefined;
+  if (input.prompts.length > 0) {
+    return {
+      state: "waiting_human",
+      prompts: input.prompts,
+      transcript,
+    };
+  }
+  if (transcript?.activity === "working" || transcript?.turn?.state === "open") {
+    return { state: "running", transcript };
+  }
+  if (input.alive === false) {
+    if (transcript?.turn?.state === "ended") {
+      return exitedFromTranscript(transcript, transcript.turn.ok !== false);
+    }
+    return exitedFromTranscript(transcript, false);
+  }
+  if (transcript?.activity === "awaiting_user") {
+    return {
+      state: "waiting_human",
+      prompts: [],
+      transcript,
+    };
+  }
+  if (transcript?.turn?.state === "ended") {
+    return exitedFromTranscript(transcript, transcript.turn.ok !== false);
+  }
+  return { state: "running", transcript };
+}
+
+function exitedFromTranscript(
+  transcript: Transcript | undefined,
+  ok: boolean,
+): WaitStatus {
+  const summary = transcript?.text?.trim();
+  return {
+    state: "exited",
+    ok,
+    result: summary ? { summary } : undefined,
+    transcript,
+  };
 }
 
 export function runStatusFromWait(wait: WaitStatus): WorkRunStatus {

@@ -493,15 +493,15 @@ export async function runWorkItem(id: string): Promise<void> {
   }
 }
 
-export async function completeWorkItem(id: string): Promise<void> {
-  const response = await fetch(`${origin()}/v1/me/work-items/${id}/complete`, {
+export async function dismissWorkItem(id: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/work-items/${id}/dismiss`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",
   });
   if (!response.ok) {
     const body = (await response.json()) as { error?: { message?: string } };
-    throw new Error(body.error?.message ?? `work complete ${response.status}`);
+    throw new Error(body.error?.message ?? `work dismiss ${response.status}`);
   }
 }
 

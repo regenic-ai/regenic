@@ -94,6 +94,8 @@ export function workNextStepCopy(thread: {
       return t("work.hint.waiting");
     case "done":
       return thread.work.can_write_back ? t("work.hint.doneWrite") : t("work.hint.done");
+    case "skipped":
+      return t("work.hint.skipped");
     default:
       return thread.work.recipe_id ? null : t("work.hint.noRecipe");
   }

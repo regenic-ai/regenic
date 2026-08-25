@@ -41,7 +41,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 - 会话名下可出最后一条预览；标题和正文相同时不重复。
 - 排序：`normal` 为置顶 + 最近活动；`attention` 为等人 / 运行中 / 未读优先，并在档位不同时分组。选择写入 `ui_prefs.inbox_sort`。
 - 渠道滤、置顶针、New 钉在列表顶，只有会话列表滚动。
-- Recipes 单独一页：用白话说明「这类工作出现时用哪个执行器」。默认看所有 task，或某一来源的 task，或从 Current work 绑一条会话。facet 只在 Advanced。匹配到的会话在 Current work 里 **Start run**，结果好了再 **Mark done**；聊天回复不结单。没有 `can_write_back` 不得 egress。
+- Recipes 单独一页：用白话说明「这类工作出现时用哪个执行器」。默认看所有 task，或某一来源的 task，或从 Current work 绑一条会话。facet 只在 Advanced。匹配到的会话在 Current work 里 **Start run**；DSH 日志出现 `turn/end` 后内核 reap。聊天回复不是退出。人不想跟的 Job 从当前工作 **拿掉**，不冒充执行器结束。没有 `can_write_back` 不得 egress；写回只发生在真 `exited`。
 
 ## 进程
 
@@ -75,7 +75,8 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | DELETE | `/v1/me/recipes/:id` | 删除 Recipe |
 | GET | `/v1/me/executors` | 已挂载执行器目录 |
 | POST | `/v1/me/work-items/:id/run` | 手动启动一条工单（桌面 Start run） |
-| POST | `/v1/me/work-items/:id/complete` | 人结单（桌面 Mark done）；授权后才回写 |
+| POST | `/v1/me/work-items/:id/dismiss` | 从当前工作拿掉；不写回 |
+| POST | `/v1/me/work-items/:id/complete` | dismiss 的别名；不冒充 DSH 退出 |
 | GET/POST | `/v1/me/prefs` | `inbox_sort`：`attention` 或 `normal` |
 | POST | `/v1/me/replies` | 把回复发回原渠道。API 按 installation + thread 找 `ChannelDriver`，再 `egress.send`。入库后 follow 该线程直到出现新的 inbound / `working` / `awaiting_user` 或短暂超时；驱动 `canReply: false` 时 501 |
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |

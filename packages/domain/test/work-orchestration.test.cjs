@@ -16,6 +16,7 @@ const {
   recipeSpecificity,
   selectRecipeForSubject,
   shouldOpenWorkItem,
+  waitFromAbsentee,
   waitFromTranscript,
   workSubjectFromEvent,
 } = require("../dist");
@@ -175,13 +176,80 @@ describe("session job face and wait status", () => {
     assert.equal(face.id, nextJob.id);
   });
 
-  it("never treats transcript as wait exit", () => {
+  it("never treats transcript speech as wait exit", () => {
     const wait = waitFromTranscript({
       prompts: [],
       transcript: { kind: "assistant", text: "done" },
     });
     assert.equal(wait.state, "running");
     assert.equal(wait.transcript.text, "done");
+  });
+
+  it("maps DSH turn/end to absentee exit, not an assistant face", () => {
+    const working = waitFromAbsentee({
+      prompts: [],
+      transcript: { kind: "assistant", text: "done", activity: "working" },
+    });
+    assert.equal(working.state, "running");
+
+    const openTurn = waitFromAbsentee({
+      prompts: [],
+      transcript: {
+        kind: "assistant",
+        text: "Looking now.",
+        turn: { state: "open" },
+      },
+    });
+    assert.equal(openTurn.state, "running");
+
+    const spoken = waitFromAbsentee({
+      prompts: [],
+      transcript: { kind: "assistant", text: "The travel request is approved." },
+    });
+    assert.equal(spoken.state, "running");
+
+    const ended = waitFromAbsentee({
+      prompts: [],
+      transcript: {
+        kind: "assistant",
+        text: "The travel request is approved.",
+        turn: { state: "ended", ok: true, reason: "completed" },
+      },
+    });
+    assert.equal(ended.state, "exited");
+    assert.equal(ended.ok, true);
+    assert.equal(ended.result.summary, "The travel request is approved.");
+
+    const failed = waitFromAbsentee({
+      prompts: [],
+      transcript: {
+        kind: "assistant",
+        text: "provider down",
+        turn: { state: "ended", ok: false, reason: "error" },
+      },
+    });
+    assert.equal(failed.state, "exited");
+    assert.equal(failed.ok, false);
+
+    const onlyOurAsk = waitFromAbsentee({
+      prompts: [],
+      transcript: { kind: "user", text: "please handle" },
+    });
+    assert.equal(onlyOurAsk.state, "running");
+
+    const waiting = waitFromAbsentee({
+      prompts: [{ prompt_id: "p1", presentation: "choice", questions: [] }],
+      transcript: { kind: "assistant", text: "Need a choice." },
+    });
+    assert.equal(waiting.state, "waiting_human");
+
+    const dead = waitFromAbsentee({
+      prompts: [],
+      transcript: { kind: "user", text: "please handle" },
+      alive: false,
+    });
+    assert.equal(dead.state, "exited");
+    assert.equal(dead.ok, false);
   });
 
   it("hides bound absentee sysout that is not the source session", () => {

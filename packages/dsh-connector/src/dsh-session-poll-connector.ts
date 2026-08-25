@@ -7,6 +7,7 @@ import {
   type IngestRecord,
   type MessageDirection,
   type MessageKind,
+  type MessageTurn,
   type PollResult,
   type ThreadActivity,
 } from "@regenic/domain";
@@ -23,6 +24,7 @@ export interface DshSurfaceEvent {
   time: number;
   actor_id: string;
   activity?: ThreadActivity;
+  turn?: MessageTurn;
   data: { content: Array<{ type: "text"; text: string }> };
 }
 
@@ -179,8 +181,12 @@ export class DshSessionPollConnector {
       occurred_at: new Date(event.time).toISOString(),
       actor_id: event.actor_id,
       activity: event.activity,
+      turn: event.turn,
       scope_id: this.options.session_id,
-      type: event.activity === "working" ? "thread_status" : "message",
+      type:
+        event.activity === "working" || event.turn
+          ? "thread_status"
+          : "message",
       text: event.data.content.map((part) => part.text).join(""),
     });
   }
@@ -248,6 +254,7 @@ export function toSurfaceEvent(event: DshHistoryEvent): DshSurfaceEvent[] {
       time: event.time,
       actor_id: classified.actor_id,
       activity: classified.activity,
+      turn: classified.turn,
       data: { content: [{ type: "text", text: classified.text }] },
     },
   ];
@@ -268,6 +275,7 @@ export function classifyDshHistoryEvent(event: DshHistoryEvent): {
   actor_id: string;
   text: string;
   activity?: ThreadActivity;
+  turn?: MessageTurn;
 } | undefined {
   if (event.type === "user/message") {
     const text = extractTextBlocks(userMessageFromData(event.data));
@@ -305,6 +313,32 @@ export function classifyDshHistoryEvent(event: DshHistoryEvent): {
       text,
     };
   }
+  if (event.type === "turn/start") {
+    return {
+      type: "assistant/message",
+      kind: "system",
+      direction: "inbound",
+      actor_id: "assistant",
+      text: "Still working.",
+      activity: "working",
+      turn: { state: "open" },
+    };
+  }
+  if (event.type === "turn/end") {
+    const reason = turnEndReasonKind(event.data);
+    return {
+      type: "assistant/message",
+      kind: "system",
+      direction: "inbound",
+      actor_id: "assistant",
+      text: "",
+      turn: {
+        state: "ended",
+        ok: reason === "completed" || reason === "max-tokens",
+        ...(reason ? { reason } : {}),
+      },
+    };
+  }
   if (event.type === "tool/call") {
     const text = askUserQuestionText(event.data);
     if (!text) {
@@ -331,6 +365,22 @@ function appendWorkingMarker(
   }
   const latest = raw.reduce((left, right) => (left.seq > right.seq ? left : right));
   const latestVisible = surface[surface.length - 1];
+  const boundary = lastTurnBoundary(raw);
+  if (boundary?.type === "turn/end") {
+    return surface;
+  }
+  if (boundary?.type === "turn/start") {
+    if (!latestVisible) {
+      return surface;
+    }
+    if (
+      (latestVisible.activity === "working" || latestVisible.turn?.state === "open") &&
+      latestVisible.seq >= latest.seq
+    ) {
+      return surface;
+    }
+    return [...surface, workingMarker(latest)];
+  }
   if (!latestVisible) {
     return surface;
   }
@@ -340,19 +390,44 @@ function appendWorkingMarker(
   if (latestVisible.kind === "assistant" || latestVisible.activity === "awaiting_user") {
     return surface;
   }
-  return [
-    ...surface,
-    {
-      type: "assistant/message",
-      kind: "system",
-      direction: "inbound",
-      seq: latest.seq,
-      time: latest.time,
-      actor_id: "assistant",
-      activity: "working",
-      data: { content: [{ type: "text", text: "Still working." }] },
-    },
-  ];
+  return [...surface, workingMarker(latest)];
+}
+
+function lastTurnBoundary(raw: DshHistoryEvent[]): DshHistoryEvent | undefined {
+  let found: DshHistoryEvent | undefined;
+  for (const event of raw) {
+    if (event.type !== "turn/start" && event.type !== "turn/end") {
+      continue;
+    }
+    if (!found || event.seq > found.seq) {
+      found = event;
+    }
+  }
+  return found;
+}
+
+function workingMarker(latest: DshHistoryEvent): DshSurfaceEvent {
+  return {
+    type: "assistant/message",
+    kind: "system",
+    direction: "inbound",
+    seq: latest.seq,
+    time: latest.time,
+    actor_id: "assistant",
+    activity: "working",
+    turn: { state: "open" },
+    data: { content: [{ type: "text", text: "Still working." }] },
+  };
+}
+
+function turnEndReasonKind(data: unknown): string | undefined {
+  if (!isObject(data)) {
+    return undefined;
+  }
+  if (isObject(data.reason) && typeof data.reason.kind === "string") {
+    return data.reason.kind;
+  }
+  return typeof data.kind === "string" ? data.kind : undefined;
 }
 
 function parseCursor(cursor: ConnectorCursor | null): {

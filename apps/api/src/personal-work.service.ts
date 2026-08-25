@@ -30,6 +30,7 @@ import {
   type EventRecord,
   type ExecutorContext,
   type ExecutorRunHandle,
+  type InboxItem,
   type InboxSortMode,
   type JsonValue,
   type PromptAnswer,
@@ -369,72 +370,78 @@ export class PersonalWorkService implements OnModuleDestroy {
     };
   }
 
-  async completeWorkItem(id: string): Promise<WorkRunView> {
+  async dismissWorkItem(id: string): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const item = await host.get("authority").getWorkItem(orgId, id);
     if (!item) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
-    const recipe = item.recipe_id
-      ? await host.get("authority").getRecipe(orgId, item.recipe_id)
-      : null;
+    const now = new Date().toISOString();
     const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-    const transcript = run?.agent_thread_id
-      ? await this.readTranscript(run.agent_thread_id)
-      : null;
-    const handle: ExecutorRunHandle = {
-      external_run_id: run?.external_run_id ?? item.id,
-      agent_thread_id: run?.agent_thread_id,
-      status: "completed",
-      result: { summary: transcript?.text?.trim() || "Done" },
-      transcript: transcript ?? undefined,
-    };
-    if (run && recipe) {
-      await this.applyHandle(item, recipe, run, handle);
-    } else {
-      await host.get("authority").putWorkItem({
-        ...item,
-        status: "done",
-        updated_at: new Date().toISOString(),
+    if (run) {
+      await host.get("authority").putWorkRun({
+        ...run,
+        status: "failed",
+        updated_at: now,
       });
     }
+    const next =
+      item.status === "skipped"
+        ? item
+        : await host.get("authority").putWorkItem({
+            ...item,
+            status: "skipped",
+            updated_at: now,
+          });
     return {
-      work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
+      work_item: next,
       run: run
-        ? ((await host.get("authority").getWorkRun(orgId, run.id)) ?? run)
+        ? ((await host.get("authority").getWorkRun(orgId, run.id)) ?? {
+            ...run,
+            status: "failed",
+            updated_at: now,
+          })
         : undefined,
     };
+  }
+
+  /** @deprecated Human dismiss. Does not fake an executor exit or write back. */
+  async completeWorkItem(id: string): Promise<WorkRunView> {
+    return this.dismissWorkItem(id);
   }
 
   private async reconcileInbox(): Promise<void> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [recipes, items, runs, heads] = await Promise.all([
+    const [recipes, items, runs, heads, currentWork] = await Promise.all([
       authority.listRecipes(orgId),
       authority.listWorkItems(orgId),
       authority.listWorkRuns(orgId),
       authority.listInbox(orgId, { heads: true }),
+      authority.listInbox(orgId),
     ]);
-    if (heads.length === 0 && items.length === 0) {
+    if (heads.length === 0 && currentWork.length === 0 && items.length === 0) {
       return;
     }
     const hidden = hiddenExecutorThreadIds(items, runs);
+    const taskRows = currentWork.filter(isTaskInboxItem);
+    const observeRows = uniqueInboxItems([...taskRows, ...heads]);
     const bodies = await resolveInboxBodies(
       authority,
       host.get("blobs"),
-      heads.map((row) => row.event.content_hash),
+      observeRows.map((row) => row.event.content_hash),
       "meta",
     );
     const installations = await authority.listInstallations(orgId);
-    const seen = new Set<string>();
-    for (const row of heads) {
+    const seenEvents = new Set<string>();
+    for (const row of observeRows) {
       const threadId = conversationId(row.event.source, row.event.external_id, row.event.id);
-      if (hidden.has(threadId) || seen.has(threadId)) {
+      if (hidden.has(threadId) || seenEvents.has(row.event.id)) {
         continue;
       }
-      seen.add(threadId);
+      seenEvents.add(row.event.id);
       const body = row.event.content_hash
         ? (bodies.get(row.event.content_hash) ?? {})
         : {};
@@ -444,10 +451,14 @@ export class PersonalWorkService implements OnModuleDestroy {
         body,
         recipes,
         installations,
+        fallbackType: isTaskInboxItem(row) ? "task" : undefined,
       });
     }
     for (const item of items) {
-      if (seen.has(item.thread_id) || hidden.has(item.thread_id)) {
+      if (
+        hidden.has(item.thread_id) ||
+        (item.head_event_id && seenEvents.has(item.head_event_id))
+      ) {
         continue;
       }
       if (!isActiveWorkStatus(item.status) || !item.head_event_id) {
@@ -479,6 +490,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     body: InboxBody;
     recipes: Recipe[];
     installations: ConnectorInstallation[];
+    fallbackType?: string;
   }): Promise<void> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
@@ -491,7 +503,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     const existing = await authority.getWorkItemByThread(orgId, input.threadId);
     const surface = input.body.surface;
     const subject = workSubjectFromEvent({
-      type: surface?.type,
+      type: surface?.type ?? input.fallbackType,
       source: input.event.source,
       thread_id: input.threadId,
       prompts: false,
@@ -617,6 +629,10 @@ export class PersonalWorkService implements OnModuleDestroy {
     handle: ExecutorRunHandle,
   ): Promise<void> {
     const host = this.runtime.requireHost();
+    const latest = await host.get("authority").getWorkItem(item.org_id, item.id);
+    if (latest?.status === "skipped") {
+      return;
+    }
     const now = new Date().toISOString();
     const nextRun: WorkRun = {
       ...run,
@@ -641,6 +657,10 @@ export class PersonalWorkService implements OnModuleDestroy {
       } catch {
         status = "failed";
       }
+    }
+    const still = await host.get("authority").getWorkItem(item.org_id, item.id);
+    if (still?.status === "skipped") {
+      return;
     }
     await host.get("authority").putWorkItem({
       ...item,
@@ -798,8 +818,25 @@ export class PersonalWorkService implements OnModuleDestroy {
     const liveBody = live.event.content_hash
       ? (bodies.get(live.event.content_hash) ?? {})
       : {};
+    const liveTurn = liveBody.surface?.turn;
+    if (liveTurn?.state === "open" || liveBody.surface?.activity === "working") {
+      return {
+        kind: liveBody.surface?.kind ?? "system",
+        activity: "working",
+        turn: { state: "open" },
+      };
+    }
+    if (liveTurn?.state === "ended") {
+      const body = visible?.event.content_hash
+        ? (bodies.get(visible.event.content_hash) ?? liveBody)
+        : liveBody;
+      return {
+        kind: body.surface?.kind ?? "system",
+        text: body.body_text,
+        turn: liveTurn,
+      };
+    }
     if (
-      liveBody.surface?.activity === "working" ||
       liveBody.surface?.type === "thread_status" ||
       live.decision.reason_codes.includes("thread_status")
     ) {
@@ -812,7 +849,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       ? (bodies.get(visible.event.content_hash) ?? liveBody)
       : liveBody;
     return {
-      kind: body.surface?.kind ?? "assistant",
+      kind: body.surface?.kind ?? "system",
       text: body.body_text,
       activity: body.surface?.activity,
     };
@@ -943,6 +980,23 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     ...(match.source?.trim() ? { source: match.source.trim() } : {}),
     ...(match.thread_id?.trim() ? { thread_id: match.thread_id.trim() } : {}),
   };
+}
+
+function isTaskInboxItem(row: InboxItem): boolean {
+  return row.decision.reason_codes.includes("task");
+}
+
+function uniqueInboxItems(rows: InboxItem[]): InboxItem[] {
+  const seen = new Set<string>();
+  const unique: InboxItem[] = [];
+  for (const row of rows) {
+    if (seen.has(row.event.id)) {
+      continue;
+    }
+    seen.add(row.event.id);
+    unique.push(row);
+  }
+  return unique;
 }
 
 async function forceDisposition(

@@ -365,7 +365,11 @@ describe("thread activity", () => {
     assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Bind a recipe/);
     assert.match(
       workNextStepCopy({ work: { status: "running" } }) ?? "",
-      /mark it done/i,
+      /ends the turn/i,
+    );
+    assert.match(
+      workNextStepCopy({ work: { status: "skipped" } }) ?? "",
+      /no longer in current work/i,
     );
     assert.equal(workNextStepCopy({ record_class: "utterance" }), null);
   });

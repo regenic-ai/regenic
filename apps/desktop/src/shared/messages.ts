@@ -40,10 +40,10 @@ export const en = {
   "inbox.unreadAria": "Unread",
 
   "thread.startRun": "Start run",
-  "thread.markDone": "Mark done",
+  "thread.dismiss": "Remove from current work",
   "thread.bindRecipe": "Bind recipe",
   "thread.startRunTitle": "Start the executor for this job",
-  "thread.markDoneTitle": "Finish this job. A chat reply does not mark it done.",
+  "thread.dismissTitle": "Stop tracking this job. The executor is not marked finished.",
   "thread.bindRecipeTitle": "Create a recipe for this conversation",
   "thread.loadingEarlier": "Loading earlier messages",
   "thread.opening": "Opening…",
@@ -60,10 +60,12 @@ export const en = {
   "work.hint.failed":
     "The last run failed. Start run again, or change the recipe on the Recipes page.",
   "work.hint.running":
-    "The executor is working in the background. A chat reply does not finish the job — mark it done when the result is ready.",
-  "work.hint.waiting": "The executor is waiting on you. Reply here if needed, then mark it done.",
-  "work.hint.doneWrite": "This job is done. The result can go back to the original channel.",
-  "work.hint.done": "This job is done.",
+    "The executor is working in the background. It finishes when DSH ends the turn — a chat reply is not exit.",
+  "work.hint.waiting": "The executor is waiting on you. Answer the prompt here.",
+  "work.hint.doneWrite": "The executor finished this job. The result can go back to the original channel.",
+  "work.hint.done": "The executor finished this job.",
+  "work.hint.skipped":
+    "This job is no longer in current work. Start run if you want the executor again.",
   "work.hint.noRecipe": "This job has no recipe yet. Bind one to choose an executor.",
   "work.running": "Running",
   "work.waiting": "Waiting",
@@ -86,7 +88,7 @@ export const en = {
   "recipes.eyebrow": "Automation",
   "recipes.title": "Recipes",
   "recipes.lead":
-    "When this kind of work shows up, run it with this executor. Matching conversations land in Current work. You start the run and mark it done — a chat reply does not finish the job.",
+    "When this kind of work shows up, run it with this executor. Matching conversations land in Current work. You start the run; the executor finishes the job. A chat reply is not exit.",
   "recipes.howTitle": "How it works",
   "recipes.step1Title": "Create a recipe",
   "recipes.step1Body":
@@ -94,9 +96,9 @@ export const en = {
   "recipes.step2Title": "Start the run",
   "recipes.step2Body":
     "Open the matching conversation in Current work and press Start run. The executor works in the background.",
-  "recipes.step3Title": "Mark it done",
+  "recipes.step3Title": "The executor finishes",
   "recipes.step3Body":
-    "When the result is ready, press Mark done. Write-back only happens if you allowed it here.",
+    "When DSH ends the turn, the job closes. Write-back only happens if you allowed it here.",
   "recipes.yours": "Your recipes",
   "recipes.new": "New recipe",
   "recipes.empty":
@@ -131,10 +133,10 @@ export const en = {
     "Open a conversation in Current work and press Bind recipe. That fills this in.",
   "recipes.runWith": "Run with",
   "recipes.absentee":
-    "This executor runs in the background. Mark the job done yourself when the result is ready.",
+    "This executor runs in the background. The job closes when it stops working.",
   "recipes.name": "Name",
   "recipes.writeBackCheck":
-    "After I mark it done, send the result back to the original conversation",
+    "When the executor finishes, send the result back to the original conversation",
   "recipes.enabledCheck": "Recipe is on",
   "recipes.advanced": "Advanced",
   "recipes.facet": "Also require a thread face",
@@ -294,7 +296,7 @@ export const en = {
   "composer.drop": "Drop to attach",
 
   "error.cannotStartWork": "Cannot start this work item",
-  "error.cannotCompleteWork": "Cannot complete this work item",
+  "error.cannotDismissWork": "Cannot remove this work item",
   "error.cannotSend": "Could not send this answer",
   "error.sendFailed": "Send failed",
 } as const;
@@ -341,10 +343,10 @@ export const zh: Record<MessageKey, string> = {
   "inbox.unreadAria": "未读",
 
   "thread.startRun": "开始执行",
-  "thread.markDone": "标记完成",
+  "thread.dismiss": "从当前工作拿掉",
   "thread.bindRecipe": "绑定配方",
   "thread.startRunTitle": "为这条工单启动执行器",
-  "thread.markDoneTitle": "结束这条工单。聊天回复不会结单。",
+  "thread.dismissTitle": "停止跟踪这条工单。不会把执行器标成已完成。",
   "thread.bindRecipeTitle": "为这条会话创建配方",
   "thread.loadingEarlier": "正在加载更早的消息",
   "thread.opening": "正在打开…",
@@ -359,10 +361,11 @@ export const zh: Record<MessageKey, string> = {
   "work.hint.open": "已有配方匹配这条会话。点「开始执行」会在后台启动执行器。",
   "work.hint.failed": "上次执行失败。可以再点「开始执行」，或到配方页改规则。",
   "work.hint.running":
-    "执行器正在后台工作。聊天回复不会结单 — 结果好了再点「标记完成」。",
-  "work.hint.waiting": "执行器在等你。需要的话先在这里回复，再标记完成。",
-  "work.hint.doneWrite": "工单已完成。结果可以写回原渠道。",
-  "work.hint.done": "工单已完成。",
+    "执行器正在后台工作。DSH 结束这一轮才会结单 — 聊天回复不是退出。",
+  "work.hint.waiting": "执行器在等你。在这里回答提示。",
+  "work.hint.doneWrite": "执行器已结束这条工单。结果可以写回原渠道。",
+  "work.hint.done": "执行器已结束这条工单。",
+  "work.hint.skipped": "已从当前工作拿掉。若要再跑，点「开始执行」。",
   "work.hint.noRecipe": "这条工单还没有配方。绑定一个以选择执行器。",
   "work.running": "执行中",
   "work.waiting": "等待中",
@@ -385,14 +388,14 @@ export const zh: Record<MessageKey, string> = {
   "recipes.eyebrow": "自动化",
   "recipes.title": "配方",
   "recipes.lead":
-    "这类工作出现时，用这个执行器去跑。匹配到的会话会出现在当前工作。由你开始执行、标记完成 — 聊天回复不会结单。",
+    "这类工作出现时，用这个执行器去跑。匹配到的会话会出现在当前工作。由你开始执行，由执行器结单。聊天回复不是退出。",
   "recipes.howTitle": "怎么用",
   "recipes.step1Title": "创建配方",
   "recipes.step1Body": "监视所有任务、某一来源的任务，或一条会话，然后选执行器。",
   "recipes.step2Title": "开始执行",
   "recipes.step2Body": "在当前工作打开匹配的会话，点「开始执行」。执行器在后台跑。",
-  "recipes.step3Title": "标记完成",
-  "recipes.step3Body": "结果好了再点「标记完成」。只有配方允许时，才会写回原渠道。",
+  "recipes.step3Title": "执行器结束",
+  "recipes.step3Body": "DSH 结束这一轮后工单关闭。只有配方允许时，才会写回原渠道。",
   "recipes.yours": "你的配方",
   "recipes.new": "新建配方",
   "recipes.empty":
@@ -424,9 +427,9 @@ export const zh: Record<MessageKey, string> = {
   "recipes.conversation": "会话",
   "recipes.bindHint": "在当前工作打开一条会话，点「绑定配方」，这里就会填上。",
   "recipes.runWith": "用谁来跑",
-  "recipes.absentee": "这个执行器在后台跑。结果好了要你自己标记完成。",
+  "recipes.absentee": "这个执行器在后台跑。它停下来后工单关闭。",
   "recipes.name": "名称",
-  "recipes.writeBackCheck": "我标记完成后，把结果发回原会话",
+  "recipes.writeBackCheck": "执行器结束后，把结果发回原会话",
   "recipes.enabledCheck": "启用这个配方",
   "recipes.advanced": "高级",
   "recipes.facet": "还要求特定线程面",
@@ -580,7 +583,7 @@ export const zh: Record<MessageKey, string> = {
   "composer.drop": "松开以添加附件",
 
   "error.cannotStartWork": "无法启动这条工单",
-  "error.cannotCompleteWork": "无法完成这条工单",
+  "error.cannotDismissWork": "无法拿掉这条工单",
   "error.cannotSend": "无法发送这个回答",
   "error.sendFailed": "发送失败",
 };

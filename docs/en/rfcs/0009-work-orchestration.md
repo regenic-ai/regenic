@@ -180,7 +180,7 @@ interface TaskExecutor {
 
 The kernel looks up `ctx.executors`. The executor reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`). It does not import a private HTTP client.
 
-Completion is `WaitStatus` (wait / notify), orthogonal to transcript. Reading a chat bubble must not complete a run. Public DSH is absentee: without notify it stays running until a human `POST /v1/me/work-items/:id/complete` (session leader reaps). Write-back happens only on explicit `exited`.
+Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is durable `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. The kernel reaps the job on `exited`. Write-back happens only on that real exit. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back.
 
 Public default: `dsh`. Cursor later. A private Agent OS is an internal plugin package; the default open-source tree does not register it.
 
@@ -195,7 +195,7 @@ Sort (`ui_prefs.inbox_sort`):
 - `normal`: pin → recent activity
 - `attention`: `waiting_you` → `needs_ack` → `running` → `unread` → `quiet`; same rank by time. Running rows do not jump on status ticks and do not set unread.
 
-The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recipes have their own page: bind a task class, a source plus task, or one conversation, then Start run / Mark done on Current work. The desktop does not classify chat / agent / ticket by connector name.
+The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recipes have their own page: bind a task class, a source plus task, or one conversation, then Start run on Current work. Humans dismiss a job they do not want; they do not Mark done. The desktop does not classify chat / agent / ticket by connector name.
 
 ## 11. Personal API
 
@@ -207,7 +207,8 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recip
 | DELETE | `/v1/me/recipes/:id` | Delete |
 | GET | `/v1/me/executors` | Mounted executor catalog |
 | POST | `/v1/me/work-items/:id/run` | Manual start |
-| POST | `/v1/me/work-items/:id/complete` | Human reap; may write back |
+| POST | `/v1/me/work-items/:id/dismiss` | Drop from current work; no write-back |
+| POST | `/v1/me/work-items/:id/complete` | Alias of dismiss; does not fake `exited` |
 | GET/POST | `/v1/me/prefs` | `inbox_sort` |
 
 ## 12. Acceptance

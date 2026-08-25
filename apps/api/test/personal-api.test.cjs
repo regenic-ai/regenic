@@ -1401,6 +1401,10 @@ describe("personal /v1/me", () => {
       assert.equal(createdBody.can_reply, true);
       assert.equal(createdBody.channel, "dsh");
       assert.equal(createdBody.channel_label, "DSH");
+      await waitUntil("dsh sess-a after install", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+        return inbox.some((item) => item.event.external_id === "sess-a:1");
+      });
 
       const slackOnly = await fetch(`${origin}/v1/me/conversations`, {
         method: "POST",
@@ -1723,6 +1727,127 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("opens a task work item even when a later utterance is the list head", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "buried-task",
+      received_at: "2026-08-25T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_travel:task-1",
+          occurred_at: "2026-08-25T00:00:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_travel",
+          type: "task",
+          text: "Approve travel",
+        }),
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_travel:comment-2",
+          occurred_at: "2026-08-25T00:05:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_travel",
+          text: "Please confirm the release.",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      await waitUntil("buried task opens a work item", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+        const row = inbox.find((item) => item.thread_id === "feishu:oc_travel");
+        return row?.work?.status === "open" && row?.event?.external_id === "oc_travel:comment-2";
+      });
+      const inbox = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      const row = inbox.find((item) => item.thread_id === "feishu:oc_travel");
+      assert.equal(row.event.external_id, "oc_travel:comment-2");
+      assert.equal(row.work.status, "open");
+      assert.equal(row.record_class, "task");
+      assert.equal(row.thread_facet, "ticket");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("dismisses a work item without writing back or faking exit", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "dismiss-task",
+      received_at: "2026-08-25T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_dismiss:task-1",
+          occurred_at: "2026-08-25T00:00:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_dismiss",
+          type: "task",
+          text: "Approve travel",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      let workId;
+      await waitUntil("dismiss test opens a work item", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+        const row = inbox.find((item) => item.thread_id === "feishu:oc_dismiss");
+        workId = row?.work?.id;
+        return row?.work?.status === "open";
+      });
+      const dismissed = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.ok(dismissed.ok, `dismiss ${dismissed.status}`);
+      const body = await dismissed.json();
+      assert.equal(body.work_item.status, "skipped");
+      assert.equal(body.work_item.id, workId);
+      const aliased = await (
+        await fetch(`${origin}/v1/me/work-items/${workId}/complete`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).json();
+      assert.equal(aliased.work_item.status, "skipped");
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const texts = inbox
+        .filter((item) => item.thread_id === "feishu:oc_dismiss")
+        .map((item) => item.body_text ?? "");
+      assert.equal(
+        texts.some((text) => text === "Done" || /work-back/.test(text)),
+        false,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("binds a recipe, remembers inbox sort, and exposes executor catalog", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
@@ -1759,6 +1884,11 @@ describe("personal /v1/me", () => {
         { method: "POST" },
       );
       assert.equal(missingComplete.status, 404);
+      const missingDismiss = await fetch(
+        `${origin}/v1/me/work-items/work-missing/dismiss`,
+        { method: "POST" },
+      );
+      assert.equal(missingDismiss.status, 404);
       const created = await (
         await fetch(`${origin}/v1/me/recipes`, {
           method: "POST",

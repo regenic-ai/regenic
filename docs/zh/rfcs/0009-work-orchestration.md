@@ -178,7 +178,7 @@ interface TaskExecutor {
 
 内核查 `ctx.executors`。执行器碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`），不自带私有 HTTP 客户端。
 
-完成契约是 `WaitStatus`（wait / notify），与 transcript 正交。读气泡不得结单。DSH 公开默认是 absentee 附着：没有 notify 就保持 running，由人 `POST /v1/me/work-items/:id/complete` 收工（会话首领 reap）。写回只发生在显式 `exited`。
+完成契约是 `WaitStatus`（wait / notify）。气泡里的字不是退出。公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在 `exited` 上 reap Job。写回只发生在这次真退出。人只回答 Prompt；不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss` 从当前工作拿掉。Dismiss 不是 `exited`，也不写回。
 
 公开默认：`dsh`。Cursor 后接。私有 Agent OS 只作内部插件包，默认开源构建不挂载。
 
@@ -193,7 +193,7 @@ interface TaskExecutor {
 - `normal`：置顶 → 最近活动
 - `attention`：`waiting_you` → `needs_ack` → `running` → `unread` → `quiet`；同档再按时间。`running` 不因 status tick 重排，不点未读。
 
-桌面读 `record_class`、`thread_facet`、`attention`、`work`。Recipes 单独一页：绑 task、某一来源的 task、或一条会话，再到 Current work 里 Start run / Mark done。不按连接器名判断人聊 / Agent / 工单。
+桌面读 `record_class`、`thread_facet`、`attention`、`work`。Recipes 单独一页：绑 task、某一来源的 task、或一条会话，再到 Current work 里 Start run。人不想跟的 Job 可以 dismiss，不要 Mark done。不按连接器名判断人聊 / Agent / 工单。
 
 ## 11. 个人 API
 
@@ -205,7 +205,8 @@ interface TaskExecutor {
 | DELETE | `/v1/me/recipes/:id` | 删除 |
 | GET | `/v1/me/executors` | 已挂载执行器目录 |
 | POST | `/v1/me/work-items/:id/run` | 手动启动 |
-| POST | `/v1/me/work-items/:id/complete` | 人 reap：显式结单，可写回 |
+| POST | `/v1/me/work-items/:id/dismiss` | 从当前工作拿掉；不写回 |
+| POST | `/v1/me/work-items/:id/complete` | dismiss 的别名；不冒充 `exited` |
 | GET/POST | `/v1/me/prefs` | `inbox_sort` |
 
 ## 12. 验收

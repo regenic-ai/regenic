@@ -6,7 +6,7 @@ import {
   fetchEngine,
   fetchInbox,
   fetchUiPrefs,
-  completeWorkItem,
+  dismissWorkItem,
   runWorkItem,
   saveUiPrefs,
   updateConversationPrefs,
@@ -591,17 +591,17 @@ export function ConsoleApp() {
     },
     [refresh],
   );
-  const completeSelectedWork = useCallback(
+  const dismissSelectedWork = useCallback(
     async (thread: InboxThread) => {
       if (!thread.work?.id) {
         return;
       }
       try {
-        await completeWorkItem(thread.work.id);
+        await dismissWorkItem(thread.work.id);
         await refresh();
         setError(null);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : translate("error.cannotCompleteWork"));
+        setError(caught instanceof Error ? caught.message : translate("error.cannotDismissWork"));
       }
     },
     [refresh],
@@ -704,7 +704,7 @@ export function ConsoleApp() {
             sortMode={sortMode}
             onSortMode={changeSortMode}
             onRunWork={runSelectedWork}
-            onCompleteWork={completeSelectedWork}
+            onDismissWork={dismissSelectedWork}
             onBindRecipe={bindSelectedRecipe}
           />
         ) : null}

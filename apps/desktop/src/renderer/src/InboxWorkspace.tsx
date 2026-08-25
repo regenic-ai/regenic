@@ -42,7 +42,7 @@ export function InboxWorkspace({
   sortMode,
   onSortMode,
   onRunWork,
-  onCompleteWork,
+  onDismissWork,
   onBindRecipe,
 }: {
   threads: InboxThread[];
@@ -64,7 +64,7 @@ export function InboxWorkspace({
   sortMode: InboxSortMode;
   onSortMode: (mode: InboxSortMode) => void;
   onRunWork: (thread: InboxThread) => Promise<void>;
-  onCompleteWork: (thread: InboxThread) => Promise<void>;
+  onDismissWork: (thread: InboxThread) => Promise<void>;
   onBindRecipe: (thread: InboxThread) => void;
 }) {
   const { t } = useLocale();
@@ -218,7 +218,7 @@ export function InboxWorkspace({
             onRename={renameSelected}
             onPin={pinSelected}
             onRunWork={() => onRunWork(selected)}
-            onCompleteWork={() => onCompleteWork(selected)}
+            onDismissWork={() => onDismissWork(selected)}
             onBindRecipe={() => onBindRecipe(selected)}
           />
         ) : (
