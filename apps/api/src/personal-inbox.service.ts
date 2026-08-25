@@ -348,7 +348,11 @@ export class PersonalInboxService {
     const result = await host
       .get("authority")
       .clearOperationalData(this.runtime.orgId(), new Date().toISOString());
-    await host.get("blobs").clear();
+    try {
+      await host.get("blobs").clear();
+    } catch (error) {
+      console.error("blob store clear leftover files", error);
+    }
     return result;
   }
 

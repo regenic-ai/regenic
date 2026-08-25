@@ -19,7 +19,7 @@ import {
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
-import { PersonalConnectorError } from "./personal-errors";
+import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
 import {
   applyPullOutcome,
@@ -127,8 +127,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   async pauseForMaintenance(): Promise<void> {
     this.maintenanceHold = true;
-    await this.waitForQuiet();
-    this.resetLivePullState();
+    try {
+      await this.waitForQuiet();
+      this.resetLivePullState();
+    } catch (error) {
+      this.maintenanceHold = false;
+      throw error;
+    }
   }
 
   resumeAfterMaintenance(): void {
@@ -171,6 +176,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     installationId: string,
     thread: ConversationThread,
   ): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installation = await this.requireInstallation(store, installationId);
@@ -190,6 +198,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       throw wrapDriverError(error, "sync_failed");
     }
     await this.exclusiveStream(installation.id, stream.stream_key, async () => {
+      if (this.maintenanceHold) {
+        return;
+      }
       try {
         await this.followStream(host, store, installation, stream, thread);
       } catch (error) {
@@ -234,6 +245,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   private async runHydrateOpenedThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
     let thread: ConversationThread;
     try {
       thread = parseConversationThread(threadId);
@@ -508,7 +522,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       this.hydrating.size > 0
     ) {
       if (Date.now() - started > timeoutMs) {
-        return;
+        throw storeBusyError();
       }
       await delay(50);
     }
@@ -532,6 +546,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return;
     }
     this.ticking = true;
+    if (this.maintenanceHold) {
+      this.ticking = false;
+      return;
+    }
     try {
       const store = this.runtime.requireHost().get("authority");
       const installations = await store.listInstallations(this.runtime.orgId());
@@ -583,6 +601,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
     maxPages: number,
     options?: { skipIdle?: boolean; capCatchUp?: boolean },
   ): Promise<ConnectorSyncView> {
+    if (this.maintenanceHold) {
+      throw new PersonalConnectorError(
+        "disabled",
+        "Store maintenance in progress",
+        409,
+      );
+    }
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installation = await this.requireInstallation(store, installationId);

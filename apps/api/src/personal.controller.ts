@@ -102,11 +102,16 @@ export class PersonalController {
   @Post("store/clear")
   async clearStore() {
     return this.guard(async () => {
-      await this.connectors.pauseForMaintenance();
+      await this.work.pauseForMaintenance();
       try {
-        return await this.inbox.clearStore();
+        await this.connectors.pauseForMaintenance();
+        try {
+          return await this.inbox.clearStore();
+        } finally {
+          this.connectors.resumeAfterMaintenance();
+        }
       } finally {
-        this.connectors.resumeAfterMaintenance();
+        this.work.resumeAfterMaintenance();
       }
     });
   }

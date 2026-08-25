@@ -361,6 +361,8 @@ export function ConsoleApp() {
     setMessagesByThread({});
     setDrafts([]);
     setSelectedId(null);
+    setOpeningId(null);
+    setRecipeSeed(null);
     setPrefOverlay({});
     setHasOlderByThread({});
     setThreadError({});
