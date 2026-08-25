@@ -356,6 +356,23 @@ export function ConsoleApp() {
     }
   }, []);
 
+  const resetWorkspace = useCallback(async () => {
+    setInbox([]);
+    setMessagesByThread({});
+    setDrafts([]);
+    setSelectedId(null);
+    setPrefOverlay({});
+    setHasOlderByThread({});
+    setThreadError({});
+    loadedThreadsRef.current.clear();
+    inboxDigestRef.current = null;
+    groupedRef.current = [];
+    groupedInboxRef.current = null;
+    openedAtRef.current = {};
+    ackStampRef.current = {};
+    await refresh();
+  }, [refresh]);
+
   useEffect(() => {
     let cancelled = false;
     let timer = 0;
@@ -731,7 +748,9 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
-        {nav === "settings" ? <SettingsPage onChanged={refresh} /> : null}
+        {nav === "settings" ? (
+          <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
+        ) : null}
       </div>
     </div>
   );

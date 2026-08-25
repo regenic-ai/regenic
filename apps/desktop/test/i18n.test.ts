@@ -17,6 +17,9 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "recipes.prompt"), "Prompt");
     assert.equal(translate("en", "tray.workCount", { count: 3 }), "3 current work");
     assert.equal(translate("zh", "tray.workCount", { count: 3 }), "3 条当前工作");
+    assert.equal(translate("en", "settings.store"), "Local data");
+    assert.equal(translate("zh", "settings.store"), "本机数据");
+    assert.equal(translate("zh", "settings.storeClear"), "清理本机数据");
     assert.equal(translate("zh", "engine.whatsapp.title"), "WhatsApp 个人导出");
     assert.equal(
       translate("zh", "engine.whatsapp.summary", {

@@ -40,6 +40,8 @@ import type {
   SourceIdentity,
   TombstoneEvent,
   Recipe,
+  StoreClearResult,
+  StoreFootprint,
   WorkItem,
   WorkRun,
   WorkStore,
@@ -470,6 +472,116 @@ export class SqliteAuthorityStore
       return next;
     });
     return transaction.immediate();
+  }
+
+  async summarizeStore(orgId: string): Promise<StoreFootprint> {
+    return this.storeFootprint(orgId);
+  }
+
+  async clearOperationalData(
+    orgId: string,
+    now: string,
+  ): Promise<StoreClearResult> {
+    this.assertWritable();
+    const transaction = this.database.transaction(() => {
+      this.database.pragma("defer_foreign_keys = ON");
+      const before = this.storeFootprint(orgId);
+      this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database
+        .prepare(`DELETE FROM message_dispositions WHERE org_id = ?`)
+        .run(orgId);
+      this.database
+        .prepare(`DELETE FROM conversation_prefs WHERE org_id = ?`)
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM ingest_quarantines
+            WHERE attempt_id IN (
+              SELECT id FROM ingest_attempts WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(`DELETE FROM ingest_attempts WHERE org_id = ?`)
+        .run(orgId);
+      this.database.prepare(`DELETE FROM source_heads WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM events WHERE org_id = ?`).run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM blobs
+            WHERE content_hash NOT IN (
+              SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+            )
+          `,
+        )
+        .run();
+      this.database
+        .prepare(
+          `
+            UPDATE connector_cursors
+            SET cursor_value = NULL,
+                cursor_version = cursor_version + 1,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                updated_at = ?
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(now, orgId);
+      const after = this.storeFootprint(orgId);
+      return {
+        cleared: {
+          events: before.events,
+          conversations: before.conversations,
+          work_items: before.work_items,
+          blobs: before.blobs,
+        },
+        kept: {
+          recipes: after.recipes,
+          connectors: after.connectors,
+        },
+      } satisfies StoreClearResult;
+    });
+    return transaction.immediate();
+  }
+
+  private storeFootprint(orgId: string): StoreFootprint {
+    const count = (sql: string, ...params: unknown[]): number =>
+      (this.database.prepare(sql).get(...params) as { n: number }).n;
+    return {
+      events: count(`SELECT COUNT(*) AS n FROM events WHERE org_id = ?`, orgId),
+      conversations: count(
+        `
+          SELECT COUNT(DISTINCT thread_id) AS n
+          FROM events
+          WHERE org_id = ? AND thread_id IS NOT NULL AND thread_id != ''
+        `,
+        orgId,
+      ),
+      work_items: count(
+        `SELECT COUNT(*) AS n FROM work_items WHERE org_id = ?`,
+        orgId,
+      ),
+      blobs: count(
+        `
+          SELECT COUNT(DISTINCT content_hash) AS n
+          FROM events
+          WHERE org_id = ? AND content_hash IS NOT NULL
+        `,
+        orgId,
+      ),
+      recipes: count(`SELECT COUNT(*) AS n FROM recipes WHERE org_id = ?`, orgId),
+      connectors: count(
+        `SELECT COUNT(*) AS n FROM connector_installations WHERE org_id = ?`,
+        orgId,
+      ),
+    };
   }
 
   async listRecipes(orgId: string): Promise<Recipe[]> {

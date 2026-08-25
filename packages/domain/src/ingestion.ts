@@ -172,6 +172,7 @@ export interface BlobStore {
   getMany(hashes: readonly string[]): Promise<Map<string, Uint8Array>>;
   delete(hash: string): Promise<void>;
   exists(hash: string): Promise<boolean>;
+  clear(): Promise<void>;
 }
 
 export async function collectAvailableBlobs(
@@ -303,6 +304,28 @@ export interface InboxSummary {
   digest: string;
 }
 
+export interface StoreFootprint {
+  events: number;
+  conversations: number;
+  work_items: number;
+  blobs: number;
+  recipes: number;
+  connectors: number;
+}
+
+export interface StoreClearResult {
+  cleared: {
+    events: number;
+    conversations: number;
+    work_items: number;
+    blobs: number;
+  };
+  kept: {
+    recipes: number;
+    connectors: number;
+  };
+}
+
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
   findBlobs(
@@ -325,6 +348,8 @@ export interface AuthorityStore {
     threadId: string,
   ): Promise<ConversationPref | null>;
   putConversationPref(input: ConversationPrefPatch): Promise<ConversationPref>;
+  summarizeStore(orgId: string): Promise<StoreFootprint>;
+  clearOperationalData(orgId: string, now: string): Promise<StoreClearResult>;
 }
 
 export type ConnectorInstallationStatus =

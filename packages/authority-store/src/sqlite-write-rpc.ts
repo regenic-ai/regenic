@@ -7,6 +7,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "commitIngest",
   "putDisposition",
   "putConversationPref",
+  "clearOperationalData",
   "putRecipe",
   "deleteRecipe",
   "putWorkItem",

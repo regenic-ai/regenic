@@ -94,6 +94,23 @@ export class PersonalController {
     );
   }
 
+  @Get("store")
+  getStore() {
+    return this.guard(() => this.inbox.getStore());
+  }
+
+  @Post("store/clear")
+  async clearStore() {
+    return this.guard(async () => {
+      await this.connectors.pauseForMaintenance();
+      try {
+        return await this.inbox.clearStore();
+      } finally {
+        this.connectors.resumeAfterMaintenance();
+      }
+    });
+  }
+
   @Post("replies")
   sendReply(@Body() body: ReplyInput) {
     return this.guard(() => this.replies.send(body ?? {}));

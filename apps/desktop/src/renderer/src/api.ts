@@ -13,6 +13,8 @@ import type {
   RecipeView,
   ReplyAttachmentInput,
   ReplyView,
+  StoreClearView,
+  StoreView,
   ThreadPrompt,
   UiPrefsView,
   WhatsAppImportView,
@@ -526,6 +528,41 @@ export async function dismissWorkItem(id: string): Promise<void> {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `work dismiss ${response.status}`);
   }
+}
+
+export async function fetchStore(): Promise<StoreView> {
+  const response = await fetch(`${origin()}/v1/me/store`);
+  if (!response.ok) {
+    throw new Error(`store ${response.status}`);
+  }
+  const body = (await response.json()) as StoreView;
+  return {
+    events: Number(body.events) || 0,
+    conversations: Number(body.conversations) || 0,
+    work_items: Number(body.work_items) || 0,
+    blobs: Number(body.blobs) || 0,
+    recipes: Number(body.recipes) || 0,
+    connectors: Number(body.connectors) || 0,
+  };
+}
+
+export async function clearStore(): Promise<StoreClearView> {
+  const response = await fetch(`${origin()}/v1/me/store/clear`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  const body = (await response.json()) as
+    | StoreClearView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `store clear ${response.status}`,
+    );
+  }
+  return body as StoreClearView;
 }
 
 export async function fetchUiPrefs(): Promise<UiPrefsView> {

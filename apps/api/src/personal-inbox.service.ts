@@ -155,6 +155,28 @@ export interface EngineQuery {
   detailed?: boolean;
 }
 
+export interface StoreView {
+  events: number;
+  conversations: number;
+  work_items: number;
+  blobs: number;
+  recipes: number;
+  connectors: number;
+}
+
+export interface StoreClearView {
+  cleared: {
+    events: number;
+    conversations: number;
+    work_items: number;
+    blobs: number;
+  };
+  kept: {
+    recipes: number;
+    connectors: number;
+  };
+}
+
 @Injectable()
 export class PersonalInboxService {
   constructor(
@@ -314,6 +336,20 @@ export class PersonalInboxService {
       installations: views,
       catalog: await catalogReady(views),
     };
+  }
+
+  async getStore(): Promise<StoreView> {
+    const host = this.runtime.requireHost();
+    return host.get("authority").summarizeStore(this.runtime.orgId());
+  }
+
+  async clearStore(): Promise<StoreClearView> {
+    const host = this.runtime.requireHost();
+    const result = await host
+      .get("authority")
+      .clearOperationalData(this.runtime.orgId(), new Date().toISOString());
+    await host.get("blobs").clear();
+    return result;
   }
 
   private async loadThreadInbox(

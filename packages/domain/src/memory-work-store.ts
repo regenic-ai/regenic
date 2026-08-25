@@ -114,6 +114,31 @@ export class MemoryWorkStore implements WorkStore {
     this.uiPrefs.set(`${orgId}\0${key}`, value);
   }
 
+  dropOperationalWork(orgId: string): number {
+    let count = 0;
+    for (const [id, item] of [...this.items]) {
+      if (item.org_id === orgId) {
+        this.items.delete(id);
+        count += 1;
+      }
+    }
+    for (const [id, run] of [...this.runs]) {
+      if (run.org_id === orgId) {
+        this.runs.delete(id);
+      }
+    }
+    return count;
+  }
+
+  workItemCount(orgId: string): number {
+    return [...this.items.values()].filter((item) => item.org_id === orgId).length;
+  }
+
+  recipeCount(orgId: string): number {
+    return [...this.recipes.values()].filter((recipe) => recipe.org_id === orgId)
+      .length;
+  }
+
   activeItems(orgId: string): WorkItem[] {
     return [...this.items.values()].filter(
       (item) => item.org_id === orgId && isActiveWorkStatus(item.status),

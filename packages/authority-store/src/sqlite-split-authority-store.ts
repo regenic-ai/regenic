@@ -28,6 +28,8 @@ import type {
   SourceIdentity,
   TombstoneEvent,
   Recipe,
+  StoreClearResult,
+  StoreFootprint,
   WorkItem,
   WorkRun,
   WorkStore,
@@ -157,6 +159,17 @@ export class SqliteSplitAuthorityStore
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
     return this.writer.call("putConversationPref", [input]);
+  }
+
+  async summarizeStore(orgId: string): Promise<StoreFootprint> {
+    return this.reader.summarizeStore(orgId);
+  }
+
+  async clearOperationalData(
+    orgId: string,
+    now: string,
+  ): Promise<StoreClearResult> {
+    return this.writer.call("clearOperationalData", [orgId, now]);
   }
 
   async listRecipes(orgId: string): Promise<Recipe[]> {

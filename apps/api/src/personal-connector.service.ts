@@ -94,6 +94,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
   private backgroundStarted = false;
+  private maintenanceHold = false;
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -124,11 +125,28 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
+  async pauseForMaintenance(): Promise<void> {
+    this.maintenanceHold = true;
+    await this.waitForQuiet();
+    this.resetLivePullState();
+  }
+
+  resumeAfterMaintenance(): void {
+    this.maintenanceHold = false;
+  }
+
   async sync(
     installationId: string,
     maxPages = DEFAULT_MAX_PAGES,
     options?: { skipIdle?: boolean; capCatchUp?: boolean },
   ): Promise<ConnectorSyncView> {
+    if (this.maintenanceHold) {
+      throw new PersonalConnectorError(
+        "disabled",
+        "Store maintenance in progress",
+        409,
+      );
+    }
     const existing = this.inflight.get(installationId);
     if (existing) {
       return existing;
@@ -181,6 +199,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   async hydrateOpenedThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
     const id = threadId.trim();
     if (!id || !shouldHydrateOpenedInbox({ thread_id: id })) {
       return;
@@ -478,8 +499,36 @@ export class PersonalConnectorService implements OnModuleDestroy {
     return this.viewOf(store, updated);
   }
 
+  private async waitForQuiet(timeoutMs = 10_000): Promise<void> {
+    const started = Date.now();
+    while (
+      this.ticking ||
+      this.inflight.size > 0 ||
+      this.streamLocks.size > 0 ||
+      this.hydrating.size > 0
+    ) {
+      if (Date.now() - started > timeoutMs) {
+        return;
+      }
+      await delay(50);
+    }
+  }
+
+  private resetLivePullState(): void {
+    const interval = pullStatus.interval_ms;
+    this.streamIdleUntil.clear();
+    this.streamCatchingUp.clear();
+    this.streamMeta.clear();
+    this.streamErrors.clear();
+    this.streamPulling.clear();
+    this.hydrateCooldown.clear();
+    this.lastCatchUpCursor = undefined;
+    resetPullStatus();
+    pullStatus.interval_ms = interval;
+  }
+
   private async tick(): Promise<void> {
-    if (this.ticking || !this.runtime.isReady()) {
+    if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
       return;
     }
     this.ticking = true;
