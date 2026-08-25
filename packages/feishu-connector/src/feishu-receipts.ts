@@ -8,11 +8,16 @@ export function feishuSentMessageId(externalId: string): string | undefined {
   if (trimmed.startsWith("om_")) {
     return trimmed;
   }
-  const cut = trimmed.indexOf(":out:");
+  const out = trimmed.indexOf(":out:");
+  if (out >= 0) {
+    const sent = trimmed.slice(out + 5).trim();
+    return sent.startsWith("om_") ? sent : undefined;
+  }
+  const cut = trimmed.lastIndexOf(":");
   if (cut < 0) {
     return undefined;
   }
-  const sent = trimmed.slice(cut + 5).trim();
+  const sent = trimmed.slice(cut + 1).trim();
   return sent.startsWith("om_") ? sent : undefined;
 }
 
