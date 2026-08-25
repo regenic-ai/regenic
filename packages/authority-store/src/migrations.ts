@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 8;
+export const LATEST_SCHEMA_VERSION = 10;
 
 export const MIGRATIONS = [
   {
@@ -171,6 +171,99 @@ export const MIGRATIONS = [
     sql: `
       ALTER TABLE conversation_prefs ADD COLUMN last_read_at TEXT;
       ALTER TABLE conversation_prefs ADD COLUMN last_read_external_id TEXT;
+    `,
+  },
+  {
+    version: 9,
+    sql: `
+      CREATE TABLE recipes (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        match_json TEXT NOT NULL,
+        executor_type TEXT NOT NULL,
+        executor_config_json TEXT NOT NULL,
+        can_write_back INTEGER NOT NULL DEFAULT 0 CHECK (can_write_back IN (0, 1)),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX recipes_org_idx ON recipes (org_id, updated_at);
+
+      CREATE TABLE work_items (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        head_event_id TEXT REFERENCES events(id),
+        record_class TEXT NOT NULL,
+        thread_facet TEXT NOT NULL,
+        status TEXT NOT NULL,
+        recipe_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (org_id, thread_id)
+      );
+
+      CREATE INDEX work_items_org_status_idx ON work_items (org_id, status, updated_at);
+
+      CREATE TABLE work_runs (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        recipe_id TEXT NOT NULL,
+        executor_type TEXT NOT NULL,
+        external_run_id TEXT,
+        agent_thread_id TEXT,
+        status TEXT NOT NULL,
+        result_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX work_runs_item_idx ON work_runs (org_id, work_item_id, updated_at);
+
+      CREATE TABLE ui_prefs (
+        org_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (org_id, key)
+      );
+    `,
+  },
+  {
+    version: 10,
+    sql: `
+      CREATE TABLE work_items_v10 (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        unit_key TEXT NOT NULL,
+        head_event_id TEXT REFERENCES events(id),
+        record_class TEXT NOT NULL,
+        thread_facet TEXT NOT NULL,
+        status TEXT NOT NULL,
+        recipe_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (org_id, thread_id, unit_key)
+      );
+
+      INSERT INTO work_items_v10 (
+        id, org_id, thread_id, unit_key, head_event_id, record_class,
+        thread_facet, status, recipe_id, created_at, updated_at
+      )
+      SELECT
+        id, org_id, thread_id, COALESCE(head_event_id, id), head_event_id,
+        record_class, thread_facet, status, recipe_id, created_at, updated_at
+      FROM work_items;
+
+      DROP TABLE work_items;
+      ALTER TABLE work_items_v10 RENAME TO work_items;
+
+      CREATE INDEX work_items_org_status_idx ON work_items (org_id, status, updated_at);
+      CREATE INDEX work_items_session_idx ON work_items (org_id, thread_id, updated_at);
     `,
   },
 ] as const;

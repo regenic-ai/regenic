@@ -368,15 +368,21 @@ export class ChannelDriverRegistry {
 
   findCreatable(
     installations: ConnectorInstallation[],
+    source?: string,
   ): { installation: ConnectorInstallation; driver: ChannelDriver } | undefined {
+    const wanted = source?.trim();
     for (const installation of installations) {
       if (installation.status !== "enabled") {
         continue;
       }
       const driver = this.get(installation.connector_type);
-      if (driver?.capabilities(installation).create) {
-        return { installation, driver };
+      if (!driver?.capabilities(installation).create) {
+        continue;
       }
+      if (wanted && driver.source !== wanted) {
+        continue;
+      }
+      return { installation, driver };
     }
     return undefined;
   }

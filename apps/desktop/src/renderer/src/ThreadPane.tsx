@@ -11,9 +11,13 @@ import {
   sameUtterance,
   threadActivityCopy,
   threadActivityOf,
+  threadFacetLabel,
   threadLoadedCountCopy,
   threadTitle,
+  workNextStepCopy,
+  workStatusLabel,
 } from "./message-view";
+import { useLocale } from "./LocaleContext";
 import { PinIcon } from "./Icons";
 import {
   ThreadMessageList,
@@ -34,6 +38,9 @@ export const ThreadPane = memo(function ThreadPane({
   onRefresh,
   onRename,
   onPin,
+  onRunWork,
+  onDismissWork,
+  onBindRecipe,
 }: {
   thread: InboxThread;
   pull?: PersonalEngineView["pull"];
@@ -46,7 +53,11 @@ export const ThreadPane = memo(function ThreadPane({
   onRefresh: () => Promise<void>;
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
+  onRunWork?: () => Promise<void>;
+  onDismissWork?: () => Promise<void>;
+  onBindRecipe?: () => void;
 }) {
+  const { t } = useLocale();
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
   const [sending, setSending] = useState(false);
@@ -107,7 +118,7 @@ export const ThreadPane = memo(function ThreadPane({
       });
       await onRefresh();
     } catch (caught) {
-      setSendError(caught instanceof Error ? caught.message : "Could not send this answer");
+      setSendError(caught instanceof Error ? caught.message : t("error.cannotSend"));
     } finally {
       setSending(false);
     }
@@ -129,13 +140,14 @@ export const ThreadPane = memo(function ThreadPane({
       setQuote(null);
       await onRefresh();
     } catch (caught) {
-      setSendError(caught instanceof Error ? caught.message : "Send failed");
-      throw caught instanceof Error ? caught : new Error("Send failed");
+      setSendError(caught instanceof Error ? caught.message : t("error.sendFailed"));
+      throw caught instanceof Error ? caught : new Error(t("error.sendFailed"));
     } finally {
       setPending((current) => current.filter((item) => item.event.id !== optimistic.event.id));
       setSending(false);
     }
   };
+  const workHint = workNextStepCopy(thread);
 
   return (
     <article className="thread-pane">
@@ -150,6 +162,58 @@ export const ThreadPane = memo(function ThreadPane({
                 {conversationKindLabel(thread.conversation_kind)}
               </span>
             ) : null}
+            {threadFacetLabel(thread.thread_facet) ? (
+              <span className="kind-tag">
+                {threadFacetLabel(thread.thread_facet)}
+              </span>
+            ) : null}
+            {workStatusLabel(thread.work?.status) ? (
+              <span className={`kind-tag work-${thread.work?.status ?? ""}`}>
+                {workStatusLabel(thread.work?.status)}
+              </span>
+            ) : null}
+            {onRunWork &&
+            thread.work &&
+            (thread.work.status === "open" ||
+              thread.work.status === "failed" ||
+              thread.work.status === "skipped") ? (
+              <button
+                type="button"
+                className="primary thread-run"
+                title={t("thread.startRunTitle")}
+                onClick={() => {
+                  void onRunWork();
+                }}
+              >
+                {t("thread.startRun")}
+              </button>
+            ) : null}
+            {onDismissWork &&
+            thread.work &&
+            (thread.work.status === "open" ||
+              thread.work.status === "running" ||
+              thread.work.status === "waiting_human") ? (
+              <button
+                type="button"
+                className="ghost thread-run"
+                title={t("thread.dismissTitle")}
+                onClick={() => {
+                  void onDismissWork();
+                }}
+              >
+                {t("thread.dismiss")}
+              </button>
+            ) : null}
+            {onBindRecipe && !thread.work?.recipe_id ? (
+              <button
+                type="button"
+                className="ghost thread-run"
+                title={t("thread.bindRecipeTitle")}
+                onClick={onBindRecipe}
+              >
+                {t("thread.bindRecipe")}
+              </button>
+            ) : null}
             <h1>
               <ThreadTitleField
                 className="thread-title"
@@ -160,8 +224,8 @@ export const ThreadPane = memo(function ThreadPane({
             <button
               type="button"
               className={`item-tool thread-pin${thread.pinned ? " is-on" : ""}`}
-              aria-label={thread.pinned ? "Unpin" : "Pin"}
-              title={thread.pinned ? "Unpin" : "Pin"}
+              aria-label={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
+              title={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
               onClick={() => {
                 void onPin(!thread.pinned);
               }}
@@ -179,7 +243,7 @@ export const ThreadPane = memo(function ThreadPane({
             {loadingOlder ? (
               <span className="thread-sync">
                 <span className="dot" />
-                Loading earlier messages
+                {t("thread.loadingEarlier")}
               </span>
             ) : null}
             {syncNote ? (
@@ -189,6 +253,7 @@ export const ThreadPane = memo(function ThreadPane({
               </span>
             ) : null}
           </p>
+          {workHint ? <p className="work-hint">{workHint}</p> : null}
         </div>
       </header>
       <ThreadMessageList

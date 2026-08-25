@@ -4,7 +4,7 @@ import {
   isPersonalApiEnabled,
   loadEnv,
 } from "@regenic/config";
-import { createHttpApp } from "./http-app";
+import { createHttpApp, listenHttpApp } from "./http-app";
 
 async function bootstrap() {
   const env = loadEnv();
@@ -20,7 +20,7 @@ async function bootstrap() {
     });
   }
   app.enableShutdownHooks();
-  await app.listen(env.PORT, env.LISTEN_HOST);
+  await listenHttpApp(app, env.PORT, env.LISTEN_HOST);
   console.log(`api listening on ${env.LISTEN_HOST}:${env.PORT}`);
 }
 

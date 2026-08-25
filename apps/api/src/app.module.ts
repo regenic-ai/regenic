@@ -12,6 +12,7 @@ import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalReplyService } from "./personal-reply.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
+import { PersonalWorkService } from "./personal-work.service";
 
 @Module({
   controllers: [HealthController, DshApiController, PersonalController],
@@ -20,6 +21,7 @@ import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.servic
     PersonalRuntimeService,
     PersonalInboxService,
     PersonalReplyService,
+    PersonalWorkService,
     PersonalConnectorService,
     PersonalWhatsAppImportService,
     {

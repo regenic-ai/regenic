@@ -13,6 +13,7 @@ import {
   selectionInTag,
 } from "./composer-rich";
 import { AttachIcon, SendIcon } from "./Icons";
+import { useLocale } from "./LocaleContext";
 import { firstLine } from "./message-view";
 import type { InboxViewItem, ReplyAttachmentInput } from "./types";
 
@@ -39,6 +40,7 @@ export function Composer({
   onCancelQuote?: () => void;
   onSend: (draft: ComposerDraft) => Promise<void> | void;
 }) {
+  const { t } = useLocale();
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const [hasText, setHasText] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -196,9 +198,9 @@ export function Composer({
         <div className="composer-quote">
           <div>
             <strong>Replying</strong>
-            <span>{firstLine(quote.body_text, 72) || "Message"}</span>
+            <span>{firstLine(quote.body_text, 72) || t("composer.message")}</span>
           </div>
-          <button type="button" className="icon-btn" onClick={onCancelQuote} aria-label="Cancel reply">
+          <button type="button" className="icon-btn" onClick={onCancelQuote} aria-label={t("composer.cancelReply")}>
             ×
           </button>
         </div>
@@ -228,8 +230,8 @@ export function Composer({
         contentEditable={!blocked}
         role="textbox"
         aria-multiline="true"
-        aria-label={hint ?? "Message"}
-        data-placeholder={hint ?? "Send a message"}
+        aria-label={hint ?? t("composer.message")}
+        data-placeholder={hint ?? t("composer.sendMessage")}
         suppressContentEditableWarning
         onInput={refreshText}
         onPaste={(event) => {
@@ -296,7 +298,7 @@ export function Composer({
           className="composer-plus"
           disabled={blocked}
           aria-label="Attach"
-          title="Attach image or file"
+          title={t("composer.attach")}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => fileRef.current?.click()}
         >
@@ -354,7 +356,7 @@ export function Composer({
           type="button"
           className="send-btn"
           disabled={!canSend}
-          aria-label={sending ? "Sending" : "Send"}
+          aria-label={sending ? t("composer.sending") : t("composer.send")}
           onClick={() => void send()}
         >
           <SendIcon />
@@ -363,7 +365,7 @@ export function Composer({
       {dragOver ? (
         <div className="composer-drop" aria-hidden="true">
           <AttachIcon />
-          Drop images or files
+          {t("composer.drop")}
         </div>
       ) : null}
       {localError || error ? <p className="action-error">{localError ?? error}</p> : null}
@@ -428,6 +430,7 @@ function AttachmentCard({
   file: LocalAttachment;
   onRemove: () => void;
 }) {
+  const { t } = useLocale();
   const image = file.media_type.startsWith("image/");
   return (
     <span className={`attach-card${image ? " is-image" : " is-file"}`}>
@@ -439,7 +442,7 @@ function AttachmentCard({
           <em>{formatFileSize(file.bytes)}</em>
         </span>
       )}
-      <button type="button" className="attach-remove" aria-label={`Remove ${file.filename}`} onClick={onRemove}>
+      <button type="button" className="attach-remove" aria-label={t("composer.remove", { name: file.filename })} onClick={onRemove}>
         ×
       </button>
     </span>

@@ -1,4 +1,5 @@
 import type { ContentPart, IngestRecord } from "./ingestion";
+import type { ThreadFacet } from "./thread-facet";
 
 export const SURFACE_MEDIA_TYPE = "application/vnd.regenic.surface+json";
 
@@ -6,6 +7,12 @@ export type ChannelId = string;
 export type MessageKind = "user" | "assistant" | "system";
 export type MessageDirection = "inbound" | "outbound";
 export type ThreadActivity = "awaiting_user" | "working";
+
+export interface MessageTurn {
+  state: "open" | "ended";
+  ok?: boolean;
+  reason?: string;
+}
 
 export interface MessageSurface {
   channel: ChannelId;
@@ -15,6 +22,9 @@ export interface MessageSurface {
   conversation_kind?: string;
   actor_label?: string;
   activity?: ThreadActivity;
+  thread_facet?: ThreadFacet;
+  type?: string;
+  turn?: MessageTurn;
 }
 
 export interface ChannelDescriptor {
@@ -93,9 +103,11 @@ export function channelRecord(input: {
   actor_id: string;
   actor_label?: string;
   activity?: ThreadActivity;
+  turn?: MessageTurn;
   scope_id: string;
   scope_name?: string;
   conversation_kind?: string;
+  thread_facet?: ThreadFacet;
   type?: string;
   parent_external_id?: string;
   thread_id?: string;
@@ -113,6 +125,9 @@ export function channelRecord(input: {
       : {}),
     ...(input.actor_label ? { actor_label: input.actor_label } : {}),
     ...(input.activity ? { activity: input.activity } : {}),
+    ...(input.turn ? { turn: input.turn } : {}),
+    ...(input.thread_facet ? { thread_facet: input.thread_facet } : {}),
+    ...(input.type ? { type: input.type } : {}),
   };
   const body = input.content ?? [];
   const hasBody = body.some((part) => part.role === "body");
@@ -252,6 +267,7 @@ function readSurface(
   const conversationKind = optionalLabel(value.conversation_kind);
   const actorLabel = optionalLabel(value.actor_label);
   const activity = isActivity(value.activity) ? value.activity : undefined;
+  const turn = readTurn(value.turn);
   return {
     channel: value.channel.trim() || fallbackChannel || value.channel,
     kind: value.kind,
@@ -260,6 +276,11 @@ function readSurface(
     ...(conversationKind ? { conversation_kind: conversationKind } : {}),
     ...(actorLabel ? { actor_label: actorLabel } : {}),
     ...(activity ? { activity } : {}),
+    ...(value.thread_facet ? { thread_facet: value.thread_facet } : {}),
+    ...(typeof value.type === "string" && value.type.trim()
+      ? { type: value.type.trim() }
+      : {}),
+    ...(turn ? { turn } : {}),
   };
 }
 
@@ -279,4 +300,24 @@ function isDirection(value: unknown): value is MessageDirection {
 
 function isActivity(value: unknown): value is ThreadActivity {
   return value === "awaiting_user" || value === "working";
+}
+
+function readTurn(value: unknown): MessageTurn | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const turn = value as MessageTurn;
+  if (turn.state === "open") {
+    return { state: "open" };
+  }
+  if (turn.state !== "ended") {
+    return undefined;
+  }
+  return {
+    state: "ended",
+    ok: turn.ok !== false,
+    ...(typeof turn.reason === "string" && turn.reason.trim()
+      ? { reason: turn.reason.trim() }
+      : {}),
+  };
 }

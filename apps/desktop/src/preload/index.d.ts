@@ -1,9 +1,11 @@
 export type KernelMode = "local" | "custom";
+export type Locale = "en" | "zh";
 
 export interface KernelSettingsView {
   mode: KernelMode;
   customOrigin: string;
   activeOrigin: string;
+  locale: Locale;
 }
 
 export type HostWatchKind = "ok" | "attention" | "critical";
@@ -40,7 +42,9 @@ export interface RegenicDesktop {
     mode: KernelMode;
     origin?: string;
   }) => Promise<KernelSettingsView>;
+  setLocale: (locale: Locale) => Promise<Locale>;
   onApiOriginChanged: (listener: (origin: string) => void) => () => void;
+  onLocaleChanged: (listener: (locale: Locale) => void) => () => void;
   showConsole: () => Promise<void>;
   quitApp: () => Promise<void>;
   getHostStats: () => Promise<HostStats>;

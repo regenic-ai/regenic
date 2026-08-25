@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   computeWindow,
+  endScrollTop,
   estimateMessageHeight,
   inboxRevision,
   isStuckToEnd,
+  paddingYFromStyle,
   prefixOffsets,
   hasOlderPage,
   inboxCursor,
@@ -237,6 +239,13 @@ describe("thread window", () => {
       isStuckToEnd({ scrollHeight: 10_000, scrollTop: 100, clientHeight: 80 }),
       false,
     );
+  });
+
+  it("pins to the content end including scroll padding", () => {
+    assert.equal(paddingYFromStyle({ paddingTop: "16px", paddingBottom: "20px" }), 36);
+    assert.equal(endScrollTop(5_000, 600, 36), 4_436);
+    assert.equal(endScrollTop(5_000, 600, 0), 4_400);
+    assert.equal(endScrollTop(200, 600, 36), 0);
   });
 
   it("loads older history only after an upward scroll reaches the top", () => {

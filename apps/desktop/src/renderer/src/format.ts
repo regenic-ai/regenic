@@ -1,3 +1,5 @@
+import { activeLocale, t } from "../../shared/i18n.ts";
+import { localeTag } from "../../shared/locale.ts";
 import { firstLine } from "./message-view";
 import type { EngineChipState } from "./types";
 
@@ -17,7 +19,7 @@ export function formatTime(iso: string): string {
   if (Number.isNaN(date.getTime())) {
     return iso;
   }
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(localeTag(activeLocale()), {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -36,7 +38,7 @@ export function formatChatTime(iso: string): string {
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
   return new Intl.DateTimeFormat(
-    "en-US",
+    localeTag(activeLocale()),
     sameDay
       ? { hour: "numeric", minute: "2-digit" }
       : { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" },
@@ -45,12 +47,12 @@ export function formatChatTime(iso: string): string {
 
 export function chipLabel(state: EngineChipState): string {
   if (state === "running") {
-    return "Running";
+    return t("chip.running");
   }
   if (state === "syncing") {
-    return "Syncing";
+    return t("chip.syncing");
   }
-  return "Stopped";
+  return t("chip.stopped");
 }
 
 export function connectorLabel(type: string): string {
@@ -70,12 +72,12 @@ export function installationStatusLabel(
   status: "enabled" | "disabled" | "needs_attention",
 ): string {
   if (status === "enabled") {
-    return "Enabled";
+    return t("status.enabled");
   }
   if (status === "disabled") {
-    return "Disabled";
+    return t("status.disabled");
   }
-  return "Needs attention";
+  return t("status.needsAttention");
 }
 
 export function connectorActionError(message: string): string {
@@ -110,12 +112,12 @@ export {
 
 export function networkWatchLabel(kind: string | undefined): string {
   if (kind === "proxy") {
-    return "Attention";
+    return t("network.attention");
   }
   if (kind === "blocked") {
-    return "Blocked";
+    return t("network.blocked");
   }
-  return "Clear";
+  return t("network.clear");
 }
 
 export function attemptSummary(
@@ -128,14 +130,17 @@ export function attemptSummary(
   } | null,
 ): string {
   if (!attempt) {
-    return "No sync yet";
+    return t("sync.none");
   }
   const when = formatTime(attempt.finished_at ?? attempt.started_at);
   if (attempt.status === "running") {
-    return `Syncing · ${when}`;
+    return t("sync.syncingWhen", { when });
   }
   if (attempt.status === "failed") {
-    return `Failed${attempt.error_code ? ` · ${attempt.error_code}` : ""} · ${when}`;
+    return t("sync.failedWhen", {
+      code: attempt.error_code ? ` · ${attempt.error_code}` : "",
+      when,
+    });
   }
-  return `OK · accepted ${attempt.accepted_count} · ${when}`;
+  return t("sync.okWhen", { count: attempt.accepted_count, when });
 }

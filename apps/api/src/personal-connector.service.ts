@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  Injectable,
-  OnApplicationBootstrap,
-  OnModuleDestroy,
-} from "@nestjs/common";
+import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -33,6 +29,7 @@ import {
   preferredThreadId,
   publishPullStreams,
   pullStatus,
+  resetPullStatus,
   type PullStreamStatus,
 } from "./personal-pull-status";
 import {
@@ -80,9 +77,7 @@ export interface ConnectorSyncView {
 }
 
 @Injectable()
-export class PersonalConnectorService
-  implements OnApplicationBootstrap, OnModuleDestroy
-{
+export class PersonalConnectorService implements OnModuleDestroy {
   private readonly inflight = new Map<string, Promise<ConnectorSyncView>>();
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly streamIdleUntil = new Map<string, number>();
@@ -98,6 +93,7 @@ export class PersonalConnectorService
   private lastCatchUpCursor: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
+  private backgroundStarted = false;
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -105,15 +101,20 @@ export class PersonalConnectorService
     private readonly drivers: ChannelDriverRegistry,
   ) {}
 
-  async onApplicationBootstrap(): Promise<void> {
+  startAfterListen(): void {
+    if (this.backgroundStarted) {
+      return;
+    }
+    this.backgroundStarted = true;
     const pullMs = pullIntervalMs();
+    resetPullStatus();
     pullStatus.interval_ms = pullMs;
     if (pullMs > 0) {
       this.timer = setInterval(() => {
         void this.tick();
       }, pullMs);
+      void this.tick();
     }
-    await this.tick();
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -325,7 +326,7 @@ export class PersonalConnectorService
   }
 
   async createConversation(
-    input: { installation_id?: string } = {},
+    input: { installation_id?: string; source?: string } = {},
   ): Promise<CreatedConversationView> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
@@ -351,7 +352,7 @@ export class PersonalConnectorService
       }
       found = { installation, driver };
     } else {
-      found = this.drivers.findCreatable(installations);
+      found = this.drivers.findCreatable(installations, input.source);
       if (!found) {
         throw new PersonalConnectorError(
           "unsupported_channel",
@@ -387,7 +388,7 @@ export class PersonalConnectorService
     const created = await store.createInstallation(
       this.buildInstallation(input, now),
     );
-    await this.catchUp(created.id);
+    void this.catchUp(created.id);
     return this.viewOf(store, created);
   }
 
@@ -430,7 +431,7 @@ export class PersonalConnectorService
       );
     }
     if (updated.status === "enabled") {
-      await this.catchUp(updated.id);
+      void this.catchUp(updated.id);
     }
     return this.viewOf(store, updated);
   }
@@ -472,7 +473,7 @@ export class PersonalConnectorService
       );
     }
     if (status === "enabled") {
-      await this.catchUp(updated.id);
+      void this.catchUp(updated.id);
     }
     return this.viewOf(store, updated);
   }

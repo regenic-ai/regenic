@@ -16,10 +16,18 @@ import trayPng from "../brand/tray-mark.png?asset";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { portFromHttpOrigin } from "../shared/host-watch";
 import {
+  probeKernelMode,
+  waitForPersonalKernel,
+} from "../shared/kernel-ready";
+import { translate } from "../shared/messages.ts";
+import { parseLocale } from "../shared/locale.ts";
+import {
   LOCAL_KERNEL_ORIGIN,
+  loadDesktopPreference,
   loadKernelPreference,
   parseKernelOrigin,
   saveKernelPreference,
+  saveLocalePreference,
   type KernelPreference,
 } from "./kernel-settings";
 
@@ -110,38 +118,11 @@ function countWorkThreads(
   return ids.size;
 }
 
-async function probe(
-  origin: string,
-  timeoutMs?: number,
-): Promise<"personal" | "other" | "none"> {
-  try {
-    const response = await fetch(
-      `${origin}/health`,
-      timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : undefined,
-    );
-    const body = (await response.json()) as { mode?: string };
-    return body.mode === "personal" ? "personal" : "other";
-  } catch {
-    return "none";
-  }
-}
-
-async function waitForPersonal(origin: string, timeoutMs = 15000): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if ((await probe(origin)) === "personal") {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error("Personal kernel did not become ready");
-}
-
 async function pickKernelPort(): Promise<{ reuse: string } | { port: number; origin: string }> {
   for (let offset = 0; offset < 10; offset += 1) {
     const port = DEFAULT_PORT + offset;
     const origin = `http://127.0.0.1:${port}`;
-    const existing = await probe(origin);
+    const existing = await probeKernelMode(origin);
     if (existing === "personal") {
       return { reuse: origin };
     }
@@ -182,17 +163,24 @@ function settingsFile(): string {
 }
 
 function kernelView() {
-  const preference = loadKernelPreference(settingsFile());
+  const preference = loadDesktopPreference(settingsFile());
   return {
     mode: preference.mode,
     customOrigin: preference.origin ?? LOCAL_KERNEL_ORIGIN,
     activeOrigin: apiOrigin,
+    locale: preference.locale,
   };
 }
 
 function broadcastOrigin(): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send("regenic:api-origin", apiOrigin);
+  }
+}
+
+function broadcastLocale(locale: "en" | "zh"): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send("regenic:locale", locale);
   }
 }
 
@@ -236,7 +224,10 @@ async function startLocalKernel(): Promise<void> {
   apiOrigin = picked.origin;
   spawnSidecar(picked.port);
   try {
-    await waitForPersonal(apiOrigin);
+    await waitForPersonalKernel({
+      origin: apiOrigin,
+      isAlive: () => sidecar != null && sidecar.exitCode == null,
+    });
   } catch (error) {
     stopOwnedSidecar();
     throw error;
@@ -244,7 +235,7 @@ async function startLocalKernel(): Promise<void> {
 }
 
 async function assertPersonalKernel(origin: string): Promise<void> {
-  const mode = await probe(origin, 4000);
+  const mode = await probeKernelMode(origin, 4000);
   if (mode === "none") {
     throw new Error(`Cannot reach the kernel at ${origin}`);
   }
@@ -414,11 +405,15 @@ function createTray(): void {
     toggleTrayWindow();
   });
   tray.on("right-click", () => {
+    const locale = loadDesktopPreference(settingsFile()).locale;
     const menu = Menu.buildFromTemplate([
-      { label: "Open console", click: () => showConsole() },
+      {
+        label: translate(locale, "tray.openConsole"),
+        click: () => showConsole(),
+      },
       { type: "separator" },
       {
-        label: "Quit",
+        label: translate(locale, "tray.quit"),
         click: () => {
           quitting = true;
           app.quit();
@@ -440,9 +435,10 @@ async function pollNotifications(): Promise<void> {
     }>;
     const count = Array.isArray(items) ? countWorkThreads(items) : 0;
     if (lastInboxCount !== null && count > lastInboxCount && Notification.isSupported()) {
+      const locale = loadDesktopPreference(settingsFile()).locale;
       new Notification({
         title: "Regenic",
-        body: `${count} current work`,
+        body: translate(locale, "tray.workCountNotify", { count }),
       }).show();
     }
     lastInboxCount = count;
@@ -483,6 +479,11 @@ app.whenReady().then(async () => {
       return kernelView();
     },
   );
+  ipcMain.handle("regenic:set-locale", async (_event, locale: unknown) => {
+    const next = saveLocalePreference(settingsFile(), parseLocale(locale));
+    broadcastLocale(next);
+    return next;
+  });
 
   try {
     await connectSavedKernel();

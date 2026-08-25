@@ -24,6 +24,17 @@ export * from "./memory-connector-runtime-store";
 export * from "./plugin-services";
 export * from "./plugin";
 export * from "./local-network";
+export * from "./record-class";
+export * from "./thread-facet";
+export * from "./work";
+export * from "./recipe-match";
+export * from "./specification";
+export * from "./recipe-trigger";
+export * from "./job-control";
+export * from "./attention";
+export * from "./executor";
+export * from "./work-policy";
+export * from "./memory-work-store";
 
 /** @unstable RFC 0001 */
 export type ActorType = "human" | "agent" | "system";

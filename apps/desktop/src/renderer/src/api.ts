@@ -3,14 +3,18 @@ import type {
   ConversationPrefView,
   CreatedConversation,
   EngineInstallationView,
+  ExecutorCatalogEntry,
   InboxViewItem,
   KernelSettingsView,
+  Locale,
   MessageReceipt,
   PersonalEngineView,
   PromptAnswerItem,
+  RecipeView,
   ReplyAttachmentInput,
   ReplyView,
   ThreadPrompt,
+  UiPrefsView,
   WhatsAppImportView,
 } from "./types";
 import { normalizeListTitle } from "./types";
@@ -37,11 +41,15 @@ export async function fetchKernelSettings(): Promise<KernelSettingsView> {
       mode: "local",
       customOrigin: currentOrigin,
       activeOrigin: currentOrigin,
+      locale: "en",
     };
   }
   const settings = await window.regenic.getKernelSettings();
   currentOrigin = settings.activeOrigin;
-  return settings;
+  return {
+    ...settings,
+    locale: settings.locale === "zh" ? "zh" : "en",
+  };
 }
 
 export async function applyKernelSettings(input: {
@@ -53,7 +61,18 @@ export async function applyKernelSettings(input: {
   }
   const settings = await window.regenic.setKernelSettings(input);
   currentOrigin = settings.activeOrigin;
-  return settings;
+  return {
+    ...settings,
+    locale: settings.locale === "zh" ? "zh" : "en",
+  };
+}
+
+export async function saveLocale(locale: Locale): Promise<Locale> {
+  if (!window.regenic?.setLocale) {
+    return locale;
+  }
+  const next = await window.regenic.setLocale(locale);
+  return next === "zh" ? "zh" : "en";
 }
 
 export async function fetchInbox(
@@ -123,6 +142,10 @@ export async function fetchInbox(
           : 0,
     can_receipt: item.can_receipt === true,
     receipt: normalizeReceipt(item.receipt),
+    record_class: item.record_class,
+    thread_facet: item.thread_facet,
+    attention: item.attention,
+    work: item.work,
   }));
 }
 
@@ -421,6 +444,117 @@ function replyErrorMessage(
     return "This reply is too large. Use a smaller image or fewer attachments.";
   }
   return `reply ${status}`;
+}
+
+export async function fetchRecipes(): Promise<RecipeView[]> {
+  const response = await fetch(`${origin()}/v1/me/recipes`);
+  if (!response.ok) {
+    throw new Error(`recipes ${response.status}`);
+  }
+  const items = (await response.json()) as RecipeView[];
+  return Array.isArray(items) ? items : [];
+}
+
+export async function fetchExecutors(): Promise<ExecutorCatalogEntry[]> {
+  const response = await fetch(`${origin()}/v1/me/executors`);
+  if (!response.ok) {
+    throw new Error(`executors ${response.status}`);
+  }
+  const items = (await response.json()) as ExecutorCatalogEntry[];
+  return Array.isArray(items) ? items : [];
+}
+
+export async function saveRecipe(
+  input: {
+    name: string;
+    match: RecipeView["match"];
+    executor_type: string;
+    executor_config?: Record<string, string>;
+    can_write_back: boolean;
+    enabled: boolean;
+  },
+  id?: string,
+): Promise<RecipeView> {
+  const response = await fetch(
+    id ? `${origin()}/v1/me/recipes/${id}` : `${origin()}/v1/me/recipes`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  const body = (await response.json()) as RecipeView | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `recipe ${response.status}`,
+    );
+  }
+  return body as RecipeView;
+}
+
+export async function deleteRecipe(id: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/recipes/${id}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `recipe ${response.status}`);
+  }
+}
+
+export async function runWorkItem(id: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/work-items/${id}/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `work run ${response.status}`);
+  }
+}
+
+export async function dismissWorkItem(id: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/work-items/${id}/dismiss`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `work dismiss ${response.status}`);
+  }
+}
+
+export async function fetchUiPrefs(): Promise<UiPrefsView> {
+  const response = await fetch(`${origin()}/v1/me/prefs`);
+  if (!response.ok) {
+    throw new Error(`prefs ${response.status}`);
+  }
+  const body = (await response.json()) as UiPrefsView;
+  return { inbox_sort: body.inbox_sort === "attention" ? "attention" : "normal" };
+}
+
+export async function saveUiPrefs(input: UiPrefsView): Promise<UiPrefsView> {
+  const response = await fetch(`${origin()}/v1/me/prefs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as UiPrefsView | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `prefs ${response.status}`,
+    );
+  }
+  return {
+    inbox_sort:
+      "inbox_sort" in body && body.inbox_sort === "attention" ? "attention" : "normal",
+  };
 }
 
 export async function setConnectorStatus(

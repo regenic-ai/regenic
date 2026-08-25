@@ -4,9 +4,11 @@ import {
   currentApiOrigin,
   fetchKernelSettings,
 } from "./api";
-import type { KernelMode } from "./types";
+import { useLocale } from "./LocaleContext";
+import type { KernelMode, Locale } from "./types";
 
 export function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) {
+  const { locale, setLocale, t } = useLocale();
   const [mode, setMode] = useState<KernelMode>("local");
   const [customOrigin, setCustomOrigin] = useState("http://127.0.0.1:4370");
   const [activeOrigin, setActiveOrigin] = useState(currentApiOrigin());
@@ -21,9 +23,9 @@ export function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) 
         setActiveOrigin(settings.activeOrigin);
       })
       .catch(() => {
-        setError("Cannot read desktop settings");
+        setError(t("settings.readError"));
       });
-  }, []);
+  }, [t]);
 
   const apply = async () => {
     setBusy(true);
@@ -38,22 +40,59 @@ export function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) 
       setActiveOrigin(settings.activeOrigin);
       await onChanged();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not apply kernel address");
+      setError(caught instanceof Error ? caught.message : t("settings.applyError"));
     } finally {
       setBusy(false);
     }
   };
 
+  const chooseLocale = (next: Locale) => {
+    if (next === locale) {
+      return;
+    }
+    void setLocale(next);
+  };
+
   return (
-    <div className="page">
-      <h1>Settings</h1>
-      <p className="muted">
-        The console talks to a personal kernel over HTTP. Default is the local sidecar on this computer.
-      </p>
+    <div className="page page-wide">
+      <header className="page-hero">
+        <h1>{t("settings.title")}</h1>
+        <p className="page-lead">{t("settings.lead")}</p>
+      </header>
+
       <section className="card">
-        <h2>Kernel address</h2>
+        <h2>{t("settings.language")}</h2>
+        <p className="muted">{t("settings.languageLead")}</p>
+        <div className="choice-list language-choices">
+          <button
+            type="button"
+            className={`choice${locale === "en" ? " active" : ""}`}
+            onClick={() => chooseLocale("en")}
+          >
+            <span className="choice-mark" />
+            <span>
+              <strong>{t("settings.english")}</strong>
+              <span className="muted">{t("settings.englishHint")}</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`choice${locale === "zh" ? " active" : ""}`}
+            onClick={() => chooseLocale("zh")}
+          >
+            <span className="choice-mark" />
+            <span>
+              <strong>{t("settings.chinese")}</strong>
+              <span className="muted">{t("settings.chineseHint")}</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>{t("settings.kernel")}</h2>
         <div className="kv">
-          <span>In use</span>
+          <span>{t("settings.inUse")}</span>
           <strong>
             <code>{activeOrigin}</code>
           </strong>
@@ -66,10 +105,8 @@ export function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) 
           >
             <span className="choice-mark" />
             <span>
-              <strong>Local</strong>
-              <span className="muted">
-                Start or reuse the sidecar on this computer (127.0.0.1, default port 4370).
-              </span>
+              <strong>{t("settings.local")}</strong>
+              <span className="muted">{t("settings.localHint")}</span>
             </span>
           </button>
           <button
@@ -79,17 +116,14 @@ export function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) 
           >
             <span className="choice-mark" />
             <span>
-              <strong>Custom</strong>
-              <span className="muted">
-                Point at another personal kernel. Apply probes /health first; a remote
-                server needs REGENIC_PERSONAL_API=1.
-              </span>
+              <strong>{t("settings.custom")}</strong>
+              <span className="muted">{t("settings.customHint")}</span>
             </span>
           </button>
         </div>
         {mode === "custom" ? (
           <label className="field">
-            <span>URL</span>
+            <span>{t("settings.url")}</span>
             <input
               value={customOrigin}
               placeholder="http://127.0.0.1:4370"
@@ -99,13 +133,12 @@ export function SettingsPage({ onChanged }: { onChanged: () => Promise<void> }) 
         ) : null}
         {mode === "custom" && activeOrigin !== customOrigin ? (
           <p className="muted">
-            Saved custom kernel is unused. Console is on <code>{activeOrigin}</code>{" "}
-            until Apply succeeds.
+            {t("settings.customUnused", { origin: activeOrigin })}
           </p>
         ) : null}
         <div className="install-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void apply()}>
-            {busy ? "Applying…" : "Apply"}
+            {busy ? t("settings.applying") : t("settings.apply")}
           </button>
         </div>
         {error ? <p className="action-error">{error}</p> : null}

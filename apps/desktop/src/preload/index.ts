@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("regenic", {
   getKernelSettings: () => ipcRenderer.invoke("regenic:get-kernel-settings"),
   setKernelSettings: (input: { mode: "local" | "custom"; origin?: string }) =>
     ipcRenderer.invoke("regenic:set-kernel-settings", input),
+  setLocale: (locale: "en" | "zh") => ipcRenderer.invoke("regenic:set-locale", locale),
   onApiOriginChanged: (listener: (origin: string) => void) => {
     const wrapped = (_event: unknown, origin: string) => {
       listener(origin);
@@ -18,6 +19,15 @@ contextBridge.exposeInMainWorld("regenic", {
     ipcRenderer.on("regenic:api-origin", wrapped);
     return () => {
       ipcRenderer.removeListener("regenic:api-origin", wrapped);
+    };
+  },
+  onLocaleChanged: (listener: (locale: "en" | "zh") => void) => {
+    const wrapped = (_event: unknown, locale: "en" | "zh") => {
+      listener(locale);
+    };
+    ipcRenderer.on("regenic:locale", wrapped);
+    return () => {
+      ipcRenderer.removeListener("regenic:locale", wrapped);
     };
   },
   showConsole: () => ipcRenderer.invoke("regenic:show-console"),

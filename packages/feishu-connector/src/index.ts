@@ -7,6 +7,7 @@ export * from "./feishu-cli-client";
 export * from "./feishu-message";
 export {
   callFeishuOpenApi,
+  callFeishuOpenApiBytes,
   feishuOpenApiBaseUrl,
   isFeishuTokenError,
   FEISHU_OPEN_API_CN,

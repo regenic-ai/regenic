@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 8);
+    assert.equal(authorityStore.schemaVersion, 10);
     authorityStore.close();
   });
 
@@ -238,12 +238,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 9");
+    database.pragma("user_version = 11");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 9 is newer than supported 8/,
+      /schema 11 is newer than supported 10/,
     );
   });
 
@@ -477,7 +477,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 8);
+    assert.equal(store.schemaVersion, 10);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);
@@ -659,6 +659,22 @@ describe("local ingestion persistence", () => {
       delivery_id: "working-face-1",
       received_at: "2026-08-22T10:44:00.000Z",
       records: [
+        {
+          operation: "create",
+          source: "dsh",
+          external_id: "session-n:0",
+          occurred_at: "2026-08-22T10:42:00.000Z",
+          actor: { id: "user" },
+          scope: { id: "session-n" },
+          type: "message",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Please review the ticket.",
+            },
+          ],
+        },
         {
           operation: "create",
           source: "dsh",
