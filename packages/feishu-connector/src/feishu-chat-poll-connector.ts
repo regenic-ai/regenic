@@ -39,6 +39,8 @@ export interface FeishuCursorState {
   head_time?: string;
   recent_seeded?: boolean;
   media_synced?: boolean;
+  media_bytes?: boolean;
+  media_ok?: boolean;
 }
 
 export interface FeishuChatPollConnectorOptions {
@@ -183,28 +185,30 @@ export class FeishuChatPollConnector {
         (parentId && parentId !== item.message_id),
     );
     const threadRoot = rootId && rootId !== item.message_id ? rootId : parentId;
-    return [
-      channelRecord({
-        channel: this.source,
-        kind,
-        direction: isFeishuSelfSender(actorId, selfId) ? "outbound" : "inbound",
-        external_id: `${chatId}:${item.message_id}`,
-        occurred_at: feishuCreateTimeToIso(item.create_time, this.now()),
-        actor_id: actorId,
-        actor_label: this.actorLabel(item, kind, names),
-        scope_id: chatId,
-        scope_name: this.options.chat_name,
-        conversation_kind: feishuConversationKind(this.options.chat_mode),
-        type: isThreadReply ? "thread_reply" : "message",
-        thread_id: isThreadReply && threadRoot ? `${chatId}:${threadRoot}` : undefined,
-        parent_external_id:
-          isThreadReply && (parentId || rootId)
-            ? `${chatId}:${parentId ?? rootId}`
-            : undefined,
-        text,
-        content: attachments,
-      }),
-    ];
+    const record = channelRecord({
+      channel: this.source,
+      kind,
+      direction: isFeishuSelfSender(actorId, selfId) ? "outbound" : "inbound",
+      external_id: `${chatId}:${item.message_id}`,
+      occurred_at: feishuCreateTimeToIso(item.create_time, this.now()),
+      actor_id: actorId,
+      actor_label: this.actorLabel(item, kind, names),
+      scope_id: chatId,
+      scope_name: this.options.chat_name,
+      conversation_kind: feishuConversationKind(this.options.chat_mode),
+      type: isThreadReply ? "thread_reply" : "message",
+      thread_id: isThreadReply && threadRoot ? `${chatId}:${threadRoot}` : undefined,
+      parent_external_id:
+        isThreadReply && (parentId || rootId)
+          ? `${chatId}:${parentId ?? rootId}`
+          : undefined,
+      text,
+      content: attachments,
+    });
+    if (attachments.some((part) => part.bytes !== undefined && part.bytes.byteLength > 0)) {
+      return [record, { ...record, operation: "revise" }];
+    }
+    return [record];
   }
 
   private async resolveAttachments(
@@ -225,12 +229,11 @@ export class FeishuChatPollConnector {
     const filename = ref.filename ?? (ref.kind === "image" ? "image.png" : "attachment");
     const fallbackType =
       ref.media_type ?? (ref.kind === "image" ? "image/png" : "application/octet-stream");
-    const download = this.client.downloadResource;
-    if (!download) {
+    if (typeof this.client.downloadResource !== "function") {
       return placeholderAttachment(filename, fallbackType);
     }
     try {
-      const file = await download({
+      const file = await this.client.downloadResource({
         message_id: messageId,
         file_key: ref.key,
         type: ref.kind,
@@ -293,6 +296,8 @@ export function decodeFeishuCursor(cursor: ConnectorCursor | null): FeishuCursor
         head_time: stringValue(parsed.head_time),
         recent_seeded: parsed.recent_seeded === true,
         media_synced: parsed.media_synced === true,
+        media_bytes: parsed.media_bytes === true,
+        media_ok: parsed.media_ok === true,
       };
     }
   } catch {
@@ -308,7 +313,9 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
     state.sort !== "desc" &&
     !state.recent_seeded &&
     !state.head_time &&
-    !state.media_synced
+    !state.media_synced &&
+    !state.media_bytes &&
+    !state.media_ok
   ) {
     return undefined;
   }
@@ -322,6 +329,8 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
       : {}),
     ...(state.recent_seeded ? { recent_seeded: true } : {}),
     ...(state.media_synced ? { media_synced: true } : {}),
+    ...(state.media_bytes ? { media_bytes: true } : {}),
+    ...(state.media_ok ? { media_ok: true } : {}),
   });
 }
 
@@ -332,7 +341,7 @@ export function needsRecentSeed(state: FeishuCursorState): boolean {
 export function needsMediaReseed(state: FeishuCursorState): boolean {
   return (
     state.recent_seeded === true &&
-    state.media_synced !== true &&
+    state.media_ok !== true &&
     state.sort !== "desc"
   );
 }
@@ -448,7 +457,7 @@ export function nextFeishuCursor(
 }
 
 function stampMediaSynced(state: FeishuCursorState): FeishuCursorState {
-  return { ...state, media_synced: true };
+  return { ...state, media_synced: true, media_bytes: true, media_ok: true };
 }
 
 function placeholderAttachment(filename: string, mediaType: string): ContentPart {

@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
+import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
   FeishuApiError,
@@ -395,15 +396,81 @@ export class LarkCliClient implements FeishuImClient {
     if (!messageId || !fileKey) {
       throw new FeishuApiError("Feishu download needs message_id and file_key");
     }
-    const downloaded = await this.requestViaHttpBytes({
-      method: "GET",
-      path: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}`,
-      params: { type: input.type },
-    });
-    if (!downloaded) {
-      throw new FeishuApiError("Feishu download requires a user token");
+    try {
+      return await this.downloadResourceViaCli({
+        message_id: messageId,
+        file_key: fileKey,
+        type: input.type,
+      });
+    } catch (cliError) {
+      try {
+        const downloaded = await this.requestViaHttpBytes({
+          method: "GET",
+          path: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}`,
+          params: { type: input.type },
+        });
+        if (downloaded && downloaded.bytes.byteLength > 0) {
+          return downloaded;
+        }
+      } catch {
+        // User-token HTTP often returns JSON instead of file bytes.
+      }
+      throw cliError;
     }
-    return downloaded;
+  }
+
+  private async downloadResourceViaCli(
+    input: FeishuDownloadResource,
+  ): Promise<FeishuDownloadedFile> {
+    const directory = await mkdtemp(join(tmpdir(), "regenic-feishu-dl-"));
+    const filename = input.type === "image" ? "image.bin" : "file.bin";
+    try {
+      const result = await this.runCli({
+        command: [
+          this.command,
+          "im",
+          "+messages-resources-download",
+          "--as",
+          "user",
+          "--format",
+          "json",
+          "--message-id",
+          input.message_id,
+          "--file-key",
+          input.file_key,
+          "--type",
+          input.type,
+          "--output",
+          `./${filename}`,
+        ],
+        env: this.options.env,
+        timeout_ms: this.timeoutMs,
+        cwd: directory,
+      });
+      const payload = unwrapLarkCli(result);
+      const saved =
+        stringField(payload, "saved_path") ??
+        stringField(payload, "output") ??
+        filename;
+      const bytes = await readFile(isAbsolute(saved) ? saved : join(directory, saved));
+      if (bytes.byteLength === 0) {
+        throw new FeishuApiError("Feishu download saved an empty file");
+      }
+      const savedName = basename(saved);
+      return {
+        bytes,
+        media_type: sniffMediaType(
+          bytes,
+          input.type === "image" ? "image/png" : "application/octet-stream",
+        ),
+        filename:
+          savedName === "image.bin" || savedName === "file.bin"
+            ? undefined
+            : savedName,
+      };
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 
   private async fillP2pNames(chats: FeishuChat[]): Promise<void> {

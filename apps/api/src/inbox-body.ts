@@ -8,7 +8,7 @@ import {
 export const CONTENT_PARTS_MEDIA_TYPE =
   "application/vnd.regenic.content-parts+json";
 
-const IMAGE_PREVIEW_BYTES = 1_500_000;
+const IMAGE_PREVIEW_BYTES = 8_000_000;
 
 export interface InboxAttachment {
   filename: string;
@@ -148,15 +148,20 @@ function decodeContentParts(
       ];
     }
     const raw = part.bytes_base64;
-    const size = raw ? Buffer.from(raw, "base64").byteLength : 0;
+    const bytes = raw ? Buffer.from(raw, "base64") : undefined;
+    const size = bytes?.byteLength ?? 0;
+    const mediaType = bytes
+      ? sniffImageMediaType(bytes, part.media_type)
+      : part.media_type;
     const preview =
       Boolean(raw) &&
-      part.media_type.startsWith("image/") &&
+      mediaType.startsWith("image/") &&
+      size > 0 &&
       size <= IMAGE_PREVIEW_BYTES;
     return [
       {
         filename,
-        media_type: part.media_type,
+        media_type: mediaType,
         data_base64: preview ? raw : undefined,
       },
     ];
@@ -177,4 +182,45 @@ function decodeContentParts(
 
 function isTextMedia(mediaType: string): boolean {
   return mediaType.startsWith("text/") || mediaType === "application/json";
+}
+
+function sniffImageMediaType(bytes: Uint8Array, declared: string): string {
+  if (declared.startsWith("image/")) {
+    return declared;
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38
+  ) {
+    return "image/gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  return declared;
 }

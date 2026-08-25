@@ -137,10 +137,10 @@ export async function callFeishuOpenApiBytes(input: {
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (looksLikeJson(contentType, bytes)) {
     const payload = parseJsonBytes(bytes);
-    if (isObject(payload) && typeof payload.code === "number" && payload.code !== 0) {
+    if (isObject(payload)) {
       throw new FeishuApiError(
-        stringValue(payload.msg) ?? `Feishu API error ${payload.code}`,
-        String(payload.code),
+        stringValue(payload.msg) ?? "Feishu download returned JSON instead of file bytes",
+        typeof payload.code === "number" ? String(payload.code) : undefined,
       );
     }
     if (!response.ok) {
