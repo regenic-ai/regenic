@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n.ts";
 import type { InboxReuse } from "./thread-window";
 import type {
   AttentionClass,
@@ -497,11 +498,11 @@ export function groupThreadsByAttention(
   threads: InboxThread[],
 ): Array<{ key: string; label: string | null; items: InboxThread[] }> {
   const labels: Record<AttentionClass, string> = {
-    waiting_you: "Needs you",
-    needs_ack: "Needs you",
-    running: "Running",
-    unread: "Unread",
-    quiet: "The rest",
+    waiting_you: t("inbox.needsYou"),
+    needs_ack: t("inbox.needsYou"),
+    running: t("inbox.sectionRunning"),
+    unread: t("inbox.unread"),
+    quiet: t("inbox.theRest"),
   };
   const sections: Array<{ key: string; label: string; items: InboxThread[] }> = [];
   for (const thread of threads) {

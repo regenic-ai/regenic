@@ -113,6 +113,30 @@ export function PencilIcon() {
   );
 }
 
+export function RecipesIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <rect
+        x="4"
+        y="3.2"
+        width="10"
+        height="11.6"
+        rx="1.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
+      <path
+        d="M6.4 6.4h5.2M6.4 9h5.2M6.4 11.6h3.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function SettingsIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">

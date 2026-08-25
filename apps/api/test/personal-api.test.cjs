@@ -4,7 +4,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
-const { createHttpApp } = require("../dist/http-app");
+const { createHttpApp, listenHttpApp } = require("../dist/http-app");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
@@ -309,7 +309,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     ...extraEnv,
   });
   const app = await createHttpApp({ logger: false });
-  await app.listen(0, "127.0.0.1");
+  await listenHttpApp(app, 0, "127.0.0.1");
   return { app, origin: await app.getUrl() };
 }
 
@@ -928,6 +928,10 @@ describe("personal /v1/me", () => {
         presentation: "choice",
         questions: [{ id: "go", prompt: "Continue?", options: [{ label: "Yes" }] }],
       });
+      await waitUntil("dsh sess-a after install", async () => {
+        const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+        return heads.some((item) => item.thread_id === "dsh:sess-a");
+      });
       const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.match(engine.inbox_digest, /&s=/);
       const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
@@ -1063,12 +1067,40 @@ describe("personal /v1/me", () => {
       assert.equal(health.sqlite, "up");
       assert.equal(health.status, "ok");
       assert.equal(health.postgres, undefined);
+      assert.equal(health.dsh, undefined);
       assert.equal(typeof health.memory.rss_bytes, "number");
       assert.ok(health.memory.rss_bytes > 0);
       assert.equal(typeof engine.memory.rss_bytes, "number");
       assert.ok(engine.memory.rss_bytes > 0);
     } finally {
       await app.close();
+    }
+  });
+
+  it("answers /health without waiting on DSH", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const hanging = createServer(() => undefined);
+    await new Promise((resolve) => {
+      hanging.listen(0, "127.0.0.1", resolve);
+    });
+    const dshOrigin = `http://127.0.0.1:${hanging.address().port}`;
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_DSH_BASE_URL: dshOrigin,
+    });
+    try {
+      const started = Date.now();
+      const health = await (await fetch(`${origin}/health`)).json();
+      assert.ok(Date.now() - started < 500);
+      assert.equal(health.mode, "personal");
+      assert.equal(health.sqlite, "up");
+      assert.equal(health.status, "ok");
+      assert.equal(health.dsh, undefined);
+    } finally {
+      await app.close();
+      hanging.close();
     }
   });
 
@@ -1108,6 +1140,13 @@ describe("personal /v1/me", () => {
       });
       assert.equal(missing.status, 404);
 
+      const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const body = await synced.json();
+      assert.equal(synced.status, 201);
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const slackItem = inbox.find(
         (item) => item.event.external_id === "C123:1710000000.000100",
@@ -1116,14 +1155,6 @@ describe("personal /v1/me", () => {
       assert.equal(slackItem.can_send, false);
       assert.equal(slackItem.await_reply, false);
       assert.equal(slackItem.list_title, "conversation");
-
-      const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      const body = await synced.json();
-      assert.equal(synced.status, 201);
       assert.equal(body.installation_id, "slack-1");
       assert.equal(body.last_run_status, "completed");
       assert.equal(body.installation.label, "C123");
@@ -1175,7 +1206,7 @@ describe("personal /v1/me", () => {
       assert.equal(installation.label, "desk-1");
       assert.equal(JSON.stringify(installation).includes("credentials"), false);
 
-      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.equal(
         engine.catalog.find((item) => item.connector_type === "dsh-session")
           .installed,
@@ -1231,7 +1262,7 @@ describe("personal /v1/me", () => {
         { method: "DELETE" },
       );
       assert.equal(removed.status, 200);
-      const after = await (await fetch(`${origin}/v1/me/engine`)).json();
+      const after = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.equal(
         after.installations.some((item) => item.id === installation.id),
         false,
@@ -1267,6 +1298,13 @@ describe("personal /v1/me", () => {
       assert.equal(installation.label, "All sessions");
       assert.equal(JSON.stringify(installation).includes("credentials"), false);
 
+      await waitUntil("dsh sessions after install", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+        return (
+          inbox.some((item) => item.event.external_id === "sess-a:1") &&
+          inbox.some((item) => item.event.external_id === "sess-b:1")
+        );
+      });
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const sessionA = inbox.find((item) => item.event.external_id === "sess-a:1");
       const sessionB = inbox.find((item) => item.event.external_id === "sess-b:1");

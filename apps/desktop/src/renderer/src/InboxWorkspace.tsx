@@ -16,6 +16,7 @@ import {
   threadTitle,
   workStatusLabel,
 } from "./message-view";
+import { useLocale } from "./LocaleContext";
 import { PencilIcon, PinIcon } from "./Icons";
 import { ThreadPane } from "./ThreadPane";
 import { ThreadTitleField } from "./ThreadTitleField";
@@ -42,6 +43,7 @@ export function InboxWorkspace({
   onSortMode,
   onRunWork,
   onCompleteWork,
+  onBindRecipe,
 }: {
   threads: InboxThread[];
   selected: InboxThread | null;
@@ -63,7 +65,9 @@ export function InboxWorkspace({
   onSortMode: (mode: InboxSortMode) => void;
   onRunWork: (thread: InboxThread) => Promise<void>;
   onCompleteWork: (thread: InboxThread) => Promise<void>;
+  onBindRecipe: (thread: InboxThread) => void;
 }) {
+  const { t } = useLocale();
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
   const [channelFilter, setChannelFilter] = useState("all");
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -84,16 +88,16 @@ export function InboxWorkspace({
       <aside className="list">
         <div className="list-chrome">
           <div className="list-head">
-            <span>Current work</span>
+            <span>{t("inbox.title")}</span>
             {threads.length > 0 ? (
-              <div className="sort-toggle" role="group" aria-label="Sort">
+              <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
                 <button
                   type="button"
                   className={sortMode === "attention" ? "active" : ""}
                   aria-pressed={sortMode === "attention"}
                   onClick={() => onSortMode("attention")}
                 >
-                  Attention
+                  {t("inbox.attention")}
                 </button>
                 <button
                   type="button"
@@ -101,7 +105,7 @@ export function InboxWorkspace({
                   aria-pressed={sortMode === "normal"}
                   onClick={() => onSortMode("normal")}
                 >
-                  Normal
+                  {t("inbox.normal")}
                 </button>
               </div>
             ) : null}
@@ -110,8 +114,8 @@ export function InboxWorkspace({
             <div className="list-toolbar">
               {channels.length > 1 ? (
                 <FilterRow
-                  label="Channel"
-                  options={[{ id: "all", label: "All" }, ...channels]}
+                  label={t("inbox.channel")}
+                  options={[{ id: "all", label: t("inbox.all") }, ...channels]}
                   value={channelFilter}
                   onChange={setChannelFilter}
                 />
@@ -122,8 +126,8 @@ export function InboxWorkspace({
                     type="button"
                     className={`item-tool list-pin${pinFilter === "pinned" ? " is-on" : ""}`}
                     aria-pressed={pinFilter === "pinned"}
-                    aria-label={pinFilter === "pinned" ? "Show all conversations" : "Show pinned only"}
-                    title={pinFilter === "pinned" ? "Showing pinned" : "Pinned only"}
+                    aria-label={pinFilter === "pinned" ? t("inbox.showAll") : t("inbox.pinOnly")}
+                    title={pinFilter === "pinned" ? t("inbox.showingPinned") : t("inbox.pinnedOnly")}
                     onClick={() =>
                       setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
                     }
@@ -155,12 +159,12 @@ export function InboxWorkspace({
           {!error && threads.length === 0 ? (
             <div className="page-empty">
               {canCreate
-                ? `No current work yet. Start a new ${createTargets[0].channel_label} conversation.`
-                : "Nothing in current work yet. Open Engine to install a connector; the kernel pulls on its own."}
+                ? t("inbox.emptyCreate", { channel: createTargets[0].channel_label })
+                : t("inbox.emptyInstall")}
             </div>
           ) : null}
           {!error && threads.length > 0 && visible.length === 0 ? (
-            <div className="page-empty">No conversations match these filters.</div>
+            <div className="page-empty">{t("inbox.noMatch")}</div>
           ) : null}
           {(sortMode === "attention"
             ? groupThreadsByAttention(visible)
@@ -215,9 +219,10 @@ export function InboxWorkspace({
             onPin={pinSelected}
             onRunWork={() => onRunWork(selected)}
             onCompleteWork={() => onCompleteWork(selected)}
+            onBindRecipe={() => onBindRecipe(selected)}
           />
         ) : (
-          <div className="thread-empty">Select a conversation on the left.</div>
+          <div className="thread-empty">{t("inbox.selectConversation")}</div>
         )}
       </section>
     </div>
@@ -247,6 +252,7 @@ function WorkRow({
   const title = threadTitle(thread);
   const preview = listPreview(thread, title);
   const facet = threadFacetLabel(thread.thread_facet);
+  const { t } = useLocale();
   const work = workStatusLabel(thread.work?.status);
   const kind = conversationKindLabel(thread.conversation_kind);
   return (
@@ -279,7 +285,7 @@ function WorkRow({
               ) : null}
             </span>
             <span className="item-time">
-              {thread.unread ? <span className="item-unread" aria-label="Unread" /> : null}
+              {thread.unread ? <span className="item-unread" aria-label={t("inbox.unreadAria")} /> : null}
               {latest ? formatChatTime(latest.event.occurred_at) : ""}
             </span>
           </div>
@@ -297,8 +303,8 @@ function WorkRow({
         <button
           type="button"
           className={`item-tool${thread.pinned ? " is-on" : ""}`}
-          aria-label={thread.pinned ? "Unpin" : "Pin"}
-          title={thread.pinned ? "Unpin" : "Pin"}
+          aria-label={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
+          title={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
           onClick={(event) => {
             event.stopPropagation();
             void onPin(!thread.pinned);
@@ -309,8 +315,8 @@ function WorkRow({
         <button
           type="button"
           className="item-tool"
-          aria-label="Rename"
-          title="Rename"
+          aria-label={t("inbox.rename")}
+          title={t("inbox.rename")}
           onClick={(event) => {
             event.stopPropagation();
             onStartRename();
@@ -334,6 +340,7 @@ function NewConversationButton({
   channelFilter: string;
   onCreate: (installationId: string) => void | Promise<void>;
 }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -369,12 +376,12 @@ function NewConversationButton({
         type="button"
         className="list-new"
         disabled={creating}
-        title={`New ${preferred.channel_label} conversation`}
+        title={t("inbox.newChannel", { channel: preferred.channel_label })}
         onClick={() => {
           void onCreate(preferred.id);
         }}
       >
-        {creating ? "Starting…" : `New ${preferred.channel_label}`}
+        {creating ? t("inbox.starting") : t("inbox.newChannel", { channel: preferred.channel_label })}
       </button>
     );
   }
@@ -388,7 +395,7 @@ function NewConversationButton({
         aria-haspopup="menu"
         onClick={() => setOpen((current) => !current)}
       >
-        {creating ? "Starting…" : "New ▾"}
+        {creating ? t("inbox.starting") : t("inbox.newMenu")}
       </button>
       {open ? (
         <div className="list-new-menu" role="menu">

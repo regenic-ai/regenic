@@ -13,6 +13,7 @@ import {
   threadFacetLabel,
   threadPreview,
   threadTitle,
+  workNextStepCopy,
   workStatusLabel,
 } from "../src/renderer/src/message-view.ts";
 import type { InboxViewItem, ThreadActivity } from "../src/renderer/src/types.ts";
@@ -361,6 +362,12 @@ describe("thread activity", () => {
     assert.equal(conversationKindLabel("group"), "Group");
     assert.equal(workStatusLabel("open"), null);
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
+    assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Bind a recipe/);
+    assert.match(
+      workNextStepCopy({ work: { status: "running" } }) ?? "",
+      /mark it done/i,
+    );
+    assert.equal(workNextStepCopy({ record_class: "utterance" }), null);
   });
 
   it("does not fall back to the first message when conversation title is missing", () => {

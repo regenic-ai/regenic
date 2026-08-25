@@ -1,11 +1,13 @@
-export type NavId = "inbox" | "engine" | "settings";
+export type NavId = "inbox" | "recipes" | "engine" | "settings";
 
 export type KernelMode = "local" | "custom";
+export type Locale = "en" | "zh";
 
 export interface KernelSettingsView {
   mode: KernelMode;
   customOrigin: string;
   activeOrigin: string;
+  locale: Locale;
 }
 
 export interface ArrangementDecision {
@@ -179,6 +181,17 @@ export interface RecipeView {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface RecipeSeed {
+  thread_id: string;
+  source?: string;
+  title?: string;
+}
+
+export interface RecipeSourceOption {
+  id: string;
+  label: string;
 }
 
 export interface UiPrefsView {

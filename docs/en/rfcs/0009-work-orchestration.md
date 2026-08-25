@@ -195,7 +195,7 @@ Sort (`ui_prefs.inbox_sort`):
 - `normal`: pin → recent activity
 - `attention`: `waiting_you` → `needs_ack` → `running` → `unread` → `quiet`; same rank by time. Running rows do not jump on status ticks and do not set unread.
 
-The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. It does not classify chat / agent / ticket by connector name.
+The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recipes have their own page: bind a task class, a source plus task, or one conversation, then Start run / Mark done on Current work. The desktop does not classify chat / agent / ticket by connector name.
 
 ## 11. Personal API
 

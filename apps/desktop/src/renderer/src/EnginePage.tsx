@@ -17,7 +17,7 @@ import {
   pullStatusLabel,
 } from "./format";
 import type { HostStats } from "../../shared/host-watch.ts";
-import { RecipeSettings } from "./RecipeSettings";
+import { useLocale } from "./LocaleContext";
 import type { PersonalEngineView } from "./types";
 
 export function EnginePage({
@@ -31,6 +31,7 @@ export function EnginePage({
   error: string | null;
   onChanged: () => Promise<void>;
 }) {
+  const { t } = useLocale();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
   const [installingType, setInstallingType] = useState<string | null>(null);
@@ -45,7 +46,7 @@ export function EnginePage({
       return true;
     } catch (caught) {
       setActionError(
-        caught instanceof Error ? connectorActionError(caught.message) : "Action failed",
+        caught instanceof Error ? connectorActionError(caught.message) : t("engine.actionFailed"),
       );
       return false;
     } finally {
@@ -56,8 +57,8 @@ export function EnginePage({
   if (error || !engine) {
     return (
       <div className="page">
-        <h1>Engine</h1>
-        <p className="muted">{error ?? "Kernel is not connected."}</p>
+        <h1>{t("engine.title")}</h1>
+        <p className="muted">{error ?? t("engine.disconnected")}</p>
       </div>
     );
   }
@@ -65,25 +66,25 @@ export function EnginePage({
   const syncable = engine.installations.filter((item) => item.syncable);
 
   return (
-    <div className="page">
-      <h1>Engine</h1>
-      <p className="muted">
-        Local authority store and connectors. Enabled connectors pull while the kernel is running. Use Sync only to catch up after a miss.
-      </p>
+    <div className="page page-wide">
+      <header className="page-hero">
+        <h1>{t("engine.title")}</h1>
+        <p className="page-lead">{t("engine.lead")}</p>
+      </header>
       <section className="card">
-        <h2>Kernel</h2>
+        <h2>{t("engine.kernel")}</h2>
         <div className="kv">
-          <span>Status</span>
-          <strong>{engine.kernel === "running" ? "Running" : "Stopped"}</strong>
-          <span>org</span>
+          <span>{t("engine.status")}</span>
+          <strong>{engine.kernel === "running" ? t("engine.running") : t("engine.stopped")}</strong>
+          <span>{t("engine.org")}</span>
           <strong>{engine.org_id}</strong>
-          <span>Database</span>
+          <span>{t("engine.database")}</span>
           <strong>
             <code>{engine.database_path ?? "—"}</code>
           </strong>
-          <span>Current work</span>
+          <span>{t("engine.currentWork")}</span>
           <strong>{engine.inbox_count}</strong>
-          <span>Live pull</span>
+          <span>{t("engine.livePull")}</span>
           <strong>
             {pullStatusLabel(engine.pull)}
             {engine.pull?.last_tick_at
@@ -93,16 +94,16 @@ export function EnginePage({
               ? ` · +${engine.pull.last_accepted_count}`
               : ""}
           </strong>
-          <span>Network</span>
+          <span>{t("engine.network")}</span>
           <strong>
             {networkWatchLabel(engine.pull?.network?.kind)}
             {engine.pull?.network?.kind !== "ok" && engine.pull?.network?.proxy
               ? ` · ${engine.pull.network.proxy}`
               : ""}
           </strong>
-          <span>Disk</span>
+          <span>{t("engine.disk")}</span>
           <strong>{host ? diskWatchCopy(host.disk) : "—"}</strong>
-          <span>Memory</span>
+          <span>{t("engine.memory")}</span>
           <strong>{host ? memoryWatchCopy(host.memory) : "—"}</strong>
         </div>
         {engine.pull?.last_error ? (
@@ -120,7 +121,7 @@ export function EnginePage({
       </section>
       <section className="card">
         <div className="card-head">
-          <h2>Connectors</h2>
+          <h2>{t("engine.connectors")}</h2>
           {syncable.length > 1 ? (
             <button
               type="button"
@@ -139,7 +140,7 @@ export function EnginePage({
                     setActionError(
                       caught instanceof Error
                         ? connectorActionError(caught.message)
-                        : "Sync failed",
+                        : t("engine.syncFailed"),
                     );
                   } finally {
                     setSyncingAll(false);
@@ -147,12 +148,12 @@ export function EnginePage({
                 })();
               }}
             >
-              {syncingAll ? "Syncing…" : "Sync all"}
+              {syncingAll ? t("engine.syncing") : t("engine.syncAll")}
             </button>
           ) : null}
         </div>
         <p className="muted">
-          Install or uninstall connectors here. Credentials are read from local environment variables only.
+          {t("engine.connectorsLead")}
         </p>
         {(engine.catalog ?? []).map((kind) => (
           <ConnectorKind
@@ -193,7 +194,10 @@ export function EnginePage({
             onUninstall={(installation) => {
               if (
                 !window.confirm(
-                  `Uninstall ${connectorLabel(installation.connector_type)} “${installation.label}”? Ingested messages stay.`,
+                  t("engine.uninstallConfirm", {
+                    type: connectorLabel(installation.connector_type),
+                    name: installation.label,
+                  }),
                 )
               ) {
                 return;
@@ -206,16 +210,6 @@ export function EnginePage({
         ))}
         {actionError ? <p className="action-error">{actionError}</p> : null}
       </section>
-      <RecipeSettings
-        sources={[
-          ...new Map(
-            engine.installations.map((item) => [
-              item.channel ?? item.connector_type,
-              item.channel_label ?? item.label,
-            ]),
-          ).entries(),
-        ].map(([id, label]) => ({ id, label }))}
-      />
     </div>
   );
 }

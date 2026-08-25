@@ -193,7 +193,7 @@ interface TaskExecutor {
 - `normal`：置顶 → 最近活动
 - `attention`：`waiting_you` → `needs_ack` → `running` → `unread` → `quiet`；同档再按时间。`running` 不因 status tick 重排，不点未读。
 
-桌面读 `record_class`、`thread_facet`、`attention`、`work`，不按连接器名判断人聊 / Agent / 工单。
+桌面读 `record_class`、`thread_facet`、`attention`、`work`。Recipes 单独一页：绑 task、某一来源的 task、或一条会话，再到 Current work 里 Start run / Mark done。不按连接器名判断人聊 / Agent / 工单。
 
 ## 11. 个人 API
 

@@ -36,8 +36,12 @@ import {
   createConversationTargets,
   mergeDraftThreads,
 } from "./inbox-drafts";
+import { t as translate } from "../../shared/i18n.ts";
+import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
-import { EngineIcon, InboxIcon, SettingsIcon } from "./Icons";
+import { EngineIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
+import { threadTitle } from "./message-view";
+import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
 import {
   hasOlderPage,
@@ -58,6 +62,7 @@ import type {
   InboxViewItem,
   NavId,
   PersonalEngineView,
+  RecipeSeed,
 } from "./types";
 
 const POLL_MS = 2000;
@@ -66,6 +71,7 @@ const FULL_REFRESH_MS = 45_000;
 const HOST_POLL_MS = 5000;
 
 export function ConsoleApp() {
+  const { t } = useLocale();
   const [nav, setNav] = useState<NavId>("inbox");
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [messagesByThread, setMessagesByThread] = useState<
@@ -87,6 +93,7 @@ export function ConsoleApp() {
   );
   const [host, setHost] = useState<HostStats | null>(null);
   const [sortMode, setSortMode] = useState<InboxSortMode>("normal");
+  const [recipeSeed, setRecipeSeed] = useState<RecipeSeed | null>(null);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const prefOverlayRef = useRef(prefOverlay);
@@ -343,7 +350,7 @@ export function ConsoleApp() {
         setError((current) => (current === null ? current : null));
       } while (refreshAgain.current);
     } catch {
-      setError(`Cannot reach the kernel at ${currentApiOrigin()}`);
+        setError(translate("chrome.cannotReach", { origin: currentApiOrigin() }));
     } finally {
       refreshInFlight.current = false;
     }
@@ -579,7 +586,7 @@ export function ConsoleApp() {
         await refresh();
         setError(null);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Cannot start this work item");
+        setError(caught instanceof Error ? caught.message : translate("error.cannotStartWork"));
       }
     },
     [refresh],
@@ -594,10 +601,33 @@ export function ConsoleApp() {
         await refresh();
         setError(null);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Cannot complete this work item");
+        setError(caught instanceof Error ? caught.message : translate("error.cannotCompleteWork"));
       }
     },
     [refresh],
+  );
+  const bindSelectedRecipe = useCallback((thread: InboxThread) => {
+    setRecipeSeed({
+      thread_id: thread.id,
+      source: thread.source || thread.channel,
+      title: threadTitle(thread),
+    });
+    setNav("recipes");
+  }, []);
+  const consumeRecipeSeed = useCallback(() => {
+    setRecipeSeed(null);
+  }, []);
+  const recipeSources = useMemo(
+    () =>
+      [
+        ...new Map(
+          (engine?.installations ?? []).map((item) => [
+            item.channel ?? item.connector_type,
+            item.channel_label ?? item.label,
+          ]),
+        ).entries(),
+      ].map(([id, label]) => ({ id, label })),
+    [engine],
   );
 
   return (
@@ -607,24 +637,31 @@ export function ConsoleApp() {
         <div className="titlebar-brand" title="Regenic">
           <BrandBadge />
         </div>
-        <div className="search">Search (soon)</div>
+        <div className="search">{t("chrome.searchSoon")}</div>
         <EngineChip state={chip} />
         {host && host.memory.kind !== "ok" ? (
           <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
         ) : null}
-        <span className="chip">{listThreads.length} current work</span>
+        <span className="chip">{t("chrome.currentWorkCount", { count: listThreads.length })}</span>
       </header>
       <nav className="rail" aria-label="Main">
         <div className="rail-top">
           <RailButton
-            label="Current work"
+            label={t("nav.inbox")}
             active={nav === "inbox"}
             onClick={() => setNav("inbox")}
           >
             <InboxIcon />
           </RailButton>
           <RailButton
-            label="Engine"
+            label={t("nav.recipes")}
+            active={nav === "recipes"}
+            onClick={() => setNav("recipes")}
+          >
+            <RecipesIcon />
+          </RailButton>
+          <RailButton
+            label={t("nav.engine")}
             active={nav === "engine"}
             onClick={() => setNav("engine")}
           >
@@ -633,7 +670,7 @@ export function ConsoleApp() {
         </div>
         <div className="rail-bottom">
           <RailButton
-            label="Settings"
+            label={t("nav.settings")}
             active={nav === "settings"}
             onClick={() => setNav("settings")}
           >
@@ -668,6 +705,15 @@ export function ConsoleApp() {
             onSortMode={changeSortMode}
             onRunWork={runSelectedWork}
             onCompleteWork={completeSelectedWork}
+            onBindRecipe={bindSelectedRecipe}
+          />
+        ) : null}
+        {nav === "recipes" ? (
+          <RecipesPage
+            sources={recipeSources}
+            seed={recipeSeed}
+            onSeedConsumed={consumeRecipeSeed}
+            onBound={() => setNav("inbox")}
           />
         ) : null}
         {nav === "engine" ? (

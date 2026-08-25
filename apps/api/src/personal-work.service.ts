@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  Injectable,
-  OnApplicationBootstrap,
-  OnModuleDestroy,
-} from "@nestjs/common";
+import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
   INGEST_SCHEMA_VERSION,
@@ -83,18 +79,21 @@ export interface WorkRunView {
 }
 
 @Injectable()
-export class PersonalWorkService
-  implements OnApplicationBootstrap, OnModuleDestroy
-{
+export class PersonalWorkService implements OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
+  private backgroundStarted = false;
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
   ) {}
 
-  async onApplicationBootstrap(): Promise<void> {
+  startAfterListen(): void {
+    if (this.backgroundStarted) {
+      return;
+    }
+    this.backgroundStarted = true;
     this.timer = setInterval(() => {
       void this.afterConnectorTick();
     }, WORK_TICK_MS);

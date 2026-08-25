@@ -4,6 +4,7 @@ import {
   connectorLabel,
   installationStatusLabel,
 } from "./format";
+import { useLocale } from "./LocaleContext";
 import type { ConnectorCatalogItem, EngineInstallationView } from "./types";
 
 export function ConnectorKind({
@@ -36,6 +37,7 @@ export function ConnectorKind({
   ) => Promise<boolean>;
   onUninstall: (installation: EngineInstallationView) => void;
 }) {
+  const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
   return (
     <div className="connector-kind">
@@ -46,10 +48,10 @@ export function ConnectorKind({
           <div className="muted">
             <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
               {kind.installed
-                ? `${kind.instance_count} installed`
-                : "Not installed"}
+                ? t("connector.installed", { count: kind.instance_count })
+                : t("connector.notInstalled")}
             </span>
-            {` · credentials ${kind.credential_hint}`}
+            {t("connector.credentials", { hint: kind.credential_hint })}
           </div>
           <PrerequisiteList
             items={visiblePrerequisites(kind, defaultFieldValues(kind))}
@@ -62,17 +64,17 @@ export function ConnectorKind({
             disabled={busyId !== null || syncingAll}
             onClick={onOpenInstall}
           >
-            Install
+            {t("connector.install")}
           </button>
         </div>
       </div>
       {installing ? (
         <ConnectorSettingsDialog
-          title={`Install ${kind.title}`}
+          title={t("connector.installTitle", { title: kind.title })}
           kind={kind}
           busy={busyId === kind.connector_type}
-          submitLabel="Install"
-          busyLabel="Installing…"
+          submitLabel={t("connector.install")}
+          busyLabel={t("connector.installing")}
           onSubmit={onInstall}
           onClose={onCloseInstall}
         />
@@ -124,6 +126,7 @@ function ConnectorSettingsDialog({
   onSubmit: (config: Record<string, string>) => void;
   onClose: () => void;
 }) {
+  const { t } = useLocale();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) {
@@ -146,7 +149,7 @@ function ConnectorSettingsDialog({
         <div className="dialog-head">
           <h2>{title}</h2>
           <button type="button" className="ghost" disabled={busy} onClick={onClose}>
-            Close
+            {t("connector.close")}
           </button>
         </div>
         <ConnectorSettingsForm
@@ -177,6 +180,7 @@ function ConnectorSettingsForm({
   busyLabel: string;
   onSubmit: (config: Record<string, string>) => void;
 }) {
+  const { t } = useLocale();
   const [values, setValues] = useState<Record<string, string>>(() => ({
     ...defaultFieldValues(kind),
     ...initialValues,
@@ -265,9 +269,9 @@ function ConnectorSettingsForm({
         {busy
           ? busyLabel
           : blocked
-            ? "Finish prerequisites first"
+            ? t("connector.prereqFirst")
             : missingRequired
-              ? "Fill required fields"
+              ? t("connector.fillRequired")
               : submitLabel}
       </button>
     </form>
@@ -283,6 +287,7 @@ function CheckOptionList({
   selected: string[];
   onToggle: (value: string) => void;
 }) {
+  const { t } = useLocale();
   const [query, setQuery] = useState("");
   const options = field.options ?? [];
   if (options.length === 0) {
@@ -298,8 +303,8 @@ function CheckOptionList({
         <input
           type="search"
           value={query}
-          placeholder={`Search ${field.label.toLowerCase()}`}
-          aria-label={`Search ${field.label.toLowerCase()}`}
+          placeholder={t("connector.search", { label: field.label.toLowerCase() })}
+          aria-label={t("connector.search", { label: field.label.toLowerCase() })}
           autoComplete="off"
           spellCheck={false}
           onChange={(event) => setQuery(event.target.value)}
@@ -311,7 +316,7 @@ function CheckOptionList({
         />
       ) : null}
       {visible.length === 0 ? (
-        <p className="field-empty">No matches</p>
+        <p className="field-empty">{t("connector.noMatches")}</p>
       ) : (
         <ul className="check-list">
           {visible.map((option) => {
@@ -368,6 +373,7 @@ function toggleCsvValue(current: string | undefined, value: string): string {
 }
 
 function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisites"] }) {
+  const { t } = useLocale();
   if (items.length === 0) {
     return null;
   }
@@ -376,7 +382,11 @@ function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisite
       {items.map((item) => (
         <li key={`${item.kind}:${item.key}`}>
           <span className={`chip ${item.ready ? "running" : item.required ? "stopped" : ""}`.trim()}>
-            {item.ready ? "Ready" : item.required ? "Needed" : "Optional"}
+            {item.ready
+              ? t("connector.ready")
+              : item.required
+                ? t("connector.needed")
+                : t("connector.optional")}
           </span>
           {` ${item.label}`}
           {item.hint ? ` · ${item.hint}` : ""}
@@ -436,6 +446,7 @@ function ConnectorRow({
   onSave: (config: Record<string, string>) => void;
   onUninstall: () => void;
 }) {
+  const { t } = useLocale();
   const statusChip =
     installation.status === "enabled"
       ? "running"
@@ -465,14 +476,16 @@ function ConnectorRow({
             disabled={busy || !installation.syncable}
             onClick={onSync}
           >
-            {busy ? "Syncing…" : "Sync"}
+            {busy ? t("engine.syncing") : t("connector.sync")}
           </button>
           <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
-            {installation.status === "disabled" ? "Enable" : "Disable"}
+            {installation.status === "disabled"
+              ? t("connector.enable")
+              : t("connector.disable")}
           </button>
           {kind.fields.length > 0 ? (
             <button type="button" className="ghost" disabled={busy} onClick={onEdit}>
-              Edit sync
+              {t("connector.editSync")}
             </button>
           ) : null}
           <button
@@ -481,19 +494,21 @@ function ConnectorRow({
             disabled={busy}
             onClick={onUninstall}
           >
-            Uninstall
+            {t("connector.uninstall")}
           </button>
         </div>
       </div>
       {editing ? (
         <ConnectorSettingsDialog
           key={`${installation.id}:${JSON.stringify(installation.settings ?? {})}`}
-          title={`Edit ${connectorLabel(installation.connector_type)} sync`}
+          title={t("connector.editTitle", {
+            type: connectorLabel(installation.connector_type),
+          })}
           kind={kind}
           busy={busy}
           initialValues={installation.settings}
-          submitLabel="Save"
-          busyLabel="Saving…"
+          submitLabel={t("connector.save")}
+          busyLabel={t("connector.saving")}
           onSubmit={onSave}
           onClose={onEdit}
         />

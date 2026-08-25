@@ -6,6 +6,7 @@ import type {
   ExecutorCatalogEntry,
   InboxViewItem,
   KernelSettingsView,
+  Locale,
   MessageReceipt,
   PersonalEngineView,
   PromptAnswerItem,
@@ -39,11 +40,15 @@ export async function fetchKernelSettings(): Promise<KernelSettingsView> {
       mode: "local",
       customOrigin: currentOrigin,
       activeOrigin: currentOrigin,
+      locale: "en",
     };
   }
   const settings = await window.regenic.getKernelSettings();
   currentOrigin = settings.activeOrigin;
-  return settings;
+  return {
+    ...settings,
+    locale: settings.locale === "zh" ? "zh" : "en",
+  };
 }
 
 export async function applyKernelSettings(input: {
@@ -55,7 +60,18 @@ export async function applyKernelSettings(input: {
   }
   const settings = await window.regenic.setKernelSettings(input);
   currentOrigin = settings.activeOrigin;
-  return settings;
+  return {
+    ...settings,
+    locale: settings.locale === "zh" ? "zh" : "en",
+  };
+}
+
+export async function saveLocale(locale: Locale): Promise<Locale> {
+  if (!window.regenic?.setLocale) {
+    return locale;
+  }
+  const next = await window.regenic.setLocale(locale);
+  return next === "zh" ? "zh" : "en";
 }
 
 export async function fetchInbox(
