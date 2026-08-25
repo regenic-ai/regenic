@@ -119,6 +119,23 @@ export function selectRecipeForSubject(
   return matched;
 }
 
+export function isAbandonedWorkItem(
+  status: WorkItemStatus | null | undefined,
+): boolean {
+  return status === "skipped";
+}
+
+export function shouldRefreshActiveRun(status: WorkItemStatus): boolean {
+  return !isAbandonedWorkItem(status);
+}
+
+export function cancelWorkRun<T extends { status: WorkRunStatus; updated_at: string }>(
+  run: T,
+  now: string,
+): T {
+  return { ...run, status: "cancelled", updated_at: now };
+}
+
 export function workStatusFromRun(status: WorkRunStatus): WorkItemStatus {
   switch (status) {
     case "waiting_human":
@@ -127,9 +144,18 @@ export function workStatusFromRun(status: WorkRunStatus): WorkItemStatus {
       return "done";
     case "failed":
       return "failed";
+    case "cancelled":
+      return "skipped";
     default:
       return "running";
   }
+}
+
+export function shouldWriteBackHandle(
+  handle: Pick<ExecutorRunHandle, "status" | "result">,
+  canWriteBack: boolean,
+): boolean {
+  return handle.status === "completed" && canWriteBack && Boolean(handle.result);
 }
 
 export function workStatusFromHandle(

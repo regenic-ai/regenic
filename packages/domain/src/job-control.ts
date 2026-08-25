@@ -43,6 +43,41 @@ export interface InferiorRef {
   sysout_id?: string;
 }
 
+/**
+ * Latest sysout face for absentee wait. Speech is not exit. A leftover
+ * `thread_status` row without an open turn or working bit is not invented
+ * working — fall through to the visible body and stay running until
+ * `turn/end` or dismiss.
+ */
+export function transcriptFromAbsenteeLive(input: {
+  liveKind?: MessageKind;
+  liveActivity?: string;
+  liveTurn?: MessageTurn;
+  visibleKind?: MessageKind;
+  visibleText?: string;
+  visibleActivity?: string;
+}): Transcript {
+  if (input.liveTurn?.state === "open" || input.liveActivity === "working") {
+    return {
+      kind: input.liveKind ?? "system",
+      activity: "working",
+      turn: { state: "open" },
+    };
+  }
+  if (input.liveTurn?.state === "ended") {
+    return {
+      kind: input.visibleKind ?? "system",
+      text: input.visibleText,
+      turn: input.liveTurn,
+    };
+  }
+  return {
+    kind: input.visibleKind ?? "system",
+    text: input.visibleText,
+    activity: input.visibleActivity,
+  };
+}
+
 export function waitFromTranscript(input: {
   prompts: ThreadPrompt[];
   transcript: Transcript | null;

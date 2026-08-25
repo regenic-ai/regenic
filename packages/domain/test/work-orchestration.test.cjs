@@ -16,9 +16,14 @@ const {
   recipeSpecificity,
   selectRecipeForSubject,
   shouldOpenWorkItem,
+  shouldRefreshActiveRun,
+  shouldWriteBackHandle,
+  transcriptFromAbsenteeLive,
   waitFromAbsentee,
   waitFromTranscript,
+  workStatusFromRun,
   workSubjectFromEvent,
+  cancelWorkRun,
 } = require("../dist");
 
 describe("recordClassFromType", () => {
@@ -259,6 +264,52 @@ describe("session job face and wait status", () => {
     );
     assert.equal(hidden.has("exec:session-9"), true);
     assert.equal(hidden.has("chat-src:t1"), false);
+  });
+});
+
+describe("dismiss vs handle commit", () => {
+  it("does not treat a leftover thread_status as working", () => {
+    const leftover = transcriptFromAbsenteeLive({
+      liveKind: "system",
+      visibleKind: "assistant",
+      visibleText: "Approved.",
+    });
+    assert.equal(leftover.activity, undefined);
+    assert.equal(leftover.text, "Approved.");
+    assert.equal(
+      waitFromAbsentee({ prompts: [], transcript: leftover }).state,
+      "running",
+    );
+
+    const working = transcriptFromAbsenteeLive({
+      liveKind: "system",
+      liveActivity: "working",
+      visibleKind: "assistant",
+      visibleText: "Looking.",
+    });
+    assert.equal(working.activity, "working");
+    assert.equal(working.turn.state, "open");
+  });
+
+  it("cancels an inferior without mapping it to failed", () => {
+    const now = "2026-08-25T02:00:00.000Z";
+    const cancelled = cancelWorkRun(
+      { id: "run-1", status: "running", updated_at: "2026-08-25T01:00:00.000Z" },
+      now,
+    );
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.updated_at, now);
+    assert.equal(workStatusFromRun("cancelled"), "skipped");
+    assert.equal(shouldRefreshActiveRun("skipped"), false);
+    assert.equal(shouldRefreshActiveRun("running"), true);
+    assert.equal(
+      shouldWriteBackHandle({ status: "completed", result: { summary: "ok" } }, true),
+      true,
+    );
+    assert.equal(
+      shouldWriteBackHandle({ status: "completed", result: { summary: "ok" } }, false),
+      false,
+    );
   });
 });
 

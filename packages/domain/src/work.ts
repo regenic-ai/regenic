@@ -62,7 +62,8 @@ export type WorkRunStatus =
   | "running"
   | "waiting_human"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export interface ResultEnvelope {
   summary: string;

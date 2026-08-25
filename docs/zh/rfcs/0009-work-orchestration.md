@@ -178,7 +178,7 @@ interface TaskExecutor {
 
 内核查 `ctx.executors`。执行器碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`），不自带私有 HTTP 客户端。
 
-完成契约是 `WaitStatus`（wait / notify）。气泡里的字不是退出。公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在 `exited` 上 reap Job。写回只发生在这次真退出。人只回答 Prompt；不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss` 从当前工作拿掉。Dismiss 不是 `exited`，也不写回。
+完成契约是 `WaitStatus`（wait / notify）。气泡里的字不是退出。公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在 `exited` 上 reap Job。写回只发生在这次真退出。人只回答 Prompt；不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss` 从当前工作拿掉。Dismiss 不是 `exited`，也不写回。被拿掉的 Inferior 记 `cancelled`，不是 `failed`。之后的 status tick 不得把这次 run 救活，也不得写回。
 
 公开默认：`dsh`。Cursor 后接。私有 Agent OS 只作内部插件包，默认开源构建不挂载。
 

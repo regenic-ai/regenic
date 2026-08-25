@@ -180,7 +180,7 @@ interface TaskExecutor {
 
 The kernel looks up `ctx.executors`. The executor reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`). It does not import a private HTTP client.
 
-Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is durable `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. The kernel reaps the job on `exited`. Write-back happens only on that real exit. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back.
+Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is durable `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. The kernel reaps the job on `exited`. Write-back happens only on that real exit. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back. The abandoned inferior is `cancelled`, not `failed`. A later status tick must not resurrect that run or write back.
 
 Public default: `dsh`. Cursor later. A private Agent OS is an internal plugin package; the default open-source tree does not register it.
 

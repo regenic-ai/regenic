@@ -297,6 +297,47 @@ async function waitUntil(label, probe, timeoutMs = 4000) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
+async function seedHostedWork(authority, input) {
+  const now = "2026-08-25T00:00:00.000Z";
+  await authority.putRecipe({
+    id: input.recipeId,
+    org_id: "local-owner",
+    name: "Seed recipe",
+    match: { record_class: "task", source: "feishu" },
+    executor_type: "dsh",
+    executor_config: {},
+    can_write_back: true,
+    enabled: true,
+    created_at: now,
+    updated_at: now,
+  });
+  await authority.putWorkItem({
+    id: input.workId,
+    org_id: "local-owner",
+    thread_id: input.threadId,
+    unit_key: input.eventId,
+    head_event_id: input.eventId,
+    record_class: "task",
+    thread_facet: "ticket",
+    status: input.status,
+    recipe_id: input.recipeId,
+    created_at: now,
+    updated_at: now,
+  });
+  await authority.putWorkRun({
+    id: input.runId,
+    org_id: "local-owner",
+    work_item_id: input.workId,
+    recipe_id: input.recipeId,
+    executor_type: "dsh",
+    external_run_id: "dsh:seed-sysout",
+    agent_thread_id: "dsh:seed-sysout",
+    status: "running",
+    created_at: now,
+    updated_at: now,
+  });
+}
+
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
   setEnv({
     REGENIC_DATABASE: database,
@@ -1788,7 +1829,7 @@ describe("personal /v1/me", () => {
     const blobRoot = join(root, "blobs");
     const authority = new SqliteAuthorityStore(database);
     const service = new IngestionService(new FsBlobStore(blobRoot), authority);
-    await service.ingest({
+    const ingested = await service.ingest({
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: "feishu-chat",
       org_id: "local-owner",
@@ -1808,16 +1849,18 @@ describe("personal /v1/me", () => {
         }),
       ],
     });
+    await seedHostedWork(authority, {
+      workId: "work-dismiss-1",
+      runId: "run-dismiss-1",
+      recipeId: "recipe-dismiss",
+      threadId: "feishu:oc_dismiss",
+      eventId: ingested.records[0].event_id,
+      status: "running",
+    });
     authority.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
-      let workId;
-      await waitUntil("dismiss test opens a work item", async () => {
-        const inbox = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
-        const row = inbox.find((item) => item.thread_id === "feishu:oc_dismiss");
-        workId = row?.work?.id;
-        return row?.work?.status === "open";
-      });
+      const workId = "work-dismiss-1";
       const dismissed = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1827,6 +1870,8 @@ describe("personal /v1/me", () => {
       const body = await dismissed.json();
       assert.equal(body.work_item.status, "skipped");
       assert.equal(body.work_item.id, workId);
+      assert.equal(body.run.status, "cancelled");
+      assert.notEqual(body.run.status, "failed");
       const aliased = await (
         await fetch(`${origin}/v1/me/work-items/${workId}/complete`, {
           method: "POST",
@@ -1845,6 +1890,63 @@ describe("personal /v1/me", () => {
       );
     } finally {
       await app.close();
+    }
+  });
+
+  it("starts a new inferior after dismiss leaves a leftover active run", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    const ingested = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "leftover-run",
+      received_at: "2026-08-25T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_leftover:task-1",
+          occurred_at: "2026-08-25T00:00:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_leftover",
+          type: "task",
+          text: "Approve leftover",
+        }),
+      ],
+    });
+    await seedHostedWork(authority, {
+      workId: "work-leftover-1",
+      runId: "run-leftover-1",
+      recipeId: "recipe-leftover",
+      threadId: "feishu:oc_leftover",
+      eventId: ingested.records[0].event_id,
+      status: "skipped",
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const started = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(started.status, 501);
+    } finally {
+      await app.close();
+    }
+    const store = new SqliteAuthorityStore(database);
+    try {
+      const leftover = await store.getWorkRun("local-owner", "run-leftover-1");
+      assert.equal(leftover.status, "cancelled");
+      const item = await store.getWorkItem("local-owner", "work-leftover-1");
+      assert.equal(item.status, "open");
+    } finally {
+      store.close();
     }
   });
 

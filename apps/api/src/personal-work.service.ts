@@ -4,11 +4,13 @@ import {
   ChannelDriverRegistry,
   INGEST_SCHEMA_VERSION,
   INBOX_SORT_PREF_KEY,
+  cancelWorkRun,
   channelRecord,
   conversationId,
   currentJobOnSession,
   formatWorkEvidence,
   hiddenExecutorThreadIds,
+  isAbandonedWorkItem,
   isActiveWorkStatus,
   recipeAllowsAutoStart,
   isRecordClass,
@@ -18,7 +20,10 @@ import {
   parseConversationThread,
   recipeSpecificity,
   selectRecipeForSubject,
+  shouldRefreshActiveRun,
+  shouldWriteBackHandle,
   toReplyParts,
+  transcriptFromAbsenteeLive,
   workFaceOf,
   workStatusFromHandle,
   workSubjectFromEvent,
@@ -47,7 +52,10 @@ import {
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
-import { PersonalRuntimeService } from "./personal-runtime.service";
+import {
+  PersonalKernelStoppedError,
+  PersonalRuntimeService,
+} from "./personal-runtime.service";
 
 const WORK_TICK_MS = 3_000;
 
@@ -116,8 +124,10 @@ export class PersonalWorkService implements OnModuleDestroy {
     try {
       await this.reconcileInbox();
       await this.refreshRuns();
-    } catch {
-      // A work tick must not take down connector pull.
+    } catch (error) {
+      if (!isWorkTickShutdown(error)) {
+        console.error("personal work tick failed", error);
+      }
     } finally {
       this.ticking = false;
     }
@@ -348,12 +358,17 @@ export class PersonalWorkService implements OnModuleDestroy {
       );
     }
     const active = await host.get("authority").getActiveWorkRun(orgId, item.id);
-    if (active) {
+    if (active && shouldRefreshActiveRun(item.status)) {
       await this.refreshOne(item, recipe, active);
       return {
         work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
         run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? active,
       };
+    }
+    if (active) {
+      await host.get("authority").putWorkRun(
+        cancelWorkRun(active, new Date().toISOString()),
+      );
     }
     const opened =
       item.status === "open"
@@ -378,14 +393,6 @@ export class PersonalWorkService implements OnModuleDestroy {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
     const now = new Date().toISOString();
-    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-    if (run) {
-      await host.get("authority").putWorkRun({
-        ...run,
-        status: "failed",
-        updated_at: now,
-      });
-    }
     const next =
       item.status === "skipped"
         ? item
@@ -394,15 +401,13 @@ export class PersonalWorkService implements OnModuleDestroy {
             status: "skipped",
             updated_at: now,
           });
+    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
+    const cancelled = run
+      ? await host.get("authority").putWorkRun(cancelWorkRun(run, now))
+      : undefined;
     return {
       work_item: next,
-      run: run
-        ? ((await host.get("authority").getWorkRun(orgId, run.id)) ?? {
-            ...run,
-            status: "failed",
-            updated_at: now,
-          })
-        : undefined,
+      run: cancelled,
     };
   }
 
@@ -629,8 +634,8 @@ export class PersonalWorkService implements OnModuleDestroy {
     handle: ExecutorRunHandle,
   ): Promise<void> {
     const host = this.runtime.requireHost();
-    const latest = await host.get("authority").getWorkItem(item.org_id, item.id);
-    if (latest?.status === "skipped") {
+    const authority = host.get("authority");
+    if (await this.abandonIfSkipped(item, run)) {
       return;
     }
     const now = new Date().toISOString();
@@ -649,24 +654,49 @@ export class PersonalWorkService implements OnModuleDestroy {
       result: handle.result ?? run.result,
       updated_at: now,
     };
-    await host.get("authority").putWorkRun(nextRun);
+    if (await this.abandonIfSkipped(item, nextRun)) {
+      return;
+    }
+    await authority.putWorkRun(nextRun);
+    if (await this.abandonIfSkipped(item, nextRun)) {
+      return;
+    }
     let status = workStatusFromHandle(handle);
-    if (handle.status === "completed" && recipe.can_write_back && handle.result) {
+    if (shouldWriteBackHandle(handle, recipe.can_write_back)) {
+      if (await this.abandonIfSkipped(item, nextRun)) {
+        return;
+      }
       try {
-        await this.writeBack(item, handle.result.summary, handle.result.content);
+        await this.writeBack(item, handle.result?.summary ?? "", handle.result?.content);
       } catch {
         status = "failed";
       }
     }
-    const still = await host.get("authority").getWorkItem(item.org_id, item.id);
-    if (still?.status === "skipped") {
+    if (await this.abandonIfSkipped(item, nextRun)) {
       return;
     }
-    await host.get("authority").putWorkItem({
+    await authority.putWorkItem({
       ...item,
       status,
       updated_at: now,
     });
+  }
+
+  private async abandonIfSkipped(item: WorkItem, run: WorkRun): Promise<boolean> {
+    const latest = await this.runtime
+      .requireHost()
+      .get("authority")
+      .getWorkItem(item.org_id, item.id);
+    if (!isAbandonedWorkItem(latest?.status)) {
+      return false;
+    }
+    if (run.status !== "cancelled") {
+      await this.runtime
+        .requireHost()
+        .get("authority")
+        .putWorkRun(cancelWorkRun(run, new Date().toISOString()));
+    }
+    return true;
   }
 
   private contextFor(executor: TaskExecutor): ExecutorContext {
@@ -774,6 +804,13 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!recipe?.can_write_back) {
       return;
     }
+    const latest = await this.runtime
+      .requireHost()
+      .get("authority")
+      .getWorkItem(item.org_id, item.id);
+    if (isAbandonedWorkItem(latest?.status)) {
+      return;
+    }
     const thread = parseConversationThread(item.thread_id);
     const text =
       content
@@ -818,41 +855,17 @@ export class PersonalWorkService implements OnModuleDestroy {
     const liveBody = live.event.content_hash
       ? (bodies.get(live.event.content_hash) ?? {})
       : {};
-    const liveTurn = liveBody.surface?.turn;
-    if (liveTurn?.state === "open" || liveBody.surface?.activity === "working") {
-      return {
-        kind: liveBody.surface?.kind ?? "system",
-        activity: "working",
-        turn: { state: "open" },
-      };
-    }
-    if (liveTurn?.state === "ended") {
-      const body = visible?.event.content_hash
-        ? (bodies.get(visible.event.content_hash) ?? liveBody)
-        : liveBody;
-      return {
-        kind: body.surface?.kind ?? "system",
-        text: body.body_text,
-        turn: liveTurn,
-      };
-    }
-    if (
-      liveBody.surface?.type === "thread_status" ||
-      live.decision.reason_codes.includes("thread_status")
-    ) {
-      return {
-        kind: liveBody.surface?.kind ?? "system",
-        activity: "working",
-      };
-    }
     const body = visible?.event.content_hash
       ? (bodies.get(visible.event.content_hash) ?? liveBody)
       : liveBody;
-    return {
-      kind: body.surface?.kind ?? "system",
-      text: body.body_text,
-      activity: body.surface?.activity,
-    };
+    return transcriptFromAbsenteeLive({
+      liveKind: liveBody.surface?.kind,
+      liveActivity: liveBody.surface?.activity,
+      liveTurn: liveBody.surface?.turn,
+      visibleKind: body.surface?.kind,
+      visibleText: body.body_text,
+      visibleActivity: body.surface?.activity,
+    });
   }
 
   private async evidenceText(
@@ -980,6 +993,16 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     ...(match.source?.trim() ? { source: match.source.trim() } : {}),
     ...(match.thread_id?.trim() ? { thread_id: match.thread_id.trim() } : {}),
   };
+}
+
+function isWorkTickShutdown(error: unknown): boolean {
+  if (error instanceof PersonalKernelStoppedError) {
+    return true;
+  }
+  return (
+    error instanceof TypeError &&
+    /database connection is not open/i.test(String((error as Error).message))
+  );
 }
 
 function isTaskInboxItem(row: InboxItem): boolean {
