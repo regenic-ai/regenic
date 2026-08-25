@@ -367,6 +367,196 @@ describe("IngestionService", () => {
     assert.equal(authorityStore.allEvents().length, 1);
   });
 
+  it("treats a Feishu image history echo as the same send as a local outbound", async () => {
+    const { authorityStore, service } = createHarness();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const outbound = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "feishu-out-1",
+      received_at: "2026-08-26T00:15:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:out:om_text",
+          occurred_at: "2026-08-26T00:15:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "oc_1",
+          text: "这块初步好了。",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "rules.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+    const echoed = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "feishu-sync-1",
+      received_at: "2026-08-26T00:15:02.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_text",
+          occurred_at: "2026-08-26T00:15:00.000Z",
+          actor_id: "ou_1",
+          actor_label: "李必琪",
+          scope_id: "oc_1",
+          text: "这块初步好了。",
+        }),
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_image",
+          occurred_at: "2026-08-26T00:15:01.000Z",
+          actor_id: "ou_1",
+          actor_label: "李必琪",
+          scope_id: "oc_1",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "image.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.equal(outbound.records[0].status, "accepted");
+    assert.equal(echoed.records[0].status, "duplicate");
+    assert.equal(echoed.records[1].status, "duplicate");
+    assert.equal(echoed.records[0].event_id, outbound.records[0].event_id);
+    assert.equal(echoed.records[1].event_id, outbound.records[0].event_id);
+    assert.equal(authorityStore.allEvents().length, 1);
+  });
+
+  it("does not treat someone else's same image as an outbound echo", async () => {
+    const { authorityStore, service } = createHarness();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 8, 7, 6]);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "feishu-out-2",
+      received_at: "2026-08-26T00:16:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:out:om_mine",
+          occurred_at: "2026-08-26T00:16:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "oc_1",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "shot.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+    const inbound = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "feishu-in-2",
+      received_at: "2026-08-26T00:16:03.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_1:om_theirs",
+          occurred_at: "2026-08-26T00:16:02.000Z",
+          actor_id: "ou_2",
+          scope_id: "oc_1",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "shot.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.equal(inbound.records[0].status, "accepted");
+    assert.equal(authorityStore.allEvents().length, 2);
+  });
+
+  it("treats an image-only echo in the same page as the local outbound", async () => {
+    const { authorityStore, service } = createHarness();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 4, 3, 2, 1]);
+    const result = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "feishu-mixed-1",
+      received_at: "2026-08-26T00:17:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:out:om_image",
+          occurred_at: "2026-08-26T00:17:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "oc_1",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "shot.png",
+              bytes: png,
+            },
+          ],
+        }),
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_image",
+          occurred_at: "2026-08-26T00:17:01.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "image.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.equal(result.records[0].status, "accepted");
+    assert.equal(result.records[1].status, "duplicate");
+    assert.equal(result.records[1].event_id, result.records[0].event_id);
+    assert.equal(authorityStore.allEvents().length, 1);
+  });
+
   it("reads stored blobs in one getMany call", async () => {
     const { blobStore, service } = createHarness();
     const batch = createBatch();

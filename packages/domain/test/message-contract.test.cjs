@@ -2,6 +2,8 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   SURFACE_MEDIA_TYPE,
+  attachmentDigestsFromParts,
+  attachmentsCoveredBy,
   channelLabel,
   channelRecord,
   conversationId,
@@ -165,6 +167,37 @@ describe("message contract", () => {
     assert.equal(parts[0].media_type, "text/markdown");
     assert.equal(parts[1].role, "attachment");
     assert.equal(parts[1].source_filename, "shot.png");
+  });
+
+  it("fingerprints attachment bytes so a split image echo can match the local send", () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const local = attachmentDigestsFromParts(
+      toReplyParts({
+        text: "see",
+        attachments: [{ filename: "rules.png", media_type: "image/png", bytes: png }],
+      }),
+    );
+    const echo = attachmentDigestsFromParts([
+      {
+        role: "attachment",
+        media_type: "image/png",
+        source_filename: "image.png",
+        bytes: png,
+      },
+    ]);
+    assert.equal(local.length, 1);
+    assert.deepEqual(echo, local);
+    assert.equal(attachmentsCoveredBy(echo, local), true);
+    assert.equal(
+      attachmentsCoveredBy(echo, attachmentDigestsFromParts([
+        {
+          role: "attachment",
+          media_type: "image/png",
+          bytes: Buffer.from([0xff, 0xd8, 0xff]),
+        },
+      ])),
+      false,
+    );
   });
 
   it("prefers stored surface and only infers for legacy events", () => {

@@ -23,6 +23,9 @@ import {
   type IngestValidationIssue,
 } from "./ingestion-schema";
 import {
+  attachmentDigestsFromParts,
+  attachmentDigestsFromStored,
+  attachmentsCoveredBy,
   bodyTextFromStored,
   conversationId,
   isLocalOutboundId,
@@ -441,27 +444,29 @@ export class IngestionService {
     orgId: string,
     record: IngestRecord,
   ): Promise<EventRecord | null> {
-    if (isLocalOutboundId(record.external_id)) {
+    const needle = echoNeedle(record);
+    if (!needle) {
       return null;
     }
-    if (surfaceFromParts(record.content ?? [])?.kind !== "user") {
-      return null;
-    }
-    const incoming = normalizeUtterance(recordBodyText(record));
-    if (!incoming) {
-      return null;
-    }
-    const conversation = conversationId(record.source, record.external_id);
     const events = await this.authorityStore.listEvents(orgId);
-    for (const event of events) {
-      if (event.source !== record.source || !isLocalOutboundId(event.external_id)) {
+    const candidates = events.filter(
+      (event) =>
+        event.source === record.source &&
+        isLocalOutboundId(event.external_id) &&
+        conversationId(event.source, event.external_id, event.id) ===
+          needle.conversation,
+    );
+    const ordered = needle.text ? candidates : [...candidates].reverse();
+    for (const event of ordered) {
+      if (needle.text) {
+        const existing = await this.readEventText(event);
+        if (existing && normalizeUtterance(existing) === needle.text) {
+          return event;
+        }
         continue;
       }
-      if (conversationId(event.source, event.external_id, event.id) !== conversation) {
-        continue;
-      }
-      const existing = await this.readEventText(event);
-      if (existing && normalizeUtterance(existing) === incoming) {
+      const existing = await this.readEventAttachments(event);
+      if (attachmentsCoveredBy(needle.attachments, existing)) {
         return event;
       }
     }
@@ -469,6 +474,32 @@ export class IngestionService {
   }
 
   private async readEventText(event: EventRecord): Promise<string | undefined> {
+    const stored = await this.readEventBytes(event);
+    if (!stored) {
+      return undefined;
+    }
+    try {
+      return bodyTextFromStored(stored.bytes, stored.mediaType);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async readEventAttachments(event: EventRecord): Promise<string[]> {
+    const stored = await this.readEventBytes(event);
+    if (!stored) {
+      return [];
+    }
+    try {
+      return attachmentDigestsFromStored(stored.bytes, stored.mediaType);
+    } catch {
+      return [];
+    }
+  }
+
+  private async readEventBytes(
+    event: EventRecord,
+  ): Promise<{ bytes: Uint8Array; mediaType: string } | undefined> {
     if (!event.content_hash) {
       return undefined;
     }
@@ -477,7 +508,10 @@ export class IngestionService {
       return undefined;
     }
     try {
-      return bodyTextFromStored(await this.blobStore.get(event.content_hash), meta.media_type);
+      return {
+        bytes: await this.blobStore.get(event.content_hash),
+        mediaType: meta.media_type,
+      };
     } catch {
       return undefined;
     }
@@ -511,35 +545,35 @@ class PendingIngestOverlay {
   }
 
   findEcho(record: IngestRecord): EventRecord | null {
-    if (isLocalOutboundId(record.external_id)) {
+    const needle = echoNeedle(record);
+    if (!needle) {
       return null;
     }
-    if (surfaceFromParts(record.content ?? [])?.kind !== "user") {
-      return null;
-    }
-    const incoming = normalizeUtterance(recordBodyText(record));
-    if (!incoming) {
-      return null;
-    }
-    const conversation = conversationId(record.source, record.external_id);
-    for (const item of this.pending) {
-      if (
-        item.record.source !== record.source ||
-        !isLocalOutboundId(item.record.external_id)
-      ) {
-        continue;
-      }
-      if (
+    const candidates = this.pending.filter(
+      (item) =>
+        item.record.source === record.source &&
+        isLocalOutboundId(item.record.external_id) &&
         conversationId(
           item.event.source,
           item.event.external_id,
           item.event.id,
-        ) !== conversation
-      ) {
+        ) === needle.conversation,
+    );
+    const ordered = needle.text ? candidates : [...candidates].reverse();
+    for (const item of ordered) {
+      if (needle.text) {
+        const existing = normalizeUtterance(recordBodyText(item.record));
+        if (existing && existing === needle.text) {
+          return item.event;
+        }
         continue;
       }
-      const existing = normalizeUtterance(recordBodyText(item.record));
-      if (existing && existing === incoming) {
+      if (
+        attachmentsCoveredBy(
+          needle.attachments,
+          attachmentDigestsFromParts(item.record.content ?? []),
+        )
+      ) {
         return item.event;
       }
     }
@@ -582,4 +616,34 @@ function identityKey(identity: SourceIdentity): string {
 
 function recordBodyText(record: IngestRecord): string | undefined {
   return record.content?.find((part) => part.role === "body" && part.text !== undefined)?.text;
+}
+
+function echoNeedle(record: IngestRecord): {
+  conversation: string;
+  text: string;
+  attachments: string[];
+} | null {
+  if (isLocalOutboundId(record.external_id)) {
+    return null;
+  }
+  if (surfaceFromParts(record.content ?? [])?.kind !== "user") {
+    return null;
+  }
+  const text = normalizeUtterance(recordBodyText(record));
+  const attachments = attachmentDigestsFromParts(record.content ?? []);
+  if (!text && attachments.length === 0) {
+    return null;
+  }
+  if (
+    !text &&
+    record.direction_tags &&
+    !record.direction_tags.includes("outbound")
+  ) {
+    return null;
+  }
+  return {
+    conversation: conversationId(record.source, record.external_id),
+    text,
+    attachments,
+  };
 }
