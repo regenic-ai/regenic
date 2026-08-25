@@ -2250,6 +2250,25 @@ describe("inbox body decode", () => {
     );
     assert.equal(meta.attachments[0].data_base64, undefined);
     assert.equal(meta.attachments[0].filename, "shot.png");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Buffer.alloc(2_000_000, 1)]);
+    const large = Buffer.from(
+      JSON.stringify([
+        {
+          role: "attachment",
+          media_type: "application/octet-stream",
+          source_filename: "image.png",
+          bytes_base64: png.toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const preview = decodeInboxBody(
+      large,
+      "application/vnd.regenic.content-parts+json",
+      "preview",
+    );
+    assert.equal(preview.attachments[0].media_type, "image/png");
+    assert.equal(preview.attachments[0].data_base64, png.toString("base64"));
   });
 });
 

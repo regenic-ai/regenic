@@ -263,17 +263,22 @@ export const feishuChatDriver: ChannelDriver = {
     }
     const unique = [
       ...new Map(wanted.map((item) => [item.messageId, item])).values(),
-    ].slice(0, 10);
-    for (const item of unique) {
-      const cached = cachedFeishuReceipt(item.messageId);
-      const receipt =
-        cached ?? receiptFromReadUsers(await client.readMessageUsers(item.messageId));
-      if (!cached) {
-        cacheFeishuReceipt(item.messageId, receipt);
-      }
+    ].slice(0, 20);
+    const live = await Promise.all(
+      unique.map(async (item) => {
+        const cached = cachedFeishuReceipt(item.messageId);
+        const receipt =
+          cached ?? receiptFromReadUsers(await client.readMessageUsers(item.messageId));
+        if (!cached) {
+          cacheFeishuReceipt(item.messageId, receipt);
+        }
+        return { messageId: item.messageId, receipt };
+      }),
+    );
+    for (const item of live) {
       for (const row of wanted) {
         if (row.messageId === item.messageId) {
-          receipts.set(row.external_id, receipt);
+          receipts.set(row.external_id, item.receipt);
         }
       }
     }

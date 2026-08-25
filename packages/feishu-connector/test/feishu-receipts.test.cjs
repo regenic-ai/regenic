@@ -14,11 +14,12 @@ afterEach(() => {
 });
 
 describe("Feishu receipts", () => {
-  it("extracts om_ from console outbound ids", () => {
+  it("extracts om_ from console outbound and history echo ids", () => {
     assert.equal(feishuSentMessageId("om_sent"), "om_sent");
     assert.equal(feishuSentMessageId("oc_1:out:om_sent"), "om_sent");
-    assert.equal(feishuSentMessageId("oc_1:om_inbound"), undefined);
+    assert.equal(feishuSentMessageId("oc_1:om_history"), "om_history");
     assert.equal(feishuSentMessageId("local:out:draft"), undefined);
+    assert.equal(feishuSentMessageId("oc_1:draft"), undefined);
   });
 
   it("treats empty read_users as sent, not unread", () => {

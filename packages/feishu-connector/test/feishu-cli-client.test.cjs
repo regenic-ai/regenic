@@ -135,13 +135,13 @@ describe("LarkCliClient", () => {
     assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
   });
 
-  it("downloads a message image over HTTP as the user", async () => {
+  it("falls back to HTTP when CLI download fails", async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const fetched = [];
     const client = new LarkCliClient({
       command: "lark-cli",
       async spawn() {
-        throw new Error("CLI should not run when HTTP works");
+        throw new Error("CLI download unavailable");
       },
       userToken: {
         async token() {
@@ -189,6 +189,67 @@ describe("LarkCliClient", () => {
     assert.match(fetched[0].url, /type=image/);
     assert.equal(file.media_type, "image/png");
     assert.equal(file.filename, "shot.png");
+    assert.deepEqual(Array.from(file.bytes), Array.from(png));
+  });
+
+  it("falls back to im +messages-resources-download when HTTP returns JSON", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const calls = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch() {
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get(name) {
+              return name === "content-type" ? "application/json" : null;
+            },
+          },
+          async arrayBuffer() {
+            return Buffer.from(JSON.stringify({ code: 99991663, msg: "token invalid" }));
+          },
+        };
+      },
+      async spawn(input) {
+        calls.push(input);
+        const { writeFile } = require("node:fs/promises");
+        const { join } = require("node:path");
+        await writeFile(join(input.cwd, "image.bin"), png);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: { saved_path: "image.bin", size_bytes: png.byteLength },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const file = await client.downloadResource({
+      message_id: "om_img",
+      file_key: "img_shot",
+      type: "image",
+    });
+    assert.deepEqual(calls[0].command.slice(0, 4), [
+      "lark-cli",
+      "im",
+      "+messages-resources-download",
+      "--as",
+    ]);
+    assert.equal(file.media_type, "image/png");
     assert.deepEqual(Array.from(file.bytes), Array.from(png));
   });
 

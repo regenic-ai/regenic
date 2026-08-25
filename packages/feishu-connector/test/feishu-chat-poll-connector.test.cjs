@@ -93,7 +93,7 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         page_token: "page-1",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     });
 
@@ -127,7 +127,7 @@ describe("FeishuChatPollConnector", () => {
         page_token: "page-2",
         start_time: "1723420860",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
@@ -191,7 +191,7 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
   });
@@ -229,7 +229,7 @@ describe("FeishuChatPollConnector", () => {
         sort: "desc",
         head_time: "1723500000",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
     assert.equal(result.has_more, true);
@@ -267,7 +267,7 @@ describe("FeishuChatPollConnector", () => {
         start_time: "100",
         head_time: "1723600000",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
     assert.equal(result.has_more, true);
@@ -337,7 +337,7 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
   });
@@ -366,7 +366,7 @@ describe("FeishuChatPollConnector", () => {
         sort: "desc",
         head_time: "1723420800",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
   });
@@ -515,7 +515,7 @@ describe("FeishuChatPollConnector", () => {
         { items: [], has_more: false },
         "ByCreateTimeAsc",
       ),
-      { start_time: "100", recent_seeded: true, media_synced: true },
+      { start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true },
     );
     assert.deepEqual(
       nextFeishuCursor(
@@ -523,7 +523,7 @@ describe("FeishuChatPollConnector", () => {
         { items: [], has_more: false },
         "ByCreateTimeDesc",
       ),
-      { start_time: "200", recent_seeded: true, media_synced: true },
+      { start_time: "200", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true },
     );
     assert.equal(needsRecentSeed({}), true);
     assert.equal(needsRecentSeed({ page_token: "p1" }), true);
@@ -532,6 +532,14 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(needsMediaReseed({ start_time: "100", recent_seeded: true }), true);
     assert.equal(
       needsMediaReseed({ start_time: "100", recent_seeded: true, media_synced: true }),
+      true,
+    );
+    assert.equal(
+      needsMediaReseed({ start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true }),
+      true,
+    );
+    assert.equal(
+      needsMediaReseed({ start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true }),
       false,
     );
     assert.deepEqual(
@@ -546,7 +554,7 @@ describe("FeishuChatPollConnector", () => {
       planFeishuHistoryRequest("oc_1", 50, {
         start_time: "100",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
       {
         chat_id: "oc_1",
@@ -626,10 +634,12 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     });
-    assert.equal(result.batch.records.length, 3);
+    assert.equal(result.batch.records.length, 6);
+    assert.equal(result.batch.records[0].operation, "create");
+    assert.equal(result.batch.records[1].operation, "revise");
     assert.deepEqual(downloads, [
       { message_id: "om_img", file_key: "img_shot", type: "image" },
       { message_id: "om_file", file_key: "file_notes", type: "file" },
@@ -639,10 +649,10 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(image.media_type, "image/png");
     assert.equal(image.source_filename, "shot.png");
     assert.deepEqual(Array.from(image.bytes), Array.from(png));
-    const file = result.batch.records[1].content.find((part) => part.role === "attachment");
+    const file = result.batch.records[2].content.find((part) => part.role === "attachment");
     assert.equal(file.media_type, "application/pdf");
     assert.equal(file.source_filename, "notes.pdf");
-    const post = result.batch.records[2];
+    const post = result.batch.records[4];
     assert.equal(
       post.content.find((part) => part.role === "body").text,
       "see this",
@@ -651,6 +661,48 @@ describe("FeishuChatPollConnector", () => {
       post.content.find((part) => part.role === "attachment").source_filename,
       "shot.png",
     );
+  });
+
+  it("keeps class-method download this so image bytes survive", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    class BoundClient {
+      async listMessages() {
+        return {
+          items: [
+            {
+              message_id: "om_img",
+              msg_type: "image",
+              create_time: "1723420800000",
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: { content: JSON.stringify({ image_key: "img_shot" }) },
+            },
+          ],
+          has_more: false,
+        };
+      }
+
+      async downloadResource() {
+        if (this === undefined || this === null) {
+          throw new Error("downloadResource lost this");
+        }
+        return { bytes: png, media_type: "image/png", filename: "shot.png" };
+      }
+    }
+    const connector = createConnector(new BoundClient());
+    const result = await connector.poll({
+      value: JSON.stringify({
+        start_time: "1723420800",
+        recent_seeded: true,
+        media_synced: true,
+        media_bytes: true,
+        media_ok: true,
+      }),
+    });
+    const attachment = result.batch.records[0].content.find(
+      (part) => part.role === "attachment",
+    );
+    assert.equal(result.batch.records[1].operation, "revise");
+    assert.deepEqual(Array.from(attachment.bytes), Array.from(png));
   });
 
   it("keeps an image row when download is unavailable", async () => {
@@ -674,7 +726,7 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     });
     assert.equal(result.batch.records.length, 1);
@@ -718,9 +770,50 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723600000",
         recent_seeded: true,
-        media_synced: true,
+        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
+  });
+
+  it("reseeds a media-synced cursor once more so empty image placeholders can get bytes", async () => {
+    const calls = [];
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        return {
+          items: [
+            {
+              message_id: "om_img",
+              msg_type: "image",
+              create_time: "1723600000000",
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: { content: JSON.stringify({ image_key: "img_shot" }) },
+            },
+          ],
+          has_more: false,
+        };
+      },
+      async downloadResource() {
+        return { bytes: png, media_type: "image/png", filename: "shot.png" };
+      },
+    });
+    const result = await connector.poll({
+      value: JSON.stringify({
+        start_time: "1723420800",
+        recent_seeded: true,
+        media_synced: true,
+        media_bytes: true,
+      }),
+    });
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      sort_type: "ByCreateTimeDesc",
+    });
+    assert.equal(result.batch.records[0].operation, "create");
+    assert.equal(result.batch.records[1].operation, "revise");
+    assert.equal(result.batch.records[0].content.find((part) => part.role === "attachment").bytes.byteLength, 8);
   });
 });
 

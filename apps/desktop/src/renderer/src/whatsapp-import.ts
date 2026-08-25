@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n.ts";
 import type { WhatsAppImportView } from "./types";
 
 export interface WhatsAppImportFile {
@@ -41,7 +42,8 @@ export async function importWhatsAppFiles(
     } catch (error) {
       result.failures.push({
         file_name: file.name,
-        message: error instanceof Error ? error.message : "Import failed",
+        message:
+          error instanceof Error ? error.message : t("engine.whatsapp.importFailed"),
       });
     }
   }
@@ -49,5 +51,11 @@ export async function importWhatsAppFiles(
 }
 
 export function whatsAppImportSummary(result: WhatsAppImportBatchResult): string {
-  return `Processed ${result.completed_files} of ${result.total_files} files · ${result.accepted_count} new · ${result.duplicate_count} duplicates · ${result.invalid_line_count} invalid lines.`;
+  return t("engine.whatsapp.summary", {
+    completed: result.completed_files,
+    total: result.total_files,
+    accepted: result.accepted_count,
+    duplicates: result.duplicate_count,
+    invalid: result.invalid_line_count,
+  });
 }

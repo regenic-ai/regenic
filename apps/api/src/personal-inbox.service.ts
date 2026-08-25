@@ -1203,10 +1203,12 @@ async function loadInboxReceipts(input: {
           thread_ids: [threadIdOf(input.thread)],
         })
       : [];
-  const queries =
+  const queries = mergeReceiptQueries(
+    receiptQueriesOf(input.resolved),
     siblingOutbound.length > 0
       ? receiptQueriesFromOutboundEvents(siblingOutbound)
-      : receiptQueriesOf(input.resolved);
+      : [],
+  );
   const receipts = await input.drivers.readReceipts(
     input.installations,
     queries,
@@ -1266,6 +1268,41 @@ function receiptQueriesOf(resolved: InboxResolvedRow[]): ThreadReceiptQuery[] {
     ...query,
     outbound: newestOutbound(query.outbound),
   }));
+}
+
+function mergeReceiptQueries(
+  ...groups: ThreadReceiptQuery[][]
+): ThreadReceiptQuery[] {
+  const merged = new Map<string, ThreadReceiptQuery>();
+  for (const group of groups) {
+    for (const query of group) {
+      const threadId = threadIdOf(query);
+      const current = merged.get(threadId);
+      if (!current) {
+        merged.set(threadId, {
+          ...query,
+          outbound: [...query.outbound],
+        });
+        continue;
+      }
+      current.outbound.push(...query.outbound);
+    }
+  }
+  return [...merged.values()].map((query) => ({
+    ...query,
+    outbound: newestOutbound(uniqueOutbound(query.outbound)),
+  }));
+}
+
+function uniqueOutbound<T extends { external_id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.external_id)) {
+      return false;
+    }
+    seen.add(item.external_id);
+    return true;
+  });
 }
 
 function receiptQueriesFromOutboundEvents(
