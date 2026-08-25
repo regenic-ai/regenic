@@ -113,6 +113,27 @@ describe("local ingestion persistence", () => {
     authorityStore.close();
   });
 
+  it("shows only the current revision in an inbox thread", async () => {
+    const root = await createRoot();
+    const { authorityStore, service } = await createHarness(root);
+    await service.ingest(createBatch());
+    await service.ingest(createBatch({
+      operation: "revise",
+      revision_id: "revision-1",
+      content: [{ role: "body", media_type: "text/plain", text: "Revision." }],
+    }));
+
+    const thread = await authorityStore.listInbox("local-owner", {
+      siblings: true,
+      source: "regenic",
+      target: "source-event-1",
+    });
+
+    assert.equal(thread.length, 1);
+    assert.equal(thread[0].event.operation, "revise");
+    authorityStore.close();
+  });
+
   it("allows only one concurrent revision to advance the source head", async () => {
     const root = await createRoot();
     const firstHarness = await createHarness(root);

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
+  importWhatsAppExport,
   installConnector,
   setConnectorStatus,
   syncConnector,
@@ -18,6 +19,10 @@ import {
 } from "./format";
 import type { HostStats } from "../../shared/host-watch.ts";
 import type { PersonalEngineView } from "./types";
+import {
+  importWhatsAppFiles,
+  whatsAppImportSummary,
+} from "./whatsapp-import";
 
 export function EnginePage({
   engine,
@@ -34,6 +39,9 @@ export function EnginePage({
   const [syncingAll, setSyncingAll] = useState(false);
   const [installingType, setInstallingType] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [whatsAppStatus, setWhatsAppStatus] = useState<string | null>(null);
+  const [importingWhatsApp, setImportingWhatsApp] = useState(false);
+  const whatsAppFileRef = useRef<HTMLInputElement>(null);
 
   const runAction = async (id: string, action: () => Promise<void>) => {
     setBusyId(id);
@@ -116,6 +124,64 @@ export function EnginePage({
         {host?.memory.hint ? (
           <p className="action-hint">{host.memory.hint}</p>
         ) : null}
+      </section>
+      <section className="card">
+        <div className="card-head">
+          <h2>WhatsApp personal export</h2>
+          <button
+            type="button"
+            className="ghost"
+            disabled={importingWhatsApp}
+            onClick={() => whatsAppFileRef.current?.click()}
+          >
+            {importingWhatsApp ? "Importing…" : "Import files"}
+          </button>
+        </div>
+        <p className="muted">
+          Import Purr WA CSV or WhatsApp Personal Export v1 JSONL files you selected yourself. This is read-only and never accesses browser cookies or sends messages.
+        </p>
+        <input
+          ref={whatsAppFileRef}
+          type="file"
+          multiple
+          accept=".csv,.jsonl,.ndjson,text/csv,application/x-ndjson,application/json"
+          hidden
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            if (files.length === 0) {
+              return;
+            }
+            void (async () => {
+              setImportingWhatsApp(true);
+              setActionError(null);
+              setWhatsAppStatus(null);
+              try {
+                const result = await importWhatsAppFiles(
+                  files,
+                  importWhatsAppExport,
+                );
+                setWhatsAppStatus(whatsAppImportSummary(result));
+                if (result.completed_files > 0) {
+                  await onChanged();
+                }
+                if (result.failures.length > 0) {
+                  const first = result.failures[0];
+                  setActionError(
+                    `${result.failures.length} file${result.failures.length === 1 ? "" : "s"} failed. ${first.file_name}: ${connectorActionError(first.message)}`,
+                  );
+                }
+              } catch (caught) {
+                setActionError(
+                  caught instanceof Error ? connectorActionError(caught.message) : "WhatsApp import failed",
+                );
+              } finally {
+                setImportingWhatsApp(false);
+              }
+            })();
+          }}
+        />
+        {whatsAppStatus ? <p className="action-hint">{whatsAppStatus}</p> : null}
       </section>
       <section className="card">
         <div className="card-head">

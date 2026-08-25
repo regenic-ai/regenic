@@ -11,6 +11,7 @@ import { PersonalController } from "./personal.controller";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalReplyService } from "./personal-reply.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
 
 @Module({
   controllers: [HealthController, DshApiController, PersonalController],
@@ -20,6 +21,7 @@ import { PersonalRuntimeService } from "./personal-runtime.service";
     PersonalInboxService,
     PersonalReplyService,
     PersonalConnectorService,
+    PersonalWhatsAppImportService,
     {
       provide: ChannelDriverRegistry,
       useFactory: () =>
