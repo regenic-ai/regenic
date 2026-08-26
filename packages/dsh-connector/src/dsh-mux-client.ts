@@ -104,6 +104,14 @@ export async function openDshMuxSocket(input: {
     throw new Error("WebSocket is not available");
   }
   const socket = new WebSocketCtor(muxSocketUrl(input.url, input.access_token));
+  let closed = false;
+  const notifyClose = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    input.onClose();
+  };
   const deliver = (event: { data?: unknown }) => {
     if (typeof event.data === "string") {
       input.onMessage(event.data);
@@ -111,14 +119,12 @@ export async function openDshMuxSocket(input: {
   };
   if (typeof socket.addEventListener === "function") {
     socket.addEventListener("message", deliver);
-    socket.addEventListener("close", () => input.onClose());
-    socket.addEventListener("error", () => {
-      socket.close();
-    });
+    socket.addEventListener("close", notifyClose);
+    socket.addEventListener("error", notifyClose);
   } else {
     socket.onmessage = deliver;
-    socket.onclose = () => input.onClose();
-    socket.onerror = () => socket.close();
+    socket.onclose = notifyClose;
+    socket.onerror = notifyClose;
   }
   return {
     close() {

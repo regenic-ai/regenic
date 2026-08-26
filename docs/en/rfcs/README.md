@@ -15,6 +15,7 @@ Methodology source: [regenic-ai/regenic-book](https://github.com/regenic-ai/rege
 | [0006](0006-acl-agent-identity.md) | ACL scopes & Agent identity | Accepted |
 | [0007](0007-daily-distillation.md) | Daily distillation | Accepted |
 | [0008](0008-thread-surface.md) | Thread Surface | Accepted |
+| [0009](0009-work-orchestration.md) | Record class, thread facet, hosted execution (L0–L6) | Accepted |
 
 Phase 0 closeout + product path:
 
@@ -49,6 +50,7 @@ Milestone: [Phase 0 — RFC acceptance](https://github.com/regenic-ai/regenic/mi
 0006 ACL + Agent identity (implements AccessPolicy for ops data)
 0007 Daily distillation (standards-machine intake)
 0008 Thread Surface (live prompts + attention)
+0009 Record class / thread facet / work items / executors (L0–L6)
 ```
 
 ## Review

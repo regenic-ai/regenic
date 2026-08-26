@@ -1,11 +1,13 @@
-export type NavId = "inbox" | "engine" | "settings";
+export type NavId = "inbox" | "recipes" | "engine" | "settings";
 
 export type KernelMode = "local" | "custom";
+export type Locale = "en" | "zh";
 
 export interface KernelSettingsView {
   mode: KernelMode;
   customOrigin: string;
   activeOrigin: string;
+  locale: Locale;
 }
 
 export interface ArrangementDecision {
@@ -84,6 +86,34 @@ export function normalizeListTitle(value: unknown): ListTitleMode {
   return "face";
 }
 
+export type RecordClass = "utterance" | "task" | "status" | "prompt";
+export type ThreadFacet = "chat" | "agent" | "ticket";
+export type AttentionClass =
+  | "waiting_you"
+  | "needs_ack"
+  | "running"
+  | "unread"
+  | "quiet";
+export type InboxSortMode = "normal" | "attention";
+export type WorkItemStatus =
+  | "open"
+  | "running"
+  | "waiting_human"
+  | "done"
+  | "failed"
+  | "skipped";
+
+export interface WorkFace {
+  id: string;
+  status: WorkItemStatus;
+  recipe_id?: string;
+  executor_type?: string;
+  agent_thread_id?: string;
+  can_write_back?: boolean;
+  has_result?: boolean;
+  updated_at?: string;
+}
+
 export interface InboxViewItem {
   decision: ArrangementDecision;
   event: EventRecord;
@@ -110,6 +140,72 @@ export interface InboxViewItem {
   unread_count?: number;
   can_receipt?: boolean;
   receipt?: MessageReceipt;
+  record_class?: RecordClass;
+  thread_facet?: ThreadFacet;
+  attention?: AttentionClass;
+  work?: WorkFace;
+}
+
+export interface ExecutorCatalogField {
+  key: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  default?: string;
+  hint?: string;
+  kind?: "text" | "textarea" | "select";
+  options?: Array<{ value: string; label: string }>;
+}
+
+export interface ExecutorCatalogEntry {
+  executor_type: string;
+  label: string;
+  description?: string;
+  params_label?: string;
+  source?: string;
+  attach?: "interactive" | "absentee";
+  fields: ExecutorCatalogField[];
+}
+
+export interface RecipeMatch {
+  record_class?: RecordClass;
+  thread_facet?: ThreadFacet;
+  source?: string;
+  thread_id?: string;
+}
+
+export interface RecipeView {
+  id: string;
+  org_id: string;
+  name: string;
+  match: RecipeMatch;
+  executor_type: string;
+  executor_config: Record<string, string>;
+  can_write_back: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RecipeSeed {
+  thread_id: string;
+  source?: string;
+  title?: string;
+}
+
+export interface RecipeSourceOption {
+  id: string;
+  label: string;
+}
+
+export interface RecipeConversationOption {
+  id: string;
+  label: string;
+  source?: string;
+}
+
+export interface UiPrefsView {
+  inbox_sort: InboxSortMode;
 }
 
 export interface IngestAttempt {
@@ -254,6 +350,28 @@ export interface PersonalEngineView {
   catalog: ConnectorCatalogItem[];
 }
 
+export interface StoreView {
+  events: number;
+  conversations: number;
+  work_items: number;
+  blobs: number;
+  recipes: number;
+  connectors: number;
+}
+
+export interface StoreClearView {
+  cleared: {
+    events: number;
+    conversations: number;
+    work_items: number;
+    blobs: number;
+  };
+  kept: {
+    recipes: number;
+    connectors: number;
+  };
+}
+
 export type EngineChipState = "running" | "syncing" | "stopped";
 
 export interface ReplyAttachmentInput {
@@ -268,4 +386,12 @@ export interface ReplyView {
   thread_id: string;
   rpc_id?: string;
   item: InboxViewItem;
+}
+
+export interface WhatsAppImportView {
+  file_hash: string;
+  accepted_count: number;
+  duplicate_count: number;
+  invalid_line_count: number;
+  errors: Array<{ line: number; code: string; message: string }>;
 }

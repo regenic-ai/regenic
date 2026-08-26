@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { formatChatTime } from "./format";
+import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
 import {
   messageRole,
@@ -21,7 +22,9 @@ import {
 } from "./message-view";
 import {
   computeWindow,
+  endScrollTop,
   estimateMessageHeight,
+  paddingYFromStyle,
   prefixOffsets,
   isStuckToEnd,
   shouldLoadOlder,
@@ -73,6 +76,7 @@ export const ThreadMessageList = memo(
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const measureFrame = useRef<number | null>(null);
+  const openingRef = useRef(opening);
   const [layout, setLayout] = useState({ start: 0, end: 0, total: 0 });
 
   const syncLayout = useCallback((pin = false) => {
@@ -93,10 +97,16 @@ export const ThreadMessageList = memo(
     offsetsRef.current = offsets;
     const total = offsets[current.length] ?? 0;
     const node = scrollRef.current;
+    let scrollTop = node?.scrollTop ?? Math.max(0, total);
     if (pin && node) {
-      node.scrollTop = Math.max(0, total - node.clientHeight);
+      const list = node.firstElementChild as HTMLElement | null;
+      if (list) {
+        list.style.height = `${total}px`;
+      }
+      const paddingY = paddingYFromStyle(getComputedStyle(node));
+      scrollTop = endScrollTop(total, node.clientHeight, paddingY);
+      node.scrollTop = scrollTop;
     }
-    const scrollTop = node?.scrollTop ?? Math.max(0, total);
     const viewport = node?.clientHeight ?? 0;
     const next = computeWindow({
       offsets,
@@ -111,10 +121,19 @@ export const ThreadMessageList = memo(
     );
   }, []);
 
+  const snapToCommittedEnd = useCallback(() => {
+    const node = scrollRef.current;
+    if (!node || !stickRef.current) {
+      return;
+    }
+    node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
+  }, []);
+
   const scrollToEnd = useCallback(() => {
     stickRef.current = true;
     syncLayout(true);
-  }, [syncLayout]);
+    snapToCommittedEnd();
+  }, [snapToCommittedEnd, syncLayout]);
 
   useImperativeHandle(ref, () => ({ scrollToEnd }), [scrollToEnd]);
 
@@ -126,7 +145,8 @@ export const ThreadMessageList = memo(
     loadArmedRef.current = true;
     lastScrollTopRef.current = 0;
     syncLayout(true);
-  }, [threadId, syncLayout]);
+    snapToCommittedEnd();
+  }, [threadId, snapToCommittedEnd, syncLayout]);
 
   useLayoutEffect(() => {
     if (loadingOlder) {
@@ -157,13 +177,15 @@ export const ThreadMessageList = memo(
     if (prepended && node && prev) {
       node.scrollTop += node.scrollHeight - prev.height;
       syncLayout(false);
+    } else {
+      snapToCommittedEnd();
     }
     pinRef.current = {
       first,
       last,
       height: node?.scrollHeight ?? 0,
     };
-  }, [items, loadingOlder, syncLayout]);
+  }, [items, loadingOlder, snapToCommittedEnd, syncLayout]);
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
@@ -201,15 +223,37 @@ export const ThreadMessageList = memo(
   }, []);
 
   useLayoutEffect(() => {
-    if (!stickRef.current) {
-      return;
-    }
+    snapToCommittedEnd();
+  }, [layout.total, threadId, snapToCommittedEnd]);
+
+  useLayoutEffect(() => {
     const node = scrollRef.current;
-    if (!node) {
+    if (!node || items.length === 0) {
       return;
     }
-    node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
-  }, [layout.total, threadId]);
+    let lastHeight = node.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const nextHeight = node.clientHeight;
+      if (nextHeight === lastHeight) {
+        return;
+      }
+      lastHeight = nextHeight;
+      syncLayout(stickRef.current);
+      snapToCommittedEnd();
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [items.length > 0, threadId, snapToCommittedEnd, syncLayout]);
+
+  useLayoutEffect(() => {
+    const wasOpening = openingRef.current;
+    openingRef.current = opening;
+    if (!wasOpening || opening || items.length === 0) {
+      return;
+    }
+    syncLayout(stickRef.current);
+    snapToCommittedEnd();
+  }, [opening, items.length, snapToCommittedEnd, syncLayout]);
 
   const onMeasure = useCallback(
     (id: string, height: number) => {
@@ -224,9 +268,10 @@ export const ThreadMessageList = memo(
       measureFrame.current = window.requestAnimationFrame(() => {
         measureFrame.current = null;
         syncLayout(stickRef.current);
+        snapToCommittedEnd();
       });
     },
-    [syncLayout],
+    [snapToCommittedEnd, syncLayout],
   );
 
   if (items.length === 0) {
@@ -385,9 +430,12 @@ const ChatRow = memo(function ChatRow({
   canReply: boolean;
   onReply: (item: InboxViewItem) => void;
 }) {
+  const { t } = useLocale();
   const receipt = receiptCopy(item);
   return (
-    <div className={`chat-row chat-row-${role}${follow ? " is-follow" : ""}`}>
+    <div
+      className={`chat-row chat-row-${role} chat-row-${item.direction}${follow ? " is-follow" : ""}`}
+    >
       <ChatAvatar role={role} label={item.actor_label} />
       <div className="chat-main">
         <div className="chat-meta">
@@ -400,7 +448,7 @@ const ChatRow = memo(function ChatRow({
           ) : null}
           {canReply ? (
             <button type="button" className="chat-reply" onClick={() => onReply(item)}>
-              Reply
+              {t("thread.reply")}
             </button>
           ) : null}
         </div>

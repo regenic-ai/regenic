@@ -465,6 +465,142 @@ describe("DshSessionPollConnector", () => {
     );
   });
 
+  it("maps DSH turn/start and turn/end as thread status, not speech", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "turn/start",
+                seq: 1,
+                time: 1_724_208_004_000,
+                data: { turn: 1 },
+              },
+              {
+                type: "user/message",
+                seq: 2,
+                time: 1_724_208_004_100,
+                data: {
+                  content: [{ type: "text", text: "Approve travel" }],
+                  source: { kind: "user" },
+                },
+              },
+              {
+                type: "assistant/message",
+                seq: 3,
+                time: 1_724_208_004_200,
+                data: {
+                  message: { content: [{ type: "text", text: "Looking now." }] },
+                },
+              },
+              {
+                type: "tool/call",
+                seq: 4,
+                time: 1_724_208_004_300,
+                data: {
+                  name: "bash",
+                  arguments: "{\"command\":\"ls\"}",
+                },
+              },
+              {
+                type: "assistant/message",
+                seq: 5,
+                time: 1_724_208_004_400,
+                data: {
+                  message: {
+                    content: [{ type: "text", text: "The travel request is approved." }],
+                  },
+                },
+              },
+              {
+                type: "turn/end",
+                seq: 6,
+                time: 1_724_208_004_500,
+                data: { turn: 1, reason: { kind: "completed" } },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-turn",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(
+      result.batch.records.map((record) => [
+        record.external_id,
+        record.type,
+        surfaceKind(record),
+        surfaceActivity(record),
+        surfaceOf(record).turn?.state,
+        surfaceOf(record).turn?.reason,
+      ]),
+      [
+        ["sess-turn:1", "thread_status", "system", "working", "open", undefined],
+        ["sess-turn:2", "message", "user", undefined, undefined, undefined],
+        ["sess-turn:3", "message", "assistant", undefined, undefined, undefined],
+        ["sess-turn:5", "message", "assistant", undefined, undefined, undefined],
+        ["sess-turn:6", "thread_status", "system", undefined, "ended", "completed"],
+      ],
+    );
+  });
+
+  it("keeps working after an assistant face while the DSH turn is still open", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return {
+            hasMore: false,
+            events: [
+              {
+                type: "turn/start",
+                seq: 1,
+                time: 1_724_208_005_000,
+                data: { turn: 1 },
+              },
+              {
+                type: "assistant/message",
+                seq: 2,
+                time: 1_724_208_005_100,
+                data: {
+                  message: { content: [{ type: "text", text: "Checking." }] },
+                },
+              },
+              {
+                type: "tool/call",
+                seq: 3,
+                time: 1_724_208_005_200,
+                data: {
+                  name: "bash",
+                  arguments: "{\"command\":\"ls\"}",
+                },
+              },
+            ],
+          };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-open-turn",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    const last = result.batch.records[result.batch.records.length - 1];
+    assert.equal(last.type, "thread_status");
+    assert.equal(surfaceActivity(last), "working");
+    assert.equal(surfaceOf(last).turn.state, "open");
+  });
+
   it("only accepts events after the committed seq cursor", async () => {
     const connector = createConnector(new MemoryDshRunLog([
       run(0, "Old", "Old reply"),

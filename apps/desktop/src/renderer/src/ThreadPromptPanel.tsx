@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useLocale } from "./LocaleContext";
 import { togglePromptOption, typePromptCustom } from "./thread-prompts";
 import type { PromptAnswerItem, PromptQuestion, ThreadPrompt } from "./types";
 
@@ -13,16 +14,17 @@ export function ThreadPromptPanel({
   error: string | null;
   onAnswer: (prompt: ThreadPrompt, answers: PromptAnswerItem[]) => Promise<void>;
 }) {
+  const { t } = useLocale();
   const prompt = prompts[0];
   if (!prompt) {
     return null;
   }
   const heading =
     prompt.presentation === "approval"
-      ? "Needs your approval"
+      ? t("prompt.approval")
       : prompt.presentation === "plan_review"
-        ? "Review the plan"
-        : "Waiting for your answer";
+        ? t("prompt.plan")
+        : t("prompt.answer");
   return (
     <form
       className={`prompt-panel presentation-${prompt.presentation}`}
@@ -35,7 +37,7 @@ export function ThreadPromptPanel({
         {prompt.title ? <h2>{prompt.title}</h2> : null}
         {prompt.detail ? <p className="prompt-detail">{prompt.detail}</p> : null}
         {prompts.length > 1 ? (
-          <p className="prompt-count">1 of {prompts.length}</p>
+          <p className="prompt-count">{t("prompt.of", { count: prompts.length })}</p>
         ) : null}
       </div>
       {prompt.presentation === "approval" ? (
@@ -100,6 +102,7 @@ function ChoicePrompt({
   submitting: boolean;
   onAnswer: (prompt: ThreadPrompt, answers: PromptAnswerItem[]) => Promise<void>;
 }) {
+  const { t } = useLocale();
   const initial = useMemo(() => emptyAnswers(prompt.questions), [prompt]);
   const [answers, setAnswers] = useState(initial);
   const ready = prompt.questions.every((question) => {
@@ -133,7 +136,7 @@ function ChoicePrompt({
                     }
                   >
                     <span>{option.label}</span>
-                    {emphasized ? <small>Suggested</small> : null}
+                    {emphasized ? <small>{t("prompt.suggested")}</small> : null}
                     {option.description ? <small>{option.description}</small> : null}
                   </button>
                 );
@@ -144,7 +147,7 @@ function ChoicePrompt({
             <input
               className="prompt-custom"
               value={answers[question.id]?.custom ?? ""}
-              placeholder="Your answer"
+              placeholder={t("prompt.yourAnswer")}
               disabled={submitting}
               onChange={(event) =>
                 setAnswers((current) =>
@@ -173,7 +176,7 @@ function ChoicePrompt({
             );
           }}
         >
-          {submitting ? "Sending…" : "Continue"}
+          {submitting ? t("prompt.sending") : t("prompt.continue")}
         </button>
       </div>
     </>

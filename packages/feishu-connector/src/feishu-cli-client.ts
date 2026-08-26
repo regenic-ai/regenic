@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
+import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
   FeishuApiError,
   callFeishuOpenApi,
+  callFeishuOpenApiBytes,
   feishuOpenApiBaseUrl,
   isFeishuTokenError,
   type FeishuSortType,
@@ -33,6 +35,18 @@ export interface FeishuUploadFile {
   filename: string;
   media_type: string;
   bytes: Uint8Array;
+}
+
+export interface FeishuDownloadResource {
+  message_id: string;
+  file_key: string;
+  type: "image" | "file";
+}
+
+export interface FeishuDownloadedFile {
+  bytes: Uint8Array;
+  media_type: string;
+  filename?: string;
 }
 
 export interface FeishuSendMessageInput {
@@ -105,6 +119,7 @@ export interface FeishuImClient {
   sendMessage?(input: FeishuSendMessageInput): Promise<{ message_id: string }>;
   uploadImage?(input: FeishuUploadFile): Promise<{ image_key: string }>;
   uploadFile?(input: FeishuUploadFile): Promise<{ file_key: string }>;
+  downloadResource?(input: FeishuDownloadResource): Promise<FeishuDownloadedFile>;
   resolveUserNames?(ids: string[]): Promise<Map<string, string>>;
   readMessageStatus?(messageIds: string[]): Promise<Map<string, boolean>>;
   readMessageUsers?(messageId: string): Promise<unknown>;
@@ -375,6 +390,89 @@ export class LarkCliClient implements FeishuImClient {
     return { file_key: fileKey };
   }
 
+  async downloadResource(input: FeishuDownloadResource): Promise<FeishuDownloadedFile> {
+    const messageId = input.message_id.trim();
+    const fileKey = input.file_key.trim();
+    if (!messageId || !fileKey) {
+      throw new FeishuApiError("Feishu download needs message_id and file_key");
+    }
+    try {
+      return await this.downloadResourceViaCli({
+        message_id: messageId,
+        file_key: fileKey,
+        type: input.type,
+      });
+    } catch (cliError) {
+      try {
+        const downloaded = await this.requestViaHttpBytes({
+          method: "GET",
+          path: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}`,
+          params: { type: input.type },
+        });
+        if (downloaded && downloaded.bytes.byteLength > 0) {
+          return downloaded;
+        }
+      } catch {
+        // User-token HTTP often returns JSON instead of file bytes.
+      }
+      throw cliError;
+    }
+  }
+
+  private async downloadResourceViaCli(
+    input: FeishuDownloadResource,
+  ): Promise<FeishuDownloadedFile> {
+    const directory = await mkdtemp(join(tmpdir(), "regenic-feishu-dl-"));
+    const filename = input.type === "image" ? "image.bin" : "file.bin";
+    try {
+      const result = await this.runCli({
+        command: [
+          this.command,
+          "im",
+          "+messages-resources-download",
+          "--as",
+          "user",
+          "--format",
+          "json",
+          "--message-id",
+          input.message_id,
+          "--file-key",
+          input.file_key,
+          "--type",
+          input.type,
+          "--output",
+          `./${filename}`,
+        ],
+        env: this.options.env,
+        timeout_ms: this.timeoutMs,
+        cwd: directory,
+      });
+      const payload = unwrapLarkCli(result);
+      const saved =
+        stringField(payload, "saved_path") ??
+        stringField(payload, "output") ??
+        filename;
+      const bytes = await readFile(isAbsolute(saved) ? saved : join(directory, saved));
+      if (bytes.byteLength === 0) {
+        throw new FeishuApiError("Feishu download saved an empty file");
+      }
+      const savedName = basename(saved);
+      return {
+        bytes,
+        media_type: sniffMediaType(
+          bytes,
+          input.type === "image" ? "image/png" : "application/octet-stream",
+        ),
+        filename:
+          savedName === "image.bin" || savedName === "file.bin"
+            ? undefined
+            : savedName,
+      };
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
   private async fillP2pNames(chats: FeishuChat[]): Promise<void> {
     const missing = chats.filter((chat) => !chat.name && chat.p2p_target_id);
     if (missing.length === 0) {
@@ -560,6 +658,61 @@ export class LarkCliClient implements FeishuImClient {
       fetch: this.options.fetch,
       timeout_ms: input.timeout_ms ?? Math.min(this.timeoutMs, 20_000),
     });
+  }
+
+  private async requestHttpBytes(input: {
+    method: "GET";
+    path: string;
+    params?: Record<string, string | number>;
+    token: string;
+    timeout_ms?: number;
+  }): Promise<FeishuDownloadedFile> {
+    const brand = await this.options.userToken?.brand();
+    return callFeishuOpenApiBytes({
+      method: input.method,
+      path: input.path,
+      params: input.params,
+      token: input.token,
+      base_url: feishuOpenApiBaseUrl(brand),
+      fetch: this.options.fetch,
+      timeout_ms: input.timeout_ms ?? Math.min(this.timeoutMs, 20_000),
+    });
+  }
+
+  private async requestViaHttpBytes(input: {
+    method: "GET";
+    path: string;
+    params?: Record<string, string | number>;
+    timeout_ms?: number;
+  }): Promise<FeishuDownloadedFile | undefined> {
+    const source = this.options.userToken;
+    if (!source) {
+      return undefined;
+    }
+    const token = await source.token();
+    if (!token) {
+      return undefined;
+    }
+    try {
+      return await retryTransientLark(() => this.requestHttpBytes({ ...input, token }));
+    } catch (error) {
+      if (isFeishuTokenError(error)) {
+        await source.refresh();
+        const next = await source.token();
+        if (next) {
+          try {
+            return await this.requestHttpBytes({ ...input, token: next });
+          } catch {
+            return undefined;
+          }
+        }
+        return undefined;
+      }
+      if (isTransientLarkError(error)) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   private async requestViaHttp(input: {

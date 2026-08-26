@@ -1,5 +1,15 @@
+import { t } from "../../shared/i18n.ts";
 import type { InboxReuse } from "./thread-window";
-import type { InboxViewItem, ListTitleMode, ThreadPrompt } from "./types";
+import type {
+  AttentionClass,
+  InboxSortMode,
+  InboxViewItem,
+  ListTitleMode,
+  RecordClass,
+  ThreadFacet,
+  ThreadPrompt,
+  WorkFace,
+} from "./types";
 
 export interface InboxThread {
   id: string;
@@ -20,6 +30,10 @@ export interface InboxThread {
   prompts: ThreadPrompt[];
   unread: boolean;
   unread_count: number;
+  record_class?: RecordClass;
+  thread_facet?: ThreadFacet;
+  attention?: AttentionClass;
+  work?: WorkFace;
 }
 
 export type PinFilter = "all" | "pinned" | "unpinned";
@@ -117,13 +131,18 @@ export function prunePrefOverlay(
   return changed ? next : overlay;
 }
 
-export function sortInboxThreads(threads: InboxThread[]): InboxThread[] {
+export function sortInboxThreads(
+  threads: InboxThread[],
+  mode: InboxSortMode = "normal",
+): InboxThread[] {
   if (threads.length < 2) {
     return threads;
   }
+  const compare = (left: InboxThread, right: InboxThread) =>
+    compareInboxThreads(left, right, mode);
   for (let index = 1; index < threads.length; index += 1) {
-    if (compareInboxThreads(threads[index - 1], threads[index]) > 0) {
-      return [...threads].sort(compareInboxThreads);
+    if (compare(threads[index - 1], threads[index]) > 0) {
+      return [...threads].sort(compare);
     }
   }
   return threads;
@@ -223,6 +242,7 @@ export function overlayThreadMessages(
         messages.some((item) => item.await_reply === true) || thread.await_reply === true,
       list_title: threadListTitle(messages, thread.list_title),
       ...threadSurface(messages, thread),
+      ...threadWork(messages, thread),
     };
   });
   return changed ? next : threads;
@@ -246,6 +266,7 @@ export function openedThreadView(
         messages.some((item) => item.await_reply === true) ||
         thread.await_reply === true,
       ...threadSurface(messages, thread),
+      ...threadWork(messages, thread),
     };
   }
   if (thread.messages.length > 0) {
@@ -300,7 +321,12 @@ export function markInboxThreadRead(
       return item;
     }
     changed = true;
-    return { ...item, unread: false, unread_count: 0 };
+    return {
+      ...item,
+      unread: false,
+      unread_count: 0,
+      attention: item.attention === "unread" ? "quiet" : item.attention,
+    };
   });
   return changed ? next : items;
 }
@@ -394,6 +420,7 @@ function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
     list_title: threadListTitle(ordered),
     messages: ordered,
     ...threadSurface(ordered),
+    ...threadWork(ordered),
   };
 }
 
@@ -437,11 +464,99 @@ function mergeMessages(
   return orderMessages([...existing, ...added]);
 }
 
-function compareInboxThreads(left: InboxThread, right: InboxThread): number {
+export function resolveThreadAttention(thread: InboxThread): AttentionClass {
+  if (
+    (thread.prompts?.length ?? 0) > 0 ||
+    thread.work?.status === "waiting_human" ||
+    thread.work?.status === "failed"
+  ) {
+    return "waiting_you";
+  }
+  if (
+    thread.work?.status === "done" &&
+    thread.work.has_result &&
+    thread.work.can_write_back === false
+  ) {
+    return "needs_ack";
+  }
+  if (
+    thread.work?.status === "running" ||
+    thread.messages.some((item) => item.activity === "working")
+  ) {
+    return "running";
+  }
+  if (thread.unread || (thread.unread_count ?? 0) > 0) {
+    return "unread";
+  }
+  if (thread.attention && thread.attention !== "unread") {
+    return thread.attention;
+  }
+  return "quiet";
+}
+
+export function groupThreadsByAttention(
+  threads: InboxThread[],
+): Array<{ key: string; label: string | null; items: InboxThread[] }> {
+  const labels: Record<AttentionClass, string> = {
+    waiting_you: t("inbox.needsYou"),
+    needs_ack: t("inbox.needsYou"),
+    running: t("inbox.sectionRunning"),
+    unread: t("inbox.unread"),
+    quiet: t("inbox.theRest"),
+  };
+  const sections: Array<{ key: string; label: string; items: InboxThread[] }> = [];
+  for (const thread of threads) {
+    const attention = resolveThreadAttention(thread);
+    const key = attention === "needs_ack" ? "waiting_you" : attention;
+    const last = sections[sections.length - 1];
+    if (last?.key === key) {
+      last.items.push(thread);
+    } else {
+      sections.push({ key, label: labels[attention], items: [thread] });
+    }
+  }
+  if (sections.length <= 1) {
+    return [{ key: "all", label: null, items: threads }];
+  }
+  return sections;
+}
+
+function compareInboxThreads(
+  left: InboxThread,
+  right: InboxThread,
+  mode: InboxSortMode = "normal",
+): number {
   if (left.pinned !== right.pinned) {
     return left.pinned ? -1 : 1;
   }
+  if (mode === "attention") {
+    const leftAttention = resolveThreadAttention(left);
+    const rightAttention = resolveThreadAttention(right);
+    const byAttention = compareAttentionRank(leftAttention, rightAttention);
+    if (byAttention !== 0) {
+      return byAttention;
+    }
+    if (leftAttention === "running") {
+      return compareStamp(attentionStable(right), attentionStable(left));
+    }
+  }
   return byRecentActivity(left, right);
+}
+
+const ATTENTION_RANK: Record<AttentionClass, number> = {
+  waiting_you: 0,
+  needs_ack: 1,
+  running: 2,
+  unread: 3,
+  quiet: 4,
+};
+
+function compareAttentionRank(left: AttentionClass, right: AttentionClass): number {
+  return ATTENTION_RANK[left] - ATTENTION_RANK[right];
+}
+
+function attentionStable(thread: InboxThread): string {
+  return thread.work?.updated_at ?? thread.work?.id ?? activityStamp(thread);
 }
 
 function isEmptyRecord(value: Record<string, unknown>): boolean {
@@ -530,6 +645,29 @@ function conversationField(
     }
   }
   return null;
+}
+
+function threadWork(
+  messages: InboxViewItem[],
+  fallback?: Pick<InboxThread, "record_class" | "thread_facet" | "attention" | "work">,
+): Pick<InboxThread, "record_class" | "thread_facet" | "attention" | "work"> {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+    if (item.work || item.attention || item.record_class || item.thread_facet) {
+      return {
+        record_class: item.record_class,
+        thread_facet: item.thread_facet,
+        attention: item.attention,
+        work: item.work,
+      };
+    }
+  }
+  return {
+    record_class: fallback?.record_class,
+    thread_facet: fallback?.thread_facet,
+    attention: fallback?.attention,
+    work: fallback?.work,
+  };
 }
 
 function threadSurface(

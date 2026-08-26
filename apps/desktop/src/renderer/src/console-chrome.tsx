@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { t } from "../../shared/i18n.ts";
 import { chipLabel } from "./format";
 import type { EngineChipState } from "./types";
 
@@ -30,7 +31,7 @@ export function EngineChip({ state }: { state: EngineChipState }) {
   return (
     <span className={`chip ${state}`}>
       <span className="dot" />
-      Kernel {chipLabel(state)}
+      {t("chrome.kernel", { state: chipLabel(state) })}
     </span>
   );
 }

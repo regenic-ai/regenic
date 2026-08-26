@@ -1,7 +1,7 @@
 # Product
 
 - **简体中文:** [../zh/PRODUCT.md](../zh/PRODUCT.md)
-- **Related:** [message orchestration](MESSAGE_ORCHESTRATION.md) · [ROADMAP.md](ROADMAP.md) · [personal → org](rfcs/personal-to-org.md) · RFCs 0001–0007
+- **Related:** [message orchestration](MESSAGE_ORCHESTRATION.md) · [ROADMAP.md](ROADMAP.md) · [personal → org](rfcs/personal-to-org.md) · RFCs 0001–0009
 
 ## Overview
 
@@ -67,5 +67,7 @@ Personal ships first so one person can connect a channel, dispatch work, and opt
 | Collaboration / handoff | 0003 |
 | Console + agents, same API | 0004 |
 | ACL / non-escalation / send privilege | 0006 |
+| Live prompts / attention | 0008 |
+| Record class / thread facet / hosted run | 0009 |
 
 Personal orchestration ships first, then Org. See [ROADMAP.md](ROADMAP.md). Accepted RFCs are the shared target schema.

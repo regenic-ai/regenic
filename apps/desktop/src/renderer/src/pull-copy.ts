@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n.ts";
 import type { EngineChipState, PersonalEngineView, PullStatusView } from "./types.ts";
 
 export function engineChip(engine: PersonalEngineView | null): EngineChipState {
@@ -16,36 +17,38 @@ export function engineChip(engine: PersonalEngineView | null): EngineChipState {
 
 export function pullStatusLabel(pull?: PullStatusView | null): string {
   if (!pull) {
-    return "off";
+    return t("sync.off");
   }
   if (pull.phase === "pulling") {
     if (pull.catching_up_count > 1) {
-      return `Syncing ${pull.catching_up_count} conversations`;
+      return t("sync.syncingCount", { count: pull.catching_up_count });
     }
     const active = pull.streams.find(
       (stream) => stream.phase === "pulling" || stream.phase === "catching_up",
     );
     if (active?.label) {
-      return `Syncing ${active.label}`;
+      return t("sync.syncingNamed", { label: active.label });
     }
-    return pull.catching_up_count === 1 ? "Syncing older messages" : "Pulling";
+    return pull.catching_up_count === 1 ? t("sync.older") : t("sync.pulling");
   }
   if (pull.catching_up_count > 1) {
-    return `Catching up · ${pull.catching_up_count} left`;
+    return t("sync.catchingLeft", { count: pull.catching_up_count });
   }
   if (pull.catching_up_count === 1) {
     const active = pull.streams.find(
       (stream) => stream.phase === "catching_up" || stream.phase === "error",
     );
-    return active?.label ? `Catching up · ${active.label}` : "Catching up";
+    return active?.label
+      ? t("sync.catchingNamed", { label: active.label })
+      : t("sync.catching");
   }
   if (pull.last_error) {
-    return "Retrying after a drop";
+    return t("sync.retry");
   }
   if (pull.interval_ms) {
-    return `every ${Math.round(pull.interval_ms / 1000)}s`;
+    return t("sync.every", { seconds: Math.round(pull.interval_ms / 1000) });
   }
-  return "off";
+  return t("sync.off");
 }
 
 export function threadSyncLabel(
@@ -57,10 +60,10 @@ export function threadSyncLabel(
     return null;
   }
   if (stream.phase === "pulling" || stream.phase === "catching_up") {
-    return "Syncing older messages";
+    return t("thread.syncOlder");
   }
   if (stream.phase === "error") {
-    return "Sync interrupted · retrying";
+    return t("thread.syncInterrupted");
   }
   return null;
 }

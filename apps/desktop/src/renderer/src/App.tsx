@@ -1,4 +1,5 @@
 import { ConsoleApp } from "./ConsoleApp";
+import { LocaleProvider } from "./LocaleContext";
 import { TrayApp } from "./TrayApp";
 
 function surface(): "console" | "tray" {
@@ -7,5 +8,9 @@ function surface(): "console" | "tray" {
 }
 
 export function App() {
-  return surface() === "tray" ? <TrayApp /> : <ConsoleApp />;
+  return (
+    <LocaleProvider>
+      {surface() === "tray" ? <TrayApp /> : <ConsoleApp />}
+    </LocaleProvider>
+  );
 }

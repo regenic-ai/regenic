@@ -5,6 +5,10 @@ import {
   currentApiOrigin,
   fetchEngine,
   fetchInbox,
+  fetchUiPrefs,
+  dismissWorkItem,
+  runWorkItem,
+  saveUiPrefs,
   updateConversationPrefs,
 } from "./api";
 import { BrandBadge } from "./Brand";
@@ -32,8 +36,12 @@ import {
   createConversationTargets,
   mergeDraftThreads,
 } from "./inbox-drafts";
+import { t as translate } from "../../shared/i18n.ts";
+import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
-import { EngineIcon, InboxIcon, SettingsIcon } from "./Icons";
+import { EngineIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
+import { threadTitle } from "./message-view";
+import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
 import {
   hasOlderPage,
@@ -50,9 +58,11 @@ import {
 import type { HostStats } from "../../shared/host-watch.ts";
 import type {
   CreatedConversation,
+  InboxSortMode,
   InboxViewItem,
   NavId,
   PersonalEngineView,
+  RecipeSeed,
 } from "./types";
 
 const POLL_MS = 2000;
@@ -61,6 +71,7 @@ const FULL_REFRESH_MS = 45_000;
 const HOST_POLL_MS = 5000;
 
 export function ConsoleApp() {
+  const { t } = useLocale();
   const [nav, setNav] = useState<NavId>("inbox");
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [messagesByThread, setMessagesByThread] = useState<
@@ -81,6 +92,8 @@ export function ConsoleApp() {
     {},
   );
   const [host, setHost] = useState<HostStats | null>(null);
+  const [sortMode, setSortMode] = useState<InboxSortMode>("normal");
+  const [recipeSeed, setRecipeSeed] = useState<RecipeSeed | null>(null);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const prefOverlayRef = useRef(prefOverlay);
@@ -96,6 +109,7 @@ export function ConsoleApp() {
   selectedIdRef.current = selectedId;
   const refreshInFlight = useRef(false);
   const refreshAgain = useRef(false);
+  const workspaceEpoch = useRef(0);
   const inboxDigestRef = useRef<string | null>(null);
   const openedAtRef = useRef<Record<string, string>>({});
   const reuseHintRef = useRef<InboxReuse | undefined>(undefined);
@@ -238,6 +252,7 @@ export function ConsoleApp() {
     }
     olderBusyRef.current.add(threadId);
     setLoadingOlderId(threadId);
+    const epoch = workspaceEpoch.current;
     try {
       const page = await fetchInbox({
         thread_id: threadId,
@@ -245,6 +260,9 @@ export function ConsoleApp() {
         before_id: cursor.before_id,
         limit: THREAD_PAGE_SIZE,
       });
+      if (workspaceEpoch.current !== epoch) {
+        return;
+      }
       setHasOlderByThread((prev) => ({
         ...prev,
         [threadId]: hasOlderPage(page.length),
@@ -302,8 +320,12 @@ export function ConsoleApp() {
     try {
       do {
         refreshAgain.current = false;
+        const epoch = workspaceEpoch.current;
         const detailed = navRef.current === "engine";
         const nextEngine = await fetchEngine({ detailed });
+        if (workspaceEpoch.current !== epoch) {
+          continue;
+        }
         const digest = nextEngine.inbox_digest ?? "";
         const now = Date.now();
         const skipHeads =
@@ -312,7 +334,11 @@ export function ConsoleApp() {
           inboxRef.current.length > 0 &&
           now - lastFullRef.current < FULL_REFRESH_MS;
         if (!skipHeads) {
-          applyHeads(await fetchInbox({ heads: true }));
+          const heads = await fetchInbox({ heads: true });
+          if (workspaceEpoch.current !== epoch) {
+            continue;
+          }
+          applyHeads(heads);
           inboxDigestRef.current = digest || inboxDigestRef.current;
           lastFullRef.current = Date.now();
         }
@@ -322,7 +348,13 @@ export function ConsoleApp() {
             openId,
             loadedThreadsRef.current.has(openId) ? "poll" : "open",
           );
+          if (workspaceEpoch.current !== epoch) {
+            continue;
+          }
           await ackOpenThread(openId, loaded);
+        }
+        if (workspaceEpoch.current !== epoch) {
+          continue;
         }
         delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
@@ -337,11 +369,51 @@ export function ConsoleApp() {
         setError((current) => (current === null ? current : null));
       } while (refreshAgain.current);
     } catch {
-      setError(`Cannot reach the kernel at ${currentApiOrigin()}`);
+        setError(translate("chrome.cannotReach", { origin: currentApiOrigin() }));
     } finally {
       refreshInFlight.current = false;
     }
   }, []);
+
+  const resetWorkspace = useCallback(async () => {
+    workspaceEpoch.current += 1;
+    const openIds = new Set(
+      [
+        ...Object.keys(threadLoadSeq.current),
+        ...loadedThreadsRef.current,
+        ...Object.keys(messagesRef.current),
+        selectedIdRef.current,
+      ].filter((id): id is string => Boolean(id)),
+    );
+    for (const id of openIds) {
+      threadLoadSeq.current[id] = (threadLoadSeq.current[id] ?? 0) + 1;
+    }
+    inboxRef.current = [];
+    messagesRef.current = {};
+    draftsRef.current = [];
+    selectedIdRef.current = null;
+    prefOverlayRef.current = {};
+    loadedThreadsRef.current.clear();
+    olderBusyRef.current.clear();
+    inboxDigestRef.current = null;
+    groupedRef.current = [];
+    groupedInboxRef.current = null;
+    openedAtRef.current = {};
+    ackStampRef.current = {};
+    lastFullRef.current = 0;
+    reuseHintRef.current = undefined;
+    setInbox([]);
+    setMessagesByThread({});
+    setDrafts([]);
+    setSelectedId(null);
+    setOpeningId(null);
+    setRecipeSeed(null);
+    setPrefOverlay({});
+    setHasOlderByThread({});
+    setThreadError({});
+    refreshAgain.current = true;
+    await refresh();
+  }, [refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -360,6 +432,20 @@ export function ConsoleApp() {
       window.clearTimeout(timer);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchUiPrefs()
+      .then((prefs) => {
+        if (!cancelled) {
+          setSortMode(prefs.inbox_sort);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (nav === "engine") {
@@ -451,8 +537,9 @@ export function ConsoleApp() {
         applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
         prefOverlay,
       ),
+      sortMode,
     );
-  }, [inbox, drafts, prefOverlay]);
+  }, [inbox, drafts, prefOverlay, sortMode]);
   const threads = useMemo(
     () => overlayThreadMessages(listThreads, messagesByThread),
     [listThreads, messagesByThread],
@@ -544,6 +631,63 @@ export function ConsoleApp() {
     (thread: InboxThread, pinned: boolean) => persistPrefs(thread, { pinned }),
     [persistPrefs],
   );
+  const changeSortMode = useCallback((mode: InboxSortMode) => {
+    setSortMode(mode);
+    void saveUiPrefs({ inbox_sort: mode }).catch(() => undefined);
+  }, []);
+  const runSelectedWork = useCallback(
+    async (thread: InboxThread) => {
+      if (!thread.work?.id) {
+        return;
+      }
+      try {
+        await runWorkItem(thread.work.id);
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : translate("error.cannotStartWork"));
+      }
+    },
+    [refresh],
+  );
+  const dismissSelectedWork = useCallback(
+    async (thread: InboxThread) => {
+      if (!thread.work?.id) {
+        return;
+      }
+      try {
+        await dismissWorkItem(thread.work.id);
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : translate("error.cannotDismissWork"));
+      }
+    },
+    [refresh],
+  );
+  const bindSelectedRecipe = useCallback((thread: InboxThread) => {
+    setRecipeSeed({
+      thread_id: thread.id,
+      source: thread.source || thread.channel,
+      title: threadTitle(thread),
+    });
+    setNav("recipes");
+  }, []);
+  const consumeRecipeSeed = useCallback(() => {
+    setRecipeSeed(null);
+  }, []);
+  const recipeSources = useMemo(
+    () =>
+      [
+        ...new Map(
+          (engine?.installations ?? []).map((item) => [
+            item.channel ?? item.connector_type,
+            item.channel_label ?? item.label,
+          ]),
+        ).entries(),
+      ].map(([id, label]) => ({ id, label })),
+    [engine],
+  );
 
   return (
     <div className="shell">
@@ -552,24 +696,33 @@ export function ConsoleApp() {
         <div className="titlebar-brand" title="Regenic">
           <BrandBadge />
         </div>
-        <div className="search">Search (soon)</div>
-        <EngineChip state={chip} />
-        {host && host.memory.kind !== "ok" ? (
-          <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
-        ) : null}
-        <span className="chip">{listThreads.length} current work</span>
+        <div className="search">{t("chrome.searchSoon")}</div>
+        <div className="titlebar-meta">
+          <EngineChip state={chip} />
+          {host && host.memory.kind !== "ok" ? (
+            <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
+          ) : null}
+          <span className="chip">{t("chrome.currentWorkCount", { count: listThreads.length })}</span>
+        </div>
       </header>
       <nav className="rail" aria-label="Main">
         <div className="rail-top">
           <RailButton
-            label="Current work"
+            label={t("nav.inbox")}
             active={nav === "inbox"}
             onClick={() => setNav("inbox")}
           >
             <InboxIcon />
           </RailButton>
           <RailButton
-            label="Engine"
+            label={t("nav.recipes")}
+            active={nav === "recipes"}
+            onClick={() => setNav("recipes")}
+          >
+            <RecipesIcon />
+          </RailButton>
+          <RailButton
+            label={t("nav.engine")}
             active={nav === "engine"}
             onClick={() => setNav("engine")}
           >
@@ -578,7 +731,7 @@ export function ConsoleApp() {
         </div>
         <div className="rail-bottom">
           <RailButton
-            label="Settings"
+            label={t("nav.settings")}
             active={nav === "settings"}
             onClick={() => setNav("settings")}
           >
@@ -609,6 +762,24 @@ export function ConsoleApp() {
             onRefresh={refresh}
             onRename={renameThread}
             onPin={pinThread}
+            sortMode={sortMode}
+            onSortMode={changeSortMode}
+            onRunWork={runSelectedWork}
+            onDismissWork={dismissSelectedWork}
+            onBindRecipe={bindSelectedRecipe}
+          />
+        ) : null}
+        {nav === "recipes" ? (
+          <RecipesPage
+            sources={recipeSources}
+            conversations={listThreads.map((thread) => ({
+              id: thread.id,
+              label: threadTitle(thread),
+              source: thread.source || thread.channel,
+            }))}
+            seed={recipeSeed}
+            onSeedConsumed={consumeRecipeSeed}
+            onBound={() => setNav("inbox")}
           />
         ) : null}
         {nav === "engine" ? (
@@ -619,7 +790,9 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
-        {nav === "settings" ? <SettingsPage onChanged={refresh} /> : null}
+        {nav === "settings" ? (
+          <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
+        ) : null}
       </div>
     </div>
   );

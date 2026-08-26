@@ -64,25 +64,35 @@ describe("arrangeMessage", () => {
     assert.deepEqual(decision.reason_codes, ["thread_reply_noise"]);
   });
 
-  it("keeps a thread status marker in current work", () => {
+  it("keeps a task record in current work", () => {
+    const decision = arrangeMessage({
+      event: event({ source: "feishu" }),
+      type: "task",
+      text: "Approve travel",
+    });
+    assert.equal(decision.disposition, "current_work");
+    assert.deepEqual(decision.reason_codes, ["task"]);
+  });
+
+  it("keeps a thread status marker out of current work", () => {
     const decision = arrangeMessage({
       event: event({ source: "dsh" }),
       type: "thread_status",
       kind: "system",
       text: "",
     });
-    assert.equal(decision.disposition, "current_work");
+    assert.equal(decision.disposition, "outside_current_work");
     assert.deepEqual(decision.reason_codes, ["thread_status"]);
   });
 
-  it("keeps a short assistant reply in current work", () => {
+  it("keeps a short assistant reply out of current work", () => {
     const decision = arrangeMessage({
       event: event({ source: "dsh" }),
       kind: "assistant",
       text: "pong",
     });
-    assert.equal(decision.disposition, "current_work");
-    assert.deepEqual(decision.reason_codes, ["assistant_reply"]);
+    assert.equal(decision.disposition, "outside_current_work");
+    assert.deepEqual(decision.reason_codes, ["assistant_not_current_work"]);
   });
 
   it("holds short unclear messages as pending", () => {

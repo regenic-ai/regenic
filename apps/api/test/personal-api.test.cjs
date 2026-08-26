@@ -4,7 +4,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
-const { createHttpApp } = require("../dist/http-app");
+const { createHttpApp, listenHttpApp } = require("../dist/http-app");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
@@ -15,6 +15,7 @@ const {
   dropDshPromptStore,
   questionPromptId,
 } = require("@regenic/dsh-connector");
+const { createPurrWhatsAppImport } = require("@regenic/whatsapp-personal");
 
 const roots = [];
 const previousEnv = {};
@@ -297,6 +298,47 @@ async function waitUntil(label, probe, timeoutMs = 4000) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
+async function seedHostedWork(authority, input) {
+  const now = "2026-08-25T00:00:00.000Z";
+  await authority.putRecipe({
+    id: input.recipeId,
+    org_id: "local-owner",
+    name: "Seed recipe",
+    match: { record_class: "task", source: "feishu" },
+    executor_type: "dsh",
+    executor_config: {},
+    can_write_back: true,
+    enabled: true,
+    created_at: now,
+    updated_at: now,
+  });
+  await authority.putWorkItem({
+    id: input.workId,
+    org_id: "local-owner",
+    thread_id: input.threadId,
+    unit_key: input.eventId,
+    head_event_id: input.eventId,
+    record_class: "task",
+    thread_facet: "ticket",
+    status: input.status,
+    recipe_id: input.recipeId,
+    created_at: now,
+    updated_at: now,
+  });
+  await authority.putWorkRun({
+    id: input.runId,
+    org_id: "local-owner",
+    work_item_id: input.workId,
+    recipe_id: input.recipeId,
+    executor_type: "dsh",
+    external_run_id: "dsh:seed-sysout",
+    agent_thread_id: "dsh:seed-sysout",
+    status: "running",
+    created_at: now,
+    updated_at: now,
+  });
+}
+
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
   setEnv({
     REGENIC_DATABASE: database,
@@ -309,7 +351,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     ...extraEnv,
   });
   const app = await createHttpApp({ logger: false });
-  await app.listen(0, "127.0.0.1");
+  await listenHttpApp(app, 0, "127.0.0.1");
   return { app, origin: await app.getUrl() };
 }
 
@@ -336,13 +378,70 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("clears local store data and keeps connectors and recipes", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const created = await (
+        await fetch(`${origin}/v1/me/recipes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "Keep me",
+            match: { record_class: "task" },
+            executor_type: "dsh",
+            can_write_back: false,
+            enabled: true,
+          }),
+        })
+      ).json();
+      assert.equal(created.name, "Keep me");
+
+      const before = await (await fetch(`${origin}/v1/me/store`)).json();
+      assert.ok(before.events >= 1);
+      assert.ok(before.connectors >= 1);
+      assert.equal(before.recipes, 1);
+
+      const cleared = await (
+        await fetch(`${origin}/v1/me/store/clear`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).json();
+      assert.ok(cleared.cleared.events >= 1);
+      assert.equal(cleared.kept.recipes, 1);
+      assert.ok(cleared.kept.connectors >= 1);
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const after = await (await fetch(`${origin}/v1/me/store`)).json();
+      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+      assert.equal(inbox.length, 0);
+      assert.equal(after.events, 0);
+      assert.equal(after.conversations, 0);
+      assert.equal(after.work_items, 0);
+      assert.equal(after.recipes, 1);
+      assert.ok(after.connectors >= 1);
+      assert.equal(engine.inbox_count, 0);
+      assert.equal(engine.installations[0].id, "slack-1");
+      assert.equal(recipes[0].name, "Keep me");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("returns inbox deltas, heads, and a light engine view", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
     const service = new IngestionService(
       new FsBlobStore(blobRoot),
-      new SqliteAuthorityStore(database),
+      authority,
     );
     await service.ingest({
       schema_version: INGEST_SCHEMA_VERSION,
@@ -359,7 +458,7 @@ describe("personal /v1/me", () => {
           occurred_at: "2026-08-21T00:00:00.000Z",
           actor_id: "user",
           scope_id: "session-x",
-          text: "first",
+          text: "first prompt for the desk",
         }),
       ],
     });
@@ -388,14 +487,15 @@ describe("personal /v1/me", () => {
           occurred_at: "2026-08-21T00:02:00.000Z",
           actor_id: "user",
           scope_id: "session-y",
-          text: "other thread",
+          text: "other thread stays current",
         }),
       ],
     });
+    authority.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
       const all = await (await fetch(`${origin}/v1/me/inbox`)).json();
-      assert.ok(all.length >= 3);
+      assert.ok(all.length >= 2);
       const first = [...all].sort((left, right) => {
         if (left.event.ingested_at === right.event.ingested_at) {
           return left.event.id < right.event.id ? -1 : 1;
@@ -447,7 +547,7 @@ describe("personal /v1/me", () => {
         )
       ).json();
       assert.equal(older.length, 1);
-      assert.equal(older[0].body_text, "first");
+      assert.equal(older[0].body_text, "first prompt for the desk");
       for (let index = 1; index < one.length; index += 1) {
         assert.ok(
           one[index - 1].event.occurred_at <= one[index].event.occurred_at,
@@ -516,6 +616,162 @@ describe("personal /v1/me", () => {
         ["session-x:49", "assistant", "pong"],
         ["session-x:7", "user", "只用一句话回复：pong"],
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("imports an explicit WhatsApp Personal Export v1 file without egress", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const imported = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: `${JSON.stringify({
+            schema_version: "1.0",
+            kind: "whatsapp_personal_message",
+            message_id: "message-1",
+            chat_id: "chat-1",
+            chat_name: "Family",
+            sender_id: "contact-1",
+            sender_name: "Alex",
+            direction: "incoming",
+            sent_at: "2026-08-21T00:00:00.000Z",
+            text: "Please call me.",
+          })}\n`,
+        }),
+      });
+      const result = await imported.json();
+      assert.equal(imported.status, 201, JSON.stringify(result));
+      assert.equal(result.accepted_count, 1);
+      assert.equal(result.invalid_line_count, 0);
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const item = inbox.find((entry) => entry.event.source === "whatsapp-personal");
+      assert.equal(item.body_text, "Please call me.");
+      assert.equal(item.can_send, false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("imports a user-selected Purr WA CSV without egress", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const content = [
+      "datetime,sender,fromMe,type,text",
+      '"21/08/2026 14:30","Alex",0,chat,"Please call me."',
+      '"21/08/2026 14:31","You",1,chat,"Calling now."',
+    ].join("\n");
+    const fileName = "Family_15550001_c_us.csv";
+    const converted = createPurrWhatsAppImport({
+      data: content,
+      file_name: fileName,
+      org_id: "local-owner",
+      local_principal_id: "local-owner",
+      received_at: "2026-08-21T15:00:00.000Z",
+    });
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      ...converted.batches[0],
+      records: converted.batches[0].records.map((record) => ({
+        ...record,
+        content: record.content.filter((part) => part.role === "body"),
+      })),
+    });
+    authority.close();
+
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const imported = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content,
+          file_name: fileName,
+        }),
+      });
+      const result = await imported.json();
+      assert.equal(imported.status, 201, JSON.stringify(result));
+      assert.equal(result.accepted_count, 2);
+      assert.equal(result.invalid_line_count, 0);
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const items = inbox.filter(
+        (entry) => entry.event.source === "whatsapp-personal",
+      );
+      assert.equal(items.length, 2);
+      assert.equal(items.every((item) => item.can_send === false), true);
+      const incoming = items.find((item) => item.direction === "inbound");
+      const outgoing = items.find((item) => item.direction === "outbound");
+      assert.equal(incoming.kind, "user");
+      assert.equal(incoming.actor_label, "Alex");
+      assert.equal(incoming.conversation_label, "Family");
+      assert.equal(incoming.conversation_kind, "direct");
+      assert.equal(outgoing.kind, "user");
+      assert.equal(outgoing.actor_label, null);
+
+      const replayed = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content,
+          file_name: fileName,
+        }),
+      });
+      const replayedResult = await replayed.json();
+      assert.equal(replayed.status, 201, JSON.stringify(replayedResult));
+      assert.equal(replayedResult.accepted_count, 0);
+      assert.equal(replayedResult.duplicate_count, 2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects WhatsApp import content larger than 20 MiB", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const response = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "x".repeat(20 * 1024 * 1024 + 1) }),
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 413, JSON.stringify(body));
+      assert.equal(body.error.code, "invalid_config");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a Purr CSV file with no valid message batch", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const response = await fetch(`${origin}/v1/me/imports/whatsapp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "time,sender,fromMe,type,text\n21/08/2026 14:30,Alex,0,chat,Hello",
+          file_name: "Family_15550001_c_us.csv",
+        }),
+      });
+      const body = await response.json();
+
+      assert.equal(response.status, 400, JSON.stringify(body));
+      assert.equal(body.error.code, "invalid_config");
     } finally {
       await app.close();
     }
@@ -870,7 +1126,7 @@ describe("personal /v1/me", () => {
           occurred_at: "2026-08-24T12:00:00.000Z",
           actor_id: "user",
           scope_id: "session-unread",
-          text: "ack",
+          text: "Working through the decision now",
         }),
       ],
     });
@@ -927,6 +1183,10 @@ describe("personal /v1/me", () => {
         prompt_id: promptId,
         presentation: "choice",
         questions: [{ id: "go", prompt: "Continue?", options: [{ label: "Yes" }] }],
+      });
+      await waitUntil("dsh sess-a after install", async () => {
+        const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+        return heads.some((item) => item.thread_id === "dsh:sess-a");
       });
       const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.match(engine.inbox_digest, /&s=/);
@@ -1063,12 +1323,40 @@ describe("personal /v1/me", () => {
       assert.equal(health.sqlite, "up");
       assert.equal(health.status, "ok");
       assert.equal(health.postgres, undefined);
+      assert.equal(health.dsh, undefined);
       assert.equal(typeof health.memory.rss_bytes, "number");
       assert.ok(health.memory.rss_bytes > 0);
       assert.equal(typeof engine.memory.rss_bytes, "number");
       assert.ok(engine.memory.rss_bytes > 0);
     } finally {
       await app.close();
+    }
+  });
+
+  it("answers /health without waiting on DSH", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const hanging = createServer(() => undefined);
+    await new Promise((resolve) => {
+      hanging.listen(0, "127.0.0.1", resolve);
+    });
+    const dshOrigin = `http://127.0.0.1:${hanging.address().port}`;
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_DSH_BASE_URL: dshOrigin,
+    });
+    try {
+      const started = Date.now();
+      const health = await (await fetch(`${origin}/health`)).json();
+      assert.ok(Date.now() - started < 500);
+      assert.equal(health.mode, "personal");
+      assert.equal(health.sqlite, "up");
+      assert.equal(health.status, "ok");
+      assert.equal(health.dsh, undefined);
+    } finally {
+      await app.close();
+      hanging.close();
     }
   });
 
@@ -1108,6 +1396,13 @@ describe("personal /v1/me", () => {
       });
       assert.equal(missing.status, 404);
 
+      const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const body = await synced.json();
+      assert.equal(synced.status, 201);
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const slackItem = inbox.find(
         (item) => item.event.external_id === "C123:1710000000.000100",
@@ -1116,14 +1411,6 @@ describe("personal /v1/me", () => {
       assert.equal(slackItem.can_send, false);
       assert.equal(slackItem.await_reply, false);
       assert.equal(slackItem.list_title, "conversation");
-
-      const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      const body = await synced.json();
-      assert.equal(synced.status, 201);
       assert.equal(body.installation_id, "slack-1");
       assert.equal(body.last_run_status, "completed");
       assert.equal(body.installation.label, "C123");
@@ -1175,7 +1462,7 @@ describe("personal /v1/me", () => {
       assert.equal(installation.label, "desk-1");
       assert.equal(JSON.stringify(installation).includes("credentials"), false);
 
-      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.equal(
         engine.catalog.find((item) => item.connector_type === "dsh-session")
           .installed,
@@ -1231,7 +1518,7 @@ describe("personal /v1/me", () => {
         { method: "DELETE" },
       );
       assert.equal(removed.status, 200);
-      const after = await (await fetch(`${origin}/v1/me/engine`)).json();
+      const after = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.equal(
         after.installations.some((item) => item.id === installation.id),
         false,
@@ -1267,6 +1554,13 @@ describe("personal /v1/me", () => {
       assert.equal(installation.label, "All sessions");
       assert.equal(JSON.stringify(installation).includes("credentials"), false);
 
+      await waitUntil("dsh sessions after install", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+        return (
+          inbox.some((item) => item.event.external_id === "sess-a:1") &&
+          inbox.some((item) => item.event.external_id === "sess-b:1")
+        );
+      });
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const sessionA = inbox.find((item) => item.event.external_id === "sess-a:1");
       const sessionB = inbox.find((item) => item.event.external_id === "sess-b:1");
@@ -1363,6 +1657,10 @@ describe("personal /v1/me", () => {
       assert.equal(createdBody.can_reply, true);
       assert.equal(createdBody.channel, "dsh");
       assert.equal(createdBody.channel_label, "DSH");
+      await waitUntil("dsh sess-a after install", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+        return inbox.some((item) => item.event.external_id === "sess-a:1");
+      });
 
       const slackOnly = await fetch(`${origin}/v1/me/conversations`, {
         method: "POST",
@@ -1685,6 +1983,271 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("opens a task work item even when a later utterance is the list head", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "buried-task",
+      received_at: "2026-08-25T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_travel:task-1",
+          occurred_at: "2026-08-25T00:00:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_travel",
+          type: "task",
+          text: "Approve travel",
+        }),
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_travel:comment-2",
+          occurred_at: "2026-08-25T00:05:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_travel",
+          text: "Please confirm the release.",
+        }),
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      await waitUntil("buried task opens a work item", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+        const row = inbox.find((item) => item.thread_id === "feishu:oc_travel");
+        return row?.work?.status === "open" && row?.event?.external_id === "oc_travel:comment-2";
+      });
+      const inbox = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      const row = inbox.find((item) => item.thread_id === "feishu:oc_travel");
+      assert.equal(row.event.external_id, "oc_travel:comment-2");
+      assert.equal(row.work.status, "open");
+      assert.equal(row.record_class, "task");
+      assert.equal(row.thread_facet, "ticket");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("dismisses a work item without writing back or faking exit", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    const ingested = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "dismiss-task",
+      received_at: "2026-08-25T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_dismiss:task-1",
+          occurred_at: "2026-08-25T00:00:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_dismiss",
+          type: "task",
+          text: "Approve travel",
+        }),
+      ],
+    });
+    await seedHostedWork(authority, {
+      workId: "work-dismiss-1",
+      runId: "run-dismiss-1",
+      recipeId: "recipe-dismiss",
+      threadId: "feishu:oc_dismiss",
+      eventId: ingested.records[0].event_id,
+      status: "running",
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const workId = "work-dismiss-1";
+      const dismissed = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.ok(dismissed.ok, `dismiss ${dismissed.status}`);
+      const body = await dismissed.json();
+      assert.equal(body.work_item.status, "skipped");
+      assert.equal(body.work_item.id, workId);
+      assert.equal(body.run.status, "cancelled");
+      assert.notEqual(body.run.status, "failed");
+      const aliased = await (
+        await fetch(`${origin}/v1/me/work-items/${workId}/complete`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).json();
+      assert.equal(aliased.work_item.status, "skipped");
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const texts = inbox
+        .filter((item) => item.thread_id === "feishu:oc_dismiss")
+        .map((item) => item.body_text ?? "");
+      assert.equal(
+        texts.some((text) => text === "Done" || /work-back/.test(text)),
+        false,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("starts a new inferior after dismiss leaves a leftover active run", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+    const ingested = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "leftover-run",
+      received_at: "2026-08-25T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_leftover:task-1",
+          occurred_at: "2026-08-25T00:00:00.000Z",
+          actor_id: "u1",
+          scope_id: "oc_leftover",
+          type: "task",
+          text: "Approve leftover",
+        }),
+      ],
+    });
+    await seedHostedWork(authority, {
+      workId: "work-leftover-1",
+      runId: "run-leftover-1",
+      recipeId: "recipe-leftover",
+      threadId: "feishu:oc_leftover",
+      eventId: ingested.records[0].event_id,
+      status: "skipped",
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const started = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(started.status, 501);
+    } finally {
+      await app.close();
+    }
+    const store = new SqliteAuthorityStore(database);
+    try {
+      const leftover = await store.getWorkRun("local-owner", "run-leftover-1");
+      assert.equal(leftover.status, "cancelled");
+      const item = await store.getWorkItem("local-owner", "work-leftover-1");
+      assert.equal(item.status, "open");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("binds a recipe, remembers inbox sort, and exposes executor catalog", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const executors = await (await fetch(`${origin}/v1/me/executors`)).json();
+      assert.equal(executors[0].executor_type, "dsh");
+      assert.equal(executors[0].source, "dsh");
+      assert.equal(executors[0].attach, "absentee");
+      assert.equal(executors[0].fields[0].key, "skill");
+      assert.equal(executors[0].fields[1].key, "prompt");
+      assert.equal(executors[0].fields[1].kind, "textarea");
+      const emptyMatch = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Too broad",
+          match: {},
+          executor_type: "dsh",
+        }),
+      });
+      assert.equal(emptyMatch.status, 400);
+      const sourceOnly = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "All chat",
+          match: { source: "feishu" },
+          executor_type: "dsh",
+        }),
+      });
+      assert.equal(sourceOnly.status, 400);
+      const missingComplete = await fetch(
+        `${origin}/v1/me/work-items/work-missing/complete`,
+        { method: "POST" },
+      );
+      assert.equal(missingComplete.status, 404);
+      const missingDismiss = await fetch(
+        `${origin}/v1/me/work-items/work-missing/dismiss`,
+        { method: "POST" },
+      );
+      assert.equal(missingDismiss.status, 404);
+      const created = await (
+        await fetch(`${origin}/v1/me/recipes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "Feishu tasks",
+            match: { record_class: "task", source: "feishu" },
+            executor_type: "dsh",
+            executor_config: { skill: "review", prompt: "Reply with a decision." },
+            can_write_back: true,
+          }),
+        })
+      ).json();
+      assert.equal(created.executor_type, "dsh");
+      assert.equal(created.can_write_back, true);
+      assert.equal(created.executor_config.skill, "review");
+      assert.equal(created.executor_config.prompt, "Reply with a decision.");
+      const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+      assert.equal(recipes.length, 1);
+      assert.equal(recipes[0].executor_config.prompt, "Reply with a decision.");
+      const prefs = await (
+        await fetch(`${origin}/v1/me/prefs`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ inbox_sort: "attention" }),
+        })
+      ).json();
+      assert.equal(prefs.inbox_sort, "attention");
+      const remembered = await (await fetch(`${origin}/v1/me/prefs`)).json();
+      assert.equal(remembered.inbox_sort, "attention");
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      assert.ok(inbox[0].record_class);
+      assert.ok(inbox[0].thread_facet);
+      assert.ok(inbox[0].attention);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("returns 503 for inbox when the personal kernel is not configured", async () => {
     setEnv({
       REGENIC_DATABASE: undefined,
@@ -1750,6 +2313,25 @@ describe("inbox body decode", () => {
     );
     assert.equal(meta.attachments[0].data_base64, undefined);
     assert.equal(meta.attachments[0].filename, "shot.png");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Buffer.alloc(2_000_000, 1)]);
+    const large = Buffer.from(
+      JSON.stringify([
+        {
+          role: "attachment",
+          media_type: "application/octet-stream",
+          source_filename: "image.png",
+          bytes_base64: png.toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const preview = decodeInboxBody(
+      large,
+      "application/vnd.regenic.content-parts+json",
+      "preview",
+    );
+    assert.equal(preview.attachments[0].media_type, "image/png");
+    assert.equal(preview.attachments[0].data_base64, png.toString("base64"));
   });
 });
 

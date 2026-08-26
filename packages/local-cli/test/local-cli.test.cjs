@@ -344,6 +344,28 @@ describe("regenic-local", () => {
     assert.deepEqual(imported.errors, []);
   });
 
+  it("imports and deduplicates an original-name Purr WA CSV", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const file = join(root, "Family_15550001_c_us.csv");
+    await writeFile(file, [
+      "datetime,sender,fromMe,type,text",
+      '"21/08/2026 14:30","Alex",0,chat,"Please confirm the plan."',
+    ].join("\n"));
+    const args = [
+      "whatsapp-import", "--database", database, "--blob-root", blobRoot,
+      "--file", file, "--org", "local-owner", "--local-principal", "local-user",
+    ];
+
+    const imported = await run(args);
+    const replayed = await run(args);
+
+    assert.equal(imported.batches[0].records[0].status, "accepted");
+    assert.equal(replayed.batches[0].records[0].status, "duplicate");
+    assert.deepEqual(imported.errors, []);
+  });
+
   it("lists only current-work messages in the inbox", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

@@ -9,7 +9,7 @@
 - **English:** [../en/CONNECTOR.md](../en/CONNECTOR.md)
 - **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) ·
   [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) ·
-  RFC 0004、0005、0006
+  RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
 - **状态：** Phase 1
 
 ## 连接器是什么
@@ -55,7 +55,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 ## 消息格式
 
-收发形状由 `@regenic/domain` 的 `message-contract` 定义。
+连接器停在 L0：只翻译本渠道的 wire。交出去的是 L1 信封（`IngestRecord`：身份、时间、作者、正文、幂等）和 L2 封闭 `record_class`（`utterance` / `task` / `status` / `prompt`，由 `type` 映射）。L3 发言者只写在 `utterance` 上。L4 线程面由内核投影，L5 WorkItem 由策略开单，L6 执行器另挂。见[消息编排 · 分层](MESSAGE_ORCHESTRATION.md)与 [RFC 0009](rfcs/0009-work-orchestration.md)。不得在安装上标注「人聊 / Agent」。
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
@@ -235,11 +235,11 @@ Slack 真人映射为 `user`。
 
 | 原生消息 | `kind` |
 | --- | --- |
-| `sender_type=user`，`msg_type` 为 `text` 或 `post` | `user` |
-| `sender_type=app`（或 `bot`），`msg_type` 为 `text` 或 `post` | `assistant` |
-| 图片、文件、卡片和其他 `msg_type` | 丢弃 |
+| `sender_type=user`，`msg_type` 为 `text` / `post` / `image` / `file` / `audio` / `media` | `user` |
+| `sender_type=app`（或 `bot`），同上 | `assistant` |
+| 卡片和其他 `msg_type` | 丢弃 |
 
-线程 id：`feishu:<chat_id>`。登录仍用 `lark-cli`。拉历史用进程内 HTTP，带钥匙串里的 `user_access_token`；读不到 token 再回退 `lark-cli api --as user`。新会话和还在从旧往新翻的会话，先倒序取最近一页，再排队回填更早的。每页最多 50 条。会话列表缓存约 30 秒。每条记录带上群名或单聊对方、`group` / `direct`、以及发送者姓名。群里 `@` 用消息自带的 `mentions[]` 写成可读人名；`@所有人` 也在这一步翻译。搜不到的发送者再走 `contact +search-user`。表单用 `lark-cli im +chat-list --types=p2p,group` 列出群和单聊，不收 token，也不用手贴 `oc_…`。默认两种都同步。安装后可以改范围。
+线程 id：`feishu:<chat_id>`。登录仍用 `lark-cli`。拉历史用进程内 HTTP，带钥匙串里的 `user_access_token`；读不到 token 再回退 `lark-cli api --as user`。图片和文件先走 `im/v1/messages/:id/resources/:file_key`；用户 token 的 HTTP 常常返回 JSON 而不是文件字节，这时回退到 `lark-cli im +messages-resources-download`。富文本 post 里的 `img` 一并收下。已同步过的会话会再倒序拉最近一页，补上以前丢掉的媒体；若当时只落下空占位（只能看见 `image.png` 文件名），再拉一次并用 `revise` 写入真实字节。Inbox 预览图片上限 8MB，`octet-stream` 也会按魔数认成 PNG/JPEG/GIF/WebP。新会话和还在从旧往新翻的会话，先倒序取最近一页，再排队回填更早的。每页最多 50 条。会话列表缓存约 30 秒。每条记录带上群名或单聊对方、`group` / `direct`、以及发送者姓名。群里 `@` 用消息自带的 `mentions[]` 写成可读人名；`@所有人` 也在这一步翻译。搜不到的发送者再走 `contact +search-user`。表单用 `lark-cli im +chat-list --types=p2p,group` 列出群和单聊，不收 token，也不用手贴 `oc_…`。默认两种都同步。安装后可以改范围。
 
 ## 安装前置
 

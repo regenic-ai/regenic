@@ -1,7 +1,7 @@
 # 产品
 
 - **English:** [../en/PRODUCT.md](../en/PRODUCT.md)
-- **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) · [路线图](ROADMAP.md) · [从个人到组织](rfcs/personal-to-org.md) · RFC 0001–0007
+- **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) · [路线图](ROADMAP.md) · [从个人到组织](rfcs/personal-to-org.md) · RFC 0001–0009
 
 ## 概述
 
@@ -67,5 +67,7 @@ Regenic 位于已有对话与 Agent 工具之下，作为证据与加工层。�
 | 协作与交接 | 0003 |
 | 控制台与 Agent 同一套 API | 0004 |
 | 权限、蒸馏不抬权、发送权 | 0006 |
+| 活 Prompt / 已读 | 0008 |
+| 记录类 / 线程面 / 托管执行 | 0009 |
 
 先交付个人编排，再做组织。见 [路线图](ROADMAP.md)。已接纳的 RFC 是共用目标模型。

@@ -122,4 +122,15 @@ describe("FsBlobStore", () => {
     assert.deepEqual(found.get(firstHash), new Uint8Array(first));
     assert.equal(found.has(secondHash), false);
   });
+
+  it("clears every stored blob and keeps the root usable", async () => {
+    const { store } = await createStore();
+    const bytes = Buffer.from("wipe me", "utf8");
+    const hash = digest(bytes);
+    await store.put(hash, bytes, "text/plain");
+    await store.clear();
+    assert.equal(await store.exists(hash), false);
+    await store.put(hash, bytes, "text/plain");
+    assert.equal(await store.exists(hash), true);
+  });
 });

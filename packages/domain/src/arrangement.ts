@@ -50,7 +50,11 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
   }
 
   if (input.type === "thread_status") {
-    return decision(input, "current_work", ["thread_status"], 0.65, decidedAt);
+    return decision(input, "outside_current_work", ["thread_status"], 0.2, decidedAt);
+  }
+
+  if (input.type === "task") {
+    return decision(input, "current_work", ["task"], 0.88, decidedAt);
   }
 
   if (isNoise(text)) {
@@ -58,7 +62,13 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
   }
 
   if (input.kind === "assistant") {
-    return decision(input, "current_work", ["assistant_reply"], 0.7, decidedAt);
+    return decision(
+      input,
+      "outside_current_work",
+      ["assistant_not_current_work"],
+      0.25,
+      decidedAt,
+    );
   }
 
   if (isActionable(text)) {

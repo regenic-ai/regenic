@@ -16,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@regenic/domain": "workspace:*"
+    "@regenic/domain": "workspace:*",
+    "csv-parse": "7.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

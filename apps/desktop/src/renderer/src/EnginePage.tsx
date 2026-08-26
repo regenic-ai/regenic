@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
+  importWhatsAppExport,
   installConnector,
   setConnectorStatus,
   syncConnector,
@@ -17,7 +18,12 @@ import {
   pullStatusLabel,
 } from "./format";
 import type { HostStats } from "../../shared/host-watch.ts";
+import { useLocale } from "./LocaleContext";
 import type { PersonalEngineView } from "./types";
+import {
+  importWhatsAppFiles,
+  whatsAppImportSummary,
+} from "./whatsapp-import";
 
 export function EnginePage({
   engine,
@@ -30,10 +36,14 @@ export function EnginePage({
   error: string | null;
   onChanged: () => Promise<void>;
 }) {
+  const { t } = useLocale();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
   const [installingType, setInstallingType] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [whatsAppStatus, setWhatsAppStatus] = useState<string | null>(null);
+  const [importingWhatsApp, setImportingWhatsApp] = useState(false);
+  const whatsAppFileRef = useRef<HTMLInputElement>(null);
 
   const runAction = async (id: string, action: () => Promise<void>) => {
     setBusyId(id);
@@ -44,7 +54,7 @@ export function EnginePage({
       return true;
     } catch (caught) {
       setActionError(
-        caught instanceof Error ? connectorActionError(caught.message) : "Action failed",
+        caught instanceof Error ? connectorActionError(caught.message) : t("engine.actionFailed"),
       );
       return false;
     } finally {
@@ -54,56 +64,94 @@ export function EnginePage({
 
   if (error || !engine) {
     return (
-      <div className="page">
-        <h1>Engine</h1>
-        <p className="muted">{error ?? "Kernel is not connected."}</p>
+      <div className="page page-wide">
+        <header className="page-hero">
+          <p className="page-eyebrow">{t("engine.eyebrow")}</p>
+          <h1>{t("engine.title")}</h1>
+          <p className="page-lead">{error ?? t("engine.disconnected")}</p>
+        </header>
       </div>
     );
   }
 
   const syncable = engine.installations.filter((item) => item.syncable);
+  const pullCopy = [
+    pullStatusLabel(engine.pull),
+    engine.pull?.last_tick_at ? formatChatTime(engine.pull.last_tick_at) : "",
+    engine.pull?.last_accepted_count ? `+${engine.pull.last_accepted_count}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const networkCopy = [
+    networkWatchLabel(engine.pull?.network?.kind),
+    engine.pull?.network?.kind !== "ok" && engine.pull?.network?.proxy
+      ? engine.pull.network.proxy
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div className="page">
-      <h1>Engine</h1>
-      <p className="muted">
-        Local authority store and connectors. Enabled connectors pull while the kernel is running. Use Sync only to catch up after a miss.
-      </p>
-      <section className="card">
-        <h2>Kernel</h2>
-        <div className="kv">
-          <span>Status</span>
-          <strong>{engine.kernel === "running" ? "Running" : "Stopped"}</strong>
-          <span>org</span>
-          <strong>{engine.org_id}</strong>
-          <span>Database</span>
-          <strong>
-            <code>{engine.database_path ?? "—"}</code>
-          </strong>
-          <span>Current work</span>
-          <strong>{engine.inbox_count}</strong>
-          <span>Live pull</span>
-          <strong>
-            {pullStatusLabel(engine.pull)}
-            {engine.pull?.last_tick_at
-              ? ` · ${formatChatTime(engine.pull.last_tick_at)}`
-              : ""}
-            {engine.pull?.last_accepted_count
-              ? ` · +${engine.pull.last_accepted_count}`
-              : ""}
-          </strong>
-          <span>Network</span>
-          <strong>
-            {networkWatchLabel(engine.pull?.network?.kind)}
-            {engine.pull?.network?.kind !== "ok" && engine.pull?.network?.proxy
-              ? ` · ${engine.pull.network.proxy}`
-              : ""}
-          </strong>
-          <span>Disk</span>
-          <strong>{host ? diskWatchCopy(host.disk) : "—"}</strong>
-          <span>Memory</span>
-          <strong>{host ? memoryWatchCopy(host.memory) : "—"}</strong>
+    <div className="page page-wide">
+      <header className="page-hero">
+        <p className="page-eyebrow">{t("engine.eyebrow")}</p>
+        <h1>{t("engine.title")}</h1>
+        <p className="page-lead">{t("engine.lead")}</p>
+      </header>
+      <section className="card engine-kernel">
+        <div className="card-head">
+          <h2>{t("engine.kernel")}</h2>
+          <span className={`chip ${engine.kernel === "running" ? "running" : "stopped"}`}>
+            <span className="dot" />
+            {engine.kernel === "running" ? t("engine.running") : t("engine.stopped")}
+          </span>
         </div>
+        <div className="engine-stats">
+          <EngineStat
+            label={t("engine.currentWork")}
+            value={String(engine.inbox_count)}
+            tone="ok"
+          />
+          <EngineStat
+            label={t("engine.livePull")}
+            value={pullCopy}
+            tone={
+              engine.pull?.last_error
+                ? "risk"
+                : engine.pull?.phase === "pulling" ||
+                    (engine.pull?.catching_up_count ?? 0) > 0
+                  ? "warn"
+                  : "ok"
+            }
+          />
+          <EngineStat
+            label={t("engine.network")}
+            value={networkCopy}
+            tone={watchTone(engine.pull?.network?.kind)}
+          />
+          <EngineStat
+            label={t("engine.disk")}
+            value={host ? diskWatchCopy(host.disk) : "—"}
+            tone={watchTone(host?.disk.kind)}
+          />
+          <EngineStat
+            label={t("engine.memory")}
+            value={host ? memoryWatchCopy(host.memory) : "—"}
+            tone={watchTone(host?.memory.kind)}
+          />
+        </div>
+        <dl className="engine-meta">
+          <div>
+            <dt>{t("engine.org")}</dt>
+            <dd>{engine.org_id}</dd>
+          </div>
+          <div>
+            <dt>{t("engine.database")}</dt>
+            <dd>
+              <code>{engine.database_path ?? "—"}</code>
+            </dd>
+          </div>
+        </dl>
         {engine.pull?.last_error ? (
           <p className="action-error">{engine.pull.last_error}</p>
         ) : null}
@@ -117,9 +165,73 @@ export function EnginePage({
           <p className="action-hint">{host.memory.hint}</p>
         ) : null}
       </section>
-      <section className="card">
+      <section className="card engine-import">
         <div className="card-head">
-          <h2>Connectors</h2>
+          <h2>{t("engine.whatsapp.title")}</h2>
+          <button
+            type="button"
+            className="primary"
+            disabled={importingWhatsApp}
+            onClick={() => whatsAppFileRef.current?.click()}
+          >
+            {importingWhatsApp
+              ? t("engine.whatsapp.importing")
+              : t("engine.whatsapp.import")}
+          </button>
+        </div>
+        <p className="muted">{t("engine.whatsapp.lead")}</p>
+        <input
+          ref={whatsAppFileRef}
+          type="file"
+          multiple
+          accept=".csv,.jsonl,.ndjson,text/csv,application/x-ndjson,application/json"
+          hidden
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            if (files.length === 0) {
+              return;
+            }
+            void (async () => {
+              setImportingWhatsApp(true);
+              setActionError(null);
+              setWhatsAppStatus(null);
+              try {
+                const result = await importWhatsAppFiles(
+                  files,
+                  importWhatsAppExport,
+                );
+                setWhatsAppStatus(whatsAppImportSummary(result));
+                if (result.completed_files > 0) {
+                  await onChanged();
+                }
+                if (result.failures.length > 0) {
+                  const first = result.failures[0];
+                  setActionError(
+                    t("engine.whatsapp.fileFailures", {
+                      count: result.failures.length,
+                      file: first.file_name,
+                      message: connectorActionError(first.message),
+                    }),
+                  );
+                }
+              } catch (caught) {
+                setActionError(
+                  caught instanceof Error
+                    ? connectorActionError(caught.message)
+                    : t("engine.whatsapp.failed"),
+                );
+              } finally {
+                setImportingWhatsApp(false);
+              }
+            })();
+          }}
+        />
+        {whatsAppStatus ? <p className="action-hint">{whatsAppStatus}</p> : null}
+      </section>
+      <section className="card engine-connectors">
+        <div className="card-head">
+          <h2>{t("engine.connectors")}</h2>
           {syncable.length > 1 ? (
             <button
               type="button"
@@ -138,7 +250,7 @@ export function EnginePage({
                     setActionError(
                       caught instanceof Error
                         ? connectorActionError(caught.message)
-                        : "Sync failed",
+                        : t("engine.syncFailed"),
                     );
                   } finally {
                     setSyncingAll(false);
@@ -146,12 +258,12 @@ export function EnginePage({
                 })();
               }}
             >
-              {syncingAll ? "Syncing…" : "Sync all"}
+              {syncingAll ? t("engine.syncing") : t("engine.syncAll")}
             </button>
           ) : null}
         </div>
         <p className="muted">
-          Install or uninstall connectors here. Credentials are read from local environment variables only.
+          {t("engine.connectorsLead")}
         </p>
         {(engine.catalog ?? []).map((kind) => (
           <ConnectorKind
@@ -192,7 +304,10 @@ export function EnginePage({
             onUninstall={(installation) => {
               if (
                 !window.confirm(
-                  `Uninstall ${connectorLabel(installation.connector_type)} “${installation.label}”? Ingested messages stay.`,
+                  t("engine.uninstallConfirm", {
+                    type: connectorLabel(installation.connector_type),
+                    name: installation.label,
+                  }),
                 )
               ) {
                 return;
@@ -207,4 +322,34 @@ export function EnginePage({
       </section>
     </div>
   );
+}
+
+function EngineStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "ok" | "warn" | "risk";
+}) {
+  return (
+    <div className={`engine-stat${tone ? ` is-${tone}` : ""}`}>
+      <span className="engine-stat-label">{label}</span>
+      <strong className="engine-stat-value">{value}</strong>
+    </div>
+  );
+}
+
+function watchTone(kind?: string): "ok" | "warn" | "risk" | undefined {
+  if (kind === "critical" || kind === "blocked") {
+    return "risk";
+  }
+  if (kind === "attention" || kind === "proxy") {
+    return "warn";
+  }
+  if (kind === "ok") {
+    return "ok";
+  }
+  return undefined;
 }

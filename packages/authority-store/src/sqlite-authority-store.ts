@@ -39,6 +39,12 @@ import type {
   SettleIngestAttempt,
   SourceIdentity,
   TombstoneEvent,
+  Recipe,
+  StoreClearResult,
+  StoreFootprint,
+  WorkItem,
+  WorkRun,
+  WorkStore,
 } from "@regenic/domain";
 import { LATEST_SCHEMA_VERSION, MIGRATIONS } from "./migrations";
 
@@ -163,7 +169,7 @@ export interface SqliteOpenOptions {
 }
 
 export class SqliteAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore
+  implements AuthorityStore, ConnectorRuntimeStore, WorkStore
 {
   private readonly database: Database.Database;
   readonly readonly: boolean;
@@ -466,6 +472,342 @@ export class SqliteAuthorityStore
       return next;
     });
     return transaction.immediate();
+  }
+
+  async summarizeStore(orgId: string): Promise<StoreFootprint> {
+    return this.storeFootprint(orgId);
+  }
+
+  async clearOperationalData(
+    orgId: string,
+    now: string,
+  ): Promise<StoreClearResult> {
+    this.assertWritable();
+    const transaction = this.database.transaction(() => {
+      this.database.pragma("defer_foreign_keys = ON");
+      const before = this.storeFootprint(orgId);
+      this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database
+        .prepare(`DELETE FROM message_dispositions WHERE org_id = ?`)
+        .run(orgId);
+      this.database
+        .prepare(`DELETE FROM conversation_prefs WHERE org_id = ?`)
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM ingest_quarantines
+            WHERE attempt_id IN (
+              SELECT id FROM ingest_attempts WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(`DELETE FROM ingest_attempts WHERE org_id = ?`)
+        .run(orgId);
+      this.database.prepare(`DELETE FROM source_heads WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM events WHERE org_id = ?`).run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM blobs
+            WHERE content_hash NOT IN (
+              SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+            )
+          `,
+        )
+        .run();
+      this.database
+        .prepare(
+          `
+            UPDATE connector_cursors
+            SET cursor_value = NULL,
+                cursor_version = cursor_version + 1,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                updated_at = ?
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(now, orgId);
+      const after = this.storeFootprint(orgId);
+      return {
+        cleared: {
+          events: before.events,
+          conversations: before.conversations,
+          work_items: before.work_items,
+          blobs: before.blobs,
+        },
+        kept: {
+          recipes: after.recipes,
+          connectors: after.connectors,
+        },
+      } satisfies StoreClearResult;
+    });
+    return transaction.immediate();
+  }
+
+  private storeFootprint(orgId: string): StoreFootprint {
+    const count = (sql: string, ...params: unknown[]): number =>
+      (this.database.prepare(sql).get(...params) as { n: number }).n;
+    return {
+      events: count(`SELECT COUNT(*) AS n FROM events WHERE org_id = ?`, orgId),
+      conversations: count(
+        `
+          SELECT COUNT(DISTINCT thread_id) AS n
+          FROM events
+          WHERE org_id = ? AND thread_id IS NOT NULL AND thread_id != ''
+        `,
+        orgId,
+      ),
+      work_items: count(
+        `SELECT COUNT(*) AS n FROM work_items WHERE org_id = ?`,
+        orgId,
+      ),
+      blobs: count(
+        `
+          SELECT COUNT(DISTINCT content_hash) AS n
+          FROM events
+          WHERE org_id = ? AND content_hash IS NOT NULL
+        `,
+        orgId,
+      ),
+      recipes: count(`SELECT COUNT(*) AS n FROM recipes WHERE org_id = ?`, orgId),
+      connectors: count(
+        `SELECT COUNT(*) AS n FROM connector_installations WHERE org_id = ?`,
+        orgId,
+      ),
+    };
+  }
+
+  async listRecipes(orgId: string): Promise<Recipe[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM recipes WHERE org_id = ? ORDER BY updated_at DESC, id`,
+      )
+      .all(orgId) as RecipeRow[];
+    return rows.map(toRecipe);
+  }
+
+  async getRecipe(orgId: string, id: string): Promise<Recipe | null> {
+    const row = this.database
+      .prepare(`SELECT * FROM recipes WHERE org_id = ? AND id = ?`)
+      .get(orgId, id) as RecipeRow | undefined;
+    return row ? toRecipe(row) : null;
+  }
+
+  async putRecipe(recipe: Recipe): Promise<Recipe> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO recipes (
+            id, org_id, name, match_json, executor_type, executor_config_json,
+            can_write_back, enabled, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            match_json = excluded.match_json,
+            executor_type = excluded.executor_type,
+            executor_config_json = excluded.executor_config_json,
+            can_write_back = excluded.can_write_back,
+            enabled = excluded.enabled,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        recipe.id,
+        recipe.org_id,
+        recipe.name,
+        JSON.stringify(recipe.match),
+        recipe.executor_type,
+        JSON.stringify(recipe.executor_config),
+        recipe.can_write_back ? 1 : 0,
+        recipe.enabled ? 1 : 0,
+        recipe.created_at,
+        recipe.updated_at,
+      );
+    return recipe;
+  }
+
+  async deleteRecipe(orgId: string, id: string): Promise<boolean> {
+    this.assertWritable();
+    const result = this.database
+      .prepare(`DELETE FROM recipes WHERE org_id = ? AND id = ?`)
+      .run(orgId, id);
+    return result.changes > 0;
+  }
+
+  async listWorkItems(orgId: string): Promise<WorkItem[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM work_items WHERE org_id = ? ORDER BY updated_at DESC, id`,
+      )
+      .all(orgId) as WorkItemRow[];
+    return rows.map(toWorkItem);
+  }
+
+  async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
+    const row = this.database
+      .prepare(`SELECT * FROM work_items WHERE org_id = ? AND id = ?`)
+      .get(orgId, id) as WorkItemRow | undefined;
+    return row ? toWorkItem(row) : null;
+  }
+
+  async getWorkItemByThread(
+    orgId: string,
+    threadId: string,
+  ): Promise<WorkItem | null> {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM work_items WHERE org_id = ? AND thread_id = ?
+         ORDER BY CASE WHEN status IN ('open', 'running', 'waiting_human') THEN 0 ELSE 1 END,
+                  updated_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(orgId, threadId) as WorkItemRow | undefined;
+    return row ? toWorkItem(row) : null;
+  }
+
+  async putWorkItem(item: WorkItem): Promise<WorkItem> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO work_items (
+            id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
+            status, recipe_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            thread_id = excluded.thread_id,
+            unit_key = excluded.unit_key,
+            head_event_id = excluded.head_event_id,
+            record_class = excluded.record_class,
+            thread_facet = excluded.thread_facet,
+            status = excluded.status,
+            recipe_id = excluded.recipe_id,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        item.id,
+        item.org_id,
+        item.thread_id,
+        item.unit_key,
+        item.head_event_id ?? null,
+        item.record_class,
+        item.thread_facet,
+        item.status,
+        item.recipe_id ?? null,
+        item.created_at,
+        item.updated_at,
+      );
+    return item;
+  }
+
+  async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
+    const rows = workItemId
+      ? (this.database
+          .prepare(
+            `SELECT * FROM work_runs WHERE org_id = ? AND work_item_id = ?
+             ORDER BY updated_at DESC, id`,
+          )
+          .all(orgId, workItemId) as WorkRunRow[])
+      : (this.database
+          .prepare(
+            `SELECT * FROM work_runs WHERE org_id = ? ORDER BY updated_at DESC, id`,
+          )
+          .all(orgId) as WorkRunRow[]);
+    return rows.map(toWorkRun);
+  }
+
+  async getWorkRun(orgId: string, id: string): Promise<WorkRun | null> {
+    const row = this.database
+      .prepare(`SELECT * FROM work_runs WHERE org_id = ? AND id = ?`)
+      .get(orgId, id) as WorkRunRow | undefined;
+    return row ? toWorkRun(row) : null;
+  }
+
+  async getActiveWorkRun(
+    orgId: string,
+    workItemId: string,
+  ): Promise<WorkRun | null> {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM work_runs
+         WHERE org_id = ? AND work_item_id = ?
+           AND status IN ('running', 'waiting_human')
+         ORDER BY updated_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(orgId, workItemId) as WorkRunRow | undefined;
+    return row ? toWorkRun(row) : null;
+  }
+
+  async putWorkRun(run: WorkRun): Promise<WorkRun> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO work_runs (
+            id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
+            agent_thread_id, status, result_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            recipe_id = excluded.recipe_id,
+            executor_type = excluded.executor_type,
+            external_run_id = excluded.external_run_id,
+            agent_thread_id = excluded.agent_thread_id,
+            status = excluded.status,
+            result_json = excluded.result_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        run.id,
+        run.org_id,
+        run.work_item_id,
+        run.recipe_id,
+        run.executor_type,
+        run.external_run_id ?? null,
+        run.agent_thread_id ?? null,
+        run.status,
+        run.result ? JSON.stringify(run.result) : null,
+        run.created_at,
+        run.updated_at,
+      );
+    return run;
+  }
+
+  async getUiPref(orgId: string, key: string): Promise<string | null> {
+    const row = this.database
+      .prepare(`SELECT value FROM ui_prefs WHERE org_id = ? AND key = ?`)
+      .get(orgId, key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  async putUiPref(
+    orgId: string,
+    key: string,
+    value: string,
+    updatedAt: string,
+  ): Promise<void> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO ui_prefs (org_id, key, value, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(org_id, key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(orgId, key, value, updatedAt);
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
@@ -952,7 +1294,16 @@ export class SqliteAuthorityStore
         this.database.exec(migration.sql);
         this.database.pragma(`user_version = ${migration.version}`);
       });
-      applyMigration.immediate();
+      if (migration.version === 10) {
+        this.database.pragma("foreign_keys = OFF");
+      }
+      try {
+        applyMigration.immediate();
+      } finally {
+        if (migration.version === 10) {
+          this.database.pragma("foreign_keys = ON");
+        }
+      }
     }
   }
 
@@ -1151,6 +1502,7 @@ export class SqliteAuthorityStore
           FROM message_dispositions d
           JOIN events e ON e.id = d.event_id
           WHERE ${clauses.join(" AND ")}
+            AND ${isCurrentHeadSql("e")}
           ${tail.orderSql}
         `,
         params: [...params, ...tail.orderParams],
@@ -1366,5 +1718,95 @@ function inboxTail(query?: InboxQuery): {
   return {
     orderSql: "ORDER BY e.occurred_at ASC, e.id ASC",
     orderParams: [],
+  };
+}
+
+interface RecipeRow {
+  id: string;
+  org_id: string;
+  name: string;
+  match_json: string;
+  executor_type: string;
+  executor_config_json: string;
+  can_write_back: number;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkItemRow {
+  id: string;
+  org_id: string;
+  thread_id: string;
+  unit_key: string;
+  head_event_id: string | null;
+  record_class: WorkItem["record_class"];
+  thread_facet: WorkItem["thread_facet"];
+  status: WorkItem["status"];
+  recipe_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkRunRow {
+  id: string;
+  org_id: string;
+  work_item_id: string;
+  recipe_id: string;
+  executor_type: string;
+  external_run_id: string | null;
+  agent_thread_id: string | null;
+  status: WorkRun["status"];
+  result_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function toRecipe(row: RecipeRow): Recipe {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    name: row.name,
+    match: JSON.parse(row.match_json) as Recipe["match"],
+    executor_type: row.executor_type,
+    executor_config: JSON.parse(row.executor_config_json) as Recipe["executor_config"],
+    can_write_back: row.can_write_back === 1,
+    enabled: row.enabled === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function toWorkItem(row: WorkItemRow): WorkItem {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    thread_id: row.thread_id,
+    unit_key: row.unit_key,
+    head_event_id: row.head_event_id ?? undefined,
+    record_class: row.record_class,
+    thread_facet: row.thread_facet,
+    status: row.status,
+    recipe_id: row.recipe_id ?? undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function toWorkRun(row: WorkRunRow): WorkRun {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    work_item_id: row.work_item_id,
+    recipe_id: row.recipe_id,
+    executor_type: row.executor_type,
+    external_run_id: row.external_run_id ?? undefined,
+    agent_thread_id: row.agent_thread_id ?? undefined,
+    status: row.status,
+    result: row.result_json
+      ? (JSON.parse(row.result_json) as WorkRun["result"])
+      : undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }

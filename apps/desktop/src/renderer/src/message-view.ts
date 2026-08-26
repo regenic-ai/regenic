@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n.ts";
 import type { InboxViewItem, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
 
@@ -22,12 +23,12 @@ export function roleLabel(
     return named;
   }
   if (role === "user") {
-    return "You";
+    return t("label.you");
   }
   if (role === "system") {
-    return "Runtime";
+    return t("label.runtime");
   }
-  return channel === "dsh" ? "DSH Agent" : "Assistant";
+  return channel === "dsh" ? t("label.dshAgent") : t("label.assistant");
 }
 
 export function receiptCopy(item: InboxViewItem): string | undefined {
@@ -35,20 +36,77 @@ export function receiptCopy(item: InboxViewItem): string | undefined {
     return undefined;
   }
   if (item.receipt?.state === "read") {
-    return "Read";
+    return t("label.read");
   }
   if (item.receipt?.state === "sent" || item.can_receipt === true) {
-    return "Sent";
+    return t("label.sent");
   }
   return undefined;
 }
 
+export function threadFacetLabel(facet: string | null | undefined): string | null {
+  if (facet === "ticket") {
+    return t("label.ticket");
+  }
+  if (facet === "agent") {
+    return t("label.agent");
+  }
+  return null;
+}
+
+export function workStatusLabel(status: string | null | undefined): string | null {
+  switch (status) {
+    case "running":
+      return t("work.running");
+    case "waiting_human":
+      return t("work.waiting");
+    case "failed":
+      return t("work.failed");
+    default:
+      return null;
+  }
+}
+
+export function workNextStepCopy(thread: {
+  work?: {
+    status?: string;
+    recipe_id?: string;
+    can_write_back?: boolean;
+  };
+  record_class?: string;
+  thread_facet?: string;
+}): string | null {
+  const status = thread.work?.status;
+  if (!thread.work) {
+    if (thread.record_class === "task" || thread.thread_facet === "ticket") {
+      return t("work.hint.task");
+    }
+    return null;
+  }
+  switch (status) {
+    case "open":
+      return t("work.hint.open");
+    case "failed":
+      return t("work.hint.failed");
+    case "running":
+      return t("work.hint.running");
+    case "waiting_human":
+      return t("work.hint.waiting");
+    case "done":
+      return thread.work.can_write_back ? t("work.hint.doneWrite") : t("work.hint.done");
+    case "skipped":
+      return t("work.hint.skipped");
+    default:
+      return thread.work.recipe_id ? null : t("work.hint.noRecipe");
+  }
+}
+
 export function conversationKindLabel(kind: string | null | undefined): string | null {
   if (kind === "group") {
-    return "Group";
+    return t("label.group");
   }
   if (kind === "direct") {
-    return "Direct";
+    return null;
   }
   if (kind && kind.trim()) {
     return kind.trim();
@@ -102,13 +160,13 @@ export function threadActivityCopy(
   activity: InboxViewItem["activity"] | "sent" | undefined,
 ): string | undefined {
   if (activity === "awaiting_user") {
-    return "Waiting for your reply in the original channel.";
+    return t("activity.awaiting");
   }
   if (activity === "working") {
-    return "The other side is still working.";
+    return t("activity.working");
   }
   if (activity === "sent") {
-    return "Sent. Waiting for a reply from the original channel.";
+    return t("activity.sent");
   }
   return undefined;
 }
@@ -160,7 +218,7 @@ export function threadTitle(thread: InboxThread): string {
       return prompt;
     }
     const face = threadFace(thread);
-    if (face.activity !== "working") {
+    if (face && face.activity !== "working") {
       return firstLine(face.body_text, 120) || thread.label;
     }
     return thread.label;
@@ -173,7 +231,7 @@ export function threadTitle(thread: InboxThread): string {
     return thread.label;
   }
   const face = threadFace(thread);
-  if (face.activity === "working") {
+  if (!face || face.activity === "working") {
     return thread.label;
   }
   return firstLine(face.body_text, 120) || thread.label;
@@ -191,6 +249,34 @@ export function threadPreview(thread: InboxThread): string {
   return thread.label;
 }
 
+export function listPreview(thread: InboxThread, title: string): string | null {
+  const latest = lastVisibleMessage(thread);
+  if (!latest) {
+    return null;
+  }
+  const line = firstLine(latest.body_text, 88);
+  if (!line) {
+    return null;
+  }
+  const heading = title.replace(/\s+/g, " ").trim();
+  if (!heading || sameListLine(heading, line)) {
+    return null;
+  }
+  return line;
+}
+
+function sameListLine(title: string, line: string): boolean {
+  if (title === line) {
+    return true;
+  }
+  if (!title.startsWith(line) && !line.startsWith(title)) {
+    return false;
+  }
+  const shorter = Math.min(title.length, line.length);
+  const longer = Math.max(title.length, line.length);
+  return shorter / longer > 0.72;
+}
+
 function firstUserLine(thread: InboxThread): string {
   const user = thread.messages.find((item) => messageRole(item) === "user");
   return firstLine(user?.body_text, 120);
@@ -206,7 +292,7 @@ function lastVisibleMessage(thread: InboxThread): InboxViewItem | undefined {
   return undefined;
 }
 
-export function threadFace(thread: InboxThread): InboxViewItem {
+export function threadFace(thread: InboxThread): InboxViewItem | undefined {
   const visible = thread.messages.filter((item) => item.activity !== "working");
   const pool = visible.length > 0 ? visible : thread.messages;
   const user = pool.find((item) => messageRole(item) === "user");
@@ -245,12 +331,12 @@ export function threadPaneEmptyCopy(
   error?: string | null,
 ): string {
   if (opening) {
-    return "Opening conversation…";
+    return t("thread.openingConversation");
   }
   if (error) {
     return error;
   }
-  return "This conversation has no displayable messages.";
+  return t("thread.noMessages");
 }
 
 export function threadLoadedCountCopy(input: {
@@ -259,12 +345,12 @@ export function threadLoadedCountCopy(input: {
   hasOlder: boolean;
 }): string {
   if (input.loaded === 0 && input.opening) {
-    return "Opening…";
+    return t("thread.opening");
   }
   if (input.hasOlder) {
-    return `${input.loaded} recent messages`;
+    return t("thread.recentMessages", { count: input.loaded });
   }
-  return `${input.loaded} messages`;
+  return t("thread.messages", { count: input.loaded });
 }
 
 export function sameSpeaker(left: InboxViewItem, right: InboxViewItem): boolean {

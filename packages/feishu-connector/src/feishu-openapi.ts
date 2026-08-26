@@ -100,6 +100,70 @@ export async function callFeishuOpenApi(input: {
   return payload;
 }
 
+export async function callFeishuOpenApiBytes(input: {
+  method: "GET" | "POST";
+  path: string;
+  token: string;
+  params?: Record<string, string | number>;
+  base_url?: string;
+  fetch?: typeof fetch;
+  timeout_ms?: number;
+}): Promise<{ bytes: Uint8Array; media_type: string; filename?: string }> {
+  const fetchFn = input.fetch ?? fetch;
+  const url = new URL(input.path, input.base_url ?? FEISHU_OPEN_API_CN);
+  for (const [key, value] of Object.entries(input.params ?? {})) {
+    url.searchParams.set(key, String(value));
+  }
+  const timeoutMs = input.timeout_ms ?? 20_000;
+  const signal =
+    timeoutMs > 0 && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+      ? AbortSignal.timeout(timeoutMs)
+      : undefined;
+  let response: Response;
+  try {
+    response = await fetchFn(url.toString(), {
+      method: input.method,
+      headers: { Authorization: `Bearer ${input.token}` },
+      signal,
+    });
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    if (/aborted|timeout|TimeoutError/i.test(text)) {
+      throw new FeishuApiError(`Feishu HTTP timed out after ${timeoutMs}ms`);
+    }
+    throw new FeishuApiError(`Feishu HTTP request failed: ${text}`);
+  }
+  const contentType = headerValue(response, "content-type");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (looksLikeJson(contentType, bytes)) {
+    const payload = parseJsonBytes(bytes);
+    if (isObject(payload)) {
+      throw new FeishuApiError(
+        stringValue(payload.msg) ?? "Feishu download returned JSON instead of file bytes",
+        typeof payload.code === "number" ? String(payload.code) : undefined,
+      );
+    }
+    if (!response.ok) {
+      throw new FeishuApiError(
+        `Feishu HTTP ${response.status}`,
+        String(response.status),
+      );
+    }
+  }
+  if (!response.ok) {
+    throw new FeishuApiError(
+      `Feishu HTTP ${response.status}`,
+      String(response.status),
+    );
+  }
+  const mediaType = contentType.split(";")[0]?.trim() || "application/octet-stream";
+  return {
+    bytes,
+    media_type: mediaType === "application/json" ? "application/octet-stream" : mediaType,
+    filename: contentDispositionFilename(headerValue(response, "content-disposition")),
+  };
+}
+
 function requestBody(
   method: "GET" | "POST",
   form: FormData | undefined,
@@ -139,4 +203,44 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function headerValue(response: Response, name: string): string {
+  const headers = response.headers;
+  if (!headers) {
+    return "";
+  }
+  if (typeof headers.get === "function") {
+    return headers.get(name) ?? "";
+  }
+  const raw = (headers as unknown as Record<string, string>)[name];
+  return raw ?? "";
+}
+
+function looksLikeJson(contentType: string, bytes: Uint8Array): boolean {
+  if (contentType.includes("application/json")) {
+    return true;
+  }
+  return bytes.length > 0 && bytes[0] === 0x7b;
+}
+
+function parseJsonBytes(bytes: Uint8Array): unknown {
+  try {
+    return JSON.parse(Buffer.from(bytes).toString("utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function contentDispositionFilename(header: string): string | undefined {
+  const utf = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf?.[1]) {
+    try {
+      return decodeURIComponent(utf[1]);
+    } catch {
+      return utf[1];
+    }
+  }
+  const plain = header.match(/filename="?([^"]+)"?/i);
+  return plain?.[1]?.trim() || undefined;
 }

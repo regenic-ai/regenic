@@ -14,6 +14,8 @@ Phase 1 是面向单人的本地优先采集基础。原生输入和连接器被
 
 > 适配器只翻译。采集核心负责校验、鉴权、去重、存储与审计。
 
+连接器交出的是 L1 信封：`IngestRecord` 带着身份、时间、作者、正文和幂等键（`org_id`、`source`、`external_id`）。L2 `record_class` 由此处的 `type` 映射。线程面、WorkItem 和执行器在这条管线之上。见[消息编排 · 分层](MESSAGE_ORCHESTRATION.md)。
+
 连接器不得直接写入 Event、Blob、身份或访问策略记录。来源特有行为留在产品不变量之外，因此增加新来源时，无需复制边界、存储或可靠性逻辑。
 
 对协作来源，Agent 回合是带 provenance 的来源记录，不是权威事实。详见[协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)。

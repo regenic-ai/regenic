@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  Injectable,
-  OnApplicationBootstrap,
-  OnModuleDestroy,
-} from "@nestjs/common";
+import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -23,7 +19,7 @@ import {
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
-import { PersonalConnectorError } from "./personal-errors";
+import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
 import {
   applyPullOutcome,
@@ -33,6 +29,7 @@ import {
   preferredThreadId,
   publishPullStreams,
   pullStatus,
+  resetPullStatus,
   type PullStreamStatus,
 } from "./personal-pull-status";
 import {
@@ -80,9 +77,7 @@ export interface ConnectorSyncView {
 }
 
 @Injectable()
-export class PersonalConnectorService
-  implements OnApplicationBootstrap, OnModuleDestroy
-{
+export class PersonalConnectorService implements OnModuleDestroy {
   private readonly inflight = new Map<string, Promise<ConnectorSyncView>>();
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly streamIdleUntil = new Map<string, number>();
@@ -98,6 +93,8 @@ export class PersonalConnectorService
   private lastCatchUpCursor: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private ticking = false;
+  private backgroundStarted = false;
+  private maintenanceHold = false;
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -105,15 +102,20 @@ export class PersonalConnectorService
     private readonly drivers: ChannelDriverRegistry,
   ) {}
 
-  async onApplicationBootstrap(): Promise<void> {
+  startAfterListen(): void {
+    if (this.backgroundStarted) {
+      return;
+    }
+    this.backgroundStarted = true;
     const pullMs = pullIntervalMs();
+    resetPullStatus();
     pullStatus.interval_ms = pullMs;
     if (pullMs > 0) {
       this.timer = setInterval(() => {
         void this.tick();
       }, pullMs);
+      void this.tick();
     }
-    await this.tick();
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -123,11 +125,33 @@ export class PersonalConnectorService
     }
   }
 
+  async pauseForMaintenance(): Promise<void> {
+    this.maintenanceHold = true;
+    try {
+      await this.waitForQuiet();
+      this.resetLivePullState();
+    } catch (error) {
+      this.maintenanceHold = false;
+      throw error;
+    }
+  }
+
+  resumeAfterMaintenance(): void {
+    this.maintenanceHold = false;
+  }
+
   async sync(
     installationId: string,
     maxPages = DEFAULT_MAX_PAGES,
     options?: { skipIdle?: boolean; capCatchUp?: boolean },
   ): Promise<ConnectorSyncView> {
+    if (this.maintenanceHold) {
+      throw new PersonalConnectorError(
+        "disabled",
+        "Store maintenance in progress",
+        409,
+      );
+    }
     const existing = this.inflight.get(installationId);
     if (existing) {
       return existing;
@@ -152,6 +176,9 @@ export class PersonalConnectorService
     installationId: string,
     thread: ConversationThread,
   ): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installation = await this.requireInstallation(store, installationId);
@@ -171,6 +198,9 @@ export class PersonalConnectorService
       throw wrapDriverError(error, "sync_failed");
     }
     await this.exclusiveStream(installation.id, stream.stream_key, async () => {
+      if (this.maintenanceHold) {
+        return;
+      }
       try {
         await this.followStream(host, store, installation, stream, thread);
       } catch (error) {
@@ -180,6 +210,9 @@ export class PersonalConnectorService
   }
 
   async hydrateOpenedThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
     const id = threadId.trim();
     if (!id || !shouldHydrateOpenedInbox({ thread_id: id })) {
       return;
@@ -212,6 +245,9 @@ export class PersonalConnectorService
   }
 
   private async runHydrateOpenedThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
     let thread: ConversationThread;
     try {
       thread = parseConversationThread(threadId);
@@ -325,7 +361,7 @@ export class PersonalConnectorService
   }
 
   async createConversation(
-    input: { installation_id?: string } = {},
+    input: { installation_id?: string; source?: string } = {},
   ): Promise<CreatedConversationView> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
@@ -351,7 +387,7 @@ export class PersonalConnectorService
       }
       found = { installation, driver };
     } else {
-      found = this.drivers.findCreatable(installations);
+      found = this.drivers.findCreatable(installations, input.source);
       if (!found) {
         throw new PersonalConnectorError(
           "unsupported_channel",
@@ -387,7 +423,7 @@ export class PersonalConnectorService
     const created = await store.createInstallation(
       this.buildInstallation(input, now),
     );
-    await this.catchUp(created.id);
+    void this.catchUp(created.id);
     return this.viewOf(store, created);
   }
 
@@ -430,7 +466,7 @@ export class PersonalConnectorService
       );
     }
     if (updated.status === "enabled") {
-      await this.catchUp(updated.id);
+      void this.catchUp(updated.id);
     }
     return this.viewOf(store, updated);
   }
@@ -472,16 +508,48 @@ export class PersonalConnectorService
       );
     }
     if (status === "enabled") {
-      await this.catchUp(updated.id);
+      void this.catchUp(updated.id);
     }
     return this.viewOf(store, updated);
   }
 
+  private async waitForQuiet(timeoutMs = 10_000): Promise<void> {
+    const started = Date.now();
+    while (
+      this.ticking ||
+      this.inflight.size > 0 ||
+      this.streamLocks.size > 0 ||
+      this.hydrating.size > 0
+    ) {
+      if (Date.now() - started > timeoutMs) {
+        throw storeBusyError();
+      }
+      await delay(50);
+    }
+  }
+
+  private resetLivePullState(): void {
+    const interval = pullStatus.interval_ms;
+    this.streamIdleUntil.clear();
+    this.streamCatchingUp.clear();
+    this.streamMeta.clear();
+    this.streamErrors.clear();
+    this.streamPulling.clear();
+    this.hydrateCooldown.clear();
+    this.lastCatchUpCursor = undefined;
+    resetPullStatus();
+    pullStatus.interval_ms = interval;
+  }
+
   private async tick(): Promise<void> {
-    if (this.ticking || !this.runtime.isReady()) {
+    if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
       return;
     }
     this.ticking = true;
+    if (this.maintenanceHold) {
+      this.ticking = false;
+      return;
+    }
     try {
       const store = this.runtime.requireHost().get("authority");
       const installations = await store.listInstallations(this.runtime.orgId());
@@ -533,6 +601,13 @@ export class PersonalConnectorService
     maxPages: number,
     options?: { skipIdle?: boolean; capCatchUp?: boolean },
   ): Promise<ConnectorSyncView> {
+    if (this.maintenanceHold) {
+      throw new PersonalConnectorError(
+        "disabled",
+        "Store maintenance in progress",
+        409,
+      );
+    }
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installation = await this.requireInstallation(store, installationId);
