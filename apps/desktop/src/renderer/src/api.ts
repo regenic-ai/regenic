@@ -473,6 +473,7 @@ export async function saveRecipe(
     executor_type: string;
     executor_config?: Record<string, string>;
     can_write_back: boolean;
+    include_context: boolean;
     enabled: boolean;
   },
   id?: string,

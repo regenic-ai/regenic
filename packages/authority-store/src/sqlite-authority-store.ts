@@ -607,14 +607,15 @@ export class SqliteAuthorityStore
         `
           INSERT INTO recipes (
             id, org_id, name, match_json, executor_type, executor_config_json,
-            can_write_back, enabled, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            can_write_back, include_context, enabled, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
             executor_type = excluded.executor_type,
             executor_config_json = excluded.executor_config_json,
             can_write_back = excluded.can_write_back,
+            include_context = excluded.include_context,
             enabled = excluded.enabled,
             updated_at = excluded.updated_at
         `,
@@ -627,6 +628,7 @@ export class SqliteAuthorityStore
         recipe.executor_type,
         JSON.stringify(recipe.executor_config),
         recipe.can_write_back ? 1 : 0,
+        recipe.include_context ? 1 : 0,
         recipe.enabled ? 1 : 0,
         recipe.created_at,
         recipe.updated_at,
@@ -1729,6 +1731,7 @@ interface RecipeRow {
   executor_type: string;
   executor_config_json: string;
   can_write_back: number;
+  include_context: number;
   enabled: number;
   created_at: string;
   updated_at: string;
@@ -1771,6 +1774,7 @@ function toRecipe(row: RecipeRow): Recipe {
     executor_type: row.executor_type,
     executor_config: JSON.parse(row.executor_config_json) as Recipe["executor_config"],
     can_write_back: row.can_write_back === 1,
+    include_context: row.include_context === 1,
     enabled: row.enabled === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,

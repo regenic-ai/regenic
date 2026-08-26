@@ -139,6 +139,7 @@ interface Recipe {
   executor_type: string;
   executor_config: Record<string, unknown>;
   can_write_back: boolean;
+  include_context: boolean;
   enabled: boolean;
 }
 
@@ -162,6 +163,8 @@ Open a work item when `record_class = task`, or a Recipe satisfies the auto-star
 A finished job plus a new `head_event_id` opens a **new** job. The list face is the current foreground job.
 
 `can_write_back` is required for egress. Seeing a digest is not send grant.
+
+When `include_context` is true, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. The default is only the triggering or head message. This is kernel evidence policy, not an `executor_config` key. Use a more specific Recipe (one chat) when sessions need different settings.
 
 `executor_config` belongs to the plugin. It is not a kernel field.
 

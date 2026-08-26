@@ -6,6 +6,8 @@ import {
   INBOX_SORT_PREF_KEY,
   cancelWorkRun,
   channelRecord,
+  WORK_EVIDENCE_FETCH_LIMIT,
+  composeWorkEvidenceText,
   conversationId,
   currentJobOnSession,
   formatWorkEvidence,
@@ -20,6 +22,7 @@ import {
   parseConversationThread,
   recipeSpecificity,
   selectRecipeForSubject,
+  selectThreadEvidenceLines,
   shouldRefreshActiveRun,
   shouldWriteBackHandle,
   toReplyParts,
@@ -46,6 +49,7 @@ import {
   type ThreadFacet,
   type ThreadPrompt,
   type Transcript,
+  type WorkEvidenceLine,
   type WorkFace,
   type WorkItem,
   type WorkRun,
@@ -66,6 +70,7 @@ export interface RecipeInput {
   executor_type?: string;
   executor_config?: Record<string, JsonValue>;
   can_write_back?: boolean;
+  include_context?: boolean;
   enabled?: boolean;
 }
 
@@ -587,9 +592,20 @@ export class PersonalWorkService implements OnModuleDestroy {
       return undefined;
     }
     const now = new Date().toISOString();
-    const text =
-      evidenceText ??
-      (await this.evidenceText(item.thread_id, item.head_event_id));
+    const includeContext = Boolean(recipe.include_context);
+    const thread = includeContext
+      ? await this.threadContextLines(item.thread_id)
+      : { lines: [], overflow: false };
+    const text = composeWorkEvidenceText({
+      include_context: includeContext,
+      trigger_text: evidenceText,
+      head_text:
+        !includeContext && evidenceText
+          ? undefined
+          : await this.evidenceText(item.thread_id, item.head_event_id),
+      thread_lines: thread.lines,
+      thread_overflow: thread.overflow,
+    });
     const handle = await executor.start(
       {
         work_item: item,
@@ -897,6 +913,43 @@ export class PersonalWorkService implements OnModuleDestroy {
     });
   }
 
+  private async threadContextLines(
+    threadId: string,
+  ): Promise<{ lines: WorkEvidenceLine[]; overflow: boolean }> {
+    const host = this.runtime.requireHost();
+    const fetchLimit = WORK_EVIDENCE_FETCH_LIMIT;
+    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
+      thread_ids: [threadId],
+      siblings: true,
+      limit: fetchLimit + 1,
+    });
+    const overflow = items.length > fetchLimit;
+    const windowed = overflow ? items.slice(1) : items;
+    const bodies = await resolveInboxBodies(
+      host.get("authority"),
+      host.get("blobs"),
+      windowed.map((row) => row.event.content_hash),
+      "meta",
+    );
+    return {
+      overflow,
+      lines: selectThreadEvidenceLines(
+        windowed.map((row) => {
+          const body = row.event.content_hash
+            ? bodies.get(row.event.content_hash)
+            : undefined;
+          return {
+            tombstone: row.event.operation === "tombstone",
+            status: row.decision.reason_codes.includes("thread_status"),
+            working: body?.surface?.activity === "working",
+            speaker: body?.surface?.actor_label || body?.surface?.kind,
+            text: body?.body_text,
+          };
+        }),
+      ),
+    };
+  }
+
   private async evidenceText(
     threadId: string,
     headEventId?: string,
@@ -999,6 +1052,7 @@ function normalizeRecipe(
     executor_type,
     executor_config: input.executor_config ?? existing?.executor_config ?? {},
     can_write_back: input.can_write_back ?? existing?.can_write_back ?? false,
+    include_context: input.include_context ?? existing?.include_context ?? false,
     enabled: input.enabled ?? existing?.enabled ?? true,
     created_at: existing?.created_at ?? now,
     updated_at: now,

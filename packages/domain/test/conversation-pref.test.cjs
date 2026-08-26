@@ -69,6 +69,7 @@ describe("conversation prefs", () => {
       executor_type: "dsh",
       executor_config: {},
       can_write_back: false,
+      include_context: false,
       enabled: true,
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
