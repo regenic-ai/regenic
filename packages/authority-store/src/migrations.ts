@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 10;
+export const LATEST_SCHEMA_VERSION = 11;
 
 export const MIGRATIONS = [
   {
@@ -264,6 +264,12 @@ export const MIGRATIONS = [
 
       CREATE INDEX work_items_org_status_idx ON work_items (org_id, status, updated_at);
       CREATE INDEX work_items_session_idx ON work_items (org_id, thread_id, updated_at);
+    `,
+  },
+  {
+    version: 11,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN include_context INTEGER NOT NULL DEFAULT 0;
     `,
   },
 ] as const;

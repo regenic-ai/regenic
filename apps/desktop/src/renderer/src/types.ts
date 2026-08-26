@@ -182,6 +182,7 @@ export interface RecipeView {
   executor_type: string;
   executor_config: Record<string, string>;
   can_write_back: boolean;
+  include_context: boolean;
   enabled: boolean;
   created_at: string;
   updated_at: string;

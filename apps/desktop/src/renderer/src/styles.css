@@ -861,6 +861,20 @@ button {
   display: none;
 }
 
+.recipe-context {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.recipe-context .muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 .recipe-form-foot {
   display: grid;
   gap: 12px;

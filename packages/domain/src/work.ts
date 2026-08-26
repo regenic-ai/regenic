@@ -38,6 +38,8 @@ export interface Recipe {
   executor_type: string;
   executor_config: Record<string, JsonValue>;
   can_write_back: boolean;
+  /** Kernel evidence: send visible thread history, not just the head. */
+  include_context: boolean;
   enabled: boolean;
   created_at: string;
   updated_at: string;

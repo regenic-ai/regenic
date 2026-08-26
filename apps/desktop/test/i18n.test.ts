@@ -15,6 +15,8 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "settings.language"), "语言");
     assert.equal(translate("zh", "recipes.params"), "调用参数");
     assert.equal(translate("en", "recipes.prompt"), "Prompt");
+    assert.equal(translate("zh", "recipes.includeContextCheck"), "携带会话上下文");
+    assert.equal(translate("en", "recipes.includeContextCheck"), "Include conversation history");
     assert.equal(translate("en", "tray.workCount", { count: 3 }), "3 current work");
     assert.equal(translate("zh", "tray.workCount", { count: 3 }), "3 条当前工作");
     assert.equal(translate("en", "settings.store"), "Local data");

@@ -308,6 +308,7 @@ async function seedHostedWork(authority, input) {
     executor_type: "dsh",
     executor_config: {},
     can_write_back: true,
+    include_context: false,
     enabled: true,
     created_at: now,
     updated_at: now,
@@ -399,6 +400,7 @@ describe("personal /v1/me", () => {
         })
       ).json();
       assert.equal(created.name, "Keep me");
+      assert.equal(created.include_context, false);
 
       const before = await (await fetch(`${origin}/v1/me/store`)).json();
       assert.ok(before.events >= 1);
@@ -2219,16 +2221,19 @@ describe("personal /v1/me", () => {
             executor_type: "dsh",
             executor_config: { skill: "review", prompt: "Reply with a decision." },
             can_write_back: true,
+            include_context: true,
           }),
         })
       ).json();
       assert.equal(created.executor_type, "dsh");
       assert.equal(created.can_write_back, true);
+      assert.equal(created.include_context, true);
       assert.equal(created.executor_config.skill, "review");
       assert.equal(created.executor_config.prompt, "Reply with a decision.");
       const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
       assert.equal(recipes.length, 1);
       assert.equal(recipes[0].executor_config.prompt, "Reply with a decision.");
+      assert.equal(recipes[0].include_context, true);
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",

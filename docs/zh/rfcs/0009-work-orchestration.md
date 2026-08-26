@@ -139,6 +139,7 @@ interface Recipe {
   executor_type: string;
   executor_config: Record<string, unknown>;
   can_write_back: boolean;
+  include_context: boolean;
   enabled: boolean;
 }
 
@@ -162,6 +163,8 @@ interface ResultEnvelope {
 同一 Session 上已完成的 Job 遇到新 `head_event_id` 开**新 Job**，不复活旧单。列表脸取当前前台 Job。
 
 没有 `can_write_back` 不得 egress。蒸馏或看过 Digest ≠ 发送权。
+
+`include_context` 为真时，开跑只取来源会话最近一页可见历史写入 evidence（条数和字数封顶，多出来的标 omitted），禁止把几千上万条整段拉进内核或执行器。默认只带触发/头消息。这是内核证据策略，不是 `executor_config` 的 key。不同会话要不同策略时，用更具体的 Recipe（一条会话）覆盖。
 
 ## 9. TaskExecutor
 
