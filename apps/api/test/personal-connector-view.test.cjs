@@ -111,4 +111,56 @@ describe("connector catalog hints", () => {
     assert.equal(view.channel_label, "Feishu");
     assert.equal(view.settings.kinds, "group,p2p");
   });
+
+  it("lists CRM catalog rows but keeps them blocked without the private plugin", () => {
+    const catalog = connectorCatalog([], { env: {} });
+    const ops = catalog.find((item) => item.connector_type === "crm-ops-review");
+    const order = catalog.find((item) => item.connector_type === "crm-order-review");
+    assert.equal(ops.title, "CRM ops review");
+    assert.equal(order.title, "CRM order review");
+    assert.equal(ops.setup_ready, false);
+    assert.equal(order.setup_ready, false);
+    assert.match(ops.prerequisites[0].hint, /cannot use CRM/);
+  });
+
+  it("marks CRM setup ready only when the private plugin and base URL are present", () => {
+    const catalog = connectorCatalog([], {
+      env: { REGENIC_CRM_BASE_URL: "https://crm.internal" },
+      services: {
+        "crm-connector": { ready: true, hint: "Private CRM connector is loaded." },
+      },
+    });
+    const ops = catalog.find((item) => item.connector_type === "crm-ops-review");
+    assert.equal(ops.setup_ready, true);
+    assert.equal(ops.prerequisites[0].ready, true);
+    assert.equal(ops.fields[0].key, "max_open_tasks");
+  });
+
+  it("labels a CRM ops install without branching inbox on source", () => {
+    const view = toInstallationView(
+      {
+        id: "crm-1",
+        org_id: "local-owner",
+        connector_type: "crm-ops-review",
+        status: "enabled",
+        config: { max_open_tasks: "50" },
+        created_at: "2026-08-26T00:00:00.000Z",
+        updated_at: "2026-08-26T00:00:00.000Z",
+      },
+      null,
+      {
+        get() {
+          return {
+            source: "crm",
+            capabilities() {
+              return { sync: true, reply: false, create: false };
+            },
+          };
+        },
+      },
+    );
+    assert.equal(view.label, "Email submit review");
+    assert.equal(view.channel, "crm");
+    assert.equal(view.settings.max_open_tasks, "50");
+  });
 });

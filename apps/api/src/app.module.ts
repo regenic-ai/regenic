@@ -3,6 +3,7 @@ import { ChannelDriverRegistry } from "@regenic/domain";
 import { dshSessionDriver } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
 import { slackChannelDriver } from "@regenic/slack-connector";
+import { optionalCrmDrivers } from "./optional-crm-drivers";
 import { DshApiController } from "./dsh-api.controller";
 import { DshApiService } from "./dsh-api.service";
 import { HealthController } from "./health.controller";
@@ -26,11 +27,16 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalWhatsAppImportService,
     {
       provide: ChannelDriverRegistry,
-      useFactory: () =>
-        new ChannelDriverRegistry()
+      useFactory: () => {
+        const registry = new ChannelDriverRegistry()
           .register(dshSessionDriver)
           .register(slackChannelDriver)
-          .register(feishuChatDriver),
+          .register(feishuChatDriver);
+        for (const driver of optionalCrmDrivers()) {
+          registry.register(driver);
+        }
+        return registry;
+      },
     },
   ],
 })

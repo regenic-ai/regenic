@@ -210,7 +210,67 @@ const CATALOG: CatalogDefinition[] = [
       },
     ],
   },
+  {
+    connector_type: "crm-ops-review",
+    title: "CRM ops review",
+    description:
+      "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes. Without the internal CRM connector this row cannot be installed.",
+    credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+    fields: [
+      {
+        key: "max_open_tasks",
+        label: "Max open tasks",
+        required: false,
+        default: "50",
+        placeholder: "50",
+      },
+    ],
+    prerequisites: crmPrerequisites(),
+  },
+  {
+    connector_type: "crm-order-review",
+    title: "CRM order review",
+    description:
+      "Private plugin. Pulls orders whose AI internal review is waiting for a human. Without the internal CRM connector this row cannot be installed.",
+    credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+    fields: [
+      {
+        key: "max_open_order_reviews",
+        label: "Max open order reviews",
+        required: false,
+        default: "50",
+        placeholder: "50",
+      },
+    ],
+    prerequisites: crmPrerequisites(),
+  },
 ];
+
+function crmPrerequisites(): CatalogDefinition["prerequisites"] {
+  return [
+    {
+      kind: "local_service",
+      key: "crm-connector",
+      label: "Private CRM connector",
+      required: true,
+      hint: "This build does not include @bioby/regenic-crm-connector. Open-source installs cannot use CRM.",
+    },
+    {
+      kind: "env",
+      key: "REGENIC_CRM_BASE_URL",
+      label: "CRM base URL",
+      required: true,
+      hint: "Set before starting the desktop, including /api, e.g. https://crm-host/api. The form does not take it.",
+    },
+    {
+      kind: "env",
+      key: "REGENIC_CRM_TOKEN",
+      label: "CRM reporting-ops token",
+      required: false,
+      hint: "Optional. When set, CRM must scope to that reporting-ops user. A bad token must 401.",
+    },
+  ];
+}
 
 export function connectorCatalog(
   installations: EngineInstallationView[],
@@ -339,6 +399,18 @@ function connectorPresentation(installation: ConnectorInstallation): {
     return {
       label: chatName ?? chatIds[0] ?? chatId ?? installation.id,
       detail: "cli",
+    };
+  }
+  if (installation.connector_type === "crm-ops-review") {
+    return {
+      label: "Email submit review",
+      detail: configString(config, "max_open_tasks") ?? "50",
+    };
+  }
+  if (installation.connector_type === "crm-order-review") {
+    return {
+      label: "Order internal review",
+      detail: configString(config, "max_open_order_reviews") ?? "50",
     };
   }
   return { label: installation.id, detail: null };

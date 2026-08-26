@@ -558,7 +558,13 @@ describe("personal /v1/me", () => {
       const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.deepEqual(
         light.catalog.map((item) => item.connector_type),
-        ["slack-channel", "dsh-session", "feishu-chat"],
+        [
+          "slack-channel",
+          "dsh-session",
+          "feishu-chat",
+          "crm-ops-review",
+          "crm-order-review",
+        ],
       );
       assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
@@ -1298,7 +1304,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.installations[0].can_reply, false);
       assert.equal(engine.installations[0].can_create, false);
       assert.equal(engine.installations[0].last_attempt, null);
-      assert.equal(engine.catalog.length, 3);
+      assert.equal(engine.catalog.length, 5);
       assert.equal(engine.catalog[0].connector_type, "slack-channel");
       assert.equal(engine.catalog[0].installed, true);
       assert.equal(engine.catalog[0].prerequisites[0].key, "REGENIC_SLACK_TOKEN");
@@ -1315,6 +1321,11 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[2].fields[2].key, "chat_ids");
       assert.equal(engine.catalog[2].fields[2].multiple, true);
       assert.equal(engine.catalog[2].prerequisites[0].key, "lark-cli");
+      assert.equal(engine.catalog[3].connector_type, "crm-ops-review");
+      assert.equal(engine.catalog[3].installed, false);
+      assert.equal(engine.catalog[3].setup_ready, false);
+      assert.equal(engine.catalog[4].connector_type, "crm-order-review");
+      assert.equal(engine.catalog[4].installed, false);
       assert.equal(engine.installations[0].settings.channel_id, "C123");
       assert.equal(JSON.stringify(engine).includes("xoxb"), false);
       assert.equal(JSON.stringify(engine).includes("credentials_ref"), false);
