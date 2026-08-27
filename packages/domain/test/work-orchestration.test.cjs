@@ -371,28 +371,30 @@ describe("write-back prompt match", () => {
     ],
   };
 
-  it("maps a Chinese reject summary onto REJECTED", () => {
-    const answer = matchWriteBackPrompt(
-      [orderPrompt],
-      "审核结果：**不通过**\n地区不符",
-    );
-    assert.deepEqual(answer, {
+  it("maps an exact option label or first-line conclusion", () => {
+    assert.deepEqual(matchWriteBackPrompt([orderPrompt], "REJECTED"), {
       prompt_id: "crm:audit:1",
       answers: [{ id: "decision", selected: ["REJECTED"] }],
     });
-  });
-
-  it("does not treat 不通过 as APPROVED", () => {
-    const answer = matchWriteBackPrompt(
-      [orderPrompt],
-      "达人通过了粉丝门槛，但语种不通过",
+    assert.equal(
+      matchWriteBackPrompt([orderPrompt], "不通过\n地区不符").answers[0].selected[0],
+      "REJECTED",
     );
-    assert.equal(answer.answers[0].selected[0], "REJECTED");
+    assert.equal(matchWriteBackPrompt([orderPrompt], "通过").answers[0].selected[0], "APPROVED");
   });
 
-  it("maps 审核通过 onto APPROVED", () => {
-    const answer = matchWriteBackPrompt([orderPrompt], "重新审查后审核通过");
-    assert.equal(answer.answers[0].selected[0], "APPROVED");
+  it("does not infer a conclusion from narrative text", () => {
+    assert.equal(
+      matchWriteBackPrompt([orderPrompt], "审核结果：**不通过**\n地区不符"),
+      undefined,
+    );
+    assert.equal(
+      matchWriteBackPrompt([orderPrompt], "达人通过了粉丝门槛，但语种不通过"),
+      undefined,
+    );
+    assert.equal(matchWriteBackPrompt([orderPrompt], "重新审查后审核通过"), undefined);
+    assert.equal(matchWriteBackPrompt([orderPrompt], "未通过"), undefined);
+    assert.equal(matchWriteBackPrompt([orderPrompt], "不建议通过"), undefined);
   });
 });
 

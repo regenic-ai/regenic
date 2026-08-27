@@ -163,55 +163,44 @@ export function matchWriteBackPrompt(
   prompts: readonly ThreadPrompt[],
   summary: string,
 ): PromptAnswer | undefined {
-  const text = summary.trim();
-  if (!text) {
+  const candidates = writeBackConclusionLines(summary);
+  if (candidates.length === 0) {
     return undefined;
   }
   for (const prompt of prompts) {
     const question = prompt.questions[0];
     const options = question?.options ?? [];
-    let best: { label: string; score: number } | undefined;
-    for (const option of options) {
-      const score = writeBackOptionScore(option.label, text);
-      if (score > 0 && (!best || score > best.score)) {
-        best = { label: option.label, score };
+    for (const candidate of candidates) {
+      const matched = options.find((option) =>
+        writeBackAliases(option.label).includes(candidate),
+      );
+      if (matched && question) {
+        return {
+          prompt_id: prompt.prompt_id,
+          answers: [{ id: question.id, selected: [matched.label] }],
+        };
       }
-    }
-    if (best && question) {
-      return {
-        prompt_id: prompt.prompt_id,
-        answers: [{ id: question.id, selected: [best.label] }],
-      };
     }
   }
   return undefined;
 }
 
-function writeBackOptionScore(label: string, summary: string): number {
-  const needles = writeBackNeedles(label);
-  let best = 0;
-  for (const needle of needles) {
-    if (summary.includes(needle) || summary.toUpperCase().includes(needle.toUpperCase())) {
-      best = Math.max(best, needle.length);
-    }
+function writeBackConclusionLines(summary: string): string[] {
+  const text = summary.trim();
+  if (!text) {
+    return [];
   }
-  if (
-    label.trim() === "APPROVED" &&
-    /通过/.test(summary) &&
-    !/不通过|REJECTED/i.test(summary)
-  ) {
-    best = Math.max(best, 2);
-  }
-  return best;
+  const firstLine = text.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return firstLine && firstLine !== text ? [text, firstLine] : [text];
 }
 
-function writeBackNeedles(label: string): string[] {
+function writeBackAliases(label: string): string[] {
   const trimmed = label.trim();
   if (trimmed === "REJECTED") {
-    return ["REJECTED", "审核不通过", "不通过"];
+    return ["REJECTED", "不通过"];
   }
   if (trimmed === "APPROVED") {
-    return ["APPROVED", "审核通过"];
+    return ["APPROVED", "通过"];
   }
   if (trimmed === "CLOSE_TASK") {
     return ["CLOSE_TASK", "关闭任务"];
