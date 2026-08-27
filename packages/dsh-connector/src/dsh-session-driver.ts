@@ -107,16 +107,33 @@ export const dshSessionDriver: ChannelDriver = {
     return createDshConversation(installation, env);
   },
 
-  async resolveStreams(installation, host, env) {
+  async resolveStreams(installation, host, env, options) {
     const transport = resolveEffectiveDshTransport(installation.config, env);
     if (transport === "cli") {
       return [await mountInstalled(host, installation, env)];
     }
     const pinned = configString(installation.config, "session_id");
-    const sessionIds = pinned
-      ? [pinned]
-      : await dshWebRpcClient(installation, env).listAllSessionIds();
-    return mountDshSessions(host, installation, env, sessionIds);
+    if (pinned) {
+      return mountDshSessions(host, installation, env, [pinned]);
+    }
+    const sessionIds = [
+      ...new Set(
+        (options?.threads ?? [])
+          .filter(
+            (thread) =>
+              thread.source === "dsh" && this.matchesThread(installation, thread),
+          )
+          .map((thread) => thread.target),
+      ),
+    ];
+    if (sessionIds.length > 0) {
+      return mountDshSessions(host, installation, env, sessionIds);
+    }
+    if (!options?.discover) {
+      return [];
+    }
+    const listed = await dshWebRpcClient(installation, env).listAllSessionIds();
+    return mountDshSessions(host, installation, env, listed);
   },
 
   async resolveThreadStream(installation, thread, host, env) {

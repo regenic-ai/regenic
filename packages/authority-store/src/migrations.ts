@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 12;
+export const LATEST_SCHEMA_VERSION = 16;
 
 export const MIGRATIONS = [
   {
@@ -288,6 +288,54 @@ export const MIGRATIONS = [
 
       CREATE INDEX executor_installations_org_idx
         ON executor_installations (org_id, updated_at);
+    `,
+  },
+  {
+    version: 13,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN trigger_kind TEXT NOT NULL DEFAULT 'push';
+      ALTER TABLE recipes ADD COLUMN trigger_interval_ms INTEGER;
+      ALTER TABLE recipes ADD COLUMN trigger_coalesce INTEGER NOT NULL DEFAULT 1;
+    `,
+  },
+  {
+    version: 14,
+    sql: `
+      CREATE TABLE work_deliveries (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        recipe_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        unit_key TEXT NOT NULL,
+        event_id TEXT,
+        status TEXT NOT NULL,
+        write_back TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_retry_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (org_id, work_item_id)
+      );
+
+      CREATE INDEX work_deliveries_org_status_idx
+        ON work_deliveries (org_id, status, next_retry_at);
+    `,
+  },
+  {
+    version: 15,
+    sql: `
+      ALTER TABLE work_deliveries ADD COLUMN payload_json TEXT;
+      ALTER TABLE work_deliveries ADD COLUMN lease_expires_at TEXT;
+    `,
+  },
+  {
+    version: 16,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN next_run_at TEXT;
+      ALTER TABLE work_deliveries ADD COLUMN idempotency_key TEXT;
+      ALTER TABLE work_deliveries ADD COLUMN channel_receipt_json TEXT;
     `,
   },
 ] as const;

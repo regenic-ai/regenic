@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   deleteRecipe,
   fetchExecutors,
   fetchRecipes,
   saveRecipe,
 } from "./api";
+import { formatNextRunWhen } from "./format";
 import { useLocale } from "./LocaleContext";
 import { MenuSelect } from "./MenuSelect";
 import { RecipeParams } from "./RecipeParams";
@@ -16,9 +17,16 @@ import type {
   RecipeMatch,
   RecipeSeed,
   RecipeSourceOption,
+  RecipeTriggerKind,
   RecipeView,
   ThreadFacet,
 } from "./types";
+
+const PULL_INTERVALS = [
+  { ms: 15 * 60 * 1000, label: "recipes.interval15m" as const },
+  { ms: 60 * 60 * 1000, label: "recipes.interval1h" as const },
+  { ms: 24 * 60 * 60 * 1000, label: "recipes.interval1d" as const },
+];
 
 type RecipeScope = "tasks" | "source" | "thread";
 
@@ -107,7 +115,7 @@ export function RecipesPage({
       return;
     }
     const match = draftMatch(draft);
-    if (!canAutoStart(match)) {
+    if (!canAutoStart(match, draft)) {
       setError(scopeError(draft, t));
       return;
     }
@@ -118,6 +126,7 @@ export function RecipesPage({
         {
           name: (draft.name.trim() || suggestedName).trim(),
           match,
+          trigger: draftTrigger(draft),
           executor_type: draft.executor_type,
           executor_config: draft.config,
           can_write_back: draft.can_write_back,
@@ -156,6 +165,7 @@ export function RecipesPage({
               executorByType.get(recipe.executor_type),
               recipe.executor_config,
             );
+            const next = nextRunCopy(recipe, t);
             return (
               <li
                 key={recipe.id}
@@ -168,21 +178,21 @@ export function RecipesPage({
                 >
                   <div className="recipe-card-title">
                     <strong>{recipe.name}</strong>
-                    <span className={`recipe-pill${recipe.enabled ? " is-on" : ""}`}>
-                      {recipe.enabled ? t("recipes.on") : t("recipes.off")}
-                    </span>
-                    {recipe.can_write_back ? (
-                      <span className="recipe-pill">{t("recipes.writeBackYes")}</span>
-                    ) : null}
-                    {recipe.include_context ? (
-                      <span className="recipe-pill">{t("recipes.contextYes")}</span>
-                    ) : null}
+                    {recipe.enabled ? null : (
+                      <span className="recipe-pill">{t("recipes.paused")}</span>
+                    )}
                   </div>
                   <p className="recipe-card-line">
-                    {whenCopy(recipe, sources, conversations, t)}
-                    <span aria-hidden="true"> → </span>
-                    {executorByType.get(recipe.executor_type)?.label ?? recipe.executor_type}
+                    {recipeCardLine(
+                      recipe,
+                      sources,
+                      conversations,
+                      executorByType.get(recipe.executor_type)?.label ??
+                        recipe.executor_type,
+                      t,
+                    )}
                   </p>
+                  {next ? <p className="recipe-card-next">{next}</p> : null}
                   {invoke ? <p className="recipe-card-how">{invoke}</p> : null}
                 </button>
                 <div className="install-actions">
@@ -235,12 +245,29 @@ export function RecipesPage({
             void save();
           }}
         >
-          <div
-            className={`recipe-form-grid${catalog?.fields.length ? "" : " is-single"}`}
-          >
-            <div className="recipe-col">
-              <section className="recipe-block">
-                <h3>{t("recipes.when")}</h3>
+          <div className="recipe-stack">
+              <section className="recipe-section">
+                <h3>{t("recipes.triggerLegend")}</h3>
+                <fieldset className="recipe-scope">
+                  <div className="seg">
+                    {triggerChoices(t).map((choice) => (
+                      <button
+                        key={choice.id}
+                        type="button"
+                        className={draft.trigger_kind === choice.id ? "active" : undefined}
+                        onClick={() =>
+                          setDraft((current) =>
+                            withSuggestedName(applyTriggerKind(current, choice.id)),
+                          )
+                        }
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="muted">{triggerHint(draft.trigger_kind, t)}</p>
+                </fieldset>
+                {draft.trigger_kind !== "pull" ? (
                 <fieldset className="recipe-scope">
                   <legend>{t("recipes.watchLegend")}</legend>
                   <div className="seg">
@@ -260,6 +287,7 @@ export function RecipesPage({
                     ))}
                   </div>
                 </fieldset>
+                ) : null}
 
                 {draft.scope === "source" ? (
                   <div className="field">
@@ -278,7 +306,7 @@ export function RecipesPage({
                   </div>
                 ) : null}
 
-                {draft.scope === "thread" ? (
+                {draft.scope === "thread" || draft.trigger_kind === "pull" ? (
                   <div className="field">
                     <span>{t("recipes.conversation")}</span>
                     {conversationOptions.length === 0 && !draft.thread_id ? (
@@ -307,83 +335,76 @@ export function RecipesPage({
                   </div>
                 ) : null}
 
-                <div className="field">
-                  <span>{t("recipes.facet")}</span>
-                  <MenuSelect
-                    value={draft.thread_facet}
-                    options={[
-                      { value: "", label: t("recipes.facetNone") },
-                      { value: "ticket", label: t("recipes.facetTicket") },
-                      { value: "agent", label: t("recipes.facetAgent") },
-                      { value: "chat", label: t("recipes.facetChat") },
-                    ]}
-                    onChange={(thread_facet) =>
-                      setDraft((current) => ({
-                        ...current,
-                        thread_facet: thread_facet as ThreadFacet | "",
-                      }))
-                    }
-                  />
-                </div>
+                {draft.trigger_kind === "pull" ? (
+                  <div className="field">
+                    <span>{t("recipes.interval")}</span>
+                    <div className="seg">
+                      {PULL_INTERVALS.map((choice) => (
+                        <button
+                          key={choice.ms}
+                          type="button"
+                          className={draft.interval_ms === choice.ms ? "active" : undefined}
+                          onClick={() =>
+                            setDraft((current) => ({ ...current, interval_ms: choice.ms }))
+                          }
+                        >
+                          {t(choice.label)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </section>
 
-              <section className="recipe-block">
+              <section className="recipe-section">
                 <h3>{t("recipes.then")}</h3>
                 <div className="field">
-                  <span>{t("recipes.runWith")}</span>
                   {executors.length === 1 ? (
                     <p className="recipe-chip">{executors[0].label}</p>
                   ) : (
-                    <MenuSelect
-                      value={draft.executor_type}
-                      options={executors.map((item) => ({
-                        value: item.executor_type,
-                        label: item.label,
-                      }))}
-                      onChange={(executor_type) =>
-                        setDraft((current) =>
-                          withSuggestedName({
-                            ...current,
-                            executor_type,
-                            config: configFromCatalog(
-                              executors.find((item) => item.executor_type === executor_type),
-                            ),
-                          }),
-                        )
-                      }
-                    />
+                    <>
+                      <span>{t("recipes.runWith")}</span>
+                      <MenuSelect
+                        value={draft.executor_type}
+                        options={executors.map((item) => ({
+                          value: item.executor_type,
+                          label: item.label,
+                        }))}
+                        onChange={(executor_type) =>
+                          setDraft((current) =>
+                            withSuggestedName({
+                              ...current,
+                              executor_type,
+                              config: configFromCatalog(
+                                executors.find((item) => item.executor_type === executor_type),
+                              ),
+                            }),
+                          )
+                        }
+                      />
+                    </>
                   )}
                 </div>
+                {catalog?.fields.length ? (
+                  <RecipeParams
+                    catalog={catalog}
+                    values={draft.config}
+                    fallbackTitle={t("recipes.params")}
+                    onChange={(key, value) =>
+                      setDraft((current) => ({
+                        ...current,
+                        config: { ...current.config, [key]: value },
+                      }))
+                    }
+                  />
+                ) : null}
               </section>
-            </div>
-
-            <section className="recipe-block recipe-block-how">
-              <h3>{t("recipes.how")}</h3>
-              {catalog?.fields.length ? (
-                <RecipeParams
-                  catalog={catalog}
-                  values={draft.config}
-                  fallbackTitle={t("recipes.params")}
-                  onChange={(key, value) =>
-                    setDraft((current) => ({
-                      ...current,
-                      config: { ...current.config, [key]: value },
-                    }))
-                  }
-                />
-              ) : null}
-              <div className="recipe-context">
-                <SwitchRow
-                  checked={draft.include_context}
-                  onChange={(include_context) =>
-                    setDraft((current) => ({ ...current, include_context }))
-                  }
-                >
-                  {t("recipes.includeContextCheck")}
-                </SwitchRow>
-                <p className="muted">{t("recipes.includeContextHint")}</p>
-              </div>
-            </section>
+              <MoreOptions
+                key={draft.id ?? "new"}
+                draft={draft}
+                setDraft={setDraft}
+                t={t}
+              />
           </div>
 
           <div className="recipe-form-foot">
@@ -405,46 +426,56 @@ export function RecipesPage({
                 </SwitchRow>
               ) : null}
               {draft.can_write_back ? (
-                <p className="muted recipe-writeback-hint">{t("recipes.writeBackHint")}</p>
+                <p className="muted recipe-writeback-hint">
+                  {t(
+                    draft.trigger_kind === "pull"
+                      ? "recipes.writeBackHintPull"
+                      : "recipes.writeBackHint",
+                  )}
+                </p>
               ) : null}
             </div>
 
-            <label className="field">
-              <span>{t("recipes.name")}</span>
-              <input
-                value={draft.name}
-                placeholder={suggestedName}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    name: event.target.value,
-                    nameTouched: true,
-                  }))
-                }
-              />
-            </label>
-
-            <div className="install-actions">
-              {draft.id || returnToWork ? (
-                <button type="button" className="ghost" onClick={resetDraft}>
-                  {t("recipes.cancel")}
+            <div className="recipe-commit">
+              <label className="field">
+                <span>{t("recipes.name")}</span>
+                <input
+                  value={draft.name}
+                  placeholder={suggestedName}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      name: event.target.value,
+                      nameTouched: true,
+                    }))
+                  }
+                />
+              </label>
+              <div className="install-actions">
+                {draft.id || returnToWork ? (
+                  <button type="button" className="ghost" onClick={resetDraft}>
+                    {t("recipes.cancel")}
+                  </button>
+                ) : null}
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={
+                    busy ||
+                    !draft.executor_type ||
+                    ((draft.scope === "thread" || draft.trigger_kind === "pull") &&
+                      !draft.thread_id)
+                  }
+                >
+                  {busy
+                    ? t("recipes.saving")
+                    : draft.id
+                      ? t("recipes.update")
+                      : returnToWork
+                        ? t("recipes.bindBack")
+                        : t("recipes.save")}
                 </button>
-              ) : null}
-              <button
-                type="submit"
-                className="primary"
-                disabled={
-                  busy || !draft.executor_type || (draft.scope === "thread" && !draft.thread_id)
-                }
-              >
-                {busy
-                  ? t("recipes.saving")
-                  : draft.id
-                    ? t("recipes.update")
-                    : returnToWork
-                      ? t("recipes.bindBack")
-                      : t("recipes.save")}
-              </button>
+              </div>
             </div>
           </div>
         </form>
@@ -460,25 +491,6 @@ export function RecipesPage({
         <h1>{t("recipes.title")}</h1>
         <p className="page-lead">{t("recipes.lead")}</p>
       </header>
-      {recipes.length === 0 ? (
-        <ol className="step-grid">
-          <li>
-            <span className="step-index">1</span>
-            <strong>{t("recipes.step1Title")}</strong>
-            {t("recipes.step1Body")}
-          </li>
-          <li>
-            <span className="step-index">2</span>
-            <strong>{t("recipes.step2Title")}</strong>
-            {t("recipes.step2Body")}
-          </li>
-          <li>
-            <span className="step-index">3</span>
-            <strong>{t("recipes.step3Title")}</strong>
-            {t("recipes.step3Body")}
-          </li>
-        </ol>
-      ) : null}
       {formFirst ? formCard : null}
       {listCard}
       {formFirst ? null : formCard}
@@ -522,10 +534,129 @@ function scopeChoices(t: Translate): Array<{ id: RecipeScope; label: string }> {
   ];
 }
 
+function triggerChoices(
+  t: Translate,
+): Array<{ id: RecipeTriggerKind; label: string }> {
+  return [
+    { id: "push", label: t("recipes.triggerPush") },
+    { id: "pull", label: t("recipes.triggerPull") },
+    { id: "manual", label: t("recipes.triggerManual") },
+  ];
+}
+
+function MoreOptions({
+  draft,
+  setDraft,
+  t,
+}: {
+  draft: RecipeDraft;
+  setDraft: Dispatch<SetStateAction<RecipeDraft>>;
+  t: Translate;
+}) {
+  const advancedDirty =
+    Boolean(draft.thread_facet) ||
+    (draft.trigger_kind === "push" && !draft.coalesce) ||
+    (draft.trigger_kind !== "pull" && draft.include_context);
+  const [open, setOpen] = useState(advancedDirty);
+  return (
+    <div className="recipe-more">
+      <button
+        type="button"
+        className="recipe-more-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {t("recipes.advanced")}
+        <span aria-hidden="true">{open ? "−" : "+"}</span>
+      </button>
+      {open ? (
+      <div className="recipe-more-body">
+        <div className="field">
+          <span>{t("recipes.facet")}</span>
+          <MenuSelect
+            value={draft.thread_facet}
+            options={[
+              { value: "", label: t("recipes.facetNone") },
+              { value: "ticket", label: t("recipes.facetTicket") },
+              { value: "agent", label: t("recipes.facetAgent") },
+              { value: "chat", label: t("recipes.facetChat") },
+            ]}
+            onChange={(thread_facet) =>
+              setDraft((current) => ({
+                ...current,
+                thread_facet: thread_facet as ThreadFacet | "",
+              }))
+            }
+          />
+        </div>
+        {draft.trigger_kind === "pull" ? (
+          <p className="muted">{t("recipes.includeContextHintPull")}</p>
+        ) : (
+          <>
+            <SwitchRow
+              checked={draft.include_context}
+              onChange={(include_context) =>
+                setDraft((current) => ({ ...current, include_context }))
+              }
+            >
+              {t("recipes.includeContextCheck")}
+            </SwitchRow>
+            <p className="muted">{t("recipes.includeContextHint")}</p>
+          </>
+        )}
+        {draft.trigger_kind === "push" ? (
+          <>
+            <SwitchRow
+              checked={draft.coalesce}
+              onChange={(coalesce) =>
+                setDraft((current) => ({ ...current, coalesce }))
+              }
+            >
+              {t("recipes.coalesceCheck")}
+            </SwitchRow>
+            <p className="muted">{t("recipes.coalesceHint")}</p>
+          </>
+        ) : null}
+        {draft.can_write_back ? (
+          <p className="muted">{t("recipes.writeBackMatchHint")}</p>
+        ) : null}
+      </div>
+      ) : null}
+    </div>
+  );
+}
+
+function triggerHint(kind: RecipeTriggerKind, t: Translate): string {
+  if (kind === "pull") {
+    return t("recipes.triggerPullHint");
+  }
+  if (kind === "manual") {
+    return t("recipes.triggerManualHint");
+  }
+  return t("recipes.triggerPushHint");
+}
+
+function applyTriggerKind(draft: RecipeDraft, kind: RecipeTriggerKind): RecipeDraft {
+  if (kind === "pull") {
+    return {
+      ...draft,
+      trigger_kind: "pull",
+      scope: "thread",
+      include_context: true,
+      can_write_back: true,
+      interval_ms: draft.interval_ms || 60 * 60 * 1000,
+    };
+  }
+  return { ...draft, trigger_kind: kind };
+}
+
 interface RecipeDraft {
   id?: string;
   name: string;
   nameTouched: boolean;
+  trigger_kind: RecipeTriggerKind;
+  interval_ms: number;
+  coalesce: boolean;
   scope: RecipeScope;
   source: string;
   thread_id: string;
@@ -542,6 +673,9 @@ function emptyDraft(executorType = ""): RecipeDraft {
   return {
     name: "",
     nameTouched: false,
+    trigger_kind: "push",
+    interval_ms: 60 * 60 * 1000,
+    coalesce: true,
     scope: "tasks",
     source: "",
     thread_id: "",
@@ -606,6 +740,9 @@ function draftFromRecipe(
     id: recipe.id,
     name: recipe.name,
     nameTouched: true,
+    trigger_kind: recipe.trigger?.kind ?? "push",
+    interval_ms: recipe.trigger?.interval_ms ?? 60 * 60 * 1000,
+    coalesce: recipe.trigger?.coalesce !== false,
     scope: recipe.match.thread_id
       ? "thread"
       : recipe.match.source
@@ -624,6 +761,12 @@ function draftFromRecipe(
 }
 
 function draftMatch(draft: RecipeDraft): RecipeMatch {
+  if (draft.trigger_kind === "pull") {
+    return {
+      ...(draft.thread_id.trim() ? { thread_id: draft.thread_id.trim() } : {}),
+      ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
+    };
+  }
   return {
     ...(draft.scope === "thread"
       ? { thread_id: draft.thread_id.trim() }
@@ -635,7 +778,20 @@ function draftMatch(draft: RecipeDraft): RecipeMatch {
   };
 }
 
-function canAutoStart(match: RecipeMatch): boolean {
+function draftTrigger(draft: RecipeDraft): RecipeView["trigger"] {
+  if (draft.trigger_kind === "pull") {
+    return { kind: "pull", interval_ms: draft.interval_ms };
+  }
+  if (draft.trigger_kind === "manual") {
+    return { kind: "manual" };
+  }
+  return { kind: "push", coalesce: draft.coalesce };
+}
+
+function canAutoStart(match: RecipeMatch, draft: RecipeDraft): boolean {
+  if (draft.trigger_kind === "pull") {
+    return Boolean(match.thread_id && draft.interval_ms);
+  }
   return Boolean(
     match.thread_id ||
       match.record_class === "task" ||
@@ -644,6 +800,12 @@ function canAutoStart(match: RecipeMatch): boolean {
 }
 
 function scopeError(draft: RecipeDraft, t: Translate): string {
+  if (draft.trigger_kind === "pull") {
+    if (!draft.thread_id.trim()) {
+      return t("recipes.errPullThread");
+    }
+    return t("recipes.errInterval");
+  }
   if (draft.scope === "thread") {
     return t("recipes.errThread");
   }
@@ -667,6 +829,14 @@ function suggestedRecipeName(
   t: Translate,
 ): string {
   const executor = catalog?.label ?? t("recipes.executorFallback");
+  if (draft.trigger_kind === "pull") {
+    const title = draft.thread_title.trim() || t("recipes.thisConversation");
+    return t("recipes.suggestedPull", { title, executor });
+  }
+  if (draft.trigger_kind === "manual" && draft.scope === "thread") {
+    const title = draft.thread_title.trim() || t("recipes.thisConversation");
+    return t("recipes.suggestedManual", { title, executor });
+  }
   if (draft.scope === "thread") {
     const title = draft.thread_title.trim() || t("recipes.thisConversation");
     return t("recipes.suggestedThread", { title, executor });
@@ -712,7 +882,71 @@ function conversationChoices(
   return options;
 }
 
+function intervalCopy(intervalMs: number | undefined, t: Translate): string {
+  const found = PULL_INTERVALS.find((item) => item.ms === intervalMs);
+  return found ? t(found.label) : t("recipes.triggerPull");
+}
+
+function recipeCardLine(
+  recipe: RecipeView,
+  sources: RecipeSourceOption[],
+  conversations: RecipeConversationOption[],
+  executor: string,
+  t: Translate,
+): string {
+  const outcome = recipe.can_write_back
+    ? t("recipes.outcomeBack")
+    : recipe.trigger?.kind === "pull"
+      ? t("recipes.outcomeKeep")
+      : "";
+  return t("recipes.cardLine", {
+    when: whenCopy(recipe, sources, conversations, t),
+    executor,
+    outcome,
+  });
+}
+
+function nextRunCopy(recipe: RecipeView, t: Translate): string | null {
+  if ((recipe.trigger?.kind ?? "push") !== "pull") {
+    return null;
+  }
+  const next = formatNextRunWhen(recipe.next_run_at);
+  if (next === "due") {
+    return t("recipes.nextRunDue");
+  }
+  if (next) {
+    return t("recipes.nextRun", { when: next });
+  }
+  return null;
+}
+
 function whenCopy(
+  recipe: RecipeView,
+  sources: RecipeSourceOption[],
+  conversations: RecipeConversationOption[],
+  t: Translate,
+): string {
+  const kind = recipe.trigger?.kind ?? "push";
+  const matchWhen = matchWhenCopy(recipe, sources, conversations, t);
+  if (kind === "pull") {
+    const title =
+      conversations.find((item) => item.id === recipe.match.thread_id)?.label ??
+      (recipe.match.thread_id ? shortThread(recipe.match.thread_id) : t("recipes.thisConversation"));
+    return t("recipes.whenPull", {
+      interval: intervalCopy(recipe.trigger?.interval_ms, t),
+      thread: title,
+    });
+  }
+  if (kind === "manual") {
+    return t("recipes.whenManual", { when: matchWhen });
+  }
+  if (recipe.match.thread_id) {
+    return t("recipes.whenPush", { when: matchWhen });
+  }
+  return t("recipes.whenPush", { when: matchWhen });
+}
+
+function matchWhenCopy(
   recipe: RecipeView,
   sources: RecipeSourceOption[],
   conversations: RecipeConversationOption[],

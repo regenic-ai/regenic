@@ -1,17 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { ExecutorRunHandle } from "./executor";
-import { recipeAllowsAutoStart } from "./recipe-trigger";
+import {
+  recipeAllowsBind,
+  recipeAllowsPushDispatch,
+  recipeMatchIsSpecific,
+  recipeWantsCoalesce,
+  recipeWantsWriteBack,
+} from "./recipe-trigger";
 import { recordClassFromType, type RecordClass } from "./record-class";
-import { matchRecipe, type RecipeSubject } from "./recipe-match";
+import { recipeMatches, recipeSpecificity, type RecipeSubject } from "./recipe-match";
 import type { PromptAnswer, ThreadPrompt } from "./thread-surface";
 import {
   mergeThreadFacet,
   projectThreadFacet,
   type ThreadFacet,
 } from "./thread-facet";
+import { deliveryFaceOf } from "./work-delivery";
 import {
   isActiveWorkStatus,
   type Recipe,
+  type WorkDelivery,
   type WorkFace,
   type WorkItem,
   type WorkItemStatus,
@@ -26,7 +34,7 @@ export function shouldOpenWorkItem(input: {
   if (input.record_class === "task") {
     return true;
   }
-  return input.recipe !== undefined && recipeAllowsAutoStart(input.recipe.match);
+  return input.recipe !== undefined && recipeAllowsPushDispatch(input.recipe);
 }
 
 export function workSubjectFromEvent(input: {
@@ -70,9 +78,27 @@ export function openOrUpdateWorkItem(input: {
   const current = input.existing;
   const unit_key = input.head_event_id ?? current?.unit_key ?? `job:${input.subject.thread_id}`;
   if (current && isActiveWorkStatus(current.status)) {
+    if (
+      !recipeWantsCoalesce(input.recipe) &&
+      input.head_event_id &&
+      input.head_event_id !== current.head_event_id
+    ) {
+      return {
+        id: `work-${randomUUID()}`,
+        org_id: input.org_id,
+        thread_id: input.subject.thread_id,
+        unit_key,
+        head_event_id: input.head_event_id,
+        record_class: input.subject.record_class,
+        thread_facet: input.subject.thread_facet,
+        status: "open",
+        recipe_id: input.recipe?.id,
+        created_at: input.now,
+        updated_at: input.now,
+      };
+    }
     const next = {
       ...current,
-      head_event_id: input.head_event_id ?? current.head_event_id,
       record_class: input.subject.record_class,
       thread_facet: input.subject.thread_facet,
       recipe_id: input.recipe?.id ?? current.recipe_id,
@@ -113,8 +139,26 @@ export function selectRecipeForSubject(
   recipes: Recipe[],
   subject: RecipeSubject,
 ): Recipe | undefined {
-  const matched = matchRecipe(recipes, subject);
-  if (!matched || !recipeAllowsAutoStart(matched.match)) {
+  const hits = recipes
+    .filter(
+      (recipe) => recipeAllowsBind(recipe) && recipeMatches(recipe.match, subject),
+    )
+    .sort((left, right) => {
+      const bySpec =
+        recipeSpecificity(right.match) - recipeSpecificity(left.match);
+      if (bySpec !== 0) {
+        return bySpec;
+      }
+      const byPush =
+        Number(recipeAllowsPushDispatch(right)) -
+        Number(recipeAllowsPushDispatch(left));
+      if (byPush !== 0) {
+        return byPush;
+      }
+      return left.id < right.id ? -1 : 1;
+    });
+  const matched = hits[0];
+  if (!matched || !recipeMatchIsSpecific(matched.match)) {
     return undefined;
   }
   return matched;
@@ -156,7 +200,26 @@ export function shouldWriteBackHandle(
   handle: Pick<ExecutorRunHandle, "status" | "result">,
   canWriteBack: boolean,
 ): boolean {
-  return handle.status === "completed" && canWriteBack && Boolean(handle.result);
+  return handle.status === "completed" && canWriteBack;
+}
+
+export function failedWorkStart(input: {
+  item: WorkItem;
+  recipe: Recipe;
+  error: string;
+  now: string;
+}): WorkRun {
+  return {
+    id: `run-${randomUUID()}`,
+    org_id: input.item.org_id,
+    work_item_id: input.item.id,
+    recipe_id: input.recipe.id,
+    executor_type: input.recipe.executor_type,
+    status: "failed",
+    result: { summary: input.error },
+    created_at: input.now,
+    updated_at: input.now,
+  };
 }
 
 export function matchWriteBackPrompt(
@@ -224,17 +287,20 @@ export function workFaceOf(
   item: WorkItem,
   recipe?: Recipe | null,
   run?: WorkRun | null,
+  delivery?: WorkDelivery | null,
 ): WorkFace {
   const result_summary = run?.result?.summary?.trim();
+  const delivery_face = deliveryFaceOf(delivery);
   return {
     id: item.id,
     status: item.status,
     recipe_id: item.recipe_id,
     executor_type: run?.executor_type ?? recipe?.executor_type,
     agent_thread_id: run?.agent_thread_id,
-    can_write_back: recipe?.can_write_back,
+    can_write_back: recipe ? recipeWantsWriteBack(recipe) : undefined,
     has_result: Boolean(result_summary),
     ...(result_summary ? { result_summary } : {}),
+    ...(delivery_face ? { delivery: delivery_face } : {}),
     updated_at: item.updated_at,
   };
 }

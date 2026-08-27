@@ -75,6 +75,7 @@ export interface ConnectorSyncOptions {
   skipIdle?: boolean;
   capCatchUp?: boolean;
   allowHistory?: boolean;
+  discover?: boolean;
 }
 
 export interface ConnectorSyncView {
@@ -715,6 +716,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         skipIdle: true,
         capCatchUp: true,
         allowHistory: false,
+        discover: true,
       });
     } catch (error) {
       await applyPullOutcome([error]);
@@ -754,19 +756,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
     beginPull();
     this.publishStreams();
     try {
+      const threads = await loadEligibleInstallationThreads(
+        store,
+        installation.org_id,
+        installation,
+        driver,
+        preferredThreadId(),
+      );
       const streams = await driver.resolveStreams(
         installation,
         host,
         process.env,
-        {
-          threads: await loadEligibleInstallationThreads(
-            store,
-            installation.org_id,
-            installation,
-            driver,
-            preferredThreadId(),
-          ),
-        },
+        { threads, discover: options?.discover === true },
       );
       this.pruneStreamPace(installation.id, streams);
       const now = Date.now();

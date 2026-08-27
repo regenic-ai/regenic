@@ -136,6 +136,11 @@ interface Recipe {
     source?: string;
     thread_id?: string;
   };
+  trigger: {
+    kind: "push" | "pull" | "manual";
+    interval_ms?: number;
+    coalesce?: boolean;
+  };
   executor_type: string;
   executor_config: Record<string, unknown>;
   can_write_back: boolean;
@@ -158,13 +163,27 @@ interface ResultEnvelope {
 | Job (`WorkItem`) | 一个工作单元，`unit_key` | 一条线程一辈子一张单 |
 | Inferior (`WorkRun`) | 一次执行；sysout 默认不进列表 | 用户自己开的 Agent 闲聊 |
 
-开单：`record_class = task`，或 Recipe 满足 **AutoStart Specification**（`thread_id`，或 `record_class=task`，或 `source` + 非 utterance 的 class）。空 match、只写 source、只写 utterance、只写 facet 都不自动开跑。
+`match` 必须具体（`thread_id`，或 `record_class=task`，或 `source` + 非 utterance 的 class）。空 match、只写 source、只写 utterance、只写 facet 不能保存。
+
+`trigger` 是一等字段，和 match 分开：
+
+| `kind` | 何时开跑 | `unit_key` | 证据 |
+|---|---|---|---|
+| `push` | 已入库的入站 user 消息/工单 | `event_id` | 触发消息；`include_context` 可选 |
+| `pull` | 时钟到期；必须有 `thread_id` + `interval_ms` | `pull:{recipe_id}:{next_run_at}` | 会话上下文是主输入；默认回写 |
+| `manual` | 只在当前工作点「开始执行」 | 与 push 相同 | 同 push |
+
+Push 合同：outbound / assistant / 本规则写回不触发；`(recipe, event)` 幂等；`coalesce` 默认真：running 时不改 `head_event_id`，结束后用最新头再开一轮。`coalesce=false` 时，活跃 Job 遇到新头立刻开新 Job。执行失败留在 `WorkItem.failed`，按 30s / 2min / 8min 最多重试 3 次（计次是 `WorkRun`）。连接器丢消息是 L0 的事。Manual 规则可以绑到对得上的 Job，但不 `start`。
+
+Pull 合同：独立于连接器 pull。`next_run_at` 持久化，休眠醒来仍认账。上一 occurrence 还在跑则跳过。到期只补跑一轮，然后把 `next_run_at` 跳到未来。内核仍不读 `executor_config` 的 key。
+
+投递账本只负责 egress，不负责开跑。Job 完成且需要回写时入队，快照写进 `payload`，并记下稳定 `idempotency_key`。Tick 认 `queued` 和到期的 `failed`；`write_back` 带 60s 租约，超时回 `queued`。渠道发送限 45s，超时不标失败，留下租约。发送成功立刻记下 `channel_receipt`，崩溃后跳过重发、只补 ingest。`applyHandle` 只入队，不在同一趟 `await` 发送。开跑、盯执行、刷投递三路 tick 各持一把锁，egress 卡住不得停采集或 Pull。`acked` / `dead` 只表示有没有发回渠道。Dismiss 把未闭合的账本标 `acked/skipped`。空正文不得当成成功跳过。桌面 `attention` 以内核脸为准：`waiting_you` / `needs_ack` / `running` 压过本地 unread。
 
 同一 Session 上已完成的 Job 遇到新 `head_event_id` 开**新 Job**，不复活旧单。列表脸取当前前台 Job。
 
-没有 `can_write_back` 不得 egress。蒸馏或看过 Digest ≠ 发送权。
+没有 `can_write_back` 不得 egress（Pull 默认开）。蒸馏或看过 Digest ≠ 发送权。
 
-`include_context` 为真时，开跑只取来源会话最近一页可见历史写入 evidence（条数和字数封顶，多出来的标 omitted），禁止把几千上万条整段拉进内核或执行器。默认只带触发/头消息。这是内核证据策略，不是 `executor_config` 的 key。不同会话要不同策略时，用更具体的 Recipe（一条会话）覆盖。
+`include_context` 为真或 `trigger.kind=pull` 时，开跑只取来源会话最近一页可见历史写入 evidence（条数和字数封顶，多出来的标 omitted），禁止把几千上万条整段拉进内核或执行器。Push 默认只带触发/头消息。这是内核证据策略，不是 `executor_config` 的 key。
 
 ## 9. TaskExecutor
 
@@ -223,7 +242,7 @@ interface ExecutorCatalogEntry {
 
 拼 stdin / HTTP / Agent 目标是插件自己的事。DSH 用 `skill` / `prompt`；Cursor、bioby-agent 各自声明 repo、模型、目标或约束。旧 DSH 配方里的 `instruction` 只在 DSH 插件内映射为 `prompt`。
 
-连接器 ≠ 执行器。同一插件包可以同时挂 L0 `ChannelDriver` 和 L6 `TaskExecutor`（DSH 已如此：Engine 装渠道，执行器安装再绑这条渠道或走 HTTP）。bioby-agent 按同样方式接入，不把私有 HTTP 写进内核或规则页。
+连接器 ≠ 执行器。同一插件包可以同时挂 L0 `ChannelDriver` 和 L6 `TaskExecutor`（DSH 已如此：Engine 装渠道，执行器安装再绑这条渠道或走 HTTP）。额外包走 `REGENIC_PLUGIN_DIR` / `REGENIC_CHANNEL_PLUGIN` 进程内加载，内核不 import 包名。出进程只走通用 HTTP 执行器，不另起 extension host。bioby-agent 按同样方式接入，不把私有 HTTP 写进内核或规则页。
 
 挂起映射为渠道无关 Prompt，走 `POST /v1/me/conversations/prompts`，禁止再走 egress。绑定 inferior 上的 Prompt 装饰到来源 Session 那一行。
 
@@ -236,7 +255,7 @@ interface ExecutorCatalogEntry {
 - `normal`：置顶 → 最近活动
 - `attention`：`waiting_you` → `needs_ack` → `running` → `unread` → `quiet`；同档再按时间。`running` 不因 status tick 重排，不点未读。
 
-桌面读 `record_class`、`thread_facet`、`attention`、`work`。Recipes 单独一页：绑 task、某一来源的 task、或一条会话，再到 Current work 里 Start run。人不想跟的 Job 可以 dismiss，不要 Mark done。不按连接器名判断人聊 / Agent / 工单。
+桌面读 `record_class`、`thread_facet`、`attention`、`work`（含 `work.delivery`）。规则页先问何时跑（有新消息 / 定时 / 仅手动），再选范围与执行器。Push 与 Pull 自动开跑；「开始执行」留给手动、失败重试、立刻跑一轮；回写失败或死信时同一按钮表示重试投递。人不想跟的 Job 可以 dismiss，不要 Mark done。不按连接器名判断人聊 / Agent / 工单。
 
 ## 11. 个人 API
 
@@ -265,3 +284,4 @@ interface ExecutorCatalogEntry {
 4. 列表能在 Attention 与正常排序之间切换，刷新后保持。
 5. 一条来源任务在列表里是一行；机器进度画在这行上。
 6. 连接器测试可以点名飞书或 DSH；内核的 L4/L5/L6 测试不可以。
+7. 需要回写的 Job 入队时带 payload 快照；发出或明确跳过才 `acked`；租约超时会回到队列；三次发送失败进死信并在列表可见。执行失败不计进投递账本。

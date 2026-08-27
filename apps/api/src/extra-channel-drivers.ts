@@ -1,29 +1,52 @@
 import { createRequire } from "node:module";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-import type { ChannelDriver } from "@regenic/domain";
+import type { ChannelDriver, TaskExecutor } from "@regenic/domain";
 
 const nodeRequire = createRequire(__filename);
 
 /**
- * Load extra ChannelDrivers from env at process start. The public tree
- * does not know private package names or sibling checkout paths.
+ * Load extra ChannelDrivers and TaskExecutors from env at process start.
+ * The public tree does not know private package names or sibling paths.
  *
  * - REGENIC_CHANNEL_PLUGIN: module id or absolute path to one package
  * - REGENIC_CRM_CONNECTOR: same, kept for existing deploys
  * - REGENIC_PLUGIN_DIR: directory of packages (each child with package.json)
+ *
+ * One package may export both an L0 driver and an L6 executor. Local
+ * plugins stay in-process; only HTTP executors leave the kernel process.
  */
 export function extraChannelDrivers(
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelDriver[] {
+  return extraPlugins(env).drivers;
+}
+
+export function extraTaskExecutors(
+  env: NodeJS.ProcessEnv = process.env,
+): TaskExecutor[] {
+  return extraPlugins(env).executors;
+}
+
+export function extraPlugins(
+  env: NodeJS.ProcessEnv = process.env,
+): { drivers: ChannelDriver[]; executors: TaskExecutor[] } {
   const drivers: ChannelDriver[] = [];
+  const executors: TaskExecutor[] = [];
   for (const spec of explicitPluginSpecs(env)) {
-    drivers.push(...loadDrivers(spec, { warnIfEmpty: true }));
+    const loaded = loadPlugin(spec, { warnIfEmpty: true });
+    drivers.push(...loaded.drivers);
+    executors.push(...loaded.executors);
   }
   for (const spec of pluginDirSpecs(env)) {
-    drivers.push(...loadDrivers(spec, { warnIfEmpty: false }));
+    const loaded = loadPlugin(spec, { warnIfEmpty: false });
+    drivers.push(...loaded.drivers);
+    executors.push(...loaded.executors);
   }
-  return uniqueDrivers(drivers);
+  return {
+    drivers: uniqueDrivers(drivers),
+    executors: uniqueExecutors(executors),
+  };
 }
 
 export function resolvePluginSpecs(
@@ -61,26 +84,28 @@ function pluginDirSpecs(env: NodeJS.ProcessEnv): string[] {
   return specs;
 }
 
-function loadDrivers(
+function loadPlugin(
   spec: string,
   options: { warnIfEmpty: boolean },
-): ChannelDriver[] {
+): { drivers: ChannelDriver[]; executors: TaskExecutor[] } {
   try {
     const resolved = resolveSpec(spec);
     if (!resolved) {
       console.warn(`regenic extra connector: cannot resolve ${spec}`);
-      return [];
+      return { drivers: [], executors: [] };
     }
-    const drivers = driversFromModule(nodeRequire(resolved));
-    if (drivers.length === 0 && options.warnIfEmpty) {
+    const loaded = nodeRequire(resolved);
+    const drivers = driversFromModule(loaded);
+    const executors = executorsFromModule(loaded);
+    if (drivers.length === 0 && executors.length === 0 && options.warnIfEmpty) {
       console.warn(
-        `regenic extra connector: ${spec} exported no ChannelDriver`,
+        `regenic extra connector: ${spec} exported no ChannelDriver or TaskExecutor`,
       );
     }
-    return drivers;
+    return { drivers, executors };
   } catch (error) {
     console.warn(`regenic extra connector: failed to load ${spec}`, error);
-    return [];
+    return { drivers: [], executors: [] };
   }
 }
 
@@ -111,6 +136,33 @@ function driversFromModule(loaded: unknown): ChannelDriver[] {
   );
 }
 
+function executorsFromModule(loaded: unknown): TaskExecutor[] {
+  if (!loaded || typeof loaded !== "object") {
+    return [];
+  }
+  return Object.values(loaded).filter((value): value is TaskExecutor => {
+    if (!value || typeof value !== "object") {
+      return false;
+    }
+    const executor = value as TaskExecutor;
+    if (
+      typeof executor.executor_type !== "string" ||
+      typeof executor.capabilities !== "function" ||
+      typeof executor.catalog !== "function" ||
+      typeof executor.start !== "function" ||
+      typeof executor.resume !== "function" ||
+      typeof executor.status !== "function"
+    ) {
+      return false;
+    }
+    try {
+      return Boolean(executor.catalog().source?.trim());
+    } catch {
+      return false;
+    }
+  });
+}
+
 function uniqueDrivers(drivers: ChannelDriver[]): ChannelDriver[] {
   const seen = new Set<string>();
   return drivers.filter((driver) => {
@@ -118,6 +170,18 @@ function uniqueDrivers(drivers: ChannelDriver[]): ChannelDriver[] {
       return false;
     }
     seen.add(driver.connector_type);
+    return true;
+  });
+}
+
+function uniqueExecutors(executors: TaskExecutor[]): TaskExecutor[] {
+  const seen = new Set<string>();
+  return executors.filter((executor) => {
+    const source = executor.catalog().source?.trim();
+    if (!source || seen.has(source)) {
+      return false;
+    }
+    seen.add(source);
     return true;
   });
 }

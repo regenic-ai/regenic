@@ -14,6 +14,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "deleteRecipe",
   "putWorkItem",
   "putWorkRun",
+  "putWorkDelivery",
   "putUiPref",
   "putExecutorInstallation",
   "deleteExecutorInstallation",

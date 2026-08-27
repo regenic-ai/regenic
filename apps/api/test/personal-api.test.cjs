@@ -305,6 +305,7 @@ async function seedHostedWork(authority, input) {
     org_id: "local-owner",
     name: "Seed recipe",
     match: { record_class: "task", source: "feishu" },
+    trigger: { kind: "push", coalesce: true },
     executor_type: "dsh",
     executor_config: {},
     can_write_back: true,
@@ -2314,12 +2315,43 @@ describe("personal /v1/me", () => {
       assert.equal(created.executor_type, "dsh");
       assert.equal(created.can_write_back, true);
       assert.equal(created.include_context, true);
+      assert.equal(created.trigger.kind, "push");
+      assert.equal(created.trigger.coalesce, true);
       assert.equal(created.executor_config.skill, "review");
+      const pullMissing = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Morning digest",
+          match: { record_class: "task" },
+          trigger: { kind: "pull", interval_ms: 3_600_000 },
+          executor_type: "dsh",
+        }),
+      });
+      assert.equal(pullMissing.status, 400);
+      const pulled = await (
+        await fetch(`${origin}/v1/me/recipes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "Morning digest",
+            match: { thread_id: "feishu:oc_chat" },
+            trigger: { kind: "pull", interval_ms: 3_600_000 },
+            executor_type: "dsh",
+          }),
+        })
+      ).json();
+      assert.equal(pulled.trigger.kind, "pull");
+      assert.equal(pulled.trigger.interval_ms, 3_600_000);
+      assert.equal(pulled.can_write_back, true);
+      assert.equal(pulled.include_context, true);
+      assert.ok(pulled.next_run_at);
       assert.equal(created.executor_config.prompt, "Reply with a decision.");
       const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
-      assert.equal(recipes.length, 1);
-      assert.equal(recipes[0].executor_config.prompt, "Reply with a decision.");
-      assert.equal(recipes[0].include_context, true);
+      assert.equal(recipes.length, 2);
+      const listed = recipes.find((recipe) => recipe.name === "Feishu tasks");
+      assert.equal(listed.executor_config.prompt, "Reply with a decision.");
+      assert.equal(listed.include_context, true);
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",

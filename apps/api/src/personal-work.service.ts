@@ -1,94 +1,46 @@
-import { randomUUID } from "node:crypto";
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
-  ChannelDriver,
   ChannelDriverRegistry,
-  INGEST_SCHEMA_VERSION,
   INBOX_SORT_PREF_KEY,
   cancelWorkRun,
-  channelRecord,
-  WORK_EVIDENCE_FETCH_LIMIT,
-  composeWorkEvidenceText,
-  conversationId,
-  currentJobOnSession,
-  formatWorkEvidence,
+  deliveryAbandoned,
   hiddenExecutorThreadIds,
-  isAbandonedWorkItem,
   isActiveWorkStatus,
-  recipeAllowsAutoStart,
-  isRecordClass,
-  isThreadFacet,
+  isDeadLetter,
   normalizeInboxSort,
-  openOrUpdateWorkItem,
   parseConversationThread,
-  recipeSpecificity,
-  pickAbsenteeInboxRows,
-  selectRecipeForSubject,
-  selectThreadEvidenceLines,
+  shouldFlushDelivery,
   shouldRefreshActiveRun,
-  shouldWriteBackHandle,
-  matchWriteBackPrompt,
-  toReplyParts,
-  transcriptFromAbsenteeLive,
-  workFaceOf,
-  workStatusFromHandle,
-  workSubjectFromEvent,
-  type ArrangementDecision,
-  type AttentionClass,
-  type ConnectorInstallation,
-  type ContentPart,
   type ConversationThread,
-  type EventRecord,
-  type ExecutorContext,
-  type ExecutorRunHandle,
-  type InboxItem,
   type InboxSortMode,
-  type JsonValue,
   type PromptAnswer,
   type Recipe,
-  type RecipeMatch,
-  type RecordClass,
-  type TaskExecutor,
-  type ThreadFacet,
   type ThreadPrompt,
-  type Transcript,
-  type WorkEvidenceLine,
-  type WorkFace,
   type WorkItem,
   type WorkRun,
 } from "@regenic/domain";
-import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalExecutorService } from "./personal-executor.service";
+import { PersonalRuntimeService } from "./personal-runtime.service";
+import { PersonalWorkChannel } from "./personal-work-channel";
+import { PersonalWorkDispatch } from "./personal-work-dispatch";
+import { workInboxFaces, type WorkInboxFace } from "./personal-work-faces";
+import { PersonalWorkFlush } from "./personal-work-flush";
+import { normalizeRecipe, type RecipeInput } from "./personal-work-recipe";
 import {
-  PersonalKernelStoppedError,
-  PersonalRuntimeService,
-} from "./personal-runtime.service";
+  delay,
+  forceDisposition,
+  isWorkTickShutdown,
+} from "./personal-work-support";
+import { PersonalWorkSupervise } from "./personal-work-supervise";
+
+export type { RecipeInput } from "./personal-work-recipe";
+export type { WorkInboxFace } from "./personal-work-faces";
 
 const WORK_TICK_MS = 3_000;
 
-export interface RecipeInput {
-  id?: string;
-  name?: string;
-  match?: RecipeMatch;
-  executor_type?: string;
-  executor_config?: Record<string, JsonValue>;
-  can_write_back?: boolean;
-  include_context?: boolean;
-  enabled?: boolean;
-}
-
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
-}
-
-export interface WorkInboxFace {
-  record_class: RecordClass;
-  thread_facet: ThreadFacet;
-  attention: AttentionClass;
-  work?: WorkFace;
-  agent_thread_id?: string;
-  extra_prompts?: ThreadPrompt[];
 }
 
 export interface WorkRunView {
@@ -99,15 +51,26 @@ export interface WorkRunView {
 @Injectable()
 export class PersonalWorkService implements OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | undefined;
-  private ticking = false;
+  private dispatching = false;
+  private supervising = false;
+  private flushing = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
+  private readonly channel: PersonalWorkChannel;
+  private readonly dispatch: PersonalWorkDispatch;
+  private readonly supervise: PersonalWorkSupervise;
+  private readonly flush: PersonalWorkFlush;
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
-    private readonly drivers: ChannelDriverRegistry,
+    drivers: ChannelDriverRegistry,
     private readonly executors: PersonalExecutorService,
-  ) {}
+  ) {
+    this.channel = new PersonalWorkChannel(runtime, drivers);
+    this.supervise = new PersonalWorkSupervise(runtime, this.channel);
+    this.dispatch = new PersonalWorkDispatch(runtime, this.channel, this.supervise);
+    this.flush = new PersonalWorkFlush(runtime, this.channel);
+  }
 
   startAfterListen(): void {
     if (this.backgroundStarted) {
@@ -148,7 +111,7 @@ export class PersonalWorkService implements OnModuleDestroy {
 
   private async waitForQuiet(timeoutMs = 10_000): Promise<void> {
     const started = Date.now();
-    while (this.ticking) {
+    while (this.dispatching || this.supervising || this.flushing) {
       if (Date.now() - started > timeoutMs) {
         throw storeBusyError();
       }
@@ -157,27 +120,74 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 
   async afterConnectorTick(): Promise<void> {
-    if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
+    if (this.maintenanceHold || !this.runtime.isReady()) {
       return;
     }
-    this.ticking = true;
-    if (this.maintenanceHold) {
-      this.ticking = false;
+    await Promise.all([
+      this.tickDispatch(),
+      this.tickSupervise(),
+      this.tickFlush(),
+    ]);
+  }
+
+  private async tickDispatch(): Promise<void> {
+    if (this.maintenanceHold || this.dispatching || !this.runtime.isReady()) {
       return;
     }
+    this.dispatching = true;
     try {
       await this.executors.ensureMounted();
       if (!this.runtime.isReady()) {
         return;
       }
-      await this.reconcileInbox();
-      await this.refreshRuns();
+      await this.dispatch.reconcileInbox();
+      await this.dispatch.dispatchPullRecipes();
     } catch (error) {
       if (!isWorkTickShutdown(error)) {
-        console.error("personal work tick failed", error);
+        console.error("personal work dispatch failed", error);
       }
     } finally {
-      this.ticking = false;
+      this.dispatching = false;
+    }
+  }
+
+  private async tickSupervise(): Promise<void> {
+    if (this.maintenanceHold || this.supervising || !this.runtime.isReady()) {
+      return;
+    }
+    this.supervising = true;
+    try {
+      await this.executors.ensureMounted();
+      if (!this.runtime.isReady()) {
+        return;
+      }
+      await this.supervise.refreshRuns();
+    } catch (error) {
+      if (!isWorkTickShutdown(error)) {
+        console.error("personal work supervise failed", error);
+      }
+    } finally {
+      this.supervising = false;
+    }
+  }
+
+  private async tickFlush(): Promise<void> {
+    if (this.maintenanceHold || this.flushing || !this.runtime.isReady()) {
+      return;
+    }
+    this.flushing = true;
+    try {
+      await this.executors.ensureMounted();
+      if (!this.runtime.isReady()) {
+        return;
+      }
+      await this.flush.flushDeliveries();
+    } catch (error) {
+      if (!isWorkTickShutdown(error)) {
+        console.error("personal work flush failed", error);
+      }
+    } finally {
+      this.flushing = false;
     }
   }
 
@@ -252,32 +262,20 @@ export class PersonalWorkService implements OnModuleDestroy {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [items, runs, recipes] = await Promise.all([
+    const [items, runs, recipes, deliveries] = await Promise.all([
       authority.listWorkItems(orgId),
       authority.listWorkRuns(orgId),
       authority.listRecipes(orgId),
+      authority.listWorkDeliveries(orgId),
     ]);
-    const recipesById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
-    const runsByItem = latestRunsByItem(runs);
-    const wanted = new Set(threadIds);
-    const faces = new Map<string, WorkInboxFace>();
-    for (const threadId of wanted) {
-      const item = currentJobOnSession(items, threadId);
-      if (!item) {
-        continue;
-      }
-      const recipe = item.recipe_id ? recipesById.get(item.recipe_id) : undefined;
-      const run = runsByItem.get(item.id);
-      const work = workFaceOf(item, recipe, run);
-      faces.set(threadId, {
-        record_class: item.record_class,
-        thread_facet: item.thread_facet,
-        attention: attentionForWork(work, extraPrompts.get(threadId)?.length ?? 0),
-        work,
-        agent_thread_id: run?.agent_thread_id,
-      });
-    }
-    return faces;
+    return workInboxFaces({
+      threadIds,
+      items,
+      runs,
+      recipes,
+      deliveries,
+      extraPrompts,
+    });
   }
 
   async activeSessionIds(): Promise<Set<string>> {
@@ -363,9 +361,9 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
     const handle = await executor.resume(
       { run, work_item: item, recipe, answer },
-      this.contextFor(executor),
+      this.channel.contextFor(executor),
     );
-    await this.applyHandle(item, recipe, run, handle);
+    await this.supervise.applyHandle(item, recipe, run, handle);
   }
 
   async ackDoneThread(threadId: string): Promise<void> {
@@ -406,9 +404,21 @@ export class PersonalWorkService implements OnModuleDestroy {
         400,
       );
     }
+    const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
+    if (
+      delivery &&
+      (delivery.write_back === "failed" || isDeadLetter(delivery)) &&
+      item.status === "done"
+    ) {
+      await this.flush.flushOne(item, recipe, delivery, true);
+      return {
+        work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
+        run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? undefined,
+      };
+    }
     const active = await host.get("authority").getActiveWorkRun(orgId, item.id);
     if (active && shouldRefreshActiveRun(item.status)) {
-      await this.refreshOne(item, recipe, active);
+      await this.supervise.refreshOne(item, recipe, active);
       return {
         work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
         run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? active,
@@ -427,9 +437,15 @@ export class PersonalWorkService implements OnModuleDestroy {
             status: "open",
             updated_at: new Date().toISOString(),
           });
-    const run = await this.startItem(opened, recipe);
+    const run = await this.dispatch.startItem(opened, recipe, undefined, "manual");
+    const latest =
+      (await host.get("authority").getWorkItem(orgId, opened.id)) ?? opened;
+    const queued = await host.get("authority").getWorkDeliveryByItem(orgId, opened.id);
+    if (queued && shouldFlushDelivery(queued, new Date().toISOString())) {
+      await this.flush.flushOne(latest, recipe, queued);
+    }
     return {
-      work_item: (await host.get("authority").getWorkItem(orgId, opened.id)) ?? opened,
+      work_item: (await host.get("authority").getWorkItem(orgId, opened.id)) ?? latest,
       run,
     };
   }
@@ -454,6 +470,10 @@ export class PersonalWorkService implements OnModuleDestroy {
     const cancelled = run
       ? await host.get("authority").putWorkRun(cancelWorkRun(run, now))
       : undefined;
+    const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
+    if (delivery && delivery.status !== "acked") {
+      await host.get("authority").putWorkDelivery(deliveryAbandoned(delivery, now));
+    }
     return {
       work_item: next,
       run: cancelled,
@@ -464,726 +484,4 @@ export class PersonalWorkService implements OnModuleDestroy {
   async completeWorkItem(id: string): Promise<WorkRunView> {
     return this.dismissWorkItem(id);
   }
-
-  private async reconcileInbox(): Promise<void> {
-    const host = this.runtime.requireHost();
-    const orgId = this.runtime.orgId();
-    const authority = host.get("authority");
-    const [recipes, items, runs, heads, currentWork] = await Promise.all([
-      authority.listRecipes(orgId),
-      authority.listWorkItems(orgId),
-      authority.listWorkRuns(orgId),
-      authority.listInbox(orgId, { heads: true }),
-      authority.listInbox(orgId),
-    ]);
-    if (heads.length === 0 && currentWork.length === 0 && items.length === 0) {
-      return;
-    }
-    const hidden = hiddenExecutorThreadIds(items, runs);
-    const taskRows = currentWork.filter(isTaskInboxItem);
-    const observeRows = uniqueInboxItems([...taskRows, ...heads]);
-    const bodies = await resolveInboxBodies(
-      authority,
-      host.get("blobs"),
-      observeRows.map((row) => row.event.content_hash),
-      "meta",
-    );
-    const installations = await authority.listInstallations(orgId);
-    const seenEvents = new Set<string>();
-    for (const row of observeRows) {
-      const threadId = conversationId(row.event.source, row.event.external_id, row.event.id);
-      if (hidden.has(threadId) || seenEvents.has(row.event.id)) {
-        continue;
-      }
-      seenEvents.add(row.event.id);
-      const body = row.event.content_hash
-        ? (bodies.get(row.event.content_hash) ?? {})
-        : {};
-      await this.observeHead({
-        event: row.event,
-        threadId,
-        body,
-        recipes,
-        installations,
-        fallbackType: isTaskInboxItem(row) ? "task" : undefined,
-      });
-    }
-    for (const item of items) {
-      if (
-        hidden.has(item.thread_id) ||
-        (item.head_event_id && seenEvents.has(item.head_event_id))
-      ) {
-        continue;
-      }
-      if (!isActiveWorkStatus(item.status) || !item.head_event_id) {
-        continue;
-      }
-      const event = await authority.getEvent(orgId, item.head_event_id);
-      if (!event) {
-        continue;
-      }
-      const body = await resolveInboxBodies(
-        authority,
-        host.get("blobs"),
-        [event.content_hash],
-        "meta",
-      );
-      await this.observeHead({
-        event,
-        threadId: item.thread_id,
-        body: event.content_hash ? (body.get(event.content_hash) ?? {}) : {},
-        recipes,
-        installations,
-      });
-    }
-  }
-
-  private async observeHead(input: {
-    event: EventRecord;
-    threadId: string;
-    body: InboxBody;
-    recipes: Recipe[];
-    installations: ConnectorInstallation[];
-    fallbackType?: string;
-  }): Promise<void> {
-    const host = this.runtime.requireHost();
-    const orgId = this.runtime.orgId();
-    const authority = host.get("authority");
-    try {
-      parseConversationThread(input.threadId);
-    } catch {
-      return;
-    }
-    const existing = await authority.getWorkItemByThread(orgId, input.threadId);
-    const surface = input.body.surface;
-    const subject = workSubjectFromEvent({
-      type: surface?.type ?? input.fallbackType,
-      source: input.event.source,
-      thread_id: input.threadId,
-      prompts: false,
-      hint: surface?.thread_facet,
-      prior_facet:
-        existing && isActiveWorkStatus(existing.status)
-          ? existing.thread_facet
-          : undefined,
-    });
-    if (!subject) {
-      return;
-    }
-    const recipe = selectRecipeForSubject(input.recipes, subject);
-    const next = openOrUpdateWorkItem({
-      existing,
-      org_id: orgId,
-      subject,
-      head_event_id: input.event.id,
-      recipe,
-      now: new Date().toISOString(),
-    });
-    if (!next) {
-      return;
-    }
-    const saved = await authority.putWorkItem(next);
-    if (saved.status === "open" && recipe) {
-      const active = await authority.getActiveWorkRun(orgId, saved.id);
-      if (!active) {
-        await this.startItem(saved, recipe, input.body.body_text);
-      }
-    }
-  }
-
-  private async startItem(
-    item: WorkItem,
-    recipe: Recipe,
-    evidenceText?: string,
-  ): Promise<WorkRun | undefined> {
-    const host = this.runtime.requireHost();
-    const executor = host.get("executors").get(recipe.executor_type);
-    if (!executor) {
-      await host.get("authority").putWorkItem({
-        ...item,
-        status: "failed",
-        updated_at: new Date().toISOString(),
-      });
-      return undefined;
-    }
-    const now = new Date().toISOString();
-    const includeContext = Boolean(recipe.include_context);
-    const thread = includeContext
-      ? await this.threadContextLines(item.thread_id)
-      : { lines: [], overflow: false };
-    const text = composeWorkEvidenceText({
-      include_context: includeContext,
-      trigger_text: evidenceText,
-      head_text:
-        !includeContext && evidenceText
-          ? undefined
-          : await this.evidenceText(item.thread_id, item.head_event_id),
-      thread_lines: thread.lines,
-      thread_overflow: thread.overflow,
-    });
-    const handle = await executor.start(
-      {
-        work_item: item,
-        recipe,
-        evidence_text: formatWorkEvidence({
-          thread_id: item.thread_id,
-          record_class: item.record_class,
-          thread_facet: item.thread_facet,
-          source: item.thread_id.split(":")[0] ?? "",
-          text,
-        }),
-      },
-      this.contextFor(executor),
-    );
-    const run: WorkRun = {
-      id: `run-${randomUUID()}`,
-      org_id: item.org_id,
-      work_item_id: item.id,
-      recipe_id: recipe.id,
-      executor_type: executor.executor_type,
-      external_run_id: handle.external_run_id,
-      agent_thread_id: handle.agent_thread_id,
-      status: handle.status === "completed" ? "completed" : handle.status === "failed" ? "failed" : handle.status === "waiting_human" ? "waiting_human" : "running",
-      result: handle.result,
-      created_at: now,
-      updated_at: now,
-    };
-    await this.applyHandle(item, recipe, run, handle);
-    return (
-      (await host.get("authority").getActiveWorkRun(item.org_id, item.id)) ?? run
-    );
-  }
-
-  private async refreshRuns(): Promise<void> {
-    const host = this.runtime.requireHost();
-    const orgId = this.runtime.orgId();
-    const items = await host.get("authority").listWorkItems(orgId);
-    for (const item of items) {
-      if (item.status !== "running" && item.status !== "waiting_human") {
-        continue;
-      }
-      const recipe = item.recipe_id
-        ? await host.get("authority").getRecipe(orgId, item.recipe_id)
-        : null;
-      const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-      if (!recipe || !run) {
-        continue;
-      }
-      await this.refreshOne(item, recipe, run);
-    }
-  }
-
-  private async refreshOne(
-    item: WorkItem,
-    recipe: Recipe,
-    run: WorkRun,
-  ): Promise<void> {
-    const host = this.runtime.requireHost();
-    const executor = host.get("executors").get(run.executor_type);
-    if (!executor) {
-      return;
-    }
-    const handle = await executor.status(run, this.contextFor(executor));
-    await this.applyHandle(item, recipe, run, handle);
-  }
-
-  private async applyHandle(
-    item: WorkItem,
-    recipe: Recipe,
-    run: WorkRun,
-    handle: ExecutorRunHandle,
-  ): Promise<void> {
-    const host = this.runtime.requireHost();
-    const authority = host.get("authority");
-    if (await this.abandonIfSkipped(item, run)) {
-      return;
-    }
-    const now = new Date().toISOString();
-    const nextRun: WorkRun = {
-      ...run,
-      external_run_id: handle.external_run_id,
-      agent_thread_id: handle.agent_thread_id ?? run.agent_thread_id,
-      status:
-        handle.status === "completed"
-          ? "completed"
-          : handle.status === "failed"
-            ? "failed"
-            : handle.status === "waiting_human"
-              ? "waiting_human"
-              : "running",
-      result: handle.result ?? run.result,
-      updated_at: now,
-    };
-    if (await this.abandonIfSkipped(item, nextRun)) {
-      return;
-    }
-    await authority.putWorkRun(nextRun);
-    if (await this.abandonIfSkipped(item, nextRun)) {
-      return;
-    }
-    let status = workStatusFromHandle(handle);
-    if (shouldWriteBackHandle(handle, recipe.can_write_back)) {
-      if (await this.abandonIfSkipped(item, nextRun)) {
-        return;
-      }
-      try {
-        await this.writeBack(item, handle.result?.summary ?? "", handle.result?.content);
-      } catch (error) {
-        console.error("personal write-back failed", error);
-      }
-    }
-    if (await this.abandonIfSkipped(item, nextRun)) {
-      return;
-    }
-    await authority.putWorkItem({
-      ...item,
-      status,
-      updated_at: now,
-    });
-  }
-
-  private async abandonIfSkipped(item: WorkItem, run: WorkRun): Promise<boolean> {
-    const latest = await this.runtime
-      .requireHost()
-      .get("authority")
-      .getWorkItem(item.org_id, item.id);
-    if (!isAbandonedWorkItem(latest?.status)) {
-      return false;
-    }
-    if (run.status !== "cancelled") {
-      await this.runtime
-        .requireHost()
-        .get("authority")
-        .putWorkRun(cancelWorkRun(run, new Date().toISOString()));
-    }
-    return true;
-  }
-
-  private contextFor(executor: TaskExecutor): ExecutorContext {
-    return {
-      org_id: this.runtime.orgId(),
-      env: process.env,
-      spawnSysout: async () => {
-        const host = this.runtime.requireHost();
-        const installations = await host
-          .get("authority")
-          .listInstallations(this.runtime.orgId());
-        const catalog = executor.catalog();
-        const pin = catalog.installation_id?.trim();
-        const found = pin
-          ? pinnedCreatable(this.drivers, installations, pin)
-          : this.drivers.findCreatable(installations, catalog.source);
-        if (!found) {
-          throw new PersonalConnectorError(
-            "unsupported_channel",
-            "No enabled connector can create an executor session",
-            501,
-          );
-        }
-        return found.driver.createThread(
-          found.installation,
-          host,
-          process.env,
-        );
-      },
-      writeStdin: async (thread, text) => {
-        await this.sendText(thread, text);
-      },
-      listPrompts: async (thread) => {
-        const host = this.runtime.requireHost();
-        const installations = await host
-          .get("authority")
-          .listInstallations(this.runtime.orgId());
-        return this.drivers.listPrompts(installations, thread, host);
-      },
-      readTranscript: async (sysoutId) => this.readTranscript(sysoutId),
-    };
-  }
-
-  private async sendText(
-    thread: ConversationThread,
-    text: string,
-    options?: { writeBack?: boolean },
-  ): Promise<void> {
-    const host = this.runtime.requireHost();
-    const installations = await host
-      .get("authority")
-      .listInstallations(this.runtime.orgId());
-    const found = this.drivers.findForThread(installations, thread);
-    if (!found || !found.driver.canReply(found.installation)) {
-      throw new PersonalConnectorError(
-        "no_sender",
-        "No enabled connector can send in this conversation",
-        404,
-      );
-    }
-    const content = toReplyParts({ text });
-    const egress = await found.driver.bindEgress(
-      found.installation,
-      thread,
-      host,
-      process.env,
-    );
-    const receipt = await egress.send({
-      installation_id: found.installation.id,
-      target: { scope_id: thread.target },
-      content,
-    });
-    const now = new Date().toISOString();
-    await host.get("ingest").ingest({
-      schema_version: INGEST_SCHEMA_VERSION,
-      connector_id: found.installation.id,
-      org_id: this.runtime.orgId(),
-      delivery_id: `${options?.writeBack ? "work-back" : "work-exec"}:${randomUUID()}`,
-      received_at: now,
-      records: [
-        channelRecord({
-          channel: found.driver.source,
-          kind: "user",
-          direction: "outbound",
-          external_id: found.driver.outboundId(thread, receipt),
-          occurred_at: now,
-          actor_id: "local-owner",
-          scope_id: thread.target,
-          content,
-        }),
-      ],
-    });
-  }
-
-  private async writeBack(
-    item: WorkItem,
-    summary: string,
-    content?: ContentPart[],
-  ): Promise<void> {
-    const recipe = item.recipe_id
-      ? await this.runtime
-          .requireHost()
-          .get("authority")
-          .getRecipe(item.org_id, item.recipe_id)
-      : null;
-    if (!recipe?.can_write_back) {
-      return;
-    }
-    const latest = await this.runtime
-      .requireHost()
-      .get("authority")
-      .getWorkItem(item.org_id, item.id);
-    if (isAbandonedWorkItem(latest?.status)) {
-      return;
-    }
-    const thread = parseConversationThread(item.thread_id);
-    const text =
-      content
-        ?.map((part) => ("text" in part && part.text ? part.text : ""))
-        .find((part) => part.trim())
-        ?.trim() ?? summary;
-    if (!text.trim()) {
-      return;
-    }
-    const host = this.runtime.requireHost();
-    const installations = await host
-      .get("authority")
-      .listInstallations(item.org_id);
-    const found = this.drivers.findForThread(installations, thread);
-    if (found?.driver.canReply(found.installation)) {
-      await this.sendText(thread, text, { writeBack: true });
-      return;
-    }
-    const prompts = await this.drivers.listPrompts(installations, thread, host);
-    const answer = matchWriteBackPrompt(
-      prompts,
-      text,
-      (label) => found?.driver.writeBackLabels?.(label) ?? [label.trim()].filter(Boolean),
-    );
-    if (!answer) {
-      if (prompts.length === 0) {
-        console.warn(
-          "personal write-back skipped: no live prompt on",
-          item.thread_id,
-        );
-        return;
-      }
-      throw new PersonalConnectorError(
-        "invalid_config",
-        "Write-back needs a prompt option that matches the result",
-        400,
-      );
-    }
-    await this.drivers.answerPrompt(installations, thread, answer, host);
-  }
-
-  private async readTranscript(
-    threadId: string,
-  ): Promise<Transcript | null> {
-    const host = this.runtime.requireHost();
-    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
-      thread_ids: [threadId],
-      siblings: true,
-    });
-    const { live, visible } = pickAbsenteeInboxRows(items);
-    if (!live) {
-      return null;
-    }
-    const hashes = [live.event.content_hash];
-    if (visible && visible.event.id !== live.event.id) {
-      hashes.push(visible.event.content_hash);
-    }
-    const bodies = await resolveInboxBodies(
-      host.get("authority"),
-      host.get("blobs"),
-      hashes,
-      "meta",
-    );
-    const liveBody = live.event.content_hash
-      ? (bodies.get(live.event.content_hash) ?? {})
-      : {};
-    const body = visible?.event.content_hash
-      ? (bodies.get(visible.event.content_hash) ?? liveBody)
-      : liveBody;
-    return transcriptFromAbsenteeLive({
-      liveKind: liveBody.surface?.kind,
-      liveActivity: liveBody.surface?.activity,
-      liveTurn: liveBody.surface?.turn,
-      visibleKind: body.surface?.kind,
-      visibleText: body.body_text,
-      visibleActivity: body.surface?.activity,
-    });
-  }
-
-  private async threadContextLines(
-    threadId: string,
-  ): Promise<{ lines: WorkEvidenceLine[]; overflow: boolean }> {
-    const host = this.runtime.requireHost();
-    const fetchLimit = WORK_EVIDENCE_FETCH_LIMIT;
-    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
-      thread_ids: [threadId],
-      siblings: true,
-      limit: fetchLimit + 1,
-    });
-    const overflow = items.length > fetchLimit;
-    const windowed = overflow ? items.slice(1) : items;
-    const bodies = await resolveInboxBodies(
-      host.get("authority"),
-      host.get("blobs"),
-      windowed.map((row) => row.event.content_hash),
-      "meta",
-    );
-    return {
-      overflow,
-      lines: selectThreadEvidenceLines(
-        windowed.map((row) => {
-          const body = row.event.content_hash
-            ? bodies.get(row.event.content_hash)
-            : undefined;
-          return {
-            tombstone: row.event.operation === "tombstone",
-            status: row.decision.reason_codes.includes("thread_status"),
-            working: body?.surface?.activity === "working",
-            speaker: body?.surface?.actor_label || body?.surface?.kind,
-            text: body?.body_text,
-          };
-        }),
-      ),
-    };
-  }
-
-  private async evidenceText(
-    threadId: string,
-    headEventId?: string,
-  ): Promise<string | undefined> {
-    const host = this.runtime.requireHost();
-    if (headEventId) {
-      const event = await host.get("authority").getEvent(this.runtime.orgId(), headEventId);
-      if (event?.content_hash) {
-        const bodies = await resolveInboxBodies(
-          host.get("authority"),
-          host.get("blobs"),
-          [event.content_hash],
-          "meta",
-        );
-        return bodies.get(event.content_hash)?.body_text;
-      }
-    }
-    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
-      thread_ids: [threadId],
-      heads: true,
-    });
-    const head = items[items.length - 1];
-    if (!head?.event.content_hash) {
-      return undefined;
-    }
-    const bodies = await resolveInboxBodies(
-      host.get("authority"),
-      host.get("blobs"),
-      [head.event.content_hash],
-      "meta",
-    );
-    return bodies.get(head.event.content_hash)?.body_text;
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function latestRunsByItem(runs: WorkRun[]): Map<string, WorkRun> {
-  const best = new Map<string, WorkRun>();
-  for (const run of runs) {
-    const current = best.get(run.work_item_id);
-    if (!current || current.updated_at < run.updated_at) {
-      best.set(run.work_item_id, run);
-    }
-  }
-  return best;
-}
-
-function attentionForWork(
-  work: WorkFace,
-  extraPrompts: number,
-): AttentionClass {
-  if (extraPrompts > 0 || work.status === "waiting_human" || work.status === "failed") {
-    return "waiting_you";
-  }
-  if (work.status === "done" && work.has_result && work.can_write_back === false) {
-    return "needs_ack";
-  }
-  if (work.status === "running") {
-    return "running";
-  }
-  return "quiet";
-}
-
-function normalizeRecipe(
-  input: RecipeInput,
-  orgId: string,
-  now: string,
-  existing?: Recipe,
-): Recipe {
-  const name = (input.name ?? existing?.name ?? "").trim();
-  if (!name) {
-    throw new PersonalConnectorError("invalid_config", "Recipe name is required", 400);
-  }
-  const executor_type = (input.executor_type ?? existing?.executor_type ?? "").trim();
-  if (!executor_type) {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "executor_type is required",
-      400,
-    );
-  }
-  const match = normalizeMatch(input.match ?? existing?.match ?? {});
-  if (recipeSpecificity(match) === 0 || !recipeAllowsAutoStart(match)) {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "Recipe match needs a thread, a task class, or source plus a non-utterance class",
-      400,
-    );
-  }
-  return {
-    id: existing?.id ?? input.id?.trim() ?? `recipe-${randomUUID()}`,
-    org_id: orgId,
-    name,
-    match,
-    executor_type,
-    executor_config: input.executor_config ?? existing?.executor_config ?? {},
-    can_write_back: input.can_write_back ?? existing?.can_write_back ?? false,
-    include_context: input.include_context ?? existing?.include_context ?? false,
-    enabled: input.enabled ?? existing?.enabled ?? true,
-    created_at: existing?.created_at ?? now,
-    updated_at: now,
-  };
-}
-
-function normalizeMatch(match: RecipeMatch): RecipeMatch {
-  const record_class = match.record_class;
-  if (record_class !== undefined && !isRecordClass(record_class)) {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "record_class is not a closed class",
-      400,
-    );
-  }
-  const thread_facet = match.thread_facet;
-  if (thread_facet !== undefined && !isThreadFacet(thread_facet)) {
-    throw new PersonalConnectorError(
-      "invalid_config",
-      "thread_facet is not a closed facet",
-      400,
-    );
-  }
-  return {
-    ...(record_class ? { record_class } : {}),
-    ...(thread_facet ? { thread_facet } : {}),
-    ...(match.source?.trim() ? { source: match.source.trim() } : {}),
-    ...(match.thread_id?.trim() ? { thread_id: match.thread_id.trim() } : {}),
-  };
-}
-
-function isWorkTickShutdown(error: unknown): boolean {
-  if (error instanceof PersonalKernelStoppedError) {
-    return true;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    (error instanceof TypeError && /database connection is not open/i.test(message)) ||
-    /Service is not available/i.test(message)
-  );
-}
-
-function isTaskInboxItem(row: InboxItem): boolean {
-  return row.decision.reason_codes.includes("task");
-}
-
-function uniqueInboxItems(rows: InboxItem[]): InboxItem[] {
-  const seen = new Set<string>();
-  const unique: InboxItem[] = [];
-  for (const row of rows) {
-    if (seen.has(row.event.id)) {
-      continue;
-    }
-    seen.add(row.event.id);
-    unique.push(row);
-  }
-  return unique;
-}
-
-async function forceDisposition(
-  authority: {
-    getDisposition(eventId: string): Promise<ArrangementDecision | null>;
-    putDisposition(decision: ArrangementDecision): Promise<void>;
-  },
-  event: EventRecord,
-  disposition: ArrangementDecision["disposition"],
-  reason: string,
-  now: string,
-): Promise<void> {
-  const current = await authority.getDisposition(event.id);
-  await authority.putDisposition({
-    event_id: event.id,
-    org_id: event.org_id,
-    disposition,
-    layer: current?.layer ?? "L1_event",
-    reason_codes: [...new Set([...(current?.reason_codes ?? []), reason])],
-    score: current?.score ?? 0.7,
-    decided_at: now,
-  });
-}
-
-function pinnedCreatable(
-  drivers: ChannelDriverRegistry,
-  installations: ConnectorInstallation[],
-  installationId: string,
-): { installation: ConnectorInstallation; driver: ChannelDriver } | undefined {
-  const installation = installations.find((item) => item.id === installationId);
-  if (!installation || installation.status !== "enabled") {
-    return undefined;
-  }
-  const driver = drivers.get(installation.connector_type);
-  if (!driver?.capabilities(installation).create) {
-    return undefined;
-  }
-  return { installation, driver };
 }

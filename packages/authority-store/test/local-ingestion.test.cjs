@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 12);
+    assert.equal(authorityStore.schemaVersion, 16);
     authorityStore.close();
   });
 
@@ -238,12 +238,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 13");
+    database.pragma("user_version = 17");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 13 is newer than supported 12/,
+      /schema 17 is newer than supported 16/,
     );
   });
 
@@ -477,7 +477,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 12);
+    assert.equal(store.schemaVersion, 16);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);
@@ -816,6 +816,7 @@ describe("local ingestion persistence", () => {
       org_id: "local-owner",
       name: "Keep me",
       match: { record_class: "task" },
+      trigger: { kind: "push", coalesce: true },
       executor_type: "dsh",
       executor_config: {},
       can_write_back: false,

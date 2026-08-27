@@ -171,6 +171,24 @@ describe("inbox sort", () => {
       id: "feishu:new",
       occurred_at: "2026-08-25T13:00:00.000Z",
     });
+    assert.equal(
+      resolveThreadAttention({
+        ...thread({ id: "feishu:dead" }),
+        work: {
+          id: "work-dead",
+          status: "done",
+          delivery: { status: "dead", write_back: "failed", attempts: 3 },
+        },
+      }),
+      "waiting_you",
+    );
+    assert.equal(
+      resolveThreadAttention({
+        ...olderUnread,
+        attention: "waiting_you",
+      }),
+      "waiting_you",
+    );
     assert.equal(resolveThreadAttention(olderUnread), "unread");
     assert.equal(sortInboxThreads([newerQuiet, olderUnread], "attention")[0].id, "feishu:old");
     assert.equal(sortInboxThreads([newerQuiet, olderUnread], "normal")[0].id, "feishu:new");

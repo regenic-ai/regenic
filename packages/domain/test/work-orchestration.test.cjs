@@ -11,6 +11,7 @@ const {
   composeWorkEvidenceText,
   formatThreadContext,
   formatWorkEvidence,
+  isExecutorSysoutBody,
   packThreadEvidence,
   selectThreadEvidenceLines,
   hiddenExecutorThreadIds,
@@ -20,7 +21,17 @@ const {
   openOrUpdateWorkItem,
   projectThreadFacet,
   recordClassFromType,
+  pullPeriodKey,
+  pullUnitKey,
+  isPullDue,
+  advancePullNextRun,
+  shouldKeepPullSchedule,
+  writeBackIdempotencyKey,
   recipeAllowsAutoStart,
+  recipeAllowsPullDispatch,
+  recipeAllowsPushDispatch,
+  shouldAcceptPushRecord,
+  shouldRetryFailedPush,
   recipeSpecificity,
   selectRecipeForSubject,
   shouldOpenWorkItem,
@@ -35,6 +46,18 @@ const {
   workStatusFromRun,
   workSubjectFromEvent,
   cancelWorkRun,
+  enqueueWriteBack,
+  deliveryClaimSend,
+  deliveryAcked,
+  deliveryWriteBackFailed,
+  deliveryRetryNow,
+  deliveryAbandoned,
+  reclaimDeliveryLease,
+  shouldFlushDelivery,
+  isDeadLetter,
+  deliveryNeedsAttention,
+  deliveryFaceOf,
+  WORK_DELIVERY_MAX_ATTEMPTS,
 } = require("../dist");
 
 describe("recordClassFromType", () => {
@@ -92,6 +115,100 @@ describe("recipe auto-start specification", () => {
       true,
     );
   });
+
+  it("dispatches push and pull separately", () => {
+    const push = makeRecipe("push", { thread_id: "chat-src:t1" });
+    const pull = makeRecipe("pull", { thread_id: "chat-src:t1" }, {
+      kind: "pull",
+      interval_ms: 60 * 60 * 1000,
+    });
+    const manual = makeRecipe("manual", { thread_id: "chat-src:t1" }, { kind: "manual" });
+    const subject = {
+      record_class: "utterance",
+      thread_facet: "chat",
+      source: "chat-src",
+      thread_id: "chat-src:t1",
+    };
+    assert.equal(recipeAllowsPushDispatch(push), true);
+    assert.equal(recipeAllowsPushDispatch(pull), false);
+    assert.equal(recipeAllowsPullDispatch(pull), true);
+    assert.equal(selectRecipeForSubject([pull, manual, push], subject).id, "push");
+    assert.equal(selectRecipeForSubject([pull, manual], subject).id, "manual");
+  });
+
+  it("ignores outbound and assistant echoes for push", () => {
+    assert.equal(shouldAcceptPushRecord({ direction: "inbound", kind: "user" }), true);
+    assert.equal(shouldAcceptPushRecord({ direction: "outbound", kind: "user" }), false);
+    assert.equal(shouldAcceptPushRecord({ direction: "inbound", kind: "assistant" }), false);
+    assert.equal(
+      shouldAcceptPushRecord({ direction: "inbound", kind: "user", external_id: "feishu:out:1" }),
+      false,
+    );
+  });
+
+  it("keeps pull periods stable and retries failed push with backoff", () => {
+    const hour = 60 * 60 * 1000;
+    const period = pullPeriodKey(Date.parse("2026-08-27T10:20:00.000Z"), hour);
+    assert.equal(period, pullPeriodKey(Date.parse("2026-08-27T10:40:00.000Z"), hour));
+    assert.equal(pullUnitKey("r1", period), `pull:r1:${period}`);
+    const due = makeRecipe("due", { thread_id: "chat-src:t1" }, {
+      kind: "pull",
+      interval_ms: hour,
+    });
+    due.next_run_at = "2026-08-27T10:00:00.000Z";
+    assert.equal(isPullDue(due, "2026-08-27T10:00:00.000Z"), true);
+    due.next_run_at = "2026-08-27T11:00:00.000Z";
+    assert.equal(isPullDue(due, "2026-08-27T10:59:59.000Z"), false);
+    assert.equal(
+      advancePullNextRun("2026-08-27T10:00:00.000Z", hour, "2026-08-27T13:10:00.000Z"),
+      "2026-08-27T14:00:00.000Z",
+    );
+    const scheduled = makeRecipe("due", { thread_id: "chat-src:t1" }, {
+      kind: "pull",
+      interval_ms: hour,
+    });
+    assert.equal(
+      shouldKeepPullSchedule(scheduled, {
+        match: { thread_id: "chat-src:t1" },
+        trigger: { kind: "pull", interval_ms: hour },
+      }),
+      true,
+    );
+    assert.equal(
+      shouldKeepPullSchedule(scheduled, {
+        match: { thread_id: "chat-src:other" },
+        trigger: { kind: "pull", interval_ms: hour },
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRetryFailedPush({
+        status: "failed",
+        updated_at: "2026-08-27T10:00:00.000Z",
+        attempts: 0,
+        now: "2026-08-27T10:00:29.000Z",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRetryFailedPush({
+        status: "failed",
+        updated_at: "2026-08-27T10:00:00.000Z",
+        attempts: 0,
+        now: "2026-08-27T10:00:30.000Z",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldRetryFailedPush({
+        status: "failed",
+        updated_at: "2026-08-27T10:00:00.000Z",
+        attempts: 3,
+        now: "2026-08-27T12:00:00.000Z",
+      }),
+      false,
+    );
+  });
 });
 
 describe("work policy", () => {
@@ -127,6 +244,28 @@ describe("work policy", () => {
     assert.equal(opened.status, "open");
     assert.equal(opened.thread_facet, "chat");
     assert.ok(opened.unit_key);
+    const running = { ...opened, status: "running", head_event_id: "evt-1" };
+    const held = openOrUpdateWorkItem({
+      existing: running,
+      org_id: "local-owner",
+      subject,
+      recipe,
+      head_event_id: "evt-2",
+      now: "2026-08-25T00:01:00.000Z",
+    });
+    assert.equal(held.id, running.id);
+    assert.equal(held.head_event_id, "evt-1");
+    const split = openOrUpdateWorkItem({
+      existing: running,
+      org_id: "local-owner",
+      subject,
+      recipe: makeRecipe("r1", { thread_id: "chat-src:t1" }, { kind: "push", coalesce: false }),
+      head_event_id: "evt-2",
+      now: "2026-08-25T00:02:00.000Z",
+    });
+    assert.notEqual(split.id, running.id);
+    assert.equal(split.head_event_id, "evt-2");
+    assert.equal(split.unit_key, "evt-2");
   });
 });
 
@@ -318,6 +457,118 @@ describe("work face", () => {
     assert.equal(face.result_summary, "审核不通过：地区不符");
     assert.equal(face.can_write_back, true);
   });
+
+  it("exposes the delivery ledger on the inbox face", () => {
+    const delivery = enqueueWriteBack({
+      org_id: "local-owner",
+      work_item_id: "work-1",
+      recipe_id: "recipe-1",
+      kind: "push",
+      unit_key: "job:1",
+      payload: { summary: "审核不通过：地区不符" },
+      now: "2026-08-27T00:00:00.000Z",
+    });
+    const face = workFaceOf(
+      {
+        id: "work-1",
+        org_id: "local-owner",
+        thread_id: "crm:order:1",
+        unit_key: "job:1",
+        record_class: "task",
+        thread_facet: "ticket",
+        status: "open",
+        recipe_id: "recipe-1",
+        created_at: "2026-08-27T00:00:00.000Z",
+        updated_at: "2026-08-27T00:00:00.000Z",
+      },
+      { can_write_back: true, executor_type: "dsh" },
+      null,
+      delivery,
+    );
+    assert.equal(face.delivery?.status, "queued");
+    assert.equal(face.delivery?.write_back, "pending");
+  });
+});
+
+describe("work delivery", () => {
+  const now = "2026-08-27T00:00:00.000Z";
+
+  function queued() {
+    return enqueueWriteBack({
+      org_id: "local-owner",
+      work_item_id: "work-1",
+      recipe_id: "recipe-1",
+      kind: "push",
+      unit_key: "evt-1",
+      event_id: "evt-1",
+      payload: { summary: "审核不通过：地区不符" },
+      now,
+    });
+  }
+
+  it("reuses one outbox row and snapshots the payload", () => {
+    const first = queued();
+    const again = enqueueWriteBack({
+      org_id: first.org_id,
+      work_item_id: first.work_item_id,
+      recipe_id: first.recipe_id,
+      kind: "push",
+      unit_key: first.unit_key,
+      payload: { summary: "second" },
+      now,
+      existing: first,
+    });
+    assert.equal(again.id, first.id);
+    assert.equal(again.payload.summary, "second");
+    assert.equal(shouldFlushDelivery(first, now), true);
+    assert.equal(
+      first.idempotency_key,
+      writeBackIdempotencyKey(first.work_item_id, first.payload),
+    );
+    assert.equal(
+      writeBackIdempotencyKey(first.work_item_id, first.payload),
+      writeBackIdempotencyKey(first.work_item_id, {
+        summary: first.payload.summary,
+      }),
+    );
+    assert.notEqual(again.idempotency_key, first.idempotency_key);
+  });
+
+  it("reclaims an expired lease and does not flush an in-flight send", () => {
+    let delivery = deliveryClaimSend(queued(), now);
+    assert.equal(delivery.status, "write_back");
+    assert.equal(shouldFlushDelivery(delivery, now), false);
+    const later = new Date(Date.parse(delivery.lease_expires_at) + 1).toISOString();
+    const reclaimed = reclaimDeliveryLease(delivery, later);
+    assert.equal(reclaimed.status, "queued");
+    assert.equal(shouldFlushDelivery(delivery, later), true);
+  });
+
+  it("acks a sent write-back and dead-letters after three send failures", () => {
+    let delivery = deliveryClaimSend(queued(), now);
+    delivery = deliveryAcked(delivery, "sent", now);
+    assert.equal(delivery.status, "acked");
+    assert.equal(delivery.write_back, "sent");
+    assert.equal(shouldFlushDelivery(delivery, now), false);
+
+    delivery = deliveryClaimSend(queued(), now);
+    delivery = deliveryWriteBackFailed(delivery, "no prompt", now);
+    assert.equal(delivery.status, "write_back");
+    assert.equal(delivery.write_back, "failed");
+    assert.equal(deliveryNeedsAttention(delivery), true);
+    assert.equal(shouldFlushDelivery(delivery, now), false);
+    assert.equal(shouldFlushDelivery(delivery, delivery.next_retry_at), true);
+
+    delivery = deliveryClaimSend(deliveryRetryNow(delivery, "2026-08-27T00:01:00.000Z"), "2026-08-27T00:01:00.000Z");
+    delivery = deliveryWriteBackFailed(delivery, "no prompt", "2026-08-27T00:01:00.000Z");
+    delivery = deliveryClaimSend(deliveryRetryNow(delivery, "2026-08-27T00:10:00.000Z"), "2026-08-27T00:10:00.000Z");
+    delivery = deliveryWriteBackFailed(delivery, "no prompt", "2026-08-27T00:10:00.000Z");
+    assert.equal(delivery.attempts, WORK_DELIVERY_MAX_ATTEMPTS);
+    assert.equal(delivery.status, "dead");
+    assert.equal(isDeadLetter(delivery), true);
+    assert.equal(deliveryFaceOf(delivery)?.status, "dead");
+    assert.equal(deliveryAbandoned(delivery, now).write_back, "skipped");
+  });
 });
 
 describe("dismiss vs handle commit", () => {
@@ -363,6 +614,7 @@ describe("dismiss vs handle commit", () => {
       shouldWriteBackHandle({ status: "completed", result: { summary: "ok" } }, false),
       false,
     );
+    assert.equal(shouldWriteBackHandle({ status: "completed" }, true), true);
   });
 });
 
@@ -427,13 +679,22 @@ describe("executor registry", () => {
       status: async () => ({ external_run_id: "1", status: "running" }),
     });
     assert.equal(registry.catalog()[0].executor_type, "exec");
-    assert.match(formatWorkEvidence({
+    const evidence = formatWorkEvidence({
       thread_id: "chat-src:t1",
       record_class: "utterance",
       thread_facet: "chat",
       source: "chat-src",
       text: "please handle",
-    }), /please handle/);
+    });
+    assert.match(evidence, /please handle/);
+    assert.equal(isExecutorSysoutBody(evidence), true);
+    assert.equal(
+      isExecutorSysoutBody(
+        "我是CEO，请站在我的角度去回复对方消息。\n\nWORK\nWork item feishu:oc_1\nrecord_class=utterance",
+      ),
+      true,
+    );
+    assert.equal(isExecutorSysoutBody("只用一句话回复：pong"), false);
     assert.equal(
       formatThreadContext([
         { speaker: "熊峰", text: "先看上周的单" },
@@ -529,12 +790,13 @@ describe("executor registry", () => {
   });
 });
 
-function makeRecipe(id, match) {
+function makeRecipe(id, match, trigger = { kind: "push", coalesce: true }) {
   return {
     id,
     org_id: "local-owner",
     name: id,
     match,
+    trigger,
     executor_type: "exec",
     executor_config: {},
     can_write_back: false,

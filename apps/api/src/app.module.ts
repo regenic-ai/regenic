@@ -6,7 +6,7 @@ import {
 import { dshSessionDriver, dshTaskExecutor } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
 import { slackChannelDriver } from "@regenic/slack-connector";
-import { extraChannelDrivers } from "./extra-channel-drivers";
+import { extraChannelDrivers, extraTaskExecutors } from "./extra-channel-drivers";
 import { DshApiController } from "./dsh-api.controller";
 import { DshApiService } from "./dsh-api.service";
 import { HealthController } from "./health.controller";
@@ -51,8 +51,24 @@ import { PersonalWorkService } from "./personal-work.service";
     },
     {
       provide: LocalExecutorPluginRegistry,
-      useFactory: () =>
-        new LocalExecutorPluginRegistry().register(dshTaskExecutor),
+      useFactory: () => {
+        const registry = new LocalExecutorPluginRegistry().register(
+          dshTaskExecutor,
+        );
+        for (const plugin of extraTaskExecutors()) {
+          const source = plugin.catalog().source?.trim();
+          if (!source || registry.forSource(source)) {
+            if (source) {
+              console.warn(
+                `regenic extra executor: skip ${source}, already registered`,
+              );
+            }
+            continue;
+          }
+          registry.register(plugin);
+        }
+        return registry;
+      },
     },
   ],
 })

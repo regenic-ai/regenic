@@ -2,6 +2,7 @@ import type { ExecutorInstallation, ExecutorStore } from "./executor-installatio
 import { currentJobOnSession } from "./job-control";
 import type {
   Recipe,
+  WorkDelivery,
   WorkItem,
   WorkRun,
   WorkStore,
@@ -12,6 +13,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly recipes = new Map<string, Recipe>();
   private readonly items = new Map<string, WorkItem>();
   private readonly runs = new Map<string, WorkRun>();
+  private readonly deliveries = new Map<string, WorkDelivery>();
   private readonly uiPrefs = new Map<string, string>();
   private readonly executors = new Map<string, ExecutorInstallation>();
 
@@ -103,6 +105,32 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     return cloneRun(run);
   }
 
+  async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
+    return [...this.deliveries.values()]
+      .filter((item) => item.org_id === orgId)
+      .map((item) => cloneDelivery(item));
+  }
+
+  async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {
+    const item = this.deliveries.get(id);
+    return item && item.org_id === orgId ? cloneDelivery(item) : null;
+  }
+
+  async getWorkDeliveryByItem(
+    orgId: string,
+    workItemId: string,
+  ): Promise<WorkDelivery | null> {
+    const found = [...this.deliveries.values()].find(
+      (item) => item.org_id === orgId && item.work_item_id === workItemId,
+    );
+    return found ? cloneDelivery(found) : null;
+  }
+
+  async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
+    this.deliveries.set(delivery.id, cloneDelivery(delivery));
+    return cloneDelivery(delivery);
+  }
+
   async getUiPref(orgId: string, key: string): Promise<string | null> {
     return this.uiPrefs.get(`${orgId}\0${key}`) ?? null;
   }
@@ -159,6 +187,11 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
         this.runs.delete(id);
       }
     }
+    for (const [id, delivery] of [...this.deliveries]) {
+      if (delivery.org_id === orgId) {
+        this.deliveries.delete(id);
+      }
+    }
     return count;
   }
 
@@ -195,6 +228,23 @@ function cloneRun(run: WorkRun): WorkRun {
   return {
     ...run,
     result: run.result ? { ...run.result } : undefined,
+  };
+}
+
+function cloneDelivery(delivery: WorkDelivery): WorkDelivery {
+  return {
+    ...delivery,
+    payload: delivery.payload
+      ? {
+          summary: delivery.payload.summary,
+          ...(delivery.payload.content
+            ? { content: [...delivery.payload.content] }
+            : {}),
+        }
+      : undefined,
+    channel_receipt: delivery.channel_receipt
+      ? { ...delivery.channel_receipt }
+      : undefined,
   };
 }
 

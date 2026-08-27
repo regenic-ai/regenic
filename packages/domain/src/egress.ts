@@ -15,6 +15,8 @@ export interface SendIntent {
   installation_id: string;
   target?: SendTarget;
   content: ContentPart[];
+  /** Stable key for at-least-once write-back. Drivers may ignore it. */
+  idempotency_key?: string;
 }
 
 export interface DeliveryReceipt {

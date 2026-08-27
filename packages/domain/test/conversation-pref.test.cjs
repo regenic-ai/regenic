@@ -66,6 +66,7 @@ describe("conversation prefs", () => {
       org_id: "local-owner",
       name: "Keep me",
       match: { record_class: "task" },
+      trigger: { kind: "push", coalesce: true },
       executor_type: "dsh",
       executor_config: {},
       can_write_back: false,
