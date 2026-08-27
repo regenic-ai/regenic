@@ -1,6 +1,6 @@
 # 桌面端
 
-- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [连接器](CONNECTOR.md) · [技术栈](TECH_STACK.md) · RFC 0004、0008、[0009](rfcs/0009-work-orchestration.md)
+- **相关：** [产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) · [连接器](CONNECTOR.md) · [执行器](EXECUTOR.md) · [技术栈](TECH_STACK.md) · RFC 0004、0008、[0009](rfcs/0009-work-orchestration.md)
 - **状态：** Phase 1 v0（控制台 + 本机引擎）
 
 Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个飞书，也不是容器面板。
@@ -59,9 +59,9 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | --- | --- | --- |
 | GET | `/v1/me/inbox` | 当前工作 + 可选 `body_text`。`heads=1` 每个会话最后一条可见消息的短脸，不含附件；`thread_id` 只返回该会话全文；`since` / `since_id` 做增量。每项带 `prompts`、`unread`、`unread_count`、`record_class`、`thread_facet`、`attention`、`work`；打开的线程另带 `can_receipt` / `receipt` |
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
-| GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录。`inbox_count` 是当前工作会话数。`detail=0` 跳过 catalog 探测和 attempt 列表，仍带 `inbox_digest`（含最新 Event、conversation prefs；有 live surface 时追加 `&s=`） |
-| GET | `/v1/me/store` | 当前内核本机数据盘点：会话 / 消息 / 工单 / 附件 / 规则 / 连接器数量 |
-| POST | `/v1/me/store/clear` | 清空当前工作、导入历史、附件和工单，重置连接器游标。保留已安装连接器和 Recipes。已启用的连接器会从头再拉。设置页二次确认后调用 |
+| GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录、已安装执行器与执行器种类目录。目录项带 `docs`（`href` / `href_zh` 指向 GitHub 规范页）。`inbox_count` 是当前工作会话数。`detail=0` 跳过 catalog 探测和 attempt 列表，仍带 `inbox_digest`（含最新 Event、conversation prefs；有 live surface 时追加 `&s=`）以及执行器安装 |
+| GET | `/v1/me/store` | 当前内核本机数据盘点：会话 / 消息 / 工单 / 附件 / 规则 / 连接器 / 执行器数量 |
+| POST | `/v1/me/store/clear` | 清空当前工作、导入历史、附件和工单，重置连接器游标。保留已安装连接器、执行器和 Recipes。已启用的连接器会从头再拉。设置页二次确认后调用 |
 | POST | `/v1/me/connectors` | 从目录安装（Slack / DSH / 飞书），不接收 token；安装后立刻开始 pull，响应不等待追平 |
 | POST | `/v1/me/connectors/:id/config` | 改已安装连接器的非密钥配置（同一套 catalog 字段），不丢游标；enabled 时立刻再开始 pull，响应不等待追平 |
 | DELETE | `/v1/me/connectors/:id` | 卸载安装记录和游标，保留已入库消息 |
@@ -75,7 +75,12 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | GET/POST | `/v1/me/recipes` | 列出 / 创建 Recipe |
 | POST | `/v1/me/recipes/:id` | 更新 Recipe |
 | DELETE | `/v1/me/recipes/:id` | 删除 Recipe |
-| GET | `/v1/me/executors` | 已挂载执行器目录 |
+| GET | `/v1/me/executors` | 已启用执行器的调用目录（规则页用） |
+| POST | `/v1/me/executors` | 安装执行器：`local_connector`（选能新建会话的本机连接器）或 `http`（`base_url` + 可选 `auth_env`） |
+| POST | `/v1/me/executors/:id/config` | 改名称或绑定（钉死连接器 / 改 URL）。不收 token |
+| DELETE | `/v1/me/executors/:id` | 卸载执行器安装；规则仍在，指向它会失败 |
+| POST | `/v1/me/executors/:id/enable` | 启用并挂上目录 |
+| POST | `/v1/me/executors/:id/disable` | 停用并从规则目录拿掉 |
 | POST | `/v1/me/work-items/:id/run` | 手动启动一条工单（桌面 Start run） |
 | POST | `/v1/me/work-items/:id/dismiss` | 从当前工作拿掉；不写回 |
 | POST | `/v1/me/work-items/:id/complete` | dismiss 的别名；不冒充 DSH 退出 |
@@ -88,7 +93,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 
 ## 连接器：同步范围与前置步骤
 
-安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每种连接器声明 `fields`（含默认值、是否必填、`visible_when`）和 `prerequisites`（环境变量或本机服务）。`ready` / `hint` 由该连接器的 `probeCatalog()` 探测，API 只合并，引擎页只渲染，不按连接器类型写死 UI。
+安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每种连接器声明 `fields`（含默认值、是否必填、`visible_when`）、`prerequisites`（环境变量或本机服务）和 `docs`（研发规范）。`ready` / `hint` 由该连接器的 `probeCatalog()` 探测，API 只合并，引擎页只渲染，不按连接器类型写死 UI。规范链接挂在分区标题旁，点开用系统浏览器打开 GitHub 页。
 
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |
@@ -99,6 +104,17 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | 飞书 | 弹窗里默认勾选全部群和全部单聊；也可勾选具体会话。安装后随时 Edit sync | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 按选择拉群和单聊，记录群名/对方名和发送者名。安装后立刻拉，之后内核轮询。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
 
 DSH 安装不接收 token / `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
+
+## 执行器：本机连接器与 HTTP
+
+引擎页的执行器和连接器分开管。规则页只列出**已启用**的安装。执行器目录同样声明 `docs`，在「执行器」标题旁打开执行器规范与 RFC 0009。
+
+| 种类 | 安装要填 | 运行时 |
+| --- | --- | --- |
+| 本机连接器 | 选一个 `create: true` 的已装连接器（现在是 DSH） | 在该安装上 `createThread`，再经 `ExecutorContext` 写 stdin / 读 transcript。空绑定（默认 `dsh`）仍自动找第一个能建会话的 DSH |
+| HTTP API | `base_url`；可选 `auth_env`（Bearer 所在环境变量名，表单不收 token） | `POST {base}/v1/runs`、`GET {base}/v1/runs/:id`、`POST {base}/v1/runs/:id/resume`。内核把 `executor_config` 当不透明袋转交，不读 key |
+
+升级后若还没有执行器安装，内核会写入一条 id 为 `dsh` 的本机绑定，旧规则不用改。私有 Agent 仍不得 import 进内核；外部运行时走这条 HTTP 合同或以后的插件包。
 
 ## 启动
 

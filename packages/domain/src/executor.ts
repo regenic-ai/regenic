@@ -41,6 +41,9 @@ export interface ExecutorCatalogEntry {
   params_label?: string;
   source?: string;
   attach?: AttachMode;
+  /** Local binding: pin spawnSysout to this connector installation. */
+  installation_id?: string;
+  kind?: "local_connector" | "http";
   fields: ExecutorCatalogField[];
 }
 
@@ -127,6 +130,7 @@ export interface ExecutorRegistry {
   get(executorType: string): TaskExecutor | undefined;
   list(): TaskExecutor[];
   catalog(): ExecutorCatalogEntry[];
+  clear(): void;
 }
 
 export class MemoryExecutorRegistry implements ExecutorRegistry {
@@ -152,6 +156,10 @@ export class MemoryExecutorRegistry implements ExecutorRegistry {
 
   catalog(): ExecutorCatalogEntry[] {
     return this.list().map((executor) => executor.catalog());
+  }
+
+  clear(): void {
+    this.byType.clear();
   }
 }
 

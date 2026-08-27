@@ -33,6 +33,10 @@ export * from "./recipe-trigger";
 export * from "./job-control";
 export * from "./attention";
 export * from "./executor";
+export * from "./executor-installation";
+export * from "./session-executor";
+export * from "./local-connector-executor";
+export * from "./http-executor";
 export * from "./work-policy";
 export * from "./memory-work-store";
 

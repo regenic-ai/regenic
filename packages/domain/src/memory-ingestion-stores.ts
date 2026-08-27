@@ -316,6 +316,7 @@ export class MemoryAuthorityStore
       kept: {
         recipes: after.recipes,
         connectors: after.connectors,
+        executors: after.executors,
       },
     };
   }
@@ -331,6 +332,7 @@ export class MemoryAuthorityStore
       ).size,
       recipes: this.recipeCount(orgId),
       connectors: 0,
+      executors: this.executorCount(orgId),
     };
   }
 

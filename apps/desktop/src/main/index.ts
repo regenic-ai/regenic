@@ -9,6 +9,7 @@ import {
   Menu,
   nativeImage,
   Notification,
+  shell,
   Tray,
 } from "electron";
 import appIconPng from "../brand/app-icon.png?asset";
@@ -312,6 +313,7 @@ function createMainWindow(): BrowserWindow {
       window.hide();
     }
   });
+  attachExternalLinks(window);
   void loadSurface(window, "console");
   applyAppIcon();
   return window;
@@ -341,8 +343,30 @@ function createTrayWindow(): BrowserWindow {
       window.hide();
     }
   });
+  attachExternalLinks(window);
   void loadSurface(window, "tray");
   return window;
+}
+
+function isHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function attachExternalLinks(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler((details) => {
+    if (isHttpUrl(details.url)) {
+      void shell.openExternal(details.url);
+    }
+    return { action: "deny" };
+  });
 }
 
 function trayIcon(): Electron.NativeImage {
@@ -458,6 +482,11 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("regenic:get-api-origin", async () => apiOrigin);
   ipcMain.handle("regenic:get-kernel-settings", async () => kernelView());
+  ipcMain.handle("regenic:open-external", async (_event, url: unknown) => {
+    if (isHttpUrl(url)) {
+      await shell.openExternal(url);
+    }
+  });
   ipcMain.handle("regenic:get-host-stats", async () =>
     collectHostStats(resolveDataPaths(), {
       sidecarPid: sidecar?.pid ?? lastOwnedSidecarPid,

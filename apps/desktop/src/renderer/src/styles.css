@@ -2474,6 +2474,14 @@ button {
   margin: 0;
 }
 
+.card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
 .kv {
   display: grid;
   grid-template-columns: 120px 1fr;
@@ -2543,6 +2551,28 @@ button {
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.install-docs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-link {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--data);
+  background: color-mix(in srgb, var(--data) 10%, transparent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.doc-link:hover {
+  border-color: var(--data);
+  color: var(--text);
 }
 
 .choice-list {

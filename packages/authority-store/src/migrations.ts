@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 11;
+export const LATEST_SCHEMA_VERSION = 12;
 
 export const MIGRATIONS = [
   {
@@ -270,6 +270,24 @@ export const MIGRATIONS = [
     version: 11,
     sql: `
       ALTER TABLE recipes ADD COLUMN include_context INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    version: 12,
+    sql: `
+      CREATE TABLE executor_installations (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('local_connector', 'http')),
+        name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('enabled', 'disabled')),
+        config_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX executor_installations_org_idx
+        ON executor_installations (org_id, updated_at);
     `,
   },
 ] as const;

@@ -45,6 +45,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkStore,
+  ExecutorInstallation,
+  ExecutorStore,
 } from "@regenic/domain";
 import { LATEST_SCHEMA_VERSION, MIGRATIONS } from "./migrations";
 
@@ -169,7 +171,7 @@ export interface SqliteOpenOptions {
 }
 
 export class SqliteAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore, WorkStore
+  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore
 {
   private readonly database: Database.Database;
   readonly readonly: boolean;
@@ -545,6 +547,7 @@ export class SqliteAuthorityStore
         kept: {
           recipes: after.recipes,
           connectors: after.connectors,
+          executors: after.executors,
         },
       } satisfies StoreClearResult;
     });
@@ -579,6 +582,10 @@ export class SqliteAuthorityStore
       recipes: count(`SELECT COUNT(*) AS n FROM recipes WHERE org_id = ?`, orgId),
       connectors: count(
         `SELECT COUNT(*) AS n FROM connector_installations WHERE org_id = ?`,
+        orgId,
+      ),
+      executors: count(
+        `SELECT COUNT(*) AS n FROM executor_installations WHERE org_id = ?`,
         orgId,
       ),
     };
@@ -810,6 +817,71 @@ export class SqliteAuthorityStore
         `,
       )
       .run(orgId, key, value, updatedAt);
+  }
+
+  async listExecutorInstallations(
+    orgId: string,
+  ): Promise<ExecutorInstallation[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT * FROM executor_installations
+          WHERE org_id = ? ORDER BY updated_at DESC, id
+        `,
+      )
+      .all(orgId) as ExecutorRow[];
+    return rows.map(toExecutorInstallation);
+  }
+
+  async getExecutorInstallation(
+    orgId: string,
+    id: string,
+  ): Promise<ExecutorInstallation | null> {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM executor_installations WHERE org_id = ? AND id = ?`,
+      )
+      .get(orgId, id) as ExecutorRow | undefined;
+    return row ? toExecutorInstallation(row) : null;
+  }
+
+  async putExecutorInstallation(
+    installation: ExecutorInstallation,
+  ): Promise<ExecutorInstallation> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO executor_installations (
+            id, org_id, kind, name, status, config_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            kind = excluded.kind,
+            name = excluded.name,
+            status = excluded.status,
+            config_json = excluded.config_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        installation.id,
+        installation.org_id,
+        installation.kind,
+        installation.name,
+        installation.status,
+        JSON.stringify(installation.config),
+        installation.created_at,
+        installation.updated_at,
+      );
+    return installation;
+  }
+
+  async deleteExecutorInstallation(orgId: string, id: string): Promise<boolean> {
+    this.assertWritable();
+    const result = this.database
+      .prepare(`DELETE FROM executor_installations WHERE org_id = ? AND id = ?`)
+      .run(orgId, id);
+    return result.changes > 0;
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
@@ -1723,6 +1795,17 @@ function inboxTail(query?: InboxQuery): {
   };
 }
 
+interface ExecutorRow {
+  id: string;
+  org_id: string;
+  kind: ExecutorInstallation["kind"];
+  name: string;
+  status: ExecutorInstallation["status"];
+  config_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface RecipeRow {
   id: string;
   org_id: string;
@@ -1763,6 +1846,19 @@ interface WorkRunRow {
   result_json: string | null;
   created_at: string;
   updated_at: string;
+}
+
+function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    kind: row.kind,
+    name: row.name,
+    status: row.status,
+    config: JSON.parse(row.config_json) as ExecutorInstallation["config"],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
 }
 
 function toRecipe(row: RecipeRow): Recipe {

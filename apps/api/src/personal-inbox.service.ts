@@ -64,6 +64,11 @@ import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
 } from "./personal-runtime.service";
+import {
+  PersonalExecutorService,
+  type EngineExecutorView,
+  type ExecutorKindCatalogItem,
+} from "./personal-executor.service";
 import { PersonalWorkService, type WorkInboxFace } from "./personal-work.service";
 
 export interface InboxViewItem {
@@ -139,6 +144,8 @@ export interface PersonalEngineView {
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
+  executor_installations: EngineExecutorView[];
+  executor_catalog: ExecutorKindCatalogItem[];
 }
 
 export interface InboxListQuery {
@@ -162,6 +169,7 @@ export interface StoreView {
   blobs: number;
   recipes: number;
   connectors: number;
+  executors: number;
 }
 
 export interface StoreClearView {
@@ -174,6 +182,7 @@ export interface StoreClearView {
   kept: {
     recipes: number;
     connectors: number;
+    executors: number;
   };
 }
 
@@ -183,6 +192,7 @@ export class PersonalInboxService {
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
     private readonly work: PersonalWorkService,
+    private readonly executors: PersonalExecutorService,
   ) {}
 
   async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
@@ -292,6 +302,7 @@ export class PersonalInboxService {
       });
     };
     if (!this.runtime.isReady()) {
+      const executorCatalog = this.executors.kindCatalog([], []);
       return {
         kernel: "stopped",
         org_id: orgId,
@@ -302,6 +313,8 @@ export class PersonalInboxService {
         pull: { ...pullStatus },
         installations: [],
         catalog: await catalogReady([]),
+        executor_installations: [],
+        executor_catalog: executorCatalog,
       };
     }
     const host = this.runtime.requireHost();
@@ -322,6 +335,10 @@ export class PersonalInboxService {
         );
       }),
     );
+    const [executorInstallations, connectorOptions] = await Promise.all([
+      this.executors.listViews(),
+      this.executors.creatableConnectorOptions(),
+    ]);
     return {
       kernel: "running",
       org_id: orgId,
@@ -335,6 +352,11 @@ export class PersonalInboxService {
       pull: { ...pullStatus },
       installations: views,
       catalog: await catalogReady(views),
+      executor_installations: executorInstallations,
+      executor_catalog: this.executors.kindCatalog(
+        executorInstallations,
+        connectorOptions,
+      ),
     };
   }
 

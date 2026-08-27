@@ -1,7 +1,7 @@
 # Message orchestration
 
 - **简体中文:** [../zh/MESSAGE_ORCHESTRATION.md](../zh/MESSAGE_ORCHESTRATION.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [CONNECTOR.md](CONNECTOR.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md)
+- **Related:** [PRODUCT.md](PRODUCT.md) · [CONNECTOR.md](CONNECTOR.md) · [EXECUTOR.md](EXECUTOR.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md)
 - **Status:** Public architecture for Phase 1+
 
 Regenic orchestrates **messages**. It does not host the apps where those messages were written.
@@ -24,7 +24,7 @@ A connector install is L0. It is not a lane. One Feishu install can emit a DM (`
 
 Speaker (L3) applies only to `utterance`. A person inside an agent session is still `user`. A bot inside a human group is still `assistant`. Those facts do not move to the install.
 
-L6 reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `readTranscript`). Completion is `WaitStatus`, not a chat bubble. The default open-source tree mounts absentee `dsh`. Cursor follows. A private Agent OS stays an internal plugin package.
+L6 reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `readTranscript`), or through the generic HTTP executor contract. Completion is `WaitStatus`, not a chat bubble. Executors are installed on the Engine page: a local connector or an HTTP API. The default open-source tree seeds an absentee `dsh` local binding. Cursor follows. A private Agent OS stays an internal plugin package or is called over HTTP.
 
 Kernel and desktop read `record_class`, `thread_facet`, `attention`, and `work`. They do not classify chat / agent / ticket by connector name.
 

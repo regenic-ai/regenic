@@ -28,6 +28,10 @@ import {
 } from "./personal-reply.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
 import {
+  PersonalExecutorService,
+  type ExecutorInput,
+} from "./personal-executor.service";
+import {
   PersonalWorkService,
   type RecipeInput,
 } from "./personal-work.service";
@@ -40,6 +44,7 @@ export class PersonalController {
     private readonly connectors: PersonalConnectorService,
     private readonly replies: PersonalReplyService,
     private readonly work: PersonalWorkService,
+    private readonly executors: PersonalExecutorService,
     private readonly whatsapp: PersonalWhatsAppImportService,
   ) {}
 
@@ -190,6 +195,31 @@ export class PersonalController {
   @Get("executors")
   listExecutors() {
     return this.guard(() => this.work.listExecutors());
+  }
+
+  @Post("executors")
+  installExecutor(@Body() body: ExecutorInput | undefined) {
+    return this.guard(() => this.executors.install(body ?? {}));
+  }
+
+  @Post("executors/:id/config")
+  updateExecutor(@Param("id") id: string, @Body() body: ExecutorInput | undefined) {
+    return this.guard(() => this.executors.update(id, body ?? {}));
+  }
+
+  @Post("executors/:id/enable")
+  enableExecutor(@Param("id") id: string) {
+    return this.guard(() => this.executors.setStatus(id, "enabled"));
+  }
+
+  @Post("executors/:id/disable")
+  disableExecutor(@Param("id") id: string) {
+    return this.guard(() => this.executors.setStatus(id, "disabled"));
+  }
+
+  @Delete("executors/:id")
+  uninstallExecutor(@Param("id") id: string) {
+    return this.guard(() => this.executors.uninstall(id));
   }
 
   @Post("work-items/:id/run")

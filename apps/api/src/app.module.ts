@@ -12,6 +12,7 @@ import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalReplyService } from "./personal-reply.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
+import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
 
 @Module({
@@ -22,6 +23,7 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalInboxService,
     PersonalReplyService,
     PersonalWorkService,
+    PersonalExecutorService,
     PersonalConnectorService,
     PersonalWhatsAppImportService,
     {

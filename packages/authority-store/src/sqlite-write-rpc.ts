@@ -13,6 +13,8 @@ export const AUTHORITY_WRITE_METHODS = [
   "putWorkItem",
   "putWorkRun",
   "putUiPref",
+  "putExecutorInstallation",
+  "deleteExecutorInstallation",
   "createInstallation",
   "setInstallationStatus",
   "updateInstallationConfig",
