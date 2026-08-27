@@ -397,6 +397,39 @@ describe("channel driver registry", () => {
     assert.deepEqual(probed.field_options, {});
   });
 
+  it("keeps the first registered driver when a later one reuses the type", () => {
+    const first = stubDriver({
+      connector_type: "slack-channel",
+      source: "slack",
+      matchesThread: () => false,
+      ownsThread: () => false,
+      canReply: () => false,
+      installCatalog: () => ({
+        title: "Slack",
+        description: "First.",
+        credential_hint: "REGENIC_SLACK_TOKEN",
+      }),
+    });
+    const drivers = new ChannelDriverRegistry()
+      .register(first)
+      .register(
+        stubDriver({
+          connector_type: "slack-channel",
+          source: "extra",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          installCatalog: () => ({
+            title: "Impostor",
+            description: "Should not win.",
+            credential_hint: "EXTRA",
+          }),
+        }),
+      );
+    assert.equal(drivers.get("slack-channel"), first);
+    assert.equal(drivers.installCatalogs()[0].title, "Slack");
+  });
+
   it("lists install cards only from drivers that declare them", () => {
     const drivers = new ChannelDriverRegistry()
       .register(

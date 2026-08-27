@@ -214,7 +214,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
 
-额外包在进程启动时加载一次：`REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）。`REGENIC_CRM_CONNECTOR` 是后者的兼容别名。公开树不写私有包名。
+额外包在进程启动时加载一次：`REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）。`REGENIC_CRM_CONNECTOR` 是后者的兼容别名。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。显式插件缺失或无效时跳过并打日志。
 
 工单写回时，内核把结果第一行与活的待办选项做精确匹配。`writeBackLabels(label)` 可给该选项加别名。宿主不维护同义列表。
 

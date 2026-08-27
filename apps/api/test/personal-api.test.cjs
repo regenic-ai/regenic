@@ -1542,6 +1542,51 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("rejects a second install of a singleton extra connector", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CHANNEL_PLUGIN: join(__dirname, "fixtures/extra-review-driver.cjs"),
+    });
+    try {
+      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      const extra = engine.catalog.find(
+        (item) => item.connector_type === "extra-review",
+      );
+      assert.equal(extra.title, "Extra review");
+      assert.equal(extra.singleton, true);
+
+      const first = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "extra-review",
+          config: { max_open: "20" },
+        }),
+      });
+      const firstBody = await first.json();
+      assert.equal(first.status, 201, JSON.stringify(firstBody));
+      assert.equal(firstBody.label, "Extra queue");
+      assert.equal(firstBody.detail, "20");
+
+      const second = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "extra-review",
+          config: { max_open: "40" },
+        }),
+      });
+      const secondBody = await second.json();
+      assert.equal(second.status, 409, JSON.stringify(secondBody));
+      assert.equal(secondBody.error.code, "already_installed");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects an unknown extra connector and treats uninstall as idempotent", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

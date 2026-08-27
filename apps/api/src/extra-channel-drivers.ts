@@ -17,8 +17,11 @@ export function extraChannelDrivers(
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelDriver[] {
   const drivers: ChannelDriver[] = [];
-  for (const spec of resolvePluginSpecs(env)) {
-    drivers.push(...loadDrivers(spec));
+  for (const spec of explicitPluginSpecs(env)) {
+    drivers.push(...loadDrivers(spec, { warnIfEmpty: true }));
+  }
+  for (const spec of pluginDirSpecs(env)) {
+    drivers.push(...loadDrivers(spec, { warnIfEmpty: false }));
   }
   return uniqueDrivers(drivers);
 }
@@ -26,6 +29,10 @@ export function extraChannelDrivers(
 export function resolvePluginSpecs(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
+  return [...new Set([...explicitPluginSpecs(env), ...pluginDirSpecs(env)])];
+}
+
+function explicitPluginSpecs(env: NodeJS.ProcessEnv): string[] {
   const specs: string[] = [];
   for (const key of ["REGENIC_CHANNEL_PLUGIN", "REGENIC_CRM_CONNECTOR"]) {
     const spec = env[key]?.trim();
@@ -33,29 +40,46 @@ export function resolvePluginSpecs(
       specs.push(spec);
     }
   }
-  const pluginDir = env.REGENIC_PLUGIN_DIR?.trim();
-  if (pluginDir && existsSync(pluginDir)) {
-    for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const child = path.join(pluginDir, entry.name);
-      if (existsSync(path.join(child, "package.json"))) {
-        specs.push(child);
-      }
-    }
-  }
-  return [...new Set(specs)];
+  return specs;
 }
 
-function loadDrivers(spec: string): ChannelDriver[] {
+function pluginDirSpecs(env: NodeJS.ProcessEnv): string[] {
+  const pluginDir = env.REGENIC_PLUGIN_DIR?.trim();
+  if (!pluginDir || !existsSync(pluginDir)) {
+    return [];
+  }
+  const specs: string[] = [];
+  for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const child = path.join(pluginDir, entry.name);
+    if (existsSync(path.join(child, "package.json"))) {
+      specs.push(child);
+    }
+  }
+  return specs;
+}
+
+function loadDrivers(
+  spec: string,
+  options: { warnIfEmpty: boolean },
+): ChannelDriver[] {
   try {
     const resolved = resolveSpec(spec);
     if (!resolved) {
+      console.warn(`regenic extra connector: cannot resolve ${spec}`);
       return [];
     }
-    return driversFromModule(nodeRequire(resolved));
-  } catch {
+    const drivers = driversFromModule(nodeRequire(resolved));
+    if (drivers.length === 0 && options.warnIfEmpty) {
+      console.warn(
+        `regenic extra connector: ${spec} exported no ChannelDriver`,
+      );
+    }
+    return drivers;
+  } catch (error) {
+    console.warn(`regenic extra connector: failed to load ${spec}`, error);
     return [];
   }
 }

@@ -38,6 +38,12 @@ import { PersonalWorkService } from "./personal-work.service";
           .register(dshSessionDriver)
           .register(feishuChatDriver);
         for (const driver of extraChannelDrivers()) {
+          if (registry.has(driver.connector_type)) {
+            console.warn(
+              `regenic extra connector: skip ${driver.connector_type}, already registered`,
+            );
+            continue;
+          }
           registry.register(driver);
         }
         return registry;

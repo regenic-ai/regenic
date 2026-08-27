@@ -270,6 +270,9 @@ export class ChannelDriverRegistry {
   private readonly drivers = new Map<string, ChannelDriver>();
 
   register(driver: ChannelDriver): this {
+    if (this.drivers.has(driver.connector_type)) {
+      return this;
+    }
     this.drivers.set(driver.connector_type, driver);
     return this;
   }

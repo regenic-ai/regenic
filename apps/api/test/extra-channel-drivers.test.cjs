@@ -26,4 +26,19 @@ describe("extraChannelDrivers", () => {
       ["/tmp/crm-connector"],
     );
   });
+
+  it("warns when an explicit plugin cannot be resolved", () => {
+    const warnings = [];
+    const original = console.warn;
+    console.warn = (...args) => warnings.push(args.map(String).join(" "));
+    try {
+      assert.deepEqual(
+        extraChannelDrivers({ REGENIC_CHANNEL_PLUGIN: "/no/such-plugin" }),
+        [],
+      );
+    } finally {
+      console.warn = original;
+    }
+    assert.match(warnings.join("\n"), /cannot resolve \/no\/such-plugin/);
+  });
 });

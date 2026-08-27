@@ -273,7 +273,9 @@ prefill.
 Extra packages load once at process start from `REGENIC_PLUGIN_DIR` (each
 child directory with a `package.json`) or `REGENIC_CHANNEL_PLUGIN` (one
 module id or path). `REGENIC_CRM_CONNECTOR` is a compat alias for the
-latter. The public tree does not name private packages.
+latter. The public tree does not name private packages. A loaded extra
+cannot replace an already registered `connector_type`. A missing or
+invalid explicit plugin is skipped and logged.
 
 When a finished job writes back, the kernel matches the first result line
 exactly to a live prompt option. `writeBackLabels(label)` may add aliases
