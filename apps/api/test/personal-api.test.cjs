@@ -562,13 +562,7 @@ describe("personal /v1/me", () => {
       const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.deepEqual(
         light.catalog.map((item) => item.connector_type),
-        [
-          "slack-channel",
-          "dsh-session",
-          "feishu-chat",
-          "crm-ops-review",
-          "crm-order-review",
-        ],
+        ["slack-channel", "dsh-session", "feishu-chat"],
       );
       assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
@@ -1308,7 +1302,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.installations[0].can_reply, false);
       assert.equal(engine.installations[0].can_create, false);
       assert.equal(engine.installations[0].last_attempt, null);
-      assert.equal(engine.catalog.length, 5);
+      assert.equal(engine.catalog.length, 3);
       assert.equal(engine.catalog[0].connector_type, "slack-channel");
       assert.equal(engine.catalog[0].installed, true);
       assert.equal(engine.catalog[0].prerequisites[0].key, "REGENIC_SLACK_TOKEN");
@@ -1325,14 +1319,11 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[2].fields[2].key, "chat_ids");
       assert.equal(engine.catalog[2].fields[2].multiple, true);
       assert.equal(engine.catalog[2].prerequisites[0].key, "lark-cli");
-      assert.equal(engine.catalog[3].connector_type, "crm-ops-review");
-      assert.equal(engine.catalog[3].installed, false);
-      assert.equal(engine.catalog[3].setup_ready, false);
-      assert.equal(engine.catalog[3].singleton, true);
-      assert.equal(engine.catalog[4].connector_type, "crm-order-review");
-      assert.equal(engine.catalog[4].installed, false);
-      assert.equal(engine.catalog[4].singleton, true);
       assert.equal(engine.catalog[0].singleton, false);
+      assert.equal(
+        engine.catalog.some((item) => item.connector_type.startsWith("crm-")),
+        false,
+      );
       assert.equal(engine.installations[0].settings.channel_id, "C123");
       assert.equal(JSON.stringify(engine).includes("xoxb"), false);
       assert.equal(JSON.stringify(engine).includes("credentials_ref"), false);
@@ -1551,24 +1542,14 @@ describe("personal /v1/me", () => {
     }
   });
 
-  it("rejects a second CRM singleton install and treats uninstall as idempotent", async () => {
+  it("rejects an unknown extra connector and treats uninstall as idempotent", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
-    const authority = new SqliteAuthorityStore(database);
-    await authority.createInstallation({
-      id: "crm-ops-1",
-      org_id: "local-owner",
-      connector_type: "crm-ops-review",
-      status: "enabled",
-      config: { max_open_tasks: "50" },
-      created_at: "2026-08-26T00:00:00.000Z",
-    });
-    authority.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
-      const duplicate = await fetch(`${origin}/v1/me/connectors`, {
+      const unknown = await fetch(`${origin}/v1/me/connectors`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -1576,15 +1557,15 @@ describe("personal /v1/me", () => {
           config: { max_open_tasks: "20" },
         }),
       });
-      const duplicateBody = await duplicate.json();
-      assert.equal(duplicate.status, 409, JSON.stringify(duplicateBody));
-      assert.equal(duplicateBody.error.code, "already_installed");
+      const unknownBody = await unknown.json();
+      assert.equal(unknown.status, 400, JSON.stringify(unknownBody));
+      assert.equal(unknownBody.error.code, "unsupported_connector");
 
-      const first = await fetch(`${origin}/v1/me/connectors/crm-ops-1`, {
+      const first = await fetch(`${origin}/v1/me/connectors/missing-install`, {
         method: "DELETE",
       });
       assert.equal(first.status, 200);
-      const second = await fetch(`${origin}/v1/me/connectors/crm-ops-1`, {
+      const second = await fetch(`${origin}/v1/me/connectors/missing-install`, {
         method: "DELETE",
       });
       const secondBody = await second.json();
@@ -2427,8 +2408,6 @@ describe("personal /v1/me", () => {
       assert.deepEqual(
         engine.catalog.map((item) => item.docs.map((doc) => doc.id)),
         [
-          ["connector", "rfc0009"],
-          ["connector", "rfc0009"],
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],

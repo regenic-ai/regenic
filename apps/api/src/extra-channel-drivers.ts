@@ -6,54 +6,32 @@ import type { ChannelDriver } from "@regenic/domain";
 const nodeRequire = createRequire(__filename);
 
 /**
- * Load extra drivers from env only. The public tree does not know
- * internal package names or sibling checkout paths.
+ * Load extra ChannelDrivers from env at process start. The public tree
+ * does not know private package names or sibling checkout paths.
  *
- * - REGENIC_CRM_CONNECTOR: module id or absolute path to one package
+ * - REGENIC_CHANNEL_PLUGIN: module id or absolute path to one package
+ * - REGENIC_CRM_CONNECTOR: same, kept for existing deploys
  * - REGENIC_PLUGIN_DIR: directory of packages (each child with package.json)
  */
-export function optionalCrmDrivers(): ChannelDriver[] {
+export function extraChannelDrivers(
+  env: NodeJS.ProcessEnv = process.env,
+): ChannelDriver[] {
   const drivers: ChannelDriver[] = [];
-  for (const spec of resolvePluginSpecs()) {
+  for (const spec of resolvePluginSpecs(env)) {
     drivers.push(...loadDrivers(spec));
   }
   return uniqueDrivers(drivers);
-}
-
-export function registerOptionalCrmDrivers(registry: {
-  has(type: string): boolean;
-  register(driver: ChannelDriver): unknown;
-}): ChannelDriver[] {
-  const loaded = optionalCrmDrivers();
-  for (const driver of loaded) {
-    if (!registry.has(driver.connector_type)) {
-      registry.register(driver);
-    }
-  }
-  return loaded;
-}
-
-export function loadedPrivateConnectorServices(registry: {
-  has(type: string): boolean;
-}): Record<string, { ready: boolean; hint: string }> {
-  if (registry.has("crm-ops-review") || registry.has("crm-order-review")) {
-    return {
-      "crm-connector": {
-        ready: true,
-        hint: "Private connector is loaded.",
-      },
-    };
-  }
-  return {};
 }
 
 export function resolvePluginSpecs(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const specs: string[] = [];
-  const connector = env.REGENIC_CRM_CONNECTOR?.trim();
-  if (connector) {
-    specs.push(connector);
+  for (const key of ["REGENIC_CHANNEL_PLUGIN", "REGENIC_CRM_CONNECTOR"]) {
+    const spec = env[key]?.trim();
+    if (spec) {
+      specs.push(spec);
+    }
   }
   const pluginDir = env.REGENIC_PLUGIN_DIR?.trim();
   if (pluginDir && existsSync(pluginDir)) {
@@ -67,7 +45,7 @@ export function resolvePluginSpecs(
       }
     }
   }
-  return specs;
+  return [...new Set(specs)];
 }
 
 function loadDrivers(spec: string): ChannelDriver[] {
@@ -103,7 +81,8 @@ function driversFromModule(loaded: unknown): ChannelDriver[] {
         value &&
           typeof value === "object" &&
           typeof (value as ChannelDriver).connector_type === "string" &&
-          typeof (value as ChannelDriver).source === "string",
+          typeof (value as ChannelDriver).source === "string" &&
+          typeof (value as ChannelDriver).install === "function",
       ),
   );
 }

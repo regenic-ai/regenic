@@ -96,6 +96,41 @@ export interface ConnectorCatalogProbe {
   field_options?: Record<string, { value: string; label: string }[]>;
 }
 
+/** Extra drivers declare install UI. First-party rows stay in the host catalog. */
+export interface DriverCatalogField {
+  key: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  default?: string;
+  multiple?: boolean;
+  options?: { value: string; label: string }[];
+}
+
+export interface DriverCatalogPrerequisite {
+  kind: "env" | "local_service";
+  key: string;
+  label: string;
+  required?: boolean;
+  hint?: string;
+}
+
+export interface DriverInstallCatalog {
+  title: string;
+  description: string;
+  credential_hint: string;
+  singleton?: boolean;
+  fields?: DriverCatalogField[];
+  prerequisites?: DriverCatalogPrerequisite[];
+  instance_label?: string;
+  instance_detail_key?: string;
+}
+
+export interface DriverInstallPresentation {
+  label: string;
+  detail: string | null;
+}
+
 export interface ConnectorStreamPace {
   idle_ms?: number;
   catch_up_pages?: number;
@@ -168,6 +203,16 @@ export interface ChannelDriver {
     env: NodeJS.ProcessEnv,
   ): Promise<RegisteredEgress>;
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt): string;
+  /**
+   * Optional install card. Absent means the host catalog does not
+   * grow a row for this driver.
+   */
+  installCatalog?(): DriverInstallCatalog;
+  /** Optional aliases for write-back. Kernel matches these exactly. */
+  writeBackLabels?(label: string): string[];
+  presentInstall?(
+    installation: ConnectorInstallation,
+  ): DriverInstallPresentation;
   probeCatalog?(input: {
     env: NodeJS.ProcessEnv;
   }): Promise<ConnectorCatalogProbe>;
@@ -228,6 +273,15 @@ export class ChannelDriverRegistry {
 
   list(): ChannelDriver[] {
     return [...this.drivers.values()];
+  }
+
+  installCatalogs(): Array<DriverInstallCatalog & { connector_type: string }> {
+    return this.list().flatMap((driver) => {
+      const catalog = driver.installCatalog?.();
+      return catalog
+        ? [{ connector_type: driver.connector_type, ...catalog }]
+        : [];
+    });
   }
 
   async probeCatalog(

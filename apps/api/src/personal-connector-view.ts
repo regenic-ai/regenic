@@ -3,6 +3,7 @@ import {
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorInstallationStatus,
+  type DriverInstallCatalog,
   type IngestAttempt,
 } from "@regenic/domain";
 import {
@@ -61,6 +62,7 @@ export interface CatalogReadiness {
   env?: NodeJS.ProcessEnv;
   services?: Record<string, boolean | CatalogServiceState>;
   field_options?: Record<string, Record<string, { value: string; label: string }[]>>;
+  extras?: CatalogDefinition[];
 }
 
 interface CatalogDefinition {
@@ -223,74 +225,54 @@ const CATALOG: CatalogDefinition[] = [
     ],
     docs: CONNECTOR_INSTALL_DOCS,
   },
-  {
-    connector_type: "crm-ops-review",
-    title: "CRM ops review",
-    description:
-      "Private plugin. Installs only when an extra connector package is loaded.",
-    credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
-    singleton: true,
-    fields: [
-      {
-        key: "max_open_tasks",
-        label: "Max open tasks",
-        required: false,
-        default: "50",
-        placeholder: "50",
-      },
-    ],
-    prerequisites: crmPrerequisites(),
-    docs: CONNECTOR_INSTALL_DOCS,
-  },
-  {
-    connector_type: "crm-order-review",
-    title: "CRM order review",
-    description:
-      "Private plugin. Installs only when an extra connector package is loaded.",
-    credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
-    singleton: true,
-    fields: [
-      {
-        key: "max_open_order_reviews",
-        label: "Max open order reviews",
-        required: false,
-        default: "50",
-        placeholder: "50",
-      },
-    ],
-    prerequisites: crmPrerequisites(),
-    docs: CONNECTOR_INSTALL_DOCS,
-  },
 ];
 
-function crmPrerequisites(): CatalogDefinition["prerequisites"] {
-  return [
-    {
-      kind: "local_service",
-      key: "crm-connector",
-      label: "Private CRM connector",
-      required: true,
-      hint: "Load a private connector with REGENIC_CRM_CONNECTOR or REGENIC_PLUGIN_DIR.",
-    },
-    {
-      kind: "env",
-      key: "REGENIC_CRM_BASE_URL",
-      label: "CRM base URL",
-      required: true,
-      hint: "Set REGENIC_CRM_BASE_URL before starting the desktop. The form does not take it.",
-    },
-    {
-      kind: "env",
-      key: "REGENIC_CRM_TOKEN",
-      label: "CRM reporting-ops token",
-      required: false,
-      hint: "Optional. A rejected token must 401; it must not fall back to an unscoped read.",
-    },
-  ];
+export function extraCatalogFromDrivers(drivers: {
+  list(): ChannelDriver[];
+}): CatalogDefinition[] {
+  return drivers.list().flatMap((driver) => {
+    const catalog = driver.installCatalog?.();
+    return catalog ? [catalogDefinitionFromDriver(driver.connector_type, catalog)] : [];
+  });
 }
 
-export function connectorAllowsMultiple(connectorType: string): boolean {
-  const item = CATALOG.find((entry) => entry.connector_type === connectorType);
+function catalogDefinitionFromDriver(
+  connectorType: string,
+  catalog: DriverInstallCatalog,
+): CatalogDefinition {
+  return {
+    connector_type: connectorType,
+    title: catalog.title,
+    description: catalog.description,
+    credential_hint: catalog.credential_hint,
+    singleton: catalog.singleton,
+    fields: (catalog.fields ?? []).map((field) => ({
+      key: field.key,
+      label: field.label,
+      required: field.required === true,
+      placeholder: field.placeholder,
+      default: field.default,
+      multiple: field.multiple,
+      options: field.options,
+    })),
+    prerequisites: (catalog.prerequisites ?? []).map((prerequisite) => ({
+      kind: prerequisite.kind,
+      key: prerequisite.key,
+      label: prerequisite.label,
+      required: prerequisite.required === true,
+      hint: prerequisite.hint,
+    })),
+    docs: [],
+  };
+}
+
+export function connectorAllowsMultiple(
+  connectorType: string,
+  extras: CatalogDefinition[] = [],
+): boolean {
+  const item = [...CATALOG, ...extras].find(
+    (entry) => entry.connector_type === connectorType,
+  );
   return item?.singleton !== true;
 }
 
@@ -299,7 +281,11 @@ export function connectorCatalog(
   readiness: CatalogReadiness = {},
 ): ConnectorCatalogItem[] {
   const env = readiness.env ?? process.env;
-  return CATALOG.map((item) => {
+  const known = new Set(CATALOG.map((item) => item.connector_type));
+  const extras = (readiness.extras ?? []).filter(
+    (item) => !known.has(item.connector_type),
+  );
+  return [...CATALOG, ...extras].map((item) => {
     const definition = catalogDefinitionForEnv(item, env);
     const instanceCount = installations.filter(
       (installation) => installation.connector_type === item.connector_type,
@@ -355,8 +341,8 @@ export function toInstallationView(
   lastAttempt: IngestAttempt | null,
   drivers: { get(connectorType: string): ChannelDriver | undefined },
 ): EngineInstallationView {
-  const { label, detail } = connectorPresentation(installation);
   const driver = drivers.get(installation.connector_type);
+  const { label, detail } = connectorPresentation(installation, driver);
   const capabilities = driver?.capabilities(installation) ?? {
     sync: false,
     reply: false,
@@ -380,10 +366,26 @@ export function toInstallationView(
   };
 }
 
-function connectorPresentation(installation: ConnectorInstallation): {
+function connectorPresentation(
+  installation: ConnectorInstallation,
+  driver?: ChannelDriver,
+): {
   label: string;
   detail: string | null;
 } {
+  const presented = driver?.presentInstall?.(installation);
+  if (presented) {
+    return presented;
+  }
+  const extra = driver?.installCatalog?.();
+  if (extra?.instance_label) {
+    return {
+      label: extra.instance_label,
+      detail: extra.instance_detail_key
+        ? (configString(installation.config, extra.instance_detail_key) ?? null)
+        : null,
+    };
+  }
   const config = installation.config;
   if (installation.connector_type === "slack-channel") {
     const channelName = configString(config, "channel_name");
@@ -422,18 +424,6 @@ function connectorPresentation(installation: ConnectorInstallation): {
     return {
       label: chatName ?? chatIds[0] ?? chatId ?? installation.id,
       detail: "cli",
-    };
-  }
-  if (installation.connector_type === "crm-ops-review") {
-    return {
-      label: "Email submit review",
-      detail: configString(config, "max_open_tasks") ?? "50",
-    };
-  }
-  if (installation.connector_type === "crm-order-review") {
-    return {
-      label: "Order internal review",
-      detail: configString(config, "max_open_order_reviews") ?? "50",
     };
   }
   return { label: installation.id, detail: null };

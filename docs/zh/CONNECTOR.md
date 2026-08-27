@@ -23,13 +23,16 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 能力写在安装上。内核不按驱动名推断能力。
 
-加来源不用改 API 或桌面，加驱动和一条目录即可。
+加来源不用改 API 或桌面。一等驱动在宿主 catalog 里有行；额外驱动声明
+`installCatalog()`，进程启动时由 `REGENIC_PLUGIN_DIR` 或
+`REGENIC_CHANNEL_PLUGIN` 加载。回写别名写在驱动的 `writeBackLabels` 上，
+内核只对结果第一行做精确匹配。
 
 ## 接口
 
 | 接口 | 职责 |
 | --- | --- |
-| `ChannelDriver` | 安装、解析流、绑定发送、声明 `sync` / `reply` / `create` |
+| `ChannelDriver` | 安装、解析流、绑定发送、声明 `sync` / `reply` / `create`。额外驱动可声明 `installCatalog` / `writeBackLabels` |
 | `ChannelConnector` | 把来源读成 `IngestBatch` |
 | `EgressAdapter` | 把 `ContentPart[]` 写回同一来源 |
 

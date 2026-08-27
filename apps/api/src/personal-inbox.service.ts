@@ -51,13 +51,10 @@ import {
   type InboxAttachment,
   type InboxBody,
 } from "./inbox-body";
-import {
-  loadedPrivateConnectorServices,
-  registerOptionalCrmDrivers,
-} from "./optional-crm-drivers";
 import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
+  extraCatalogFromDrivers,
   toInstallationView,
   type ConnectorCatalogItem,
   type EngineInstallationView,
@@ -299,19 +296,19 @@ export class PersonalInboxService {
     const catalogReady = async (
       installations: EngineInstallationView[],
     ) => {
-      registerOptionalCrmDrivers(this.drivers);
-      const loaded = loadedPrivateConnectorServices(this.drivers);
+      const extras = extraCatalogFromDrivers(this.drivers);
       if (!detailed) {
         return connectorCatalog(installations, {
           env: process.env,
-          services: loaded,
+          extras,
         });
       }
       const probed = await this.drivers.probeCatalog(process.env);
       return connectorCatalog(installations, {
         env: process.env,
-        services: { ...loaded, ...probed.services },
+        services: probed.services,
         field_options: probed.field_options,
+        extras,
       });
     };
     if (!this.runtime.isReady()) {

@@ -385,13 +385,22 @@ describe("write-back prompt match", () => {
       answers: [{ id: "decision", selected: ["REJECTED"] }],
     });
     assert.equal(
-      matchWriteBackPrompt([orderPrompt], "不通过\n地区不符").answers[0].selected[0],
+      matchWriteBackPrompt([orderPrompt], "REJECTED\n地区不符").answers[0].selected[0],
       "REJECTED",
     );
-    assert.equal(matchWriteBackPrompt([orderPrompt], "通过").answers[0].selected[0], "APPROVED");
+    assert.equal(
+      matchWriteBackPrompt(
+        [orderPrompt],
+        "不通过\n地区不符",
+        (label) => (label === "REJECTED" ? ["REJECTED", "不通过"] : [label]),
+      ).answers[0].selected[0],
+      "REJECTED",
+    );
   });
 
   it("does not infer a conclusion from narrative text", () => {
+    assert.equal(matchWriteBackPrompt([orderPrompt], "通过"), undefined);
+    assert.equal(matchWriteBackPrompt([orderPrompt], "不通过\n地区不符"), undefined);
     assert.equal(
       matchWriteBackPrompt([orderPrompt], "审核结果：**不通过**\n地区不符"),
       undefined,

@@ -65,12 +65,6 @@ export function connectorLabel(type: string): string {
   if (type === "feishu-chat") {
     return "Feishu";
   }
-  if (type === "crm-ops-review") {
-    return "CRM ops";
-  }
-  if (type === "crm-order-review") {
-    return "CRM orders";
-  }
   return type;
 }
 

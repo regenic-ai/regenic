@@ -396,4 +396,41 @@ describe("channel driver registry", () => {
     });
     assert.deepEqual(probed.field_options, {});
   });
+
+  it("lists install cards only from drivers that declare them", () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(
+        stubDriver({
+          connector_type: "slack-channel",
+          source: "slack",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+        }),
+      )
+      .register(
+        stubDriver({
+          connector_type: "extra-review",
+          source: "extra",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          installCatalog: () => ({
+            title: "Extra review",
+            description: "Loaded plugin.",
+            credential_hint: "EXTRA_URL",
+            singleton: true,
+          }),
+        }),
+      );
+    assert.deepEqual(drivers.installCatalogs(), [
+      {
+        connector_type: "extra-review",
+        title: "Extra review",
+        description: "Loaded plugin.",
+        credential_hint: "EXTRA_URL",
+        singleton: true,
+      },
+    ]);
+  });
 });

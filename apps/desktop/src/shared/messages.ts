@@ -150,7 +150,7 @@ export const en = {
   "recipes.name": "Name",
   "recipes.writeBackCheck": "Write back when done",
   "recipes.writeBackHint":
-    "Write-back matches only the first line of the result to a live prompt option (for example APPROVED, REJECTED, 通过, or 不通过). Put reasons on the next lines — do not write 审核结果：不通过.",
+    "Write-back matches only the first line of the result to a live prompt option label. Put reasons on the next lines.",
   "recipes.includeContextCheck": "Include conversation history",
   "recipes.includeContextHint":
     "On: send recent messages from this chat. Long threads are truncated. Off: only the latest work item.",
@@ -523,7 +523,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.name": "名称",
   "recipes.writeBackCheck": "做完后回写",
   "recipes.writeBackHint":
-    "回写只认结果第一行，必须刚好是渠道待办选项（例如 APPROVED、REJECTED、通过、不通过）。原因从第二行写，不要写成「审核结果：不通过」。",
+    "回写只认结果第一行，必须刚好是渠道待办选项的原文。原因从第二行写。",
   "recipes.includeContextCheck": "携带会话上下文",
   "recipes.includeContextHint":
     "打开后带上这条会话最近的可见消息；很长的会话会截断。关闭则只带最近这条工单。",

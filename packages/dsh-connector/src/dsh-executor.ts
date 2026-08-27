@@ -90,7 +90,7 @@ export const dshTaskExecutor: TaskExecutor = {
           label: "Prompt",
           kind: "textarea",
           hint: "Sent before the work evidence. If the recipe writes back, line 1 must be the exact prompt option.",
-          placeholder: "REJECTED\nReason on the following lines.",
+          placeholder: "option-label\nReason on the following lines.",
         },
       ],
     };

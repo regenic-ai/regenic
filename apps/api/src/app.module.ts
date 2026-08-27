@@ -6,7 +6,7 @@ import {
 import { dshSessionDriver, dshTaskExecutor } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
 import { slackChannelDriver } from "@regenic/slack-connector";
-import { optionalCrmDrivers } from "./optional-crm-drivers";
+import { extraChannelDrivers } from "./extra-channel-drivers";
 import { DshApiController } from "./dsh-api.controller";
 import { DshApiService } from "./dsh-api.service";
 import { HealthController } from "./health.controller";
@@ -37,7 +37,7 @@ import { PersonalWorkService } from "./personal-work.service";
           .register(dshSessionDriver)
           .register(slackChannelDriver)
           .register(feishuChatDriver);
-        for (const driver of optionalCrmDrivers()) {
+        for (const driver of extraChannelDrivers()) {
           registry.register(driver);
         }
         return registry;

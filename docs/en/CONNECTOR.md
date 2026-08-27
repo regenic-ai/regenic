@@ -27,14 +27,17 @@ The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 Capabilities are declared on the installation. The kernel does not infer them
 from the driver name.
 
-You do not rebuild the API or the desktop to add a source. You add a driver
-and a catalog entry.
+You do not rebuild the API or the desktop to add a source. First-party
+drivers have a host catalog row. Extra drivers declare `installCatalog()`
+and load at process start from `REGENIC_PLUGIN_DIR` or
+`REGENIC_CHANNEL_PLUGIN`. Write-back aliases stay on the driver
+(`writeBackLabels`); the kernel matches the first result line exactly.
 
 ## Interfaces
 
 | Interface | Responsibility |
 | --- | --- |
-| `ChannelDriver` | Install, resolve streams, bind send, declare `sync` / `reply` / `create` |
+| `ChannelDriver` | Install, resolve streams, bind send, declare `sync` / `reply` / `create`. Extra drivers may add `installCatalog` / `writeBackLabels` |
 | `ChannelConnector` | Read the source into `IngestBatch` |
 | `EgressAdapter` | Write `ContentPart[]` back to the same source |
 

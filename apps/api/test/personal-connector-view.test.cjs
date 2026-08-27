@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const {
   connectorAllowsMultiple,
   connectorCatalog,
+  extraCatalogFromDrivers,
   toInstallationView,
 } = require("../dist/personal-connector-view");
 
@@ -113,43 +114,64 @@ describe("connector catalog hints", () => {
     assert.equal(view.settings.kinds, "group,p2p");
   });
 
-  it("lists CRM catalog rows but keeps them blocked without the private plugin", () => {
+  it("does not list extra connectors until a driver declares a catalog", () => {
     const catalog = connectorCatalog([], { env: {} });
-    const ops = catalog.find((item) => item.connector_type === "crm-ops-review");
-    const order = catalog.find((item) => item.connector_type === "crm-order-review");
-    assert.equal(ops.title, "CRM ops review");
-    assert.equal(order.title, "CRM order review");
-    assert.equal(ops.setup_ready, false);
-    assert.equal(order.setup_ready, false);
-    assert.equal(ops.singleton, true);
-    assert.equal(order.singleton, true);
-    assert.equal(connectorAllowsMultiple("crm-ops-review"), false);
-    assert.equal(connectorAllowsMultiple("crm-order-review"), false);
+    assert.deepEqual(
+      catalog.map((item) => item.connector_type),
+      ["slack-channel", "dsh-session", "feishu-chat"],
+    );
     assert.equal(connectorAllowsMultiple("slack-channel"), true);
-    assert.match(ops.prerequisites[0].hint, /REGENIC_CRM_CONNECTOR|REGENIC_PLUGIN_DIR/);
+    assert.equal(connectorAllowsMultiple("extra-review"), true);
   });
 
-  it("marks CRM setup ready only when the private plugin and base URL are present", () => {
-    const catalog = connectorCatalog([], {
-      env: { REGENIC_CRM_BASE_URL: "https://crm.internal" },
-      services: {
-        "crm-connector": { ready: true, hint: "Private CRM connector is loaded." },
-      },
+  it("appends install cards from loaded extra drivers", () => {
+    const extras = extraCatalogFromDrivers({
+      list: () => [
+        {
+          connector_type: "extra-review",
+          source: "extra",
+          installCatalog() {
+            return {
+              title: "Extra review",
+              description: "Loaded plugin.",
+              credential_hint: "EXTRA_URL",
+              singleton: true,
+              fields: [{ key: "max_open", label: "Max open", default: "50" }],
+              prerequisites: [
+                {
+                  kind: "env",
+                  key: "EXTRA_URL",
+                  label: "Base URL",
+                  required: true,
+                },
+              ],
+              instance_label: "Extra queue",
+              instance_detail_key: "max_open",
+            };
+          },
+        },
+      ],
     });
-    const ops = catalog.find((item) => item.connector_type === "crm-ops-review");
-    assert.equal(ops.setup_ready, true);
-    assert.equal(ops.prerequisites[0].ready, true);
-    assert.equal(ops.fields[0].key, "max_open_tasks");
+    const catalog = connectorCatalog([], {
+      env: { EXTRA_URL: "https://extra.internal" },
+      extras,
+    });
+    const extra = catalog.find((item) => item.connector_type === "extra-review");
+    assert.equal(extra.title, "Extra review");
+    assert.equal(extra.setup_ready, true);
+    assert.equal(extra.singleton, true);
+    assert.equal(extra.fields[0].key, "max_open");
+    assert.equal(connectorAllowsMultiple("extra-review", extras), false);
   });
 
-  it("labels a CRM ops install without branching inbox on source", () => {
+  it("labels an extra install from the driver, not a host type switch", () => {
     const view = toInstallationView(
       {
-        id: "crm-1",
+        id: "extra-1",
         org_id: "local-owner",
-        connector_type: "crm-ops-review",
+        connector_type: "extra-review",
         status: "enabled",
-        config: { max_open_tasks: "50" },
+        config: { max_open: "50" },
         created_at: "2026-08-26T00:00:00.000Z",
         updated_at: "2026-08-26T00:00:00.000Z",
       },
@@ -157,16 +179,26 @@ describe("connector catalog hints", () => {
       {
         get() {
           return {
-            source: "crm",
+            source: "extra",
             capabilities() {
               return { sync: true, reply: false, create: false };
+            },
+            installCatalog() {
+              return {
+                title: "Extra review",
+                description: "Loaded plugin.",
+                credential_hint: "EXTRA_URL",
+                instance_label: "Extra queue",
+                instance_detail_key: "max_open",
+              };
             },
           };
         },
       },
     );
-    assert.equal(view.label, "Email submit review");
-    assert.equal(view.channel, "crm");
-    assert.equal(view.settings.max_open_tasks, "50");
+    assert.equal(view.label, "Extra queue");
+    assert.equal(view.detail, "50");
+    assert.equal(view.channel, "extra");
+    assert.equal(view.settings.max_open, "50");
   });
 });

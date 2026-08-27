@@ -891,7 +891,11 @@ export class PersonalWorkService implements OnModuleDestroy {
       return;
     }
     const prompts = await this.drivers.listPrompts(installations, thread, host);
-    const answer = matchWriteBackPrompt(prompts, text);
+    const answer = matchWriteBackPrompt(
+      prompts,
+      text,
+      (label) => found?.driver.writeBackLabels?.(label) ?? [label.trim()].filter(Boolean),
+    );
     if (!answer) {
       if (prompts.length === 0) {
         console.warn(

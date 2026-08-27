@@ -162,6 +162,7 @@ export function shouldWriteBackHandle(
 export function matchWriteBackPrompt(
   prompts: readonly ThreadPrompt[],
   summary: string,
+  labelsFor: (label: string) => readonly string[] = writeBackExactLabels,
 ): PromptAnswer | undefined {
   const candidates = writeBackConclusionLines(summary);
   if (candidates.length === 0) {
@@ -172,7 +173,7 @@ export function matchWriteBackPrompt(
     const options = question?.options ?? [];
     for (const candidate of candidates) {
       const matched = options.find((option) =>
-        writeBackAliases(option.label).includes(candidate),
+        labelsFor(option.label).includes(candidate),
       );
       if (matched && question) {
         return {
@@ -185,6 +186,11 @@ export function matchWriteBackPrompt(
   return undefined;
 }
 
+export function writeBackExactLabels(label: string): string[] {
+  const trimmed = label.trim();
+  return trimmed ? [trimmed] : [];
+}
+
 function writeBackConclusionLines(summary: string): string[] {
   const text = summary.trim();
   if (!text) {
@@ -192,23 +198,6 @@ function writeBackConclusionLines(summary: string): string[] {
   }
   const firstLine = text.split(/\r?\n/, 1)[0]?.trim() ?? "";
   return firstLine && firstLine !== text ? [text, firstLine] : [text];
-}
-
-function writeBackAliases(label: string): string[] {
-  const trimmed = label.trim();
-  if (trimmed === "REJECTED") {
-    return ["REJECTED", "不通过"];
-  }
-  if (trimmed === "APPROVED") {
-    return ["APPROVED", "通过"];
-  }
-  if (trimmed === "CLOSE_TASK") {
-    return ["CLOSE_TASK", "关闭任务"];
-  }
-  if (trimmed === "APPROVE_AND_CONTINUE") {
-    return ["APPROVE_AND_CONTINUE", "继续自动化"];
-  }
-  return trimmed ? [trimmed] : [];
 }
 
 export function workStatusFromHandle(

@@ -17,6 +17,7 @@ import {
 import type { Host } from "@regenic/plugin-host";
 import {
   connectorAllowsMultiple,
+  extraCatalogFromDrivers,
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
@@ -536,7 +537,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
     const store = this.runtime.requireHost().get("authority");
-    if (!connectorAllowsMultiple(input.connector_type)) {
+    if (
+      !connectorAllowsMultiple(
+        input.connector_type,
+        extraCatalogFromDrivers(this.drivers),
+      )
+    ) {
       const existing = (await store.listInstallations(this.runtime.orgId())).some(
         (item) => item.connector_type === input.connector_type,
       );
