@@ -277,7 +277,7 @@ describe("dshSessionPlugin", () => {
     });
   });
 
-  it("returns no streams when DSH web has no sessions", async () => {
+  it("mounts eligible DSH web sessions and does not list every session", async () => {
     const installation = {
       id: "dsh-1",
       org_id: "local-owner",
@@ -286,9 +286,13 @@ describe("dshSessionPlugin", () => {
       config: { transport: "web", base_url: "http://127.0.0.1:3080" },
       created_at: "2026-08-21T00:00:00.000Z",
     };
+    let listed = 0;
     const previous = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
-      const body = JSON.parse(init.body);
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.method === "session.list") {
+        listed += 1;
+      }
       return {
         ok: true,
         status: 200,
@@ -302,9 +306,30 @@ describe("dshSessionPlugin", () => {
       };
     };
     const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
     try {
       const streams = await dshSessionDriver.resolveStreams(installation, host, {});
       assert.deepEqual(streams, []);
+      assert.equal(listed, 0);
+      const eligible = await dshSessionDriver.resolveStreams(
+        installation,
+        host,
+        {},
+        { threads: [{ source: "dsh", target: "sess-keep" }] },
+      );
+      assert.deepEqual(
+        eligible.map((stream) => stream.thread_id),
+        ["dsh:sess-keep"],
+      );
+      assert.equal(listed, 0);
     } finally {
       globalThis.fetch = previous;
       await host.dispose();

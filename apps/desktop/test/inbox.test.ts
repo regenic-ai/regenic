@@ -12,6 +12,7 @@ import {
   overlayThreadMessages,
   resolveThreadAttention,
   sortInboxThreads,
+  workThreadId,
   type InboxThread,
 } from "../src/renderer/src/inbox.ts";
 import {
@@ -128,6 +129,19 @@ function thread(input: {
     unread_count: 0,
   };
 }
+
+describe("workThreadId", () => {
+  it("keeps a DSH session with colons on one thread for inbound and outbound", () => {
+    assert.equal(
+      workThreadId("dsh", "workspace:session:49", "evt"),
+      workThreadId("dsh", "workspace:session:out:rpc-1", "evt"),
+    );
+    assert.equal(
+      workThreadId("dsh", "workspace:session:out:rpc-1", "evt"),
+      "dsh:workspace:session",
+    );
+  });
+});
 
 describe("inbox sort", () => {
   it("ranks attention before recency when asked", () => {

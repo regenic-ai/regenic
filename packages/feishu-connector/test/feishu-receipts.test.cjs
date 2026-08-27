@@ -39,6 +39,18 @@ describe("Feishu receipts", () => {
         read_at: "2026-08-24T12:01:00.000Z",
       },
     );
+    assert.deepEqual(
+      receiptFromReadUsers({
+        data: {
+          items: [{ user_id: "ou_1", timestamp: "1609484183000" }],
+        },
+      }),
+      {
+        state: "read",
+        read_count: 1,
+        read_at: "2021-01-01T06:56:23.000Z",
+      },
+    );
   });
 
   it("caches a receipt briefly", () => {
@@ -67,8 +79,41 @@ describe("Feishu receipts", () => {
     assert.deepEqual(empty, { items: [] });
     const users = await client.readMessageUsers("om_1");
     assert.equal(users.items[0].user_id, "ou_1");
-    assert.match(calls[0].command.join(" "), /\/open-apis\/im\/v1\/messages\/om_1\/read_users/);
+    assert.match(calls[0].command.join(" "), /\+message-read-users/);
+    assert.match(calls[0].command.join(" "), /--message-id om_1/);
+    assert.equal(calls[0].command.includes("--page-all"), false);
     assert.equal(calls[0].command.includes("--as"), true);
     assert.equal(calls[0].command[calls[0].command.indexOf("--as") + 1], "user");
+  });
+
+  it("falls back to user CLI read_users when the shortcut is missing", async () => {
+    const calls = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn(input) {
+        calls.push(input.command.join(" "));
+        if (String(input.command.join(" ")).includes("+message-read-users")) {
+          return {
+            stdout: "",
+            stderr: "unknown command: +message-read-users",
+            exit_code: 2,
+          };
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            identity: "user",
+            data: { items: [{ user_id: "ou_2", timestamp: "1609484183000" }] },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const users = await client.readMessageUsers("om_2");
+    assert.equal(users.items[0].user_id, "ou_2");
+    assert.match(calls[0], /\+message-read-users/);
+    assert.match(calls[1], /\/open-apis\/im\/v1\/messages\/om_2\/read_users/);
+    assert.match(calls[1], /--as user/);
   });
 });

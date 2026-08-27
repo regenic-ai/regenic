@@ -175,7 +175,12 @@ describe("feishuChatDriver", () => {
       config: { chat_id: "oc_1", chat_name: "engineering" },
       now: "2026-08-22T00:00:00.000Z",
     });
-    assert.deepEqual(created.config, { selection: "pick", chat_ids: ["oc_1"] });
+    assert.deepEqual(created.config, {
+      selection: "pick",
+      chat_ids: ["oc_1"],
+      chat_names: ["engineering"],
+    });
+    assert.equal(feishuChatDriver.presentInstall(created).label, "engineering");
     assert.equal(
       feishuChatDriver.matchesThread(installation, { source: "feishu", target: "oc_1" }),
       true,
@@ -349,23 +354,50 @@ describe("feishuChatDriver", () => {
     ]);
   });
 
-  it("does not list chats to fill missing picked names", async () => {
-    let listed = 0;
+  it("fills missing picked names from the recent directory", async () => {
+    let recent = 0;
+    let all = 0;
     const chats = await resolveFeishuChatTargets(
       { selection: "pick", chat_ids: ["oc_1"] },
       {
         async listAllChats() {
-          listed += 1;
-          return [{ chat_id: "oc_1", name: "Ada" }];
+          all += 1;
+          return [];
         },
-        async listRecentChats() {
-          listed += 1;
-          return [{ chat_id: "oc_1", name: "Ada" }];
+        async listRecentChats(types, options) {
+          recent += 1;
+          assert.equal(types, undefined);
+          assert.equal(options?.names, true);
+          return [{ chat_id: "oc_1", name: "Ada", chat_mode: "p2p" }];
         },
       },
     );
-    assert.equal(listed, 0);
-    assert.deepEqual(chats, [{ chat_id: "oc_1", name: undefined }]);
+    assert.equal(recent, 1);
+    assert.equal(all, 0);
+    assert.deepEqual(chats, [
+      { chat_id: "oc_1", name: "Ada", chat_mode: "p2p" },
+    ]);
+  });
+
+  it("lists all chats when the recent page misses a picked name", async () => {
+    let all = 0;
+    const chats = await resolveFeishuChatTargets(
+      { selection: "pick", chat_ids: ["oc_old"] },
+      {
+        async listRecentChats() {
+          return [{ chat_id: "oc_hot", name: "Ada" }];
+        },
+        async listAllChats(maxPages) {
+          all += 1;
+          assert.equal(maxPages, require("../dist/probe").CATALOG_CHAT_PAGES);
+          return [{ chat_id: "oc_old", name: "Legacy", chat_mode: "group" }];
+        },
+      },
+    );
+    assert.equal(all, 1);
+    assert.deepEqual(chats, [
+      { chat_id: "oc_old", name: "Legacy", chat_mode: "group" },
+    ]);
   });
 
   it("reuses known chats on a busy tick without listing", async () => {

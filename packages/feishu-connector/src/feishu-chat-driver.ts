@@ -46,6 +46,7 @@ import {
   receiptFromReadUsers,
 } from "./feishu-receipts";
 import {
+  CATALOG_CHAT_PAGES,
   larkCliCatalogHint,
   larkCliReady,
   listFeishuCatalogChats,
@@ -136,11 +137,12 @@ export const feishuChatDriver: ChannelDriver = {
     if (selection === "all" || (!selection && chatIds.length === 0 && !chatId)) {
       return { label: feishuAllLabel(config), detail: "cli" };
     }
+    const names = configStringList(config, "chat_names");
     if (chatIds.length > 1) {
       return { label: `${chatIds.length} conversations`, detail: "cli" };
     }
     return {
-      label: chatName ?? chatIds[0] ?? chatId ?? installation.id,
+      label: names[0] ?? chatName ?? chatIds[0] ?? chatId ?? installation.id,
       detail: "cli",
     };
   },
@@ -247,7 +249,7 @@ export const feishuChatDriver: ChannelDriver = {
       return labels;
     }
     const picked = feishuPickedChatIds(installation.config);
-    const names = configStringList(installation.config, "chat_names");
+    const names = pickedChatNames(installation.config, picked);
     if (picked.length > 0 && names.length === picked.length) {
       for (let index = 0; index < picked.length; index += 1) {
         const name = names[index]?.replace(/\s+/g, " ").trim();
@@ -338,19 +340,28 @@ export const feishuChatDriver: ChannelDriver = {
     }
     const unique = [
       ...new Map(wanted.map((item) => [item.messageId, item])).values(),
-    ].slice(0, 20);
+    ].slice(0, 8);
     const live = await Promise.all(
       unique.map(async (item) => {
         const cached = cachedFeishuReceipt(item.messageId);
-        const receipt =
-          cached ?? receiptFromReadUsers(await client.readMessageUsers(item.messageId));
-        if (!cached) {
-          cacheFeishuReceipt(item.messageId, receipt);
+        if (cached) {
+          return { messageId: item.messageId, receipt: cached };
         }
-        return { messageId: item.messageId, receipt };
+        try {
+          const receipt = receiptFromReadUsers(
+            await client.readMessageUsers(item.messageId),
+          );
+          cacheFeishuReceipt(item.messageId, receipt);
+          return { messageId: item.messageId, receipt };
+        } catch {
+          return { messageId: item.messageId, receipt: undefined };
+        }
       }),
     );
     for (const item of live) {
+      if (!item.receipt) {
+        continue;
+      }
       for (const row of wanted) {
         if (row.messageId === item.messageId) {
           receipts.set(row.external_id, item.receipt);
@@ -439,7 +450,7 @@ export function feishuInstallConfig(
       "Feishu install requires at least one conversation when choosing conversations",
     );
   }
-  const names = configStringList(input, "chat_names");
+  const names = pickedChatNames(input, chatIds);
   const config: Record<string, JsonValue> = {
     selection: "pick",
     chat_ids: chatIds,
@@ -472,12 +483,7 @@ export async function resolveFeishuChatTargets(
   } = {},
 ): Promise<FeishuChat[]> {
   if (feishuSelection(config) === "pick") {
-    const ids = feishuPickedChatIds(config);
-    const names = configStringList(config, "chat_names");
-    return ids.map((chat_id, index) => ({
-      chat_id,
-      name: names[index],
-    }));
+    return fillPickedFeishuChats(config, client);
   }
   const kinds = feishuKinds(config);
   const known = (options.known ?? []).filter((chat) =>
@@ -495,6 +501,81 @@ export async function resolveFeishuChatTargets(
   }
   const listed = await listRecentFeishuChats(client, kinds);
   return mergeFeishuChats(known, listed);
+}
+
+async function fillPickedFeishuChats(
+  config: Record<string, unknown>,
+  client: FeishuChatDirectory,
+): Promise<FeishuChat[]> {
+  const ids = feishuPickedChatIds(config);
+  const stored = pickedChatNames(config, ids);
+  const named = ids.map((chat_id, index) => ({
+    chat_id,
+    name: stored[index],
+  }));
+  if (named.every((chat) => Boolean(chat.name))) {
+    return named;
+  }
+  const listed = await listPickedFeishuDirectory(
+    client,
+    named.filter((chat) => !chat.name).map((chat) => chat.chat_id),
+  );
+  const byId = new Map(listed.map((chat) => [chat.chat_id, chat]));
+  return named.map((chat) => {
+    const found = byId.get(chat.chat_id);
+    return {
+      chat_id: chat.chat_id,
+      name: chat.name || found?.name,
+      ...(found?.chat_mode ? { chat_mode: found.chat_mode } : {}),
+    };
+  });
+}
+
+async function listPickedFeishuDirectory(
+  client: FeishuChatDirectory,
+  wanted: string[],
+): Promise<FeishuChat[]> {
+  const byId = new Map<string, FeishuChat>();
+  const missing = () => wanted.filter((id) => !byId.get(id)?.name);
+  try {
+    if (client.listRecentChats && missing().length > 0) {
+      for (const chat of await client.listRecentChats(undefined, { names: true })) {
+        byId.set(chat.chat_id, chat);
+      }
+    }
+  } catch {
+    // Fall through to the catalog-sized list.
+  }
+  try {
+    if (client.listAllChats && missing().length > 0) {
+      for (const chat of await client.listAllChats(CATALOG_CHAT_PAGES)) {
+        const prev = byId.get(chat.chat_id);
+        byId.set(chat.chat_id, {
+          chat_id: chat.chat_id,
+          name: chat.name ?? prev?.name,
+          chat_mode: chat.chat_mode ?? prev?.chat_mode,
+          ...(chat.p2p_target_id || prev?.p2p_target_id
+            ? { p2p_target_id: chat.p2p_target_id ?? prev?.p2p_target_id }
+            : {}),
+        });
+      }
+    }
+  } catch {
+    // Keep the picked ids. A directory miss must not drop the install set.
+  }
+  return [...byId.values()];
+}
+
+function pickedChatNames(
+  config: Record<string, unknown>,
+  chatIds: string[],
+): string[] {
+  const names = configStringList(config, "chat_names");
+  if (names.length === chatIds.length) {
+    return names;
+  }
+  const single = configString(config, "chat_name");
+  return single && chatIds.length === 1 ? [single] : [];
 }
 
 function chatMatchesKinds(chat: FeishuChat, kinds: FeishuChatMode[]): boolean {
@@ -642,7 +723,7 @@ function feishuChatName(
   chatId: string,
 ): string | undefined {
   const ids = feishuPickedChatIds(config);
-  const names = configStringList(config, "chat_names");
+  const names = pickedChatNames(config, ids);
   const index = ids.indexOf(chatId);
   if (index < 0) {
     return undefined;

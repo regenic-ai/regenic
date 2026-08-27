@@ -59,6 +59,7 @@ describe("pull status network watch", () => {
         thread_id: "feishu:oc_old",
         label: "Old",
         phase: "catching_up",
+        work: null,
         last_error: null,
       },
       {
@@ -66,6 +67,7 @@ describe("pull status network watch", () => {
         thread_id: "feishu:oc_hot",
         label: "Hot",
         phase: "error",
+        work: null,
         last_error: "lark-cli timed out after 60000ms",
       },
     ]);
@@ -93,6 +95,7 @@ describe("opened inbox hydrate", () => {
       false,
     );
     assert.equal(shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", heads: true }), false);
+    assert.equal(shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", live: true }), false);
     assert.equal(shouldHydrateOpenedInbox({ heads: true }), false);
     assert.equal(shouldHydrateOpenedInbox({ thread_id: "dsh:session-x" }), true);
   });
@@ -133,6 +136,10 @@ describe("opened inbox hydrate", () => {
     );
     assert.equal(shouldNoteHumanInbox({ heads: true }), false);
     assert.equal(
+      shouldNoteHumanInbox({ thread_id: "feishu:oc_1", live: true }),
+      false,
+    );
+    assert.equal(
       shouldSkipLiveChannelOverlays({ thread_id: "feishu:oc_1" }),
       true,
     );
@@ -141,7 +148,12 @@ describe("opened inbox hydrate", () => {
         thread_id: "feishu:oc_1",
         since: "2026-08-24T00:00:00.000Z",
       }),
+      true,
+    );
+    assert.equal(
+      shouldSkipLiveChannelOverlays({ thread_id: "feishu:oc_1", live: true }),
       false,
     );
+    assert.equal(shouldSkipLiveChannelOverlays({ heads: true }), false);
   });
 });

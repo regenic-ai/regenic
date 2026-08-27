@@ -52,12 +52,15 @@ export function workThreadId(
   fallbackId: string,
 ): string {
   const cut = externalId.indexOf(":out:");
-  const withoutOut = cut >= 0 ? externalId.slice(0, cut) : externalId;
-  const colon = withoutOut.lastIndexOf(":");
-  if (colon > 0) {
-    return `${source}:${withoutOut.slice(0, colon)}`;
+  if (cut >= 0) {
+    const target = externalId.slice(0, cut).trim();
+    return `${source}:${target || fallbackId}`;
   }
-  return `${source}:${withoutOut || fallbackId}`;
+  const colon = externalId.lastIndexOf(":");
+  if (colon > 0) {
+    return `${source}:${externalId.slice(0, colon)}`;
+  }
+  return `${source}:${externalId || fallbackId}`;
 }
 
 export function groupInboxThreads(

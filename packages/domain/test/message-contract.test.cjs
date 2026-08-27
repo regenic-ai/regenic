@@ -22,6 +22,14 @@ describe("message contract", () => {
       conversationId("dsh", "session-abc:out:rpc-1"),
     );
     assert.equal(conversationId("dsh", "session-abc:49"), "dsh:session-abc");
+    assert.equal(
+      conversationId("dsh", "workspace:session:49"),
+      conversationId("dsh", "workspace:session:out:rpc-1"),
+    );
+    assert.equal(
+      conversationId("dsh", "workspace:session:out:rpc-1"),
+      "dsh:workspace:session",
+    );
     assert.equal(conversationId("slack", "C123:1710000000.000100"), "slack:C123");
     assert.equal(isLocalOutboundId("session-abc:out:rpc"), true);
     assert.equal(isLocalOutboundId("session-abc:49"), false);

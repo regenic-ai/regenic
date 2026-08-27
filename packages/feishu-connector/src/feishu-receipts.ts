@@ -29,11 +29,30 @@ export function receiptFromReadUsers(value: unknown): MessageReceipt {
   const latest = items.reduce((best, item) =>
     item.timestamp > best.timestamp ? item : best,
   );
+  const readAt = feishuReadAt(latest.timestamp);
   return {
     state: "read",
     read_count: items.length,
-    ...(latest.timestamp ? { read_at: latest.timestamp } : {}),
+    ...(readAt ? { read_at: readAt } : {}),
   };
+}
+
+/** Official read_users timestamp is a millisecond epoch string. */
+export function feishuReadAt(timestamp: string): string | undefined {
+  const raw = timestamp.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (/^\d+$/.test(raw)) {
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) {
+      return undefined;
+    }
+    const ms = raw.length <= 10 ? value * 1000 : value;
+    return new Date(ms).toISOString();
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : raw;
 }
 
 export function cachedFeishuReceipt(messageId: string): MessageReceipt | undefined {

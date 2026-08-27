@@ -8,12 +8,14 @@ import {
 
 export type PullPhase = "idle" | "pulling";
 export type PullStreamPhase = "idle" | "pulling" | "catching_up" | "error";
+export type PullStreamWork = "live" | "history";
 
 export interface PullStreamStatus {
   stream_key: string;
   thread_id: string | null;
   label: string | null;
   phase: PullStreamPhase;
+  work: PullStreamWork | null;
   last_error: string | null;
 }
 
@@ -81,7 +83,7 @@ export function publishPullStreams(streams: PullStreamStatus[]): void {
   });
   pullStatus.streams = ranked.slice(0, MAX_STREAM_VIEWS);
   pullStatus.catching_up_count = streams.filter(
-    (stream) => stream.phase === "catching_up" || stream.phase === "pulling",
+    (stream) => stream.phase === "catching_up" || stream.work === "history",
   ).length;
 }
 

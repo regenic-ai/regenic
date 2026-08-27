@@ -58,7 +58,10 @@ export function mergeInboxDelta(
     }
     return !isBeforeEvent(item.event, oldest.event.occurred_at, oldest.event.id);
   });
-  return appended.length === 0 ? updated : [...updated, ...appended];
+  return preserveMessageReceipts(
+    previous,
+    appended.length === 0 ? updated : [...updated, ...appended],
+  );
 }
 
 export function mergeRecentInbox(
@@ -86,7 +89,39 @@ export function mergeRecentInbox(
     previous.filter((item) => recentIds.has(item.event.id)),
     recent,
   );
-  return older.length === 0 ? reusedRecent : [...older, ...reusedRecent];
+  return preserveMessageReceipts(
+    previous,
+    older.length === 0 ? reusedRecent : [...older, ...reusedRecent],
+  );
+}
+
+export function preserveMessageReceipts(
+  previous: InboxViewItem[],
+  next: InboxViewItem[],
+): InboxViewItem[] {
+  if (previous.length === 0 || next.length === 0) {
+    return next;
+  }
+  const prior = new Map(previous.map((item) => [item.event.id, item]));
+  let changed = false;
+  const merged = next.map((item) => {
+    const old = prior.get(item.event.id);
+    if (!old) {
+      return item;
+    }
+    const keepRead = old.receipt?.state === "read" && item.receipt?.state !== "read";
+    const keepCan = old.can_receipt === true && item.can_receipt !== true;
+    if (!keepRead && !keepCan) {
+      return item;
+    }
+    changed = true;
+    return {
+      ...item,
+      can_receipt: keepCan ? true : item.can_receipt,
+      receipt: keepRead ? old.receipt : item.receipt,
+    };
+  });
+  return changed ? merged : next;
 }
 
 export function mergeOlderInbox(
