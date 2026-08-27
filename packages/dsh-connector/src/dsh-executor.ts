@@ -89,8 +89,8 @@ export const dshTaskExecutor: TaskExecutor = {
           key: DSH_PROMPT_FIELD,
           label: "Prompt",
           kind: "textarea",
-          hint: "Task instruction sent before the work evidence.",
-          placeholder: "What this run should do.",
+          hint: "Sent before the work evidence. If the recipe writes back, line 1 must be the exact prompt option.",
+          placeholder: "option-label\nReason on the following lines.",
         },
       ],
     };

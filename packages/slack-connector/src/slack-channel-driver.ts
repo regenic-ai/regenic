@@ -87,6 +87,47 @@ export const slackChannelDriver: ChannelDriver = {
     return `${thread.target}:out:local`;
   },
 
+  installCatalog() {
+    return {
+      title: "Slack",
+      description:
+        "Install by channel. The kernel pulls that channel after install and keeps pulling while enabled.",
+      credential_hint: "REGENIC_SLACK_TOKEN",
+      fields: [
+        {
+          key: "channel_id",
+          label: "Channel ID",
+          required: true,
+          placeholder: "C01234567",
+        },
+        {
+          key: "channel_name",
+          label: "Channel name",
+          required: false,
+          placeholder: "Optional, display only",
+        },
+      ],
+      prerequisites: [
+        {
+          kind: "env" as const,
+          key: "REGENIC_SLACK_TOKEN",
+          label: "Local Slack token",
+          required: true,
+          hint: "Set REGENIC_SLACK_TOKEN (bot token from your Slack app) before starting the desktop. The form does not take it.",
+        },
+      ],
+    };
+  },
+
+  presentInstall(installation) {
+    const channelName = configString(installation.config, "channel_name");
+    const channelId = configString(installation.config, "channel_id");
+    return {
+      label: channelName ?? channelId ?? installation.id,
+      detail: channelName && channelId ? channelId : null,
+    };
+  },
+
   async resolveConversationLabels(installation, threads) {
     const channelId = configString(installation.config, "channel_id");
     const channelName = configString(installation.config, "channel_name");

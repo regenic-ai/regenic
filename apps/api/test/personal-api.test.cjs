@@ -1319,6 +1319,11 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[2].fields[2].key, "chat_ids");
       assert.equal(engine.catalog[2].fields[2].multiple, true);
       assert.equal(engine.catalog[2].prerequisites[0].key, "lark-cli");
+      assert.equal(engine.catalog[0].singleton, false);
+      assert.equal(
+        engine.catalog.some((item) => item.connector_type.startsWith("crm-")),
+        false,
+      );
       assert.equal(engine.installations[0].settings.channel_id, "C123");
       assert.equal(JSON.stringify(engine).includes("xoxb"), false);
       assert.equal(JSON.stringify(engine).includes("credentials_ref"), false);
@@ -1532,6 +1537,85 @@ describe("personal /v1/me", () => {
           .installed,
         false,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a second install of a singleton extra connector", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CHANNEL_PLUGIN: join(__dirname, "fixtures/extra-review-driver.cjs"),
+    });
+    try {
+      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      const extra = engine.catalog.find(
+        (item) => item.connector_type === "extra-review",
+      );
+      assert.equal(extra.title, "Extra review");
+      assert.equal(extra.singleton, true);
+
+      const first = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "extra-review",
+          config: { max_open: "20" },
+        }),
+      });
+      const firstBody = await first.json();
+      assert.equal(first.status, 201, JSON.stringify(firstBody));
+      assert.equal(firstBody.label, "Extra queue");
+      assert.equal(firstBody.detail, "20");
+
+      const second = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "extra-review",
+          config: { max_open: "40" },
+        }),
+      });
+      const secondBody = await second.json();
+      assert.equal(second.status, 409, JSON.stringify(secondBody));
+      assert.equal(secondBody.error.code, "already_installed");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects an unknown extra connector and treats uninstall as idempotent", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const unknown = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "crm-ops-review",
+          config: { max_open_tasks: "20" },
+        }),
+      });
+      const unknownBody = await unknown.json();
+      assert.equal(unknown.status, 400, JSON.stringify(unknownBody));
+      assert.equal(unknownBody.error.code, "unsupported_connector");
+
+      const first = await fetch(`${origin}/v1/me/connectors/missing-install`, {
+        method: "DELETE",
+      });
+      assert.equal(first.status, 200);
+      const second = await fetch(`${origin}/v1/me/connectors/missing-install`, {
+        method: "DELETE",
+      });
+      const secondBody = await second.json();
+      assert.equal(second.status, 200, JSON.stringify(secondBody));
+      assert.equal(secondBody.removed, true);
     } finally {
       await app.close();
     }

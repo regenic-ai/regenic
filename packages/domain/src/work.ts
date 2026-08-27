@@ -105,6 +105,7 @@ export interface WorkFace {
   agent_thread_id?: string;
   can_write_back?: boolean;
   has_result?: boolean;
+  result_summary?: string;
   updated_at?: string;
 }
 

@@ -25,10 +25,13 @@ const {
   selectRecipeForSubject,
   shouldOpenWorkItem,
   shouldRefreshActiveRun,
+  matchWriteBackPrompt,
+  pickAbsenteeInboxRows,
   shouldWriteBackHandle,
   transcriptFromAbsenteeLive,
   waitFromAbsentee,
   waitFromTranscript,
+  workFaceOf,
   workStatusFromRun,
   workSubjectFromEvent,
   cancelWorkRun,
@@ -198,6 +201,20 @@ describe("session job face and wait status", () => {
     assert.equal(wait.transcript.text, "done");
   });
 
+  it("prefers thread_status over later speech for absentee live", () => {
+    const ended = {
+      event: { id: "status", operation: "create" },
+      decision: { reason_codes: ["thread_status"] },
+    };
+    const spoken = {
+      event: { id: "say", operation: "create" },
+      decision: { reason_codes: ["assistant_not_current_work"] },
+    };
+    const picked = pickAbsenteeInboxRows([ended, spoken]);
+    assert.equal(picked.live, ended);
+    assert.equal(picked.visible, spoken);
+  });
+
   it("maps DSH turn/end to absentee exit, not an assistant face", () => {
     const working = waitFromAbsentee({
       prompts: [],
@@ -275,6 +292,34 @@ describe("session job face and wait status", () => {
   });
 });
 
+describe("work face", () => {
+  it("exposes the run summary on the inbox face", () => {
+    const face = workFaceOf(
+      {
+        id: "work-1",
+        org_id: "local-owner",
+        thread_id: "crm:order:1",
+        unit_key: "job:1",
+        record_class: "task",
+        thread_facet: "ticket",
+        status: "done",
+        recipe_id: "recipe-1",
+        created_at: "2026-08-27T00:00:00.000Z",
+        updated_at: "2026-08-27T00:00:00.000Z",
+      },
+      { can_write_back: true, executor_type: "dsh" },
+      {
+        executor_type: "dsh",
+        agent_thread_id: "dsh:session-1",
+        result: { summary: "  审核不通过：地区不符  " },
+      },
+    );
+    assert.equal(face.has_result, true);
+    assert.equal(face.result_summary, "审核不通过：地区不符");
+    assert.equal(face.can_write_back, true);
+  });
+});
+
 describe("dismiss vs handle commit", () => {
   it("does not treat a leftover thread_status as working", () => {
     const leftover = transcriptFromAbsenteeLive({
@@ -318,6 +363,55 @@ describe("dismiss vs handle commit", () => {
       shouldWriteBackHandle({ status: "completed", result: { summary: "ok" } }, false),
       false,
     );
+  });
+});
+
+describe("write-back prompt match", () => {
+  const orderPrompt = {
+    prompt_id: "crm:audit:1",
+    presentation: "approval",
+    questions: [
+      {
+        id: "decision",
+        prompt: "review",
+        options: [{ label: "APPROVED" }, { label: "REJECTED" }],
+      },
+    ],
+  };
+
+  it("maps an exact option label or first-line conclusion", () => {
+    assert.deepEqual(matchWriteBackPrompt([orderPrompt], "REJECTED"), {
+      prompt_id: "crm:audit:1",
+      answers: [{ id: "decision", selected: ["REJECTED"] }],
+    });
+    assert.equal(
+      matchWriteBackPrompt([orderPrompt], "REJECTED\n地区不符").answers[0].selected[0],
+      "REJECTED",
+    );
+    assert.equal(
+      matchWriteBackPrompt(
+        [orderPrompt],
+        "不通过\n地区不符",
+        (label) => (label === "REJECTED" ? ["REJECTED", "不通过"] : [label]),
+      ).answers[0].selected[0],
+      "REJECTED",
+    );
+  });
+
+  it("does not infer a conclusion from narrative text", () => {
+    assert.equal(matchWriteBackPrompt([orderPrompt], "通过"), undefined);
+    assert.equal(matchWriteBackPrompt([orderPrompt], "不通过\n地区不符"), undefined);
+    assert.equal(
+      matchWriteBackPrompt([orderPrompt], "审核结果：**不通过**\n地区不符"),
+      undefined,
+    );
+    assert.equal(
+      matchWriteBackPrompt([orderPrompt], "达人通过了粉丝门槛，但语种不通过"),
+      undefined,
+    );
+    assert.equal(matchWriteBackPrompt([orderPrompt], "重新审查后审核通过"), undefined);
+    assert.equal(matchWriteBackPrompt([orderPrompt], "未通过"), undefined);
+    assert.equal(matchWriteBackPrompt([orderPrompt], "不建议通过"), undefined);
   });
 });
 

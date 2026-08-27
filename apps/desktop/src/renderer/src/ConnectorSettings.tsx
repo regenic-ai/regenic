@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   attemptSummary,
-  connectorLabel,
   installationStatusLabel,
 } from "./format";
 import { useLocale } from "./LocaleContext";
@@ -13,6 +12,7 @@ export function ConnectorKind({
   busyId,
   syncingAll,
   installing,
+  pendingUninstall,
   onOpenInstall,
   onCloseInstall,
   onInstall,
@@ -26,6 +26,7 @@ export function ConnectorKind({
   busyId: string | null;
   syncingAll: boolean;
   installing: boolean;
+  pendingUninstall: boolean;
   onOpenInstall: () => void;
   onCloseInstall: () => void;
   onInstall: (config: Record<string, string>) => void;
@@ -60,16 +61,28 @@ export function ConnectorKind({
           />
         </div>
         <div className="install-actions">
-          <button
-            type="button"
-            className={kind.installed ? "ghost" : "primary"}
-            disabled={busyId !== null || syncingAll}
-            onClick={onOpenInstall}
-          >
-            {t("connector.install")}
-          </button>
+          {!kind.singleton || !kind.installed ? (
+            <button
+              type="button"
+              className={kind.installed ? "ghost" : "primary"}
+              disabled={
+                busyId !== null ||
+                syncingAll ||
+                !kind.setup_ready ||
+                installing
+              }
+              onClick={onOpenInstall}
+            >
+              {busyId === kind.connector_type
+                ? t("connector.installing")
+                : t("connector.install")}
+            </button>
+          ) : null}
         </div>
       </div>
+      {pendingUninstall && installations.length === 0 ? (
+        <p className="muted">{t("connector.uninstalling")}</p>
+      ) : null}
       {installing ? (
         <ConnectorSettingsDialog
           title={t("connector.installTitle", { title: kind.title })}
@@ -200,6 +213,9 @@ function ConnectorSettingsForm({
       className="install-form"
       onSubmit={(event) => {
         event.preventDefault();
+        if (busy) {
+          return;
+        }
         onSubmit(values);
       }}
     >
@@ -460,7 +476,7 @@ function ConnectorRow({
       <div className="install install-instance">
         <div>
           <strong title={installation.id}>
-            {connectorLabel(installation.connector_type)} · {installation.label}
+            {kind.title} · {installation.label}
           </strong>
           <div className="install-meta">
             <span className={`chip ${statusChip}`.trim()}>
@@ -505,7 +521,7 @@ function ConnectorRow({
         <ConnectorSettingsDialog
           key={`${installation.id}:${JSON.stringify(installation.settings ?? {})}`}
           title={t("connector.editTitle", {
-            type: connectorLabel(installation.connector_type),
+            type: kind.title,
           })}
           kind={kind}
           busy={busy}

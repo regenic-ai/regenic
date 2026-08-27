@@ -27,14 +27,18 @@ The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 Capabilities are declared on the installation. The kernel does not infer them
 from the driver name.
 
-You do not rebuild the API or the desktop to add a source. You add a driver
-and a catalog entry.
+You do not rebuild the API or the desktop to add a source. Every driver
+declares `installCatalog()` and optional `presentInstall` /
+`writeBackLabels`. The host assembles Engine from registered drivers.
+Extra packages load at process start from `REGENIC_PLUGIN_DIR` or
+`REGENIC_CHANNEL_PLUGIN`. The kernel matches the first result line
+exactly to a live prompt option.
 
 ## Interfaces
 
 | Interface | Responsibility |
 | --- | --- |
-| `ChannelDriver` | Install, resolve streams, bind send, declare `sync` / `reply` / `create` |
+| `ChannelDriver` | Install, resolve streams, bind send, declare `sync` / `reply` / `create`, and `installCatalog` / `presentInstall` / `writeBackLabels` |
 | `ChannelConnector` | Read the source into `IngestBatch` |
 | `EgressAdapter` | Write `ContentPart[]` back to the same source |
 
@@ -54,6 +58,9 @@ Each connector must:
 - Read credentials from environment variables, or from a `credentials_ref`
   that names one. The install form does not accept tokens.
 - Fail independently. One install must not stall another.
+- Implement `installCatalog()` to appear on Engine. Optional
+  `presentInstall` labels the installed row. Optional `writeBackLabels`
+  lists exact aliases for write-back.
 
 The following are not allowed:
 
@@ -165,6 +172,10 @@ interface ChannelDriver {
   resolveThreadStream(installation, thread, host, env): Promise<ConnectorStream>;
   bindEgress(installation, thread, host, env): Promise<RegisteredEgress>;
   outboundId(thread, receipt): string;
+  installCatalog?(input?): DriverInstallCatalog;
+  presentInstall?(installation, input?): { label; detail };
+  writeBackLabels?(label): string[];
+  probeCatalog?(input): Promise<ConnectorCatalogProbe>;
 }
 ```
 
@@ -184,6 +195,10 @@ interface ChannelDriver {
 | `createThread` | Required when `create` is true. Otherwise throw `unsupported_channel`. |
 | `bindEgress` | Required when `reply` is true. Otherwise throw `unsupported_channel`. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
+| `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. |
+| `presentInstall` | Optional. Label and detail for an installed row. |
+| `writeBackLabels` | Optional. Exact aliases for a prompt option. The kernel matches the first result line. |
+| `probeCatalog` | Optional. Local service / env readiness and field options. |
 
 `ChannelDriverError` codes: `invalid_config`, `missing_credentials`,
 `sync_failed`, `send_failed`, `unsupported_channel`, `no_sender`.
@@ -243,11 +258,28 @@ adapter writes that envelope back to the same source and thread.
 
 ## Catalog
 
-`GET /v1/me/engine` returns a catalog. The Engine page opens a dialog for those catalog fields on Install
-and on Edit sync.
-A new connector adds an entry there. The desktop does not hard-code fields
-per type. Installations include `settings` (non-secret config as strings)
-so the edit form can prefill.
+`GET /v1/me/engine` returns a catalog. The Engine page opens a dialog for
+those catalog fields on Install and on Edit sync.
+
+A driver appears there only when it implements `installCatalog()`. Slack,
+DSH, Feishu, and extra plugins use that same method. The host does not
+keep a parallel list. `singleton: true` allows one install.
+`presentInstall` labels an installed row; without it the host uses
+`instance_label` / `instance_detail_key`, then the installation id. The
+desktop does not hard-code fields or titles per type. Installations
+include `settings` (non-secret config as strings) so the edit form can
+prefill.
+
+Extra packages load once at process start from `REGENIC_PLUGIN_DIR` (each
+child directory with a `package.json`) or `REGENIC_CHANNEL_PLUGIN` (one
+module id or path). `REGENIC_CRM_CONNECTOR` is a compat alias for the
+latter. The public tree does not name private packages. A loaded extra
+cannot replace an already registered `connector_type`. A missing or
+invalid explicit plugin is skipped and logged.
+
+When a finished job writes back, the kernel matches the first result line
+exactly to a live prompt option. `writeBackLabels(label)` may add aliases
+for that option. The host does not keep a synonym list.
 
 | Field | Description |
 | --- | --- |

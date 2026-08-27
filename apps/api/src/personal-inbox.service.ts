@@ -54,6 +54,7 @@ import {
 import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
+  catalogFromDrivers,
   toInstallationView,
   type ConnectorCatalogItem,
   type EngineInstallationView,
@@ -295,14 +296,19 @@ export class PersonalInboxService {
     const catalogReady = async (
       installations: EngineInstallationView[],
     ) => {
+      const extras = catalogFromDrivers(this.drivers, process.env);
       if (!detailed) {
-        return connectorCatalog(installations, { env: process.env });
+        return connectorCatalog(installations, {
+          env: process.env,
+          extras,
+        });
       }
       const probed = await this.drivers.probeCatalog(process.env);
       return connectorCatalog(installations, {
         env: process.env,
         services: probed.services,
         field_options: probed.field_options,
+        extras,
       });
     };
     if (!this.runtime.isReady()) {

@@ -71,6 +71,8 @@ export const en = {
   "work.running": "Running",
   "work.waiting": "Waiting",
   "work.failed": "Failed",
+  "work.done": "Done",
+  "work.result": "Result",
 
   "label.ticket": "Ticket",
   "label.agent": "Agent",
@@ -147,6 +149,8 @@ export const en = {
     "This executor runs in the background. The job closes when it stops working.",
   "recipes.name": "Name",
   "recipes.writeBackCheck": "Write back when done",
+  "recipes.writeBackHint":
+    "Write-back matches only the first line of the result to a live prompt option label. Put reasons on the next lines.",
   "recipes.includeContextCheck": "Include conversation history",
   "recipes.includeContextHint":
     "On: send recent messages from this chat. Long threads are truncated. Off: only the latest work item.",
@@ -329,6 +333,7 @@ export const en = {
   "connector.disable": "Disable",
   "connector.editSync": "Edit sync",
   "connector.uninstall": "Uninstall",
+  "connector.uninstalling": "Uninstalling…",
   "connector.save": "Save",
   "connector.saving": "Saving…",
   "connector.editTitle": "Edit {type} sync",
@@ -443,6 +448,8 @@ export const zh: Record<MessageKey, string> = {
   "work.running": "执行中",
   "work.waiting": "等待中",
   "work.failed": "失败",
+  "work.done": "已完成",
+  "work.result": "执行结果",
 
   "label.ticket": "工单",
   "label.agent": "Agent",
@@ -515,6 +522,8 @@ export const zh: Record<MessageKey, string> = {
   "recipes.absentee": "这个执行器在后台跑，停下来后工单关闭。",
   "recipes.name": "名称",
   "recipes.writeBackCheck": "做完后回写",
+  "recipes.writeBackHint":
+    "回写只认结果第一行，必须刚好是渠道待办选项的原文。原因从第二行写。",
   "recipes.includeContextCheck": "携带会话上下文",
   "recipes.includeContextHint":
     "打开后带上这条会话最近的可见消息；很长的会话会截断。关闭则只带最近这条工单。",
@@ -690,6 +699,7 @@ export const zh: Record<MessageKey, string> = {
   "connector.disable": "停用",
   "connector.editSync": "改同步范围",
   "connector.uninstall": "卸载",
+  "connector.uninstalling": "卸载中…",
   "connector.save": "保存",
   "connector.saving": "保存中…",
   "connector.editTitle": "编辑 {type} 同步",

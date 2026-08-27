@@ -6,6 +6,7 @@ import {
 import { dshSessionDriver, dshTaskExecutor } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
 import { slackChannelDriver } from "@regenic/slack-connector";
+import { extraChannelDrivers } from "./extra-channel-drivers";
 import { DshApiController } from "./dsh-api.controller";
 import { DshApiService } from "./dsh-api.service";
 import { HealthController } from "./health.controller";
@@ -31,11 +32,22 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalWhatsAppImportService,
     {
       provide: ChannelDriverRegistry,
-      useFactory: () =>
-        new ChannelDriverRegistry()
-          .register(dshSessionDriver)
+      useFactory: () => {
+        const registry = new ChannelDriverRegistry()
           .register(slackChannelDriver)
-          .register(feishuChatDriver),
+          .register(dshSessionDriver)
+          .register(feishuChatDriver);
+        for (const driver of extraChannelDrivers()) {
+          if (registry.has(driver.connector_type)) {
+            console.warn(
+              `regenic extra connector: skip ${driver.connector_type}, already registered`,
+            );
+            continue;
+          }
+          registry.register(driver);
+        }
+        return registry;
+      },
     },
     {
       provide: LocalExecutorPluginRegistry,

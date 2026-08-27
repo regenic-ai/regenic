@@ -99,6 +99,17 @@ describe("thread window", () => {
     assert.ok(estimateMessageHeight(message, true) < estimateMessageHeight(message, false));
   });
 
+  it("estimates ticket system messages from the body instead of a collapsed line", () => {
+    const ticket = {
+      ...item("t1", "# 订单 AI 内审待人工\n- 达人: 小红\n\n## 项目需求\n要竖屏带货"),
+      kind: "system" as const,
+      thread_facet: "ticket" as const,
+    };
+    const notice = { ...item("s1", "ok"), kind: "system" as const };
+    assert.equal(estimateMessageHeight(notice, false), 36);
+    assert.ok(estimateMessageHeight(ticket, false) > 80);
+  });
+
   it("changes inbox revision when a later event appears", () => {
     const first = [item("a", "one"), item("b", "two")];
     const next = [...first, item("c", "three")];

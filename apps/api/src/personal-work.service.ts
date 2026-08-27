@@ -22,10 +22,12 @@ import {
   openOrUpdateWorkItem,
   parseConversationThread,
   recipeSpecificity,
+  pickAbsenteeInboxRows,
   selectRecipeForSubject,
   selectThreadEvidenceLines,
   shouldRefreshActiveRun,
   shouldWriteBackHandle,
+  matchWriteBackPrompt,
   toReplyParts,
   transcriptFromAbsenteeLive,
   workFaceOf,
@@ -726,8 +728,8 @@ export class PersonalWorkService implements OnModuleDestroy {
       }
       try {
         await this.writeBack(item, handle.result?.summary ?? "", handle.result?.content);
-      } catch {
-        status = "failed";
+      } catch (error) {
+        console.error("personal write-back failed", error);
       }
     }
     if (await this.abandonIfSkipped(item, nextRun)) {
@@ -879,7 +881,36 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!text.trim()) {
       return;
     }
-    await this.sendText(thread, text, { writeBack: true });
+    const host = this.runtime.requireHost();
+    const installations = await host
+      .get("authority")
+      .listInstallations(item.org_id);
+    const found = this.drivers.findForThread(installations, thread);
+    if (found?.driver.canReply(found.installation)) {
+      await this.sendText(thread, text, { writeBack: true });
+      return;
+    }
+    const prompts = await this.drivers.listPrompts(installations, thread, host);
+    const answer = matchWriteBackPrompt(
+      prompts,
+      text,
+      (label) => found?.driver.writeBackLabels?.(label) ?? [label.trim()].filter(Boolean),
+    );
+    if (!answer) {
+      if (prompts.length === 0) {
+        console.warn(
+          "personal write-back skipped: no live prompt on",
+          item.thread_id,
+        );
+        return;
+      }
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "Write-back needs a prompt option that matches the result",
+        400,
+      );
+    }
+    await this.drivers.answerPrompt(installations, thread, answer, host);
   }
 
   private async readTranscript(
@@ -890,18 +921,11 @@ export class PersonalWorkService implements OnModuleDestroy {
       thread_ids: [threadId],
       siblings: true,
     });
-    const live = [...items].reverse().find((row) => row.event.operation !== "tombstone");
+    const { live, visible } = pickAbsenteeInboxRows(items);
     if (!live) {
       return null;
     }
     const hashes = [live.event.content_hash];
-    const visible = items
-      .slice()
-      .reverse()
-      .find((row) => {
-        const codes = row.decision.reason_codes;
-        return !codes.includes("thread_status") && row.event.operation !== "tombstone";
-      });
     if (visible && visible.event.id !== live.event.id) {
       hashes.push(visible.event.content_hash);
     }

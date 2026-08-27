@@ -155,7 +155,9 @@ Tokens are prerequisites, not form fields.
 Public DSH absentee notify is durable `turn/end` (an unclosed `turn/start`
 or `working` stays running), or a gone session. The kernel reaps the job
 on `exited`. Write-back happens only on that real exit, and only when the
-Recipe has `can_write_back`.
+Recipe has `can_write_back`. The kernel matches the first result line
+exactly to a live prompt option. Aliases come from
+`ChannelDriver.writeBackLabels`, not a host list.
 
 Humans may `POST /v1/me/work-items/:id/dismiss` to drop a job from
 current work. Dismiss is not `exited` and does not write back. The

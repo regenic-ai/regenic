@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { answerConversationPrompt, sendReply } from "./api";
 import { Composer, type ComposerDraft } from "./Composer";
+import { MessageBody } from "./MessageBody";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
 import { latestMessage, type InboxThread } from "./inbox";
@@ -147,7 +148,8 @@ export const ThreadPane = memo(function ThreadPane({
       setSending(false);
     }
   };
-  const workHint = workNextStepCopy(thread);
+  const resultSummary = thread.work?.result_summary?.trim();
+  const workHint = resultSummary ? null : workNextStepCopy(thread);
   const heading = threadTitle(thread);
   const subLabel = thread.conversation_label || thread.label;
   const showSubLabel = Boolean(subLabel && subLabel !== heading);
@@ -265,6 +267,12 @@ export const ThreadPane = memo(function ThreadPane({
             ) : null}
           </p>
           {workHint ? <p className="work-hint">{workHint}</p> : null}
+          {resultSummary ? (
+            <section className="work-result">
+              <p className="work-result-kicker">{t("work.result")}</p>
+              <MessageBody text={resultSummary} />
+            </section>
+          ) : null}
         </div>
       </header>
       <ThreadMessageList

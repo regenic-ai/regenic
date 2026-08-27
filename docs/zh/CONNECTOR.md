@@ -23,13 +23,16 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 能力写在安装上。内核不按驱动名推断能力。
 
-加来源不用改 API 或桌面，加驱动和一条目录即可。
+加来源不用改 API 或桌面。每个驱动自己声明 `installCatalog()`，以及可选的
+`presentInstall` / `writeBackLabels`。引擎页由已注册驱动组装。额外包在
+进程启动时由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载。
+内核只对结果第一行与待办选项做精确匹配。
 
 ## 接口
 
 | 接口 | 职责 |
 | --- | --- |
-| `ChannelDriver` | 安装、解析流、绑定发送、声明 `sync` / `reply` / `create` |
+| `ChannelDriver` | 安装、解析流、绑定发送、声明 `sync` / `reply` / `create`，以及 `installCatalog` / `presentInstall` / `writeBackLabels` |
 | `ChannelConnector` | 把来源读成 `IngestBatch` |
 | `EgressAdapter` | 把 `ContentPart[]` 写回同一来源 |
 
@@ -45,6 +48,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 只有采集服务提交或隔离该页之后，才推进流游标。
 - 从环境变量读凭证，或从一个指向环境变量的 `credentials_ref` 读。安装表单不收 token。
 - 故障彼此隔离。一个安装不得拖住另一个。
+- 要出现在引擎页就实现 `installCatalog()`。可选 `presentInstall` 写已装
+  行的文案。可选 `writeBackLabels` 列出回写时的精确别名。
 
 不允许：
 
@@ -124,6 +129,10 @@ interface ChannelDriver {
   resolveThreadStream(installation, thread, host, env): Promise<ConnectorStream>;
   bindEgress(installation, thread, host, env): Promise<RegisteredEgress>;
   outboundId(thread, receipt): string;
+  installCatalog?(input?): DriverInstallCatalog;
+  presentInstall?(installation, input?): { label; detail };
+  writeBackLabels?(label): string[];
+  probeCatalog?(input): Promise<ConnectorCatalogProbe>;
 }
 ```
 
@@ -143,6 +152,10 @@ interface ChannelDriver {
 | `createThread` | `create` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `bindEgress` | `reply` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
+| `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。 |
+| `presentInstall` | 可选。已装行的标题和细节。 |
+| `writeBackLabels` | 可选。某个待办选项的精确别名。内核只对结果第一行做匹配。 |
+| `probeCatalog` | 可选。本机服务 / 环境是否就绪，以及表单选项。 |
 
 `ChannelDriverError` 错误码：`invalid_config`、`missing_credentials`、
 `sync_failed`、`send_failed`、`unsupported_channel`、`no_sender`。
@@ -197,7 +210,13 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 ## 目录
 
-`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。新连接器在那里加一条。桌面不按类型写死字段。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
+`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。
+
+驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
+
+额外包在进程启动时加载一次：`REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）。`REGENIC_CRM_CONNECTOR` 是后者的兼容别名。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。显式插件缺失或无效时跳过并打日志。
+
+工单写回时，内核把结果第一行与活的待办选项做精确匹配。`writeBackLabels(label)` 可给该选项加别名。宿主不维护同义列表。
 
 | 字段 | 说明 |
 | --- | --- |

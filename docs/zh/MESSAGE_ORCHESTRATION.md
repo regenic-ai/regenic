@@ -99,7 +99,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 | 种类 | 职责 | 禁止 |
 | --- | --- | --- |
 | 连接器（`ChannelConnector`） | 把来源读成 `IngestBatch` | 直写 Event、Blob、ACL、身份 |
-| 渠道驱动（`ChannelDriver`） | 安装、解析 pull 流、按线程绑定 egress、用 `capabilities()` 声明 sync / reply / create | 在 API / UI 里按渠道名打补丁 |
+| 渠道驱动（`ChannelDriver`） | 安装、解析 pull 流、按线程绑定 egress、用 `capabilities()` 声明 sync / reply / create，以及 `installCatalog` / `presentInstall` / `writeBackLabels` | 在 API / UI 里按渠道名打补丁，或在宿主另写一份 catalog |
 | 发送（`EgressAdapter`） | 把回复写回原渠道 | 自授权限或跳过审批 |
 | 排序 / 分层 | D0 之后的打分（耐久、敏感、「该知道」）。D0 过滤 / 分层在内核 | 用个人标签冒充组织事实 |
 | 调度策略 | 排序 + 标准 + 习惯 → 不进入当前工作 \| pending \| defer | 没有发送授权就发送 |
@@ -123,7 +123,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 
 | 目标 | 机制 |
 | --- | --- |
-| 加来源 | [连接器合同](CONNECTOR.md)；一致性测试 |
+| 加来源 | [连接器合同](CONNECTOR.md)；实现 `installCatalog()`；额外包由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载 |
 | 加发送 | 同一渠道打开发送 |
 | 改「什么算重要」 | 排序器 + 版本化标准 |
 | 普通邮件自动处理 | 绑在标准上的调度策略；这些消息不进入当前工作，每次跳过都记审计 |

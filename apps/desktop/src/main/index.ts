@@ -16,10 +16,8 @@ import appIconPng from "../brand/app-icon.png?asset";
 import trayPng from "../brand/tray-mark.png?asset";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { portFromHttpOrigin } from "../shared/host-watch";
-import {
-  probeKernelMode,
-  waitForPersonalKernel,
-} from "../shared/kernel-ready";
+import { waitForPersonalKernel } from "../shared/kernel-ready";
+import { probeKernelMode } from "./kernel-probe";
 import { translate } from "../shared/messages.ts";
 import { parseLocale } from "../shared/locale.ts";
 import {
@@ -156,6 +154,17 @@ function sidecarEnv(
     env.REGENIC_CONNECTOR_PULL_MS = "3000";
   }
   delete env.REGENIC_PERSONAL_API;
+  const noProxy = [
+    env.NO_PROXY,
+    env.no_proxy,
+    "127.0.0.1",
+    "localhost",
+  ]
+    .flatMap((value) => (value ? String(value).split(",") : []))
+    .map((part) => part.trim())
+    .filter(Boolean);
+  env.NO_PROXY = [...new Set(noProxy)].join(",");
+  env.no_proxy = env.NO_PROXY;
   return env;
 }
 
@@ -227,6 +236,7 @@ async function startLocalKernel(): Promise<void> {
   try {
     await waitForPersonalKernel({
       origin: apiOrigin,
+      probe: probeKernelMode,
       isAlive: () => sidecar != null && sidecar.exitCode == null,
     });
   } catch (error) {
