@@ -4,8 +4,10 @@
  */
 
 export * from "./ingestion";
+export * from "./content-parts";
 export * from "./channel-driver";
 export * from "./message-contract";
+export * from "./content-compact";
 export * from "./thread-surface";
 export * from "./inbox-query";
 export * from "./ingestion-schema";

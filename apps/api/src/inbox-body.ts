@@ -1,12 +1,20 @@
 import {
+  CONTENT_PARTS_MEDIA_TYPE,
+  SURFACE_MEDIA_TYPE,
+  attachmentHashesFromStoredParts,
+  isTextMediaType,
+  parseStoredContentParts,
+  storedPartBytes,
+  storedPartContentHash,
+  storedPartText,
   surfaceFromParts,
   type AuthorityStore,
   type BlobStore,
   type MessageSurface,
+  type StoredContentPart,
 } from "@regenic/domain";
 
-export const CONTENT_PARTS_MEDIA_TYPE =
-  "application/vnd.regenic.content-parts+json";
+export { CONTENT_PARTS_MEDIA_TYPE };
 
 const IMAGE_PREVIEW_BYTES = 8_000_000;
 
@@ -21,13 +29,6 @@ export interface InboxBody {
   media_type?: string;
   attachments?: InboxAttachment[];
   surface?: MessageSurface;
-}
-
-interface EncodedContentPart {
-  role?: string;
-  media_type?: string;
-  source_filename?: string | null;
-  bytes_base64?: string;
 }
 
 export type AttachmentMode = "preview" | "meta";
@@ -49,6 +50,8 @@ export async function resolveInboxBodies(
     authority.findBlobs(unique),
     blobs.getMany(unique),
   ]);
+  const envelopes = new Map<string, StoredContentPart[]>();
+  const sidecarHashes: string[] = [];
   for (const hash of unique) {
     const meta = metas.get(hash);
     if (!meta) {
@@ -60,7 +63,28 @@ export async function resolveInboxBodies(
       resolved.set(hash, { media_type: meta.media_type });
       continue;
     }
+    if (meta.media_type === CONTENT_PARTS_MEDIA_TYPE) {
+      const parts = parseStoredContentParts(data);
+      if (parts) {
+        envelopes.set(hash, parts);
+        sidecarHashes.push(...attachmentHashesFromStoredParts(parts));
+      }
+    }
     resolved.set(hash, decodeInboxBody(data, meta.media_type, attachments));
+  }
+  if (attachments !== "preview" || sidecarHashes.length === 0) {
+    return resolved;
+  }
+  const sidecars = await blobs.getMany(sidecarHashes);
+  for (const [hash, parts] of envelopes) {
+    const body = resolved.get(hash);
+    if (!body?.attachments) {
+      continue;
+    }
+    resolved.set(hash, {
+      ...body,
+      attachments: decodeAttachments(parts, "preview", sidecars),
+    });
   }
   return resolved;
 }
@@ -91,7 +115,7 @@ export function decodeInboxBody(
   if (mediaType === CONTENT_PARTS_MEDIA_TYPE) {
     return decodeContentParts(bytes, attachments);
   }
-  if (isTextMedia(mediaType)) {
+  if (isTextMediaType(mediaType) && mediaType !== SURFACE_MEDIA_TYPE) {
     return {
       media_type: mediaType,
       body_text: Buffer.from(bytes).toString("utf8"),
@@ -111,13 +135,8 @@ function decodeContentParts(
   bytes: Uint8Array,
   attachmentMode: AttachmentMode,
 ): InboxBody {
-  let parts: EncodedContentPart[];
-  try {
-    parts = JSON.parse(Buffer.from(bytes).toString("utf8")) as EncodedContentPart[];
-  } catch {
-    return {};
-  }
-  if (!Array.isArray(parts) || parts.length === 0) {
+  const parts = parseStoredContentParts(bytes);
+  if (!parts) {
     return {};
   }
   const body =
@@ -125,13 +144,22 @@ function decodeContentParts(
     parts.find((part) => part.role !== "metadata") ??
     parts[0];
   const bodyText =
-    body?.role !== "metadata" &&
-    body?.bytes_base64 &&
-    body.media_type &&
-    isTextMedia(body.media_type)
-      ? Buffer.from(body.bytes_base64, "base64").toString("utf8")
-      : undefined;
-  const attachments = parts.flatMap((part) => {
+    body?.role !== "metadata" ? storedPartText(body) : undefined;
+  const attachments = decodeAttachments(parts, attachmentMode);
+  return {
+    media_type: CONTENT_PARTS_MEDIA_TYPE,
+    body_text: bodyText,
+    attachments: attachments.length > 0 ? attachments : undefined,
+    surface: surfaceFromParts(parts),
+  };
+}
+
+function decodeAttachments(
+  parts: StoredContentPart[],
+  attachmentMode: AttachmentMode,
+  sidecars?: Map<string, Uint8Array>,
+): InboxAttachment[] {
+  return parts.flatMap((part) => {
     if (part.role !== "attachment" || !part.media_type) {
       return [];
     }
@@ -147,8 +175,10 @@ function decodeContentParts(
         },
       ];
     }
-    const raw = part.bytes_base64;
-    const bytes = raw ? Buffer.from(raw, "base64") : undefined;
+    const hash = storedPartContentHash(part);
+    const inline = storedPartBytes(part);
+    const bytes = hash ? sidecars?.get(hash) : inline;
+    const raw = bytes ? Buffer.from(bytes).toString("base64") : undefined;
     const size = bytes?.byteLength ?? 0;
     const mediaType = bytes
       ? sniffImageMediaType(bytes, part.media_type)
@@ -166,22 +196,6 @@ function decodeContentParts(
       },
     ];
   });
-  return {
-    media_type: CONTENT_PARTS_MEDIA_TYPE,
-    body_text: bodyText,
-    attachments: attachments.length > 0 ? attachments : undefined,
-    surface: surfaceFromParts(
-      parts.map((part) => ({
-        role: part.role,
-        media_type: part.media_type,
-        bytes_base64: part.bytes_base64,
-      })),
-    ),
-  };
-}
-
-function isTextMedia(mediaType: string): boolean {
-  return mediaType.startsWith("text/") || mediaType === "application/json";
 }
 
 function sniffImageMediaType(bytes: Uint8Array, declared: string): string {

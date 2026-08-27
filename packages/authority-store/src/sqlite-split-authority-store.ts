@@ -20,6 +20,7 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  RepointContentInput,
   ResetConnectorCursor,
   ReleaseConnectorLease,
   SetConnectorInstallationConfig,
@@ -151,6 +152,14 @@ export class SqliteSplitAuthorityStore
 
   async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
     return this.writer.call("commitIngest", [request]);
+  }
+
+  async repointContentHash(input: RepointContentInput): Promise<number> {
+    return this.writer.call("repointContentHash", [input]);
+  }
+
+  async vacuumStore(): Promise<void> {
+    await this.writer.call("vacuumStore", []);
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {

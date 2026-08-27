@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
+import {
+  CONTENT_PARTS_MEDIA_TYPE,
+  SURFACE_MEDIA_TYPE,
+  parseStoredContentParts,
+  storedPartContentHash,
+  storedPartText,
+  type StoredContentPart,
+} from "./content-parts";
 import type { ContentPart, IngestRecord } from "./ingestion";
 import type { ThreadFacet } from "./thread-facet";
-
-export const SURFACE_MEDIA_TYPE = "application/vnd.regenic.surface+json";
 
 export type ChannelId = string;
 export type MessageKind = "user" | "assistant" | "system";
@@ -52,21 +58,16 @@ export function bodyTextFromStored(
   bytes: Uint8Array,
   mediaType: string,
 ): string | undefined {
-  if (mediaType === "application/vnd.regenic.content-parts+json") {
-    try {
-      const parts = JSON.parse(Buffer.from(bytes).toString("utf8")) as Array<{
-        role?: string;
-        media_type?: string;
-        bytes_base64?: string;
-      }>;
-      const body = parts.find((part) => part.role === "body") ?? parts[0];
-      if (body?.bytes_base64 && body.media_type?.startsWith("text/")) {
-        return Buffer.from(body.bytes_base64, "base64").toString("utf8");
-      }
-    } catch {
+  if (mediaType === CONTENT_PARTS_MEDIA_TYPE) {
+    const parts = parseStoredContentParts(bytes);
+    if (!parts) {
       return undefined;
     }
-    return undefined;
+    const body = parts.find((part) => part.role === "body") ?? parts[0];
+    if (!body || body.role === "metadata") {
+      return undefined;
+    }
+    return storedPartText(body);
   }
   if (mediaType.startsWith("text/") || mediaType === "application/json") {
     return Buffer.from(bytes).toString("utf8");
@@ -79,6 +80,7 @@ export function attachmentDigestsFromParts(
     role?: string;
     bytes?: Uint8Array;
     bytes_base64?: string;
+    content_hash?: string;
   }>,
 ): string[] {
   const digests: string[] = [];
@@ -87,16 +89,16 @@ export function attachmentDigestsFromParts(
     if (part.role !== "attachment") {
       continue;
     }
-    const bytes = part.bytes
-      ? part.bytes
-      : part.bytes_base64
-        ? Buffer.from(part.bytes_base64, "base64")
-        : undefined;
-    if (!bytes || bytes.byteLength === 0) {
-      continue;
-    }
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    if (seen.has(digest)) {
+    const digest =
+      storedPartContentHash(part) ??
+      (part.bytes
+        ? createHash("sha256").update(part.bytes).digest("hex")
+        : part.bytes_base64
+          ? createHash("sha256")
+              .update(Buffer.from(part.bytes_base64, "base64"))
+              .digest("hex")
+          : undefined);
+    if (!digest || seen.has(digest)) {
       continue;
     }
     seen.add(digest);
@@ -109,18 +111,11 @@ export function attachmentDigestsFromStored(
   bytes: Uint8Array,
   mediaType: string,
 ): string[] {
-  if (mediaType !== "application/vnd.regenic.content-parts+json") {
+  if (mediaType !== CONTENT_PARTS_MEDIA_TYPE) {
     return [];
   }
-  try {
-    const parts = JSON.parse(Buffer.from(bytes).toString("utf8")) as Array<{
-      role?: string;
-      bytes_base64?: string;
-    }>;
-    return Array.isArray(parts) ? attachmentDigestsFromParts(parts) : [];
-  } catch {
-    return [];
-  }
+  const parts = parseStoredContentParts(bytes);
+  return parts ? attachmentDigestsFromParts(parts) : [];
 }
 
 export function attachmentsCoveredBy(
@@ -260,7 +255,9 @@ export function toReplyParts(input: {
 }
 
 export function surfaceFromParts(
-  parts: Array<{ role?: string; media_type?: string; text?: string; bytes_base64?: string }>,
+  parts: Array<
+    Pick<StoredContentPart, "role" | "media_type" | "text" | "bytes_base64">
+  >,
 ): MessageSurface | undefined {
   for (const part of parts) {
     if (part.role !== "metadata" || part.media_type !== SURFACE_MEDIA_TYPE) {

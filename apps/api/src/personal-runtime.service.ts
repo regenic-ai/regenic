@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { loadEnv } from "@regenic/config";
+import { compactEmbeddedContent } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
   createPersonalHost,
@@ -23,6 +24,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       blobRoot: env.REGENIC_BLOB_ROOT,
     };
     this.host = await createPersonalHost(this.options);
+    await compactLocalContent(this.host, this.orgId());
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -60,5 +62,28 @@ export class PersonalKernelStoppedError extends Error {
   constructor() {
     super("Personal kernel is not running");
     this.name = "PersonalKernelStoppedError";
+  }
+}
+
+async function compactLocalContent(host: Host, orgId: string): Promise<void> {
+  try {
+    const result = await compactEmbeddedContent(
+      host.get("authority"),
+      host.get("blobs"),
+      orgId,
+    );
+    if (result.rewritten === 0) {
+      return;
+    }
+    try {
+      await host.get("authority").vacuumStore();
+    } catch (error) {
+      console.warn("vacuum after content compact failed", error);
+    }
+    console.info(
+      `compacted ${result.rewritten} message envelopes, released ${result.released_bytes} bytes`,
+    );
+  } catch (error) {
+    console.warn("content compact failed", error);
   }
 }

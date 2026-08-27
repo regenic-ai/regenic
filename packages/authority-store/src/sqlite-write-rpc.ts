@@ -5,6 +5,8 @@ export const AUTHORITY_WRITE_METHODS = [
   "appendRevision",
   "markTombstone",
   "commitIngest",
+  "repointContentHash",
+  "vacuumStore",
   "putDisposition",
   "putConversationPref",
   "clearOperationalData",

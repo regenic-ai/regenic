@@ -239,13 +239,28 @@ export interface EventRecord extends SourceIdentity {
   ingested_at: string;
 }
 
+export interface BlobMetaInput {
+  content_hash: string;
+  media_type: string;
+  byte_size: number;
+}
+
 export interface NewEvent extends SourceIdentity {
   id?: string;
   content_hash: string;
   content_media_type: string;
   content_byte_size: number;
+  extra_blobs?: BlobMetaInput[];
   occurred_at: string;
   expected_head_id: string | null;
+}
+
+export interface RepointContentInput {
+  old_content_hash: string;
+  new_content_hash: string;
+  content_media_type: string;
+  content_byte_size: number;
+  extra_blobs?: BlobMetaInput[];
 }
 
 export interface IngestCommitRequest {
@@ -340,6 +355,8 @@ export interface AuthorityStore {
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
   commitIngest(request: IngestCommitRequest): Promise<EventRecord[]>;
+  repointContentHash(input: RepointContentInput): Promise<number>;
+  vacuumStore(): Promise<void>;
   putDisposition(decision: ArrangementDecision): Promise<void>;
   getDisposition(eventId: string): Promise<ArrangementDecision | null>;
   listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]>;
