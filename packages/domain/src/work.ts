@@ -180,6 +180,7 @@ export interface WorkFace {
   recipe_id?: string;
   executor_type?: string;
   agent_thread_id?: string;
+  head_event_id?: string;
   can_write_back?: boolean;
   has_result?: boolean;
   result_summary?: string;

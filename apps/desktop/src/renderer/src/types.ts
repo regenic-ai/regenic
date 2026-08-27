@@ -125,6 +125,7 @@ export interface WorkFace {
   recipe_id?: string;
   executor_type?: string;
   agent_thread_id?: string;
+  head_event_id?: string;
   can_write_back?: boolean;
   has_result?: boolean;
   result_summary?: string;
@@ -238,6 +239,12 @@ export interface RecipeTrigger {
   coalesce?: boolean;
 }
 
+export interface RecipeLastRun {
+  status: string;
+  at: string;
+  summary?: string;
+}
+
 export interface RecipeView {
   id: string;
   org_id: string;
@@ -250,6 +257,7 @@ export interface RecipeView {
   include_context: boolean;
   enabled: boolean;
   next_run_at?: string;
+  last_run?: RecipeLastRun;
   created_at: string;
   updated_at: string;
 }
@@ -269,6 +277,7 @@ export interface RecipeConversationOption {
   id: string;
   label: string;
   source?: string;
+  can_send?: boolean;
 }
 
 export interface UiPrefsView {

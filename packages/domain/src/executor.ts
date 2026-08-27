@@ -123,6 +123,7 @@ export interface TaskExecutor {
     ctx: ExecutorContext,
   ): Promise<ExecutorRunHandle>;
   status(run: WorkRun, ctx: ExecutorContext): Promise<ExecutorRunHandle>;
+  cancel?(run: WorkRun, ctx: ExecutorContext): Promise<void>;
 }
 
 export interface ExecutorRegistry {
@@ -331,6 +332,10 @@ export function composeWorkEvidenceText(input: {
     return packed.text || trigger || head;
   }
   return trigger || head;
+}
+
+export function isExecutorSysoutBody(text: string): boolean {
+  return /\bWork item\b/.test(text) || /^WORK\b/m.test(text);
 }
 
 export function formatWorkEvidence(input: {

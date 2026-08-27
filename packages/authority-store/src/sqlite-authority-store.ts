@@ -694,7 +694,7 @@ export class SqliteAuthorityStore
       .prepare(
         `SELECT * FROM work_items WHERE org_id = ? AND thread_id = ?
          ORDER BY CASE WHEN status IN ('open', 'running', 'waiting_human') THEN 0 ELSE 1 END,
-                  updated_at DESC, id DESC
+                  created_at DESC, id DESC
          LIMIT 1`,
       )
       .get(orgId, threadId) as WorkItemRow | undefined;

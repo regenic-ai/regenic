@@ -116,11 +116,13 @@ export class PersonalWorkSupervise {
     if (await this.abandonIfSkipped(item, nextRun)) {
       return;
     }
-    await authority.putWorkItem({
-      ...item,
-      status,
-      updated_at: now,
-    });
+    if (item.status !== status) {
+      await authority.putWorkItem({
+        ...item,
+        status,
+        updated_at: now,
+      });
+    }
   }
 
   async abandonIfSkipped(item: WorkItem, run: WorkRun): Promise<boolean> {

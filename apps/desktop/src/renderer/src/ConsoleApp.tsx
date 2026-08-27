@@ -787,6 +787,7 @@ export function ConsoleApp() {
               id: thread.id,
               label: threadTitle(thread),
               source: thread.source || thread.channel,
+              can_send: thread.can_send,
             }))}
             seed={recipeSeed}
             onSeedConsumed={consumeRecipeSeed}

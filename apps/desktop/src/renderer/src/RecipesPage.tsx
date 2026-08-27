@@ -9,7 +9,7 @@ import { formatNextRunWhen } from "./format";
 import { useLocale } from "./LocaleContext";
 import { MenuSelect } from "./MenuSelect";
 import { RecipeParams } from "./RecipeParams";
-import { configFromCatalog, invokeCopy } from "./recipe-params";
+import { configFromCatalog, invokeCopy, missingRequiredField } from "./recipe-params";
 import type { MessageKey } from "../../shared/i18n.ts";
 import type {
   ExecutorCatalogEntry,
@@ -119,6 +119,11 @@ export function RecipesPage({
       setError(scopeError(draft, t));
       return;
     }
+    const required = missingRequiredField(catalog, draft.config);
+    if (required) {
+      setError(t("recipes.errRequired", { field: required }));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -129,7 +134,9 @@ export function RecipesPage({
           trigger: draftTrigger(draft),
           executor_type: draft.executor_type,
           executor_config: draft.config,
-          can_write_back: draft.can_write_back,
+          can_write_back: writeBackAvailable(draft, conversations)
+            ? draft.can_write_back
+            : false,
           include_context: draft.include_context,
           enabled: draft.enabled,
         },
@@ -166,6 +173,8 @@ export function RecipesPage({
               recipe.executor_config,
             );
             const next = nextRunCopy(recipe, t);
+            const last = lastRunCopy(recipe, t);
+            const conflict = conflictCopy(recipe, recipes, t);
             return (
               <li
                 key={recipe.id}
@@ -193,6 +202,8 @@ export function RecipesPage({
                     )}
                   </p>
                   {next ? <p className="recipe-card-next">{next}</p> : null}
+                  {last ? <p className="recipe-card-next">{last}</p> : null}
+                  {conflict ? <p className="recipe-card-next">{conflict}</p> : null}
                   {invoke ? <p className="recipe-card-how">{invoke}</p> : null}
                 </button>
                 <div className="install-actions">
@@ -327,6 +338,10 @@ export function RecipesPage({
                               thread_id,
                               thread_title: picked?.label ?? thread_id,
                               source: picked?.source ?? current.source,
+                              can_write_back:
+                                picked?.can_send === false
+                                  ? false
+                                  : current.can_write_back,
                             }),
                           );
                         }}
@@ -410,7 +425,10 @@ export function RecipesPage({
           <div className="recipe-form-foot">
             <div className="recipe-switches">
               <SwitchRow
-                checked={draft.can_write_back}
+                checked={
+                  writeBackAvailable(draft, conversations) && draft.can_write_back
+                }
+                disabled={!writeBackAvailable(draft, conversations)}
                 onChange={(can_write_back) =>
                   setDraft((current) => ({ ...current, can_write_back }))
                 }
@@ -425,7 +443,11 @@ export function RecipesPage({
                   {t("recipes.enabledCheck")}
                 </SwitchRow>
               ) : null}
-              {draft.can_write_back ? (
+              {!writeBackAvailable(draft, conversations) ? (
+                <p className="muted recipe-writeback-hint">
+                  {t("recipes.writeBackUnavailable")}
+                </p>
+              ) : draft.can_write_back ? (
                 <p className="muted recipe-writeback-hint">
                   {t(
                     draft.trigger_kind === "pull"
@@ -507,18 +529,21 @@ function SwitchRow({
   checked,
   onChange,
   children,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   children: string;
+  disabled?: boolean;
 }) {
   return (
-    <div className="switch-row">
+    <div className={`switch-row${disabled ? " is-disabled" : ""}`}>
       <span>{children}</span>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
+        disabled={disabled}
         className={`switch${checked ? " is-on" : ""}`}
         onClick={() => onChange(!checked)}
       />
@@ -904,6 +929,100 @@ function recipeCardLine(
     executor,
     outcome,
   });
+}
+
+function writeBackAvailable(
+  draft: Pick<RecipeDraft, "thread_id">,
+  conversations: RecipeConversationOption[],
+): boolean {
+  const picked = conversations.find((item) => item.id === draft.thread_id);
+  return picked?.can_send !== false;
+}
+
+function lastRunCopy(recipe: RecipeView, t: Translate): string | null {
+  const run = recipe.last_run;
+  if (!run) {
+    return null;
+  }
+  if (run.status === "failed") {
+    return t("recipes.lastRunFailed");
+  }
+  if (run.status === "completed") {
+    return t("recipes.lastRunDone");
+  }
+  if (run.status === "cancelled") {
+    return t("recipes.lastRunSkipped");
+  }
+  if (run.status === "running" || run.status === "waiting_human") {
+    return t("recipes.lastRunRunning");
+  }
+  return null;
+}
+
+function conflictCopy(
+  recipe: RecipeView,
+  recipes: RecipeView[],
+  t: Translate,
+): string | null {
+  if (!recipe.enabled) {
+    return null;
+  }
+  const other = recipes.find(
+    (item) =>
+      item.id !== recipe.id &&
+      item.enabled &&
+      recipesOverlap(recipe.match, item.match) &&
+      recipeRanksBefore(item, recipe),
+  );
+  if (!other) {
+    return null;
+  }
+  return t("recipes.losesTo", { name: other.name });
+}
+
+function recipesOverlap(
+  left: RecipeMatch,
+  right: RecipeMatch,
+): boolean {
+  if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
+    return false;
+  }
+  if (left.source && right.source && left.source !== right.source) {
+    return false;
+  }
+  if (
+    left.record_class &&
+    right.record_class &&
+    left.record_class !== right.record_class
+  ) {
+    return false;
+  }
+  if (
+    left.thread_facet &&
+    right.thread_facet &&
+    left.thread_facet !== right.thread_facet
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function recipeRanksBefore(left: RecipeView, right: RecipeView): boolean {
+  const leftScore = matchScore(left.match);
+  const rightScore = matchScore(right.match);
+  if (leftScore !== rightScore) {
+    return leftScore > rightScore;
+  }
+  return left.id < right.id;
+}
+
+function matchScore(match: RecipeMatch): number {
+  return (
+    (match.thread_id ? 8 : 0) +
+    (match.source ? 4 : 0) +
+    (match.record_class ? 2 : 0) +
+    (match.thread_facet ? 1 : 0)
+  );
 }
 
 function nextRunCopy(recipe: RecipeView, t: Translate): string | null {

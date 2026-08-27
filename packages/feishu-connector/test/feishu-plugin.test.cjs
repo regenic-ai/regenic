@@ -10,6 +10,7 @@ const {
   FEISHU_STREAM_PACE,
   createFeishuStreams,
   feishuChatDriver,
+  feishuWriteBackLabels,
   resolveFeishuChatTargets,
 } = require("../dist/feishu-chat-driver");
 const { feishuChatPlugin } = require("../dist/plugin");
@@ -533,5 +534,12 @@ describe("feishuChatDriver", () => {
       () => feishuChatDriver.createThread(installation, {}, process.env),
       (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
     );
+  });
+
+  it("aliases Feishu approval labels for write-back", () => {
+    assert.ok(feishuWriteBackLabels("同意").includes("通过"));
+    assert.ok(feishuWriteBackLabels("通过").includes("同意"));
+    assert.ok(feishuWriteBackLabels("拒绝").includes("驳回"));
+    assert.deepEqual(feishuChatDriver.writeBackLabels("同意"), feishuWriteBackLabels("同意"));
   });
 });

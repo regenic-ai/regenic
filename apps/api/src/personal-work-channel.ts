@@ -340,6 +340,24 @@ export class PersonalWorkChannel {
     );
     return bodies.get(head.event.content_hash)?.body_text;
   }
+
+  async canReplyThread(threadId: string): Promise<boolean | undefined> {
+    let thread;
+    try {
+      thread = parseConversationThread(threadId);
+    } catch {
+      return undefined;
+    }
+    const host = this.runtime.requireHost();
+    const installations = await host
+      .get("authority")
+      .listInstallations(this.runtime.orgId());
+    const found = this.drivers.findForThread(installations, thread);
+    if (!found) {
+      return undefined;
+    }
+    return found.driver.canReply(found.installation);
+  }
 }
 
 function pinnedCreatable(

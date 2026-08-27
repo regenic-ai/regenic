@@ -18,6 +18,7 @@ import {
   type ThreadPrompt,
   type WorkItem,
   type WorkRun,
+  type WorkRunStatus,
 } from "@regenic/domain";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalExecutorService } from "./personal-executor.service";
@@ -46,6 +47,16 @@ export interface UiPrefsView {
 export interface WorkRunView {
   work_item: WorkItem;
   run?: WorkRun;
+}
+
+export interface RecipeLastRun {
+  status: WorkRunStatus;
+  at: string;
+  summary?: string;
+}
+
+export interface RecipeView extends Recipe {
+  last_run?: RecipeLastRun;
 }
 
 @Injectable()
@@ -191,9 +202,17 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
   }
 
-  async listRecipes(): Promise<Recipe[]> {
+  async listRecipes(): Promise<RecipeView[]> {
     const host = this.runtime.requireHost();
-    return host.get("authority").listRecipes(this.runtime.orgId());
+    const orgId = this.runtime.orgId();
+    const [recipes, runs] = await Promise.all([
+      host.get("authority").listRecipes(orgId),
+      host.get("authority").listWorkRuns(orgId),
+    ]);
+    return recipes.map((recipe) => ({
+      ...recipe,
+      last_run: lastRunForRecipe(runs, recipe.id),
+    }));
   }
 
   async listExecutors() {
@@ -211,7 +230,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (id && !existing) {
       throw new PersonalConnectorError("not_found", "Recipe not found", 404);
     }
-    const recipe = normalizeRecipe(input, orgId, now, existing ?? undefined);
+    let recipe = normalizeRecipe(input, orgId, now, existing ?? undefined);
     const executor = host.get("executors").get(recipe.executor_type);
     if (!executor) {
       throw new PersonalConnectorError(
@@ -220,7 +239,21 @@ export class PersonalWorkService implements OnModuleDestroy {
         400,
       );
     }
-    void executor;
+    const missing = missingCatalogFields(executor.catalog().fields, recipe.executor_config);
+    if (missing) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        `${missing} is required`,
+        400,
+      );
+    }
+    const threadId = recipe.match.thread_id?.trim();
+    if (recipe.can_write_back && threadId) {
+      const canReply = await this.channel.canReplyThread(threadId);
+      if (canReply === false) {
+        recipe = { ...recipe, can_write_back: false };
+      }
+    }
     const saved = await host.get("authority").putRecipe(recipe);
     void this.afterConnectorTick();
     return saved;
@@ -467,6 +500,16 @@ export class PersonalWorkService implements OnModuleDestroy {
             updated_at: now,
           });
     const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
+    if (run) {
+      const executor = host.get("executors").get(run.executor_type);
+      if (executor?.cancel) {
+        try {
+          await executor.cancel(run, this.channel.contextFor(executor));
+        } catch {
+          // Ledger unfollow still stands if the inferior ignores cancel.
+        }
+      }
+    }
     const cancelled = run
       ? await host.get("authority").putWorkRun(cancelWorkRun(run, now))
       : undefined;
@@ -484,4 +527,44 @@ export class PersonalWorkService implements OnModuleDestroy {
   async completeWorkItem(id: string): Promise<WorkRunView> {
     return this.dismissWorkItem(id);
   }
+}
+
+function lastRunForRecipe(
+  runs: WorkRun[],
+  recipeId: string,
+): RecipeLastRun | undefined {
+  const latest = runs
+    .filter((run) => run.recipe_id === recipeId)
+    .sort((left, right) =>
+      left.updated_at < right.updated_at
+        ? 1
+        : left.updated_at > right.updated_at
+          ? -1
+          : 0,
+    )[0];
+  if (!latest) {
+    return undefined;
+  }
+  const summary = latest.result?.summary?.trim();
+  return {
+    status: latest.status,
+    at: latest.updated_at,
+    ...(summary ? { summary } : {}),
+  };
+}
+
+function missingCatalogFields(
+  fields: Array<{ key: string; label: string; required?: boolean }>,
+  config: Record<string, unknown>,
+): string | undefined {
+  for (const field of fields) {
+    if (!field.required) {
+      continue;
+    }
+    const value = config[field.key];
+    if (typeof value !== "string" || !value.trim()) {
+      return field.label;
+    }
+  }
+  return undefined;
 }

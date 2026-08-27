@@ -187,12 +187,12 @@ export function currentJobOnSession(
   const onSession = items.filter((item) => item.thread_id === threadId);
   const active = onSession.filter((item) => isActiveWorkStatus(item.status));
   const pool = active.length > 0 ? active : onSession;
-  return [...pool].sort(byJobRecency)[0];
+  return [...pool].sort(byJobForeground)[0];
 }
 
-function byJobRecency(left: WorkItem, right: WorkItem): number {
-  if (left.updated_at !== right.updated_at) {
-    return left.updated_at < right.updated_at ? 1 : -1;
+function byJobForeground(left: WorkItem, right: WorkItem): number {
+  if (left.created_at !== right.created_at) {
+    return left.created_at < right.created_at ? 1 : -1;
   }
   return left.id < right.id ? 1 : -1;
 }

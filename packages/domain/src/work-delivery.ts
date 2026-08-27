@@ -197,6 +197,17 @@ export function nextDeliveryRetryAt(attempts: number, now: string): string {
   return new Date(Date.parse(now) + wait).toISOString();
 }
 
+export function deliverySendTimedOut(
+  delivery: WorkDelivery,
+  now: string,
+): WorkDelivery {
+  return {
+    ...delivery,
+    attempts: Math.max(0, delivery.attempts - 1),
+    updated_at: now,
+  };
+}
+
 export function deliveryRetryNow(delivery: WorkDelivery, now: string): WorkDelivery {
   return {
     ...delivery,

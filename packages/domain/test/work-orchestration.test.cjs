@@ -33,6 +33,7 @@ const {
   shouldAcceptPushRecord,
   shouldRetryFailedPush,
   recipeSpecificity,
+  recipePreemptedBy,
   selectRecipeForSubject,
   shouldOpenWorkItem,
   shouldRefreshActiveRun,
@@ -52,6 +53,7 @@ const {
   deliveryAcked,
   deliveryWriteBackFailed,
   deliveryRetryNow,
+  deliverySendTimedOut,
   deliveryAbandoned,
   reclaimDeliveryLease,
   shouldFlushDelivery,
@@ -100,6 +102,13 @@ describe("recipe match", () => {
     assert.equal(matchRecipe(recipes, subject).id, "thread");
     assert.ok(recipeSpecificity({ thread_id: "x" }) > recipeSpecificity({ source: "chat-src" }));
     assert.equal(matchRecipe([makeRecipe("empty", {})], subject), undefined);
+    const general = makeRecipe("general", { record_class: "task" });
+    const specific = makeRecipe("specific", {
+      record_class: "task",
+      source: "chat-src",
+    });
+    assert.equal(recipePreemptedBy(general, [general, specific])?.id, "specific");
+    assert.equal(recipePreemptedBy(specific, [general, specific]), undefined);
   });
 });
 
@@ -330,6 +339,24 @@ describe("session job face and wait status", () => {
     assert.equal(nextJob.unit_key, "evt-2");
     const face = currentJobOnSession([done, nextJob], "chat-src:t1");
     assert.equal(face.id, nextJob.id);
+    const olderRunning = {
+      ...done,
+      id: "work-old",
+      status: "running",
+      created_at: "2026-08-25T00:00:00.000Z",
+      updated_at: "2026-08-25T02:00:00.000Z",
+    };
+    const newerOpen = {
+      ...nextJob,
+      id: "work-new",
+      status: "open",
+      created_at: "2026-08-25T01:00:00.000Z",
+      updated_at: "2026-08-25T01:00:00.000Z",
+    };
+    assert.equal(
+      currentJobOnSession([olderRunning, newerOpen], "chat-src:t1").id,
+      "work-new",
+    );
   });
 
   it("never treats transcript speech as wait exit", () => {
@@ -552,6 +579,11 @@ describe("work delivery", () => {
     assert.equal(same.attempts, 1);
     assert.deepEqual(same.channel_receipt, { accepted: true, rpc_id: "rpc-1" });
     assert.equal(same.idempotency_key, sent.idempotency_key);
+    const claimed = deliveryClaimSend(queued(), now);
+    const timedOut = deliverySendTimedOut(claimed, now);
+    assert.equal(timedOut.attempts, 0);
+    assert.equal(timedOut.status, "write_back");
+    assert.equal(timedOut.lease_expires_at, claimed.lease_expires_at);
   });
 
   it("reclaims an expired lease and does not flush an in-flight send", () => {

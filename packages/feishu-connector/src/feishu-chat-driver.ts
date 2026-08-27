@@ -171,6 +171,10 @@ export const feishuChatDriver: ChannelDriver = {
     return this.capabilities(installation).reply;
   },
 
+  writeBackLabels(label) {
+    return feishuWriteBackLabels(label);
+  },
+
   async createThread() {
     throw new ChannelDriverError(
       "unsupported_channel",
@@ -379,6 +383,24 @@ export const feishuChatDriver: ChannelDriver = {
     };
   },
 };
+
+const FEISHU_WRITE_BACK_GROUPS = [
+  ["同意", "通过", "批准", "Approve", "approve", "Yes", "yes"],
+  ["拒绝", "驳回", "不通过", "Reject", "reject", "No", "no"],
+] as const;
+
+export function feishuWriteBackLabels(label: string): string[] {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const folded = trimmed.toLowerCase();
+  const group = FEISHU_WRITE_BACK_GROUPS.find((aliases) =>
+    aliases.some((alias) => alias.toLowerCase() === folded),
+  );
+  const aliases = group ? [...group] : [];
+  return [...new Set([trimmed, ...aliases])];
+}
 
 export function feishuSelection(config: Record<string, unknown>): "all" | "pick" {
   const selection = configString(config, "selection");

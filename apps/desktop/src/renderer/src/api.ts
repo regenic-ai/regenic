@@ -580,6 +580,7 @@ export async function saveRecipe(
   input: {
     name: string;
     match: RecipeView["match"];
+    trigger?: RecipeView["trigger"];
     executor_type: string;
     executor_config?: Record<string, string>;
     can_write_back: boolean;

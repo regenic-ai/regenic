@@ -1052,6 +1052,15 @@ button {
   font-size: 13px;
 }
 
+.switch-row.is-disabled {
+  color: var(--muted);
+}
+
+.switch-row.is-disabled .switch {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .switch {
   flex: 0 0 auto;
   width: 36px;

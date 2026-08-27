@@ -5,6 +5,7 @@ import {
   deliveryErrorMessage,
   deliveryRecordReceipt,
   deliveryRetryNow,
+  deliverySendTimedOut,
   deliveryWriteBackFailed,
   reclaimDeliveryLease,
   shouldFlushDelivery,
@@ -97,6 +98,12 @@ export class PersonalWorkFlush {
       await host.get("authority").putWorkDelivery(deliveryAcked(latest, outcome, now));
     } catch (error) {
       if (error instanceof WriteBackTimeoutError) {
+        const latest =
+          (await host.get("authority").getWorkDeliveryByItem(item.org_id, item.id)) ??
+          current;
+        await host.get("authority").putWorkDelivery(
+          deliverySendTimedOut(latest, now),
+        );
         return;
       }
       console.error("personal write-back failed", error);
