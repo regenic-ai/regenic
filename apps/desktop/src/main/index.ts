@@ -154,14 +154,17 @@ function sidecarEnv(
     env.REGENIC_CONNECTOR_PULL_MS = "3000";
   }
   delete env.REGENIC_PERSONAL_API;
-  delete env.HTTP_PROXY;
-  delete env.HTTPS_PROXY;
-  delete env.http_proxy;
-  delete env.https_proxy;
-  delete env.ALL_PROXY;
-  delete env.all_proxy;
-  env.NO_PROXY = "127.0.0.1,localhost";
-  env.no_proxy = "127.0.0.1,localhost";
+  const noProxy = [
+    env.NO_PROXY,
+    env.no_proxy,
+    "127.0.0.1",
+    "localhost",
+  ]
+    .flatMap((value) => (value ? String(value).split(",") : []))
+    .map((part) => part.trim())
+    .filter(Boolean);
+  env.NO_PROXY = [...new Set(noProxy)].join(",");
+  env.no_proxy = env.NO_PROXY;
   return env;
 }
 

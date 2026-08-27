@@ -728,8 +728,8 @@ export class PersonalWorkService implements OnModuleDestroy {
       }
       try {
         await this.writeBack(item, handle.result?.summary ?? "", handle.result?.content);
-      } catch {
-        status = "failed";
+      } catch (error) {
+        console.error("personal write-back failed", error);
       }
     }
     if (await this.abandonIfSkipped(item, nextRun)) {
@@ -894,6 +894,10 @@ export class PersonalWorkService implements OnModuleDestroy {
     const answer = matchWriteBackPrompt(prompts, text);
     if (!answer) {
       if (prompts.length === 0) {
+        console.warn(
+          "personal write-back skipped: no live prompt on",
+          item.thread_id,
+        );
         return;
       }
       throw new PersonalConnectorError(
