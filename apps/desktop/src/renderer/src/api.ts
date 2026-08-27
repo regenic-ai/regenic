@@ -219,6 +219,7 @@ export async function fetchEngine(
       ...item,
       prerequisites: item.prerequisites ?? [],
       setup_ready: item.setup_ready ?? false,
+      singleton: item.singleton === true,
     })),
   };
 }

@@ -249,7 +249,7 @@ export function estimateMessageHeight(
   item: InboxViewItem,
   follow: boolean,
 ): number {
-  if (item.kind === "system") {
+  if (item.kind === "system" && item.thread_facet !== "ticket") {
     return 36;
   }
   const text = item.body_text ?? "";

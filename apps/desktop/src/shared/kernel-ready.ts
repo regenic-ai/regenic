@@ -1,7 +1,7 @@
 export type KernelProbe = "personal" | "other" | "none";
 
-export const KERNEL_READY_TIMEOUT_MS = 15_000;
-export const KERNEL_PROBE_TIMEOUT_MS = 400;
+export const KERNEL_READY_TIMEOUT_MS = 30_000;
+export const KERNEL_PROBE_TIMEOUT_MS = 1_500;
 export const KERNEL_PROBE_INTERVAL_MS = 200;
 
 export async function probeKernelMode(

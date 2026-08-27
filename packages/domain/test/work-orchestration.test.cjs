@@ -21,6 +21,7 @@ const {
   transcriptFromAbsenteeLive,
   waitFromAbsentee,
   waitFromTranscript,
+  workFaceOf,
   workStatusFromRun,
   workSubjectFromEvent,
   cancelWorkRun,
@@ -264,6 +265,34 @@ describe("session job face and wait status", () => {
     );
     assert.equal(hidden.has("exec:session-9"), true);
     assert.equal(hidden.has("chat-src:t1"), false);
+  });
+});
+
+describe("work face", () => {
+  it("exposes the run summary on the inbox face", () => {
+    const face = workFaceOf(
+      {
+        id: "work-1",
+        org_id: "local-owner",
+        thread_id: "crm:order:1",
+        unit_key: "job:1",
+        record_class: "task",
+        thread_facet: "ticket",
+        status: "done",
+        recipe_id: "recipe-1",
+        created_at: "2026-08-27T00:00:00.000Z",
+        updated_at: "2026-08-27T00:00:00.000Z",
+      },
+      { can_write_back: true, executor_type: "dsh" },
+      {
+        executor_type: "dsh",
+        agent_thread_id: "dsh:session-1",
+        result: { summary: "  审核不通过：地区不符  " },
+      },
+    );
+    assert.equal(face.has_result, true);
+    assert.equal(face.result_summary, "审核不通过：地区不符");
+    assert.equal(face.can_write_back, true);
   });
 });
 

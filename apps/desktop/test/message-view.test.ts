@@ -362,6 +362,16 @@ describe("thread activity", () => {
     assert.equal(conversationKindLabel("group"), "Group");
     assert.equal(workStatusLabel("open"), null);
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
+    assert.equal(workStatusLabel("done"), "Done");
+    assert.equal(
+      listPreview(
+        thread(chat.messages, {
+          work: { id: "work-1", status: "done", result_summary: "审核不通过：地区不符" },
+        }),
+        "Ada",
+      ),
+      "审核不通过：地区不符",
+    );
     assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Bind a recipe/);
     assert.match(
       workNextStepCopy({ work: { status: "running" } }) ?? "",

@@ -342,7 +342,7 @@ export const ThreadMessageList = memo(
               size={items.length}
               onMeasure={onMeasure}
             >
-              {role === "system" ? (
+              {role === "system" && item.thread_facet !== "ticket" ? (
                 <div className="chat-system">
                   <details>
                     <summary>
@@ -351,6 +351,14 @@ export const ThreadMessageList = memo(
                     </summary>
                     <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
                   </details>
+                </div>
+              ) : role === "system" ? (
+                <div className="chat-ticket">
+                  <div className="chat-meta">
+                    <strong>{roleLabel(role, channel, item.actor_label)}</strong>
+                    <span>{formatChatTime(item.event.occurred_at)}</span>
+                  </div>
+                  <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
                 </div>
               ) : (
                 <ChatRow

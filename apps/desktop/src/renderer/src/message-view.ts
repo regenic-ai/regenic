@@ -62,6 +62,8 @@ export function workStatusLabel(status: string | null | undefined): string | nul
       return t("work.waiting");
     case "failed":
       return t("work.failed");
+    case "done":
+      return t("work.done");
     default:
       return null;
   }
@@ -250,6 +252,10 @@ export function threadPreview(thread: InboxThread): string {
 }
 
 export function listPreview(thread: InboxThread, title: string): string | null {
+  const resultLine = firstLine(thread.work?.result_summary, 88);
+  if (resultLine && !sameListLine(title, resultLine)) {
+    return resultLine;
+  }
   const latest = lastVisibleMessage(thread);
   if (!latest) {
     return null;

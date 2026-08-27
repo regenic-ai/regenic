@@ -40,12 +40,18 @@ export function EnginePage({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
   const [installingType, setInstallingType] = useState<string | null>(null);
+  const [pendingUninstallIds, setPendingUninstallIds] = useState<string[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [whatsAppStatus, setWhatsAppStatus] = useState<string | null>(null);
   const [importingWhatsApp, setImportingWhatsApp] = useState(false);
   const whatsAppFileRef = useRef<HTMLInputElement>(null);
+  const actionLock = useRef(false);
 
   const runAction = async (id: string, action: () => Promise<void>) => {
+    if (actionLock.current) {
+      return false;
+    }
+    actionLock.current = true;
     setBusyId(id);
     setActionError(null);
     try {
@@ -59,6 +65,7 @@ export function EnginePage({
       return false;
     } finally {
       setBusyId(null);
+      actionLock.current = false;
     }
   };
 
@@ -270,13 +277,30 @@ export function EnginePage({
             key={kind.connector_type}
             kind={kind}
             installations={engine.installations.filter(
-              (item) => item.connector_type === kind.connector_type,
+              (item) =>
+                item.connector_type === kind.connector_type &&
+                !pendingUninstallIds.includes(item.id),
             )}
             busyId={busyId}
             syncingAll={syncingAll}
             installing={installingType === kind.connector_type}
-            onOpenInstall={() => setInstallingType(kind.connector_type)}
-            onCloseInstall={() => setInstallingType(null)}
+            pendingUninstall={engine.installations.some(
+              (item) =>
+                item.connector_type === kind.connector_type &&
+                pendingUninstallIds.includes(item.id),
+            )}
+            onOpenInstall={() => {
+              if (actionLock.current || busyId !== null || syncingAll) {
+                return;
+              }
+              setInstallingType(kind.connector_type);
+            }}
+            onCloseInstall={() => {
+              if (actionLock.current || busyId === kind.connector_type) {
+                return;
+              }
+              setInstallingType(null);
+            }}
             onInstall={(config) =>
               void runAction(kind.connector_type, async () => {
                 await installConnector(kind.connector_type, config);
@@ -303,6 +327,13 @@ export function EnginePage({
             }
             onUninstall={(installation) => {
               if (
+                actionLock.current ||
+                busyId !== null ||
+                pendingUninstallIds.includes(installation.id)
+              ) {
+                return;
+              }
+              if (
                 !window.confirm(
                   t("engine.uninstallConfirm", {
                     type: connectorLabel(installation.connector_type),
@@ -312,8 +343,19 @@ export function EnginePage({
               ) {
                 return;
               }
+              setPendingUninstallIds((current) =>
+                current.includes(installation.id)
+                  ? current
+                  : [...current, installation.id],
+              );
               void runAction(installation.id, async () => {
                 await uninstallConnector(installation.id);
+              }).then((ok) => {
+                if (!ok) {
+                  setPendingUninstallIds((current) =>
+                    current.filter((id) => id !== installation.id),
+                  );
+                }
               });
             }}
           />

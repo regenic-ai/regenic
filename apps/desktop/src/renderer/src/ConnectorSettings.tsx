@@ -13,6 +13,7 @@ export function ConnectorKind({
   busyId,
   syncingAll,
   installing,
+  pendingUninstall,
   onOpenInstall,
   onCloseInstall,
   onInstall,
@@ -26,6 +27,7 @@ export function ConnectorKind({
   busyId: string | null;
   syncingAll: boolean;
   installing: boolean;
+  pendingUninstall: boolean;
   onOpenInstall: () => void;
   onCloseInstall: () => void;
   onInstall: (config: Record<string, string>) => void;
@@ -60,16 +62,28 @@ export function ConnectorKind({
           />
         </div>
         <div className="install-actions">
-          <button
-            type="button"
-            className={kind.installed ? "ghost" : "primary"}
-            disabled={busyId !== null || syncingAll || !kind.setup_ready}
-            onClick={onOpenInstall}
-          >
-            {t("connector.install")}
-          </button>
+          {!kind.singleton || !kind.installed ? (
+            <button
+              type="button"
+              className={kind.installed ? "ghost" : "primary"}
+              disabled={
+                busyId !== null ||
+                syncingAll ||
+                !kind.setup_ready ||
+                installing
+              }
+              onClick={onOpenInstall}
+            >
+              {busyId === kind.connector_type
+                ? t("connector.installing")
+                : t("connector.install")}
+            </button>
+          ) : null}
         </div>
       </div>
+      {pendingUninstall && installations.length === 0 ? (
+        <p className="muted">{t("connector.uninstalling")}</p>
+      ) : null}
       {installing ? (
         <ConnectorSettingsDialog
           title={t("connector.installTitle", { title: kind.title })}
@@ -200,6 +214,9 @@ function ConnectorSettingsForm({
       className="install-form"
       onSubmit={(event) => {
         event.preventDefault();
+        if (busy) {
+          return;
+        }
         onSubmit(values);
       }}
     >

@@ -71,6 +71,8 @@ export const en = {
   "work.running": "Running",
   "work.waiting": "Waiting",
   "work.failed": "Failed",
+  "work.done": "Done",
+  "work.result": "Result",
 
   "label.ticket": "Ticket",
   "label.agent": "Agent",
@@ -310,6 +312,7 @@ export const en = {
   "connector.disable": "Disable",
   "connector.editSync": "Edit sync",
   "connector.uninstall": "Uninstall",
+  "connector.uninstalling": "Uninstalling…",
   "connector.save": "Save",
   "connector.saving": "Saving…",
   "connector.editTitle": "Edit {type} sync",
@@ -411,6 +414,8 @@ export const zh: Record<MessageKey, string> = {
   "work.running": "执行中",
   "work.waiting": "等待中",
   "work.failed": "失败",
+  "work.done": "已完成",
+  "work.result": "执行结果",
 
   "label.ticket": "工单",
   "label.agent": "Agent",
@@ -640,6 +645,7 @@ export const zh: Record<MessageKey, string> = {
   "connector.disable": "停用",
   "connector.editSync": "改同步范围",
   "connector.uninstall": "卸载",
+  "connector.uninstalling": "卸载中…",
   "connector.save": "保存",
   "connector.saving": "保存中…",
   "connector.editTitle": "编辑 {type} 同步",

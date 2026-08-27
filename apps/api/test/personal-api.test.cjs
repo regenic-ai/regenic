@@ -1324,8 +1324,11 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[3].connector_type, "crm-ops-review");
       assert.equal(engine.catalog[3].installed, false);
       assert.equal(engine.catalog[3].setup_ready, false);
+      assert.equal(engine.catalog[3].singleton, true);
       assert.equal(engine.catalog[4].connector_type, "crm-order-review");
       assert.equal(engine.catalog[4].installed, false);
+      assert.equal(engine.catalog[4].singleton, true);
+      assert.equal(engine.catalog[0].singleton, false);
       assert.equal(engine.installations[0].settings.channel_id, "C123");
       assert.equal(JSON.stringify(engine).includes("xoxb"), false);
       assert.equal(JSON.stringify(engine).includes("credentials_ref"), false);
@@ -1539,6 +1542,50 @@ describe("personal /v1/me", () => {
           .installed,
         false,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects a second CRM singleton install and treats uninstall as idempotent", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const authority = new SqliteAuthorityStore(database);
+    await authority.createInstallation({
+      id: "crm-ops-1",
+      org_id: "local-owner",
+      connector_type: "crm-ops-review",
+      status: "enabled",
+      config: { max_open_tasks: "50" },
+      created_at: "2026-08-26T00:00:00.000Z",
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const duplicate = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "crm-ops-review",
+          config: { max_open_tasks: "20" },
+        }),
+      });
+      const duplicateBody = await duplicate.json();
+      assert.equal(duplicate.status, 409, JSON.stringify(duplicateBody));
+      assert.equal(duplicateBody.error.code, "already_installed");
+
+      const first = await fetch(`${origin}/v1/me/connectors/crm-ops-1`, {
+        method: "DELETE",
+      });
+      assert.equal(first.status, 200);
+      const second = await fetch(`${origin}/v1/me/connectors/crm-ops-1`, {
+        method: "DELETE",
+      });
+      const secondBody = await second.json();
+      assert.equal(second.status, 200, JSON.stringify(secondBody));
+      assert.equal(secondBody.removed, true);
     } finally {
       await app.close();
     }

@@ -40,6 +40,7 @@ export interface ConnectorCatalogItem {
   installed: boolean;
   instance_count: number;
   setup_ready: boolean;
+  singleton: boolean;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
 }
@@ -60,6 +61,7 @@ interface CatalogDefinition {
   title: string;
   description: string;
   credential_hint: string;
+  singleton?: boolean;
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
 }
@@ -216,6 +218,7 @@ const CATALOG: CatalogDefinition[] = [
     description:
       "Private plugin. Installs only when an extra connector package is loaded.",
     credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+    singleton: true,
     fields: [
       {
         key: "max_open_tasks",
@@ -233,6 +236,7 @@ const CATALOG: CatalogDefinition[] = [
     description:
       "Private plugin. Installs only when an extra connector package is loaded.",
     credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
+    singleton: true,
     fields: [
       {
         key: "max_open_order_reviews",
@@ -272,6 +276,11 @@ function crmPrerequisites(): CatalogDefinition["prerequisites"] {
   ];
 }
 
+export function connectorAllowsMultiple(connectorType: string): boolean {
+  const item = CATALOG.find((entry) => entry.connector_type === connectorType);
+  return item?.singleton !== true;
+}
+
 export function connectorCatalog(
   installations: EngineInstallationView[],
   readiness: CatalogReadiness = {},
@@ -307,6 +316,7 @@ export function connectorCatalog(
       installed: instanceCount > 0,
       instance_count: instanceCount,
       setup_ready: requiredVisible.every((prerequisite) => prerequisite.ready),
+      singleton: Boolean(definition.singleton),
       prerequisites,
     };
   });

@@ -16,6 +16,7 @@ import {
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
+  connectorAllowsMultiple,
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
@@ -114,7 +115,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       this.timer = setInterval(() => {
         void this.tick();
       }, pullMs);
-      void this.tick();
+      setTimeout(() => {
+        void this.tick();
+      }, 250);
     }
   }
 
@@ -419,6 +422,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
     const store = this.runtime.requireHost().get("authority");
+    if (!connectorAllowsMultiple(input.connector_type)) {
+      const existing = (await store.listInstallations(this.runtime.orgId())).some(
+        (item) => item.connector_type === input.connector_type,
+      );
+      if (existing) {
+        throw new PersonalConnectorError(
+          "already_installed",
+          `${input.connector_type} is already installed`,
+          409,
+        );
+      }
+    }
     const now = new Date().toISOString();
     const created = await store.createInstallation(
       this.buildInstallation(input, now),
@@ -473,18 +488,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   async uninstall(installationId: string): Promise<{ id: string; removed: true }> {
     const store = this.runtime.requireHost().get("authority");
-    const current = await this.requireInstallation(store, installationId);
-    const removed = await store.deleteInstallation(
-      current.id,
-      this.runtime.orgId(),
-    );
-    if (!removed) {
-      throw new PersonalConnectorError(
-        "not_found",
-        "Connector installation not found",
-        404,
-      );
+    const current = await store.findInstallation(installationId);
+    if (!current || current.org_id !== this.runtime.orgId()) {
+      return { id: installationId, removed: true };
     }
+    await store.deleteInstallation(current.id, this.runtime.orgId());
     return { id: current.id, removed: true };
   }
 

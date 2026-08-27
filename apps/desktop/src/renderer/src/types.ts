@@ -111,6 +111,7 @@ export interface WorkFace {
   agent_thread_id?: string;
   can_write_back?: boolean;
   has_result?: boolean;
+  result_summary?: string;
   updated_at?: string;
 }
 
@@ -254,6 +255,7 @@ export interface ConnectorCatalogItem {
   installed: boolean;
   instance_count: number;
   setup_ready: boolean;
+  singleton: boolean;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
 }

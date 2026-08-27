@@ -183,6 +183,7 @@ export function workFaceOf(
   recipe?: Recipe | null,
   run?: WorkRun | null,
 ): WorkFace {
+  const result_summary = run?.result?.summary?.trim();
   return {
     id: item.id,
     status: item.status,
@@ -190,7 +191,8 @@ export function workFaceOf(
     executor_type: run?.executor_type ?? recipe?.executor_type,
     agent_thread_id: run?.agent_thread_id,
     can_write_back: recipe?.can_write_back,
-    has_result: Boolean(run?.result),
+    has_result: Boolean(result_summary),
+    ...(result_summary ? { result_summary } : {}),
     updated_at: item.updated_at,
   };
 }

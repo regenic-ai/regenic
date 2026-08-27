@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
+  connectorAllowsMultiple,
   connectorCatalog,
   toInstallationView,
 } = require("../dist/personal-connector-view");
@@ -120,6 +121,11 @@ describe("connector catalog hints", () => {
     assert.equal(order.title, "CRM order review");
     assert.equal(ops.setup_ready, false);
     assert.equal(order.setup_ready, false);
+    assert.equal(ops.singleton, true);
+    assert.equal(order.singleton, true);
+    assert.equal(connectorAllowsMultiple("crm-ops-review"), false);
+    assert.equal(connectorAllowsMultiple("crm-order-review"), false);
+    assert.equal(connectorAllowsMultiple("slack-channel"), true);
     assert.match(ops.prerequisites[0].hint, /REGENIC_CRM_CONNECTOR|REGENIC_PLUGIN_DIR/);
   });
 

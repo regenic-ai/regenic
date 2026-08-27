@@ -87,6 +87,9 @@ export function installationStatusLabel(
 }
 
 export function connectorActionError(message: string): string {
+  if (message.includes("already installed")) {
+    return "This connector is already installed";
+  }
   if (message.includes("already syncing") || message.includes("already leased")) {
     return "This connector is already syncing";
   }
