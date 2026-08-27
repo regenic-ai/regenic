@@ -4,7 +4,15 @@ const {
   attentionOf,
   compareAttention,
   currentJobOnSession,
+  WORK_EVIDENCE_CHAR_LIMIT,
+  WORK_EVIDENCE_OMITTED,
+  WORK_EVIDENCE_THREAD_LIMIT,
+  budgetThreadEvidence,
+  composeWorkEvidenceText,
+  formatThreadContext,
   formatWorkEvidence,
+  packThreadEvidence,
+  selectThreadEvidenceLines,
   hiddenExecutorThreadIds,
   matchRecipe,
   MemoryExecutorRegistry,
@@ -417,6 +425,98 @@ describe("executor registry", () => {
       source: "chat-src",
       text: "please handle",
     }), /please handle/);
+    assert.equal(
+      formatThreadContext([
+        { speaker: "熊峰", text: "先看上周的单" },
+        { speaker: "user", text: "按上次说的办" },
+      ]),
+      "熊峰: 先看上周的单\n\nuser: 按上次说的办",
+    );
+    assert.deepEqual(
+      selectThreadEvidenceLines([
+        { speaker: "A", text: "hello" },
+        { tombstone: true, text: "gone" },
+        { status: true, text: "working" },
+        { working: true, text: "Looking" },
+        { speaker: "B", text: "  " },
+        { speaker: "B", text: "please handle" },
+      ]),
+      [
+        { speaker: "A", text: "hello" },
+        { speaker: "B", text: "please handle" },
+      ],
+    );
+    const capped = selectThreadEvidenceLines(
+      Array.from({ length: WORK_EVIDENCE_THREAD_LIMIT + 5 }, (_, index) => ({
+        speaker: "user",
+        text: `m${index}`,
+      })),
+    );
+    assert.equal(capped.length, WORK_EVIDENCE_THREAD_LIMIT);
+    assert.equal(capped[0].text, "m5");
+    assert.equal(capped[capped.length - 1].text, `m${WORK_EVIDENCE_THREAD_LIMIT + 4}`);
+    assert.equal(
+      composeWorkEvidenceText({
+        include_context: false,
+        trigger_text: "latest ticket",
+        head_text: "older head",
+        thread_lines: [{ speaker: "A", text: "history" }],
+      }),
+      "latest ticket",
+    );
+    assert.equal(
+      composeWorkEvidenceText({
+        include_context: true,
+        trigger_text: "latest ticket",
+        thread_lines: [
+          { speaker: "A", text: "history" },
+          { speaker: "B", text: "latest ticket" },
+        ],
+      }),
+      "A: history\n\nB: latest ticket",
+    );
+    const packed = packThreadEvidence({
+      lines: [
+        { speaker: "A", text: "old" },
+        { speaker: "B", text: "new" },
+      ],
+      overflow: true,
+    });
+    assert.equal(packed.omitted, true);
+    assert.match(packed.text, new RegExp(WORK_EVIDENCE_OMITTED.replace(/[[\]]/g, "\\$&")));
+    assert.match(packed.text, /B: new/);
+    const tight = budgetThreadEvidence(
+      [
+        { speaker: "A", text: "aaaa" },
+        { speaker: "B", text: "bbbb" },
+      ],
+      12,
+    );
+    assert.equal(tight.omitted, 1);
+    assert.deepEqual(tight.lines, [{ speaker: "B", text: "bbbb" }]);
+    const oneHuge = budgetThreadEvidence(
+      [{ speaker: "user", text: "x".repeat(WORK_EVIDENCE_CHAR_LIMIT + 50) }],
+      20,
+    );
+    assert.equal(oneHuge.lines.length, 1);
+    assert.ok(oneHuge.lines[0].text.length < 20);
+    assert.equal(
+      composeWorkEvidenceText({
+        include_context: true,
+        head_text: "the ticket",
+        thread_overflow: true,
+        thread_lines: [{ speaker: "A", text: "recent" }],
+      }).startsWith(WORK_EVIDENCE_OMITTED),
+      true,
+    );
+    assert.match(
+      composeWorkEvidenceText({
+        include_context: true,
+        head_text: "the ticket",
+        thread_lines: [{ speaker: "A", text: "recent" }],
+      }),
+      /user: the ticket$/,
+    );
   });
 });
 
@@ -429,6 +529,7 @@ function makeRecipe(id, match) {
     executor_type: "exec",
     executor_config: {},
     can_write_back: false,
+    include_context: false,
     enabled: true,
     created_at: "2026-08-25T00:00:00.000Z",
     updated_at: "2026-08-25T00:00:00.000Z",

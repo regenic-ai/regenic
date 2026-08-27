@@ -2,8 +2,10 @@ import type {
   ConnectorSyncView,
   ConversationPrefView,
   CreatedConversation,
+  EngineExecutorView,
   EngineInstallationView,
   ExecutorCatalogEntry,
+  ExecutorKind,
   InboxViewItem,
   KernelSettingsView,
   Locale,
@@ -220,8 +222,38 @@ export async function fetchEngine(
       prerequisites: item.prerequisites ?? [],
       setup_ready: item.setup_ready ?? false,
       singleton: item.singleton === true,
+      docs: catalogDocs(item.docs),
+    })),
+    executor_installations: (engine.executor_installations ?? []).map((item) => ({
+      ...item,
+      kind: item.kind === "http" ? "http" : "local_connector",
+      status: item.status === "disabled" ? "disabled" : "enabled",
+    })),
+    executor_catalog: (engine.executor_catalog ?? []).map((item) => ({
+      ...item,
+      kind: item.kind === "http" ? "http" : "local_connector",
+      fields: item.fields ?? [],
+      setup_ready: item.setup_ready !== false,
+      docs: catalogDocs(item.docs),
     })),
   };
+}
+
+function catalogDocs(
+  docs: PersonalEngineView["catalog"][number]["docs"] | undefined,
+): PersonalEngineView["catalog"][number]["docs"] {
+  if (!Array.isArray(docs)) {
+    return [];
+  }
+  return docs.flatMap((item) => {
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    const href = typeof item.href === "string" ? item.href.trim() : "";
+    const hrefZh = typeof item.href_zh === "string" ? item.href_zh.trim() : "";
+    return id && href
+      ? [{ id, title: title || id, href, href_zh: hrefZh || href }]
+      : [];
+  });
 }
 
 export async function syncConnector(id: string): Promise<ConnectorSyncView> {
@@ -458,6 +490,83 @@ export async function fetchRecipes(): Promise<RecipeView[]> {
   return Array.isArray(items) ? items : [];
 }
 
+export async function installExecutor(
+  kind: ExecutorKind,
+  config: Record<string, string>,
+): Promise<EngineExecutorView> {
+  const { name, ...rest } = config;
+  const response = await fetch(`${origin()}/v1/me/executors`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ kind, name, config: rest }),
+  });
+  const body = (await response.json()) as
+    | EngineExecutorView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `executor install ${response.status}`,
+    );
+  }
+  return body as EngineExecutorView;
+}
+
+export async function updateExecutorConfig(
+  id: string,
+  config: Record<string, string>,
+): Promise<EngineExecutorView> {
+  const { name, ...rest } = config;
+  const response = await fetch(`${origin()}/v1/me/executors/${id}/config`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, config: rest }),
+  });
+  const body = (await response.json()) as
+    | EngineExecutorView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `executor update ${response.status}`,
+    );
+  }
+  return body as EngineExecutorView;
+}
+
+export async function setExecutorStatus(
+  id: string,
+  status: "enabled" | "disabled",
+): Promise<EngineExecutorView> {
+  const response = await fetch(
+    `${origin()}/v1/me/executors/${id}/${status === "enabled" ? "enable" : "disable"}`,
+    { method: "POST" },
+  );
+  const body = (await response.json()) as
+    | EngineExecutorView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `executor status ${response.status}`,
+    );
+  }
+  return body as EngineExecutorView;
+}
+
+export async function uninstallExecutor(id: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/executors/${id}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `executor uninstall ${response.status}`);
+  }
+}
+
 export async function fetchExecutors(): Promise<ExecutorCatalogEntry[]> {
   const response = await fetch(`${origin()}/v1/me/executors`);
   if (!response.ok) {
@@ -474,6 +583,7 @@ export async function saveRecipe(
     executor_type: string;
     executor_config?: Record<string, string>;
     can_write_back: boolean;
+    include_context: boolean;
     enabled: boolean;
   },
   id?: string,
@@ -544,6 +654,7 @@ export async function fetchStore(): Promise<StoreView> {
     blobs: Number(body.blobs) || 0,
     recipes: Number(body.recipes) || 0,
     connectors: Number(body.connectors) || 0,
+    executors: Number(body.executors) || 0,
   };
 }
 

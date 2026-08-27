@@ -12,8 +12,11 @@ const {
 } = require("../dist/personal-pull-status");
 const {
   shouldHydrateOpenedInbox,
+  shouldNoteHumanInbox,
+  shouldPullOlderInbox,
   shouldWaitForOpenedHydrate,
 } = require("../dist/personal-connector.service");
+const { shouldSkipLiveChannelOverlays } = require("../dist/personal-inbox.service");
 
 afterEach(() => {
   resetPullStatus({});
@@ -98,5 +101,47 @@ describe("opened inbox hydrate", () => {
     assert.equal(shouldWaitForOpenedHydrate(0), true);
     assert.equal(shouldWaitForOpenedHydrate(1), false);
     assert.equal(shouldWaitForOpenedHydrate(23), false);
+  });
+
+  it("asks the connector for older pages only on an empty scroll-up", () => {
+    assert.equal(
+      shouldPullOlderInbox({
+        thread_id: "feishu:oc_1",
+        before: "2026-08-24T00:00:00.000Z",
+      }),
+      true,
+    );
+    assert.equal(shouldPullOlderInbox({ thread_id: "feishu:oc_1" }), false);
+    assert.equal(
+      shouldPullOlderInbox({
+        thread_id: "feishu:oc_1",
+        before: "2026-08-24T00:00:00.000Z",
+        since: "2026-08-23T00:00:00.000Z",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldNoteHumanInbox({ thread_id: "feishu:oc_1" }),
+      true,
+    );
+    assert.equal(
+      shouldNoteHumanInbox({
+        thread_id: "feishu:oc_1",
+        since: "2026-08-24T00:00:00.000Z",
+      }),
+      false,
+    );
+    assert.equal(shouldNoteHumanInbox({ heads: true }), false);
+    assert.equal(
+      shouldSkipLiveChannelOverlays({ thread_id: "feishu:oc_1" }),
+      true,
+    );
+    assert.equal(
+      shouldSkipLiveChannelOverlays({
+        thread_id: "feishu:oc_1",
+        since: "2026-08-24T00:00:00.000Z",
+      }),
+      false,
+    );
   });
 });

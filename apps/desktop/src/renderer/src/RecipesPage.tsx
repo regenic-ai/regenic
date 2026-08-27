@@ -121,6 +121,7 @@ export function RecipesPage({
           executor_type: draft.executor_type,
           executor_config: draft.config,
           can_write_back: draft.can_write_back,
+          include_context: draft.include_context,
           enabled: draft.enabled,
         },
         draft.id,
@@ -172,6 +173,9 @@ export function RecipesPage({
                     </span>
                     {recipe.can_write_back ? (
                       <span className="recipe-pill">{t("recipes.writeBackYes")}</span>
+                    ) : null}
+                    {recipe.include_context ? (
+                      <span className="recipe-pill">{t("recipes.contextYes")}</span>
                     ) : null}
                   </div>
                   <p className="recipe-card-line">
@@ -353,9 +357,9 @@ export function RecipesPage({
               </section>
             </div>
 
-            {catalog?.fields.length ? (
-              <section className="recipe-block recipe-block-how">
-                <h3>{t("recipes.how")}</h3>
+            <section className="recipe-block recipe-block-how">
+              <h3>{t("recipes.how")}</h3>
+              {catalog?.fields.length ? (
                 <RecipeParams
                   catalog={catalog}
                   values={draft.config}
@@ -367,8 +371,19 @@ export function RecipesPage({
                     }))
                   }
                 />
-              </section>
-            ) : null}
+              ) : null}
+              <div className="recipe-context">
+                <SwitchRow
+                  checked={draft.include_context}
+                  onChange={(include_context) =>
+                    setDraft((current) => ({ ...current, include_context }))
+                  }
+                >
+                  {t("recipes.includeContextCheck")}
+                </SwitchRow>
+                <p className="muted">{t("recipes.includeContextHint")}</p>
+              </div>
+            </section>
           </div>
 
           <div className="recipe-form-foot">
@@ -519,6 +534,7 @@ interface RecipeDraft {
   executor_type: string;
   config: Record<string, string>;
   can_write_back: boolean;
+  include_context: boolean;
   enabled: boolean;
 }
 
@@ -534,6 +550,7 @@ function emptyDraft(executorType = ""): RecipeDraft {
     executor_type: executorType,
     config: {},
     can_write_back: false,
+    include_context: false,
     enabled: true,
   };
 }
@@ -601,6 +618,7 @@ function draftFromRecipe(
     executor_type: recipe.executor_type,
     config: configFromCatalog(catalog, config),
     can_write_back: recipe.can_write_back,
+    include_context: recipe.include_context,
     enabled: recipe.enabled,
   };
 }

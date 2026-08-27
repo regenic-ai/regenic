@@ -16,8 +16,11 @@ import {
   PersonalConnectorError,
   PersonalConnectorService,
   shouldHydrateOpenedInbox,
+  shouldNoteHumanInbox,
+  shouldPullOlderInbox,
   shouldWaitForOpenedHydrate,
 } from "./personal-connector.service";
+import { noteHumanActivity } from "./personal-human-pace";
 import {
   PersonalInboxService,
   PersonalKernelStoppedError,
@@ -27,6 +30,10 @@ import {
   type ReplyInput,
 } from "./personal-reply.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
+import {
+  PersonalExecutorService,
+  type ExecutorInput,
+} from "./personal-executor.service";
 import {
   PersonalWorkService,
   type RecipeInput,
@@ -40,6 +47,7 @@ export class PersonalController {
     private readonly connectors: PersonalConnectorService,
     private readonly replies: PersonalReplyService,
     private readonly work: PersonalWorkService,
+    private readonly executors: PersonalExecutorService,
     private readonly whatsapp: PersonalWhatsAppImportService,
   ) {}
 
@@ -63,16 +71,26 @@ export class PersonalController {
       limit: limit?.trim() ? Number(limit) : undefined,
     };
     return this.guard(async () => {
+      if (shouldNoteHumanInbox(query)) {
+        noteHumanActivity();
+      }
       const local = await this.inbox.listInbox(query);
       if (
-        !shouldHydrateOpenedInbox(query) ||
-        !query.thread_id ||
-        !shouldWaitForOpenedHydrate(local.length)
+        shouldPullOlderInbox(query) &&
+        query.thread_id &&
+        local.length === 0
       ) {
-        return local;
+        await this.connectors.pullOlderForThread(query.thread_id);
+        return this.inbox.listInbox(query);
       }
-      await this.connectors.hydrateOpenedThread(query.thread_id);
-      return this.inbox.listInbox(query);
+      if (
+        shouldHydrateOpenedInbox(query) &&
+        query.thread_id &&
+        shouldWaitForOpenedHydrate(local.length)
+      ) {
+        void this.connectors.hydrateOpenedThread(query.thread_id);
+      }
+      return local;
     });
   }
 
@@ -118,6 +136,7 @@ export class PersonalController {
 
   @Post("replies")
   sendReply(@Body() body: ReplyInput) {
+    noteHumanActivity();
     return this.guard(() => this.replies.send(body ?? {}));
   }
 
@@ -128,6 +147,7 @@ export class PersonalController {
 
   @Post("conversations")
   createConversation(@Body() body: { installation_id?: string } | undefined) {
+    noteHumanActivity();
     return this.guard(() => this.connectors.createConversation(body ?? {}));
   }
 
@@ -150,6 +170,7 @@ export class PersonalController {
         }
       | undefined,
   ) {
+    noteHumanActivity();
     return this.guard(() => this.inbox.ackConversationAttention(body ?? {}));
   }
 
@@ -164,6 +185,7 @@ export class PersonalController {
         }
       | undefined,
   ) {
+    noteHumanActivity();
     return this.guard(() => this.inbox.answerConversationPrompt(body ?? {}));
   }
 
@@ -190,6 +212,31 @@ export class PersonalController {
   @Get("executors")
   listExecutors() {
     return this.guard(() => this.work.listExecutors());
+  }
+
+  @Post("executors")
+  installExecutor(@Body() body: ExecutorInput | undefined) {
+    return this.guard(() => this.executors.install(body ?? {}));
+  }
+
+  @Post("executors/:id/config")
+  updateExecutor(@Param("id") id: string, @Body() body: ExecutorInput | undefined) {
+    return this.guard(() => this.executors.update(id, body ?? {}));
+  }
+
+  @Post("executors/:id/enable")
+  enableExecutor(@Param("id") id: string) {
+    return this.guard(() => this.executors.setStatus(id, "enabled"));
+  }
+
+  @Post("executors/:id/disable")
+  disableExecutor(@Param("id") id: string) {
+    return this.guard(() => this.executors.setStatus(id, "disabled"));
+  }
+
+  @Delete("executors/:id")
+  uninstallExecutor(@Param("id") id: string) {
+    return this.guard(() => this.executors.uninstall(id));
   }
 
   @Post("work-items/:id/run")
@@ -234,6 +281,7 @@ export class PersonalController {
         HttpStatus.BAD_REQUEST,
       );
     }
+    noteHumanActivity();
     return this.guard(() =>
       this.connectors.install({
         connector_type: connectorType,
@@ -247,6 +295,7 @@ export class PersonalController {
     @Param("id") id: string,
     @Body() body: { config?: Record<string, unknown> } | undefined,
   ) {
+    noteHumanActivity();
     return this.guard(() => this.connectors.updateConfig(id, body?.config ?? {}));
   }
 
@@ -260,11 +309,13 @@ export class PersonalController {
     @Param("id") id: string,
     @Body() body: { max_pages?: number } | undefined,
   ) {
+    noteHumanActivity();
     return this.guard(() => this.connectors.sync(id, body?.max_pages));
   }
 
   @Post("connectors/:id/enable")
   enableConnector(@Param("id") id: string) {
+    noteHumanActivity();
     return this.guard(() => this.connectors.setStatus(id, "enabled"));
   }
 

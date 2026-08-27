@@ -32,6 +32,7 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  RepointContentInput,
   ResetConnectorCursor,
   ReleaseConnectorLease,
   SetConnectorInstallationConfig,
@@ -45,6 +46,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkStore,
+  ExecutorInstallation,
+  ExecutorStore,
 } from "@regenic/domain";
 import { LATEST_SCHEMA_VERSION, MIGRATIONS } from "./migrations";
 
@@ -158,6 +161,7 @@ interface InsertEventInput extends SourceIdentity {
   content_hash?: string;
   content_media_type?: string;
   content_byte_size?: number;
+  extra_blobs?: NewEvent["extra_blobs"];
   parent_event_id?: string;
   revision_id?: string;
   occurred_at: string;
@@ -169,7 +173,7 @@ export interface SqliteOpenOptions {
 }
 
 export class SqliteAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore, WorkStore
+  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore
 {
   private readonly database: Database.Database;
   readonly readonly: boolean;
@@ -545,6 +549,7 @@ export class SqliteAuthorityStore
         kept: {
           recipes: after.recipes,
           connectors: after.connectors,
+          executors: after.executors,
         },
       } satisfies StoreClearResult;
     });
@@ -581,6 +586,10 @@ export class SqliteAuthorityStore
         `SELECT COUNT(*) AS n FROM connector_installations WHERE org_id = ?`,
         orgId,
       ),
+      executors: count(
+        `SELECT COUNT(*) AS n FROM executor_installations WHERE org_id = ?`,
+        orgId,
+      ),
     };
   }
 
@@ -607,14 +616,15 @@ export class SqliteAuthorityStore
         `
           INSERT INTO recipes (
             id, org_id, name, match_json, executor_type, executor_config_json,
-            can_write_back, enabled, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            can_write_back, include_context, enabled, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
             executor_type = excluded.executor_type,
             executor_config_json = excluded.executor_config_json,
             can_write_back = excluded.can_write_back,
+            include_context = excluded.include_context,
             enabled = excluded.enabled,
             updated_at = excluded.updated_at
         `,
@@ -627,6 +637,7 @@ export class SqliteAuthorityStore
         recipe.executor_type,
         JSON.stringify(recipe.executor_config),
         recipe.can_write_back ? 1 : 0,
+        recipe.include_context ? 1 : 0,
         recipe.enabled ? 1 : 0,
         recipe.created_at,
         recipe.updated_at,
@@ -810,6 +821,71 @@ export class SqliteAuthorityStore
       .run(orgId, key, value, updatedAt);
   }
 
+  async listExecutorInstallations(
+    orgId: string,
+  ): Promise<ExecutorInstallation[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT * FROM executor_installations
+          WHERE org_id = ? ORDER BY updated_at DESC, id
+        `,
+      )
+      .all(orgId) as ExecutorRow[];
+    return rows.map(toExecutorInstallation);
+  }
+
+  async getExecutorInstallation(
+    orgId: string,
+    id: string,
+  ): Promise<ExecutorInstallation | null> {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM executor_installations WHERE org_id = ? AND id = ?`,
+      )
+      .get(orgId, id) as ExecutorRow | undefined;
+    return row ? toExecutorInstallation(row) : null;
+  }
+
+  async putExecutorInstallation(
+    installation: ExecutorInstallation,
+  ): Promise<ExecutorInstallation> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO executor_installations (
+            id, org_id, kind, name, status, config_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            kind = excluded.kind,
+            name = excluded.name,
+            status = excluded.status,
+            config_json = excluded.config_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        installation.id,
+        installation.org_id,
+        installation.kind,
+        installation.name,
+        installation.status,
+        JSON.stringify(installation.config),
+        installation.created_at,
+        installation.updated_at,
+      );
+    return installation;
+  }
+
+  async deleteExecutorInstallation(orgId: string, id: string): Promise<boolean> {
+    this.assertWritable();
+    const result = this.database
+      .prepare(`DELETE FROM executor_installations WHERE org_id = ? AND id = ?`)
+      .run(orgId, id);
+    return result.changes > 0;
+  }
+
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
     return (await this.findBlobs([contentHash])).get(contentHash) ?? null;
   }
@@ -840,6 +916,66 @@ export class SqliteAuthorityStore
   async append(input: NewEvent): Promise<EventRecord> {
     this.assertWritable();
     return this.insert({ ...input, operation: "create" });
+  }
+
+  async repointContentHash(input: RepointContentInput): Promise<number> {
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const now = new Date().toISOString();
+      this.insertBlobRow(
+        input.new_content_hash,
+        input.content_media_type,
+        input.content_byte_size,
+        now,
+      );
+      for (const blob of input.extra_blobs ?? []) {
+        this.insertBlobRow(
+          blob.content_hash,
+          blob.media_type,
+          blob.byte_size,
+          now,
+        );
+      }
+      const updated = this.database
+        .prepare(`UPDATE events SET content_hash = ? WHERE content_hash = ?`)
+        .run(input.new_content_hash, input.old_content_hash);
+      if (input.old_content_hash !== input.new_content_hash) {
+        this.database
+          .prepare(
+            `
+              DELETE FROM blobs
+              WHERE content_hash = ?
+                AND content_hash NOT IN (
+                  SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+                )
+            `,
+          )
+          .run(input.old_content_hash);
+      }
+      return updated.changes;
+    }).immediate();
+  }
+
+  async vacuumStore(): Promise<void> {
+    this.assertWritable();
+    this.database.exec("VACUUM");
+  }
+
+  private insertBlobRow(
+    contentHash: string,
+    mediaType: string | undefined,
+    byteSize: number | undefined,
+    createdAt: string,
+  ): void {
+    this.database
+      .prepare(
+        `
+          INSERT OR IGNORE INTO blobs (
+            content_hash, media_type, byte_size, created_at
+          ) VALUES (?, ?, ?, ?)
+        `,
+      )
+      .run(contentHash, mediaType ?? "application/octet-stream", byteSize ?? 0, createdAt);
   }
 
   async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
@@ -1376,20 +1512,20 @@ export class SqliteAuthorityStore
     };
 
     if (input.content_hash) {
-      this.database
-        .prepare(
-          `
-            INSERT OR IGNORE INTO blobs (
-              content_hash, media_type, byte_size, created_at
-            ) VALUES (?, ?, ?, ?)
-          `,
-        )
-        .run(
-          input.content_hash,
-          input.content_media_type,
-          input.content_byte_size,
-          event.ingested_at,
-        );
+      this.insertBlobRow(
+        input.content_hash,
+        input.content_media_type,
+        input.content_byte_size,
+        event.ingested_at,
+      );
+    }
+    for (const blob of input.extra_blobs ?? []) {
+      this.insertBlobRow(
+        blob.content_hash,
+        blob.media_type,
+        blob.byte_size,
+        event.ingested_at,
+      );
     }
 
     this.database
@@ -1721,6 +1857,17 @@ function inboxTail(query?: InboxQuery): {
   };
 }
 
+interface ExecutorRow {
+  id: string;
+  org_id: string;
+  kind: ExecutorInstallation["kind"];
+  name: string;
+  status: ExecutorInstallation["status"];
+  config_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface RecipeRow {
   id: string;
   org_id: string;
@@ -1729,6 +1876,7 @@ interface RecipeRow {
   executor_type: string;
   executor_config_json: string;
   can_write_back: number;
+  include_context: number;
   enabled: number;
   created_at: string;
   updated_at: string;
@@ -1762,6 +1910,19 @@ interface WorkRunRow {
   updated_at: string;
 }
 
+function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    kind: row.kind,
+    name: row.name,
+    status: row.status,
+    config: JSON.parse(row.config_json) as ExecutorInstallation["config"],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 function toRecipe(row: RecipeRow): Recipe {
   return {
     id: row.id,
@@ -1771,6 +1932,7 @@ function toRecipe(row: RecipeRow): Recipe {
     executor_type: row.executor_type,
     executor_config: JSON.parse(row.executor_config_json) as Recipe["executor_config"],
     can_write_back: row.can_write_back === 1,
+    include_context: row.include_context === 1,
     enabled: row.enabled === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,

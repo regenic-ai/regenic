@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
+  ChannelDriver,
   ChannelDriverRegistry,
   INGEST_SCHEMA_VERSION,
   INBOX_SORT_PREF_KEY,
   cancelWorkRun,
   channelRecord,
+  WORK_EVIDENCE_FETCH_LIMIT,
+  composeWorkEvidenceText,
   conversationId,
   currentJobOnSession,
   formatWorkEvidence,
@@ -21,6 +24,7 @@ import {
   recipeSpecificity,
   pickAbsenteeInboxRows,
   selectRecipeForSubject,
+  selectThreadEvidenceLines,
   shouldRefreshActiveRun,
   shouldWriteBackHandle,
   matchWriteBackPrompt,
@@ -48,12 +52,14 @@ import {
   type ThreadFacet,
   type ThreadPrompt,
   type Transcript,
+  type WorkEvidenceLine,
   type WorkFace,
   type WorkItem,
   type WorkRun,
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
+import { PersonalExecutorService } from "./personal-executor.service";
 import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
@@ -68,6 +74,7 @@ export interface RecipeInput {
   executor_type?: string;
   executor_config?: Record<string, JsonValue>;
   can_write_back?: boolean;
+  include_context?: boolean;
   enabled?: boolean;
 }
 
@@ -99,6 +106,7 @@ export class PersonalWorkService implements OnModuleDestroy {
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
+    private readonly executors: PersonalExecutorService,
   ) {}
 
   startAfterListen(): void {
@@ -106,6 +114,11 @@ export class PersonalWorkService implements OnModuleDestroy {
       return;
     }
     this.backgroundStarted = true;
+    void this.executors.ensureMounted().catch((error) => {
+      if (!isWorkTickShutdown(error)) {
+        console.error("executor mount failed", error);
+      }
+    });
     this.timer = setInterval(() => {
       void this.afterConnectorTick();
     }, WORK_TICK_MS);
@@ -153,6 +166,10 @@ export class PersonalWorkService implements OnModuleDestroy {
       return;
     }
     try {
+      await this.executors.ensureMounted();
+      if (!this.runtime.isReady()) {
+        return;
+      }
       await this.reconcileInbox();
       await this.refreshRuns();
     } catch (error) {
@@ -170,10 +187,11 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 
   async listExecutors() {
-    return this.runtime.requireHost().get("executors").catalog();
+    return this.executors.listCatalog();
   }
 
   async putRecipe(input: RecipeInput, id?: string): Promise<Recipe> {
+    await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const now = new Date().toISOString();
@@ -589,9 +607,20 @@ export class PersonalWorkService implements OnModuleDestroy {
       return undefined;
     }
     const now = new Date().toISOString();
-    const text =
-      evidenceText ??
-      (await this.evidenceText(item.thread_id, item.head_event_id));
+    const includeContext = Boolean(recipe.include_context);
+    const thread = includeContext
+      ? await this.threadContextLines(item.thread_id)
+      : { lines: [], overflow: false };
+    const text = composeWorkEvidenceText({
+      include_context: includeContext,
+      trigger_text: evidenceText,
+      head_text:
+        !includeContext && evidenceText
+          ? undefined
+          : await this.evidenceText(item.thread_id, item.head_event_id),
+      thread_lines: thread.lines,
+      thread_overflow: thread.overflow,
+    });
     const handle = await executor.start(
       {
         work_item: item,
@@ -739,10 +768,11 @@ export class PersonalWorkService implements OnModuleDestroy {
         const installations = await host
           .get("authority")
           .listInstallations(this.runtime.orgId());
-        const found = this.drivers.findCreatable(
-          installations,
-          executor.catalog().source,
-        );
+        const catalog = executor.catalog();
+        const pin = catalog.installation_id?.trim();
+        const found = pin
+          ? pinnedCreatable(this.drivers, installations, pin)
+          : this.drivers.findCreatable(installations, catalog.source);
         if (!found) {
           throw new PersonalConnectorError(
             "unsupported_channel",
@@ -913,6 +943,43 @@ export class PersonalWorkService implements OnModuleDestroy {
     });
   }
 
+  private async threadContextLines(
+    threadId: string,
+  ): Promise<{ lines: WorkEvidenceLine[]; overflow: boolean }> {
+    const host = this.runtime.requireHost();
+    const fetchLimit = WORK_EVIDENCE_FETCH_LIMIT;
+    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
+      thread_ids: [threadId],
+      siblings: true,
+      limit: fetchLimit + 1,
+    });
+    const overflow = items.length > fetchLimit;
+    const windowed = overflow ? items.slice(1) : items;
+    const bodies = await resolveInboxBodies(
+      host.get("authority"),
+      host.get("blobs"),
+      windowed.map((row) => row.event.content_hash),
+      "meta",
+    );
+    return {
+      overflow,
+      lines: selectThreadEvidenceLines(
+        windowed.map((row) => {
+          const body = row.event.content_hash
+            ? bodies.get(row.event.content_hash)
+            : undefined;
+          return {
+            tombstone: row.event.operation === "tombstone",
+            status: row.decision.reason_codes.includes("thread_status"),
+            working: body?.surface?.activity === "working",
+            speaker: body?.surface?.actor_label || body?.surface?.kind,
+            text: body?.body_text,
+          };
+        }),
+      ),
+    };
+  }
+
   private async evidenceText(
     threadId: string,
     headEventId?: string,
@@ -1015,6 +1082,7 @@ function normalizeRecipe(
     executor_type,
     executor_config: input.executor_config ?? existing?.executor_config ?? {},
     can_write_back: input.can_write_back ?? existing?.can_write_back ?? false,
+    include_context: input.include_context ?? existing?.include_context ?? false,
     enabled: input.enabled ?? existing?.enabled ?? true,
     created_at: existing?.created_at ?? now,
     updated_at: now,
@@ -1050,9 +1118,10 @@ function isWorkTickShutdown(error: unknown): boolean {
   if (error instanceof PersonalKernelStoppedError) {
     return true;
   }
+  const message = error instanceof Error ? error.message : String(error);
   return (
-    error instanceof TypeError &&
-    /database connection is not open/i.test(String((error as Error).message))
+    (error instanceof TypeError && /database connection is not open/i.test(message)) ||
+    /Service is not available/i.test(message)
   );
 }
 
@@ -1093,4 +1162,20 @@ async function forceDisposition(
     score: current?.score ?? 0.7,
     decided_at: now,
   });
+}
+
+function pinnedCreatable(
+  drivers: ChannelDriverRegistry,
+  installations: ConnectorInstallation[],
+  installationId: string,
+): { installation: ConnectorInstallation; driver: ChannelDriver } | undefined {
+  const installation = installations.find((item) => item.id === installationId);
+  if (!installation || installation.status !== "enabled") {
+    return undefined;
+  }
+  const driver = drivers.get(installation.connector_type);
+  if (!driver?.capabilities(installation).create) {
+    return undefined;
+  }
+  return { installation, driver };
 }

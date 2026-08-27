@@ -253,7 +253,7 @@ button {
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 10px 16px 6px;
+  padding: 12px 20px 8px;
   background: var(--surface);
   color: var(--muted);
   font-size: 10px;
@@ -263,7 +263,7 @@ button {
 }
 
 .list-head {
-  padding: 12px 14px 10px;
+  padding: 16px 20px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -344,14 +344,14 @@ button {
 .list-filters {
   display: grid;
   gap: 6px;
-  padding: 0 14px 10px;
+  padding: 0 20px 12px;
 }
 
 .list-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px 12px;
+  padding: 0 20px 14px;
   min-width: 0;
 }
 
@@ -430,7 +430,7 @@ button {
 .item {
   width: 100%;
   text-align: left;
-  padding: 12px 10px 12px 16px;
+  padding: 13px 16px 13px 20px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -871,6 +871,20 @@ button {
   display: none;
 }
 
+.recipe-context {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.recipe-context .muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 .recipe-form-foot {
   display: grid;
   gap: 12px;
@@ -1168,9 +1182,9 @@ button {
 }
 
 .work-hint {
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   max-width: 52em;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 55%, var(--bg));
@@ -1302,7 +1316,7 @@ button {
 .thread-head {
   flex-shrink: 0;
   margin: 0;
-  padding: 16px 24px 14px;
+  padding: 20px 32px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
@@ -1315,7 +1329,7 @@ button {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 20px 24px 24px;
+  padding: 24px 32px 28px;
   overflow-anchor: none;
 }
 
@@ -1752,6 +1766,142 @@ button {
   background: #0d100e;
 }
 
+.msg-image-btn {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: zoom-in;
+}
+
+.msg-image-btn .msg-image {
+  display: block;
+}
+
+.msg-image-btn:hover .msg-image,
+.msg-image-btn:focus-visible .msg-image {
+  border-color: color-mix(in srgb, var(--text) 32%, var(--line));
+  filter: brightness(1.08);
+}
+
+.msg-image-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  padding: 16px 24px 28px;
+  background: rgb(10 10 10 / 88%);
+}
+
+.image-lightbox:focus {
+  outline: none;
+}
+
+.image-lightbox-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 8px 16px;
+}
+
+.image-lightbox-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.image-lightbox-caption span:last-child {
+  color: var(--muted);
+}
+
+.image-lightbox-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #0a0a0acc;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.image-lightbox-close:hover,
+.image-lightbox-nav:hover {
+  background: #1e2620;
+}
+
+.image-lightbox-stage {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  margin: 0 56px;
+  overflow: hidden;
+  cursor: zoom-out;
+  touch-action: none;
+}
+
+.image-lightbox-stage.is-zoomed {
+  cursor: grab;
+}
+
+.image-lightbox-stage.is-zoomed:active {
+  cursor: grabbing;
+}
+
+.image-lightbox-stage img {
+  max-width: 100%;
+  max-height: calc(100vh - 160px);
+  object-fit: contain;
+  border-radius: 8px;
+  transform-origin: center center;
+  cursor: zoom-in;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.image-lightbox-stage.is-zoomed img {
+  cursor: grab;
+}
+
+.image-lightbox-stage.is-zoomed:active img {
+  cursor: grabbing;
+}
+
+.image-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  width: 40px;
+  height: 40px;
+  margin-top: -20px;
+  border-radius: 50%;
+  background: #0a0a0acc;
+  color: var(--text);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.image-lightbox-nav.is-prev {
+  left: 28px;
+}
+
+.image-lightbox-nav.is-next {
+  right: 28px;
+}
+
 .file-chip {
   display: inline-flex;
   align-items: center;
@@ -1780,13 +1930,13 @@ button {
 .composer-dock {
   flex-shrink: 0;
   background: var(--bg);
-  padding: 10px 24px 18px;
+  padding: 16px 32px 24px;
 }
 
 .prompt-panel {
   display: grid;
-  gap: 12px;
-  padding: 12px;
+  gap: 16px;
+  padding: 18px 20px 16px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--surface);
@@ -1801,7 +1951,7 @@ button {
 }
 
 .prompt-head h2 {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   font-size: 15px;
   font-weight: 600;
 }
@@ -1860,8 +2010,19 @@ button {
 
 .prompt-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
+}
+
+.prompt-panel.presentation-approval .prompt-actions {
+  margin-top: 2px;
+}
+
+.prompt-panel.presentation-approval .prompt-actions .primary,
+.prompt-panel.presentation-approval .prompt-actions .ghost {
+  min-width: 112px;
+  height: 36px;
+  padding: 0 18px;
 }
 
 .thread-activity {
@@ -2368,6 +2529,14 @@ button {
   margin: 0;
 }
 
+.card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
 .kv {
   display: grid;
   grid-template-columns: 120px 1fr;
@@ -2437,6 +2606,28 @@ button {
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.install-docs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-link {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--data);
+  background: color-mix(in srgb, var(--data) 10%, transparent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.doc-link:hover {
+  border-color: var(--data);
+  color: var(--text);
 }
 
 .choice-list {

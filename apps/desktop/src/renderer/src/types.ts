@@ -158,6 +158,9 @@ export interface ExecutorCatalogField {
   options?: Array<{ value: string; label: string }>;
 }
 
+export type ExecutorKind = "local_connector" | "http";
+export type ExecutorInstallStatus = "enabled" | "disabled";
+
 export interface ExecutorCatalogEntry {
   executor_type: string;
   label: string;
@@ -165,7 +168,42 @@ export interface ExecutorCatalogEntry {
   params_label?: string;
   source?: string;
   attach?: "interactive" | "absentee";
+  installation_id?: string;
+  kind?: ExecutorKind;
   fields: ExecutorCatalogField[];
+}
+
+export interface EngineExecutorView {
+  id: string;
+  kind: ExecutorKind;
+  name: string;
+  status: ExecutorInstallStatus;
+  label: string;
+  detail: string | null;
+  connector_id?: string;
+  base_url?: string;
+  auth_env?: string;
+}
+
+export interface ExecutorKindField {
+  key: string;
+  label: string;
+  required: boolean;
+  placeholder?: string;
+  hint?: string;
+  options?: Array<{ value: string; label: string }>;
+}
+
+export interface ExecutorKindCatalogItem {
+  kind: ExecutorKind;
+  title: string;
+  description: string;
+  credential_hint: string;
+  installed: boolean;
+  instance_count: number;
+  setup_ready: boolean;
+  fields: ExecutorKindField[];
+  docs: CatalogDocRef[];
 }
 
 export interface RecipeMatch {
@@ -183,6 +221,7 @@ export interface RecipeView {
   executor_type: string;
   executor_config: Record<string, string>;
   can_write_back: boolean;
+  include_context: boolean;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -247,6 +286,13 @@ export interface ConnectorPrerequisite {
   visible_when?: ConnectorFieldWhen;
 }
 
+export interface CatalogDocRef {
+  id: string;
+  title: string;
+  href: string;
+  href_zh: string;
+}
+
 export interface ConnectorCatalogItem {
   connector_type: string;
   title: string;
@@ -258,6 +304,7 @@ export interface ConnectorCatalogItem {
   singleton: boolean;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
+  docs: CatalogDocRef[];
 }
 
 export interface EngineInstallationView {
@@ -350,6 +397,8 @@ export interface PersonalEngineView {
   pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
+  executor_installations: EngineExecutorView[];
+  executor_catalog: ExecutorKindCatalogItem[];
 }
 
 export interface StoreView {
@@ -359,6 +408,7 @@ export interface StoreView {
   blobs: number;
   recipes: number;
   connectors: number;
+  executors: number;
 }
 
 export interface StoreClearView {
@@ -371,6 +421,7 @@ export interface StoreClearView {
   kept: {
     recipes: number;
     connectors: number;
+    executors: number;
   };
 }
 

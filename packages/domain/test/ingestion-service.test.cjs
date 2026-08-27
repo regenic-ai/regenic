@@ -557,6 +557,78 @@ describe("IngestionService", () => {
     assert.equal(authorityStore.allEvents().length, 1);
   });
 
+  it("stores attachments as hashed blobs instead of inlining base64", async () => {
+    const { authorityStore, blobStore, service } = createHarness();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const first = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "attach-1",
+      received_at: "2026-08-27T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_1:om_1",
+          occurred_at: "2026-08-27T00:00:00.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          text: "see this",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "shot.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+    const second = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "attach-2",
+      received_at: "2026-08-27T00:00:01.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_1:om_2",
+          occurred_at: "2026-08-27T00:00:01.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          text: "again",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "copy.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.equal(first.records[0].status, "accepted");
+    assert.equal(second.records[0].status, "accepted");
+    assert.equal(authorityStore.allEvents().length, 2);
+    assert.equal(blobStore.size, 3);
+    const firstHash = authorityStore.allEvents()[0].content_hash;
+    const envelope = JSON.parse(Buffer.from(await blobStore.get(firstHash)).toString("utf8"));
+    const attachment = envelope.find((part) => part.role === "attachment");
+    const body = envelope.find((part) => part.role === "body");
+    assert.equal(body.text, "see this");
+    assert.equal(attachment.bytes_base64, undefined);
+    assert.match(attachment.content_hash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(Buffer.from(await blobStore.get(attachment.content_hash)), png);
+  });
+
   it("reads stored blobs in one getMany call", async () => {
     const { blobStore, service } = createHarness();
     const batch = createBatch();

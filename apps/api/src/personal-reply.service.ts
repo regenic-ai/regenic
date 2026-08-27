@@ -10,6 +10,7 @@ import {
   toReplyParts,
   type ContentPart,
 } from "@regenic/domain";
+import type { Host } from "@regenic/plugin-host";
 import {
   PersonalConnectorError,
   PersonalConnectorService,
@@ -153,6 +154,10 @@ export class PersonalReplyService {
     }
 
     const now = new Date().toISOString();
+    const stamp = await this.conversationStamp(thread.target, threadId, quoted, {
+      installationId: installation.id,
+      host,
+    });
     const record = channelRecord({
       channel: driver.source,
       kind: "user",
@@ -161,6 +166,10 @@ export class PersonalReplyService {
       occurred_at: now,
       actor_id: "local-owner",
       scope_id: thread.target,
+      ...(stamp.scope_name ? { scope_name: stamp.scope_name } : {}),
+      ...(stamp.conversation_kind
+        ? { conversation_kind: stamp.conversation_kind }
+        : {}),
       parent_external_id: quoted?.event.external_id,
       content: toReplyParts({
         text: composed,
@@ -207,6 +216,42 @@ export class PersonalReplyService {
       rpc_id: receipt.rpc_id,
       item,
     };
+  }
+
+  private async conversationStamp(
+    target: string,
+    threadId: string,
+    quoted: InboxViewItem | null,
+    bound: { installationId: string; host: Host },
+  ): Promise<{ scope_name?: string; conversation_kind?: string }> {
+    const stream = bound.host
+      .get("connectors")
+      .listStreams(bound.installationId)
+      .find((item) => item.thread_id === threadId);
+    const fromKnown = conversationStampForReply({
+      target,
+      quotedLabel: quoted?.conversation_label,
+      quotedKind: quoted?.conversation_kind,
+      streamLabel: stream?.label,
+    });
+    if (fromKnown.scope_name) {
+      return fromKnown;
+    }
+    const head = (
+      await this.inbox.listInbox({
+        thread_id: threadId,
+        heads: true,
+        limit: 1,
+      })
+    )[0];
+    return conversationStampForReply({
+      target,
+      quotedLabel: quoted?.conversation_label,
+      quotedKind: quoted?.conversation_kind,
+      streamLabel: stream?.label,
+      headLabel: head?.conversation_label,
+      headKind: head?.conversation_kind,
+    });
   }
 
   private async prepareAttachments(
@@ -271,6 +316,42 @@ export class PersonalReplyService {
     }
     return prepared;
   }
+}
+
+export function usableConversationName(
+  name: string | null | undefined,
+  target: string,
+): string | undefined {
+  const value = name?.replace(/\s+/g, " ").trim();
+  if (!value || value === target) {
+    return undefined;
+  }
+  return value;
+}
+
+export function conversationStampForReply(input: {
+  target: string;
+  quotedLabel?: string | null;
+  quotedKind?: string | null;
+  streamLabel?: string | null;
+  headLabel?: string | null;
+  headKind?: string | null;
+}): { scope_name?: string; conversation_kind?: string } {
+  const scope_name =
+    usableConversationName(input.quotedLabel, input.target) ??
+    usableConversationName(input.headLabel, input.target) ??
+    usableConversationName(input.streamLabel, input.target);
+  const conversation_kind =
+    optionalKind(input.quotedKind) ?? optionalKind(input.headKind);
+  return {
+    ...(scope_name ? { scope_name } : {}),
+    ...(conversation_kind ? { conversation_kind } : {}),
+  };
+}
+
+function optionalKind(value: string | null | undefined): string | undefined {
+  const kind = value?.trim();
+  return kind ? kind : undefined;
 }
 
 function composeReplyText(text: string, quoted: InboxViewItem | null): string {

@@ -4,8 +4,10 @@
  */
 
 export * from "./ingestion";
+export * from "./content-parts";
 export * from "./channel-driver";
 export * from "./message-contract";
+export * from "./content-compact";
 export * from "./thread-surface";
 export * from "./inbox-query";
 export * from "./ingestion-schema";
@@ -33,6 +35,10 @@ export * from "./recipe-trigger";
 export * from "./job-control";
 export * from "./attention";
 export * from "./executor";
+export * from "./executor-installation";
+export * from "./session-executor";
+export * from "./local-connector-executor";
+export * from "./http-executor";
 export * from "./work-policy";
 export * from "./memory-work-store";
 

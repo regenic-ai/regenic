@@ -52,6 +52,7 @@ import {
   mergeRecentInbox,
   reuseInboxList,
   shouldFetchInboxDelta,
+  THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
   type InboxReuse,
 } from "./thread-window";
@@ -69,6 +70,8 @@ const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
 const FULL_REFRESH_MS = 45_000;
 const HOST_POLL_MS = 5000;
+const OPEN_RETRY_MS = 350;
+const OPEN_RETRIES = 5;
 
 export function ConsoleApp() {
   const { t } = useLocale();
@@ -204,10 +207,16 @@ export function ConsoleApp() {
       if (olderBusyRef.current.has(threadId)) {
         return current;
       }
-      const items = await fetchInbox({
+      let items = await fetchInbox({
         thread_id: threadId,
-        limit: THREAD_PAGE_SIZE,
+        limit: THREAD_OPEN_PAGE_SIZE,
       });
+      if (mode === "open" && items.length === 0) {
+        items = await waitForOpenedInbox(
+          threadId,
+          () => threadLoadSeq.current[threadId] === seq,
+        );
+      }
       if (threadLoadSeq.current[threadId] !== seq) {
         return undefined;
       }
@@ -218,7 +227,9 @@ export function ConsoleApp() {
       const keptOlder = merged.length > items.length;
       setHasOlderByThread((prev) => ({
         ...prev,
-        [threadId]: keptOlder ? prev[threadId] === true : hasOlderPage(items.length),
+        [threadId]: keptOlder
+          ? prev[threadId] === true
+          : hasOlderPage(items.length, THREAD_OPEN_PAGE_SIZE),
       }));
       setMessagesByThread((prev) =>
         rememberThreadMessages(prev, threadId, merged),
@@ -796,4 +807,26 @@ export function ConsoleApp() {
       </div>
     </div>
   );
+}
+
+async function waitForOpenedInbox(
+  threadId: string,
+  stillCurrent: () => boolean,
+): Promise<InboxViewItem[]> {
+  for (let attempt = 0; attempt < OPEN_RETRIES; attempt += 1) {
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, OPEN_RETRY_MS);
+    });
+    if (!stillCurrent()) {
+      return [];
+    }
+    const items = await fetchInbox({
+      thread_id: threadId,
+      limit: THREAD_OPEN_PAGE_SIZE,
+    });
+    if (items.length > 0) {
+      return items;
+    }
+  }
+  return [];
 }

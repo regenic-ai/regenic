@@ -323,6 +323,7 @@ Do not put tokens in the install form, the repo, or chat logs.
 
 [Message orchestration](docs/en/MESSAGE_ORCHESTRATION.md) ·
 [Connectors](docs/en/CONNECTOR.md) ·
+[Executors](docs/en/EXECUTOR.md) ·
 [PRODUCT](docs/en/PRODUCT.md) · [ROADMAP](docs/en/ROADMAP.md) ·
 [TECH_STACK](docs/en/TECH_STACK.md) ·
 [Desktop](docs/zh/DESKTOP.md) ·

@@ -1,4 +1,22 @@
 export const CATCH_UP_STREAMS_PER_TICK = 3;
+export const HUMAN_LIVE_STREAMS_BUSY = 2;
+export const HUMAN_LIVE_STREAMS_IDLE = 1;
+export const HUMAN_HISTORY_STREAMS_IDLE = 1;
+
+export function humanPaceLimits(idle: boolean): {
+  liveLimit: number;
+  historyLimit: number;
+} {
+  return idle
+    ? {
+        liveLimit: HUMAN_LIVE_STREAMS_IDLE,
+        historyLimit: HUMAN_HISTORY_STREAMS_IDLE,
+      }
+    : {
+        liveLimit: HUMAN_LIVE_STREAMS_BUSY,
+        historyLimit: 0,
+      };
+}
 
 export interface PlannedStream<T = unknown> {
   key: string;
@@ -51,6 +69,56 @@ export function lastCatchUpKey(
   selected: Array<{ key: string; catchingUp: boolean }>,
 ): string | undefined {
   return [...selected].reverse().find((item) => item.catchingUp)?.key;
+}
+
+export interface PacedStream<T = unknown> {
+  key: string;
+  catchingUp: boolean;
+  older: boolean;
+  item: T;
+}
+
+/** Live updates stay first. History only rides along when the human is idle. */
+export function selectHumanPacedStreams<T>(
+  items: Array<PlannedStream<T>>,
+  options: {
+    liveLimit: number;
+    historyLimit: number;
+    rotateFrom?: string;
+    preferredThreadId?: string | null;
+  },
+): Array<PacedStream<T>> {
+  const preferredIndex = options.preferredThreadId
+    ? items.findIndex((item) => item.threadId === options.preferredThreadId)
+    : -1;
+  const preferred = preferredIndex >= 0 ? items[preferredIndex] : undefined;
+  const rest = items.filter((_, index) => index !== preferredIndex);
+  const livePool = preferred ? [preferred, ...rest] : rest;
+  const live = livePool.slice(0, Math.max(0, options.liveLimit)).map((stream) => ({
+    key: stream.key,
+    catchingUp: stream.catchingUp,
+    older: false,
+    item: stream.item,
+  }));
+  const liveKeys = new Set(live.map((stream) => stream.key));
+  const history = rotateFromKey(
+    items.filter((item) => item.catchingUp && !liveKeys.has(item.key)),
+    options.rotateFrom,
+  )
+    .slice(0, Math.max(0, options.historyLimit))
+    .map((stream) => ({
+      key: stream.key,
+      catchingUp: true,
+      older: true,
+      item: stream.item,
+    }));
+  return [...live, ...history];
+}
+
+export function lastHistoryKey(
+  selected: Array<{ key: string; older: boolean }>,
+): string | undefined {
+  return [...selected].reverse().find((item) => item.older)?.key;
 }
 
 export function shouldKeepCatchingUp(input: {

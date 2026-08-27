@@ -308,6 +308,7 @@ async function seedHostedWork(authority, input) {
     executor_type: "dsh",
     executor_config: {},
     can_write_back: true,
+    include_context: false,
     enabled: true,
     created_at: now,
     updated_at: now,
@@ -399,10 +400,12 @@ describe("personal /v1/me", () => {
         })
       ).json();
       assert.equal(created.name, "Keep me");
+      assert.equal(created.include_context, false);
 
       const before = await (await fetch(`${origin}/v1/me/store`)).json();
       assert.ok(before.events >= 1);
       assert.ok(before.connectors >= 1);
+      assert.ok(before.executors >= 1);
       assert.equal(before.recipes, 1);
 
       const cleared = await (
@@ -415,6 +418,7 @@ describe("personal /v1/me", () => {
       assert.ok(cleared.cleared.events >= 1);
       assert.equal(cleared.kept.recipes, 1);
       assert.ok(cleared.kept.connectors >= 1);
+      assert.ok(cleared.kept.executors >= 1);
 
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const after = await (await fetch(`${origin}/v1/me/store`)).json();
@@ -2277,16 +2281,19 @@ describe("personal /v1/me", () => {
             executor_type: "dsh",
             executor_config: { skill: "review", prompt: "Reply with a decision." },
             can_write_back: true,
+            include_context: true,
           }),
         })
       ).json();
       assert.equal(created.executor_type, "dsh");
       assert.equal(created.can_write_back, true);
+      assert.equal(created.include_context, true);
       assert.equal(created.executor_config.skill, "review");
       assert.equal(created.executor_config.prompt, "Reply with a decision.");
       const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
       assert.equal(recipes.length, 1);
       assert.equal(recipes[0].executor_config.prompt, "Reply with a decision.");
+      assert.equal(recipes[0].include_context, true);
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",
@@ -2301,6 +2308,101 @@ describe("personal /v1/me", () => {
       assert.ok(inbox[0].record_class);
       assert.ok(inbox[0].thread_facet);
       assert.ok(inbox[0].attention);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("installs HTTP and local executors and seeds the default DSH binding", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      assert.equal(engine.executor_catalog.length, 2);
+      assert.equal(engine.executor_catalog[0].kind, "local_connector");
+      assert.equal(engine.executor_catalog[1].kind, "http");
+      assert.equal(engine.executor_installations[0].id, "dsh");
+      assert.equal(engine.executor_installations[0].kind, "local_connector");
+
+      const missingLocal = await fetch(`${origin}/v1/me/executors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "local_connector", config: {} }),
+      });
+      assert.equal(missingLocal.status, 400);
+
+      const remote = await fetch(`${origin}/v1/me/executors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "http",
+          name: "Remote agent",
+          config: { base_url: "https://agent.example/exec/" },
+        }),
+      });
+      const remoteBody = await remote.json();
+      assert.equal(remote.status, 201, JSON.stringify(remoteBody));
+      assert.equal(remoteBody.kind, "http");
+      assert.equal(remoteBody.base_url, "https://agent.example/exec");
+
+      const catalog = await (await fetch(`${origin}/v1/me/executors`)).json();
+      assert.equal(catalog.some((item) => item.executor_type === "dsh"), true);
+      assert.equal(
+        catalog.some((item) => item.executor_type === remoteBody.id),
+        true,
+      );
+
+      const disabled = await fetch(
+        `${origin}/v1/me/executors/${remoteBody.id}/disable`,
+        { method: "POST" },
+      );
+      assert.equal(disabled.status, 201);
+      const afterDisable = await (await fetch(`${origin}/v1/me/executors`)).json();
+      assert.equal(
+        afterDisable.some((item) => item.executor_type === remoteBody.id),
+        false,
+      );
+
+      const connector = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: "http://127.0.0.1:3080" },
+        }),
+      });
+      const connectorBody = await connector.json();
+      assert.equal(connector.status, 201, JSON.stringify(connectorBody));
+
+      const local = await fetch(`${origin}/v1/me/executors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "local_connector",
+          name: "Office DSH",
+          config: { installation_id: connectorBody.id },
+        }),
+      });
+      const localBody = await local.json();
+      assert.equal(local.status, 201, JSON.stringify(localBody));
+      assert.equal(localBody.kind, "local_connector");
+      assert.equal(localBody.connector_id, connectorBody.id);
+
+      const recipe = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Pinned local",
+          match: { record_class: "task", source: "feishu" },
+          executor_type: localBody.id,
+        }),
+      });
+      const recipeBody = await recipe.json();
+      assert.equal(recipe.status, 201, JSON.stringify(recipeBody));
+      assert.equal(recipeBody.executor_type, localBody.id);
     } finally {
       await app.close();
     }
@@ -2322,6 +2424,35 @@ describe("personal /v1/me", () => {
       assert.equal(inbox.status, 503);
       assert.equal(engine.kernel, "stopped");
       assert.equal(engine.catalog[0].installed, false);
+      assert.deepEqual(
+        engine.catalog.map((item) => item.docs.map((doc) => doc.id)),
+        [
+          ["connector", "rfc0009"],
+          ["connector", "rfc0009"],
+          ["connector", "rfc0009"],
+          ["connector", "rfc0009"],
+          ["connector", "rfc0009"],
+        ],
+      );
+      assert.deepEqual(
+        engine.executor_catalog.map((item) => item.docs.map((doc) => doc.id)),
+        [
+          ["executor", "rfc0009"],
+          ["executor", "rfc0009"],
+        ],
+      );
+      assert.match(
+        engine.catalog[0].docs[0].href,
+        /github.com\/regenic-ai\/regenic\/blob\/main\/docs\/en\/CONNECTOR.md$/,
+      );
+      assert.match(
+        engine.catalog[0].docs[0].href_zh,
+        /docs\/zh\/CONNECTOR.md$/,
+      );
+      assert.match(
+        engine.executor_catalog[0].docs[0].href,
+        /docs\/en\/EXECUTOR.md$/,
+      );
     } finally {
       await app.close();
     }
@@ -2347,6 +2478,20 @@ describe("inbox body decode", () => {
     assert.equal(
       decodeBodyText(envelope, "application/vnd.regenic.content-parts+json"),
       "Please confirm",
+    );
+    const textEnvelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          text: "Hashed body",
+        },
+      ]),
+      "utf8",
+    );
+    assert.equal(
+      decodeBodyText(textEnvelope, "application/vnd.regenic.content-parts+json"),
+      "Hashed body",
     );
     const withFile = Buffer.from(
       JSON.stringify([

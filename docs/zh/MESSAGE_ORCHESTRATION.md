@@ -1,7 +1,7 @@
 # 消息编排
 
 - **English:** [../en/MESSAGE_ORCHESTRATION.md](../en/MESSAGE_ORCHESTRATION.md)
-- **相关：** [产品](PRODUCT.md) · [连接器](CONNECTOR.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
+- **相关：** [产品](PRODUCT.md) · [连接器](CONNECTOR.md) · [执行器](EXECUTOR.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
 - **状态：** Phase 1 起的公开架构
 
 Regenic 编排的是**消息**。它不托管这些消息当初被写下的那些应用。
@@ -24,7 +24,7 @@ L6 执行         TaskExecutor 插件（DSH / Cursor / 内部）
 
 发言者（L3）只作用于 `utterance`。Agent 会话里的人仍是 `user`。人群里的机器人仍是 `assistant`。这两件事不写到安装上。
 
-L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTranscript`）。完成看 `WaitStatus`，不看气泡。默认开源树挂 absentee `dsh`。Cursor 后接。私有 Agent OS 只留在内部插件包。
+L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTranscript`），或走通用 HTTP 执行器合同。完成看 `WaitStatus`，不看气泡。执行器在引擎页安装：本机连接器或 HTTP API。默认开源树种子一条 absentee `dsh` 本机绑定。Cursor 后接。私有 Agent OS 只留在内部插件包或经 HTTP 调用。
 
 内核和桌面读 `record_class`、`thread_facet`、`attention`、`work`，不按连接器名判断人聊 / Agent / 工单。
 

@@ -22,6 +22,28 @@ import {
 import { reuseInboxList } from "../src/renderer/src/thread-window.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
 
+function feishuHead(
+  id: string,
+  occurredAt: string,
+  threadId: string,
+  conversationLabel: string | null,
+): InboxViewItem {
+  const item = message(id, occurredAt, threadId);
+  const target = threadId.slice("feishu:".length);
+  return {
+    ...item,
+    event: {
+      ...item.event,
+      source: "feishu",
+      external_id: `${target}:${id}`,
+    },
+    channel: "feishu",
+    channel_label: "Feishu",
+    conversation_label: conversationLabel,
+    list_title: "conversation",
+  };
+}
+
 function message(
   id: string,
   occurredAt: string,
@@ -202,6 +224,60 @@ describe("inbox sort", () => {
     const sorted = sortInboxThreads([created, pinned]);
     assert.equal(sorted[0].id, "feishu:oc_1");
     assert.equal(sorted[1].id, "dsh:new");
+  });
+
+  it("keeps the conversation title when a new head has no name", () => {
+    const named = feishuHead(
+      "in-1",
+      "2026-08-27T17:20:00.000Z",
+      "feishu:oc_abc",
+      "交付运营沟通群",
+    );
+    const outbound = feishuHead(
+      "out-1",
+      "2026-08-27T17:27:00.000Z",
+      "feishu:oc_abc",
+      null,
+    );
+    const previous = groupInboxThreads([named]);
+    assert.equal(previous[0]?.conversation_label, "交付运营沟通群");
+    const next = groupInboxThreads([outbound], previous);
+    assert.equal(next[0]?.conversation_label, "交付运营沟通群");
+    const rawId = feishuHead(
+      "out-2",
+      "2026-08-27T17:28:00.000Z",
+      "feishu:oc_abc",
+      "oc_abc",
+    );
+    assert.equal(groupInboxThreads([rawId], previous)[0]?.conversation_label, "交付运营沟通群");
+  });
+
+  it("does not let an outbound head flip a direct chat to group", () => {
+    const inbound = {
+      ...feishuHead(
+        "in-1",
+        "2026-08-27T17:20:00.000Z",
+        "feishu:oc_abc",
+        "李诗婷",
+      ),
+      direction: "inbound" as const,
+      conversation_kind: "direct",
+    };
+    const outbound = {
+      ...feishuHead(
+        "out-1",
+        "2026-08-27T17:27:00.000Z",
+        "feishu:oc_abc",
+        "李诗婷",
+      ),
+      conversation_kind: "group",
+    };
+    const previous = groupInboxThreads([inbound]);
+    assert.equal(previous[0]?.conversation_kind, "direct");
+    const next = groupInboxThreads([outbound], previous);
+    assert.equal(next[0]?.conversation_kind, "direct");
+    const both = groupInboxThreads([inbound, outbound], previous);
+    assert.equal(both[0]?.conversation_kind, "direct");
   });
 
   it("appends into one thread without rebuilding the others", () => {

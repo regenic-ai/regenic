@@ -15,12 +15,19 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "settings.language"), "语言");
     assert.equal(translate("zh", "recipes.params"), "调用参数");
     assert.equal(translate("en", "recipes.prompt"), "Prompt");
+    assert.equal(translate("zh", "recipes.includeContextCheck"), "携带会话上下文");
+    assert.equal(translate("en", "recipes.includeContextCheck"), "Include conversation history");
+    assert.equal(translate("en", "preview.image"), "Image preview");
+    assert.equal(translate("zh", "preview.close"), "关闭预览");
+    assert.equal(translate("zh", "preview.counter", { current: 2, total: 5 }), "2 / 5");
     assert.equal(translate("en", "tray.workCount", { count: 3 }), "3 current work");
     assert.equal(translate("zh", "tray.workCount", { count: 3 }), "3 条当前工作");
     assert.equal(translate("en", "settings.store"), "Local data");
     assert.equal(translate("zh", "settings.store"), "本机数据");
     assert.equal(translate("zh", "settings.storeClear"), "清理本机数据");
     assert.equal(translate("zh", "engine.whatsapp.title"), "WhatsApp 个人导出");
+    assert.equal(translate("zh", "docs.connector"), "连接器规范");
+    assert.equal(translate("en", "docs.executor"), "Executor spec");
     assert.equal(
       translate("zh", "engine.whatsapp.summary", {
         completed: 2,

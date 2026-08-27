@@ -16,6 +16,7 @@ const emptyStore: StoreView = {
   blobs: 0,
   recipes: 0,
   connectors: 0,
+  executors: 0,
 };
 
 function storeHasData(store: StoreView): boolean {
@@ -130,6 +131,7 @@ export function SettingsPage({
         blobs: 0,
         recipes: result.kept.recipes,
         connectors: result.kept.connectors,
+        executors: result.kept.executors ?? 0,
       });
       setConfirming(false);
       setStoreDone(

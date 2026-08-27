@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **简体中文:** [../../zh/rfcs/0009-work-orchestration.md](../../zh/rfcs/0009-work-orchestration.md)
 - **Depends on:** RFC 0004, RFC 0005, RFC 0008, connector contract
-- **Related:** [MESSAGE_ORCHESTRATION](../MESSAGE_ORCHESTRATION.md) · [CONNECTOR](../CONNECTOR.md)
+- **Related:** [MESSAGE_ORCHESTRATION](../MESSAGE_ORCHESTRATION.md) · [CONNECTOR](../CONNECTOR.md) · [EXECUTOR](../EXECUTOR.md)
 
 ## 1. Problem
 
@@ -139,6 +139,7 @@ interface Recipe {
   executor_type: string;
   executor_config: Record<string, unknown>;
   can_write_back: boolean;
+  include_context: boolean;
   enabled: boolean;
 }
 
@@ -163,6 +164,8 @@ A finished job plus a new `head_event_id` opens a **new** job. The list face is 
 
 `can_write_back` is required for egress. Seeing a digest is not send grant.
 
+When `include_context` is true, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. The default is only the triggering or head message. This is kernel evidence policy, not an `executor_config` key. Use a more specific Recipe (one chat) when sessions need different settings.
+
 `executor_config` belongs to the plugin. It is not a kernel field.
 
 ## 9. TaskExecutor
@@ -182,7 +185,16 @@ The kernel looks up `ctx.executors`. The executor reaches the channel only throu
 
 Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is durable `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. The kernel reaps the job on `exited`. Write-back happens only on that real exit. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back. The abandoned inferior is `cancelled`, not `failed`. A later status tick must not resurrect that run or write back.
 
-Public default: `dsh`. Cursor and a private Agent OS (for example bioby-agent) come later under the same catalog contract. A private runtime is an internal plugin package; the default open-source tree does not register it.
+Public default: a managed local `dsh` binding (seeded id `dsh`, so existing recipes keep working). Local L6 plugins register by `catalog.source`; the mount path does not write `if (source === "dsh")`. Cursor and a private Agent OS (for example bioby-agent) come later under the same catalog contract. A private runtime is an internal plugin package, or it is called through the generic HTTP executor. The default open-source tree does not import private HTTP.
+
+Executors are first-class installations, next to connectors:
+
+| `kind` | Meaning |
+| --- | --- |
+| `local_connector` | Pin to a connector installation that can `create`. `spawnSysout` uses that installation. An empty pin still picks the first creatable connector for `catalog.source` |
+| `http` | Generic HTTP adapter. `POST {base}/v1/runs`, `GET /v1/runs/:id`, `POST /v1/runs/:id/resume`. Credentials are an env var name only |
+
+Swapping an executor is an installation (or plugin) plus a Recipe choice. `GET /v1/me/executors` lists catalogs of **enabled** installations only. The kernel still never reads `executor_config` keys and never classifies by connector name.
 
 ### Invoke catalog
 
@@ -213,7 +225,7 @@ interface ExecutorCatalogEntry {
 
 Composing stdin, HTTP, or an agent goal is the plugin’s job. DSH uses `skill` / `prompt`. Cursor or bioby-agent declare their own repo, model, goal, or constraints. A legacy DSH `instruction` maps to `prompt` only inside the DSH plugin.
 
-A connector is not an executor. One plugin package may register both an L0 `ChannelDriver` and an L6 `TaskExecutor` (DSH already does: Engine installs the channel, then the host `executors.register`s). bioby-agent attaches the same way. Private HTTP stays out of the kernel and the Recipes page.
+A connector is not an executor. One plugin package may register both an L0 `ChannelDriver` and an L6 `TaskExecutor` (DSH already does: Engine installs the channel, then an executor installation binds that channel or calls HTTP). bioby-agent attaches the same way. Private HTTP stays out of the kernel and the Recipes page.
 
 Suspend maps to Thread Surface prompts. Answers use `POST /v1/me/conversations/prompts`, never egress. Prompts on a bound inferior decorate the source session row.
 
@@ -236,7 +248,12 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recip
 | GET/POST | `/v1/me/recipes` | List / create |
 | POST | `/v1/me/recipes/:id` | Update |
 | DELETE | `/v1/me/recipes/:id` | Delete |
-| GET | `/v1/me/executors` | Mounted executor catalog |
+| GET | `/v1/me/executors` | Enabled executor catalog |
+| POST | `/v1/me/executors` | Install `local_connector` or `http` |
+| POST | `/v1/me/executors/:id/config` | Rename or rebind |
+| DELETE | `/v1/me/executors/:id` | Uninstall |
+| POST | `/v1/me/executors/:id/enable` | Enable |
+| POST | `/v1/me/executors/:id/disable` | Disable |
 | POST | `/v1/me/work-items/:id/run` | Manual start |
 | POST | `/v1/me/work-items/:id/dismiss` | Drop from current work; no write-back |
 | POST | `/v1/me/work-items/:id/complete` | Alias of dismiss; does not fake `exited` |

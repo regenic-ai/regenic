@@ -356,6 +356,59 @@ describe("LarkCliClient", () => {
     resetFeishuChatListCache();
   });
 
+  it("lists only the latest chat page without resolving p2p names", async () => {
+    resetFeishuChatListCache();
+    const calls = [];
+    const client = new LarkCliClient({
+      async spawn(input) {
+        calls.push(input);
+        if (input.command.includes("+search-user")) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: { users: [{ open_id: "ou_9", name: "Ben" }] },
+            }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              chats: [
+                {
+                  chat_id: "oc_bare",
+                  chat_mode: "p2p",
+                  p2p_target_id: "ou_9",
+                  chat_status: "normal",
+                },
+              ],
+              has_more: true,
+              page_token: "p2",
+            },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const chats = await client.listRecentChats(["p2p"], { names: false });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].command.includes("+chat-list"), true);
+    assert.deepEqual(chats, [
+      {
+        chat_id: "oc_bare",
+        name: undefined,
+        chat_mode: "p2p",
+        p2p_target_id: "ou_9",
+      },
+    ]);
+    await client.listRecentChats(["p2p"], { names: false });
+    assert.equal(calls.length, 1);
+    resetFeishuChatListCache();
+  });
+
   it("coalesces concurrent chat list pagination", async () => {
     resetFeishuChatListCache();
     let calls = 0;

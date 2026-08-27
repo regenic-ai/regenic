@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 10);
+    assert.equal(authorityStore.schemaVersion, 12);
     authorityStore.close();
   });
 
@@ -238,12 +238,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 11");
+    database.pragma("user_version = 13");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 11 is newer than supported 10/,
+      /schema 13 is newer than supported 12/,
     );
   });
 
@@ -477,7 +477,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 10);
+    assert.equal(store.schemaVersion, 12);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);
@@ -819,7 +819,18 @@ describe("local ingestion persistence", () => {
       executor_type: "dsh",
       executor_config: {},
       can_write_back: false,
+      include_context: false,
       enabled: true,
+      created_at: "2026-08-26T00:00:00.000Z",
+      updated_at: "2026-08-26T00:00:00.000Z",
+    });
+    await authorityStore.putExecutorInstallation({
+      id: "keep-executor",
+      org_id: "local-owner",
+      kind: "http",
+      name: "Remote",
+      status: "enabled",
+      config: { base_url: "https://agent.example" },
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
     });
@@ -840,6 +851,7 @@ describe("local ingestion persistence", () => {
     assert.equal(before.work_items, 1);
     assert.equal(before.recipes, 1);
     assert.equal(before.connectors, 1);
+    assert.equal(before.executors, 1);
 
     const cleared = await authorityStore.clearOperationalData(
       "local-owner",
@@ -855,12 +867,14 @@ describe("local ingestion persistence", () => {
     assert.equal(cleared.cleared.work_items, 1);
     assert.equal(cleared.kept.recipes, 1);
     assert.equal(cleared.kept.connectors, 1);
+    assert.equal(cleared.kept.executors, 1);
     assert.equal(after.events, 0);
     assert.equal(after.conversations, 0);
     assert.equal(after.work_items, 0);
     assert.equal(after.blobs, 0);
     assert.equal(after.recipes, 1);
     assert.equal(after.connectors, 1);
+    assert.equal(after.executors, 1);
     assert.equal(recipes[0].id, "keep-recipe");
     assert.equal(installations[0].id, "keep-connector");
     assert.equal(attempts.length, 0);

@@ -123,6 +123,7 @@ export const en = {
   "recipes.thenRun": "{executor}",
   "recipes.writeBackYes": "Write back",
   "recipes.writeBackNo": "Keep here",
+  "recipes.contextYes": "Context",
   "recipes.off": "Off",
   "recipes.on": "On",
   "recipes.edit": "Edit",
@@ -150,6 +151,9 @@ export const en = {
   "recipes.writeBackCheck": "Write back when done",
   "recipes.writeBackHint":
     "Write-back matches only the first line of the result to a live prompt option (for example APPROVED, REJECTED, 通过, or 不通过). Put reasons on the next lines — do not write 审核结果：不通过.",
+  "recipes.includeContextCheck": "Include conversation history",
+  "recipes.includeContextHint":
+    "On: send recent messages from this chat. Long threads are truncated. Off: only the latest work item.",
   "recipes.enabledCheck": "On",
   "recipes.advanced": "More",
   "recipes.facet": "Type",
@@ -211,7 +215,7 @@ export const en = {
   "settings.unavailable": "Desktop settings are not available",
   "settings.store": "Local data",
   "settings.storeLead":
-    "Conversations, jobs, and imports on the kernel in use. Clearing empties Current work. Installed connectors and recipes stay; enabled connectors pull again from the start.",
+    "Conversations, jobs, and imports on the kernel in use. Clearing empties Current work. Installed connectors, executors, and recipes stay; enabled connectors pull again from the start.",
   "settings.storeKernel": "Kernel",
   "settings.storeConversations": "Conversations",
   "settings.storeMessages": "Messages",
@@ -221,7 +225,7 @@ export const en = {
   "settings.storeClear": "Clear local data",
   "settings.storeClearing": "Clearing…",
   "settings.storeConfirmLead":
-    "This cannot be undone. Current work and imported history will be empty. Connectors and recipes stay.",
+    "This cannot be undone. Current work and imported history will be empty. Connectors, executors, and recipes stay.",
   "settings.storeConfirm": "Clear now",
   "settings.storeCancel": "Cancel",
   "settings.storeDone":
@@ -232,7 +236,7 @@ export const en = {
   "engine.eyebrow": "Runtime",
   "engine.title": "Engine",
   "engine.lead":
-    "Local authority store and connectors. Enabled connectors pull while the kernel is running. Use Sync only to catch up after a miss.",
+    "Local authority store, connectors, and executors. Enabled connectors pull while the kernel is running. Use Sync only to catch up after a miss.",
   "engine.disconnected": "Kernel is not connected.",
   "engine.kernel": "Kernel",
   "engine.status": "Status",
@@ -248,6 +252,21 @@ export const en = {
   "engine.connectors": "Connectors",
   "engine.connectorsLead":
     "Install or uninstall connectors here. Credentials are read from local environment variables only.",
+  "engine.executors": "Executors",
+  "engine.executorsLead":
+    "Bind a local connector, or call an external executor over HTTP. Recipes pick from enabled executors.",
+  "engine.uninstallExecutorConfirm": "Uninstall executor “{name}”? Recipes that point at it will fail until you pick another.",
+  "executor.kind.local": "Local connector",
+  "executor.kind.localLead":
+    "Start a session on an installed connector that can create conversations.",
+  "executor.kind.http": "HTTP API",
+  "executor.kind.httpLead":
+    "Call POST /v1/runs, GET /v1/runs/:id, and POST /v1/runs/:id/resume on a remote executor.",
+  "executor.needConnector":
+    "Install a connector that can create sessions first, then bind it here.",
+  "executor.chooseConnector": "Choose a connector",
+  "executor.installTitle": "Install {title}",
+  "executor.edit": "Edit",
   "engine.syncAll": "Sync all",
   "engine.syncing": "Syncing…",
   "engine.syncFailed": "Sync failed",
@@ -320,6 +339,12 @@ export const en = {
   "connector.editTitle": "Edit {type} sync",
   "connector.installTitle": "Install {title}",
 
+  "docs.connector": "Connector spec",
+  "docs.executor": "Executor spec",
+  "docs.rfc0009": "RFC 0009",
+  "docs.orchestration": "Message orchestration",
+  "docs.desktop": "Desktop",
+
   "prompt.approval": "Needs your approval",
   "prompt.plan": "Review the plan",
   "prompt.answer": "Waiting for your answer",
@@ -339,6 +364,13 @@ export const en = {
   "composer.send": "Send",
   "composer.remove": "Remove {name}",
   "composer.drop": "Drop to attach",
+
+  "preview.image": "Image preview",
+  "preview.open": "Preview {name}",
+  "preview.close": "Close preview",
+  "preview.previous": "Previous image",
+  "preview.next": "Next image",
+  "preview.counter": "{current} of {total}",
 
   "error.cannotStartWork": "Cannot start this work item",
   "error.cannotDismissWork": "Cannot remove this work item",
@@ -465,6 +497,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.thenRun": "{executor}",
   "recipes.writeBackYes": "回写",
   "recipes.writeBackNo": "留在本地",
+  "recipes.contextYes": "带上下文",
   "recipes.off": "关",
   "recipes.on": "开",
   "recipes.edit": "编辑",
@@ -491,6 +524,9 @@ export const zh: Record<MessageKey, string> = {
   "recipes.writeBackCheck": "做完后回写",
   "recipes.writeBackHint":
     "回写只认结果第一行，必须刚好是渠道待办选项（例如 APPROVED、REJECTED、通过、不通过）。原因从第二行写，不要写成「审核结果：不通过」。",
+  "recipes.includeContextCheck": "携带会话上下文",
+  "recipes.includeContextHint":
+    "打开后带上这条会话最近的可见消息；很长的会话会截断。关闭则只带最近这条工单。",
   "recipes.enabledCheck": "启用",
   "recipes.advanced": "更多",
   "recipes.facet": "类型",
@@ -549,7 +585,7 @@ export const zh: Record<MessageKey, string> = {
   "settings.unavailable": "桌面设置不可用",
   "settings.store": "本机数据",
   "settings.storeLead":
-    "当前内核上的会话、工单和导入记录。清理后当前工作会空掉。已安装的连接器和规则会留下；已启用的连接器会从头再拉一遍。",
+    "当前内核上的会话、工单和导入记录。清理后当前工作会空掉。已安装的连接器、执行器和规则会留下；已启用的连接器会从头再拉一遍。",
   "settings.storeKernel": "内核",
   "settings.storeConversations": "会话",
   "settings.storeMessages": "消息",
@@ -559,7 +595,7 @@ export const zh: Record<MessageKey, string> = {
   "settings.storeClear": "清理本机数据",
   "settings.storeClearing": "清理中…",
   "settings.storeConfirmLead":
-    "此操作不能撤销。当前工作和导入历史都会清空。连接器和规则会留下。",
+    "此操作不能撤销。当前工作和导入历史都会清空。连接器、执行器和规则会留下。",
   "settings.storeConfirm": "立即清理",
   "settings.storeCancel": "取消",
   "settings.storeDone": "已清理 {conversations} 个会话、{events} 条消息、{work} 条工单。",
@@ -569,7 +605,7 @@ export const zh: Record<MessageKey, string> = {
   "engine.eyebrow": "运行时",
   "engine.title": "引擎",
   "engine.lead":
-    "本机数据和连接器。内核在跑时，已启用的连接器会自己拉消息。漏了再点同步即可。",
+    "本机数据、连接器和执行器。内核在跑时，已启用的连接器会自己拉消息。漏了再点同步即可。",
   "engine.disconnected": "内核还没连上。",
   "engine.kernel": "内核",
   "engine.status": "状态",
@@ -584,6 +620,20 @@ export const zh: Record<MessageKey, string> = {
   "engine.memory": "内存",
   "engine.connectors": "连接器",
   "engine.connectorsLead": "在这里安装或卸载连接器。凭证只从本机环境变量读取。",
+  "engine.executors": "执行器",
+  "engine.executorsLead":
+    "绑定本机连接器，或用 HTTP 调用外部执行器。规则页只列出已启用的执行器。",
+  "engine.uninstallExecutorConfirm":
+    "卸载执行器「{name}」？指向它的规则会失败，直到你改选另一个。",
+  "executor.kind.local": "本机连接器",
+  "executor.kind.localLead": "在已安装、能新建会话的连接器上开一次执行会话。",
+  "executor.kind.http": "HTTP API",
+  "executor.kind.httpLead":
+    "调用外部执行器的 POST /v1/runs、GET /v1/runs/:id、POST /v1/runs/:id/resume。",
+  "executor.needConnector": "先安装一个能新建会话的连接器，再在这里绑定。",
+  "executor.chooseConnector": "选择连接器",
+  "executor.installTitle": "安装 {title}",
+  "executor.edit": "编辑",
   "engine.syncAll": "全部同步",
   "engine.syncing": "同步中…",
   "engine.syncFailed": "同步失败",
@@ -655,6 +705,12 @@ export const zh: Record<MessageKey, string> = {
   "connector.editTitle": "编辑 {type} 同步",
   "connector.installTitle": "安装 {title}",
 
+  "docs.connector": "连接器规范",
+  "docs.executor": "执行器规范",
+  "docs.rfc0009": "RFC 0009",
+  "docs.orchestration": "消息编排",
+  "docs.desktop": "桌面端",
+
   "prompt.approval": "需要你批准",
   "prompt.plan": "看看这份计划",
   "prompt.answer": "等你回答",
@@ -674,6 +730,13 @@ export const zh: Record<MessageKey, string> = {
   "composer.send": "发送",
   "composer.remove": "移除 {name}",
   "composer.drop": "松开即可添加附件",
+
+  "preview.image": "图片预览",
+  "preview.open": "预览 {name}",
+  "preview.close": "关闭预览",
+  "preview.previous": "上一张",
+  "preview.next": "下一张",
+  "preview.counter": "{current} / {total}",
 
   "error.cannotStartWork": "这条工单启动失败",
   "error.cannotDismissWork": "没能从当前工作拿掉",

@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { ArrangementService } from "./arrangement-service";
 import {
+  blobsForCanonical,
   canonicalizeRecordContent,
   ContentUnavailableError,
+  extraBlobsForCanonical,
   type CanonicalContent,
 } from "./canonicalization";
 import type {
@@ -280,12 +282,10 @@ export class IngestionService {
   ): Promise<void> {
     const blobs = new Map<string, BlobObject>();
     for (const item of creates) {
-      if (!blobs.has(item.canonical.hash)) {
-        blobs.set(item.canonical.hash, {
-          hash: item.canonical.hash,
-          bytes: item.canonical.bytes,
-          mediaType: item.canonical.media_type,
-        });
+      for (const blob of blobsForCanonical(item.canonical)) {
+        if (!blobs.has(blob.hash)) {
+          blobs.set(blob.hash, blob);
+        }
       }
     }
     await this.blobStore.putMany([...blobs.values()]);
@@ -296,6 +296,7 @@ export class IngestionService {
       content_hash: item.canonical.hash,
       content_media_type: item.canonical.media_type,
       content_byte_size: item.canonical.bytes.byteLength,
+      extra_blobs: extraBlobsForCanonical(item.canonical),
       occurred_at: item.record.occurred_at,
       expected_head_id: null,
     }));
@@ -343,11 +344,8 @@ export class IngestionService {
       );
     }
 
-    await this.blobStore.put(
-      inspected.canonical.hash,
-      inspected.canonical.bytes,
-      inspected.canonical.media_type,
-    );
+    await this.blobStore.putMany(blobsForCanonical(inspected.canonical));
+    const extraBlobs = extraBlobsForCanonical(inspected.canonical);
 
     try {
       if (inspected.kind === "revise") {
@@ -356,6 +354,7 @@ export class IngestionService {
           content_hash: inspected.canonical.hash,
           content_media_type: inspected.canonical.media_type,
           content_byte_size: inspected.canonical.bytes.byteLength,
+          extra_blobs: extraBlobs,
           occurred_at: inspected.record.occurred_at,
           expected_head_id: inspected.current.id,
           parent_event_id: inspected.current.id,
@@ -369,6 +368,7 @@ export class IngestionService {
         content_hash: inspected.canonical.hash,
         content_media_type: inspected.canonical.media_type,
         content_byte_size: inspected.canonical.bytes.byteLength,
+        extra_blobs: extraBlobs,
         occurred_at: inspected.record.occurred_at,
         expected_head_id:
           inspected.kind === "create_after_tombstone"

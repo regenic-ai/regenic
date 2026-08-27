@@ -8,6 +8,7 @@
 
 - **English:** [../en/CONNECTOR.md](../en/CONNECTOR.md)
 - **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) ·
+  [执行器](EXECUTOR.md) ·
   [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) ·
   RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
 - **状态：** Phase 1
@@ -119,7 +120,7 @@ interface ChannelDriver {
   surfaceGeneration?(installation, host): string;
   canReply(installation): boolean;
   createThread(installation, host, env): Promise<ConversationThread>;
-  resolveStreams(installation, host, env): Promise<ConnectorStream[]>;
+  resolveStreams(installation, host, env, options?): Promise<ConnectorStream[]>;
   resolveThreadStream(installation, thread, host, env): Promise<ConnectorStream>;
   bindEgress(installation, thread, host, env): Promise<RegisteredEgress>;
   outboundId(thread, receipt): string;
@@ -132,13 +133,13 @@ interface ChannelDriver {
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
 | `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`prompts`、`attention`、`receipts`。`await_reply`：DSH 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH 为 `prompt`（第一条用户消息）。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Slack 不写。 |
-| `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。飞书用安装里的 `chat_names` 或会话列表（单聊 `name` 空则解析 `p2p_target_id`）。Slack 用 `channel_name`。查找失败不得挡住 inbox。 |
+| `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。只读本地已有名字：飞书用安装里的 `chat_names`，Slack 用 `channel_name`。不得为了补名去 `listAllChats` 或挡住打开会话。 |
 | `listPrompts` / `answerPrompt` | 可选。活的待决决策。DSH web 挂 mux，把 `question/requested` / `approval/requested` 映射成渠道无关 Prompt，答题走 `/api/respond`。`not-pending` 视为已解决。 |
 | `readAttention` / `ackAttention` | 可选。来源已读覆盖（我看对方）。飞书对最新 inbound `om_` 调用户态 `read_status`；失败或官方已读都不消本机未读。ack 先写本地游标。 |
 | `readReceipts` | 可选。对端是否已读我的出站。飞书对 `:out:om_` 调用户态 `read_users`。空 items 是 Sent。不得用来源会话未读。 |
 | `surfaceGeneration` | 可选。活 surface 世代，拼进 `inbox_digest` 的 `&s=`，审批弹出时桌面轮询能看见。 |
 | `canReply` | 与 `capabilities().reply` 相同。 |
-| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：每个选中的会话一条 `chat:<id>`，`selection=all` 时跟当前能看到的群和/或单聊。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转后隔多久再扫）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支。 |
+| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：勾选的 `chat:<id>`；`selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及会话目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转后隔多久再扫）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支。 |
 | `createThread` | `create` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `bindEgress` | `reply` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
@@ -159,7 +160,7 @@ interface ConnectorStream {
 }
 ```
 
-`pace` 由连接器按流声明。内核只读字段：有 `idle_ms` 且本 tick 空转后，后台 tick 可跳过该流；有进展时下一轮最多拉 `catch_up_pages` 页（内核封顶）。不写 `pace` 则每 tick 扫 1 页。飞书写 `{ idle_ms: 15_000, catch_up_pages: 5 }`；DSH / Slack 不写。
+`pace` 由连接器按流声明。内核只读字段：有 `idle_ms` 且本 tick 空转后，后台 tick 可跳过该流。后台 tick 先给人让路：人在操作时只从内核算出的资格集合里扫少量会话的最近/新消息（每流 1 页），不追历史，也不枚举飞书全部会话。资格集合由内核从收件箱当前工作和打开中的会话算出，经 `options.threads` 传给驱动；新会话靠最近一页目录按 TTL 发现，不等人空闲。不在集合里的流卸掉。人空闲后再每次补 1 页历史。打开空会话先种最近一批；本地没有更早消息时，上翻再要 1 页更早的。人点 Engine Sync 时才按 `catch_up_pages`（内核封顶）往前赶。不写 `pace` 则每 tick 扫 1 页。飞书写 `{ idle_ms: 15_000, catch_up_pages: 5 }`；DSH / Slack 不写。
 
 ## ChannelConnector
 
@@ -202,6 +203,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 | --- | --- |
 | `fields` | `key`、`label`、是否必填、默认值、`visible_when`、可选 `multiple` + `options` |
 | `prerequisites` | 环境变量或本机服务，带 `ready` 和 `hint` |
+| `docs` | 研发规范。引擎页在「连接器」标题旁统一渲染一次，点开跳到 GitHub 网页 |
 
 token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起本机服务。
 `ready` 为 false 时，`hint` 写出该跑的命令。飞书会分两档：没装二进制，

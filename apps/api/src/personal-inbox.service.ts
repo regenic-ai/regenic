@@ -68,6 +68,11 @@ import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
 } from "./personal-runtime.service";
+import {
+  PersonalExecutorService,
+  type EngineExecutorView,
+  type ExecutorKindCatalogItem,
+} from "./personal-executor.service";
 import { PersonalWorkService, type WorkInboxFace } from "./personal-work.service";
 
 export interface InboxViewItem {
@@ -143,6 +148,8 @@ export interface PersonalEngineView {
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
+  executor_installations: EngineExecutorView[];
+  executor_catalog: ExecutorKindCatalogItem[];
 }
 
 export interface InboxListQuery {
@@ -153,6 +160,10 @@ export interface InboxListQuery {
   heads?: boolean;
   thread_id?: string;
   limit?: number;
+}
+
+export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
+  return Boolean(query.thread_id && !query.since && !query.heads);
 }
 
 export interface EngineQuery {
@@ -166,6 +177,7 @@ export interface StoreView {
   blobs: number;
   recipes: number;
   connectors: number;
+  executors: number;
 }
 
 export interface StoreClearView {
@@ -178,6 +190,7 @@ export interface StoreClearView {
   kept: {
     recipes: number;
     connectors: number;
+    executors: number;
   };
 }
 
@@ -187,6 +200,7 @@ export class PersonalInboxService {
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
     private readonly work: PersonalWorkService,
+    private readonly executors: PersonalExecutorService,
   ) {}
 
   async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
@@ -301,6 +315,7 @@ export class PersonalInboxService {
       });
     };
     if (!this.runtime.isReady()) {
+      const executorCatalog = this.executors.kindCatalog([], []);
       return {
         kernel: "stopped",
         org_id: orgId,
@@ -311,6 +326,8 @@ export class PersonalInboxService {
         pull: { ...pullStatus },
         installations: [],
         catalog: await catalogReady([]),
+        executor_installations: [],
+        executor_catalog: executorCatalog,
       };
     }
     const host = this.runtime.requireHost();
@@ -331,6 +348,10 @@ export class PersonalInboxService {
         );
       }),
     );
+    const [executorInstallations, connectorOptions] = await Promise.all([
+      this.executors.listViews(),
+      this.executors.creatableConnectorOptions(),
+    ]);
     return {
       kernel: "running",
       org_id: orgId,
@@ -344,6 +365,11 @@ export class PersonalInboxService {
       pull: { ...pullStatus },
       installations: views,
       catalog: await catalogReady(views),
+      executor_installations: executorInstallations,
+      executor_catalog: this.executors.kindCatalog(
+        executorInstallations,
+        connectorOptions,
+      ),
     };
   }
 
@@ -482,25 +508,33 @@ export class PersonalInboxService {
           )
         : inboundFromPage;
     const awaitingUser = awaitingUserThreads(resolved);
+    const liveChannel = !shouldSkipLiveChannelOverlays(query);
     const [livePrompts, attention, receiptPage] = await Promise.all([
       this.drivers.listPromptsForThreads(installations, threads, host),
-      this.drivers.readAttention(
-        installations,
-        withInboundHint(threads, inboundByThread),
-        host,
-      ),
-      loadInboxReceipts({
-        heads: query.heads === true,
-        thread,
-        since: query.since,
-        resolved,
-        installations,
-        drivers: this.drivers,
-        host,
-        authority,
-        blobs,
-        orgId,
-      }),
+      liveChannel
+        ? this.drivers.readAttention(
+            installations,
+            withInboundHint(threads, inboundByThread),
+            host,
+          )
+        : Promise.resolve(new Map()),
+      liveChannel
+        ? loadInboxReceipts({
+            heads: query.heads === true,
+            thread,
+            since: query.since,
+            resolved,
+            installations,
+            drivers: this.drivers,
+            host,
+            authority,
+            blobs,
+            orgId,
+          })
+        : Promise.resolve({
+            receipts: new Map(),
+            extras: [] as InboxResolvedRow[],
+          }),
     ]);
     const prompts = await promptLabelsFor(
       orgId,

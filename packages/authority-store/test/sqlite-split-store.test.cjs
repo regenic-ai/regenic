@@ -4,10 +4,14 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const { FsBlobStore } = require("@regenic/blob-store");
+const { createHash } = require("node:crypto");
 const {
   AuthorityConflictError,
+  CONTENT_PARTS_MEDIA_TYPE,
   INGEST_SCHEMA_VERSION,
   IngestionService,
+  compactEmbeddedContent,
+  parseStoredContentParts,
 } = require("@regenic/domain");
 const {
   SqliteAuthorityStore,
@@ -225,6 +229,53 @@ describe("sqlite read/write split", () => {
     };
     await store.append(event);
     await assert.rejects(() => store.append(event), AuthorityConflictError);
+    await store.close();
+  });
+
+  it("compacts inlined attachments through the write worker", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const blobs = new FsBlobStore(join(root, "blobs"));
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const envelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          bytes_base64: Buffer.from("see this", "utf8").toString("base64"),
+        },
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "shot.png",
+          bytes_base64: png.toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const oldHash = createHash("sha256").update(envelope).digest("hex");
+    await blobs.put(oldHash, envelope, CONTENT_PARTS_MEDIA_TYPE);
+    const event = await store.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_1",
+      content_hash: oldHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: envelope.byteLength,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+
+    const result = await compactEmbeddedContent(store, blobs, "local-owner");
+    const updated = await store.getEvent("local-owner", event.id);
+    const parts = parseStoredContentParts(await blobs.get(updated.content_hash));
+    const attachment = parts.find((part) => part.role === "attachment");
+
+    assert.equal(result.rewritten, 1);
+    assert.notEqual(updated.content_hash, oldHash);
+    assert.equal(await blobs.exists(oldHash), false);
+    assert.equal(parts.find((part) => part.role === "body").text, "see this");
+    assert.deepEqual(Buffer.from(await blobs.get(attachment.content_hash)), png);
     await store.close();
   });
 });

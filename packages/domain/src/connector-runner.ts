@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   ChannelConnector,
+  ConnectorPollOptions,
   ConnectorRuntimeStore,
   IngestBatch,
   IngestBatchResult,
@@ -17,6 +18,8 @@ export interface RunConnectorPollInput {
   stream_key: string;
   lease_owner: string;
   lease_duration_ms: number;
+  older?: boolean;
+  media?: boolean;
 }
 
 export type ConnectorPollRunResult =
@@ -64,6 +67,7 @@ export class ConnectorRunner {
     try {
       pollResult = await this.connector.poll(
         lease.cursor ? { value: lease.cursor } : null,
+        pollOptions(input),
       );
     } catch (error) {
       await this.runtimeStore.releaseLease({
@@ -202,4 +206,17 @@ export class ConnectorRunner {
       error_code: retryable?.error_code,
     };
   }
+}
+
+function pollOptions(
+  input: Pick<RunConnectorPollInput, "older" | "media">,
+): ConnectorPollOptions | undefined {
+  const options: ConnectorPollOptions = {};
+  if (input.older === true) {
+    options.older = true;
+  }
+  if (input.media === false) {
+    options.media = false;
+  }
+  return options.older || options.media === false ? options : undefined;
 }

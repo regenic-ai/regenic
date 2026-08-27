@@ -5,6 +5,12 @@ import {
   type ConnectorInstallationStatus,
   type IngestAttempt,
 } from "@regenic/domain";
+import {
+  CONNECTOR_INSTALL_DOCS,
+  type CatalogDocRef,
+} from "./install-docs";
+
+export type { CatalogDocRef };
 
 export interface ConnectorFieldWhen {
   field: string;
@@ -43,6 +49,7 @@ export interface ConnectorCatalogItem {
   singleton: boolean;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
+  docs: CatalogDocRef[];
 }
 
 export interface CatalogServiceState {
@@ -64,6 +71,7 @@ interface CatalogDefinition {
   singleton?: boolean;
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
+  docs: CatalogDocRef[];
 }
 
 const CATALOG: CatalogDefinition[] = [
@@ -96,6 +104,7 @@ const CATALOG: CatalogDefinition[] = [
         hint: "Set REGENIC_SLACK_TOKEN (bot token from your Slack app) before starting the desktop. The form does not take it.",
       },
     ],
+    docs: CONNECTOR_INSTALL_DOCS,
   },
   {
     connector_type: "dsh-session",
@@ -163,6 +172,7 @@ const CATALOG: CatalogDefinition[] = [
         visible_when: { field: "transport", value: "web" },
       },
     ],
+    docs: CONNECTOR_INSTALL_DOCS,
   },
   {
     connector_type: "feishu-chat",
@@ -211,6 +221,7 @@ const CATALOG: CatalogDefinition[] = [
         hint: "Not installed. Run: npx @larksuite/cli@latest install. Docs: https://github.com/larksuite/cli",
       },
     ],
+    docs: CONNECTOR_INSTALL_DOCS,
   },
   {
     connector_type: "crm-ops-review",
@@ -229,6 +240,7 @@ const CATALOG: CatalogDefinition[] = [
       },
     ],
     prerequisites: crmPrerequisites(),
+    docs: CONNECTOR_INSTALL_DOCS,
   },
   {
     connector_type: "crm-order-review",
@@ -247,6 +259,7 @@ const CATALOG: CatalogDefinition[] = [
       },
     ],
     prerequisites: crmPrerequisites(),
+    docs: CONNECTOR_INSTALL_DOCS,
   },
 ];
 

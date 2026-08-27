@@ -132,6 +132,13 @@ export interface ConnectorCursor {
   value: string;
 }
 
+export interface ConnectorPollOptions {
+  /** One older/history page instead of the live/recent page. */
+  older?: boolean;
+  /** Download attachments. Default true. Open/seed can skip this. */
+  media?: boolean;
+}
+
 export interface PollResult {
   batch: IngestBatch;
   next_cursor?: string;
@@ -154,7 +161,10 @@ export interface ChannelConnector {
   capabilities(): ConnectorCapabilities;
   verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook>;
   handleWebhook(webhook: VerifiedWebhook): Promise<IngestBatch>;
-  poll(cursor: ConnectorCursor | null): Promise<PollResult>;
+  poll(
+    cursor: ConnectorCursor | null,
+    options?: ConnectorPollOptions,
+  ): Promise<PollResult>;
   backfill(range: BackfillRange): AsyncIterable<IngestBatch>;
   syncMembers(scope: ExternalScopeRef): Promise<MembershipBatch>;
 }
@@ -239,13 +249,28 @@ export interface EventRecord extends SourceIdentity {
   ingested_at: string;
 }
 
+export interface BlobMetaInput {
+  content_hash: string;
+  media_type: string;
+  byte_size: number;
+}
+
 export interface NewEvent extends SourceIdentity {
   id?: string;
   content_hash: string;
   content_media_type: string;
   content_byte_size: number;
+  extra_blobs?: BlobMetaInput[];
   occurred_at: string;
   expected_head_id: string | null;
+}
+
+export interface RepointContentInput {
+  old_content_hash: string;
+  new_content_hash: string;
+  content_media_type: string;
+  content_byte_size: number;
+  extra_blobs?: BlobMetaInput[];
 }
 
 export interface IngestCommitRequest {
@@ -311,6 +336,7 @@ export interface StoreFootprint {
   blobs: number;
   recipes: number;
   connectors: number;
+  executors: number;
 }
 
 export interface StoreClearResult {
@@ -323,6 +349,7 @@ export interface StoreClearResult {
   kept: {
     recipes: number;
     connectors: number;
+    executors: number;
   };
 }
 
@@ -338,6 +365,8 @@ export interface AuthorityStore {
   appendRevision(input: EventRevision): Promise<EventRecord>;
   markTombstone(input: TombstoneEvent): Promise<EventRecord>;
   commitIngest(request: IngestCommitRequest): Promise<EventRecord[]>;
+  repointContentHash(input: RepointContentInput): Promise<number>;
+  vacuumStore(): Promise<void>;
   putDisposition(decision: ArrangementDecision): Promise<void>;
   getDisposition(eventId: string): Promise<ArrangementDecision | null>;
   listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]>;
