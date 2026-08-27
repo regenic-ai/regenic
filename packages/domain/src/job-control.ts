@@ -44,6 +44,28 @@ export interface InferiorRef {
 }
 
 /**
+ * Live wait face is the latest thread_status, not the latest speech.
+ * DSH often emits turn/end and an assistant row at the same stamp.
+ */
+export function pickAbsenteeInboxRows<
+  T extends {
+    event: { operation: string };
+    decision: { reason_codes: readonly string[] };
+  },
+>(items: readonly T[]): { live?: T; visible?: T } {
+  const newest = [...items]
+    .reverse()
+    .filter((row) => row.event.operation !== "tombstone");
+  const live =
+    newest.find((row) => row.decision.reason_codes.includes("thread_status")) ??
+    newest[0];
+  const visible = newest.find(
+    (row) => !row.decision.reason_codes.includes("thread_status"),
+  );
+  return { live, visible };
+}
+
+/**
  * Latest sysout face for absentee wait. Speech is not exit. A leftover
  * `thread_status` row without an open turn or working bit is not invented
  * working — fall through to the visible body and stay running until

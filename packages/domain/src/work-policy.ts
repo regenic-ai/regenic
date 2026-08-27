@@ -3,6 +3,7 @@ import type { ExecutorRunHandle } from "./executor";
 import { recipeAllowsAutoStart } from "./recipe-trigger";
 import { recordClassFromType, type RecordClass } from "./record-class";
 import { matchRecipe, type RecipeSubject } from "./recipe-match";
+import type { PromptAnswer, ThreadPrompt } from "./thread-surface";
 import {
   mergeThreadFacet,
   projectThreadFacet,
@@ -156,6 +157,69 @@ export function shouldWriteBackHandle(
   canWriteBack: boolean,
 ): boolean {
   return handle.status === "completed" && canWriteBack && Boolean(handle.result);
+}
+
+export function matchWriteBackPrompt(
+  prompts: readonly ThreadPrompt[],
+  summary: string,
+): PromptAnswer | undefined {
+  const text = summary.trim();
+  if (!text) {
+    return undefined;
+  }
+  for (const prompt of prompts) {
+    const question = prompt.questions[0];
+    const options = question?.options ?? [];
+    let best: { label: string; score: number } | undefined;
+    for (const option of options) {
+      const score = writeBackOptionScore(option.label, text);
+      if (score > 0 && (!best || score > best.score)) {
+        best = { label: option.label, score };
+      }
+    }
+    if (best && question) {
+      return {
+        prompt_id: prompt.prompt_id,
+        answers: [{ id: question.id, selected: [best.label] }],
+      };
+    }
+  }
+  return undefined;
+}
+
+function writeBackOptionScore(label: string, summary: string): number {
+  const needles = writeBackNeedles(label);
+  let best = 0;
+  for (const needle of needles) {
+    if (summary.includes(needle) || summary.toUpperCase().includes(needle.toUpperCase())) {
+      best = Math.max(best, needle.length);
+    }
+  }
+  if (
+    label.trim() === "APPROVED" &&
+    /通过/.test(summary) &&
+    !/不通过|REJECTED/i.test(summary)
+  ) {
+    best = Math.max(best, 2);
+  }
+  return best;
+}
+
+function writeBackNeedles(label: string): string[] {
+  const trimmed = label.trim();
+  if (trimmed === "REJECTED") {
+    return ["REJECTED", "审核不通过", "不通过"];
+  }
+  if (trimmed === "APPROVED") {
+    return ["APPROVED", "审核通过"];
+  }
+  if (trimmed === "CLOSE_TASK") {
+    return ["CLOSE_TASK", "关闭任务"];
+  }
+  if (trimmed === "APPROVE_AND_CONTINUE") {
+    return ["APPROVE_AND_CONTINUE", "继续自动化"];
+  }
+  return trimmed ? [trimmed] : [];
 }
 
 export function workStatusFromHandle(

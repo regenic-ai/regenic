@@ -17,6 +17,8 @@ const {
   selectRecipeForSubject,
   shouldOpenWorkItem,
   shouldRefreshActiveRun,
+  matchWriteBackPrompt,
+  pickAbsenteeInboxRows,
   shouldWriteBackHandle,
   transcriptFromAbsenteeLive,
   waitFromAbsentee,
@@ -191,6 +193,20 @@ describe("session job face and wait status", () => {
     assert.equal(wait.transcript.text, "done");
   });
 
+  it("prefers thread_status over later speech for absentee live", () => {
+    const ended = {
+      event: { id: "status", operation: "create" },
+      decision: { reason_codes: ["thread_status"] },
+    };
+    const spoken = {
+      event: { id: "say", operation: "create" },
+      decision: { reason_codes: ["assistant_not_current_work"] },
+    };
+    const picked = pickAbsenteeInboxRows([ended, spoken]);
+    assert.equal(picked.live, ended);
+    assert.equal(picked.visible, spoken);
+  });
+
   it("maps DSH turn/end to absentee exit, not an assistant face", () => {
     const working = waitFromAbsentee({
       prompts: [],
@@ -339,6 +355,44 @@ describe("dismiss vs handle commit", () => {
       shouldWriteBackHandle({ status: "completed", result: { summary: "ok" } }, false),
       false,
     );
+  });
+});
+
+describe("write-back prompt match", () => {
+  const orderPrompt = {
+    prompt_id: "crm:audit:1",
+    presentation: "approval",
+    questions: [
+      {
+        id: "decision",
+        prompt: "review",
+        options: [{ label: "APPROVED" }, { label: "REJECTED" }],
+      },
+    ],
+  };
+
+  it("maps a Chinese reject summary onto REJECTED", () => {
+    const answer = matchWriteBackPrompt(
+      [orderPrompt],
+      "审核结果：**不通过**\n地区不符",
+    );
+    assert.deepEqual(answer, {
+      prompt_id: "crm:audit:1",
+      answers: [{ id: "decision", selected: ["REJECTED"] }],
+    });
+  });
+
+  it("does not treat 不通过 as APPROVED", () => {
+    const answer = matchWriteBackPrompt(
+      [orderPrompt],
+      "达人通过了粉丝门槛，但语种不通过",
+    );
+    assert.equal(answer.answers[0].selected[0], "REJECTED");
+  });
+
+  it("maps 审核通过 onto APPROVED", () => {
+    const answer = matchWriteBackPrompt([orderPrompt], "重新审查后审核通过");
+    assert.equal(answer.answers[0].selected[0], "APPROVED");
   });
 });
 
