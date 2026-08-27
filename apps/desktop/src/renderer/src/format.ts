@@ -55,19 +55,6 @@ export function chipLabel(state: EngineChipState): string {
   return t("chip.stopped");
 }
 
-export function connectorLabel(type: string): string {
-  if (type === "slack-channel") {
-    return "Slack";
-  }
-  if (type === "dsh-session") {
-    return "DSH";
-  }
-  if (type === "feishu-chat") {
-    return "Feishu";
-  }
-  return type;
-}
-
 export function installationStatusLabel(
   status: "enabled" | "disabled" | "needs_attention",
 ): string {

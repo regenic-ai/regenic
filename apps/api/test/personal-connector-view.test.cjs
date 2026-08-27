@@ -1,15 +1,34 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
+const { slackChannelDriver } = require("@regenic/slack-connector");
+const { dshSessionDriver } = require("@regenic/dsh-connector");
+const { feishuChatDriver } = require("@regenic/feishu-connector");
 const {
+  catalogFromDrivers,
   connectorAllowsMultiple,
   connectorCatalog,
-  extraCatalogFromDrivers,
   toInstallationView,
 } = require("../dist/personal-connector-view");
 
+function firstParty(env = {}) {
+  return catalogFromDrivers(
+    {
+      list: () => [slackChannelDriver, dshSessionDriver, feishuChatDriver],
+    },
+    env,
+  );
+}
+
+function catalogOf(readiness = {}) {
+  return connectorCatalog([], {
+    ...readiness,
+    extras: readiness.extras ?? firstParty(readiness.env ?? {}),
+  });
+}
+
 describe("connector catalog hints", () => {
   it("uses a service hint when lark-cli is missing or signed out", () => {
-    const missing = connectorCatalog([], {
+    const missing = catalogOf({
       env: {},
       services: {
         "lark-cli": {
@@ -22,7 +41,7 @@ describe("connector catalog hints", () => {
     assert.equal(feishu.setup_ready, false);
     assert.match(feishu.prerequisites[0].hint, /npx @larksuite\/cli@latest install/);
 
-    const signedOut = connectorCatalog([], {
+    const signedOut = catalogOf({
       env: {},
       services: {
         "lark-cli": {
@@ -38,12 +57,12 @@ describe("connector catalog hints", () => {
   });
 
   it("lists DSH web and CLI service prerequisites from the catalog", () => {
-    const slack = connectorCatalog([], { env: {} }).find(
+    const slack = catalogOf({ env: {} }).find(
       (item) => item.connector_type === "slack-channel",
     );
     assert.match(slack.prerequisites[0].hint, /REGENIC_SLACK_TOKEN/);
     assert.equal(slack.setup_ready, false);
-    const dsh = connectorCatalog([], { env: {} }).find(
+    const dsh = catalogOf({ env: {} }).find(
       (item) => item.connector_type === "dsh-session",
     );
     assert.deepEqual(
@@ -55,7 +74,7 @@ describe("connector catalog hints", () => {
   });
 
   it("does not block a DSH web install when dsh web is down", () => {
-    const dsh = connectorCatalog([], {
+    const dsh = catalogOf({
       env: {},
       services: {
         "dsh-web": { ready: false, hint: "Start dsh web --port 3080 first." },
@@ -67,7 +86,7 @@ describe("connector catalog hints", () => {
   });
 
   it("fills Feishu conversation options for a pick list", () => {
-    const catalog = connectorCatalog([], {
+    const catalog = catalogOf({
       env: {},
       field_options: {
         "feishu-chat": {
@@ -85,7 +104,7 @@ describe("connector catalog hints", () => {
     ]);
   });
 
-  it("labels a Feishu install as all conversations by default", () => {
+  it("labels a Feishu install from the driver, not a host type switch", () => {
     const view = toInstallationView(
       {
         id: "feishu-1",
@@ -99,12 +118,7 @@ describe("connector catalog hints", () => {
       null,
       {
         get() {
-          return {
-            source: "feishu",
-            capabilities() {
-              return { sync: true, reply: true, create: false };
-            },
-          };
+          return feishuChatDriver;
         },
       },
     );
@@ -114,19 +128,21 @@ describe("connector catalog hints", () => {
     assert.equal(view.settings.kinds, "group,p2p");
   });
 
-  it("does not list extra connectors until a driver declares a catalog", () => {
+  it("lists no catalog rows until a driver declares installCatalog", () => {
     const catalog = connectorCatalog([], { env: {} });
+    assert.deepEqual(catalog.map((item) => item.connector_type), []);
     assert.deepEqual(
-      catalog.map((item) => item.connector_type),
+      firstParty({}).map((item) => item.connector_type),
       ["slack-channel", "dsh-session", "feishu-chat"],
     );
-    assert.equal(connectorAllowsMultiple("slack-channel"), true);
+    assert.equal(connectorAllowsMultiple("slack-channel", firstParty()), true);
     assert.equal(connectorAllowsMultiple("extra-review"), true);
   });
 
   it("appends install cards from loaded extra drivers", () => {
-    const extras = extraCatalogFromDrivers({
+    const extras = catalogFromDrivers({
       list: () => [
+        slackChannelDriver,
         {
           connector_type: "extra-review",
           source: "extra",
@@ -156,6 +172,7 @@ describe("connector catalog hints", () => {
       env: { EXTRA_URL: "https://extra.internal" },
       extras,
     });
+    assert.equal(catalog[0].connector_type, "slack-channel");
     const extra = catalog.find((item) => item.connector_type === "extra-review");
     assert.equal(extra.title, "Extra review");
     assert.equal(extra.setup_ready, true);

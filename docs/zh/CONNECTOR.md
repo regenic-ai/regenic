@@ -23,16 +23,16 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 能力写在安装上。内核不按驱动名推断能力。
 
-加来源不用改 API 或桌面。一等驱动在宿主 catalog 里有行；额外驱动声明
-`installCatalog()`，进程启动时由 `REGENIC_PLUGIN_DIR` 或
-`REGENIC_CHANNEL_PLUGIN` 加载。回写别名写在驱动的 `writeBackLabels` 上，
-内核只对结果第一行做精确匹配。
+加来源不用改 API 或桌面。每个驱动自己声明 `installCatalog()`，以及可选的
+`presentInstall` / `writeBackLabels`。引擎页由已注册驱动组装。额外包在
+进程启动时由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载。
+内核只对结果第一行与待办选项做精确匹配。
 
 ## 接口
 
 | 接口 | 职责 |
 | --- | --- |
-| `ChannelDriver` | 安装、解析流、绑定发送、声明 `sync` / `reply` / `create`。额外驱动可声明 `installCatalog` / `writeBackLabels` |
+| `ChannelDriver` | 安装、解析流、绑定发送、声明 `sync` / `reply` / `create`，以及 `installCatalog` / `presentInstall` / `writeBackLabels` |
 | `ChannelConnector` | 把来源读成 `IngestBatch` |
 | `EgressAdapter` | 把 `ContentPart[]` 写回同一来源 |
 
@@ -200,7 +200,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 ## 目录
 
-`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。新连接器在那里加一条。桌面不按类型写死字段。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
+`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
 
 | 字段 | 说明 |
 | --- | --- |

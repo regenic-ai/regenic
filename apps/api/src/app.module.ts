@@ -34,8 +34,8 @@ import { PersonalWorkService } from "./personal-work.service";
       provide: ChannelDriverRegistry,
       useFactory: () => {
         const registry = new ChannelDriverRegistry()
-          .register(dshSessionDriver)
           .register(slackChannelDriver)
+          .register(dshSessionDriver)
           .register(feishuChatDriver);
         for (const driver of extraChannelDrivers()) {
           registry.register(driver);

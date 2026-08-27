@@ -96,7 +96,12 @@ export interface ConnectorCatalogProbe {
   field_options?: Record<string, { value: string; label: string }[]>;
 }
 
-/** Extra drivers declare install UI. First-party rows stay in the host catalog. */
+/** Drivers declare their own install card. The host does not keep a parallel catalog. */
+export interface DriverCatalogFieldWhen {
+  field: string;
+  value: string;
+}
+
 export interface DriverCatalogField {
   key: string;
   label: string;
@@ -105,6 +110,7 @@ export interface DriverCatalogField {
   default?: string;
   multiple?: boolean;
   options?: { value: string; label: string }[];
+  visible_when?: DriverCatalogFieldWhen;
 }
 
 export interface DriverCatalogPrerequisite {
@@ -113,6 +119,7 @@ export interface DriverCatalogPrerequisite {
   label: string;
   required?: boolean;
   hint?: string;
+  visible_when?: DriverCatalogFieldWhen;
 }
 
 export interface DriverInstallCatalog {
@@ -204,14 +211,14 @@ export interface ChannelDriver {
   ): Promise<RegisteredEgress>;
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt): string;
   /**
-   * Optional install card. Absent means the host catalog does not
-   * grow a row for this driver.
+   * Install card. Absent means this driver does not appear in Engine.
    */
-  installCatalog?(): DriverInstallCatalog;
+  installCatalog?(input?: { env?: NodeJS.ProcessEnv }): DriverInstallCatalog;
   /** Optional aliases for write-back. Kernel matches these exactly. */
   writeBackLabels?(label: string): string[];
   presentInstall?(
     installation: ConnectorInstallation,
+    input?: { env?: NodeJS.ProcessEnv },
   ): DriverInstallPresentation;
   probeCatalog?(input: {
     env: NodeJS.ProcessEnv;
@@ -275,9 +282,11 @@ export class ChannelDriverRegistry {
     return [...this.drivers.values()];
   }
 
-  installCatalogs(): Array<DriverInstallCatalog & { connector_type: string }> {
+  installCatalogs(
+    env: NodeJS.ProcessEnv = process.env,
+  ): Array<DriverInstallCatalog & { connector_type: string }> {
     return this.list().flatMap((driver) => {
-      const catalog = driver.installCatalog?.();
+      const catalog = driver.installCatalog?.({ env });
       return catalog
         ? [{ connector_type: driver.connector_type, ...catalog }]
         : [];

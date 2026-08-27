@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   attemptSummary,
-  connectorLabel,
   installationStatusLabel,
 } from "./format";
 import { useLocale } from "./LocaleContext";
@@ -477,7 +476,7 @@ function ConnectorRow({
       <div className="install install-instance">
         <div>
           <strong title={installation.id}>
-            {connectorLabel(installation.connector_type)} · {installation.label}
+            {kind.title} · {installation.label}
           </strong>
           <div className="install-meta">
             <span className={`chip ${statusChip}`.trim()}>
@@ -522,7 +521,7 @@ function ConnectorRow({
         <ConnectorSettingsDialog
           key={`${installation.id}:${JSON.stringify(installation.settings ?? {})}`}
           title={t("connector.editTitle", {
-            type: connectorLabel(installation.connector_type),
+            type: kind.title,
           })}
           kind={kind}
           busy={busy}

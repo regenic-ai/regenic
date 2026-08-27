@@ -148,6 +148,127 @@ export const dshSessionDriver: ChannelDriver = {
     return `${thread.target}:out:${receipt.rpc_id ?? randomUUID()}`;
   },
 
+  installCatalog(input = {}) {
+    const env = input.env ?? process.env;
+    if (env.REGENIC_DSH_BASE_URL?.trim()) {
+      return {
+        title: "DSH",
+        description:
+          "Hosted kernel talks to DSH over the cluster Service (REGENIC_DSH_BASE_URL). Leave Session ID empty to follow every session. Do not paste a public DSH URL.",
+        credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
+        fields: [
+          {
+            key: "session_id",
+            label: "Session ID",
+            required: false,
+            placeholder: "Leave empty to sync all sessions",
+          },
+        ],
+        prerequisites: [
+          {
+            kind: "local_service" as const,
+            key: "dsh-web",
+            label: "Cluster DSH",
+            required: false,
+            hint: "Uses REGENIC_DSH_BASE_URL (cluster DNS, not a public URL)",
+          },
+          {
+            kind: "env" as const,
+            key: "REGENIC_DSH_TOKEN",
+            label: "DSH web token",
+            required: false,
+            hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
+          },
+        ],
+      };
+    }
+    return {
+      title: "DSH",
+      description:
+        "One install talks to dsh web (local loopback, or REGENIC_DSH_BASE_URL on a hosted API). The kernel pulls every session after install; set a Session ID to follow only that one.",
+      credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
+      fields: [
+        {
+          key: "transport",
+          label: "Transport",
+          required: true,
+          default: "web",
+          options: [
+            { value: "web", label: "Web" },
+            { value: "cli", label: "CLI" },
+          ],
+        },
+        {
+          key: "session_id",
+          label: "Session ID",
+          required: false,
+          placeholder: "Leave empty to sync all sessions",
+          visible_when: { field: "transport", value: "web" },
+        },
+        {
+          key: "base_url",
+          label: "Base URL",
+          required: false,
+          default: "http://127.0.0.1:3080",
+          placeholder: "Loopback only (127.0.0.1 / localhost)",
+          visible_when: { field: "transport", value: "web" },
+        },
+        {
+          key: "mailbox",
+          label: "Mailbox",
+          required: false,
+          placeholder: "CLI mode; defaults to the install ID",
+          visible_when: { field: "transport", value: "cli" },
+        },
+      ],
+      prerequisites: [
+        {
+          kind: "local_service" as const,
+          key: "dsh-web",
+          label: "Local dsh web",
+          required: false,
+          hint: "dsh must work in your terminal. Then start dsh web --port 3080.",
+          visible_when: { field: "transport", value: "web" },
+        },
+        {
+          kind: "local_service" as const,
+          key: "dsh-cli",
+          label: "Local dsh",
+          required: true,
+          hint: "dsh must work in your terminal.",
+          visible_when: { field: "transport", value: "cli" },
+        },
+        {
+          kind: "env" as const,
+          key: "REGENIC_DSH_TOKEN",
+          label: "DSH web token",
+          required: false,
+          hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
+          visible_when: { field: "transport", value: "web" },
+        },
+      ],
+    };
+  },
+
+  presentInstall(installation, input = {}) {
+    const env = input.env ?? process.env;
+    const hosted = Boolean(env.REGENIC_DSH_BASE_URL?.trim());
+    const transport = hosted
+      ? "web"
+      : resolveEffectiveDshTransport(installation.config, env);
+    if (transport === "cli") {
+      return {
+        label: configString(installation.config, "mailbox") ?? installation.id,
+        detail: "cli",
+      };
+    }
+    const sessionId = configString(installation.config, "session_id");
+    return {
+      label: sessionId ?? "All sessions",
+      detail: transport === "web" || hosted ? "web" : null,
+    };
+  },
+
   async probeCatalog({ env }) {
     return probeDshCatalog({ env });
   },

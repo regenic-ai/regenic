@@ -27,17 +27,18 @@ The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 Capabilities are declared on the installation. The kernel does not infer them
 from the driver name.
 
-You do not rebuild the API or the desktop to add a source. First-party
-drivers have a host catalog row. Extra drivers declare `installCatalog()`
-and load at process start from `REGENIC_PLUGIN_DIR` or
-`REGENIC_CHANNEL_PLUGIN`. Write-back aliases stay on the driver
-(`writeBackLabels`); the kernel matches the first result line exactly.
+You do not rebuild the API or the desktop to add a source. Every driver
+declares `installCatalog()` and optional `presentInstall` /
+`writeBackLabels`. The host assembles Engine from registered drivers.
+Extra packages load at process start from `REGENIC_PLUGIN_DIR` or
+`REGENIC_CHANNEL_PLUGIN`. The kernel matches the first result line
+exactly to a live prompt option.
 
 ## Interfaces
 
 | Interface | Responsibility |
 | --- | --- |
-| `ChannelDriver` | Install, resolve streams, bind send, declare `sync` / `reply` / `create`. Extra drivers may add `installCatalog` / `writeBackLabels` |
+| `ChannelDriver` | Install, resolve streams, bind send, declare `sync` / `reply` / `create`, and `installCatalog` / `presentInstall` / `writeBackLabels` |
 | `ChannelConnector` | Read the source into `IngestBatch` |
 | `EgressAdapter` | Write `ContentPart[]` back to the same source |
 
@@ -248,9 +249,10 @@ adapter writes that envelope back to the same source and thread.
 
 `GET /v1/me/engine` returns a catalog. The Engine page opens a dialog for those catalog fields on Install
 and on Edit sync.
-A new connector adds an entry there. The desktop does not hard-code fields
-per type. Installations include `settings` (non-secret config as strings)
-so the edit form can prefill.
+A driver appears there only when it implements `installCatalog()`. Slack,
+DSH, Feishu, and extra plugins use that same method. The desktop does not
+hard-code fields or titles per type. Installations include `settings`
+(non-secret config as strings) so the edit form can prefill.
 
 | Field | Description |
 | --- | --- |

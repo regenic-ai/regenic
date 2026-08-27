@@ -17,7 +17,7 @@ import {
 import type { Host } from "@regenic/plugin-host";
 import {
   connectorAllowsMultiple,
-  extraCatalogFromDrivers,
+  catalogFromDrivers,
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
@@ -540,7 +540,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (
       !connectorAllowsMultiple(
         input.connector_type,
-        extraCatalogFromDrivers(this.drivers),
+        catalogFromDrivers(this.drivers, process.env),
       )
     ) {
       const existing = (await store.listInstallations(this.runtime.orgId())).some(

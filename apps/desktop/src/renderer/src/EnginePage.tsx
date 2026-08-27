@@ -16,7 +16,6 @@ import { ConnectorKind } from "./ConnectorSettings";
 import { ExecutorKind } from "./ExecutorSettings";
 import {
   connectorActionError,
-  connectorLabel,
   diskWatchCopy,
   formatChatTime,
   memoryWatchCopy,
@@ -348,7 +347,7 @@ export function EnginePage({
               if (
                 !window.confirm(
                   t("engine.uninstallConfirm", {
-                    type: connectorLabel(installation.connector_type),
+                    type: kind.title,
                     name: installation.label,
                   }),
                 )
