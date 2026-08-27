@@ -108,8 +108,10 @@ A remote executor implements these three calls. The kernel forwards
 | POST | `/v1/runs/:id/resume` | `work_item_id`, `recipe_id`, `answer` | Same |
 
 `status` is `running` / `waiting_human` / `completed` / `failed` /
-`cancelled`. Unknown values are `running`. The Bearer token comes from the
-environment variable named on the install.
+`cancelled`. Missing or unknown values are `failed`, so a job does not
+stay running. The Bearer token comes from the environment variable named
+on the install (`[A-Za-z_][A-Za-z0-9_]*`). Cloud metadata hosts are not
+allowed as `base_url`.
 
 ## Invoke catalog
 

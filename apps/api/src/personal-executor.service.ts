@@ -4,6 +4,7 @@ import {
   ChannelDriverRegistry,
   DEFAULT_LOCAL_EXECUTOR_ID,
   EXECUTOR_DEFAULTS_SEEDED_PREF,
+  LocalExecutorPluginRegistry,
   createHttpTaskExecutor,
   createLocalConnectorExecutor,
   createSessionTaskExecutor,
@@ -19,7 +20,6 @@ import {
   type ExecutorKind,
   type JsonValue,
 } from "@regenic/domain";
-import { dshTaskExecutor } from "@regenic/dsh-connector";
 import { EXECUTOR_INSTALL_DOCS, type CatalogDocRef } from "./install-docs";
 import { PersonalConnectorError } from "./personal-errors";
 import { toInstallationView } from "./personal-connector-view";
@@ -71,6 +71,7 @@ export class PersonalExecutorService {
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
+    private readonly localPlugins: LocalExecutorPluginRegistry,
   ) {}
 
   async ensureMounted(): Promise<void> {
@@ -331,30 +332,29 @@ export class PersonalExecutorService {
       });
     }
     const pin = executorConfigText(row.config, "installation_id");
-    let source = "dsh";
-    if (pin) {
-      const connector = await this.runtime
-        .requireHost()
-        .get("authority")
-        .findInstallation(pin);
-      const driver = connector
-        ? this.drivers.get(connector.connector_type)
-        : undefined;
-      if (driver) {
-        source = driver.source;
-      }
-    }
+    const source = pin ? await this.sourceOf(pin) : undefined;
     const plugin =
-      source === "dsh"
-        ? dshTaskExecutor
-        : createSessionTaskExecutor({ source });
+      (source ? this.localPlugins.forSource(source) : undefined) ??
+      this.localPlugins.default() ??
+      createSessionTaskExecutor({ source });
     return createLocalConnectorExecutor({
       executor_type: row.id,
       label: row.name,
-      source,
+      source: plugin.catalog().source ?? source,
       installation_id: pin || undefined,
       plugin,
     });
+  }
+
+  private async sourceOf(installationId: string): Promise<string | undefined> {
+    const connector = await this.runtime
+      .requireHost()
+      .get("authority")
+      .findInstallation(installationId);
+    const driver = connector
+      ? this.drivers.get(connector.connector_type)
+      : undefined;
+    return driver?.source;
   }
 
   private async validatedConfig(

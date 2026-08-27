@@ -185,7 +185,7 @@ The kernel looks up `ctx.executors`. The executor reaches the channel only throu
 
 Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is durable `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. The kernel reaps the job on `exited`. Write-back happens only on that real exit. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back. The abandoned inferior is `cancelled`, not `failed`. A later status tick must not resurrect that run or write back.
 
-Public default: a managed local `dsh` binding (seeded id `dsh`, so existing recipes keep working). Cursor and a private Agent OS (for example bioby-agent) come later under the same catalog contract. A private runtime is an internal plugin package, or it is called through the generic HTTP executor. The default open-source tree does not import private HTTP.
+Public default: a managed local `dsh` binding (seeded id `dsh`, so existing recipes keep working). Local L6 plugins register by `catalog.source`; the mount path does not write `if (source === "dsh")`. Cursor and a private Agent OS (for example bioby-agent) come later under the same catalog contract. A private runtime is an internal plugin package, or it is called through the generic HTTP executor. The default open-source tree does not import private HTTP.
 
 Executors are first-class installations, next to connectors:
 

@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
+  LocalExecutorPluginRegistry,
   MemoryExecutorRegistry,
   composeSessionStdin,
   createHttpTaskExecutor,
@@ -24,10 +25,16 @@ describe("normalizeExecutorHttpUrl", () => {
     );
   });
 
-  it("rejects credentials and non-http schemes", () => {
+  it("rejects credentials, metadata hosts, and non-http schemes", () => {
     assert.throws(() => normalizeExecutorHttpUrl("file:///etc/passwd"));
     assert.throws(() => normalizeExecutorHttpUrl("https://user:pass@host/x"));
     assert.throws(() => normalizeExecutorHttpUrl("not-a-url"));
+    assert.throws(() =>
+      normalizeExecutorHttpUrl("http://169.254.169.254/latest/meta-data"),
+    );
+    assert.throws(() =>
+      normalizeExecutorHttpUrl("http://metadata.google.internal/"),
+    );
   });
 });
 
@@ -48,6 +55,12 @@ describe("normalizeExecutorInstallConfig", () => {
       "https://agent.example/v1",
     );
     assert.throws(() => normalizeExecutorInstallConfig("http", {}));
+    assert.throws(() =>
+      normalizeExecutorInstallConfig("http", {
+        base_url: "https://agent.example",
+        auth_env: "not a name",
+      }),
+    );
   });
 });
 
@@ -169,10 +182,23 @@ describe("http executor", () => {
 });
 
 describe("handleFromHttp", () => {
-  it("defaults unknown status to running", () => {
+  it("defaults unknown status to failed", () => {
     const handle = handleFromHttp({ external_run_id: "x" }, "fallback");
-    assert.equal(handle.status, "running");
+    assert.equal(handle.status, "failed");
     assert.equal(handle.external_run_id, "x");
+  });
+});
+
+describe("LocalExecutorPluginRegistry", () => {
+  it("looks up a plugin by catalog.source and does not name a channel", () => {
+    const dsh = createSessionTaskExecutor({
+      executor_type: "dsh",
+      source: "dsh",
+    });
+    const registry = new LocalExecutorPluginRegistry().register(dsh);
+    assert.equal(registry.forSource("dsh"), dsh);
+    assert.equal(registry.default(), dsh);
+    assert.equal(registry.forSource("feishu"), undefined);
   });
 });
 

@@ -90,7 +90,9 @@ Recipe 的 `executor_type: "dsh"` 不用改。`GET /v1/me/executors` 只列出
 | POST | `/v1/runs/:id/resume` | `work_item_id`、`recipe_id`、`answer` | 同上 |
 
 `status` 只能是 `running` / `waiting_human` / `completed` / `failed` /
-`cancelled`。未知值按 `running`。Bearer token 来自安装声明的环境变量。
+`cancelled`。缺省或未知值按 `failed`，避免工单一直挂着。Bearer token
+来自安装声明的环境变量名（`[A-Za-z_][A-Za-z0-9_]*`）。云 metadata
+地址不能当 `base_url`。
 
 ## 调用目录
 

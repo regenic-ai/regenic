@@ -71,7 +71,28 @@ export function normalizeExecutorHttpUrl(value: string): string {
   if (parsed.username || parsed.password) {
     throw new Error("Executor URL must not include credentials");
   }
+  const host = parsed.hostname.toLowerCase();
+  if (!host || host === "0.0.0.0" || BLOCKED_EXECUTOR_HOSTS.has(host)) {
+    throw new Error("Executor URL host is not allowed");
+  }
   return parsed.toString().replace(/\/$/, "");
+}
+
+const BLOCKED_EXECUTOR_HOSTS = new Set([
+  "169.254.169.254",
+  "metadata.google.internal",
+  "metadata.goog",
+]);
+
+export function normalizeExecutorAuthEnv(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) {
+    throw new Error("Token environment variable name is invalid");
+  }
+  return trimmed;
 }
 
 export function defaultLocalExecutorInstallation(
@@ -100,7 +121,9 @@ export function normalizeExecutorInstallConfig(
       typeof input.base_url === "string" ? input.base_url : "",
     );
     const authEnv =
-      typeof input.auth_env === "string" ? input.auth_env.trim() : "";
+      typeof input.auth_env === "string"
+        ? normalizeExecutorAuthEnv(input.auth_env)
+        : "";
     const timeout = parseTimeoutMs(input.timeout_ms);
     return {
       base_url: baseUrl,

@@ -186,7 +186,7 @@ function parseHttpRunStatus(value: unknown): WorkRunStatus {
   ) {
     return value;
   }
-  return "running";
+  return "failed";
 }
 
 function parseHttpResult(value: unknown): ResultEnvelope | undefined {
