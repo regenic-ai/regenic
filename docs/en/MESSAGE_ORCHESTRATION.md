@@ -99,7 +99,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 | Kind | Responsibility | Must not |
 | --- | --- | --- |
 | Connector (`ChannelConnector`) | Read a source into `IngestBatch` | Write Event, Blob, ACL, or identity |
-| Channel driver (`ChannelDriver`) | Install, resolve pull streams, bind egress, declare sync / reply / create | Patch API / UI with per-channel switches |
+| Channel driver (`ChannelDriver`) | Install, resolve pull streams, bind egress, declare sync / reply / create, and `installCatalog` / `presentInstall` / `writeBackLabels` | Patch API / UI with per-channel switches, or keep a host catalog next to the driver |
 | Send (`EgressAdapter`) | Write a reply to the original channel | Mint extra privileges or skip approval |
 | Ranker / layer | Scoring after D0 (durability, sensitivity, “need to know”). D0 filter/layer is kernel | Promote personal labels to org truth |
 | Dispatcher policy | Map rank + standard + habits → outside current work \| pending \| defer | Send without a send grant |
@@ -123,7 +123,7 @@ Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: `
 
 | Goal | Mechanism |
 | --- | --- |
-| Add a source | [Connector contract](CONNECTOR.md); conformance tests |
+| Add a source | [Connector contract](CONNECTOR.md); implement `installCatalog()`; extra packages load from `REGENIC_PLUGIN_DIR` or `REGENIC_CHANNEL_PLUGIN` |
 | Add a send path | Same channel, send enabled |
 | Change what counts as important | Ranker plus a versioned standard |
 | Auto-handle ordinary mail | Dispatcher policy bound to a standard; those messages stay outside the current work and every skip is audited |

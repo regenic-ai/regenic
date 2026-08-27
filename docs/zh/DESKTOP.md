@@ -93,7 +93,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 
 ## 连接器：同步范围与前置步骤
 
-安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每种连接器声明 `fields`（含默认值、是否必填、`visible_when`）、`prerequisites`（环境变量或本机服务）和 `docs`（研发规范）。`ready` / `hint` 由该连接器的 `probeCatalog()` 探测，API 只合并，引擎页只渲染，不按连接器类型写死 UI。规范链接挂在分区标题旁，点开用系统浏览器打开 GitHub 页。
+安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每个驱动用 `installCatalog()` 声明标题、`fields`（含默认值、是否必填、`visible_when`）和 `prerequisites`（环境变量或本机服务）。Slack、DSH、飞书和额外插件同一套。`ready` / `hint` 由该驱动的 `probeCatalog()` 探测，已装行的文案由 `presentInstall` 提供，API 只合并，引擎页只渲染，不按连接器类型写死 UI。规范链接（`docs`）挂在分区标题旁，点开用系统浏览器打开 GitHub 页。额外包在进程启动时由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载。
 
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |

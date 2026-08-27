@@ -135,7 +135,8 @@ token 是前置条件，不是表单字段。
 公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的
 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在
 `exited` 上 reap Job。写回只发生在这次真退出，且 Recipe
-`can_write_back` 为真。
+`can_write_back` 为真。内核把结果第一行与活的待办选项做精确匹配。
+别名来自 `ChannelDriver.writeBackLabels`，不写在宿主名单里。
 
 人不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss`。Dismiss 不是
 `exited`，也不写回。被拿掉的 Inferior 记 `cancelled`。之后的 status
