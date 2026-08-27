@@ -339,6 +339,13 @@ export const en = {
   "composer.remove": "Remove {name}",
   "composer.drop": "Drop to attach",
 
+  "preview.image": "Image preview",
+  "preview.open": "Preview {name}",
+  "preview.close": "Close preview",
+  "preview.previous": "Previous image",
+  "preview.next": "Next image",
+  "preview.counter": "{current} of {total}",
+
   "error.cannotStartWork": "Cannot start this work item",
   "error.cannotDismissWork": "Cannot remove this work item",
   "error.cannotSend": "Could not send this answer",
@@ -672,6 +679,13 @@ export const zh: Record<MessageKey, string> = {
   "composer.send": "发送",
   "composer.remove": "移除 {name}",
   "composer.drop": "松开即可添加附件",
+
+  "preview.image": "图片预览",
+  "preview.open": "预览 {name}",
+  "preview.close": "关闭预览",
+  "preview.previous": "上一张",
+  "preview.next": "下一张",
+  "preview.counter": "{current} / {total}",
 
   "error.cannotStartWork": "这条工单启动失败",
   "error.cannotDismissWork": "没能从当前工作拿掉",

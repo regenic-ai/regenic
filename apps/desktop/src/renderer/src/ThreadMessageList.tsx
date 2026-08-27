@@ -9,6 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import { formatChatTime } from "./format";
+import {
+  collectPreviewImages,
+  previewImageId,
+} from "./image-preview";
+import { ImageLightbox } from "./ImageLightbox";
 import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
 import {
@@ -78,6 +83,11 @@ export const ThreadMessageList = memo(
   const measureFrame = useRef<number | null>(null);
   const openingRef = useRef(opening);
   const [layout, setLayout] = useState({ start: 0, end: 0, total: 0 });
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const previewImages = collectPreviewImages(items);
+  const previewIndex = previewId
+    ? previewImages.findIndex((image) => image.id === previewId)
+    : -1;
 
   const syncLayout = useCallback((pin = false) => {
     const current = itemsRef.current;
@@ -146,6 +156,7 @@ export const ThreadMessageList = memo(
     lastScrollTopRef.current = 0;
     syncLayout(true);
     snapToCommittedEnd();
+    setPreviewId(null);
   }, [threadId, snapToCommittedEnd, syncLayout]);
 
   useLayoutEffect(() => {
@@ -274,6 +285,20 @@ export const ThreadMessageList = memo(
     [snapToCommittedEnd, syncLayout],
   );
 
+  const openPreview = useCallback((id: string) => {
+    setPreviewId(id);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setPreviewId(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (previewId && previewIndex < 0) {
+      setPreviewId(null);
+    }
+  }, [previewId, previewIndex]);
+
   if (items.length === 0) {
     return (
       <div className="thread-scroll">
@@ -290,6 +315,7 @@ export const ThreadMessageList = memo(
   const visible = items.slice(layout.start, layout.end);
 
   return (
+    <>
     <div
       className="thread-scroll"
       ref={scrollRef}
@@ -349,7 +375,13 @@ export const ThreadMessageList = memo(
                       {roleLabel(role, channel, item.actor_label)} ·{" "}
                       {formatChatTime(item.event.occurred_at)}
                     </summary>
-                    <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
+                    <MessageBody
+                      text={item.body_text ?? ""}
+                      attachments={item.attachments}
+                      onPreviewImage={(fileIndex) =>
+                        openPreview(previewImageId(item.event.id, fileIndex))
+                      }
+                    />
                   </details>
                 </div>
               ) : (
@@ -360,6 +392,7 @@ export const ThreadMessageList = memo(
                   channel={channel}
                   canReply={canReply}
                   onReply={onReply}
+                  onPreviewImage={openPreview}
                 />
               )}
             </WindowItem>
@@ -367,6 +400,15 @@ export const ThreadMessageList = memo(
         })}
       </ol>
     </div>
+      {previewIndex >= 0 ? (
+        <ImageLightbox
+          images={previewImages}
+          index={previewIndex}
+          onClose={closePreview}
+          onIndex={(next) => setPreviewId(previewImages[next]?.id ?? null)}
+        />
+      ) : null}
+    </>
   );
   }),
 );
@@ -422,6 +464,7 @@ const ChatRow = memo(function ChatRow({
   channel,
   canReply,
   onReply,
+  onPreviewImage,
 }: {
   item: InboxViewItem;
   role: MessageRole;
@@ -429,6 +472,7 @@ const ChatRow = memo(function ChatRow({
   channel: string;
   canReply: boolean;
   onReply: (item: InboxViewItem) => void;
+  onPreviewImage: (id: string) => void;
 }) {
   const { t } = useLocale();
   const receipt = receiptCopy(item);
@@ -452,7 +496,13 @@ const ChatRow = memo(function ChatRow({
             </button>
           ) : null}
         </div>
-        <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
+        <MessageBody
+          text={item.body_text ?? ""}
+          attachments={item.attachments}
+          onPreviewImage={(fileIndex) =>
+            onPreviewImage(previewImageId(item.event.id, fileIndex))
+          }
+        />
       </div>
     </div>
   );
