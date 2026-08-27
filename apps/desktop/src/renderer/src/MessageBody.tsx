@@ -1,14 +1,19 @@
 import { memo, type ReactNode } from "react";
+import { imagePreviewSrc } from "./image-preview";
+import { useLocale } from "./LocaleContext";
 import { parseRichBlocks } from "./message-view";
 import type { InboxAttachment } from "./types";
 
 export const MessageBody = memo(function MessageBody({
   text,
   attachments,
+  onPreviewImage,
 }: {
   text: string;
   attachments?: InboxAttachment[];
+  onPreviewImage?: (index: number) => void;
 }) {
+  const { t } = useLocale();
   const visible = stripAttachmentLines(text);
   return (
     <div className="rich-body">
@@ -79,20 +84,34 @@ export const MessageBody = memo(function MessageBody({
         : null}
       {attachments && attachments.length > 0 ? (
         <div className="msg-files">
-          {attachments.map((file, index) =>
-            file.data_base64 && file.media_type.startsWith("image/") ? (
-              <img
+          {attachments.map((file, index) => {
+            const src = imagePreviewSrc(file);
+            if (!src) {
+              return (
+                <span key={`${file.filename}-${index}`} className="file-chip">
+                  {file.filename}
+                </span>
+              );
+            }
+            const image = (
+              <img className="msg-image" src={src} alt={file.filename} draggable={false} />
+            );
+            if (!onPreviewImage) {
+              return <span key={`${file.filename}-${index}`}>{image}</span>;
+            }
+            return (
+              <button
                 key={`${file.filename}-${index}`}
-                className="msg-image"
-                src={`data:${file.media_type};base64,${file.data_base64}`}
-                alt={file.filename}
-              />
-            ) : (
-              <span key={`${file.filename}-${index}`} className="file-chip">
-                {file.filename}
-              </span>
-            ),
-          )}
+                type="button"
+                className="msg-image-btn"
+                aria-haspopup="dialog"
+                aria-label={t("preview.open", { name: file.filename })}
+                onClick={() => onPreviewImage(index)}
+              >
+                {image}
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
