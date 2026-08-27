@@ -63,7 +63,7 @@ export function ConnectorKind({
           <button
             type="button"
             className={kind.installed ? "ghost" : "primary"}
-            disabled={busyId !== null || syncingAll}
+            disabled={busyId !== null || syncingAll || !kind.setup_ready}
             onClick={onOpenInstall}
           >
             {t("connector.install")}

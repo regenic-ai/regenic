@@ -214,7 +214,7 @@ const CATALOG: CatalogDefinition[] = [
     connector_type: "crm-ops-review",
     title: "CRM ops review",
     description:
-      "Private plugin. Pulls email-submit PENDING_REVIEW tasks; DSH decides, the connector completes. Without the internal CRM connector this row cannot be installed.",
+      "Private plugin. Installs only when an extra connector package is loaded.",
     credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
     fields: [
       {
@@ -231,7 +231,7 @@ const CATALOG: CatalogDefinition[] = [
     connector_type: "crm-order-review",
     title: "CRM order review",
     description:
-      "Private plugin. Pulls orders whose AI internal review is waiting for a human. Without the internal CRM connector this row cannot be installed.",
+      "Private plugin. Installs only when an extra connector package is loaded.",
     credential_hint: "REGENIC_CRM_BASE_URL; REGENIC_CRM_TOKEN optional",
     fields: [
       {
@@ -253,21 +253,21 @@ function crmPrerequisites(): CatalogDefinition["prerequisites"] {
       key: "crm-connector",
       label: "Private CRM connector",
       required: true,
-      hint: "This build does not include @bioby/regenic-crm-connector. Open-source installs cannot use CRM.",
+      hint: "Load a private connector with REGENIC_CRM_CONNECTOR or REGENIC_PLUGIN_DIR.",
     },
     {
       kind: "env",
       key: "REGENIC_CRM_BASE_URL",
       label: "CRM base URL",
       required: true,
-      hint: "Set before starting the desktop, including /api, e.g. https://crm-host/api. The form does not take it.",
+      hint: "Set REGENIC_CRM_BASE_URL before starting the desktop. The form does not take it.",
     },
     {
       kind: "env",
       key: "REGENIC_CRM_TOKEN",
       label: "CRM reporting-ops token",
       required: false,
-      hint: "Optional. When set, CRM must scope to that reporting-ops user. A bad token must 401.",
+      hint: "Optional. A rejected token must 401; it must not fall back to an unscoped read.",
     },
   ];
 }

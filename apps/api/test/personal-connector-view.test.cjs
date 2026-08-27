@@ -120,7 +120,7 @@ describe("connector catalog hints", () => {
     assert.equal(order.title, "CRM order review");
     assert.equal(ops.setup_ready, false);
     assert.equal(order.setup_ready, false);
-    assert.match(ops.prerequisites[0].hint, /cannot use CRM/);
+    assert.match(ops.prerequisites[0].hint, /REGENIC_CRM_CONNECTOR|REGENIC_PLUGIN_DIR/);
   });
 
   it("marks CRM setup ready only when the private plugin and base URL are present", () => {
