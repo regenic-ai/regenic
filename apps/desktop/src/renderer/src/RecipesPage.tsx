@@ -389,6 +389,9 @@ export function RecipesPage({
                   {t("recipes.enabledCheck")}
                 </SwitchRow>
               ) : null}
+              {draft.can_write_back ? (
+                <p className="muted recipe-writeback-hint">{t("recipes.writeBackHint")}</p>
+              ) : null}
             </div>
 
             <label className="field">

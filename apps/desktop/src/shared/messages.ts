@@ -148,6 +148,8 @@ export const en = {
     "This executor runs in the background. The job closes when it stops working.",
   "recipes.name": "Name",
   "recipes.writeBackCheck": "Write back when done",
+  "recipes.writeBackHint":
+    "Write-back matches only the first line of the result to a live prompt option (for example APPROVED, REJECTED, 通过, or 不通过). Put reasons on the next lines — do not write 审核结果：不通过.",
   "recipes.enabledCheck": "On",
   "recipes.advanced": "More",
   "recipes.facet": "Type",
@@ -487,6 +489,8 @@ export const zh: Record<MessageKey, string> = {
   "recipes.absentee": "这个执行器在后台跑，停下来后工单关闭。",
   "recipes.name": "名称",
   "recipes.writeBackCheck": "做完后回写",
+  "recipes.writeBackHint":
+    "回写只认结果第一行，必须刚好是渠道待办选项（例如 APPROVED、REJECTED、通过、不通过）。原因从第二行写，不要写成「审核结果：不通过」。",
   "recipes.enabledCheck": "启用",
   "recipes.advanced": "更多",
   "recipes.facet": "类型",
