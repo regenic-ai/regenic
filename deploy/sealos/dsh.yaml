@@ -4,7 +4,8 @@
 # Disk is a StatefulSet claim (`data-regenic-dsh-0`). Do not click Launchpad
 # "开存储" on this app; replacing the pod remounts the same volume.
 #
-# Public hosts, namespace DNS, and Ingress stay out of git. Copy:
+# Public hosts, namespace DNS, and Ingress stay out of git. Do not add an
+# Ingress unless you intentionally reopen public access. Copy:
 #   cp deploy/sealos/dsh.local.yaml.example deploy/sealos/dsh.local.yaml
 # Then:
 #   kubectl apply -f deploy/sealos/secret.yaml -f deploy/sealos/dsh.yaml

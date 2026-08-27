@@ -96,11 +96,11 @@ spec:
               value: /data/tmp
           resources:
             requests:
-              cpu: 50m
-              memory: 51Mi
+              cpu: 100m
+              memory: 102Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: "1"
+              memory: 1Gi
           volumeMounts:
             - name: data
               mountPath: /data
