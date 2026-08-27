@@ -4,6 +4,7 @@ import {
   INGEST_SCHEMA_VERSION,
   WORK_EVIDENCE_FETCH_LIMIT,
   channelRecord,
+  deliveryChannelReceipt,
   isAbandonedWorkItem,
   matchWriteBackPrompt,
   parseConversationThread,
@@ -183,20 +184,20 @@ export class PersonalWorkChannel {
       .get("authority")
       .listInstallations(item.org_id);
     const found = this.drivers.findForThread(installations, thread);
+    const recorded = deliveryChannelReceipt(delivery);
     if (found?.driver.canReply(found.installation)) {
       await this.sendText(thread, text, {
         writeBack: true,
         idempotency_key: delivery?.idempotency_key,
-        receipt: delivery?.channel_receipt
-          ? {
-              accepted: delivery.channel_receipt.accepted,
-              ...(delivery.channel_receipt.rpc_id
-                ? { rpc_id: delivery.channel_receipt.rpc_id }
-                : {}),
-            }
-          : undefined,
+        receipt: recorded,
         onReceipt,
       });
+      return "sent";
+    }
+    if (recorded) {
+      if (onReceipt) {
+        await onReceipt(recorded, new Date().toISOString());
+      }
       return "sent";
     }
     const prompts = await this.drivers.listPrompts(installations, thread, host);
@@ -214,7 +215,22 @@ export class PersonalWorkChannel {
         400,
       );
     }
-    await this.drivers.answerPrompt(installations, thread, answer, host);
+    const accepted = await this.drivers.answerPrompt(
+      installations,
+      thread,
+      answer,
+      host,
+    );
+    if (!accepted.accepted) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "Write-back prompt was not accepted",
+        502,
+      );
+    }
+    if (onReceipt) {
+      await onReceipt({ accepted: true }, new Date().toISOString());
+    }
     return "sent";
   }
 

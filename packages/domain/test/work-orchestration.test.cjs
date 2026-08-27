@@ -48,6 +48,7 @@ const {
   cancelWorkRun,
   enqueueWriteBack,
   deliveryClaimSend,
+  deliveryRecordReceipt,
   deliveryAcked,
   deliveryWriteBackFailed,
   deliveryRetryNow,
@@ -532,6 +533,25 @@ describe("work delivery", () => {
       }),
     );
     assert.notEqual(again.idempotency_key, first.idempotency_key);
+    const sent = deliveryRecordReceipt(
+      deliveryClaimSend(queued(), now),
+      { accepted: true, rpc_id: "rpc-1" },
+      now,
+    );
+    const same = enqueueWriteBack({
+      org_id: sent.org_id,
+      work_item_id: sent.work_item_id,
+      recipe_id: sent.recipe_id,
+      kind: "push",
+      unit_key: sent.unit_key,
+      payload: sent.payload,
+      now: "2026-08-27T10:00:01.000Z",
+      existing: sent,
+    });
+    assert.equal(same.status, "write_back");
+    assert.equal(same.attempts, 1);
+    assert.deepEqual(same.channel_receipt, { accepted: true, rpc_id: "rpc-1" });
+    assert.equal(same.idempotency_key, sent.idempotency_key);
   });
 
   it("reclaims an expired lease and does not flush an in-flight send", () => {

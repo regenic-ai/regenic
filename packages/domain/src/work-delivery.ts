@@ -51,8 +51,15 @@ export function enqueueWriteBack(input: {
   now: string;
   existing?: WorkDelivery | null;
 }): WorkDelivery {
+  const idempotency_key = writeBackIdempotencyKey(input.work_item_id, input.payload);
+  const existing = input.existing;
+  if (existing && deliveryPayloadKey(existing) === idempotency_key) {
+    return existing.idempotency_key
+      ? existing
+      : { ...existing, idempotency_key };
+  }
   return {
-    id: input.existing?.id ?? `deliv-${randomUUID()}`,
+    id: existing?.id ?? `deliv-${randomUUID()}`,
     org_id: input.org_id,
     work_item_id: input.work_item_id,
     recipe_id: input.recipe_id,
@@ -63,11 +70,37 @@ export function enqueueWriteBack(input: {
     write_back: "pending",
     attempts: 0,
     payload: clonePayload(input.payload),
-    idempotency_key: writeBackIdempotencyKey(input.work_item_id, input.payload),
+    idempotency_key,
     channel_receipt: undefined,
-    created_at: input.existing?.created_at ?? input.now,
+    last_error: undefined,
+    next_retry_at: undefined,
+    lease_expires_at: undefined,
+    created_at: existing?.created_at ?? input.now,
     updated_at: input.now,
   };
+}
+
+export function deliveryChannelReceipt(
+  delivery?: Pick<WorkDelivery, "channel_receipt"> | null,
+): DeliveryReceipt | undefined {
+  const receipt = delivery?.channel_receipt;
+  if (!receipt?.accepted) {
+    return undefined;
+  }
+  return {
+    accepted: true,
+    ...(receipt.rpc_id ? { rpc_id: receipt.rpc_id } : {}),
+  };
+}
+
+function deliveryPayloadKey(delivery: WorkDelivery): string | undefined {
+  if (delivery.idempotency_key) {
+    return delivery.idempotency_key;
+  }
+  if (!delivery.payload) {
+    return undefined;
+  }
+  return writeBackIdempotencyKey(delivery.work_item_id, delivery.payload);
 }
 
 export function writeBackIdempotencyKey(
