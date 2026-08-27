@@ -1,0 +1,197 @@
+const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
+const { describe, it } = require("node:test");
+const {
+  CONTENT_PARTS_MEDIA_TYPE,
+  MemoryAuthorityStore,
+  MemoryBlobStore,
+  compactEmbeddedContent,
+  parseStoredContentParts,
+} = require("../dist");
+
+describe("compactEmbeddedContent", () => {
+  it("rewrites inlined base64 attachments into hashed blobs", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 8, 7, 6]);
+    const envelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          source_filename: null,
+          bytes_base64: Buffer.from("see this", "utf8").toString("base64"),
+        },
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "shot.png",
+          bytes_base64: png.toString("base64"),
+        },
+        {
+          role: "metadata",
+          media_type: "application/vnd.regenic.surface+json",
+          source_filename: null,
+          bytes_base64: Buffer.from(
+            JSON.stringify({
+              channel: "feishu",
+              kind: "user",
+              direction: "inbound",
+            }),
+            "utf8",
+          ).toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const oldHash = createHash("sha256").update(envelope).digest("hex");
+    await blobs.put(oldHash, envelope, CONTENT_PARTS_MEDIA_TYPE);
+    const event = await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_1",
+      content_hash: oldHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: envelope.byteLength,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+
+    const first = await compactEmbeddedContent(authority, blobs, "local-owner");
+    const second = await compactEmbeddedContent(authority, blobs, "local-owner");
+    const updated = await authority.getEvent("local-owner", event.id);
+    const parts = parseStoredContentParts(await blobs.get(updated.content_hash));
+    const attachment = parts.find((part) => part.role === "attachment");
+    const body = parts.find((part) => part.role === "body");
+
+    assert.equal(first.rewritten, 1);
+    assert.equal(first.failed, 0);
+    assert.equal(second.rewritten, 0);
+    assert.equal(second.failed, 0);
+    assert.notEqual(updated.content_hash, oldHash);
+    assert.equal(await blobs.exists(oldHash), false);
+    assert.equal(body.text, "see this");
+    assert.equal(attachment.bytes_base64, undefined);
+    assert.deepEqual(Buffer.from(await blobs.get(attachment.content_hash)), png);
+    assert.ok(first.released_bytes > 0);
+  });
+
+  it("stops when the caller aborts", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const envelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          bytes_base64: Buffer.from("keep", "utf8").toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const oldHash = createHash("sha256").update(envelope).digest("hex");
+    await blobs.put(oldHash, envelope, CONTENT_PARTS_MEDIA_TYPE);
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_abort",
+      content_hash: oldHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: envelope.byteLength,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+
+    const result = await compactEmbeddedContent(
+      authority,
+      blobs,
+      "local-owner",
+      { signal: AbortSignal.abort() },
+    );
+
+    assert.equal(result.rewritten, 0);
+    assert.equal(result.paused, true);
+    assert.equal(await blobs.exists(oldHash), true);
+  });
+
+  it("pauses when the human becomes active again", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const envelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          bytes_base64: Buffer.from("keep", "utf8").toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const oldHash = createHash("sha256").update(envelope).digest("hex");
+    await blobs.put(oldHash, envelope, CONTENT_PARTS_MEDIA_TYPE);
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_pause",
+      content_hash: oldHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: envelope.byteLength,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+
+    const result = await compactEmbeddedContent(
+      authority,
+      blobs,
+      "local-owner",
+      { pauseIf: () => true },
+    );
+
+    assert.equal(result.rewritten, 0);
+    assert.equal(result.paused, true);
+    assert.equal(await blobs.exists(oldHash), true);
+  });
+
+  it("counts skipped embedded envelopes so a later pass can retry", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const missingHash = createHash("sha256").update("missing").digest("hex");
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_missing",
+      content_hash: missingHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: 8,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    const broken = Buffer.from(
+      JSON.stringify([
+        {
+          role: "attachment",
+          media_type: "image/png",
+          bytes_base64: "",
+        },
+      ]),
+      "utf8",
+    );
+    const brokenHash = createHash("sha256").update(broken).digest("hex");
+    await blobs.put(brokenHash, broken, CONTENT_PARTS_MEDIA_TYPE);
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_broken",
+      content_hash: brokenHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: broken.byteLength,
+      occurred_at: "2026-08-27T00:00:01.000Z",
+      expected_head_id: null,
+    });
+
+    const result = await compactEmbeddedContent(authority, blobs, "local-owner");
+    assert.equal(result.rewritten, 0);
+    assert.equal(result.failed, 2);
+    assert.equal(result.paused, false);
+  });
+});

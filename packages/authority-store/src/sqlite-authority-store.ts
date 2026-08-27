@@ -32,6 +32,7 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  RepointContentInput,
   ResetConnectorCursor,
   ReleaseConnectorLease,
   SetConnectorInstallationConfig,
@@ -160,6 +161,7 @@ interface InsertEventInput extends SourceIdentity {
   content_hash?: string;
   content_media_type?: string;
   content_byte_size?: number;
+  extra_blobs?: NewEvent["extra_blobs"];
   parent_event_id?: string;
   revision_id?: string;
   occurred_at: string;
@@ -916,6 +918,66 @@ export class SqliteAuthorityStore
     return this.insert({ ...input, operation: "create" });
   }
 
+  async repointContentHash(input: RepointContentInput): Promise<number> {
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const now = new Date().toISOString();
+      this.insertBlobRow(
+        input.new_content_hash,
+        input.content_media_type,
+        input.content_byte_size,
+        now,
+      );
+      for (const blob of input.extra_blobs ?? []) {
+        this.insertBlobRow(
+          blob.content_hash,
+          blob.media_type,
+          blob.byte_size,
+          now,
+        );
+      }
+      const updated = this.database
+        .prepare(`UPDATE events SET content_hash = ? WHERE content_hash = ?`)
+        .run(input.new_content_hash, input.old_content_hash);
+      if (input.old_content_hash !== input.new_content_hash) {
+        this.database
+          .prepare(
+            `
+              DELETE FROM blobs
+              WHERE content_hash = ?
+                AND content_hash NOT IN (
+                  SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+                )
+            `,
+          )
+          .run(input.old_content_hash);
+      }
+      return updated.changes;
+    }).immediate();
+  }
+
+  async vacuumStore(): Promise<void> {
+    this.assertWritable();
+    this.database.exec("VACUUM");
+  }
+
+  private insertBlobRow(
+    contentHash: string,
+    mediaType: string | undefined,
+    byteSize: number | undefined,
+    createdAt: string,
+  ): void {
+    this.database
+      .prepare(
+        `
+          INSERT OR IGNORE INTO blobs (
+            content_hash, media_type, byte_size, created_at
+          ) VALUES (?, ?, ?, ?)
+        `,
+      )
+      .run(contentHash, mediaType ?? "application/octet-stream", byteSize ?? 0, createdAt);
+  }
+
   async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
     this.assertWritable();
     if (request.appends.length === 0 && request.dispositions.length === 0) {
@@ -1450,20 +1512,20 @@ export class SqliteAuthorityStore
     };
 
     if (input.content_hash) {
-      this.database
-        .prepare(
-          `
-            INSERT OR IGNORE INTO blobs (
-              content_hash, media_type, byte_size, created_at
-            ) VALUES (?, ?, ?, ?)
-          `,
-        )
-        .run(
-          input.content_hash,
-          input.content_media_type,
-          input.content_byte_size,
-          event.ingested_at,
-        );
+      this.insertBlobRow(
+        input.content_hash,
+        input.content_media_type,
+        input.content_byte_size,
+        event.ingested_at,
+      );
+    }
+    for (const blob of input.extra_blobs ?? []) {
+      this.insertBlobRow(
+        blob.content_hash,
+        blob.media_type,
+        blob.byte_size,
+        event.ingested_at,
+      );
     }
 
     this.database

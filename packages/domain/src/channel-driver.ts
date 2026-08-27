@@ -24,6 +24,11 @@ export interface ConversationThread {
   target: string;
 }
 
+/** Kernel-owned threads this install should keep live. Drivers may add a cheap peek. */
+export interface ResolveStreamsOptions {
+  threads?: ConversationThread[];
+}
+
 /** Store-derived inbound cursor. Connectors may use it as an opaque hint. */
 export interface ThreadAttentionQuery extends ConversationThread {
   latest_inbound?: ThreadInboundCursor;
@@ -148,6 +153,7 @@ export interface ChannelDriver {
     installation: ConnectorInstallation,
     host: Host,
     env: NodeJS.ProcessEnv,
+    options?: ResolveStreamsOptions,
   ): Promise<ConnectorStream[]>;
   resolveThreadStream(
     installation: ConnectorInstallation,

@@ -83,7 +83,7 @@ export async function listFeishuCatalogChats(options: {
       spawn: options.spawn,
       timeout_ms: 15_000,
     });
-    return await client.listAllChats();
+    return await client.listRecentChats(undefined, { names: true });
   } catch {
     return [];
   }

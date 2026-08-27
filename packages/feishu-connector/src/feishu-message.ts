@@ -185,8 +185,14 @@ export function mergeFeishuDisplayNames(
 
 export function feishuConversationKind(
   chatMode: string | undefined,
-): "group" | "direct" {
-  return chatMode === "p2p" ? "direct" : "group";
+): "group" | "direct" | undefined {
+  if (chatMode === "p2p") {
+    return "direct";
+  }
+  if (chatMode === "group") {
+    return "group";
+  }
+  return undefined;
 }
 
 export function feishuCreateTimeToIso(

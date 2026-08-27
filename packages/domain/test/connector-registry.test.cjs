@@ -63,4 +63,14 @@ describe("MemoryConnectorRegistry streams", () => {
       /Connector already registered: feishu-1:chat:oc_1/,
     );
   });
+
+  it("unregisters one stream without dropping the others", () => {
+    const registry = new MemoryConnectorRegistry();
+    registry.register("feishu-1", stubConnector(), { stream_key: "chat:oc_1" });
+    registry.register("feishu-1", stubConnector(), { stream_key: "chat:oc_2" });
+    assert.equal(registry.unregister("feishu-1", "chat:oc_1"), true);
+    assert.equal(registry.getStream("feishu-1", "chat:oc_1"), undefined);
+    assert.equal(registry.getStream("feishu-1", "chat:oc_2")?.stream_key, "chat:oc_2");
+    assert.equal(registry.unregister("feishu-1", "chat:missing"), false);
+  });
 });

@@ -13,6 +13,7 @@ import type {
   InboxSummary,
   IngestCommitRequest,
   NewEvent,
+  RepointContentInput,
   SourceIdentity,
   StoreClearResult,
   StoreFootprint,
@@ -372,19 +373,62 @@ export class MemoryAuthorityStore
     return this.events.map((event) => ({ ...event }));
   }
 
+  async repointContentHash(input: RepointContentInput): Promise<number> {
+    this.rememberBlob({
+      content_hash: input.new_content_hash,
+      media_type: input.content_media_type,
+      byte_size: input.content_byte_size,
+    });
+    for (const blob of input.extra_blobs ?? []) {
+      this.rememberBlob(blob);
+    }
+    let updated = 0;
+    for (const event of this.events) {
+      if (event.content_hash === input.old_content_hash) {
+        event.content_hash = input.new_content_hash;
+        updated += 1;
+      }
+    }
+    const stillUsed = this.events.some(
+      (event) => event.content_hash === input.old_content_hash,
+    );
+    if (!stillUsed && input.old_content_hash !== input.new_content_hash) {
+      this.blobs.delete(input.old_content_hash);
+    }
+    return updated;
+  }
+
+  async vacuumStore(): Promise<void> {}
+
+  private rememberBlob(input: {
+    content_hash: string;
+    media_type: string;
+    byte_size: number;
+  }): void {
+    if (this.blobs.has(input.content_hash)) {
+      return;
+    }
+    this.blobs.set(input.content_hash, {
+      content_hash: input.content_hash,
+      media_type: input.media_type,
+      byte_size: input.byte_size,
+      created_at: new Date().toISOString(),
+    });
+  }
+
   private addContentEvent(
     input: NewEvent | EventRevision,
     operation: "create" | "revise",
   ): EventRecord {
     const current = this.currentBySource.get(sourceKey(input)) ?? null;
     this.assertExpectedHead(input.expected_head_id, current);
-    if (!this.blobs.has(input.content_hash)) {
-      this.blobs.set(input.content_hash, {
-        content_hash: input.content_hash,
-        media_type: input.content_media_type,
-        byte_size: input.content_byte_size,
-        created_at: new Date().toISOString(),
-      });
+    this.rememberBlob({
+      content_hash: input.content_hash,
+      media_type: input.content_media_type,
+      byte_size: input.content_byte_size,
+    });
+    for (const blob of input.extra_blobs ?? []) {
+      this.rememberBlob(blob);
     }
     return this.addEvent({
       ...input,

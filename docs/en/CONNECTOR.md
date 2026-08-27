@@ -161,7 +161,7 @@ interface ChannelDriver {
   surfaceGeneration?(installation, host): string;
   canReply(installation): boolean;
   createThread(installation, host, env): Promise<ConversationThread>;
-  resolveStreams(installation, host, env): Promise<ConnectorStream[]>;
+  resolveStreams(installation, host, env, options?): Promise<ConnectorStream[]>;
   resolveThreadStream(installation, thread, host, env): Promise<ConnectorStream>;
   bindEgress(installation, thread, host, env): Promise<RegisteredEgress>;
   outboundId(thread, receipt): string;
@@ -174,13 +174,13 @@ interface ChannelDriver {
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
 | `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `prompts`, `attention`, and `receipts`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH sets `prompt` (first user message). `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Slack omit it. |
-| `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Feishu uses install `chat_names` or the live chat list (a nameless p2p chat resolves `p2p_target_id`). Slack uses `channel_name`. A lookup failure must not block inbox. |
+| `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Local names only: Feishu uses install `chat_names`, Slack uses `channel_name`. Must not call `listAllChats` or block opening a thread. |
 | `listPrompts` / `answerPrompt` | Optional. Live pending decisions. DSH web mounts mux, maps `question/requested` / `approval/requested` to a channel-agnostic Prompt, and answers on `/api/respond`. `not-pending` is treated as settled. |
 | `readAttention` / `ackAttention` | Optional. Source overlay for *my* unread of their inbound. Feishu calls user-identity `read_status` on the latest inbound `om_`. Failure or an official “read” must not hide a thread the PC has never opened. Ack writes the local cursor first. |
 | `readReceipts` | Optional. Peer read of my outbound. Feishu calls user-identity `read_users` on `:out:om_`. Empty items stay Sent. Do not reuse this as conversation unread. |
 | `surfaceGeneration` | Optional. Live surface generation, appended to `inbox_digest` as `&s=` so a new approval is visible to desktop polling. |
 | `canReply` | Same value as `capabilities().reply`. |
-| `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` per selected conversation, or every visible group and/or p2p chat when `selection=all`. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
+| `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` for picked chats; when `selection=all`, follow `options.threads` from the kernel (current work ∪ the open thread) plus new `chat_id`s from the latest directory page (cached about 2 minutes). Unmount streams outside that set. Must not read the inbox or call `listAllChats` on every tick. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
 | `createThread` | Required when `create` is true. Otherwise throw `unsupported_channel`. |
 | `bindEgress` | Required when `reply` is true. Otherwise throw `unsupported_channel`. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
@@ -201,7 +201,7 @@ interface ConnectorStream {
 }
 ```
 
-`pace` is declared per stream. The kernel only reads the fields: after an empty tick, a background tick may skip a stream that set `idle_ms`; while catching up it pulls at most `catch_up_pages` (kernel-capped). Omit `pace` to poll one page every tick. Feishu sets `{ idle_ms: 15_000, catch_up_pages: 5 }`; DSH and Slack omit it.
+`pace` is declared per stream. The kernel only reads the fields: after an empty tick, a background tick may skip a stream that set `idle_ms`. Background ticks stay out of the human's way: while the PC is in use they only poll a few streams from the kernel-computed eligible set for recent/live messages (one page each), do not walk history, and do not census every Feishu chat. The kernel derives that set from current-work inbox threads and the open thread, and passes it as `options.threads`; new conversations come from the latest directory page on a TTL. Streams outside the set are unmounted. After the human is idle they backfill one older page at a time. Opening an empty thread seeds the latest page; scrolling up asks for one older page when the local store has none. An explicit Engine Sync may use `catch_up_pages` (kernel-capped). Omit `pace` to poll one page every tick. Feishu sets `{ idle_ms: 15_000, catch_up_pages: 5 }`; DSH and Slack omit it.
 
 ## ChannelConnector
 

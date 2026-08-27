@@ -2419,6 +2419,20 @@ describe("inbox body decode", () => {
       decodeBodyText(envelope, "application/vnd.regenic.content-parts+json"),
       "Please confirm",
     );
+    const textEnvelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          text: "Hashed body",
+        },
+      ]),
+      "utf8",
+    );
+    assert.equal(
+      decodeBodyText(textEnvelope, "application/vnd.regenic.content-parts+json"),
+      "Hashed body",
+    );
     const withFile = Buffer.from(
       JSON.stringify([
         {

@@ -14,6 +14,7 @@ COPY packages/blob-store/package.json packages/blob-store/
 COPY packages/config/package.json packages/config/
 COPY packages/domain/package.json packages/domain/
 COPY packages/dsh-connector/package.json packages/dsh-connector/
+COPY packages/feishu-connector/package.json packages/feishu-connector/
 COPY packages/local-cli/package.json packages/local-cli/
 COPY packages/plugin-host/package.json packages/plugin-host/
 COPY packages/slack-connector/package.json packages/slack-connector/
@@ -32,7 +33,9 @@ RUN pnpm --filter @regenic/plugin-host build \
   && pnpm --filter @regenic/blob-store build \
   && pnpm --filter @regenic/authority-store build \
   && pnpm --filter @regenic/dsh-connector build \
+  && pnpm --filter @regenic/feishu-connector build \
   && pnpm --filter @regenic/slack-connector build \
+  && pnpm --filter @regenic/whatsapp-personal build \
   && ls -la packages/authority-store/dist packages/blob-store/dist packages/config/dist packages/domain/dist \
   && test -f packages/config/dist/index.d.ts \
   && test -f packages/domain/dist/index.d.ts \
