@@ -72,6 +72,7 @@ const FULL_REFRESH_MS = 45_000;
 const HOST_POLL_MS = 5000;
 const OPEN_RETRY_MS = 350;
 const OPEN_RETRIES = 5;
+const RECEIPT_REFRESH_MS = 15_000;
 
 export function ConsoleApp() {
   const { t } = useLocale();
@@ -122,6 +123,7 @@ export function ConsoleApp() {
   const hasOlderRef = useRef(hasOlderByThread);
   hasOlderRef.current = hasOlderByThread;
   const threadLoadSeq = useRef<Record<string, number>>({});
+  const lastReceiptAt = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
   const delayRef = useRef(POLL_MS);
   const ackStampRef = useRef<Record<string, string>>({});
@@ -193,6 +195,9 @@ export function ConsoleApp() {
         }
         if (delta.length === 0) {
           finishOpen();
+          if (loaded) {
+            maybeRefreshOpenedReceipts(threadId);
+          }
           return current;
         }
         const next = orderThreadMessages(
@@ -202,6 +207,9 @@ export function ConsoleApp() {
           rememberThreadMessages(prev, threadId, next),
         );
         finishOpen();
+        if (loaded) {
+          maybeRefreshOpenedReceipts(threadId);
+        }
         return next;
       }
       if (olderBusyRef.current.has(threadId)) {
@@ -235,6 +243,11 @@ export function ConsoleApp() {
         rememberThreadMessages(prev, threadId, merged),
       );
       finishOpen();
+      if (mode === "open" && !loaded) {
+        void refreshOpenedReceipts(threadId);
+      } else if (loaded) {
+        maybeRefreshOpenedReceipts(threadId);
+      }
       return merged;
     } catch (caught) {
       if (threadLoadSeq.current[threadId] !== seq) {
@@ -250,6 +263,41 @@ export function ConsoleApp() {
       finishOpen();
       return current;
     }
+  };
+
+  const refreshOpenedReceipts = async (threadId: string) => {
+    lastReceiptAt.current[threadId] = Date.now();
+    const epoch = workspaceEpoch.current;
+    try {
+      const items = await fetchInbox({
+        thread_id: threadId,
+        limit: THREAD_OPEN_PAGE_SIZE,
+        live: true,
+      });
+      if (workspaceEpoch.current !== epoch) {
+        return;
+      }
+      if (!loadedThreadsRef.current.has(threadId)) {
+        return;
+      }
+      setMessagesByThread((prev) =>
+        rememberThreadMessages(
+          prev,
+          threadId,
+          orderThreadMessages(mergeInboxDelta(prev[threadId] ?? [], items)),
+        ),
+      );
+    } catch {
+      // Receipts stay optional; the thread is already on screen.
+    }
+  };
+
+  const maybeRefreshOpenedReceipts = (threadId: string) => {
+    const last = lastReceiptAt.current[threadId] ?? 0;
+    if (Date.now() - last < RECEIPT_REFRESH_MS) {
+      return;
+    }
+    void refreshOpenedReceipts(threadId);
   };
 
   const loadOlder = async (threadId: string) => {
@@ -362,6 +410,9 @@ export function ConsoleApp() {
           if (workspaceEpoch.current !== epoch) {
             continue;
           }
+          if (loadedThreadsRef.current.has(openId)) {
+            maybeRefreshOpenedReceipts(openId);
+          }
           await ackOpenThread(openId, loaded);
         }
         if (workspaceEpoch.current !== epoch) {
@@ -412,6 +463,7 @@ export function ConsoleApp() {
     openedAtRef.current = {};
     ackStampRef.current = {};
     lastFullRef.current = 0;
+    lastReceiptAt.current = {};
     reuseHintRef.current = undefined;
     setInbox([]);
     setMessagesByThread({});

@@ -7,6 +7,7 @@ const {
   catalogFromDrivers,
   connectorAllowsMultiple,
   connectorCatalog,
+  nextPickedChatNames,
   toInstallationView,
 } = require("../dist/personal-connector-view");
 
@@ -217,5 +218,32 @@ describe("connector catalog hints", () => {
     assert.equal(view.detail, "50");
     assert.equal(view.channel, "extra");
     assert.equal(view.settings.max_open, "50");
+  });
+
+  it("persists picked chat names from stream labels", () => {
+    assert.deepEqual(
+      nextPickedChatNames(
+        { selection: "pick", chat_ids: ["oc_1", "oc_2"] },
+        [
+          { thread_id: "feishu:oc_1", label: "合伙" },
+          { thread_id: "feishu:oc_2", label: "李诗婷" },
+        ],
+      ),
+      ["合伙", "李诗婷"],
+    );
+    assert.equal(
+      nextPickedChatNames(
+        { selection: "pick", chat_ids: ["oc_1"], chat_names: ["Ada"] },
+        [{ thread_id: "feishu:oc_1", label: "Ada" }],
+      ),
+      null,
+    );
+    assert.equal(
+      nextPickedChatNames(
+        { selection: "pick", chat_ids: ["oc_1", "oc_2"] },
+        [{ thread_id: "feishu:oc_1", label: "oc_1" }],
+      ),
+      null,
+    );
   });
 });

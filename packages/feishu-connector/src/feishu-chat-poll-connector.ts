@@ -121,6 +121,22 @@ export class FeishuChatPollConnector {
       state,
       { older: options?.older === true },
     );
+    if (!request) {
+      const nextCursor = encodeFeishuCursor(state);
+      return {
+        batch: {
+          schema_version: INGEST_SCHEMA_VERSION,
+          connector_id: this.options.connector_id,
+          org_id: this.options.org_id,
+          delivery_id: this.deliveryId(cursor?.value, nextCursor),
+          received_at: this.now(),
+          next_cursor: nextCursor,
+          records: [],
+        },
+        next_cursor: nextCursor,
+        has_more: false,
+      };
+    }
     const page = await this.client.listMessages(request);
     const names = await this.resolveNames(page.items);
     const selfId = await this.selfUserId();
@@ -404,7 +420,7 @@ export function planFeishuHistoryRequest(
   pageSize: number,
   state: FeishuCursorState,
   options: { older?: boolean } = {},
-): FeishuListInput {
+): FeishuListInput | null {
   if (needsRecentSeed(state) || needsMediaReseed(state)) {
     return {
       chat_id: chatId,
@@ -413,7 +429,10 @@ export function planFeishuHistoryRequest(
     };
   }
   const historyToken = deferredHistoryToken(state);
-  if (options.older === true && historyToken) {
+  if (options.older === true) {
+    if (!historyToken) {
+      return null;
+    }
     return {
       chat_id: chatId,
       page_size: pageSize,

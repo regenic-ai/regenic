@@ -162,6 +162,13 @@ export function resetLarkCliSlot(): void {
   larkCliWaiters.length = 0;
 }
 
+export function isMissingLarkShortcutError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /unknown|not found|no such|unrecognized|invalid command|\+message-read-users/i.test(
+    text,
+  );
+}
+
 export function isTransientLarkError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const code = error instanceof FeishuApiError ? error.code : undefined;
@@ -557,13 +564,16 @@ export class LarkCliClient implements FeishuImClient {
       return { items: [] };
     }
     try {
-      return await this.request({
+      return await this.readMessageUsersViaShortcut(id);
+    } catch (error) {
+      if (!isMissingLarkShortcutError(error)) {
+        throw error;
+      }
+      return this.requestViaCli({
         method: "GET",
         path: `/open-apis/im/v1/messages/${encodeURIComponent(id)}/read_users`,
         params: { user_id_type: "open_id", page_size: 50 },
       });
-    } catch {
-      return { items: [] };
     }
   }
 
@@ -603,6 +613,16 @@ export class LarkCliClient implements FeishuImClient {
     if (viaHttp !== undefined) {
       return viaHttp;
     }
+    return this.requestViaCli(input);
+  }
+
+  /** User read_users is UAT-only. Official docs mark the raw HTTP path as bot/TAT. */
+  private async requestViaCli(input: {
+    method: "GET" | "POST";
+    path: string;
+    params?: Record<string, string | number>;
+    data?: Record<string, unknown>;
+  }): Promise<unknown> {
     const argv = [
       this.command,
       "api",
@@ -623,6 +643,28 @@ export class LarkCliClient implements FeishuImClient {
       command: argv,
       env: this.options.env,
       timeout_ms: this.timeoutMs,
+    });
+    return unwrapLarkCli(result);
+  }
+
+  private async readMessageUsersViaShortcut(messageId: string): Promise<unknown> {
+    // Official user path is one page. `--page-all` defaults to --page-delay 200ms
+    // and up to 10 pages; we only need items.length > 0 to paint Read.
+    const result = await this.runCli({
+      command: [
+        this.command,
+        "im",
+        "+message-read-users",
+        "--message-id",
+        messageId,
+        "--user-id-type",
+        "open_id",
+        "--as",
+        "user",
+        "--json",
+      ],
+      env: this.options.env,
+      timeout_ms: Math.min(this.timeoutMs, 8_000),
     });
     return unwrapLarkCli(result);
   }

@@ -58,6 +58,7 @@ export class PersonalController {
     @Query("before") before?: string,
     @Query("before_id") beforeId?: string,
     @Query("heads") heads?: string,
+    @Query("live") live?: string,
     @Query("thread_id") threadId?: string,
     @Query("limit") limit?: string,
   ) {
@@ -67,6 +68,7 @@ export class PersonalController {
       before: before?.trim() || undefined,
       before_id: beforeId?.trim() || undefined,
       heads: heads === "1" || heads === "true",
+      live: live === "1" || live === "true",
       thread_id: threadId?.trim() || undefined,
       limit: limit?.trim() ? Number(limit) : undefined,
     };

@@ -3,6 +3,8 @@ const { describe, it } = require("node:test");
 const {
   lastCatchUpKey,
   lastHistoryKey,
+  prependUnseenStreams,
+  streamCursorUnseeded,
   rotateFromKey,
   selectHumanPacedStreams,
   selectStreamsForTick,
@@ -75,6 +77,21 @@ describe("selectHumanPacedStreams", () => {
     assert.equal(lastHistoryKey(selected), "b");
   });
 
+  it("gives catching-up streams the live slots after the open conversation", () => {
+    const selected = selectHumanPacedStreams(
+      [
+        planned("live1", false, "feishu:live1"),
+        planned("live2", false, "feishu:live2"),
+        planned("a", true, "feishu:a"),
+      ],
+      { liveLimit: 2, historyLimit: 0, preferredThreadId: "feishu:live1" },
+    );
+    assert.deepEqual(
+      selected.map((item) => `${item.key}:${item.older ? "older" : "live"}`),
+      ["live1:live", "a:live"],
+    );
+  });
+
   it("does not poll the same catching-up stream as both live and history", () => {
     const selected = selectHumanPacedStreams(
       [planned("only", true, "feishu:only")],
@@ -94,6 +111,42 @@ describe("selectHumanPacedStreams", () => {
     assert.deepEqual(
       mixed.map((item) => `${item.key}:${item.older ? "older" : "live"}`),
       ["open:live", "other:older"],
+    );
+  });
+
+  it("never backfills history on the open conversation", () => {
+    const selected = selectHumanPacedStreams(
+      [
+        planned("open", true, "feishu:open"),
+        planned("other", true, "feishu:other"),
+      ],
+      { liveLimit: 0, historyLimit: 1, preferredThreadId: "feishu:open" },
+    );
+    assert.deepEqual(
+      selected.map((item) => `${item.key}:${item.older ? "older" : "live"}`),
+      ["other:older"],
+    );
+  });
+});
+
+describe("streamCursorUnseeded", () => {
+  it("treats a missing cursor or a Feishu cursor before recent seed as unseen", () => {
+    assert.equal(streamCursorUnseeded(undefined), true);
+    assert.equal(streamCursorUnseeded(""), true);
+    assert.equal(streamCursorUnseeded("{}"), false);
+    assert.equal(streamCursorUnseeded(JSON.stringify({ recent_seeded: true })), false);
+    assert.equal(streamCursorUnseeded("plain-dsh-cursor"), false);
+  });
+});
+
+describe("prependUnseenStreams", () => {
+  it("seeds unseen streams before the paced live set", () => {
+    assert.deepEqual(
+      prependUnseenStreams(
+        [{ key: "a" }, { key: "b" }, { key: "c" }, { key: "d" }],
+        [{ key: "open" }, { key: "a" }],
+      ).map((item) => item.key),
+      ["a", "b", "c", "d", "open"],
     );
   });
 });

@@ -18,6 +18,7 @@ import type { Host } from "@regenic/plugin-host";
 import {
   connectorAllowsMultiple,
   catalogFromDrivers,
+  nextPickedChatNames,
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
@@ -38,8 +39,10 @@ import { isHumanIdle, noteHumanActivity } from "./personal-human-pace";
 import {
   humanPaceLimits,
   lastHistoryKey,
+  prependUnseenStreams,
   selectHumanPacedStreams,
   shouldKeepCatchingUp,
+  streamCursorUnseeded,
 } from "./personal-stream-pace";
 import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
@@ -95,12 +98,14 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly streamIdleUntil = new Map<string, number>();
   private readonly streamCatchingUp = new Set<string>();
+  private readonly streamSeeded = new Set<string>();
   private readonly streamMeta = new Map<
     string,
     { thread_id: string | null; label: string | null }
   >();
   private readonly streamErrors = new Map<string, string>();
   private readonly streamPulling = new Set<string>();
+  private readonly streamPullingHistory = new Set<string>();
   private readonly hydrating = new Map<string, Promise<void>>();
   private readonly hydrateCooldown = new Map<string, number>();
   private lastCatchUpCursor: string | undefined;
@@ -325,6 +330,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       const key = streamPaceKey(installation.id, stream.stream_key);
       this.rememberStreamMeta(key, stream);
       this.streamPulling.add(key);
+      this.streamPullingHistory.add(key);
       this.publishStreams();
       try {
         const pages = await this.exclusiveStream(
@@ -353,6 +359,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         throw error;
       } finally {
         this.streamPulling.delete(key);
+        this.streamPullingHistory.delete(key);
         this.publishStreams();
       }
       return;
@@ -661,9 +668,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const interval = pullStatus.interval_ms;
     this.streamIdleUntil.clear();
     this.streamCatchingUp.clear();
+    this.streamSeeded.clear();
     this.streamMeta.clear();
     this.streamErrors.clear();
     this.streamPulling.clear();
+    this.streamPullingHistory.clear();
     this.hydrateCooldown.clear();
     this.lastCatchUpCursor = undefined;
     resetPullStatus();
@@ -769,8 +778,23 @@ export class PersonalConnectorService implements OnModuleDestroy {
         process.env,
         { threads, discover: options?.discover === true },
       );
+      await this.persistPickedChatNames(store, installation, streams);
       this.pruneStreamPace(installation.id, streams);
       const now = Date.now();
+      const unseededKeys = new Set(
+        (
+          await Promise.all(
+            streams.map(async (stream) => {
+              const key = streamPaceKey(installation.id, stream.stream_key);
+              const cursor = await store.getCursor(
+                installation.id,
+                stream.stream_key,
+              );
+              return streamCursorUnseeded(cursor?.cursor) ? key : null;
+            }),
+          )
+        ).flatMap((key) => (key ? [key] : [])),
+      );
       const planned = streams.flatMap((stream) => {
         const key = streamPaceKey(installation.id, stream.stream_key);
         this.rememberStreamMeta(key, stream);
@@ -782,35 +806,53 @@ export class PersonalConnectorService implements OnModuleDestroy {
         ) {
           return [];
         }
+        const unseen = unseededKeys.has(key) && !this.streamSeeded.has(key);
+        if (unseen) {
+          this.streamCatchingUp.add(key);
+        }
         const catchingUp = this.streamCatchingUp.has(key);
-        return [{ stream, key, idleMs, catchingUp }];
+        return [{ stream, key, idleMs, catchingUp, unseen }];
       });
       const allowHistory = options?.allowHistory !== false;
       const selected = options?.capCatchUp
-        ? selectHumanPacedStreams(
-            planned.map((item) => ({
-              key: item.key,
-              catchingUp: item.catchingUp,
-              threadId: item.stream.thread_id,
-              item,
+        ? prependUnseenStreams(
+            planned
+              .filter((item) => item.unseen)
+              .map((item) => ({
+                ...item,
+                older: false,
+                pages: DEFAULT_MAX_PAGES,
+              })),
+            selectHumanPacedStreams(
+              planned.map((item) => ({
+                key: item.key,
+                catchingUp: item.catchingUp,
+                threadId: item.stream.thread_id,
+                item,
+              })),
+              {
+                ...humanPaceLimits(allowHistory && isHumanIdle()),
+                rotateFrom: this.lastCatchUpCursor,
+                preferredThreadId: preferredThreadId(),
+              },
+            ).map((entry) => ({
+              ...entry.item,
+              older: entry.older,
+              pages: DEFAULT_MAX_PAGES,
             })),
-            {
-              ...humanPaceLimits(allowHistory && isHumanIdle()),
-              rotateFrom: this.lastCatchUpCursor,
-              preferredThreadId: preferredThreadId(),
-            },
-          ).map((entry) => ({
-            ...entry.item,
-            older: entry.older,
-            pages: DEFAULT_MAX_PAGES,
-          }))
+          )
         : planned.flatMap((item) => {
             const live = {
               ...item,
               older: false,
               pages: maxPages,
             };
-            if (!item.catchingUp || !allowHistory) {
+            const preferred = preferredThreadId();
+            if (
+              !item.catchingUp ||
+              !allowHistory ||
+              (preferred && item.stream.thread_id === preferred)
+            ) {
               return [live];
             }
             return [
@@ -830,6 +872,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       }
       for (const item of selected) {
         this.streamPulling.add(item.key);
+        if (item.older) {
+          this.streamPullingHistory.add(item.key);
+        }
       }
       this.publishStreams();
       const concurrency = options?.capCatchUp ? 1 : STREAM_CONCURRENCY;
@@ -857,6 +902,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
             error: null as unknown,
           };
           this.streamPulling.delete(item.key);
+          if (item.older) {
+            this.streamPullingHistory.delete(item.key);
+          }
           this.rememberStreamPace(result);
           this.publishStreams();
           return result;
@@ -869,6 +917,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
             error,
           };
           this.streamPulling.delete(item.key);
+          if (item.older) {
+            this.streamPullingHistory.delete(item.key);
+          }
           this.rememberStreamPace(result);
           this.publishStreams();
           return result;
@@ -956,16 +1007,20 @@ export class PersonalConnectorService implements OnModuleDestroy {
     for (const key of [
       ...this.streamIdleUntil.keys(),
       ...this.streamCatchingUp,
+      ...this.streamSeeded,
       ...this.streamMeta.keys(),
       ...this.streamErrors.keys(),
       ...this.streamPulling,
+      ...this.streamPullingHistory,
     ]) {
       if (key.startsWith(prefix) && !live.has(key)) {
         this.streamIdleUntil.delete(key);
         this.streamCatchingUp.delete(key);
+        this.streamSeeded.delete(key);
         this.streamMeta.delete(key);
         this.streamErrors.delete(key);
         this.streamPulling.delete(key);
+        this.streamPullingHistory.delete(key);
       }
     }
   }
@@ -1006,6 +1061,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
         thread_id: meta?.thread_id ?? null,
         label: meta?.label ?? null,
         phase,
+        work: this.streamPulling.has(key)
+          ? this.streamPullingHistory.has(key)
+            ? "history"
+            : "live"
+          : null,
         last_error: error,
       };
     });
@@ -1027,6 +1087,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (input.pages.length === 0 && !input.error) {
       return;
     }
+    this.streamSeeded.add(input.key);
     const summary = summarizeRuns(input.pages);
     if (
       shouldKeepCatchingUp({
@@ -1084,6 +1145,26 @@ export class PersonalConnectorService implements OnModuleDestroy {
       }
     });
     return current;
+  }
+
+  private async persistPickedChatNames(
+    store: ConnectorRuntimeStore,
+    installation: ConnectorInstallation,
+    streams: ConnectorStream[],
+  ): Promise<void> {
+    const names = nextPickedChatNames(installation.config, streams);
+    if (!names) {
+      return;
+    }
+    await store.updateInstallationConfig({
+      id: installation.id,
+      org_id: installation.org_id,
+      config: {
+        ...installation.config,
+        chat_names: names,
+      },
+      updated_at: new Date().toISOString(),
+    });
   }
 
   private async viewOf(
@@ -1280,9 +1361,10 @@ export function shouldHydrateOpenedInbox(query: {
   since?: string;
   before?: string;
   heads?: boolean;
+  live?: boolean;
 }): boolean {
   return Boolean(
-    query.thread_id && !query.since && !query.before && !query.heads,
+    query.thread_id && !query.since && !query.before && !query.heads && !query.live,
   );
 }
 
@@ -1290,6 +1372,7 @@ export function shouldWaitForOpenedHydrate(localCount: number): boolean {
   return localCount === 0;
 }
 
+/** Scroll-up is the only inbox query that asks the connector for older pages. */
 export function shouldPullOlderInbox(query: {
   thread_id?: string;
   since?: string;
@@ -1305,6 +1388,7 @@ export function shouldNoteHumanInbox(query: {
   thread_id?: string;
   since?: string;
   heads?: boolean;
+  live?: boolean;
 }): boolean {
-  return Boolean(query.thread_id && !query.since && !query.heads);
+  return Boolean(query.thread_id && !query.since && !query.heads && !query.live);
 }

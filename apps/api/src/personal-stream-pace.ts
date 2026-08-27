@@ -2,6 +2,7 @@ export const CATCH_UP_STREAMS_PER_TICK = 3;
 export const HUMAN_LIVE_STREAMS_BUSY = 2;
 export const HUMAN_LIVE_STREAMS_IDLE = 1;
 export const HUMAN_HISTORY_STREAMS_IDLE = 1;
+export const SEED_UNSEEN_PER_TICK = 16;
 
 export function humanPaceLimits(idle: boolean): {
   liveLimit: number;
@@ -78,7 +79,10 @@ export interface PacedStream<T = unknown> {
   item: T;
 }
 
-/** Live updates stay first. History only rides along when the human is idle. */
+/**
+ * Live watermarks stay first. History is scroll-up first; idle ticks may
+ * backfill other threads, never the conversation the human has open.
+ */
 export function selectHumanPacedStreams<T>(
   items: Array<PlannedStream<T>>,
   options: {
@@ -88,12 +92,17 @@ export function selectHumanPacedStreams<T>(
     preferredThreadId?: string | null;
   },
 ): Array<PacedStream<T>> {
-  const preferredIndex = options.preferredThreadId
-    ? items.findIndex((item) => item.threadId === options.preferredThreadId)
+  const preferredId = options.preferredThreadId ?? null;
+  const preferredIndex = preferredId
+    ? items.findIndex((item) => item.threadId === preferredId)
     : -1;
   const preferred = preferredIndex >= 0 ? items[preferredIndex] : undefined;
   const rest = items.filter((_, index) => index !== preferredIndex);
-  const livePool = preferred ? [preferred, ...rest] : rest;
+  const restRanked = [
+    ...rest.filter((item) => item.catchingUp),
+    ...rest.filter((item) => !item.catchingUp),
+  ];
+  const livePool = preferred ? [preferred, ...restRanked] : restRanked;
   const live = livePool.slice(0, Math.max(0, options.liveLimit)).map((stream) => ({
     key: stream.key,
     catchingUp: stream.catchingUp,
@@ -102,7 +111,12 @@ export function selectHumanPacedStreams<T>(
   }));
   const liveKeys = new Set(live.map((stream) => stream.key));
   const history = rotateFromKey(
-    items.filter((item) => item.catchingUp && !liveKeys.has(item.key)),
+    items.filter(
+      (item) =>
+        item.catchingUp &&
+        !liveKeys.has(item.key) &&
+        item.threadId !== preferredId,
+    ),
     options.rotateFrom,
   )
     .slice(0, Math.max(0, options.historyLimit))
@@ -119,6 +133,31 @@ export function lastHistoryKey(
   selected: Array<{ key: string; older: boolean }>,
 ): string | undefined {
   return [...selected].reverse().find((item) => item.older)?.key;
+}
+
+export function streamCursorUnseeded(value?: string | null): boolean {
+  if (!value?.trim()) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(value) as { recent_seeded?: unknown };
+    if (parsed && typeof parsed === "object" && "recent_seeded" in parsed) {
+      return parsed.recent_seeded !== true;
+    }
+  } catch {
+    // A non-JSON cursor still means this stream has been polled.
+  }
+  return false;
+}
+
+export function prependUnseenStreams<T extends { key: string }>(
+  unseen: T[],
+  selected: T[],
+  limit = SEED_UNSEEN_PER_TICK,
+): T[] {
+  const seeds = unseen.slice(0, Math.max(0, limit));
+  const keys = new Set(seeds.map((item) => item.key));
+  return [...seeds, ...selected.filter((item) => !keys.has(item.key))];
 }
 
 export function shouldKeepCatchingUp(input: {

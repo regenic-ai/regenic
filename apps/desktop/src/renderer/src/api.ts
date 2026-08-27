@@ -86,6 +86,7 @@ export async function fetchInbox(
     before?: string;
     before_id?: string;
     heads?: boolean;
+    live?: boolean;
     thread_id?: string;
     limit?: number;
   } = {},
@@ -105,6 +106,9 @@ export async function fetchInbox(
   }
   if (query.heads) {
     params.set("heads", "1");
+  }
+  if (query.live) {
+    params.set("live", "1");
   }
   if (query.thread_id) {
     params.set("thread_id", query.thread_id);
@@ -580,7 +584,7 @@ export async function saveRecipe(
   input: {
     name: string;
     match: RecipeView["match"];
-    trigger?: RecipeView["trigger"];
+    trigger: RecipeView["trigger"];
     executor_type: string;
     executor_config?: Record<string, string>;
     can_write_back: boolean;

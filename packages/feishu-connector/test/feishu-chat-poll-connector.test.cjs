@@ -360,6 +360,28 @@ describe("FeishuChatPollConnector", () => {
     assert.match(older.next_cursor ?? "", /"start_time":"1723500000"/);
   });
 
+  it("does not turn a scroll-up into a live pull when history is already caught up", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        return { items: [textItem()], has_more: false };
+      },
+    });
+    const caughtUp = JSON.stringify({
+      start_time: "1723500000",
+      recent_seeded: true,
+      media_synced: true,
+      media_bytes: true,
+      media_ok: true,
+    });
+    const older = await connector.poll({ value: caughtUp }, { older: true });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(older.batch.records, []);
+    assert.equal(older.has_more, false);
+    assert.equal(older.next_cursor, caughtUp);
+  });
+
   it("treats a leftover desc cursor as deferred history plus a live watermark", () => {
     const state = decodeFeishuCursor({
       value: JSON.stringify({
@@ -716,6 +738,21 @@ describe("FeishuChatPollConnector", () => {
         start_time: "100",
         sort_type: "ByCreateTimeAsc",
       },
+    );
+    assert.equal(
+      planFeishuHistoryRequest(
+        "oc_1",
+        50,
+        {
+          start_time: "100",
+          recent_seeded: true,
+          media_synced: true,
+          media_bytes: true,
+          media_ok: true,
+        },
+        { older: true },
+      ),
+      null,
     );
   });
 

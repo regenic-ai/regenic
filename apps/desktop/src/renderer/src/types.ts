@@ -396,12 +396,14 @@ export interface LocalNetworkWatch {
 
 export type PullPhase = "idle" | "pulling";
 export type PullStreamPhase = "idle" | "pulling" | "catching_up" | "error";
+export type PullStreamWork = "live" | "history";
 
 export interface PullStreamStatus {
   stream_key: string;
   thread_id: string | null;
   label: string | null;
   phase: PullStreamPhase;
+  work?: PullStreamWork | null;
   last_error: string | null;
 }
 

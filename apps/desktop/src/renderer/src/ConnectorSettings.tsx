@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 import {
+  configWithOptionNames,
+  splitValues,
+  toggleCsvValue,
+} from "./connector-config";
+import {
   attemptSummary,
   installationStatusLabel,
 } from "./format";
@@ -216,7 +221,7 @@ function ConnectorSettingsForm({
         if (busy) {
           return;
         }
-        onSubmit(values);
+        onSubmit(configWithOptionNames(values, kind.fields));
       }}
     >
       <PrerequisiteList items={prerequisites} />
@@ -371,23 +376,6 @@ function filterCheckOptions(
       option.label.toLowerCase().includes(needle) ||
       option.value.toLowerCase().includes(needle),
   );
-}
-
-function splitValues(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
-function toggleCsvValue(current: string | undefined, value: string): string {
-  const selected = new Set(splitValues(current));
-  if (selected.has(value)) {
-    selected.delete(value);
-  } else {
-    selected.add(value);
-  }
-  return [...selected].join(",");
 }
 
 function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisites"] }) {
