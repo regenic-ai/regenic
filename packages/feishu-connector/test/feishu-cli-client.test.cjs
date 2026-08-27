@@ -12,6 +12,7 @@ const {
   parseChatPage,
   parseHistoryPage,
   parseUserNamePage,
+  listFeishuCatalogChats,
   probeLarkCli,
   probeLarkCliAuth,
   resetFeishuChatListCache,
@@ -705,6 +706,71 @@ describe("LarkCliClient", () => {
   it("falls back to the global lark-cli command when an absolute path is missing", () => {
     assert.equal(resolveLarkCommand("/Users/missing/lark-cli"), "lark-cli");
     assert.equal(resolveLarkCommand("lark-cli"), "lark-cli");
+  });
+
+  it("loads every conversation page for the install picker, not just the latest 50", async () => {
+    resetLarkCliProbeCache();
+    resetFeishuChatListCache();
+    const calls = [];
+    const chats = await listFeishuCatalogChats({
+      now: () => 1,
+      async spawn(input) {
+        calls.push(input.command.join(" "));
+        if (input.command.includes("auth")) {
+          return {
+            stdout: JSON.stringify({ ok: true, identity: "user" }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
+        if (input.command.includes("--page-token")) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                chats: [
+                  {
+                    chat_id: "oc_partnership",
+                    name: "合伙",
+                    chat_mode: "group",
+                    chat_status: "normal",
+                  },
+                ],
+                has_more: false,
+              },
+            }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              chats: [
+                {
+                  chat_id: "oc_recent",
+                  name: "最近的群",
+                  chat_mode: "group",
+                  chat_status: "normal",
+                },
+              ],
+              has_more: true,
+              page_token: "p2",
+            },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    assert.equal(calls.some((command) => command.includes("+chat-list")), true);
+    assert.deepEqual(
+      chats.map((chat) => chat.name),
+      ["最近的群", "合伙"],
+    );
+    resetLarkCliProbeCache();
+    resetFeishuChatListCache();
   });
 
   it("distinguishes a missing CLI from a signed-out CLI", async () => {

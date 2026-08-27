@@ -66,6 +66,8 @@ export function isLarkCliMissing(error: unknown): boolean {
   return error instanceof FeishuApiError && error.message.includes("Unable to start lark-cli");
 }
 
+export const CATALOG_CHAT_PAGES = 40;
+
 export async function listFeishuCatalogChats(options: {
   command?: string;
   env?: NodeJS.ProcessEnv;
@@ -81,9 +83,9 @@ export async function listFeishuCatalogChats(options: {
       command: options.command ?? options.env?.REGENIC_LARK_CLI,
       env: options.env,
       spawn: options.spawn,
-      timeout_ms: 15_000,
+      timeout_ms: 30_000,
     });
-    return await client.listRecentChats(undefined, { names: true });
+    return await client.listAllChats(CATALOG_CHAT_PAGES);
   } catch {
     return [];
   }
