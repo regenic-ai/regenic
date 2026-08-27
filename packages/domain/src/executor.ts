@@ -334,10 +334,6 @@ export function composeWorkEvidenceText(input: {
   return trigger || head;
 }
 
-export function isExecutorSysoutBody(text: string): boolean {
-  return /\bWork item\b/.test(text) || /^WORK\b/m.test(text);
-}
-
 export function formatWorkEvidence(input: {
   thread_id: string;
   record_class: string;
