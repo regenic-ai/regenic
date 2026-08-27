@@ -1,6 +1,10 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { ChannelDriverError, MemoryConnectorRegistry, MemoryEgressRegistry } = require("@regenic/domain");
+const {
+  ChannelDriverError,
+  MemoryConnectorRegistry,
+  MemoryEgressRegistry,
+} = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const {
   FEISHU_STREAM_PACE,
@@ -246,7 +250,7 @@ describe("feishuChatDriver", () => {
       },
       host,
       { REGENIC_LARK_CLI: "/missing-lark-cli" },
-      { discover: "known" },
+      { threads: [{ source: "feishu", target: "oc_1" }] },
     );
     assert.equal(listed.length, 1);
     assert.equal(listed[0].thread_id, "feishu:oc_1");
@@ -387,6 +391,96 @@ describe("feishuChatDriver", () => {
     assert.deepEqual(chats, [
       { chat_id: "oc_hot", name: "Ada", chat_mode: "p2p" },
     ]);
+  });
+
+  it("keeps known chats when the recent directory page fails", async () => {
+    const chats = await resolveFeishuChatTargets(
+      { selection: "all" },
+      {
+        async listRecentChats() {
+          throw new Error("lark down");
+        },
+      },
+      {
+        known: [{ chat_id: "oc_work", name: "Work" }],
+        discover: "recent",
+      },
+    );
+    assert.deepEqual(
+      chats.map((chat) => ({ chat_id: chat.chat_id, name: chat.name })),
+      [{ chat_id: "oc_work", name: "Work" }],
+    );
+  });
+
+  it("mounts kernel-eligible Feishu chats without listing the directory", async () => {
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    const streams = await feishuChatDriver.resolveStreams(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all", kinds: ["group", "p2p"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+      },
+      host,
+      { REGENIC_LARK_CLI: "/missing-lark-cli" },
+      { threads: [{ source: "feishu", target: "oc_work" }] },
+    );
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].thread_id, "feishu:oc_work");
+    await host.dispose();
+  });
+
+  it("unmounts Feishu chats that left the eligible set", async () => {
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    const installation = {
+      id: "feishu-1",
+      org_id: "local-owner",
+      connector_type: "feishu-chat",
+      status: "enabled",
+      config: { selection: "all", kinds: ["group", "p2p"] },
+      created_at: "2026-08-22T00:00:00.000Z",
+    };
+    await feishuChatDriver.resolveThreadStream(
+      installation,
+      { source: "feishu", target: "oc_old" },
+      host,
+      {},
+    );
+    assert.equal(connectors.listStreams("feishu-1").length, 1);
+    const streams = await feishuChatDriver.resolveStreams(
+      installation,
+      host,
+      { REGENIC_LARK_CLI: "/missing-lark-cli" },
+      { threads: [{ source: "feishu", target: "oc_work" }] },
+    );
+    assert.deepEqual(
+      streams.map((stream) => stream.thread_id),
+      ["feishu:oc_work"],
+    );
+    assert.equal(connectors.listStreams("feishu-1").length, 1);
+    assert.equal(connectors.getStream("feishu-1", "chat:oc_old"), undefined);
+    assert.equal(egress.get("feishu-1", "chat:oc_old"), undefined);
+    await host.dispose();
   });
 
   it("merges a recent directory page onto known chats", async () => {

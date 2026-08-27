@@ -26,14 +26,3 @@ export function resetHumanPace(): void {
   bootAt = 0;
   lastHumanAt = 0;
 }
-
-export function streamDiscover(
-  options: { capCatchUp?: boolean } | undefined,
-  mountedCount: number,
-  now = Date.now(),
-): "known" | "recent" {
-  if (mountedCount === 0 || !options?.capCatchUp || isHumanIdle(now)) {
-    return "recent";
-  }
-  return "known";
-}

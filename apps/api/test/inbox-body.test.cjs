@@ -157,4 +157,83 @@ describe("resolveInboxBodies", () => {
       png.toString("base64"),
     );
   });
+
+  it("keeps legacy inline previews when another message on the page uses sidecars", async () => {
+    const { createHash } = require("node:crypto");
+    const { CONTENT_PARTS_MEDIA_TYPE } = require("@regenic/domain");
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const service = new IngestionService(blobs, authority);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+    const ingested = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "attach-hash",
+      received_at: "2026-08-27T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_1:om_hash",
+          occurred_at: "2026-08-27T00:00:01.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          text: "hashed",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "new.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+    const hashed = await authority.getEvent(
+      "local-owner",
+      ingested.records[0].event_id,
+    );
+    const legacy = Buffer.from(
+      JSON.stringify([
+        { role: "body", media_type: "text/plain", text: "old shot" },
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "old.png",
+          bytes_base64: png.toString("base64"),
+        },
+      ]),
+    );
+    const legacyHash = createHash("sha256").update(legacy).digest("hex");
+    await blobs.put(legacyHash, legacy, CONTENT_PARTS_MEDIA_TYPE);
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_legacy",
+      content_hash: legacyHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: legacy.byteLength,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+
+    const preview = await resolveInboxBodies(authority, blobs, [
+      legacyHash,
+      hashed.content_hash,
+    ]);
+
+    assert.equal(preview.get(legacyHash).body_text, "old shot");
+    assert.equal(preview.get(legacyHash).attachments[0].filename, "old.png");
+    assert.equal(
+      preview.get(legacyHash).attachments[0].data_base64,
+      png.toString("base64"),
+    );
+    assert.equal(
+      preview.get(hashed.content_hash).attachments[0].data_base64,
+      png.toString("base64"),
+    );
+  });
 });

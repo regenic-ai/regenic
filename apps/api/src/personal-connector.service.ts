@@ -32,13 +32,14 @@ import {
   resetPullStatus,
   type PullStreamStatus,
 } from "./personal-pull-status";
-import { isHumanIdle, noteHumanActivity, streamDiscover } from "./personal-human-pace";
+import { isHumanIdle, noteHumanActivity } from "./personal-human-pace";
 import {
   humanPaceLimits,
   lastHistoryKey,
   selectHumanPacedStreams,
   shouldKeepCatchingUp,
 } from "./personal-stream-pace";
+import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export { PersonalConnectorError } from "./personal-errors";
@@ -746,9 +747,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
         host,
         process.env,
         {
-          discover: streamDiscover(
-            options,
-            host.get("connectors").listStreams(installation.id).length,
+          threads: await loadEligibleInstallationThreads(
+            store,
+            installation.org_id,
+            installation,
+            driver,
+            preferredThreadId(),
           ),
         },
       );

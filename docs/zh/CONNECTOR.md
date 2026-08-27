@@ -139,7 +139,7 @@ interface ChannelDriver {
 | `readReceipts` | 可选。对端是否已读我的出站。飞书对 `:out:om_` 调用户态 `read_users`。空 items 是 Sent。不得用来源会话未读。 |
 | `surfaceGeneration` | 可选。活 surface 世代，拼进 `inbox_digest` 的 `&s=`，审批弹出时桌面轮询能看见。 |
 | `canReply` | 与 `capabilities().reply` 相同。 |
-| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：勾选的 `chat:<id>`；`selection=all` 时跟已挂上的流，空闲或尚未挂流时再扫飞书会话目录的最近一页（约 50 个），不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `options.discover`：`known` / `recent` / `full`。可选 `pace`：`idle_ms`（空转后隔多久再扫）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支。 |
+| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：勾选的 `chat:<id>`；`selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及会话目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转后隔多久再扫）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支。 |
 | `createThread` | `create` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `bindEgress` | `reply` 为 true 时必须实现。否则抛 `unsupported_channel`。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
@@ -160,7 +160,7 @@ interface ConnectorStream {
 }
 ```
 
-`pace` 由连接器按流声明。内核只读字段：有 `idle_ms` 且本 tick 空转后，后台 tick 可跳过该流。后台 tick 先给人让路：人在操作时只扫少量已挂上的会话的最近/新消息（每流 1 页），不追历史，也不枚举飞书全部会话；人空闲后再每次补 1 页历史，并可用最近一页会话目录发现新会话。打开空会话先种最近一批；本地没有更早消息时，上翻再要 1 页更早的。人点 Engine Sync 时才按 `catch_up_pages`（内核封顶）往前赶。不写 `pace` 则每 tick 扫 1 页。飞书写 `{ idle_ms: 15_000, catch_up_pages: 5 }`；DSH / Slack 不写。
+`pace` 由连接器按流声明。内核只读字段：有 `idle_ms` 且本 tick 空转后，后台 tick 可跳过该流。后台 tick 先给人让路：人在操作时只从内核算出的资格集合里扫少量会话的最近/新消息（每流 1 页），不追历史，也不枚举飞书全部会话。资格集合由内核从收件箱当前工作和打开中的会话算出，经 `options.threads` 传给驱动；新会话靠最近一页目录按 TTL 发现，不等人空闲。不在集合里的流卸掉。人空闲后再每次补 1 页历史。打开空会话先种最近一批；本地没有更早消息时，上翻再要 1 页更早的。人点 Engine Sync 时才按 `catch_up_pages`（内核封顶）往前赶。不写 `pace` 则每 tick 扫 1 页。飞书写 `{ idle_ms: 15_000, catch_up_pages: 5 }`；DSH / Slack 不写。
 
 ## ChannelConnector
 

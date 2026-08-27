@@ -6,7 +6,6 @@ const {
   markKernelReady,
   noteHumanActivity,
   resetHumanPace,
-  streamDiscover,
 } = require("../dist/personal-human-pace");
 
 afterEach(() => {
@@ -26,17 +25,5 @@ describe("human pace", () => {
     noteHumanActivity(5_000);
     assert.equal(isHumanIdle(5_000 + HUMAN_IDLE_MS - 1), false);
     assert.equal(isHumanIdle(5_000 + HUMAN_IDLE_MS), true);
-  });
-
-  it("refreshes the Feishu directory only when idle or nothing is mounted", () => {
-    markKernelReady(1_000);
-    noteHumanActivity(1_000);
-    assert.equal(streamDiscover({ capCatchUp: true }, 3, 1_000), "known");
-    assert.equal(streamDiscover({ capCatchUp: true }, 0, 1_000), "recent");
-    assert.equal(
-      streamDiscover({ capCatchUp: true }, 3, 1_000 + HUMAN_IDLE_MS),
-      "recent",
-    );
-    assert.equal(streamDiscover({}, 3, 1_000), "recent");
   });
 });

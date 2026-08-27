@@ -22,12 +22,13 @@ import {
 import { createLarkUserTokenSource } from "./feishu-user-token";
 import { FEISHU_SOURCE } from "./feishu-message";
 import { feishuChatPlugin } from "./plugin";
-import { feishuChatIdFromStreamKey, feishuStreamKey } from "./feishu-streams";
+import { feishuStreamKey } from "./feishu-streams";
 
 export {
   FEISHU_STREAM_PACE,
   createFeishuStreams,
   feishuChatIdFromStreamKey,
+  feishuChatIdFromThreadId,
   feishuStreamKey,
 } from "./feishu-streams";
 import {
@@ -110,12 +111,11 @@ export const feishuChatDriver: ChannelDriver = {
 
   async resolveStreams(installation, host, env, options?: ResolveStreamsOptions) {
     const client = larkClient(env);
-    const known = mountedFeishuChats(host, installation);
     const chats = await resolveFeishuChatTargets(installation.config, client, {
-      known,
-      discover: options?.discover ?? (known.length > 0 ? "known" : "recent"),
+      known: feishuChatsFromThreads(options?.threads ?? [], installation),
+      discover: feishuSelection(installation.config) === "pick" ? "known" : "recent",
     });
-    return mountFeishuChats(host, installation, chats, env, client);
+    return mountFeishuChats(host, installation, chats, env, client, true);
   },
 
   async resolveThreadStream(installation, thread, host, env) {
@@ -388,8 +388,8 @@ export async function resolveFeishuChatTargets(
   const known = (options.known ?? []).filter((chat) =>
     chatMatchesKinds(chat, kinds),
   );
-  const discover = options.discover ?? (known.length > 0 ? "known" : "recent");
-  if (discover === "known" && known.length > 0) {
+  const discover = options.discover ?? "recent";
+  if (discover === "known") {
     return known;
   }
   if (discover === "full") {
@@ -426,29 +426,34 @@ async function listRecentFeishuChats(
   client: FeishuChatDirectory,
   kinds: FeishuChatMode[],
 ): Promise<FeishuChat[]> {
-  if (client.listRecentChats) {
-    return client.listRecentChats(kinds, { names: false });
-  }
-  if (client.listAllChats) {
-    return client.listAllChats(1, kinds);
+  try {
+    if (client.listRecentChats) {
+      return await client.listRecentChats(kinds, { names: false });
+    }
+    if (client.listAllChats) {
+      return await client.listAllChats(1, kinds);
+    }
+  } catch {
+    // Keep the local eligible set. A directory miss must not drop current work.
   }
   return [];
 }
 
-function mountedFeishuChats(
-  host: Host,
+function feishuChatsFromThreads(
+  threads: ConversationThread[],
   installation: ConnectorInstallation,
 ): FeishuChat[] {
-  return host.get("connectors").listStreams(installation.id).flatMap((stream) => {
-    const chat_id = feishuChatIdFromStreamKey(stream.stream_key);
-    if (!chat_id) {
+  return threads.flatMap((thread) => {
+    if (thread.source !== FEISHU_SOURCE) {
       return [];
     }
-    const label = stream.label?.replace(/\s+/g, " ").trim();
+    if (!feishuChatDriver.matchesThread(installation, thread)) {
+      return [];
+    }
     return [
       {
-        chat_id,
-        name: label && label !== chat_id ? label : undefined,
+        chat_id: thread.target,
+        name: feishuChatName(installation.config, thread.target),
       },
     ];
   });
@@ -460,11 +465,14 @@ async function mountFeishuChats(
   chats: FeishuChat[],
   env: NodeJS.ProcessEnv,
   client: FeishuImClient,
+  prune = false,
 ): Promise<ConnectorStream[]> {
   const registry = host.get("connectors");
+  const egress = host.get("egress");
   const existing = new Set(
     registry.listStreams(installation.id).map((stream) => stream.stream_key),
   );
+  const wanted = new Set(chats.map((chat) => feishuStreamKey(chat.chat_id)));
   const missing = chats.filter(
     (chat) => !existing.has(feishuStreamKey(chat.chat_id)),
   );
@@ -478,7 +486,15 @@ async function mountFeishuChats(
       client,
     });
   }
-  const wanted = new Set(chats.map((chat) => feishuStreamKey(chat.chat_id)));
+  if (prune) {
+    for (const stream of registry.listStreams(installation.id)) {
+      if (wanted.has(stream.stream_key)) {
+        continue;
+      }
+      registry.unregister(installation.id, stream.stream_key);
+      egress.unregister(installation.id, stream.stream_key);
+    }
+  }
   return registry
     .listStreams(installation.id)
     .filter((stream) => wanted.has(stream.stream_key));

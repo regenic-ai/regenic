@@ -19,6 +19,14 @@ export function feishuChatIdFromStreamKey(streamKey: string): string | undefined
   return streamKey.slice(5);
 }
 
+export function feishuChatIdFromThreadId(threadId: string): string | undefined {
+  const prefix = `${FEISHU_SOURCE}:`;
+  if (!threadId.startsWith(prefix) || threadId.length <= prefix.length) {
+    return undefined;
+  }
+  return threadId.slice(prefix.length);
+}
+
 export function createFeishuStreams(
   installation: Pick<ConnectorInstallation, "id" | "org_id">,
   chats: FeishuChat[],

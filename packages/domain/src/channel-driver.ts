@@ -24,11 +24,9 @@ export interface ConversationThread {
   target: string;
 }
 
-/** How `resolveStreams` should expand the live set. Drivers may ignore this. */
-export type ConnectorStreamDiscover = "known" | "recent" | "full";
-
+/** Kernel-owned threads this install should keep live. Drivers may add a cheap peek. */
 export interface ResolveStreamsOptions {
-  discover?: ConnectorStreamDiscover;
+  threads?: ConversationThread[];
 }
 
 /** Store-derived inbound cursor. Connectors may use it as an opaque hint. */

@@ -25,6 +25,7 @@ export interface ConnectorRegistry {
     streamKey?: string,
   ): ConnectorStream | undefined;
   listStreams(installationId: string): ConnectorStream[];
+  unregister(installationId: string, streamKey: string): boolean;
 }
 
 interface StoredStream {
@@ -92,6 +93,17 @@ export class MemoryConnectorRegistry implements ConnectorRegistry {
       return [];
     }
     return [...streams.values()].map(toConnectorStream);
+  }
+
+  unregister(installationId: string, streamKey: string): boolean {
+    const streams = this.byInstall.get(installationId);
+    if (!streams?.delete(streamKey)) {
+      return false;
+    }
+    if (streams.size === 0) {
+      this.byInstall.delete(installationId);
+    }
+    return true;
   }
 
   private storedStream(

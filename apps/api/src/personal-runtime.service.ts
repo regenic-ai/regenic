@@ -18,7 +18,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   private host: Host | null = null;
   private options: PersonalHostOptions | null = null;
   private compactAbort: AbortController | null = null;
-  private compacting: Promise<"done" | "paused" | "aborted"> | null = null;
+  private compacting: Promise<ContentCompactOutcome> | null = null;
   private compactTimer: ReturnType<typeof setTimeout> | undefined;
   private compactFinished = false;
 
@@ -111,10 +111,10 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     );
     const outcome = await this.compacting;
     this.compacting = null;
-    if (outcome === "paused") {
+    if (shouldRetryContentCompact(outcome)) {
       this.scheduleCompact();
     }
-    if (outcome === "done") {
+    if (shouldFinishContentCompact(outcome)) {
       this.compactFinished = true;
     }
   }
@@ -127,11 +127,31 @@ export class PersonalKernelStoppedError extends Error {
   }
 }
 
+export type ContentCompactOutcome = "done" | "paused" | "aborted" | "failed";
+
+export function shouldRetryContentCompact(outcome: ContentCompactOutcome): boolean {
+  return outcome === "paused" || outcome === "failed";
+}
+
+export function shouldFinishContentCompact(outcome: ContentCompactOutcome): boolean {
+  return outcome === "done";
+}
+
+export function contentCompactFailureOutcome(
+  error: unknown,
+  aborted: boolean,
+): ContentCompactOutcome {
+  if (aborted || isWriteWorkerClosed(error)) {
+    return "aborted";
+  }
+  return "failed";
+}
+
 async function compactLocalContent(
   host: Host,
   orgId: string,
   signal: AbortSignal,
-): Promise<"done" | "paused" | "aborted"> {
+): Promise<ContentCompactOutcome> {
   try {
     const result = await compactEmbeddedContent(
       host.get("authority"),
@@ -167,11 +187,11 @@ async function compactLocalContent(
     );
     return "done";
   } catch (error) {
-    if (signal.aborted || isWriteWorkerClosed(error)) {
-      return "aborted";
+    const outcome = contentCompactFailureOutcome(error, signal.aborted);
+    if (outcome === "failed") {
+      console.warn("content compact failed", error);
     }
-    console.warn("content compact failed", error);
-    return "done";
+    return outcome;
   }
 }
 

@@ -37,4 +37,22 @@ describe("MemoryEgressRegistry", () => {
       /Egress adapter already registered: dsh-1/,
     );
   });
+
+  it("unregisters one stream adapter", () => {
+    const registry = new MemoryEgressRegistry();
+    const adapter = {
+      source: "feishu",
+      capabilities() {
+        return { reply: true, edit: false, tombstone: false };
+      },
+      async send() {
+        return { accepted: true };
+      },
+    };
+    registry.register("feishu-1", adapter, "chat:oc_1");
+    registry.register("feishu-1", { ...adapter }, "chat:oc_2");
+    assert.equal(registry.unregister("feishu-1", "chat:oc_1"), true);
+    assert.equal(registry.get("feishu-1", "chat:oc_1"), undefined);
+    assert.equal(registry.get("feishu-1", "chat:oc_2")?.source, "feishu");
+  });
 });

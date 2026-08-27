@@ -246,11 +246,7 @@ function decodeAttachments(
     }
     const hash = storedPartContentHash(part);
     const inline = storedPartBytes(part);
-    const bytes = hash
-      ? sidecars?.get(hash)
-      : sidecars
-        ? undefined
-        : inline;
+    const bytes = hash ? sidecars?.get(hash) : inline;
     const raw = bytes ? Buffer.from(bytes).toString("base64") : undefined;
     const size = bytes?.byteLength ?? 0;
     const mediaType = bytes

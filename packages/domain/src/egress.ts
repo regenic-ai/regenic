@@ -37,6 +37,7 @@ export interface EgressRegistry {
     streamKey?: string,
   ): () => void;
   get(installationId: string, streamKey?: string): RegisteredEgress | undefined;
+  unregister(installationId: string, streamKey: string): boolean;
 }
 
 export class MemoryEgressRegistry implements EgressRegistry {
@@ -83,5 +84,16 @@ export class MemoryEgressRegistry implements EgressRegistry {
       return [...adapters.values()][0];
     }
     return adapters.get("");
+  }
+
+  unregister(installationId: string, streamKey: string): boolean {
+    const adapters = this.byInstall.get(installationId);
+    if (!adapters?.delete(streamKey)) {
+      return false;
+    }
+    if (adapters.size === 0) {
+      this.byInstall.delete(installationId);
+    }
+    return true;
   }
 }
