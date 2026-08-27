@@ -38,7 +38,7 @@ function engine(overrides: Partial<PersonalEngineView> = {}): PersonalEngineView
 }
 
 describe("engine chip and pull copy", () => {
-  it("shows syncing while a long conversation is still catching up", () => {
+  it("shows older-message copy only while history is actually pulling", () => {
     const view = engine({
       pull: pull({
         phase: "pulling",
@@ -48,7 +48,8 @@ describe("engine chip and pull copy", () => {
             stream_key: "feishu-1:chat:oc_1",
             thread_id: "feishu:oc_1",
             label: "熊峰",
-            phase: "catching_up",
+            phase: "pulling",
+            work: "history",
             last_error: null,
           },
         ],
@@ -58,6 +59,29 @@ describe("engine chip and pull copy", () => {
     assert.equal(pullStatusLabel(view.pull), "Syncing 熊峰");
     assert.equal(threadSyncLabel("feishu:oc_1", view.pull), "Syncing older messages");
     assert.equal(threadSyncTone("feishu:oc_1", view.pull), "syncing");
+  });
+
+  it("does not call a live watermark pull older-message sync", () => {
+    const view = engine({
+      pull: pull({
+        phase: "pulling",
+        catching_up_count: 1,
+        streams: [
+          {
+            stream_key: "feishu-1:chat:oc_1",
+            thread_id: "feishu:oc_1",
+            label: "Christy",
+            phase: "pulling",
+            work: "live",
+            last_error: null,
+          },
+        ],
+      }),
+    });
+    assert.equal(engineChip(view), "running");
+    assert.equal(pullStatusLabel(view.pull), "Syncing Christy");
+    assert.equal(threadSyncLabel("feishu:oc_1", view.pull), null);
+    assert.equal(threadSyncTone("feishu:oc_1", view.pull), null);
   });
 
   it("names a dropped sync so the open thread can show it", () => {

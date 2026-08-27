@@ -8,6 +8,7 @@ import {
   computeThreadUnread,
   conversationId,
   inboxDigest,
+  isExecutorSysoutBody,
   headsByThread,
   isLocalOutboundId,
   isThreadStatusItem,
@@ -155,12 +156,19 @@ export interface InboxListQuery {
   before?: string;
   before_id?: string;
   heads?: boolean;
+  live?: boolean;
   thread_id?: string;
   limit?: number;
 }
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
-  return Boolean(query.thread_id && !query.since && !query.heads);
+  // Feishu read_users only on `live=1`. Heads still need read_status for list
+  // dots. Open, since, and older pages stay on SQLite so switching chats does
+  // not wait on lark-cli.
+  if (query.live || query.heads) {
+    return false;
+  }
+  return Boolean(query.thread_id);
 }
 
 export interface EngineQuery {
@@ -533,7 +541,7 @@ export class PersonalInboxService {
             extras: [] as InboxResolvedRow[],
           }),
     ]);
-    const prompts = await promptLabelsFor(
+    const promptPage = await promptLabelsFor(
       orgId,
       resolved,
       installations,
@@ -543,11 +551,13 @@ export class PersonalInboxService {
       query.heads === true,
       siblings,
     );
+    const prompts = promptPage.labels;
     const includeReceipts = query.heads !== true;
-    const [hidden, bound] = await Promise.all([
+    const [hiddenIds, bound] = await Promise.all([
       this.work.hiddenThreadIds(),
       this.work.boundPromptThreads(),
     ]);
+    const hidden = new Set([...hiddenIds, ...promptPage.hide]);
     const agentThreads = [...new Set(bound.values())].flatMap((id) => {
       try {
         return [parseConversationThread(id)];
@@ -909,7 +919,7 @@ async function promptLabelsFor(
   blobs: BlobStore,
   heads: boolean,
   preloadedSiblings: InboxItem[] = [],
-): Promise<Map<string, string>> {
+): Promise<{ labels: Map<string, string>; hide: Set<string> }> {
   const promptIds = [
     ...new Set(
       resolved
@@ -921,10 +931,10 @@ async function promptLabelsFor(
     ),
   ];
   if (promptIds.length === 0) {
-    return new Map();
+    return { labels: new Map(), hide: new Set() };
   }
   if (!heads) {
-    return firstUserLabelsFrom(resolved);
+    return { labels: firstUserLabelsFrom(resolved), hide: new Set() };
   }
   const have = new Set(
     preloadedSiblings.map((item) =>
@@ -955,20 +965,24 @@ async function promptLabelsFor(
     }
   }
   const labels = new Map<string, string>();
+  const hide = new Set<string>();
   await Promise.all(
     promptIds.map(async (threadId) => {
-      const text = await firstUserTextIn(
+      const face = await firstUserTextIn(
         (groups.get(threadId) ?? []).slice().sort(byEventTime),
         resolved,
         authority,
         blobs,
       );
-      if (text) {
-        labels.set(threadId, text);
+      if (face.hide) {
+        hide.add(threadId);
+      }
+      if (face.text) {
+        labels.set(threadId, face.text);
       }
     }),
   );
-  return labels;
+  return { labels, hide };
 }
 
 function firstUserLabelsFrom(
@@ -1010,7 +1024,7 @@ async function firstUserTextIn(
   }>,
   authority: AuthorityStore,
   blobs: BlobStore,
-): Promise<string | undefined> {
+): Promise<{ text?: string; hide: boolean }> {
   const cached = new Map(
     resolved.map((row) => [row.item.event.id, row.body] as const),
   );
@@ -1047,12 +1061,14 @@ async function firstUserTextIn(
     if (users > PROMPT_USER_SCAN_LIMIT) {
       break;
     }
-    const text = listFaceText(body.body_text);
-    if (text) {
-      return text;
+    const raw = body.body_text ?? "";
+    const hide = isExecutorSysoutBody(raw);
+    const text = listFaceText(raw);
+    if (text || hide) {
+      return { text, hide };
     }
   }
-  return undefined;
+  return { hide: false };
 }
 
 function byEventTime(
@@ -1250,7 +1266,7 @@ function inboundScansOf(
   });
 }
 
-const RECEIPT_SCAN_LIMIT = 20;
+const RECEIPT_SCAN_LIMIT = 8;
 
 type InboxResolvedRow = {
   item: { decision: ArrangementDecision; event: EventRecord };
@@ -1276,12 +1292,16 @@ async function loadInboxReceipts(input: {
   if (input.heads) {
     return { receipts: new Map(), extras: [] };
   }
-  const siblingOutbound =
+  const siblings =
     input.thread && input.drivers.canReceipt(input.installations, input.thread)
       ? await input.authority.listInbox(input.orgId, {
           siblings: true,
           thread_ids: [threadIdOf(input.thread)],
         })
+      : [];
+  const siblingOutbound =
+    siblings.length > 0
+      ? await outboundSiblingEvents(siblings, input.authority, input.blobs)
       : [];
   const queries = mergeReceiptQueries(
     receiptQueriesOf(input.resolved),
@@ -1301,7 +1321,6 @@ async function loadInboxReceipts(input: {
   const extras = siblingOutbound.filter(
     (item) =>
       !seen.has(item.event.id) &&
-      isLocalOutboundId(item.event.external_id) &&
       receipts.get(item.event.external_id)?.state === "read",
   );
   if (extras.length === 0) {
@@ -1385,14 +1404,34 @@ function uniqueOutbound<T extends { external_id: string }>(items: T[]): T[] {
   });
 }
 
+async function outboundSiblingEvents(
+  items: InboxItem[],
+  authority: AuthorityStore,
+  blobs: BlobStore,
+): Promise<InboxItem[]> {
+  const newest = items.slice().sort(byEventTime).reverse().slice(0, 48);
+  const hashes = newest
+    .map((item) => item.event.content_hash)
+    .filter((hash): hash is string => Boolean(hash));
+  const bodies =
+    hashes.length > 0
+      ? await resolveInboxBodies(authority, blobs, hashes, "meta")
+      : new Map<string, InboxBody>();
+  return newest
+    .filter((item) => {
+      const body = item.event.content_hash
+        ? (bodies.get(item.event.content_hash) ?? {})
+        : {};
+      return messageSurfaceOf(item.event, body).direction === "outbound";
+    })
+    .slice(0, RECEIPT_SCAN_LIMIT);
+}
+
 function receiptQueriesFromOutboundEvents(
   items: Array<{ event: EventRecord }>,
 ): ThreadReceiptQuery[] {
   const groups = new Map<string, ThreadReceiptQuery>();
   for (const { event } of items) {
-    if (!isLocalOutboundId(event.external_id)) {
-      continue;
-    }
     const thread = threadOf(event);
     const threadId = threadIdOf(thread);
     const current = groups.get(threadId) ?? { ...thread, outbound: [] };

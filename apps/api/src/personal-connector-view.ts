@@ -240,6 +240,59 @@ function connectorPresentation(
   return { label: installation.id, detail: null };
 }
 
+export function nextPickedChatNames(
+  config: Record<string, unknown>,
+  streams: Array<{ thread_id?: string | null; label?: string | null }>,
+): string[] | null {
+  if (config.selection === "all") {
+    return null;
+  }
+  const ids = configStringList(config, "chat_ids");
+  if (ids.length === 0) {
+    return null;
+  }
+  const existing = configStringList(config, "chat_names");
+  if (existing.length === ids.length) {
+    return null;
+  }
+  const byTarget = new Map<string, string>();
+  for (const stream of streams) {
+    const threadId = stream.thread_id?.trim();
+    const label = stream.label?.replace(/\s+/g, " ").trim();
+    if (!threadId || !label) {
+      continue;
+    }
+    const target = threadId.includes(":")
+      ? threadId.slice(threadId.indexOf(":") + 1)
+      : threadId;
+    if (!target || label === target) {
+      continue;
+    }
+    byTarget.set(target, label);
+  }
+  const names = ids.map((id) => byTarget.get(id) ?? "");
+  return names.every((name) => name.length > 0) ? names : null;
+}
+
+export function configStringList(
+  config: Record<string, unknown>,
+  name: string,
+): string[] {
+  const value = config[name];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) =>
+      typeof entry === "string" && entry.trim().length > 0 ? [entry.trim()] : [],
+    );
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+  return [];
+}
+
 export function installationSettings(
   config: Record<string, unknown>,
 ): Record<string, string> {

@@ -353,3 +353,11 @@ export function formatWorkEvidence(input: {
   }
   return lines.join("\n");
 }
+
+export function isExecutorSysoutBody(text: string | undefined): boolean {
+  const value = text?.trim() ?? "";
+  if (!value) {
+    return false;
+  }
+  return /(^|\n)WORK\nWork item /.test(value) || /^Work item \S+:/.test(value);
+}

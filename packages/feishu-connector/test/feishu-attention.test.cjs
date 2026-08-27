@@ -54,10 +54,7 @@ describe("Feishu attention", () => {
       unread: true,
       unread_count: 1,
     });
-    assert.deepEqual(feishuAttentionOf("oc_1", true), {
-      unread: false,
-      unread_count: 0,
-    });
+    assert.equal(feishuAttentionOf("oc_1", true), undefined);
   });
 
   it("acks locally without pretending the official chat list has a count", () => {

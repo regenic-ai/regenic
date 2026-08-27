@@ -5,11 +5,10 @@ export function engineChip(engine: PersonalEngineView | null): EngineChipState {
   if (!engine || engine.kernel === "stopped") {
     return "stopped";
   }
-  if (
-    engine.pull?.phase === "pulling" ||
-    (engine.pull?.catching_up_count ?? 0) > 0 ||
-    engine.installations.some((item) => item.last_attempt?.status === "running")
-  ) {
+  if (engine.installations.some((item) => item.last_attempt?.status === "running")) {
+    return "syncing";
+  }
+  if (engine.pull?.streams.some((stream) => stream.work === "history")) {
     return "syncing";
   }
   return "running";
@@ -20,16 +19,22 @@ export function pullStatusLabel(pull?: PullStatusView | null): string {
     return t("sync.off");
   }
   if (pull.phase === "pulling") {
-    if (pull.catching_up_count > 1) {
-      return t("sync.syncingCount", { count: pull.catching_up_count });
+    const historyCount = pull.streams.filter(isHistoryWork).length;
+    if (historyCount > 1) {
+      return t("sync.syncingCount", { count: historyCount });
     }
-    const active = pull.streams.find(
-      (stream) => stream.phase === "pulling" || stream.phase === "catching_up",
-    );
-    if (active?.label) {
-      return t("sync.syncingNamed", { label: active.label });
+    const history = pull.streams.find(isHistoryWork);
+    if (history?.label) {
+      return t("sync.syncingNamed", { label: history.label });
     }
-    return pull.catching_up_count === 1 ? t("sync.older") : t("sync.pulling");
+    if (history) {
+      return t("sync.older");
+    }
+    const live = pull.streams.find((stream) => stream.phase === "pulling");
+    if (live?.label) {
+      return t("sync.syncingNamed", { label: live.label });
+    }
+    return t("sync.pulling");
   }
   if (pull.catching_up_count > 1) {
     return t("sync.catchingLeft", { count: pull.catching_up_count });
@@ -59,11 +64,11 @@ export function threadSyncLabel(
   if (!stream) {
     return null;
   }
-  if (stream.phase === "pulling" || stream.phase === "catching_up") {
-    return t("thread.syncOlder");
-  }
   if (stream.phase === "error") {
     return t("thread.syncInterrupted");
+  }
+  if (isHistoryWork(stream)) {
+    return t("thread.syncOlder");
   }
   return null;
 }
@@ -79,8 +84,14 @@ export function threadSyncTone(
   if (stream.phase === "error") {
     return "error";
   }
-  if (stream.phase === "pulling" || stream.phase === "catching_up") {
+  if (isHistoryWork(stream)) {
     return "syncing";
   }
   return null;
+}
+
+function isHistoryWork(stream: {
+  work?: "live" | "history" | null;
+}): boolean {
+  return stream.work === "history";
 }

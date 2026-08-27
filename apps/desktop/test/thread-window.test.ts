@@ -179,6 +179,20 @@ describe("thread window", () => {
     assert.equal(cursor?.since_id, "c");
   });
 
+  it("keeps a live Read receipt when a later local page only has Sent", () => {
+    const sent = item("m1", "hi");
+    sent.direction = "outbound";
+    sent.can_receipt = true;
+    sent.receipt = { state: "sent" };
+    const read = {
+      ...sent,
+      receipt: { state: "read" as const, read_count: 1 },
+    };
+    assert.equal(mergeInboxDelta([sent], [read])[0].receipt?.state, "read");
+    assert.equal(mergeInboxDelta([read], [sent])[0].receipt?.state, "read");
+    assert.equal(mergeRecentInbox([read], [sent])[0].receipt?.state, "read");
+  });
+
   it("does not pull older catch-up events into a recent window", () => {
     const recent = [
       item("m50", "new"),

@@ -196,6 +196,8 @@ export function computeThreadUnread(input: {
     }
     return { unread: false, mentioned: input.source?.mentioned };
   }
+  // Source overlays may only add unread. A Feishu "already read" must not
+  // hide a never-opened thread just because the latest inbound is missing.
   if (input.source?.unread) {
     return {
       unread: true,

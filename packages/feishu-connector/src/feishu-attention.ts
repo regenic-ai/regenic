@@ -71,12 +71,11 @@ export function feishuAttentionOf(chatId: string, isRead?: boolean): ThreadAtten
   if (localRead.has(chatId)) {
     return { unread: false, unread_count: 0 };
   }
-  if (isRead === undefined) {
-    return undefined;
+  if (isRead === false) {
+    return { unread: true, unread_count: 1 };
   }
-  return isRead
-    ? { unread: false, unread_count: 0 }
-    : { unread: true, unread_count: 1 };
+  // Official is_read=true must not clear a never-opened local unread.
+  return undefined;
 }
 
 export function cacheFeishuReadStatus(messageId: string, isRead: boolean): void {

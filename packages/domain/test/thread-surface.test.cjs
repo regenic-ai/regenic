@@ -73,6 +73,10 @@ describe("thread surface", () => {
     });
     assert.equal(sourceOnly.unread, true);
     assert.equal(sourceOnly.unread_count, 2);
+    const officialReadWithoutInbound = computeThreadUnread({
+      source: { unread: false, unread_count: 0 },
+    });
+    assert.equal(officialReadWithoutInbound.unread, false);
   });
 
   it("picks the latest inbound on the thread, not the list face", () => {
