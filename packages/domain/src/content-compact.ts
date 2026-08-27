@@ -17,6 +17,7 @@ import type {
 export interface ContentCompactResult {
   scanned: number;
   rewritten: number;
+  failed: number;
   released_bytes: number;
   paused: boolean;
 }
@@ -49,6 +50,7 @@ export async function compactEmbeddedContent(
   ];
   const metas = await authority.findBlobs(hashes);
   let rewritten = 0;
+  let failed = 0;
   let released = 0;
   let paused = false;
 
@@ -72,14 +74,19 @@ export async function compactEmbeddedContent(
     try {
       bytes = await blobs.get(hash);
     } catch {
+      failed += 1;
       continue;
     }
     const parts = parseStoredContentParts(bytes);
-    if (!parts || !envelopeHasEmbeddedBytes(parts)) {
+    if (!parts) {
+      continue;
+    }
+    if (!envelopeHasEmbeddedBytes(parts)) {
       continue;
     }
     const content = partsToContent(parts);
     if (!content) {
+      failed += 1;
       continue;
     }
     const canonical = canonicalizeContent(content);
@@ -114,6 +121,7 @@ export async function compactEmbeddedContent(
   return {
     scanned: hashes.length,
     rewritten,
+    failed,
     released_bytes: released,
     paused,
   };

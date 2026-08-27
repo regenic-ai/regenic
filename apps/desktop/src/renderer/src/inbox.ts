@@ -358,7 +358,7 @@ function rebuildInboxThreads(
       next.push(old);
       continue;
     }
-    next.push(buildThread(id, ordered));
+    next.push(buildThread(id, ordered, old));
   }
   return sortInboxThreads(next);
 }
@@ -386,7 +386,7 @@ function appendInboxThreads(
       return thread;
     }
     dirty.delete(thread.id);
-    return buildThread(thread.id, mergeMessages(thread.messages, extra));
+    return buildThread(thread.id, mergeMessages(thread.messages, extra), thread);
   });
   for (const [id, extra] of dirty) {
     next.push(buildThread(id, orderMessages(extra)));
@@ -401,18 +401,27 @@ function threadIdOf(item: InboxViewItem): string {
   );
 }
 
-function buildThread(id: string, ordered: InboxViewItem[]): InboxThread {
+function buildThread(
+  id: string,
+  ordered: InboxViewItem[],
+  previous?: InboxThread,
+): InboxThread {
   const latest = ordered[ordered.length - 1];
   const pref = latestPref(ordered);
+  const rawId = threadLabel(id, latest);
   return {
     id,
     source: latest.event.source,
     channel: latest.channel ?? latest.event.source,
     channel_label: latest.channel_label ?? latest.event.source.toUpperCase(),
-    label: threadLabel(id, latest),
+    label: rawId,
     title: pref.title,
-    conversation_label: conversationField(ordered, "conversation_label"),
-    conversation_kind: conversationField(ordered, "conversation_kind"),
+    conversation_label: keepConversationValue(
+      conversationField(ordered, "conversation_label"),
+      previous?.conversation_label,
+      rawId,
+    ),
+    conversation_kind: threadConversationKind(ordered, previous?.conversation_kind),
     pinned: pref.pinned,
     pref_updated_at: pref.updated_at,
     can_send: ordered.some((item) => item.can_send),
@@ -645,6 +654,42 @@ function conversationField(
     }
   }
   return null;
+}
+
+function keepConversationValue(
+  next: string | null,
+  previous: string | null | undefined,
+  rawId: string,
+): string | null {
+  return usableConversationName(next, rawId) ?? usableConversationName(previous, rawId);
+}
+
+function threadConversationKind(
+  messages: InboxViewItem[],
+  previous?: string | null,
+): string | null {
+  const inbound = conversationField(
+    messages.filter((item) => item.direction === "inbound"),
+    "conversation_kind",
+  );
+  if (inbound) {
+    return inbound;
+  }
+  if (previous?.trim()) {
+    return previous.trim();
+  }
+  return conversationField(messages, "conversation_kind");
+}
+
+function usableConversationName(
+  name: string | null | undefined,
+  rawId: string,
+): string | null {
+  const value = name?.replace(/\s+/g, " ").trim() || null;
+  if (!value || value === rawId) {
+    return null;
+  }
+  return value;
 }
 
 function threadWork(

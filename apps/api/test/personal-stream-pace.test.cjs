@@ -74,6 +74,28 @@ describe("selectHumanPacedStreams", () => {
     );
     assert.equal(lastHistoryKey(selected), "b");
   });
+
+  it("does not poll the same catching-up stream as both live and history", () => {
+    const selected = selectHumanPacedStreams(
+      [planned("only", true, "feishu:only")],
+      { liveLimit: 1, historyLimit: 1, preferredThreadId: "feishu:only" },
+    );
+    assert.deepEqual(
+      selected.map((item) => `${item.key}:${item.older ? "older" : "live"}`),
+      ["only:live"],
+    );
+    const mixed = selectHumanPacedStreams(
+      [
+        planned("open", true, "feishu:open"),
+        planned("other", true, "feishu:other"),
+      ],
+      { liveLimit: 1, historyLimit: 1, preferredThreadId: "feishu:open" },
+    );
+    assert.deepEqual(
+      mixed.map((item) => `${item.key}:${item.older ? "older" : "live"}`),
+      ["open:live", "other:older"],
+    );
+  });
 });
 
 describe("shouldKeepCatchingUp", () => {

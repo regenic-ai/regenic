@@ -137,6 +137,13 @@ export function shouldFinishContentCompact(outcome: ContentCompactOutcome): bool
   return outcome === "done";
 }
 
+export function contentCompactScanOutcome(result: {
+  rewritten: number;
+  failed: number;
+}): ContentCompactOutcome {
+  return result.failed > 0 ? "failed" : "done";
+}
+
 export function contentCompactFailureOutcome(
   error: unknown,
   aborted: boolean,
@@ -168,24 +175,24 @@ async function compactLocalContent(
     if (result.paused || !isHumanIdle()) {
       return "paused";
     }
-    if (result.rewritten === 0) {
-      return "done";
-    }
-    try {
-      await host.get("authority").vacuumStore();
-    } catch (error) {
-      if (signal.aborted || isWriteWorkerClosed(error)) {
+    const outcome = contentCompactScanOutcome(result);
+    if (result.rewritten > 0) {
+      try {
+        await host.get("authority").vacuumStore();
+      } catch (error) {
+        if (signal.aborted || isWriteWorkerClosed(error)) {
+          return "aborted";
+        }
+        console.warn("vacuum after content compact failed", error);
+      }
+      if (signal.aborted) {
         return "aborted";
       }
-      console.warn("vacuum after content compact failed", error);
+      console.info(
+        `compacted ${result.rewritten} message envelopes, released ${result.released_bytes} bytes`,
+      );
     }
-    if (signal.aborted) {
-      return "aborted";
-    }
-    console.info(
-      `compacted ${result.rewritten} message envelopes, released ${result.released_bytes} bytes`,
-    );
-    return "done";
+    return outcome;
   } catch (error) {
     const outcome = contentCompactFailureOutcome(error, signal.aborted);
     if (outcome === "failed") {

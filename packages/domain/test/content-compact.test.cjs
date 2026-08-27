@@ -65,7 +65,9 @@ describe("compactEmbeddedContent", () => {
     const body = parts.find((part) => part.role === "body");
 
     assert.equal(first.rewritten, 1);
+    assert.equal(first.failed, 0);
     assert.equal(second.rewritten, 0);
+    assert.equal(second.failed, 0);
     assert.notEqual(updated.content_hash, oldHash);
     assert.equal(await blobs.exists(oldHash), false);
     assert.equal(body.text, "see this");
@@ -148,5 +150,48 @@ describe("compactEmbeddedContent", () => {
     assert.equal(result.rewritten, 0);
     assert.equal(result.paused, true);
     assert.equal(await blobs.exists(oldHash), true);
+  });
+
+  it("counts skipped embedded envelopes so a later pass can retry", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const missingHash = createHash("sha256").update("missing").digest("hex");
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_missing",
+      content_hash: missingHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: 8,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    const broken = Buffer.from(
+      JSON.stringify([
+        {
+          role: "attachment",
+          media_type: "image/png",
+          bytes_base64: "",
+        },
+      ]),
+      "utf8",
+    );
+    const brokenHash = createHash("sha256").update(broken).digest("hex");
+    await blobs.put(brokenHash, broken, CONTENT_PARTS_MEDIA_TYPE);
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_broken",
+      content_hash: brokenHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: broken.byteLength,
+      occurred_at: "2026-08-27T00:00:01.000Z",
+      expected_head_id: null,
+    });
+
+    const result = await compactEmbeddedContent(authority, blobs, "local-owner");
+    assert.equal(result.rewritten, 0);
+    assert.equal(result.failed, 2);
+    assert.equal(result.paused, false);
   });
 });

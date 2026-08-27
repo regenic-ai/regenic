@@ -14,6 +14,7 @@ const {
   FeishuChatPollConnector,
   extractFeishuMedia,
   extractFeishuText,
+  feishuConversationKind,
   lastFeishuInbound,
   nextFeishuCursor,
   planFeishuHistoryRequest,
@@ -46,11 +47,21 @@ function textItem(overrides = {}) {
   };
 }
 
+describe("feishuConversationKind", () => {
+  it("does not default an unknown chat to group", () => {
+    assert.equal(feishuConversationKind("p2p"), "direct");
+    assert.equal(feishuConversationKind("group"), "group");
+    assert.equal(feishuConversationKind(undefined), undefined);
+    assert.equal(feishuConversationKind("topic"), undefined);
+  });
+});
+
 describe("FeishuChatPollConnector", () => {
   it("maps text, post, thread replies, and drops unknown types", async () => {
     const calls = [];
-    const connector = createConnector({
-      async listMessages(input) {
+    const connector = createConnector(
+      {
+        async listMessages(input) {
         calls.push(input);
         return {
           items: [
@@ -89,7 +100,9 @@ describe("FeishuChatPollConnector", () => {
           page_token: "page-2",
         };
       },
-    });
+      },
+      { chat_mode: "group" },
+    );
 
     const result = await connector.poll({
       value: JSON.stringify({
@@ -134,6 +147,30 @@ describe("FeishuChatPollConnector", () => {
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
     assert.equal(result.has_more, true);
+  });
+
+  it("does not stamp group when chat_mode is still unknown", async () => {
+    const connector = createConnector({
+      async listMessages() {
+        return { items: [textItem()], has_more: false };
+      },
+    });
+    const result = await connector.poll({
+      value: JSON.stringify({ recent_seeded: true, media_synced: true }),
+    });
+    const surface = JSON.parse(
+      result.batch.records[0].content.find((part) => part.role === "metadata").text,
+    );
+    assert.equal(surface.conversation_kind, undefined);
+    connector.rememberChat({ chat_mode: "p2p" });
+    assert.equal(connector.describeChat().chat_mode, "p2p");
+    const again = await connector.poll({
+      value: JSON.stringify({ recent_seeded: true, media_synced: true }),
+    });
+    const direct = JSON.parse(
+      again.batch.records[0].content.find((part) => part.role === "metadata").text,
+    );
+    assert.equal(direct.conversation_kind, "direct");
   });
 
   it("marks my Feishu history as outbound and remembers only newer peer inbound", async () => {

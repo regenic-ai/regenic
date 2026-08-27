@@ -59,16 +59,41 @@ export class FeishuChatPollConnector {
   readonly source = FEISHU_SOURCE;
   private readonly pageSize: number;
   private readonly now: () => string;
+  private chatName: string | undefined;
+  private chatMode: FeishuChatMode | undefined;
 
   constructor(
     private readonly client: FeishuImClient,
     private readonly options: FeishuChatPollConnectorOptions,
   ) {
     this.pageSize = options.page_size ?? 50;
+    this.chatName = options.chat_name;
+    this.chatMode = options.chat_mode;
     if (!Number.isInteger(this.pageSize) || this.pageSize < 1 || this.pageSize > 50) {
       throw new Error("Feishu page_size must be an integer from 1 through 50");
     }
     this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  describeChat(): {
+    chat_id: string;
+    name?: string;
+    chat_mode?: FeishuChatMode;
+  } {
+    return {
+      chat_id: this.options.chat_id,
+      ...(this.chatName ? { name: this.chatName } : {}),
+      ...(this.chatMode ? { chat_mode: this.chatMode } : {}),
+    };
+  }
+
+  rememberChat(input: { name?: string; chat_mode?: FeishuChatMode }): void {
+    if (input.name?.trim()) {
+      this.chatName = input.name.trim();
+    }
+    if (input.chat_mode) {
+      this.chatMode = input.chat_mode;
+    }
   }
 
   private async selfUserId(): Promise<string | undefined> {
@@ -211,8 +236,8 @@ export class FeishuChatPollConnector {
       actor_id: actorId,
       actor_label: this.actorLabel(item, kind, names),
       scope_id: chatId,
-      scope_name: this.options.chat_name,
-      conversation_kind: feishuConversationKind(this.options.chat_mode),
+      scope_name: this.chatName,
+      conversation_kind: feishuConversationKind(this.chatMode),
       type: isThreadReply ? "thread_reply" : "message",
       thread_id: isThreadReply && threadRoot ? `${chatId}:${threadRoot}` : undefined,
       parent_external_id:
@@ -281,8 +306,8 @@ export class FeishuChatPollConnector {
     if (named) {
       return named;
     }
-    if (kind === "assistant" && this.options.chat_mode === "p2p") {
-      return this.options.chat_name;
+    if (kind === "assistant" && this.chatMode === "p2p") {
+      return this.chatName;
     }
     return undefined;
   }

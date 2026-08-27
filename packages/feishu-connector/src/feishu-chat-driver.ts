@@ -21,8 +21,9 @@ import {
 } from "./feishu-cli-client";
 import { createLarkUserTokenSource } from "./feishu-user-token";
 import { FEISHU_SOURCE } from "./feishu-message";
+import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
 import { feishuChatPlugin } from "./plugin";
-import { feishuStreamKey } from "./feishu-streams";
+import { feishuChatIdFromStreamKey, feishuStreamKey } from "./feishu-streams";
 
 export {
   FEISHU_STREAM_PACE,
@@ -111,8 +112,15 @@ export const feishuChatDriver: ChannelDriver = {
 
   async resolveStreams(installation, host, env, options?: ResolveStreamsOptions) {
     const client = larkClient(env);
+    const mounted = feishuChatsFromStreams(
+      host.get("connectors").listStreams(installation.id),
+    );
     const chats = await resolveFeishuChatTargets(installation.config, client, {
-      known: feishuChatsFromThreads(options?.threads ?? [], installation),
+      known: feishuChatsFromThreads(
+        options?.threads ?? [],
+        installation,
+        mounted,
+      ),
       discover: feishuSelection(installation.config) === "pick" ? "known" : "recent",
     });
     return mountFeishuChats(host, installation, chats, env, client, true);
@@ -120,13 +128,19 @@ export const feishuChatDriver: ChannelDriver = {
 
   async resolveThreadStream(installation, thread, host, env) {
     const client = larkClient(env);
+    const mounted = feishuChatFromStreams(
+      host.get("connectors").listStreams(installation.id),
+      thread.target,
+    );
     const streams = await mountFeishuChats(
       host,
       installation,
       [
         {
           chat_id: thread.target,
-          name: feishuChatName(installation.config, thread.target),
+          name:
+            feishuChatName(installation.config, thread.target) ?? mounted?.name,
+          chat_mode: mounted?.chat_mode,
         },
       ],
       env,
@@ -442,7 +456,9 @@ async function listRecentFeishuChats(
 function feishuChatsFromThreads(
   threads: ConversationThread[],
   installation: ConnectorInstallation,
+  mounted: FeishuChat[] = [],
 ): FeishuChat[] {
+  const known = new Map(mounted.map((chat) => [chat.chat_id, chat]));
   return threads.flatMap((thread) => {
     if (thread.source !== FEISHU_SOURCE) {
       return [];
@@ -450,13 +466,45 @@ function feishuChatsFromThreads(
     if (!feishuChatDriver.matchesThread(installation, thread)) {
       return [];
     }
+    const prev = known.get(thread.target);
     return [
       {
         chat_id: thread.target,
-        name: feishuChatName(installation.config, thread.target),
+        name: feishuChatName(installation.config, thread.target) ?? prev?.name,
+        chat_mode: prev?.chat_mode,
       },
     ];
   });
+}
+
+function feishuChatsFromStreams(streams: ConnectorStream[]): FeishuChat[] {
+  return streams.flatMap((stream) => {
+    const chat = feishuChatFromStream(stream);
+    return chat ? [chat] : [];
+  });
+}
+
+function feishuChatFromStreams(
+  streams: ConnectorStream[],
+  chatId: string,
+): FeishuChat | undefined {
+  return feishuChatsFromStreams(streams).find((chat) => chat.chat_id === chatId);
+}
+
+function feishuChatFromStream(stream: ConnectorStream): FeishuChat | undefined {
+  const chatId =
+    feishuChatIdFromStreamKey(stream.stream_key) ??
+    stream.thread_id?.slice(`${FEISHU_SOURCE}:`.length);
+  if (!chatId) {
+    return undefined;
+  }
+  if (stream.connector instanceof FeishuChatPollConnector) {
+    return stream.connector.describeChat();
+  }
+  return {
+    chat_id: chatId,
+    ...(stream.label && stream.label !== chatId ? { name: stream.label } : {}),
+  };
 }
 
 async function mountFeishuChats(
@@ -476,6 +524,14 @@ async function mountFeishuChats(
   const missing = chats.filter(
     (chat) => !existing.has(feishuStreamKey(chat.chat_id)),
   );
+  for (const stream of registry.listStreams(installation.id)) {
+    const chat = chats.find(
+      (item) => feishuStreamKey(item.chat_id) === stream.stream_key,
+    );
+    if (chat && stream.connector instanceof FeishuChatPollConnector) {
+      stream.connector.rememberChat(chat);
+    }
+  }
   if (missing.length > 0) {
     await host.plugin(feishuChatPlugin, {
       installation_id: installation.id,

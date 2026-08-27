@@ -100,8 +100,9 @@ export function selectHumanPacedStreams<T>(
     older: false,
     item: stream.item,
   }));
+  const liveKeys = new Set(live.map((stream) => stream.key));
   const history = rotateFromKey(
-    items.filter((item) => item.catchingUp),
+    items.filter((item) => item.catchingUp && !liveKeys.has(item.key)),
     options.rotateFrom,
   )
     .slice(0, Math.max(0, options.historyLimit))
