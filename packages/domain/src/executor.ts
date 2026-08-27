@@ -123,6 +123,7 @@ export interface TaskExecutor {
     ctx: ExecutorContext,
   ): Promise<ExecutorRunHandle>;
   status(run: WorkRun, ctx: ExecutorContext): Promise<ExecutorRunHandle>;
+  cancel?(run: WorkRun, ctx: ExecutorContext): Promise<void>;
 }
 
 export interface ExecutorRegistry {

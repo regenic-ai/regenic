@@ -27,6 +27,32 @@ export function formatTime(iso: string): string {
   }).format(date);
 }
 
+export function formatNextRunWhen(
+  iso: string | undefined,
+  now = new Date(),
+): "due" | string | null {
+  if (!iso) {
+    return null;
+  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  if (date.getTime() <= now.getTime() + 30_000) {
+    return "due";
+  }
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return new Intl.DateTimeFormat(
+    localeTag(activeLocale()),
+    sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" },
+  ).format(date);
+}
+
 export function formatChatTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {

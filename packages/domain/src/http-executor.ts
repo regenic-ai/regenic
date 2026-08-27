@@ -107,6 +107,22 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
       });
       return handleFromHttp(body, runId);
     },
+
+    async cancel(run: WorkRun, ctx: ExecutorContext) {
+      const runId = run.external_run_id ?? run.id;
+      try {
+        await callHttpExecutor(request, {
+          url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/cancel`,
+          method: "POST",
+          authEnv: options.auth_env,
+          timeoutMs,
+          env: ctx.env,
+          payload: { work_item_id: run.work_item_id },
+        });
+      } catch {
+        // Best effort. Dismiss still unfollows even if the inferior stays up.
+      }
+    },
   };
 }
 

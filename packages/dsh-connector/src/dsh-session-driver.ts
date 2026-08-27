@@ -126,7 +126,14 @@ export const dshSessionDriver: ChannelDriver = {
           .map((thread) => thread.target),
       ),
     ];
-    return mountDshSessions(host, installation, env, sessionIds);
+    if (sessionIds.length > 0) {
+      return mountDshSessions(host, installation, env, sessionIds);
+    }
+    if (!options?.discover) {
+      return [];
+    }
+    const listed = await dshWebRpcClient(installation, env).listAllSessionIds();
+    return mountDshSessions(host, installation, env, listed);
   },
 
   async resolveThreadStream(installation, thread, host, env) {

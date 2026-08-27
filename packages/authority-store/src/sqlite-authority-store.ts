@@ -6,7 +6,12 @@ import {
   AuthorityConflictError,
   conversationId,
   formatInboxDigest,
+  isRecipeTriggerKind,
+  isPullIntervalMs,
+  isWorkDeliveryStatus,
+  isWorkWriteBackState,
   normalizeInboxLimit,
+  recipeTriggerOf,
   threadExternalIdLike,
 } from "@regenic/domain";
 import type {
@@ -41,6 +46,7 @@ import type {
   SourceIdentity,
   TombstoneEvent,
   Recipe,
+  WorkDelivery,
   StoreClearResult,
   StoreFootprint,
   WorkItem,
@@ -490,6 +496,7 @@ export class SqliteAuthorityStore
     const transaction = this.database.transaction(() => {
       this.database.pragma("defer_foreign_keys = ON");
       const before = this.storeFootprint(orgId);
+      this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
       this.database
@@ -611,13 +618,15 @@ export class SqliteAuthorityStore
 
   async putRecipe(recipe: Recipe): Promise<Recipe> {
     this.assertWritable();
+    const trigger = recipeTriggerOf(recipe);
     this.database
       .prepare(
         `
           INSERT INTO recipes (
             id, org_id, name, match_json, executor_type, executor_config_json,
-            can_write_back, include_context, enabled, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            can_write_back, include_context, enabled, trigger_kind,
+            trigger_interval_ms, trigger_coalesce, next_run_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
@@ -626,6 +635,10 @@ export class SqliteAuthorityStore
             can_write_back = excluded.can_write_back,
             include_context = excluded.include_context,
             enabled = excluded.enabled,
+            trigger_kind = excluded.trigger_kind,
+            trigger_interval_ms = excluded.trigger_interval_ms,
+            trigger_coalesce = excluded.trigger_coalesce,
+            next_run_at = excluded.next_run_at,
             updated_at = excluded.updated_at
         `,
       )
@@ -639,6 +652,10 @@ export class SqliteAuthorityStore
         recipe.can_write_back ? 1 : 0,
         recipe.include_context ? 1 : 0,
         recipe.enabled ? 1 : 0,
+        trigger.kind,
+        trigger.kind === "pull" ? (trigger.interval_ms ?? null) : null,
+        trigger.kind === "push" && trigger.coalesce !== false ? 1 : 0,
+        recipe.next_run_at ?? null,
         recipe.created_at,
         recipe.updated_at,
       );
@@ -677,7 +694,7 @@ export class SqliteAuthorityStore
       .prepare(
         `SELECT * FROM work_items WHERE org_id = ? AND thread_id = ?
          ORDER BY CASE WHEN status IN ('open', 'running', 'waiting_human') THEN 0 ELSE 1 END,
-                  updated_at DESC, id DESC
+                  created_at DESC, id DESC
          LIMIT 1`,
       )
       .get(orgId, threadId) as WorkItemRow | undefined;
@@ -792,6 +809,85 @@ export class SqliteAuthorityStore
         run.updated_at,
       );
     return run;
+  }
+
+  async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM work_deliveries WHERE org_id = ? ORDER BY updated_at DESC, id`,
+      )
+      .all(orgId) as WorkDeliveryRow[];
+    return rows.map(toWorkDelivery);
+  }
+
+  async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {
+    const row = this.database
+      .prepare(`SELECT * FROM work_deliveries WHERE org_id = ? AND id = ?`)
+      .get(orgId, id) as WorkDeliveryRow | undefined;
+    return row ? toWorkDelivery(row) : null;
+  }
+
+  async getWorkDeliveryByItem(
+    orgId: string,
+    workItemId: string,
+  ): Promise<WorkDelivery | null> {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM work_deliveries WHERE org_id = ? AND work_item_id = ?`,
+      )
+      .get(orgId, workItemId) as WorkDeliveryRow | undefined;
+    return row ? toWorkDelivery(row) : null;
+  }
+
+  async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO work_deliveries (
+            id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
+            status, write_back, attempts, last_error, next_retry_at,
+            payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            recipe_id = excluded.recipe_id,
+            kind = excluded.kind,
+            unit_key = excluded.unit_key,
+            event_id = excluded.event_id,
+            status = excluded.status,
+            write_back = excluded.write_back,
+            attempts = excluded.attempts,
+            last_error = excluded.last_error,
+            next_retry_at = excluded.next_retry_at,
+            payload_json = excluded.payload_json,
+            lease_expires_at = excluded.lease_expires_at,
+            idempotency_key = excluded.idempotency_key,
+            channel_receipt_json = excluded.channel_receipt_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        delivery.id,
+        delivery.org_id,
+        delivery.work_item_id,
+        delivery.recipe_id,
+        delivery.kind,
+        delivery.unit_key,
+        delivery.event_id ?? null,
+        delivery.status,
+        delivery.write_back,
+        delivery.attempts,
+        delivery.last_error ?? null,
+        delivery.next_retry_at ?? null,
+        delivery.payload ? JSON.stringify(delivery.payload) : null,
+        delivery.lease_expires_at ?? null,
+        delivery.idempotency_key ?? null,
+        delivery.channel_receipt ? JSON.stringify(delivery.channel_receipt) : null,
+        delivery.created_at,
+        delivery.updated_at,
+      );
+    return delivery;
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {
@@ -1878,6 +1974,10 @@ interface RecipeRow {
   can_write_back: number;
   include_context: number;
   enabled: number;
+  trigger_kind: string | null;
+  trigger_interval_ms: number | null;
+  trigger_coalesce: number | null;
+  next_run_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1892,6 +1992,27 @@ interface WorkItemRow {
   thread_facet: WorkItem["thread_facet"];
   status: WorkItem["status"];
   recipe_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkDeliveryRow {
+  id: string;
+  org_id: string;
+  work_item_id: string;
+  recipe_id: string;
+  kind: string;
+  unit_key: string;
+  event_id: string | null;
+  status: string;
+  write_back: string;
+  attempts: number;
+  last_error: string | null;
+  next_retry_at: string | null;
+  payload_json: string | null;
+  lease_expires_at: string | null;
+  idempotency_key: string | null;
+  channel_receipt_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1924,16 +2045,31 @@ function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
 }
 
 function toRecipe(row: RecipeRow): Recipe {
+  const match = JSON.parse(row.match_json) as Recipe["match"];
+  const kind = isRecipeTriggerKind(row.trigger_kind) ? row.trigger_kind : undefined;
   return {
     id: row.id,
     org_id: row.org_id,
     name: row.name,
-    match: JSON.parse(row.match_json) as Recipe["match"],
+    match,
+    trigger: recipeTriggerOf({
+      match,
+      trigger: kind
+        ? {
+            kind,
+            ...(kind === "pull" && isPullIntervalMs(row.trigger_interval_ms)
+              ? { interval_ms: row.trigger_interval_ms }
+              : {}),
+            ...(kind === "push" ? { coalesce: row.trigger_coalesce !== 0 } : {}),
+          }
+        : undefined,
+    }),
     executor_type: row.executor_type,
     executor_config: JSON.parse(row.executor_config_json) as Recipe["executor_config"],
     can_write_back: row.can_write_back === 1,
     include_context: row.include_context === 1,
     enabled: row.enabled === 1,
+    ...(row.next_run_at ? { next_run_at: row.next_run_at } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1971,4 +2107,62 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+function toWorkDelivery(row: WorkDeliveryRow): WorkDelivery {
+  const kind = isRecipeTriggerKind(row.kind) ? row.kind : "manual";
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    work_item_id: row.work_item_id,
+    recipe_id: row.recipe_id,
+    kind,
+    unit_key: row.unit_key,
+    event_id: row.event_id ?? undefined,
+    status: isWorkDeliveryStatus(row.status) ? row.status : "queued",
+    write_back: isWorkWriteBackState(row.write_back) ? row.write_back : "pending",
+    attempts: row.attempts,
+    last_error: row.last_error ?? undefined,
+    next_retry_at: row.next_retry_at ?? undefined,
+    payload: parseDeliveryPayload(row.payload_json),
+    lease_expires_at: row.lease_expires_at ?? undefined,
+    idempotency_key: row.idempotency_key ?? undefined,
+    channel_receipt: parseChannelReceipt(row.channel_receipt_json),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function parseChannelReceipt(
+  raw: string | null,
+): WorkDelivery["channel_receipt"] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as WorkDelivery["channel_receipt"];
+    if (!parsed || typeof parsed.accepted !== "boolean") {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseDeliveryPayload(
+  raw: string | null,
+): WorkDelivery["payload"] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as WorkDelivery["payload"];
+    if (!parsed || typeof parsed.summary !== "string") {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
 }

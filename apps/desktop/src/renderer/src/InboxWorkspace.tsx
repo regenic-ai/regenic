@@ -251,7 +251,7 @@ function WorkRow({
   const preview = listPreview(thread, title);
   const facet = threadFacetLabel(thread.thread_facet);
   const { t } = useLocale();
-  const work = workStatusLabel(thread.work?.status);
+  const work = workStatusLabel(thread.work);
   const kind = conversationKindLabel(thread.conversation_kind);
   return (
     <div

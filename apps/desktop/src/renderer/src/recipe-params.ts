@@ -14,6 +14,18 @@ export function invokeCopy(
   return (values.prompt ?? values.instruction ?? values.skill ?? "").trim();
 }
 
+export function missingRequiredField(
+  catalog: ExecutorCatalogEntry | undefined,
+  config: Record<string, string> | undefined,
+): string | undefined {
+  for (const field of catalog?.fields ?? []) {
+    if (field.required && !(config?.[field.key] ?? "").trim()) {
+      return field.label;
+    }
+  }
+  return undefined;
+}
+
 export function configFromCatalog(
   catalog: ExecutorCatalogEntry | undefined,
   existing?: Record<string, string>,

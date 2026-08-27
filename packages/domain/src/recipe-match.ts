@@ -45,6 +45,57 @@ export function recipeMatches(match: RecipeMatch, subject: RecipeSubject): boole
   return true;
 }
 
+export function recipesCanShareSubject(
+  left: RecipeMatch,
+  right: RecipeMatch,
+): boolean {
+  if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
+    return false;
+  }
+  if (left.source && right.source && left.source !== right.source) {
+    return false;
+  }
+  if (
+    left.record_class &&
+    right.record_class &&
+    left.record_class !== right.record_class
+  ) {
+    return false;
+  }
+  if (
+    left.thread_facet &&
+    right.thread_facet &&
+    left.thread_facet !== right.thread_facet
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function recipePreemptedBy(
+  recipe: Recipe,
+  recipes: readonly Recipe[],
+): Recipe | undefined {
+  if (!recipe.enabled) {
+    return undefined;
+  }
+  return recipes.find(
+    (other) =>
+      other.id !== recipe.id &&
+      other.enabled &&
+      recipesCanShareSubject(recipe.match, other.match) &&
+      recipeRanksBefore(other, recipe),
+  );
+}
+
+function recipeRanksBefore(left: Recipe, right: Recipe): boolean {
+  const bySpec = recipeSpecificity(left.match) - recipeSpecificity(right.match);
+  if (bySpec !== 0) {
+    return bySpec > 0;
+  }
+  return left.id < right.id;
+}
+
 export function matchRecipe(
   recipes: Recipe[],
   subject: RecipeSubject,

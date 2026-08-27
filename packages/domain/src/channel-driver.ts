@@ -27,6 +27,8 @@ export interface ConversationThread {
 /** Kernel-owned threads this install should keep live. Drivers may add a cheap peek. */
 export interface ResolveStreamsOptions {
   threads?: ConversationThread[];
+  /** First seed or an explicit sync. Not the paced live tick. */
+  discover?: boolean;
 }
 
 /** Store-derived inbound cursor. Connectors may use it as an opaque hint. */

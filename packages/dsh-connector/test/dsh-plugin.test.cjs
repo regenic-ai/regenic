@@ -319,6 +319,15 @@ describe("dshSessionPlugin", () => {
       const streams = await dshSessionDriver.resolveStreams(installation, host, {});
       assert.deepEqual(streams, []);
       assert.equal(listed, 0);
+      const discovered = await dshSessionDriver.resolveStreams(
+        installation,
+        host,
+        {},
+        { discover: true },
+      );
+      assert.deepEqual(discovered, []);
+      assert.equal(listed, 1);
+      listed = 0;
       const eligible = await dshSessionDriver.resolveStreams(
         installation,
         host,

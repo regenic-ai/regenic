@@ -54,8 +54,39 @@ export function threadFacetLabel(facet: string | null | undefined): string | nul
   return null;
 }
 
-export function workStatusLabel(status: string | null | undefined): string | null {
-  switch (status) {
+export function workStatusLabel(
+  work:
+    | string
+    | {
+        status?: string;
+        delivery?: { status?: string; write_back?: string };
+      }
+    | null
+    | undefined,
+): string | null {
+  if (!work) {
+    return null;
+  }
+  if (typeof work !== "string") {
+    const delivery = work.delivery;
+    if (delivery?.status === "dead") {
+      return t("work.dead");
+    }
+    if (delivery?.write_back === "failed") {
+      return t("work.writeBackFailed");
+    }
+    if (delivery?.status === "write_back") {
+      return t("work.writeBack");
+    }
+    if (delivery?.status === "queued") {
+      return t("work.queued");
+    }
+    if (delivery?.status === "acked" && delivery.write_back === "sent") {
+      return t("work.acked");
+    }
+    return workStatusLabel(work.status);
+  }
+  switch (work) {
     case "running":
       return t("work.running");
     case "waiting_human":
@@ -69,14 +100,59 @@ export function workStatusLabel(status: string | null | undefined): string | nul
   }
 }
 
+export function heldFollowUpCount(thread: {
+  work?: { status?: string; head_event_id?: string; updated_at?: string };
+  messages?: Array<{
+    event: { id: string; occurred_at: string };
+    direction?: string;
+    kind?: string;
+  }>;
+}): number {
+  const work = thread.work;
+  if (work?.status !== "running" && work?.status !== "waiting_human") {
+    return 0;
+  }
+  const messages = thread.messages ?? [];
+  const headIndex = work.head_event_id
+    ? messages.findIndex((item) => item.event.id === work.head_event_id)
+    : -1;
+  const later =
+    headIndex >= 0
+      ? messages.slice(headIndex + 1)
+      : work.updated_at
+        ? messages.filter(
+            (item) =>
+              Date.parse(item.event.occurred_at) > Date.parse(work.updated_at ?? ""),
+          )
+        : [];
+  return later.filter(
+    (item) => item.direction === "inbound" && item.kind === "user",
+  ).length;
+}
+
+export function deliveryNeedsYou(delivery?: {
+  status?: string;
+  write_back?: string;
+} | null): boolean {
+  return delivery?.status === "dead" || delivery?.write_back === "failed";
+}
+
 export function workNextStepCopy(thread: {
   work?: {
     status?: string;
     recipe_id?: string;
+    head_event_id?: string;
+    updated_at?: string;
     can_write_back?: boolean;
+    delivery?: { status?: string; write_back?: string; last_error?: string };
   };
   record_class?: string;
   thread_facet?: string;
+  messages?: Array<{
+    event: { id: string; occurred_at: string };
+    direction?: string;
+    kind?: string;
+  }>;
 }): string | null {
   const status = thread.work?.status;
   if (!thread.work) {
@@ -85,17 +161,38 @@ export function workNextStepCopy(thread: {
     }
     return null;
   }
+  const delivery = thread.work.delivery;
+  if (delivery?.status === "dead") {
+    return t("work.hint.dead");
+  }
+  if (delivery?.write_back === "failed") {
+    return t("work.hint.writeBackFailed");
+  }
+  if (delivery?.status === "write_back") {
+    return t("work.hint.writeBack");
+  }
+  if (delivery?.status === "queued") {
+    return t("work.hint.queued");
+  }
   switch (status) {
     case "open":
       return t("work.hint.open");
     case "failed":
       return t("work.hint.failed");
-    case "running":
-      return t("work.hint.running");
+    case "running": {
+      const held = heldFollowUpCount(thread);
+      return held > 0
+        ? t("work.hint.held", { count: held })
+        : t("work.hint.running");
+    }
     case "waiting_human":
       return t("work.hint.waiting");
     case "done":
-      return thread.work.can_write_back ? t("work.hint.doneWrite") : t("work.hint.done");
+      return delivery?.write_back === "sent"
+        ? t("work.hint.acked")
+        : thread.work.can_write_back
+          ? t("work.hint.doneWrite")
+          : t("work.hint.done");
     case "skipped":
       return t("work.hint.skipped");
     default:

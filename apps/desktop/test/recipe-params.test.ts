@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { configFromCatalog, invokeCopy } from "../src/renderer/src/recipe-params.ts";
+import {
+  configFromCatalog,
+  invokeCopy,
+  missingRequiredField,
+} from "../src/renderer/src/recipe-params.ts";
 import type { ExecutorCatalogEntry } from "../src/renderer/src/types.ts";
 
 const dsh: ExecutorCatalogEntry = {
@@ -8,7 +12,7 @@ const dsh: ExecutorCatalogEntry = {
   label: "DSH",
   fields: [
     { key: "skill", label: "Skill", kind: "text" },
-    { key: "prompt", label: "Prompt", kind: "textarea" },
+    { key: "prompt", label: "Prompt", kind: "textarea", required: true },
   ],
 };
 
@@ -44,5 +48,10 @@ describe("recipe invoke catalog", () => {
       "regenic · auto · Fix the test.",
     );
     assert.equal(invokeCopy(dsh, { instruction: "legacy" }), "legacy");
+  });
+
+  it("blocks a missing required catalog field", () => {
+    assert.equal(missingRequiredField(dsh, { skill: "review" }), "Prompt");
+    assert.equal(missingRequiredField(dsh, { skill: "review", prompt: "同意" }), undefined);
   });
 });

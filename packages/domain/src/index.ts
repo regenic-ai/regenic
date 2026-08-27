@@ -39,6 +39,7 @@ export * from "./executor-installation";
 export * from "./session-executor";
 export * from "./local-connector-executor";
 export * from "./http-executor";
+export * from "./work-delivery";
 export * from "./work-policy";
 export * from "./memory-work-store";
 

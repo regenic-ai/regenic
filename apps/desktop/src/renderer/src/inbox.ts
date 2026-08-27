@@ -1,4 +1,5 @@
 import { t } from "../../shared/i18n.ts";
+import { deliveryNeedsYou } from "./message-view.ts";
 import type { InboxReuse } from "./thread-window";
 import type {
   AttentionClass,
@@ -478,9 +479,17 @@ function mergeMessages(
 
 export function resolveThreadAttention(thread: InboxThread): AttentionClass {
   if (
+    thread.attention === "waiting_you" ||
+    thread.attention === "needs_ack" ||
+    thread.attention === "running"
+  ) {
+    return thread.attention;
+  }
+  if (
     (thread.prompts?.length ?? 0) > 0 ||
     thread.work?.status === "waiting_human" ||
-    thread.work?.status === "failed"
+    thread.work?.status === "failed" ||
+    deliveryNeedsYou(thread.work?.delivery)
   ) {
     return "waiting_you";
   }

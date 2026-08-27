@@ -44,6 +44,7 @@ describe("dshTaskExecutor", () => {
     assert.equal(dshTaskExecutor.catalog().fields[0].kind, "text");
     assert.equal(dshTaskExecutor.catalog().fields[1].key, "prompt");
     assert.equal(dshTaskExecutor.catalog().fields[1].kind, "textarea");
+    assert.equal(dshTaskExecutor.catalog().fields[1].required, undefined);
     assert.ok(dshTaskExecutor.catalog().fields[1].hint);
     assert.match(dshTaskExecutor.catalog().fields[1].hint, /line 1/);
     assert.equal(dshTaskExecutor.capabilities().prompts, true);

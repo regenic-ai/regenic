@@ -103,15 +103,33 @@ export type WorkItemStatus =
   | "failed"
   | "skipped";
 
+export type WorkDeliveryStatus =
+  | "queued"
+  | "running"
+  | "write_back"
+  | "acked"
+  | "dead";
+
+export type WorkWriteBackState = "pending" | "sent" | "skipped" | "failed";
+
+export interface WorkDeliveryFace {
+  status: WorkDeliveryStatus;
+  write_back: WorkWriteBackState;
+  attempts: number;
+  last_error?: string;
+}
+
 export interface WorkFace {
   id: string;
   status: WorkItemStatus;
   recipe_id?: string;
   executor_type?: string;
   agent_thread_id?: string;
+  head_event_id?: string;
   can_write_back?: boolean;
   has_result?: boolean;
   result_summary?: string;
+  delivery?: WorkDeliveryFace;
   updated_at?: string;
 }
 
@@ -213,16 +231,33 @@ export interface RecipeMatch {
   thread_id?: string;
 }
 
+export type RecipeTriggerKind = "push" | "pull" | "manual";
+
+export interface RecipeTrigger {
+  kind: RecipeTriggerKind;
+  interval_ms?: number;
+  coalesce?: boolean;
+}
+
+export interface RecipeLastRun {
+  status: string;
+  at: string;
+  summary?: string;
+}
+
 export interface RecipeView {
   id: string;
   org_id: string;
   name: string;
   match: RecipeMatch;
+  trigger: RecipeTrigger;
   executor_type: string;
   executor_config: Record<string, string>;
   can_write_back: boolean;
   include_context: boolean;
   enabled: boolean;
+  next_run_at?: string;
+  last_run?: RecipeLastRun;
   created_at: string;
   updated_at: string;
 }
@@ -242,6 +277,7 @@ export interface RecipeConversationOption {
   id: string;
   label: string;
   source?: string;
+  can_send?: boolean;
 }
 
 export interface UiPrefsView {

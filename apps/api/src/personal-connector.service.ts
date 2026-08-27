@@ -78,6 +78,7 @@ export interface ConnectorSyncOptions {
   skipIdle?: boolean;
   capCatchUp?: boolean;
   allowHistory?: boolean;
+  discover?: boolean;
 }
 
 export interface ConnectorSyncView {
@@ -724,6 +725,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         skipIdle: true,
         capCatchUp: true,
         allowHistory: false,
+        discover: true,
       });
     } catch (error) {
       await applyPullOutcome([error]);
@@ -774,7 +776,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         installation,
         host,
         process.env,
-        { threads },
+        { threads, discover: options?.discover === true },
       );
       await this.persistPickedChatNames(store, installation, streams);
       this.pruneStreamPace(installation.id, streams);

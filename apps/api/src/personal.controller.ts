@@ -312,7 +312,9 @@ export class PersonalController {
     @Body() body: { max_pages?: number } | undefined,
   ) {
     noteHumanActivity();
-    return this.guard(() => this.connectors.sync(id, body?.max_pages));
+    return this.guard(() =>
+      this.connectors.sync(id, body?.max_pages, { discover: true }),
+    );
   }
 
   @Post("connectors/:id/enable")

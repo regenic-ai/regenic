@@ -31,6 +31,7 @@ import type {
   Recipe,
   StoreClearResult,
   StoreFootprint,
+  WorkDelivery,
   WorkItem,
   WorkRun,
   WorkStore,
@@ -235,6 +236,22 @@ export class SqliteSplitAuthorityStore
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return this.writer.call("putWorkRun", [run]);
+  }
+
+  async listWorkDeliveries(orgId: string) {
+    return this.reader.listWorkDeliveries(orgId);
+  }
+
+  async getWorkDelivery(orgId: string, id: string) {
+    return this.reader.getWorkDelivery(orgId, id);
+  }
+
+  async getWorkDeliveryByItem(orgId: string, workItemId: string) {
+    return this.reader.getWorkDeliveryByItem(orgId, workItemId);
+  }
+
+  async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
+    return this.writer.call("putWorkDelivery", [delivery]);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {

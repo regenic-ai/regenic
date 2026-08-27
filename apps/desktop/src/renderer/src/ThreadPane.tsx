@@ -15,6 +15,7 @@ import {
   threadFacetLabel,
   threadLoadedCountCopy,
   threadTitle,
+  deliveryNeedsYou,
   workNextStepCopy,
   workStatusLabel,
 } from "./message-view";
@@ -149,7 +150,9 @@ export const ThreadPane = memo(function ThreadPane({
     }
   };
   const resultSummary = thread.work?.result_summary?.trim();
-  const workHint = resultSummary ? null : workNextStepCopy(thread);
+  const needsDeliveryRetry = deliveryNeedsYou(thread.work?.delivery);
+  const workHint =
+    needsDeliveryRetry || !resultSummary ? workNextStepCopy(thread) : null;
   const heading = threadTitle(thread);
   const subLabel = thread.conversation_label || thread.label;
   const showSubLabel = Boolean(subLabel && subLabel !== heading);
@@ -158,7 +161,8 @@ export const ThreadPane = memo(function ThreadPane({
     Boolean(thread.work) &&
     (thread.work?.status === "open" ||
       thread.work?.status === "failed" ||
-      thread.work?.status === "skipped");
+      thread.work?.status === "skipped" ||
+      (thread.work?.status === "done" && needsDeliveryRetry));
   const canDismiss =
     Boolean(onDismissWork) &&
     Boolean(thread.work) &&
@@ -168,7 +172,7 @@ export const ThreadPane = memo(function ThreadPane({
   const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
   const kind = conversationKindLabel(thread.conversation_kind);
   const facet = threadFacetLabel(thread.thread_facet);
-  const work = workStatusLabel(thread.work?.status);
+  const work = workStatusLabel(thread.work);
 
   return (
     <article className="thread-pane">
@@ -235,12 +239,18 @@ export const ThreadPane = memo(function ThreadPane({
                   <button
                     type="button"
                     className="primary thread-run"
-                    title={t("thread.startRunTitle")}
+                    title={
+                      needsDeliveryRetry
+                        ? t("thread.retryDeliveryTitle")
+                        : t("thread.startRunTitle")
+                    }
                     onClick={() => {
                       void onRunWork?.();
                     }}
                   >
-                    {t("thread.startRun")}
+                    {needsDeliveryRetry
+                      ? t("thread.retryDelivery")
+                      : t("thread.startRun")}
                   </button>
                 ) : null}
               </div>

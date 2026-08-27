@@ -136,6 +136,11 @@ interface Recipe {
     source?: string;
     thread_id?: string;
   };
+  trigger: {
+    kind: "push" | "pull" | "manual";
+    interval_ms?: number;
+    coalesce?: boolean;
+  };
   executor_type: string;
   executor_config: Record<string, unknown>;
   can_write_back: boolean;
@@ -158,13 +163,27 @@ Identity is three objects (POSIX session / job / inferior):
 | Job (`WorkItem`) | One work unit, `unit_key` | One item for the life of a thread |
 | Inferior (`WorkRun`) | One execution; sysout stays off the list by default | A user-opened agent chat |
 
-Open a work item when `record_class = task`, or a Recipe satisfies the auto-start Specification (`thread_id`, or `record_class=task`, or `source` plus a non-utterance class). Empty, source-only, utterance-only, and facet-only matches do not auto-start.
+`match` must be specific (`thread_id`, or `record_class=task`, or `source` plus a non-utterance class). Empty, source-only, utterance-only, and facet-only matches cannot be saved.
+
+`trigger` is first-class and separate from match:
+
+| `kind` | When it runs | `unit_key` | Evidence |
+|---|---|---|---|
+| `push` | Ingested inbound user message or task | `event_id` | Trigger message; `include_context` optional |
+| `pull` | Clock; requires `thread_id` + `interval_ms` | `pull:{recipe_id}:{next_run_at}` | Session context is the payload; write-back default on |
+| `manual` | Current work → Start run only | Same as push | Same as push |
+
+Push contract: outbound / assistant / this recipe’s own write-back do not fire; `(recipe, event)` is idempotent; `coalesce` defaults true: a running job does not steal `head_event_id`, and after exit one follow-up uses the latest head. `coalesce=false` opens a new job on a new head even while one is active. Execution failure stays on `WorkItem.failed` and retries at 30s / 2min / 8min, at most 3 times, counted by `WorkRun`. Connector loss stays at L0. A manual recipe may bind to a matching job but does not `start`.
+
+Pull contract: not connector pull. Persist `next_run_at` so sleep and restart still fire. Skip if the previous occurrence is still running. A due recipe runs once, then `next_run_at` jumps to a future slot. The kernel still does not read `executor_config` keys.
+
+The delivery ledger owns egress only, not start. A finished job that needs write-back enqueues a `payload` snapshot and a stable `idempotency_key`. The tick flushes `queued` and due `failed` rows. `write_back` holds a 60s lease and returns to `queued` when it expires. Channel send is capped at 45s; timeout does not fail the letter. A recorded `channel_receipt` skips a second send and only retries ingest. `applyHandle` enqueues; it does not `await` send. Dispatch, supervise, and flush hold separate locks so a stuck egress does not stall ingest or pull. `acked` / `dead` mean whether the channel got the result. Dismiss closes an open letter as `acked/skipped`. An empty body is not a successful skip. Desktop `attention` trusts the kernel face: `waiting_you` / `needs_ack` / `running` beat local unread.
 
 A finished job plus a new `head_event_id` opens a **new** job. The list face is the current foreground job.
 
-`can_write_back` is required for egress. Seeing a digest is not send grant.
+`can_write_back` is required for egress (on by default for pull). Seeing a digest is not send grant.
 
-When `include_context` is true, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. The default is only the triggering or head message. This is kernel evidence policy, not an `executor_config` key. Use a more specific Recipe (one chat) when sessions need different settings.
+When `include_context` is true or `trigger.kind=pull`, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. Push defaults to only the triggering or head message. This is kernel evidence policy, not an `executor_config` key.
 
 `executor_config` belongs to the plugin. It is not a kernel field.
 
@@ -225,7 +244,7 @@ interface ExecutorCatalogEntry {
 
 Composing stdin, HTTP, or an agent goal is the plugin’s job. DSH uses `skill` / `prompt`. Cursor or bioby-agent declare their own repo, model, goal, or constraints. A legacy DSH `instruction` maps to `prompt` only inside the DSH plugin.
 
-A connector is not an executor. One plugin package may register both an L0 `ChannelDriver` and an L6 `TaskExecutor` (DSH already does: Engine installs the channel, then an executor installation binds that channel or calls HTTP). bioby-agent attaches the same way. Private HTTP stays out of the kernel and the Recipes page.
+A connector is not an executor. One plugin package may register both an L0 `ChannelDriver` and an L6 `TaskExecutor` (DSH already does: Engine installs the channel, then an executor installation binds that channel or calls HTTP). Extra packages load in-process from `REGENIC_PLUGIN_DIR` / `REGENIC_CHANNEL_PLUGIN`; the kernel does not import their names. Out-of-process stays the generic HTTP executor — no extension host. bioby-agent attaches the same way. Private HTTP stays out of the kernel and the Recipes page.
 
 Suspend maps to Thread Surface prompts. Answers use `POST /v1/me/conversations/prompts`, never egress. Prompts on a bound inferior decorate the source session row.
 
@@ -238,7 +257,7 @@ Sort (`ui_prefs.inbox_sort`):
 - `normal`: pin → recent activity
 - `attention`: `waiting_you` → `needs_ack` → `running` → `unread` → `quiet`; same rank by time. Running rows do not jump on status ticks and do not set unread.
 
-The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recipes have their own page: bind a task class, a source plus task, or one conversation, then Start run on Current work. Humans dismiss a job they do not want; they do not Mark done. The desktop does not classify chat / agent / ticket by connector name.
+The desktop reads `record_class`, `thread_facet`, `attention`, and `work` (including `work.delivery`). The recipe page asks when to run first (new messages / schedule / manual), then scope and executor. Push and pull start on their own; Start run is for manual, retry, or run-now. On write-back failure or dead letter the same button retries delivery. Humans dismiss a job they do not want; they do not Mark done. The desktop does not classify chat / agent / ticket by connector name.
 
 ## 11. Personal API
 
@@ -267,3 +286,4 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work`. Recip
 4. Sort mode persists across refresh.
 5. A source task is one list row; machine progress lives on that row.
 6. A connector test may name Feishu or DSH. A kernel test of L4/L5/L6 may not.
+7. A job that needs write-back enqueues a payload snapshot. Sent or an explicit skip is `acked`. An expired lease returns to the queue. Three send failures become a visible dead letter. Execution failure is not a delivery row.

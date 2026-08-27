@@ -89,7 +89,7 @@ export const dshTaskExecutor: TaskExecutor = {
           key: DSH_PROMPT_FIELD,
           label: "Prompt",
           kind: "textarea",
-          hint: "Sent before the work evidence. If the recipe writes back, line 1 must be the exact prompt option.",
+          hint: "Optional. Sent before the work evidence. If the recipe writes back, put the option on line 1. Feishu approvals also accept 同意/通过 and 拒绝/驳回.",
           placeholder: "option-label\nReason on the following lines.",
         },
       ],

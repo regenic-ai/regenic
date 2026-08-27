@@ -13,6 +13,7 @@ import {
   threadFacetLabel,
   threadPreview,
   threadTitle,
+  heldFollowUpCount,
   workNextStepCopy,
   workStatusLabel,
 } from "../src/renderer/src/message-view.ts";
@@ -364,6 +365,20 @@ describe("thread activity", () => {
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
     assert.equal(workStatusLabel("done"), "Done");
     assert.equal(
+      workStatusLabel({
+        status: "done",
+        delivery: { status: "dead", write_back: "failed" },
+      }),
+      "Not sent",
+    );
+    assert.equal(
+      workStatusLabel({
+        status: "done",
+        delivery: { status: "write_back", write_back: "failed" },
+      }),
+      "Not sent",
+    );
+    assert.equal(
       listPreview(
         thread(chat.messages, {
           work: { id: "work-1", status: "done", result_summary: "审核不通过：地区不符" },
@@ -372,16 +387,66 @@ describe("thread activity", () => {
       ),
       "审核不通过：地区不符",
     );
-    assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Bind a recipe/);
+    assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Set a rule/);
     assert.match(
       workNextStepCopy({ work: { status: "running" } }) ?? "",
-      /ends the turn/i,
+      /chat reply is not the same as finishing/i,
     );
     assert.match(
       workNextStepCopy({ work: { status: "skipped" } }) ?? "",
-      /no longer in current work/i,
+      /Removed from current work/i,
     );
     assert.equal(workNextStepCopy({ record_class: "utterance" }), null);
+    assert.match(
+      workNextStepCopy({
+        work: {
+          status: "done",
+          delivery: { status: "write_back", write_back: "failed" },
+        },
+      }) ?? "",
+      /Send again/,
+    );
+    assert.match(
+      workNextStepCopy({
+        work: {
+          status: "done",
+          delivery: { status: "dead", write_back: "failed" },
+        },
+      }) ?? "",
+      /three tries/,
+    );
+    assert.equal(
+      heldFollowUpCount({
+        work: { status: "running", head_event_id: "m1" },
+        messages: [
+          item({ id: "m1", external_id: "e1", text: "first" }),
+          item({
+            id: "m2",
+            external_id: "e2",
+            text: "follow-up",
+            kind: "user",
+            direction: "inbound",
+          }),
+        ],
+      }),
+      1,
+    );
+    assert.match(
+      workNextStepCopy({
+        work: { status: "running", head_event_id: "m1" },
+        messages: [
+          item({ id: "m1", external_id: "e1", text: "first" }),
+          item({
+            id: "m2",
+            external_id: "e2",
+            text: "follow-up",
+            kind: "user",
+            direction: "inbound",
+          }),
+        ],
+      }) ?? "",
+      /newer messages/,
+    );
   });
 
   it("does not fall back to the first message when conversation title is missing", () => {
