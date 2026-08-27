@@ -8,6 +8,7 @@
 
 - **English:** [../en/CONNECTOR.md](../en/CONNECTOR.md)
 - **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) ·
+  [执行器](EXECUTOR.md) ·
   [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) ·
   RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
 - **状态：** Phase 1
@@ -202,6 +203,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 | --- | --- |
 | `fields` | `key`、`label`、是否必填、默认值、`visible_when`、可选 `multiple` + `options` |
 | `prerequisites` | 环境变量或本机服务，带 `ready` 和 `hint` |
+| `docs` | 研发规范。引擎页在「连接器」标题旁统一渲染一次，点开跳到 GitHub 网页 |
 
 token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起本机服务。
 `ready` 为 false 时，`hint` 写出该跑的命令。飞书会分两档：没装二进制，

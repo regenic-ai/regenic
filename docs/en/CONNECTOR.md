@@ -11,6 +11,7 @@ This page is for people who implement a connector.
 
 - **简体中文:** [../zh/CONNECTOR.md](../zh/CONNECTOR.md)
 - **Related:** [Message orchestration](MESSAGE_ORCHESTRATION.md) ·
+  [Executors](EXECUTOR.md) ·
   [Ingestion](INGESTION_ARCHITECTURE.md) · [Technology stack](TECH_STACK.md) ·
   RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md)
 - **Status:** Phase 1
@@ -252,6 +253,7 @@ so the edit form can prefill.
 | --- | --- |
 | `fields` | `key`, `label`, required, default, `visible_when`, optional `multiple` + `options` |
 | `prerequisites` | Environment variable or local service, with `ready` and a `hint` |
+| `docs` | R&D specs. The Engine page renders these once next to the Connectors title and opens the GitHub page |
 
 Tokens are prerequisites, not form fields. The kernel does not install a
 CLI or start a local server. `hint` says what the user should run when

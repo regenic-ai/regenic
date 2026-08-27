@@ -1,3 +1,4 @@
+import type { ExecutorInstallation, ExecutorStore } from "./executor-installation";
 import { currentJobOnSession } from "./job-control";
 import type {
   Recipe,
@@ -7,11 +8,12 @@ import type {
 } from "./work";
 import { isActiveWorkStatus } from "./work";
 
-export class MemoryWorkStore implements WorkStore {
+export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly recipes = new Map<string, Recipe>();
   private readonly items = new Map<string, WorkItem>();
   private readonly runs = new Map<string, WorkRun>();
   private readonly uiPrefs = new Map<string, string>();
+  private readonly executors = new Map<string, ExecutorInstallation>();
 
   async listRecipes(orgId: string): Promise<Recipe[]> {
     return [...this.recipes.values()]
@@ -114,6 +116,36 @@ export class MemoryWorkStore implements WorkStore {
     this.uiPrefs.set(`${orgId}\0${key}`, value);
   }
 
+  async listExecutorInstallations(orgId: string): Promise<ExecutorInstallation[]> {
+    return [...this.executors.values()]
+      .filter((item) => item.org_id === orgId)
+      .map((item) => cloneExecutor(item));
+  }
+
+  async getExecutorInstallation(
+    orgId: string,
+    id: string,
+  ): Promise<ExecutorInstallation | null> {
+    const item = this.executors.get(id);
+    return item && item.org_id === orgId ? cloneExecutor(item) : null;
+  }
+
+  async putExecutorInstallation(
+    installation: ExecutorInstallation,
+  ): Promise<ExecutorInstallation> {
+    this.executors.set(installation.id, cloneExecutor(installation));
+    return cloneExecutor(installation);
+  }
+
+  async deleteExecutorInstallation(orgId: string, id: string): Promise<boolean> {
+    const item = this.executors.get(id);
+    if (!item || item.org_id !== orgId) {
+      return false;
+    }
+    this.executors.delete(id);
+    return true;
+  }
+
   dropOperationalWork(orgId: string): number {
     let count = 0;
     for (const [id, item] of [...this.items]) {
@@ -139,6 +171,11 @@ export class MemoryWorkStore implements WorkStore {
       .length;
   }
 
+  executorCount(orgId: string): number {
+    return [...this.executors.values()].filter((item) => item.org_id === orgId)
+      .length;
+  }
+
   activeItems(orgId: string): WorkItem[] {
     return [...this.items.values()].filter(
       (item) => item.org_id === orgId && isActiveWorkStatus(item.status),
@@ -158,5 +195,12 @@ function cloneRun(run: WorkRun): WorkRun {
   return {
     ...run,
     result: run.result ? { ...run.result } : undefined,
+  };
+}
+
+function cloneExecutor(item: ExecutorInstallation): ExecutorInstallation {
+  return {
+    ...item,
+    config: { ...item.config },
   };
 }

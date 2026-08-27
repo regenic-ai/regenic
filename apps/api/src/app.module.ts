@@ -1,6 +1,9 @@
 import { Module } from "@nestjs/common";
-import { ChannelDriverRegistry } from "@regenic/domain";
-import { dshSessionDriver } from "@regenic/dsh-connector";
+import {
+  ChannelDriverRegistry,
+  LocalExecutorPluginRegistry,
+} from "@regenic/domain";
+import { dshSessionDriver, dshTaskExecutor } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
 import { slackChannelDriver } from "@regenic/slack-connector";
 import { DshApiController } from "./dsh-api.controller";
@@ -12,6 +15,7 @@ import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalReplyService } from "./personal-reply.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
+import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
 
 @Module({
@@ -22,6 +26,7 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalInboxService,
     PersonalReplyService,
     PersonalWorkService,
+    PersonalExecutorService,
     PersonalConnectorService,
     PersonalWhatsAppImportService,
     {
@@ -31,6 +36,11 @@ import { PersonalWorkService } from "./personal-work.service";
           .register(dshSessionDriver)
           .register(slackChannelDriver)
           .register(feishuChatDriver),
+    },
+    {
+      provide: LocalExecutorPluginRegistry,
+      useFactory: () =>
+        new LocalExecutorPluginRegistry().register(dshTaskExecutor),
     },
   ],
 })

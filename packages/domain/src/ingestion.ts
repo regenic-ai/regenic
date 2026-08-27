@@ -311,6 +311,7 @@ export interface StoreFootprint {
   blobs: number;
   recipes: number;
   connectors: number;
+  executors: number;
 }
 
 export interface StoreClearResult {
@@ -323,6 +324,7 @@ export interface StoreClearResult {
   kept: {
     recipes: number;
     connectors: number;
+    executors: number;
   };
 }
 

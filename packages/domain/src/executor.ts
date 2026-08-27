@@ -41,6 +41,9 @@ export interface ExecutorCatalogEntry {
   params_label?: string;
   source?: string;
   attach?: AttachMode;
+  /** Local binding: pin spawnSysout to this connector installation. */
+  installation_id?: string;
+  kind?: "local_connector" | "http";
   fields: ExecutorCatalogField[];
 }
 
@@ -127,6 +130,7 @@ export interface ExecutorRegistry {
   get(executorType: string): TaskExecutor | undefined;
   list(): TaskExecutor[];
   catalog(): ExecutorCatalogEntry[];
+  clear(): void;
 }
 
 export class MemoryExecutorRegistry implements ExecutorRegistry {
@@ -152,6 +156,43 @@ export class MemoryExecutorRegistry implements ExecutorRegistry {
 
   catalog(): ExecutorCatalogEntry[] {
     return this.list().map((executor) => executor.catalog());
+  }
+
+  clear(): void {
+    this.byType.clear();
+  }
+}
+
+/**
+ * Local L6 plugins keyed by `catalog().source`. The API registers public
+ * plugins here (DSH today). `createRuntime` looks up by the pinned
+ * connector's source and never names a channel.
+ */
+export class LocalExecutorPluginRegistry {
+  private readonly plugins: TaskExecutor[] = [];
+
+  register(plugin: TaskExecutor): this {
+    const source = plugin.catalog().source?.trim();
+    if (!source) {
+      throw new Error("Local executor plugin must declare catalog.source");
+    }
+    if (this.forSource(source)) {
+      throw new Error(`Local executor plugin already registered: ${source}`);
+    }
+    this.plugins.push(plugin);
+    return this;
+  }
+
+  forSource(source: string): TaskExecutor | undefined {
+    const key = source.trim();
+    if (!key) {
+      return undefined;
+    }
+    return this.plugins.find((plugin) => plugin.catalog().source === key);
+  }
+
+  default(): TaskExecutor | undefined {
+    return this.plugins[0];
   }
 }
 

@@ -3,7 +3,7 @@
 - **状态：** Accepted
 - **English:** [../../en/rfcs/0009-work-orchestration.md](../../en/rfcs/0009-work-orchestration.md)
 - **依赖：** RFC 0004、RFC 0005、RFC 0008、连接器合同
-- **相关：** [消息编排](../MESSAGE_ORCHESTRATION.md) · [连接器](../CONNECTOR.md) · [桌面端](../DESKTOP.md)
+- **相关：** [消息编排](../MESSAGE_ORCHESTRATION.md) · [连接器](../CONNECTOR.md) · [执行器](../EXECUTOR.md) · [桌面端](../DESKTOP.md)
 
 ## 1. 问题
 
@@ -183,7 +183,16 @@ interface TaskExecutor {
 
 完成契约是 `WaitStatus`（wait / notify）。气泡里的字不是退出。公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在 `exited` 上 reap Job。写回只发生在这次真退出。人只回答 Prompt；不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss` 从当前工作拿掉。Dismiss 不是 `exited`，也不写回。被拿掉的 Inferior 记 `cancelled`，不是 `failed`。之后的 status tick 不得把这次 run 救活，也不得写回。
 
-公开默认：`dsh`。Cursor 与私有 Agent OS（如 bioby-agent）后接，同一目录合同。私有运行时只作内部插件包，默认开源构建不挂载。
+公开默认：可管理的 `dsh` 本机绑定（种子 id 仍是 `dsh`，旧 Recipe 不用改）。本机 L6 插件按 `catalog.source` 注册，不在挂载路径写 `if (source === "dsh")`。Cursor 与私有 Agent OS（如 bioby-agent）后接，同一目录合同。私有运行时只作内部插件包，或经通用 HTTP 执行器调用；默认开源构建不 import 私有 HTTP。
+
+执行器是一等安装，和连接器并列：
+
+| `kind` | 含义 |
+| --- | --- |
+| `local_connector` | 钉在一条能 `create` 的连接器安装上；`spawnSysout` 走该安装。未钉时仍按 `catalog.source` 找第一个能建会话的连接器 |
+| `http` | 通用 HTTP 适配器。`POST {base}/v1/runs`、`GET /v1/runs/:id`、`POST /v1/runs/:id/resume`。凭证只读环境变量名 |
+
+换执行器 = 换安装（或换插件）+ Recipe 选择。`GET /v1/me/executors` 只列出已启用安装的 `catalog()`。内核仍不读 `executor_config` 的 key，也不按连接器名分类。
 
 ### 调用目录
 
@@ -214,7 +223,7 @@ interface ExecutorCatalogEntry {
 
 拼 stdin / HTTP / Agent 目标是插件自己的事。DSH 用 `skill` / `prompt`；Cursor、bioby-agent 各自声明 repo、模型、目标或约束。旧 DSH 配方里的 `instruction` 只在 DSH 插件内映射为 `prompt`。
 
-连接器 ≠ 执行器。同一插件包可以同时挂 L0 `ChannelDriver` 和 L6 `TaskExecutor`（DSH 已如此：Engine 装渠道，host 再 `executors.register`）。bioby-agent 按同样方式接入，不把私有 HTTP 写进内核或规则页。
+连接器 ≠ 执行器。同一插件包可以同时挂 L0 `ChannelDriver` 和 L6 `TaskExecutor`（DSH 已如此：Engine 装渠道，执行器安装再绑这条渠道或走 HTTP）。bioby-agent 按同样方式接入，不把私有 HTTP 写进内核或规则页。
 
 挂起映射为渠道无关 Prompt，走 `POST /v1/me/conversations/prompts`，禁止再走 egress。绑定 inferior 上的 Prompt 装饰到来源 Session 那一行。
 
@@ -237,7 +246,12 @@ interface ExecutorCatalogEntry {
 | GET/POST | `/v1/me/recipes` | 列出 / 创建 |
 | POST | `/v1/me/recipes/:id` | 更新 |
 | DELETE | `/v1/me/recipes/:id` | 删除 |
-| GET | `/v1/me/executors` | 已挂载执行器目录 |
+| GET | `/v1/me/executors` | 已启用执行器目录 |
+| POST | `/v1/me/executors` | 安装 `local_connector` 或 `http` |
+| POST | `/v1/me/executors/:id/config` | 改名称或绑定 |
+| DELETE | `/v1/me/executors/:id` | 卸载 |
+| POST | `/v1/me/executors/:id/enable` | 启用 |
+| POST | `/v1/me/executors/:id/disable` | 停用 |
 | POST | `/v1/me/work-items/:id/run` | 手动启动 |
 | POST | `/v1/me/work-items/:id/dismiss` | 从当前工作拿掉；不写回 |
 | POST | `/v1/me/work-items/:id/complete` | dismiss 的别名；不冒充 `exited` |

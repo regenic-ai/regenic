@@ -47,6 +47,7 @@ export interface RegenicDesktop {
   onLocaleChanged: (listener: (locale: Locale) => void) => () => void;
   showConsole: () => Promise<void>;
   quitApp: () => Promise<void>;
+  openExternal: (url: string) => Promise<void>;
   getHostStats: () => Promise<HostStats>;
 }
 

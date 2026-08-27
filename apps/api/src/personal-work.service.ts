@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
+  ChannelDriver,
   ChannelDriverRegistry,
   INGEST_SCHEMA_VERSION,
   INBOX_SORT_PREF_KEY,
@@ -56,6 +57,7 @@ import {
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
+import { PersonalExecutorService } from "./personal-executor.service";
 import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
@@ -102,6 +104,7 @@ export class PersonalWorkService implements OnModuleDestroy {
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
+    private readonly executors: PersonalExecutorService,
   ) {}
 
   startAfterListen(): void {
@@ -109,6 +112,11 @@ export class PersonalWorkService implements OnModuleDestroy {
       return;
     }
     this.backgroundStarted = true;
+    void this.executors.ensureMounted().catch((error) => {
+      if (!isWorkTickShutdown(error)) {
+        console.error("executor mount failed", error);
+      }
+    });
     this.timer = setInterval(() => {
       void this.afterConnectorTick();
     }, WORK_TICK_MS);
@@ -156,6 +164,10 @@ export class PersonalWorkService implements OnModuleDestroy {
       return;
     }
     try {
+      await this.executors.ensureMounted();
+      if (!this.runtime.isReady()) {
+        return;
+      }
       await this.reconcileInbox();
       await this.refreshRuns();
     } catch (error) {
@@ -173,10 +185,11 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 
   async listExecutors() {
-    return this.runtime.requireHost().get("executors").catalog();
+    return this.executors.listCatalog();
   }
 
   async putRecipe(input: RecipeInput, id?: string): Promise<Recipe> {
+    await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const now = new Date().toISOString();
@@ -753,10 +766,11 @@ export class PersonalWorkService implements OnModuleDestroy {
         const installations = await host
           .get("authority")
           .listInstallations(this.runtime.orgId());
-        const found = this.drivers.findCreatable(
-          installations,
-          executor.catalog().source,
-        );
+        const catalog = executor.catalog();
+        const pin = catalog.installation_id?.trim();
+        const found = pin
+          ? pinnedCreatable(this.drivers, installations, pin)
+          : this.drivers.findCreatable(installations, catalog.source);
         if (!found) {
           throw new PersonalConnectorError(
             "unsupported_channel",
@@ -1088,9 +1102,10 @@ function isWorkTickShutdown(error: unknown): boolean {
   if (error instanceof PersonalKernelStoppedError) {
     return true;
   }
+  const message = error instanceof Error ? error.message : String(error);
   return (
-    error instanceof TypeError &&
-    /database connection is not open/i.test(String((error as Error).message))
+    (error instanceof TypeError && /database connection is not open/i.test(message)) ||
+    /Service is not available/i.test(message)
   );
 }
 
@@ -1131,4 +1146,20 @@ async function forceDisposition(
     score: current?.score ?? 0.7,
     decided_at: now,
   });
+}
+
+function pinnedCreatable(
+  drivers: ChannelDriverRegistry,
+  installations: ConnectorInstallation[],
+  installationId: string,
+): { installation: ConnectorInstallation; driver: ChannelDriver } | undefined {
+  const installation = installations.find((item) => item.id === installationId);
+  if (!installation || installation.status !== "enabled") {
+    return undefined;
+  }
+  const driver = drivers.get(installation.connector_type);
+  if (!driver?.capabilities(installation).create) {
+    return undefined;
+  }
+  return { installation, driver };
 }

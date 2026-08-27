@@ -2,12 +2,18 @@ import { useRef, useState } from "react";
 import {
   importWhatsAppExport,
   installConnector,
+  installExecutor,
   setConnectorStatus,
+  setExecutorStatus,
   syncConnector,
   uninstallConnector,
+  uninstallExecutor,
   updateConnectorConfig,
+  updateExecutorConfig,
 } from "./api";
+import { CatalogDocs, uniqueCatalogDocs } from "./CatalogDocs";
 import { ConnectorKind } from "./ConnectorSettings";
+import { ExecutorKind } from "./ExecutorSettings";
 import {
   connectorActionError,
   connectorLabel,
@@ -40,6 +46,9 @@ export function EnginePage({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
   const [installingType, setInstallingType] = useState<string | null>(null);
+  const [installingExecutor, setInstallingExecutor] = useState<string | null>(
+    null,
+  );
   const [actionError, setActionError] = useState<string | null>(null);
   const [whatsAppStatus, setWhatsAppStatus] = useState<string | null>(null);
   const [importingWhatsApp, setImportingWhatsApp] = useState(false);
@@ -231,7 +240,10 @@ export function EnginePage({
       </section>
       <section className="card engine-connectors">
         <div className="card-head">
-          <h2>{t("engine.connectors")}</h2>
+          <div className="card-title">
+            <h2>{t("engine.connectors")}</h2>
+            <CatalogDocs docs={uniqueCatalogDocs(engine.catalog ?? [])} />
+          </div>
           {syncable.length > 1 ? (
             <button
               type="button"
@@ -319,6 +331,61 @@ export function EnginePage({
           />
         ))}
         {actionError ? <p className="action-error">{actionError}</p> : null}
+      </section>
+      <section className="card engine-connectors">
+        <div className="card-head">
+          <div className="card-title">
+            <h2>{t("engine.executors")}</h2>
+            <CatalogDocs docs={uniqueCatalogDocs(engine.executor_catalog ?? [])} />
+          </div>
+        </div>
+        <p className="muted">{t("engine.executorsLead")}</p>
+        {(engine.executor_catalog ?? []).map((kind) => (
+          <ExecutorKind
+            key={kind.kind}
+            kind={kind}
+            installations={(engine.executor_installations ?? []).filter(
+              (item) => item.kind === kind.kind,
+            )}
+            busyId={busyId}
+            installing={installingExecutor === kind.kind}
+            onOpenInstall={() => setInstallingExecutor(kind.kind)}
+            onCloseInstall={() => setInstallingExecutor(null)}
+            onInstall={(config) =>
+              void runAction(`ex:${kind.kind}`, async () => {
+                await installExecutor(kind.kind, config);
+                setInstallingExecutor(null);
+              })
+            }
+            onToggle={(installation) =>
+              void runAction(`ex:${installation.id}`, async () => {
+                await setExecutorStatus(
+                  installation.id,
+                  installation.status === "disabled" ? "enabled" : "disabled",
+                );
+              })
+            }
+            onUpdate={(installation, config) =>
+              runAction(`ex:${installation.id}`, async () => {
+                await updateExecutorConfig(installation.id, config);
+              })
+            }
+            onUninstall={(installation) => {
+              if (
+                !window.confirm(
+                  t("engine.uninstallExecutorConfirm", {
+                    name: installation.label,
+                  }),
+                )
+              ) {
+                return;
+              }
+              void runAction(`ex:${installation.id}`, async () => {
+                await uninstallExecutor(installation.id);
+              });
+            }}
+          />
+        ))}
       </section>
     </div>
   );

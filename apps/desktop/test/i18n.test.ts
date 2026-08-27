@@ -26,6 +26,8 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "settings.store"), "本机数据");
     assert.equal(translate("zh", "settings.storeClear"), "清理本机数据");
     assert.equal(translate("zh", "engine.whatsapp.title"), "WhatsApp 个人导出");
+    assert.equal(translate("zh", "docs.connector"), "连接器规范");
+    assert.equal(translate("en", "docs.executor"), "Executor spec");
     assert.equal(
       translate("zh", "engine.whatsapp.summary", {
         completed: 2,

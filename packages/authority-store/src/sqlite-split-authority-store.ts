@@ -33,12 +33,14 @@ import type {
   WorkItem,
   WorkRun,
   WorkStore,
+  ExecutorInstallation,
+  ExecutorStore,
 } from "@regenic/domain";
 import { SqliteAuthorityStore } from "./sqlite-authority-store";
 import { SqliteWriteClient } from "./sqlite-write-client";
 
 export class SqliteSplitAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore, WorkStore
+  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore
 {
   private constructor(
     private readonly reader: SqliteAuthorityStore,
@@ -237,6 +239,29 @@ export class SqliteSplitAuthorityStore
     updatedAt: string,
   ): Promise<void> {
     await this.writer.call("putUiPref", [orgId, key, value, updatedAt]);
+  }
+
+  async listExecutorInstallations(
+    orgId: string,
+  ): Promise<ExecutorInstallation[]> {
+    return this.reader.listExecutorInstallations(orgId);
+  }
+
+  async getExecutorInstallation(
+    orgId: string,
+    id: string,
+  ): Promise<ExecutorInstallation | null> {
+    return this.reader.getExecutorInstallation(orgId, id);
+  }
+
+  async putExecutorInstallation(
+    installation: ExecutorInstallation,
+  ): Promise<ExecutorInstallation> {
+    return this.writer.call("putExecutorInstallation", [installation]);
+  }
+
+  async deleteExecutorInstallation(orgId: string, id: string): Promise<boolean> {
+    return this.writer.call("deleteExecutorInstallation", [orgId, id]);
   }
 
   async createInstallation(
