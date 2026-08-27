@@ -110,6 +110,7 @@ export interface FeishuImClient {
     page_size: number;
     page_token?: string;
     types?: FeishuChatMode[];
+    names?: boolean;
   }): Promise<FeishuChatPage>;
   sendText(input: {
     chat_id: string;
@@ -252,6 +253,7 @@ export class LarkCliClient implements FeishuImClient {
     page_size: number;
     page_token?: string;
     types?: FeishuChatMode[];
+    names?: boolean;
   }): Promise<FeishuChatPage> {
     const types = normalizeChatTypes(input.types);
     const argv = [
@@ -276,24 +278,52 @@ export class LarkCliClient implements FeishuImClient {
       timeout_ms: this.timeoutMs,
     });
     const page = parseChatPage(unwrapLarkCli(result));
-    await this.fillP2pNames(page.items);
+    if (input.names !== false) {
+      await this.fillP2pNames(page.items);
+    }
     return page;
+  }
+
+  async listRecentChats(
+    types?: FeishuChatMode[],
+    options?: { names?: boolean },
+  ): Promise<FeishuChat[]> {
+    const named = options?.names !== false;
+    const key = `recent:${normalizeChatTypes(types).join(",")}:${named ? "named" : "id"}`;
+    return this.cachedChatList(key, RECENT_CHAT_LIST_TTL_MS, async () => {
+      const page = await this.listChats({
+        page_size: 50,
+        types,
+        names: named,
+      });
+      return page.items;
+    });
   }
 
   async listAllChats(
     maxPages = 10,
     types?: FeishuChatMode[],
   ): Promise<FeishuChat[]> {
-    const key = normalizeChatTypes(types).join(",");
+    const key = `all:${normalizeChatTypes(types).join(",")}`;
+    return this.cachedChatList(key, CHAT_LIST_TTL_MS, () =>
+      this.fetchAllChats(maxPages, types),
+    );
+  }
+
+  private async cachedChatList(
+    key: string,
+    ttlMs: number,
+    load: () => Promise<FeishuChat[]>,
+  ): Promise<FeishuChat[]> {
     const cached = chatListCache.get(key);
-    if (cached && Date.now() - cached.at < CHAT_LIST_TTL_MS) {
+    if (cached && Date.now() - cached.at < ttlMs) {
       return cached.chats;
     }
     const pending = chatListInflight.get(key);
     if (pending) {
       return pending;
     }
-    const job = this.fetchAllChats(maxPages, types).then((chats) => {
+    const job = load().then((chats) => {
       chatListCache.set(key, { at: Date.now(), chats });
       return chats;
     });
@@ -865,7 +895,8 @@ function parseChat(value: unknown): FeishuChat[] {
 }
 
 const USER_NAME_TTL_MS = 10 * 60 * 1000;
-const CHAT_LIST_TTL_MS = 30_000;
+const CHAT_LIST_TTL_MS = 5 * 60_000;
+const RECENT_CHAT_LIST_TTL_MS = 2 * 60_000;
 const userNameCache = new Map<string, { name: string; at: number }>();
 const chatListCache = new Map<string, { at: number; chats: FeishuChat[] }>();
 const chatListInflight = new Map<string, Promise<FeishuChat[]>>();

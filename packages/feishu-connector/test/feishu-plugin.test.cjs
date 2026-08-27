@@ -112,6 +112,18 @@ describe("feishuChatDriver", () => {
       {},
     );
     assert.equal(labels.get("feishu:oc_1"), "Ada");
+    const all = feishuChatDriver.install({
+      id: "feishu-3",
+      org_id: "local-owner",
+      config: { selection: "all" },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    const live = await feishuChatDriver.resolveConversationLabels(
+      all,
+      [{ source: "feishu", target: "oc_hot" }],
+      {},
+    );
+    assert.equal(live.size, 0);
   });
 
   it("installs all groups or a picked set", () => {
@@ -223,6 +235,50 @@ describe("feishuChatDriver", () => {
     );
     assert.equal(again.length, 1);
     assert.equal(connectors.listStreams("feishu-1").length, 1);
+    const listed = await feishuChatDriver.resolveStreams(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all", kinds: ["group", "p2p"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+      },
+      host,
+      { REGENIC_LARK_CLI: "/missing-lark-cli" },
+      { discover: "known" },
+    );
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].thread_id, "feishu:oc_1");
+    await host.dispose();
+  });
+
+  it("opens one thread without listing every Feishu chat", async () => {
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    const stream = await feishuChatDriver.resolveThreadStream(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all", kinds: ["group", "p2p"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+      },
+      { source: "feishu", target: "oc_hot" },
+      host,
+      {},
+    );
+    assert.equal(stream.thread_id, "feishu:oc_hot");
+    assert.equal(connectors.listStreams("feishu-1").length, 1);
     await host.dispose();
   });
 
@@ -230,13 +286,16 @@ describe("feishuChatDriver", () => {
     const chats = await resolveFeishuChatTargets(
       { selection: "all" },
       {
-        async listAllChats(maxPages, types) {
-          assert.equal(maxPages, 10);
+        async listRecentChats(types, options) {
           assert.deepEqual(types, ["group", "p2p"]);
+          assert.equal(options?.names, false);
           return [
             { chat_id: "oc_g", name: "Team", chat_mode: "group" },
             { chat_id: "oc_p", name: "Ada", chat_mode: "p2p" },
           ];
+        },
+        async listAllChats() {
+          throw new Error("resolveStreams must not census every chat");
         },
       },
     );
@@ -273,6 +332,10 @@ describe("feishuChatDriver", () => {
           listed += 1;
           return [];
         },
+        async listRecentChats() {
+          listed += 1;
+          return [];
+        },
       },
     );
     assert.equal(listed, 0);
@@ -280,6 +343,75 @@ describe("feishuChatDriver", () => {
       { chat_id: "oc_1", name: "Ada" },
       { chat_id: "oc_2", name: "Ben" },
     ]);
+  });
+
+  it("does not list chats to fill missing picked names", async () => {
+    let listed = 0;
+    const chats = await resolveFeishuChatTargets(
+      { selection: "pick", chat_ids: ["oc_1"] },
+      {
+        async listAllChats() {
+          listed += 1;
+          return [{ chat_id: "oc_1", name: "Ada" }];
+        },
+        async listRecentChats() {
+          listed += 1;
+          return [{ chat_id: "oc_1", name: "Ada" }];
+        },
+      },
+    );
+    assert.equal(listed, 0);
+    assert.deepEqual(chats, [{ chat_id: "oc_1", name: undefined }]);
+  });
+
+  it("reuses known chats on a busy tick without listing", async () => {
+    let listed = 0;
+    const chats = await resolveFeishuChatTargets(
+      { selection: "all" },
+      {
+        async listAllChats() {
+          listed += 1;
+          return [];
+        },
+        async listRecentChats() {
+          listed += 1;
+          return [];
+        },
+      },
+      {
+        known: [{ chat_id: "oc_hot", name: "Ada", chat_mode: "p2p" }],
+        discover: "known",
+      },
+    );
+    assert.equal(listed, 0);
+    assert.deepEqual(chats, [
+      { chat_id: "oc_hot", name: "Ada", chat_mode: "p2p" },
+    ]);
+  });
+
+  it("merges a recent directory page onto known chats", async () => {
+    let all = 0;
+    const chats = await resolveFeishuChatTargets(
+      { selection: "all", kinds: ["group", "p2p"] },
+      {
+        async listAllChats() {
+          all += 1;
+          return [];
+        },
+        async listRecentChats() {
+          return [{ chat_id: "oc_new", name: "New", chat_mode: "group" }];
+        },
+      },
+      {
+        known: [{ chat_id: "oc_hot", name: "Ada" }],
+        discover: "recent",
+      },
+    );
+    assert.equal(all, 0);
+    assert.deepEqual(
+      chats.map((chat) => chat.chat_id),
+      ["oc_hot", "oc_new"],
+    );
   });
 
   it("requires a picked conversation and cannot create a conversation", async () => {

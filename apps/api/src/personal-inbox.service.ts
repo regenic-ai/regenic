@@ -158,6 +158,10 @@ export interface InboxListQuery {
   limit?: number;
 }
 
+export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
+  return Boolean(query.thread_id && !query.since && !query.heads);
+}
+
 export interface EngineQuery {
   detailed?: boolean;
 }
@@ -495,25 +499,33 @@ export class PersonalInboxService {
           )
         : inboundFromPage;
     const awaitingUser = awaitingUserThreads(resolved);
+    const liveChannel = !shouldSkipLiveChannelOverlays(query);
     const [livePrompts, attention, receiptPage] = await Promise.all([
       this.drivers.listPromptsForThreads(installations, threads, host),
-      this.drivers.readAttention(
-        installations,
-        withInboundHint(threads, inboundByThread),
-        host,
-      ),
-      loadInboxReceipts({
-        heads: query.heads === true,
-        thread,
-        since: query.since,
-        resolved,
-        installations,
-        drivers: this.drivers,
-        host,
-        authority,
-        blobs,
-        orgId,
-      }),
+      liveChannel
+        ? this.drivers.readAttention(
+            installations,
+            withInboundHint(threads, inboundByThread),
+            host,
+          )
+        : Promise.resolve(new Map()),
+      liveChannel
+        ? loadInboxReceipts({
+            heads: query.heads === true,
+            thread,
+            since: query.since,
+            resolved,
+            installations,
+            drivers: this.drivers,
+            host,
+            authority,
+            blobs,
+            orgId,
+          })
+        : Promise.resolve({
+            receipts: new Map(),
+            extras: [] as InboxResolvedRow[],
+          }),
     ]);
     const prompts = await promptLabelsFor(
       orgId,

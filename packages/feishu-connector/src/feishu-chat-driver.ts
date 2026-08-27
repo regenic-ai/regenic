@@ -8,6 +8,7 @@ import {
   type DeliveryReceipt,
   type JsonValue,
   type NewConnectorInstallation,
+  type ResolveStreamsOptions,
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
@@ -21,11 +22,12 @@ import {
 import { createLarkUserTokenSource } from "./feishu-user-token";
 import { FEISHU_SOURCE } from "./feishu-message";
 import { feishuChatPlugin } from "./plugin";
-import { feishuStreamKey } from "./feishu-streams";
+import { feishuChatIdFromStreamKey, feishuStreamKey } from "./feishu-streams";
 
 export {
   FEISHU_STREAM_PACE,
   createFeishuStreams,
+  feishuChatIdFromStreamKey,
   feishuStreamKey,
 } from "./feishu-streams";
 import {
@@ -106,19 +108,30 @@ export const feishuChatDriver: ChannelDriver = {
     );
   },
 
-  async resolveStreams(installation, host, env) {
+  async resolveStreams(installation, host, env, options?: ResolveStreamsOptions) {
     const client = larkClient(env);
-    const chats = await resolveFeishuChatTargets(installation.config, client);
+    const known = mountedFeishuChats(host, installation);
+    const chats = await resolveFeishuChatTargets(installation.config, client, {
+      known,
+      discover: options?.discover ?? (known.length > 0 ? "known" : "recent"),
+    });
     return mountFeishuChats(host, installation, chats, env, client);
   },
 
   async resolveThreadStream(installation, thread, host, env) {
     const client = larkClient(env);
-    const chats = await resolveFeishuChatTargets(installation.config, client);
-    const chat =
-      chats.find((item) => item.chat_id === thread.target) ??
-      { chat_id: thread.target };
-    const streams = await mountFeishuChats(host, installation, [chat], env, client);
+    const streams = await mountFeishuChats(
+      host,
+      installation,
+      [
+        {
+          chat_id: thread.target,
+          name: feishuChatName(installation.config, thread.target),
+        },
+      ],
+      env,
+      client,
+    );
     return (
       streams[0] ??
       requireConnectorStream(
@@ -145,7 +158,7 @@ export const feishuChatDriver: ChannelDriver = {
     return `${thread.target}:out:${receipt.rpc_id ?? "local"}`;
   },
 
-  async resolveConversationLabels(installation, threads, env) {
+  async resolveConversationLabels(installation, threads, _env) {
     const wanted = threads.filter((thread) => thread.source === FEISHU_SOURCE);
     const labels = new Map<string, string>();
     if (wanted.length === 0) {
@@ -160,26 +173,6 @@ export const feishuChatDriver: ChannelDriver = {
           labels.set(`${FEISHU_SOURCE}:${picked[index]}`, name);
         }
       }
-    }
-    const missing = wanted.filter(
-      (thread) => !labels.has(`${thread.source}:${thread.target}`),
-    );
-    if (missing.length === 0) {
-      return labels;
-    }
-    try {
-      const chats = await resolveFeishuChatTargets(
-        installation.config,
-        larkClient(env),
-      );
-      for (const chat of chats) {
-        const name = chat.name?.replace(/\s+/g, " ").trim();
-        if (name) {
-          labels.set(`${FEISHU_SOURCE}:${chat.chat_id}`, name);
-        }
-      }
-    } catch {
-      // Live chat list is optional. Config names still apply.
     }
     return labels;
   },
@@ -362,30 +355,102 @@ export function feishuInstallConfig(
   return config;
 }
 
+export type FeishuChatDiscover = "known" | "recent" | "full";
+
+export interface FeishuChatDirectory {
+  listRecentChats?(
+    types?: FeishuChatMode[],
+    options?: { names?: boolean },
+  ): Promise<FeishuChat[]>;
+  listAllChats?(
+    maxPages?: number,
+    types?: FeishuChatMode[],
+  ): Promise<FeishuChat[]>;
+}
+
 export async function resolveFeishuChatTargets(
   config: Record<string, unknown>,
-  client: Pick<LarkCliClient, "listAllChats">,
+  client: FeishuChatDirectory,
+  options: {
+    known?: FeishuChat[];
+    discover?: FeishuChatDiscover;
+  } = {},
 ): Promise<FeishuChat[]> {
-  if (feishuSelection(config) === "all") {
-    return client.listAllChats(10, feishuKinds(config));
-  }
-  const ids = feishuPickedChatIds(config);
-  const names = configStringList(config, "chat_names");
-  if (names.length === ids.length) {
+  if (feishuSelection(config) === "pick") {
+    const ids = feishuPickedChatIds(config);
+    const names = configStringList(config, "chat_names");
     return ids.map((chat_id, index) => ({
       chat_id,
       name: names[index],
     }));
   }
-  const listed = await client.listAllChats(10, ["group", "p2p"]).catch(() => []);
-  const byId = new Map(listed.map((chat) => [chat.chat_id, chat]));
-  return ids.map((chat_id, index) => {
-    const live = byId.get(chat_id);
-    return {
-      chat_id,
-      name: live?.name ?? names[index],
-      chat_mode: live?.chat_mode,
-    };
+  const kinds = feishuKinds(config);
+  const known = (options.known ?? []).filter((chat) =>
+    chatMatchesKinds(chat, kinds),
+  );
+  const discover = options.discover ?? (known.length > 0 ? "known" : "recent");
+  if (discover === "known" && known.length > 0) {
+    return known;
+  }
+  if (discover === "full") {
+    const listed = client.listAllChats
+      ? await client.listAllChats(10, kinds)
+      : [];
+    return mergeFeishuChats(known, listed);
+  }
+  const listed = await listRecentFeishuChats(client, kinds);
+  return mergeFeishuChats(known, listed);
+}
+
+function chatMatchesKinds(chat: FeishuChat, kinds: FeishuChatMode[]): boolean {
+  return !chat.chat_mode || kinds.includes(chat.chat_mode);
+}
+
+function mergeFeishuChats(known: FeishuChat[], extra: FeishuChat[]): FeishuChat[] {
+  const byId = new Map<string, FeishuChat>();
+  for (const chat of [...known, ...extra]) {
+    const prev = byId.get(chat.chat_id);
+    byId.set(chat.chat_id, {
+      chat_id: chat.chat_id,
+      name: chat.name ?? prev?.name,
+      chat_mode: chat.chat_mode ?? prev?.chat_mode,
+      ...(chat.p2p_target_id || prev?.p2p_target_id
+        ? { p2p_target_id: chat.p2p_target_id ?? prev?.p2p_target_id }
+        : {}),
+    });
+  }
+  return [...byId.values()];
+}
+
+async function listRecentFeishuChats(
+  client: FeishuChatDirectory,
+  kinds: FeishuChatMode[],
+): Promise<FeishuChat[]> {
+  if (client.listRecentChats) {
+    return client.listRecentChats(kinds, { names: false });
+  }
+  if (client.listAllChats) {
+    return client.listAllChats(1, kinds);
+  }
+  return [];
+}
+
+function mountedFeishuChats(
+  host: Host,
+  installation: ConnectorInstallation,
+): FeishuChat[] {
+  return host.get("connectors").listStreams(installation.id).flatMap((stream) => {
+    const chat_id = feishuChatIdFromStreamKey(stream.stream_key);
+    if (!chat_id) {
+      return [];
+    }
+    const label = stream.label?.replace(/\s+/g, " ").trim();
+    return [
+      {
+        chat_id,
+        name: label && label !== chat_id ? label : undefined,
+      },
+    ];
   });
 }
 
@@ -417,6 +482,19 @@ async function mountFeishuChats(
   return registry
     .listStreams(installation.id)
     .filter((stream) => wanted.has(stream.stream_key));
+}
+
+function feishuChatName(
+  config: Record<string, unknown>,
+  chatId: string,
+): string | undefined {
+  const ids = feishuPickedChatIds(config);
+  const names = configStringList(config, "chat_names");
+  const index = ids.indexOf(chatId);
+  if (index < 0) {
+    return undefined;
+  }
+  return names[index];
 }
 
 function larkClient(env: NodeJS.ProcessEnv): LarkCliClient {

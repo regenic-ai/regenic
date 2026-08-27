@@ -132,6 +132,13 @@ export interface ConnectorCursor {
   value: string;
 }
 
+export interface ConnectorPollOptions {
+  /** One older/history page instead of the live/recent page. */
+  older?: boolean;
+  /** Download attachments. Default true. Open/seed can skip this. */
+  media?: boolean;
+}
+
 export interface PollResult {
   batch: IngestBatch;
   next_cursor?: string;
@@ -154,7 +161,10 @@ export interface ChannelConnector {
   capabilities(): ConnectorCapabilities;
   verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook>;
   handleWebhook(webhook: VerifiedWebhook): Promise<IngestBatch>;
-  poll(cursor: ConnectorCursor | null): Promise<PollResult>;
+  poll(
+    cursor: ConnectorCursor | null,
+    options?: ConnectorPollOptions,
+  ): Promise<PollResult>;
   backfill(range: BackfillRange): AsyncIterable<IngestBatch>;
   syncMembers(scope: ExternalScopeRef): Promise<MembershipBatch>;
 }

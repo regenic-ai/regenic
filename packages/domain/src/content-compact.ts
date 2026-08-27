@@ -18,6 +18,12 @@ export interface ContentCompactResult {
   scanned: number;
   rewritten: number;
   released_bytes: number;
+  paused: boolean;
+}
+
+export interface ContentCompactOptions {
+  signal?: AbortSignal;
+  pauseIf?: () => boolean;
 }
 
 const CONTENT_ROLES = new Set<ContentPartRole>([
@@ -31,6 +37,7 @@ export async function compactEmbeddedContent(
   authority: AuthorityStore,
   blobs: BlobStore,
   orgId: string,
+  options: ContentCompactOptions = {},
 ): Promise<ContentCompactResult> {
   const events = await authority.listEvents(orgId);
   const hashes = [
@@ -43,8 +50,20 @@ export async function compactEmbeddedContent(
   const metas = await authority.findBlobs(hashes);
   let rewritten = 0;
   let released = 0;
+  let paused = false;
 
-  for (const hash of hashes) {
+  for (const [index, hash] of hashes.entries()) {
+    if (options.signal?.aborted || options.pauseIf?.()) {
+      paused = true;
+      break;
+    }
+    if (index > 0 && index % 8 === 0) {
+      await yieldEventLoop();
+      if (options.signal?.aborted || options.pauseIf?.()) {
+        paused = true;
+        break;
+      }
+    }
     const meta = metas.get(hash);
     if (!meta || meta.media_type !== CONTENT_PARTS_MEDIA_TYPE) {
       continue;
@@ -96,7 +115,14 @@ export async function compactEmbeddedContent(
     scanned: hashes.length,
     rewritten,
     released_bytes: released,
+    paused,
   };
+}
+
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function partsToContent(parts: StoredContentPart[]): ContentPart[] | undefined {

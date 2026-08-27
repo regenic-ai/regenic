@@ -24,6 +24,13 @@ export interface ConversationThread {
   target: string;
 }
 
+/** How `resolveStreams` should expand the live set. Drivers may ignore this. */
+export type ConnectorStreamDiscover = "known" | "recent" | "full";
+
+export interface ResolveStreamsOptions {
+  discover?: ConnectorStreamDiscover;
+}
+
 /** Store-derived inbound cursor. Connectors may use it as an opaque hint. */
 export interface ThreadAttentionQuery extends ConversationThread {
   latest_inbound?: ThreadInboundCursor;
@@ -148,6 +155,7 @@ export interface ChannelDriver {
     installation: ConnectorInstallation,
     host: Host,
     env: NodeJS.ProcessEnv,
+    options?: ResolveStreamsOptions,
   ): Promise<ConnectorStream[]>;
   resolveThreadStream(
     installation: ConnectorInstallation,

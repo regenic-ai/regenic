@@ -2,7 +2,9 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   lastCatchUpKey,
+  lastHistoryKey,
   rotateFromKey,
+  selectHumanPacedStreams,
   selectStreamsForTick,
   shouldKeepCatchingUp,
 } = require("../dist/personal-stream-pace");
@@ -37,6 +39,40 @@ describe("selectStreamsForTick", () => {
       ),
       ["c", "a", "b"],
     );
+  });
+});
+
+describe("selectHumanPacedStreams", () => {
+  it("keeps a few live streams while the human is busy and skips history", () => {
+    const selected = selectHumanPacedStreams(
+      [
+        planned("a", true, "feishu:a"),
+        planned("b", true, "feishu:b"),
+        planned("c", true, "feishu:c"),
+        planned("live", false, "feishu:live"),
+      ],
+      { liveLimit: 2, historyLimit: 0, preferredThreadId: "feishu:c" },
+    );
+    assert.deepEqual(
+      selected.map((item) => `${item.key}:${item.older ? "older" : "live"}`),
+      ["c:live", "a:live"],
+    );
+  });
+
+  it("adds one rotated history page only when idle", () => {
+    const selected = selectHumanPacedStreams(
+      [
+        planned("a", true, "feishu:a"),
+        planned("b", true, "feishu:b"),
+        planned("live", false, "feishu:live"),
+      ],
+      { liveLimit: 1, historyLimit: 1, rotateFrom: "a", preferredThreadId: "feishu:live" },
+    );
+    assert.deepEqual(
+      selected.map((item) => `${item.key}:${item.older ? "older" : "live"}`),
+      ["live:live", "b:older"],
+    );
+    assert.equal(lastHistoryKey(selected), "b");
   });
 });
 

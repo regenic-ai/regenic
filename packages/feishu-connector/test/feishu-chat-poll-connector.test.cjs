@@ -17,6 +17,8 @@ const {
   lastFeishuInbound,
   nextFeishuCursor,
   planFeishuHistoryRequest,
+  decodeFeishuCursor,
+  deferredHistoryToken,
   needsMediaReseed,
   needsRecentSeed,
   resetFeishuAttention,
@@ -225,14 +227,129 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(
       result.next_cursor,
       JSON.stringify({
-        page_token: "older",
-        sort: "desc",
-        head_time: "1723500000",
+        start_time: "1723500000",
         recent_seeded: true,
+        history_token: "older",
         media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
     assert.equal(result.has_more, true);
+  });
+
+  it("skips attachment downloads when opening so the first page can land as text", async () => {
+    const downloads = [];
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [
+            {
+              message_id: "om_img",
+              msg_type: "image",
+              create_time: "1723500000000",
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: { content: JSON.stringify({ image_key: "img_shot" }) },
+            },
+          ],
+          has_more: true,
+          page_token: "older",
+        };
+      },
+      async downloadResource(input) {
+        downloads.push(input);
+        return {
+          bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+          media_type: "image/png",
+          filename: "shot.png",
+        };
+      },
+    });
+    const result = await connector.poll(null, { media: false });
+    const attachment = result.batch.records[0].content.find(
+      (part) => part.role === "attachment",
+    );
+    assert.deepEqual(downloads, []);
+    assert.equal(attachment.bytes.byteLength, 0);
+    assert.equal(result.has_more, true);
+    assert.match(result.next_cursor ?? "", /"recent_seeded":true/);
+    assert.doesNotMatch(result.next_cursor ?? "", /"media_ok":true/);
+  });
+
+  it("keeps live polling after the recent seed and only walks history when asked", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (input.sort_type === "ByCreateTimeDesc" && input.page_token === "older") {
+          return {
+            items: [textItem({ message_id: "om_old", create_time: "1723400000000" })],
+            has_more: true,
+            page_token: "older-2",
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_live", create_time: "1723600000000" })],
+          has_more: false,
+        };
+      },
+    });
+    const seeded = JSON.stringify({
+      start_time: "1723500000",
+      recent_seeded: true,
+      history_token: "older",
+      media_synced: true,
+      media_bytes: true,
+      media_ok: true,
+    });
+    const live = await connector.poll({ value: seeded });
+    const older = await connector.poll({ value: seeded }, { older: true });
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: undefined,
+      start_time: "1723500000",
+      sort_type: "ByCreateTimeAsc",
+    });
+    assert.deepEqual(calls[1], {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: "older",
+      sort_type: "ByCreateTimeDesc",
+    });
+    assert.equal(live.batch.records[0].external_id, "oc_1:om_live");
+    assert.equal(live.has_more, true);
+    assert.match(live.next_cursor ?? "", /"history_token":"older"/);
+    assert.equal(older.batch.records[0].external_id, "oc_1:om_old");
+    assert.match(older.next_cursor ?? "", /"history_token":"older-2"/);
+    assert.match(older.next_cursor ?? "", /"start_time":"1723500000"/);
+  });
+
+  it("treats a leftover desc cursor as deferred history plus a live watermark", () => {
+    const state = decodeFeishuCursor({
+      value: JSON.stringify({
+        page_token: "older",
+        sort: "desc",
+        head_time: "1723500000",
+        recent_seeded: true,
+        media_synced: true,
+        media_bytes: true,
+        media_ok: true,
+      }),
+    });
+    assert.equal(state.start_time, "1723500000");
+    assert.equal(deferredHistoryToken(state), "older");
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: undefined,
+      start_time: "1723500000",
+      sort_type: "ByCreateTimeAsc",
+    });
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state, { older: true }), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: "older",
+      sort_type: "ByCreateTimeDesc",
+    });
   });
 
   it("seeds recent messages without dropping a mid-history asc cursor", async () => {
@@ -362,10 +479,9 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(
       report.next_cursor,
       JSON.stringify({
-        page_token: "page-2",
-        sort: "desc",
-        head_time: "1723420800",
+        start_time: "1723420800",
         recent_seeded: true,
+        history_token: "page-2",
         media_synced: true, media_bytes: true, media_ok: true,
       }),
     );

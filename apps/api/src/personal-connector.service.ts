@@ -32,9 +32,11 @@ import {
   resetPullStatus,
   type PullStreamStatus,
 } from "./personal-pull-status";
+import { isHumanIdle, noteHumanActivity, streamDiscover } from "./personal-human-pace";
 import {
-  lastCatchUpKey,
-  selectStreamsForTick,
+  humanPaceLimits,
+  lastHistoryKey,
+  selectHumanPacedStreams,
   shouldKeepCatchingUp,
 } from "./personal-stream-pace";
 import { PersonalRuntimeService } from "./personal-runtime.service";
@@ -49,6 +51,7 @@ const HYDRATE_WAIT_MS = 12_000;
 const FOLLOW_TRIES = 6;
 const FOLLOW_WAIT_MS = 750;
 const DEFAULT_PULL_MS = 3_000;
+const START_PULL_DELAY_MS = 1_000;
 const LEASE_MS = 60_000;
 
 export interface ConnectorInstallInput {
@@ -63,6 +66,12 @@ export interface CreatedConversationView {
   can_send: boolean;
   await_reply: boolean;
   list_title: "conversation" | "face" | "prompt";
+}
+
+export interface ConnectorSyncOptions {
+  skipIdle?: boolean;
+  capCatchUp?: boolean;
+  allowHistory?: boolean;
 }
 
 export interface ConnectorSyncView {
@@ -92,6 +101,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly hydrateCooldown = new Map<string, number>();
   private lastCatchUpCursor: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private startTimer: ReturnType<typeof setTimeout> | undefined;
   private ticking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
@@ -111,14 +121,21 @@ export class PersonalConnectorService implements OnModuleDestroy {
     resetPullStatus();
     pullStatus.interval_ms = pullMs;
     if (pullMs > 0) {
+      this.startTimer = setTimeout(() => {
+        this.startTimer = undefined;
+        void this.tick();
+      }, START_PULL_DELAY_MS);
       this.timer = setInterval(() => {
         void this.tick();
       }, pullMs);
-      void this.tick();
     }
   }
 
   async onModuleDestroy(): Promise<void> {
+    if (this.startTimer) {
+      clearTimeout(this.startTimer);
+      this.startTimer = undefined;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
@@ -143,7 +160,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   async sync(
     installationId: string,
     maxPages = DEFAULT_MAX_PAGES,
-    options?: { skipIdle?: boolean; capCatchUp?: boolean },
+    options?: ConnectorSyncOptions,
   ): Promise<ConnectorSyncView> {
     if (this.maintenanceHold) {
       throw new PersonalConnectorError(
@@ -244,6 +261,100 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
+  async pullOlderForThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
+    const id = threadId.trim();
+    if (!id || !shouldPullOlderInbox({ thread_id: id, before: "1" })) {
+      return;
+    }
+    noteHumanActivity();
+    preferThread(id);
+    const existing = this.hydrating.get(id);
+    if (existing) {
+      try {
+        await Promise.race([existing, delay(HYDRATE_WAIT_MS)]);
+      } catch {
+        return;
+      }
+    }
+    try {
+      await this.runPullOlderThread(id);
+    } catch {
+      return;
+    }
+  }
+
+  private async runPullOlderThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
+    let thread: ConversationThread;
+    try {
+      thread = parseConversationThread(threadId);
+    } catch {
+      return;
+    }
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installations = await store.listInstallations(this.runtime.orgId());
+    for (const installation of installations) {
+      if (installation.status !== "enabled") {
+        continue;
+      }
+      const driver = this.drivers.get(installation.connector_type);
+      if (!driver?.matchesThread(installation, thread)) {
+        continue;
+      }
+      let stream: ConnectorStream;
+      try {
+        stream = await driver.resolveThreadStream(
+          installation,
+          thread,
+          host,
+          process.env,
+        );
+      } catch {
+        continue;
+      }
+      const key = streamPaceKey(installation.id, stream.stream_key);
+      this.rememberStreamMeta(key, stream);
+      this.streamPulling.add(key);
+      this.publishStreams();
+      try {
+        const pages = await this.exclusiveStream(
+          installation.id,
+          stream.stream_key,
+          () =>
+            pollStream(host, store, installation, stream, 1, { older: true }),
+        );
+        if (pages === undefined) {
+          return;
+        }
+        this.rememberStreamPace({
+          key,
+          pages,
+          pagesBudget: 1,
+          idleMs: streamIdleMs(stream),
+        });
+      } catch (error) {
+        this.rememberStreamPace({
+          key,
+          pages: [],
+          pagesBudget: 1,
+          idleMs: streamIdleMs(stream),
+          error,
+        });
+        throw error;
+      } finally {
+        this.streamPulling.delete(key);
+        this.publishStreams();
+      }
+      return;
+    }
+  }
+
   private async runHydrateOpenedThread(threadId: string): Promise<void> {
     if (this.maintenanceHold) {
       return;
@@ -290,7 +401,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
         const pages = await this.exclusiveStream(
           installation.id,
           stream.stream_key,
-          () => pollStream(host, store, installation, stream, 1),
+          () =>
+            pollStream(host, store, installation, stream, 1, {
+              older: false,
+              media: false,
+            }),
           { skipIfBusy: true },
         );
         if (pages === undefined) {
@@ -330,10 +445,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const threadId = `${thread.source}:${thread.target}`;
     const before = await this.threadFollowState(threadId);
     for (let attempt = 0; attempt < FOLLOW_TRIES; attempt += 1) {
-      await pollStream(host, store, installation, stream, 2);
+      await pollStream(host, store, installation, stream, 2, { older: false });
       const after = await this.threadFollowState(threadId);
       if (after.latestId && after.latestId !== before.latestId && after.inbound) {
-        await pollStream(host, store, installation, stream, 2);
+        await pollStream(host, store, installation, stream, 2, { older: false });
         return;
       }
       if (attempt < FOLLOW_TRIES - 1) {
@@ -563,11 +678,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
           continue;
         }
         try {
-          await this.sync(
-            installation.id,
-            DEFAULT_MAX_PAGES,
-            { skipIdle: true, capCatchUp: true },
-          );
+          await this.sync(installation.id, DEFAULT_MAX_PAGES, {
+            skipIdle: true,
+            capCatchUp: true,
+            allowHistory: isHumanIdle(),
+          });
         } catch (error) {
           errors.push(error);
         }
@@ -581,16 +696,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
-  private async catchUp(
-    installationId: string,
-    options?: { skipIdle?: boolean; capCatchUp?: boolean },
-  ): Promise<void> {
+  private async catchUp(installationId: string): Promise<void> {
     try {
-      await this.sync(
-        installationId,
-        options?.skipIdle ? DEFAULT_MAX_PAGES : MAX_PAGES_CAP,
-        options,
-      );
+      await this.sync(installationId, DEFAULT_MAX_PAGES, {
+        skipIdle: true,
+        capCatchUp: true,
+        allowHistory: false,
+      });
     } catch (error) {
       await applyPullOutcome([error]);
     }
@@ -599,7 +711,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private async runSync(
     installationId: string,
     maxPages: number,
-    options?: { skipIdle?: boolean; capCatchUp?: boolean },
+    options?: ConnectorSyncOptions,
   ): Promise<ConnectorSyncView> {
     if (this.maintenanceHold) {
       throw new PersonalConnectorError(
@@ -633,6 +745,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
         installation,
         host,
         process.env,
+        {
+          discover: streamDiscover(
+            options,
+            host.get("connectors").listStreams(installation.id).length,
+          ),
+        },
       );
       this.pruneStreamPace(installation.id, streams);
       const now = Date.now();
@@ -648,13 +766,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
           return [];
         }
         const catchingUp = this.streamCatchingUp.has(key);
-        const pages = catchingUp
-          ? Math.max(maxPages, streamCatchUpPages(stream, maxPages))
-          : maxPages;
-        return [{ stream, pages, key, idleMs, catchingUp }];
+        return [{ stream, key, idleMs, catchingUp }];
       });
+      const allowHistory = options?.allowHistory !== false;
       const selected = options?.capCatchUp
-        ? selectStreamsForTick(
+        ? selectHumanPacedStreams(
             planned.map((item) => ({
               key: item.key,
               catchingUp: item.catchingUp,
@@ -662,28 +778,58 @@ export class PersonalConnectorService implements OnModuleDestroy {
               item,
             })),
             {
+              ...humanPaceLimits(allowHistory && isHumanIdle()),
               rotateFrom: this.lastCatchUpCursor,
               preferredThreadId: preferredThreadId(),
             },
-          ).map((entry) => entry.item)
-        : planned;
-      this.lastCatchUpCursor = lastCatchUpKey(
-        selected.map((item) => ({
-          key: item.key,
-          catchingUp: item.catchingUp,
-        })),
+          ).map((entry) => ({
+            ...entry.item,
+            older: entry.older,
+            pages: DEFAULT_MAX_PAGES,
+          }))
+        : planned.flatMap((item) => {
+            const live = {
+              ...item,
+              older: false,
+              pages: maxPages,
+            };
+            if (!item.catchingUp || !allowHistory) {
+              return [live];
+            }
+            return [
+              live,
+              {
+                ...item,
+                older: true,
+                pages: Math.max(maxPages, streamCatchUpPages(item.stream, maxPages)),
+              },
+            ];
+          });
+      const olderKey = lastHistoryKey(
+        selected.map((item) => ({ key: item.key, older: item.older })),
       );
+      if (olderKey) {
+        this.lastCatchUpCursor = olderKey;
+      }
       for (const item of selected) {
         this.streamPulling.add(item.key);
       }
       this.publishStreams();
-      const batches = await mapLimit(selected, STREAM_CONCURRENCY, async (item) => {
+      const concurrency = options?.capCatchUp ? 1 : STREAM_CONCURRENCY;
+      const batches = await mapLimit(selected, concurrency, async (item) => {
         try {
           const pages = await this.exclusiveStream(
             installation.id,
             item.stream.stream_key,
             () =>
-              pollStream(host, store, installation, item.stream, item.pages),
+              pollStream(
+                host,
+                store,
+                installation,
+                item.stream,
+                item.pages,
+                { older: item.older },
+              ),
             { skipIfBusy: true },
           );
           const result = {
@@ -891,11 +1037,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       if (meta.thread_id !== threadId) {
         continue;
       }
-      if (
-        this.streamPulling.has(key) ||
-        this.streamCatchingUp.has(key) ||
-        this.streamLocks.has(key)
-      ) {
+      if (this.streamPulling.has(key) || this.streamLocks.has(key)) {
         return true;
       }
     }
@@ -982,6 +1124,7 @@ async function pollStream(
   installation: ConnectorInstallation,
   stream: ConnectorStream,
   maxPages: number,
+  options?: { older?: boolean; media?: boolean },
 ): Promise<ConnectorPollRunResult[]> {
   const runner = new ConnectorRunner(stream.connector, host.get("ingest"), store);
   const runs: ConnectorPollRunResult[] = [];
@@ -992,6 +1135,8 @@ async function pollStream(
       stream_key: stream.stream_key,
       lease_owner: `personal-api:${randomUUID()}`,
       lease_duration_ms: LEASE_MS,
+      older: options?.older === true,
+      media: options?.media,
     });
     runs.push(run);
     if (run.status === "lease_unavailable") {
@@ -1126,4 +1271,23 @@ export function shouldHydrateOpenedInbox(query: {
 
 export function shouldWaitForOpenedHydrate(localCount: number): boolean {
   return localCount === 0;
+}
+
+export function shouldPullOlderInbox(query: {
+  thread_id?: string;
+  since?: string;
+  before?: string;
+  heads?: boolean;
+}): boolean {
+  return Boolean(
+    query.thread_id && query.before && !query.since && !query.heads,
+  );
+}
+
+export function shouldNoteHumanInbox(query: {
+  thread_id?: string;
+  since?: string;
+  heads?: boolean;
+}): boolean {
+  return Boolean(query.thread_id && !query.since && !query.heads);
 }

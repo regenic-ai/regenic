@@ -6,6 +6,7 @@ export const THREAD_STICK_PX = 96;
 export const THREAD_LOAD_OLDER_PX = 12;
 export const THREAD_LOAD_OLDER_REARM_PX = 80;
 export const THREAD_PAGE_SIZE = 50;
+export const THREAD_OPEN_PAGE_SIZE = 20;
 
 export type InboxReuse = KeyedReuse<InboxViewItem>;
 

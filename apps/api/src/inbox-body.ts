@@ -17,6 +17,7 @@ import {
 export { CONTENT_PARTS_MEDIA_TYPE };
 
 const IMAGE_PREVIEW_BYTES = 8_000_000;
+const THREAD_PREVIEW_IMAGES = 6;
 
 export interface InboxAttachment {
   filename: string;
@@ -72,10 +73,18 @@ export async function resolveInboxBodies(
     }
     resolved.set(hash, decodeInboxBody(data, meta.media_type, attachments));
   }
-  if (attachments !== "preview" || sidecarHashes.length === 0) {
+  if (attachments !== "preview") {
     return resolved;
   }
-  const sidecars = await blobs.getMany(sidecarHashes);
+  if (sidecarHashes.length === 0) {
+    return limitPreviewBodies(resolved, unique);
+  }
+  const previewHashes = previewAttachmentHashes(unique, envelopes);
+  const sidecars = await blobs.getMany(
+    previewHashes.length > 0
+      ? previewHashes
+      : sidecarHashes.slice(-THREAD_PREVIEW_IMAGES),
+  );
   for (const [hash, parts] of envelopes) {
     const body = resolved.get(hash);
     if (!body?.attachments) {
@@ -86,7 +95,7 @@ export async function resolveInboxBodies(
       attachments: decodeAttachments(parts, "preview", sidecars),
     });
   }
-  return resolved;
+  return limitPreviewBodies(resolved, unique);
 }
 
 export async function resolveInboxBody(
@@ -154,6 +163,66 @@ function decodeContentParts(
   };
 }
 
+function limitPreviewBodies(
+  resolved: Map<string, InboxBody>,
+  hashes: readonly string[],
+): Map<string, InboxBody> {
+  const images: string[] = [];
+  for (const hash of hashes) {
+    const attachments = resolved.get(hash)?.attachments ?? [];
+    attachments.forEach((file, index) => {
+      if (file.data_base64 && file.media_type.startsWith("image/")) {
+        images.push(`${hash}:${index}`);
+      }
+    });
+  }
+  const drop = new Set(images.slice(0, Math.max(0, images.length - THREAD_PREVIEW_IMAGES)));
+  if (drop.size === 0) {
+    return resolved;
+  }
+  for (const hash of hashes) {
+    const body = resolved.get(hash);
+    if (!body?.attachments) {
+      continue;
+    }
+    resolved.set(hash, {
+      ...body,
+      attachments: body.attachments.map((file, index) =>
+        drop.has(`${hash}:${index}`)
+          ? { filename: file.filename, media_type: file.media_type }
+          : file,
+      ),
+    });
+  }
+  return resolved;
+}
+
+function previewAttachmentHashes(
+  hashes: readonly string[],
+  envelopes: Map<string, StoredContentPart[]>,
+): string[] {
+  const images: string[] = [];
+  for (const hash of hashes) {
+    const parts = envelopes.get(hash);
+    if (!parts) {
+      continue;
+    }
+    for (const part of parts) {
+      if (part.role !== "attachment") {
+        continue;
+      }
+      const sidecar = storedPartContentHash(part);
+      if (!sidecar) {
+        continue;
+      }
+      if (!part.media_type || part.media_type.startsWith("image/")) {
+        images.push(sidecar);
+      }
+    }
+  }
+  return images.slice(-THREAD_PREVIEW_IMAGES);
+}
+
 function decodeAttachments(
   parts: StoredContentPart[],
   attachmentMode: AttachmentMode,
@@ -177,7 +246,11 @@ function decodeAttachments(
     }
     const hash = storedPartContentHash(part);
     const inline = storedPartBytes(part);
-    const bytes = hash ? sidecars?.get(hash) : inline;
+    const bytes = hash
+      ? sidecars?.get(hash)
+      : sidecars
+        ? undefined
+        : inline;
     const raw = bytes ? Buffer.from(bytes).toString("base64") : undefined;
     const size = bytes?.byteLength ?? 0;
     const mediaType = bytes

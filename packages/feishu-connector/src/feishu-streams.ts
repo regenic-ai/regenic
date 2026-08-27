@@ -12,6 +12,13 @@ export function feishuStreamKey(chatId: string): string {
   return `chat:${chatId}`;
 }
 
+export function feishuChatIdFromStreamKey(streamKey: string): string | undefined {
+  if (!streamKey.startsWith("chat:") || streamKey.length <= 5) {
+    return undefined;
+  }
+  return streamKey.slice(5);
+}
+
 export function createFeishuStreams(
   installation: Pick<ConnectorInstallation, "id" | "org_id">,
   chats: FeishuChat[],

@@ -73,4 +73,80 @@ describe("compactEmbeddedContent", () => {
     assert.deepEqual(Buffer.from(await blobs.get(attachment.content_hash)), png);
     assert.ok(first.released_bytes > 0);
   });
+
+  it("stops when the caller aborts", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const envelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          bytes_base64: Buffer.from("keep", "utf8").toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const oldHash = createHash("sha256").update(envelope).digest("hex");
+    await blobs.put(oldHash, envelope, CONTENT_PARTS_MEDIA_TYPE);
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_abort",
+      content_hash: oldHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: envelope.byteLength,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+
+    const result = await compactEmbeddedContent(
+      authority,
+      blobs,
+      "local-owner",
+      { signal: AbortSignal.abort() },
+    );
+
+    assert.equal(result.rewritten, 0);
+    assert.equal(result.paused, true);
+    assert.equal(await blobs.exists(oldHash), true);
+  });
+
+  it("pauses when the human becomes active again", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const envelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "body",
+          media_type: "text/plain",
+          bytes_base64: Buffer.from("keep", "utf8").toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const oldHash = createHash("sha256").update(envelope).digest("hex");
+    await blobs.put(oldHash, envelope, CONTENT_PARTS_MEDIA_TYPE);
+    await authority.append({
+      org_id: "local-owner",
+      source: "feishu",
+      external_id: "oc_1:om_pause",
+      content_hash: oldHash,
+      content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+      content_byte_size: envelope.byteLength,
+      occurred_at: "2026-08-27T00:00:00.000Z",
+      expected_head_id: null,
+    });
+
+    const result = await compactEmbeddedContent(
+      authority,
+      blobs,
+      "local-owner",
+      { pauseIf: () => true },
+    );
+
+    assert.equal(result.rewritten, 0);
+    assert.equal(result.paused, true);
+    assert.equal(await blobs.exists(oldHash), true);
+  });
 });

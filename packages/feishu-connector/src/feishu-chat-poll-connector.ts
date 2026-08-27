@@ -38,6 +38,7 @@ export interface FeishuCursorState {
   sort?: "asc" | "desc";
   head_time?: string;
   recent_seeded?: boolean;
+  history_token?: string;
   media_synced?: boolean;
   media_bytes?: boolean;
   media_ok?: boolean;
@@ -83,19 +84,24 @@ export class FeishuChatPollConnector {
     }
   }
 
-  async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
+  async poll(
+    cursor: ConnectorCursor | null,
+    options?: { older?: boolean; media?: boolean },
+  ): Promise<PollResult> {
     const state = decodeFeishuCursor(cursor);
+    const wantMedia = options?.media !== false;
     const request = planFeishuHistoryRequest(
       this.options.chat_id,
       this.pageSize,
       state,
+      { older: options?.older === true },
     );
     const page = await this.client.listMessages(request);
     const names = await this.resolveNames(page.items);
     const selfId = await this.selfUserId();
     const records: IngestBatch["records"] = [];
     for (const item of page.items) {
-      records.push(...(await this.toRecord(item, names, selfId)));
+      records.push(...(await this.toRecord(item, names, selfId, wantMedia)));
     }
     for (const item of page.items) {
       if (item.deleted || !item.message_id || isFeishuSelfSender(item.sender?.id, selfId)) {
@@ -103,7 +109,9 @@ export class FeishuChatPollConnector {
       }
       rememberFeishuInbound(this.options.chat_id, item.message_id, item.create_time);
     }
-    const nextState = nextFeishuCursor(state, page, request.sort_type);
+    const nextState = nextFeishuCursor(state, page, request.sort_type, {
+      media: wantMedia,
+    });
     const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
@@ -117,7 +125,7 @@ export class FeishuChatPollConnector {
     return {
       batch,
       next_cursor: nextCursor,
-      has_more: feishuHistoryHasMore(state, page, request.sort_type),
+      has_more: feishuHistoryHasMore(state, page, request.sort_type, nextState),
     };
   }
 
@@ -160,6 +168,7 @@ export class FeishuChatPollConnector {
     item: FeishuHistoryItem,
     names: ReadonlyMap<string, string>,
     selfId?: string,
+    wantMedia = true,
   ): Promise<IngestBatch["records"]> {
     if (item.deleted) {
       return [];
@@ -176,7 +185,15 @@ export class FeishuChatPollConnector {
     if (!kind || !actorId || (!text && media.length === 0)) {
       return [];
     }
-    const attachments = await this.resolveAttachments(item.message_id, media);
+    const attachments = wantMedia
+      ? await this.resolveAttachments(item.message_id, media)
+      : media.map((ref) =>
+          placeholderAttachment(
+            ref.filename ?? (ref.kind === "image" ? "image.png" : "attachment"),
+            ref.media_type ??
+              (ref.kind === "image" ? "image/png" : "application/octet-stream"),
+          ),
+        );
     const chatId = this.options.chat_id;
     const rootId = emptyToUndefined(item.root_id);
     const parentId = emptyToUndefined(item.parent_id);
@@ -289,12 +306,21 @@ export function decodeFeishuCursor(cursor: ConnectorCursor | null): FeishuCursor
     const parsed = JSON.parse(cursor.value) as unknown;
     if (isObject(parsed)) {
       const sort = parsed.sort === "desc" || parsed.sort === "asc" ? parsed.sort : undefined;
+      const pageToken = stringValue(parsed.page_token);
+      const historyToken =
+        stringValue(parsed.history_token) ??
+        (sort === "desc" ? pageToken : undefined);
       return {
-        page_token: stringValue(parsed.page_token),
-        start_time: stringValue(parsed.start_time),
-        sort,
+        page_token: sort === "desc" ? undefined : pageToken,
+        start_time:
+          stringValue(parsed.start_time) ??
+          (sort === "desc" && parsed.recent_seeded === true
+            ? stringValue(parsed.head_time)
+            : undefined),
+        sort: sort === "desc" ? undefined : sort,
         head_time: stringValue(parsed.head_time),
         recent_seeded: parsed.recent_seeded === true,
+        history_token: historyToken,
         media_synced: parsed.media_synced === true,
         media_bytes: parsed.media_bytes === true,
         media_ok: parsed.media_ok === true,
@@ -313,6 +339,7 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
     state.sort !== "desc" &&
     !state.recent_seeded &&
     !state.head_time &&
+    !state.history_token &&
     !state.media_synced &&
     !state.media_bytes &&
     !state.media_ok
@@ -328,6 +355,7 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
       ? { head_time: state.head_time }
       : {}),
     ...(state.recent_seeded ? { recent_seeded: true } : {}),
+    ...(state.history_token ? { history_token: state.history_token } : {}),
     ...(state.media_synced ? { media_synced: true } : {}),
     ...(state.media_bytes ? { media_bytes: true } : {}),
     ...(state.media_ok ? { media_ok: true } : {}),
@@ -350,11 +378,21 @@ export function planFeishuHistoryRequest(
   chatId: string,
   pageSize: number,
   state: FeishuCursorState,
+  options: { older?: boolean } = {},
 ): FeishuListInput {
   if (needsRecentSeed(state) || needsMediaReseed(state)) {
     return {
       chat_id: chatId,
       page_size: pageSize,
+      sort_type: "ByCreateTimeDesc",
+    };
+  }
+  const historyToken = deferredHistoryToken(state);
+  if (options.older === true && historyToken) {
+    return {
+      chat_id: chatId,
+      page_size: pageSize,
+      page_token: historyToken,
       sort_type: "ByCreateTimeDesc",
     };
   }
@@ -375,11 +413,22 @@ export function planFeishuHistoryRequest(
   };
 }
 
+export function deferredHistoryToken(state: FeishuCursorState): string | undefined {
+  return (
+    state.history_token ??
+    (state.sort === "desc" ? state.page_token : undefined)
+  );
+}
+
 export function feishuHistoryHasMore(
   current: FeishuCursorState,
   page: { has_more: boolean },
   sort: FeishuSortType = "ByCreateTimeAsc",
+  nextState?: FeishuCursorState,
 ): boolean {
+  if (nextState && deferredHistoryToken(nextState)) {
+    return true;
+  }
   if (
     (needsRecentSeed(current) || needsMediaReseed(current)) &&
     sort === "ByCreateTimeDesc" &&
@@ -394,12 +443,15 @@ export function nextFeishuCursor(
   current: FeishuCursorState,
   page: { items: FeishuHistoryItem[]; has_more: boolean; page_token?: string },
   sort: FeishuSortType = "ByCreateTimeAsc",
+  options: { media?: boolean } = {},
 ): FeishuCursorState {
   const newest = newestStartTime(page.items);
   const head = laterTime(current.head_time, newest);
+  const stamp = (state: FeishuCursorState) =>
+    stampCursor(state, options.media !== false);
   if (needsRecentSeed(current) && sort === "ByCreateTimeDesc") {
     if (current.page_token) {
-      return stampMediaSynced({
+      return stamp({
         page_token: current.page_token,
         start_time: current.start_time,
         recent_seeded: true,
@@ -407,20 +459,19 @@ export function nextFeishuCursor(
       });
     }
     if (page.has_more && page.page_token) {
-      return stampMediaSynced({
-        page_token: page.page_token,
-        sort: "desc",
+      return stamp({
+        ...(head ? { start_time: head, head_time: head } : {}),
+        history_token: page.page_token,
         recent_seeded: true,
-        ...(head ? { head_time: head } : {}),
       });
     }
-    return stampMediaSynced(
+    return stamp(
       head ? { start_time: head, recent_seeded: true } : { recent_seeded: true },
     );
   }
   if (needsMediaReseed(current) && sort === "ByCreateTimeDesc") {
     const live = laterTime(current.start_time, head);
-    return stampMediaSynced({
+    return stamp({
       ...(current.page_token ? { page_token: current.page_token } : {}),
       ...(live ? { start_time: live } : {}),
       recent_seeded: true,
@@ -428,36 +479,49 @@ export function nextFeishuCursor(
     });
   }
   if (sort === "ByCreateTimeDesc") {
+    const live = current.start_time ?? current.head_time ?? head;
     if (page.has_more && page.page_token) {
-      return stampMediaSynced({
-        page_token: page.page_token,
-        sort: "desc",
+      return stamp({
+        ...(live ? { start_time: live } : {}),
+        ...(current.head_time || head
+          ? { head_time: laterTime(current.head_time, head) }
+          : {}),
+        history_token: page.page_token,
         recent_seeded: true,
-        ...(head ? { head_time: head } : current.head_time ? { head_time: current.head_time } : {}),
       });
     }
-    const live = current.head_time ?? head;
-    return stampMediaSynced(
+    return stamp(
       live ? { start_time: live, recent_seeded: true } : { recent_seeded: true },
     );
   }
   const lastStart = lastStartTime(page.items) ?? current.start_time;
+  const history = deferredHistoryToken(current);
   if (page.has_more && page.page_token) {
-    return stampMediaSynced({
+    return stamp({
       page_token: page.page_token,
       ...(lastStart ? { start_time: lastStart } : {}),
       recent_seeded: true,
       ...(head && head !== lastStart ? { head_time: head } : {}),
+      ...(history ? { history_token: history } : {}),
     });
   }
   const liveStart = laterTime(lastStart, current.head_time);
-  return stampMediaSynced(
-    liveStart ? { start_time: liveStart, recent_seeded: true } : { recent_seeded: true },
-  );
+  return stamp({
+    ...(liveStart ? { start_time: liveStart } : {}),
+    recent_seeded: true,
+    ...(history ? { history_token: history } : {}),
+  });
 }
 
 function stampMediaSynced(state: FeishuCursorState): FeishuCursorState {
   return { ...state, media_synced: true, media_bytes: true, media_ok: true };
+}
+
+function stampCursor(
+  state: FeishuCursorState,
+  media = true,
+): FeishuCursorState {
+  return media ? stampMediaSynced(state) : state;
 }
 
 function placeholderAttachment(filename: string, mediaType: string): ContentPart {

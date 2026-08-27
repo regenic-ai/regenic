@@ -107,4 +107,54 @@ describe("resolveInboxBodies", () => {
     );
     assert.equal(meta.get(event.content_hash).attachments[0].data_base64, undefined);
   });
+
+  it("only inlines the latest few image previews on a thread page", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const service = new IngestionService(blobs, authority);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
+    const ingested = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "attach-many",
+      received_at: "2026-08-27T00:00:00.000Z",
+      records: Array.from({ length: 8 }, (_, index) =>
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: `oc_1:om_${index}`,
+          occurred_at: `2026-08-27T00:00:0${index}.000Z`,
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          text: `shot ${index}`,
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: `shot-${index}.png`,
+              bytes: png,
+            },
+          ],
+        }),
+      ),
+    });
+    const hashes = await Promise.all(
+      ingested.records.map((record) =>
+        authority.getEvent("local-owner", record.event_id).then((event) => event.content_hash),
+      ),
+    );
+    const preview = await resolveInboxBodies(authority, blobs, hashes);
+    const inlined = hashes.filter(
+      (hash) => preview.get(hash).attachments[0].data_base64,
+    );
+    assert.equal(inlined.length, 6);
+    assert.equal(preview.get(hashes[0]).attachments[0].data_base64, undefined);
+    assert.equal(preview.get(hashes[1]).attachments[0].data_base64, undefined);
+    assert.equal(
+      preview.get(hashes[7]).attachments[0].data_base64,
+      png.toString("base64"),
+    );
+  });
 });
