@@ -3,6 +3,7 @@ import {
   CONTENT_PARTS_MEDIA_TYPE,
   isTextMediaType,
 } from "./content-parts";
+import { isUsableAttachmentBytes } from "./content-resolution";
 import type { BlobMetaInput, BlobObject, ContentPart, IngestRecord } from "./ingestion";
 
 export interface CanonicalContent {
@@ -35,9 +36,20 @@ function shouldInlinePart(part: ContentPart): boolean {
   return part.role !== "attachment" && isTextMediaType(part.media_type);
 }
 
+function isPointerPart(part: ContentPart): boolean {
+  return Boolean(part.external_locator) || isEmptyAttachment(part);
+}
+
+function isEmptyAttachment(part: ContentPart): boolean {
+  return (
+    part.role === "attachment" &&
+    part.bytes !== undefined &&
+    part.bytes.byteLength === 0
+  );
+}
+
 function encodeEnvelopePart(
   part: ContentPart,
-  bytes: Uint8Array,
   blobs: BlobObject[],
 ): Record<string, string> {
   const encoded: Record<string, string> = {
@@ -47,6 +59,17 @@ function encodeEnvelopePart(
   if (part.source_filename) {
     encoded.source_filename = part.source_filename;
   }
+  if (part.external_locator) {
+    encoded.external_locator = part.external_locator;
+  }
+  if (
+    part.role === "attachment" &&
+    (part.bytes === undefined ||
+      !isUsableAttachmentBytes(part.bytes, part.media_type))
+  ) {
+    return encoded;
+  }
+  const bytes = canonicalizePart(part);
   if (shouldInlinePart(part)) {
     encoded.text = Buffer.from(bytes).toString("utf8");
     return encoded;
@@ -66,7 +89,7 @@ function canonicalizeParts(parts: ContentPart[]): {
   media_type: string;
   blobs: BlobObject[];
 } {
-  if (parts.length === 1) {
+  if (parts.length === 1 && !isPointerPart(parts[0])) {
     return {
       bytes: canonicalizePart(parts[0]),
       media_type: parts[0].media_type,
@@ -75,9 +98,7 @@ function canonicalizeParts(parts: ContentPart[]): {
   }
 
   const blobs: BlobObject[] = [];
-  const envelope = parts.map((part) =>
-    encodeEnvelopePart(part, canonicalizePart(part), blobs),
-  );
+  const envelope = parts.map((part) => encodeEnvelopePart(part, blobs));
 
   return {
     bytes: Buffer.from(JSON.stringify(envelope), "utf8"),

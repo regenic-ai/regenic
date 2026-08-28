@@ -243,7 +243,11 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt) {
-    return `${thread.target}:out:${receipt.rpc_id ?? "local"}`;
+    const sent = receipt.rpc_id?.trim();
+    if (sent) {
+      return `${thread.target}:${sent}`;
+    }
+    return `${thread.target}:out:local`;
   },
 
   async resolveConversationLabels(installation, threads, _env) {

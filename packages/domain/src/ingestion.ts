@@ -41,7 +41,7 @@ interface ContentPartBase {
 
 export type ContentPart = ContentPartBase &
   (
-    | { bytes: Uint8Array; text?: never; external_locator?: never }
+    | { bytes: Uint8Array; text?: never; external_locator?: string }
     | { bytes?: never; text: string; external_locator?: never }
     | { bytes?: never; text?: never; external_locator: string }
   );

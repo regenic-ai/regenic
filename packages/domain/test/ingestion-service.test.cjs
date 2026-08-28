@@ -218,7 +218,7 @@ describe("IngestionService", () => {
     assert.equal(blobStore.size, 1);
   });
 
-  it("quarantines unresolved external content", async () => {
+  it("accepts an attachment pointer without bytes", async () => {
     const { authorityStore, blobStore, service } = createHarness();
     const result = await service.ingest(
       createBatch({
@@ -226,16 +226,79 @@ describe("IngestionService", () => {
           {
             role: "attachment",
             media_type: "application/pdf",
+            source_filename: "doc.pdf",
             external_locator: "source://document/1",
           },
         ],
       }),
     );
 
-    assert.equal(result.records[0].status, "quarantined");
-    assert.equal(result.records[0].error_code, "content_unavailable");
-    assert.equal(authorityStore.allEvents().length, 0);
-    assert.equal(blobStore.size, 0);
+    assert.equal(result.records[0].status, "accepted");
+    assert.equal(authorityStore.allEvents().length, 1);
+    assert.equal(blobStore.size, 1);
+  });
+
+  it("fills a pointer with bytes on the same identity and refuses to overwrite them", async () => {
+    const { authorityStore, blobStore, service } = createHarness();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const pointer = await service.ingest(
+      createBatch({
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "shot.png",
+            external_locator: "source://image/1",
+          },
+        ],
+      }),
+    );
+    const filled = await service.ingest(
+      createBatch({
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "shot.png",
+            external_locator: "source://image/1",
+            bytes: png,
+          },
+        ],
+      }),
+    );
+    const emptied = await service.ingest(
+      createBatch({
+        operation: "revise",
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "shot.png",
+            external_locator: "source://image/1",
+          },
+        ],
+      }),
+    );
+    const junk = await service.ingest(
+      createBatch({
+        operation: "revise",
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "shot.png",
+            external_locator: "source://image/1",
+            bytes: Buffer.from(JSON.stringify({ error: "token" })),
+          },
+        ],
+      }),
+    );
+
+    assert.equal(pointer.records[0].status, "accepted");
+    assert.equal(filled.records[0].status, "accepted");
+    assert.equal(emptied.records[0].status, "duplicate");
+    assert.equal(junk.records[0].status, "duplicate");
+    assert.equal(authorityStore.allEvents().length, 2);
   });
 
   it("treats a DSH history echo as the same utterance as a local outbound", async () => {
