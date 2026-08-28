@@ -369,6 +369,7 @@ export class PersonalWorkDispatch {
         kind: surface?.kind,
         direction: surface?.direction,
         external_id: input.event.external_id,
+        type: surface?.type ?? input.fallbackType,
       })
     ) {
       return;

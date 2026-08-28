@@ -157,8 +157,36 @@ describe("recipe auto-start specification", () => {
     assert.equal(shouldAcceptPushRecord({ direction: "inbound", kind: "user" }), true);
     assert.equal(shouldAcceptPushRecord({ direction: "outbound", kind: "user" }), false);
     assert.equal(shouldAcceptPushRecord({ direction: "inbound", kind: "assistant" }), false);
+    assert.equal(shouldAcceptPushRecord({ direction: "inbound", kind: "system" }), false);
     assert.equal(
       shouldAcceptPushRecord({ direction: "inbound", kind: "user", external_id: "feishu:out:1" }),
+      false,
+    );
+  });
+
+  it("accepts inbound task tickets even when kind is system", () => {
+    assert.equal(
+      shouldAcceptPushRecord({
+        direction: "inbound",
+        kind: "system",
+        type: "task",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldAcceptPushRecord({
+        direction: "inbound",
+        kind: "assistant",
+        type: "task",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldAcceptPushRecord({
+        direction: "outbound",
+        kind: "system",
+        type: "task",
+      }),
       false,
     );
   });

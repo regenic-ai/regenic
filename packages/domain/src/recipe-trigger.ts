@@ -1,4 +1,5 @@
 import { isLocalOutboundId } from "./message-contract";
+import { recordClassFromType } from "./record-class";
 import type { Specification } from "./specification";
 import {
   PULL_INTERVAL_MS,
@@ -149,14 +150,19 @@ export function shouldAcceptPushRecord(input: {
   kind?: string;
   direction?: string;
   external_id?: string;
+  type?: string;
 }): boolean {
   if (input.direction === "outbound") {
     return false;
   }
-  if (input.kind === "assistant" || input.kind === "system") {
+  if (input.external_id && isLocalOutboundId(input.external_id)) {
     return false;
   }
-  if (input.external_id && isLocalOutboundId(input.external_id)) {
+  // Speakers only exist on utterances. A ticket's kind=system is not a chat echo.
+  if (recordClassFromType(input.type) === "task") {
+    return true;
+  }
+  if (input.kind === "assistant" || input.kind === "system") {
     return false;
   }
   return true;
