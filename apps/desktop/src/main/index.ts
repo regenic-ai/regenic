@@ -589,6 +589,7 @@ async function applyDataDirectory(input: {
       }
       throw error;
     }
+    committed = true;
     if (
       previousLocked &&
       ownedStoreRoot &&
@@ -596,9 +597,14 @@ async function applyDataDirectory(input: {
     ) {
       releaseStoreLock(previousLocked, process.pid);
     }
-    sealSourceStore(current.dataRoot, plan.path, input.action, identity);
-    rememberSourceRetention(input.action, current.dataRoot);
-    committed = true;
+    try {
+      sealSourceStore(current.dataRoot, plan.path, input.action, identity);
+      rememberSourceRetention(input.action, current.dataRoot);
+    } catch (error) {
+      process.stderr.write(
+        `[kernel] ${error instanceof Error ? error.message : error}\n`,
+      );
+    }
     broadcastOrigin();
     return kernelView();
   } catch (error) {
