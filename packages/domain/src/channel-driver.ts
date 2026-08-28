@@ -287,7 +287,21 @@ export function driverCanReply(
   driver: ChannelDriver,
   installation: ConnectorInstallation,
 ): boolean {
-  return Boolean(driver.capabilities(installation).reply);
+  return Boolean(
+    driver.capabilities(installation).reply &&
+      driver.bindEgress &&
+      driver.outboundId,
+  );
+}
+
+export function requireReplyPorts(driver: ChannelDriver): {
+  bindEgress: NonNullable<ChannelDriver["bindEgress"]>;
+  outboundId: NonNullable<ChannelDriver["outboundId"]>;
+} {
+  return {
+    bindEgress: requireBindEgress(driver),
+    outboundId: requireOutboundId(driver),
+  };
 }
 
 export function requireCreateThread(

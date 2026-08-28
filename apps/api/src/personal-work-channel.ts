@@ -11,9 +11,8 @@ import {
   parseConversationThread,
   pickAbsenteeInboxRows,
   recipeWantsWriteBack,
-  requireBindEgress,
   requireCreateThread,
-  requireOutboundId,
+  requireReplyPorts,
   selectThreadEvidenceLines,
   toReplyParts,
   transcriptFromAbsenteeLive,
@@ -133,7 +132,8 @@ export class PersonalWorkChannel {
       );
     }
     const content = toReplyParts({ text });
-    const egress = await requireBindEgress(found.driver)(
+    const { bindEgress, outboundId } = requireReplyPorts(found.driver);
+    const egress = await bindEgress(
       found.installation,
       thread,
       host,
@@ -166,7 +166,7 @@ export class PersonalWorkChannel {
           channel: found.driver.source,
           kind: "user",
           direction: "outbound",
-          external_id: requireOutboundId(found.driver)(thread, receipt),
+          external_id: outboundId(thread, receipt),
           occurred_at: now,
           actor_id: "local-owner",
           scope_id: thread.target,

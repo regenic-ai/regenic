@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { afterEach, describe, it } = require("node:test");
-const { LOCAL_PROXY_HINT } = require("@regenic/domain");
+const { DeadlineExceededError, LOCAL_PROXY_HINT } = require("@regenic/domain");
 const {
   applyPullOutcome,
   beginPull,
@@ -47,6 +47,17 @@ describe("pull status overlapping pulls", () => {
 });
 
 describe("pull status network watch", () => {
+  it("does not keep a tick deadline as the last pull error", async () => {
+    pullStatus.last_error = "stale";
+    pullStatus.last_error_hint = "stale hint";
+    await applyPullOutcome(
+      [new DeadlineExceededError("sync slack-channel", 30_000)],
+      { env: {} },
+    );
+    assert.equal(pullStatus.last_error, null);
+    assert.equal(pullStatus.last_error_hint, null);
+  });
+
   it("clears the last error and network hint after a clean tick", async () => {
     pullStatus.last_error = "stale";
     pullStatus.last_error_hint = "stale hint";

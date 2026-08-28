@@ -8,8 +8,7 @@ import {
   INGEST_SCHEMA_VERSION,
   channelRecord,
   parseConversationThread,
-  requireBindEgress,
-  requireOutboundId,
+  requireReplyPorts,
   toReplyParts,
   type ContentPart,
 } from "@regenic/domain";
@@ -140,8 +139,11 @@ export class PersonalReplyService {
       ),
     ];
     let receipt;
+    let outboundId: ReturnType<typeof requireReplyPorts>["outboundId"];
     try {
-      const egress = await requireBindEgress(driver)(
+      const ports = requireReplyPorts(driver);
+      outboundId = ports.outboundId;
+      const egress = await ports.bindEgress(
         installation,
         thread,
         host,
@@ -165,7 +167,7 @@ export class PersonalReplyService {
       channel: driver.source,
       kind: "user",
       direction: "outbound",
-      external_id: requireOutboundId(driver)(thread, receipt),
+      external_id: outboundId(thread, receipt),
       occurred_at: now,
       actor_id: "local-owner",
       scope_id: thread.target,

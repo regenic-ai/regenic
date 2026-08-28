@@ -1,4 +1,5 @@
 import {
+  DeadlineExceededError,
   clearLocalNetwork,
   isTransportFailure,
   watchLocalFetchFailure,
@@ -97,14 +98,17 @@ export async function applyPullOutcome(
   errors: unknown[],
   options: { env?: NodeJS.ProcessEnv; connect?: TcpConnect } = {},
 ): Promise<void> {
-  if (errors.length === 0) {
+  const durable = errors.filter(
+    (item) => !(item instanceof DeadlineExceededError),
+  );
+  if (durable.length === 0) {
     pullStatus.last_error = null;
     pullStatus.last_error_hint = null;
     pullStatus.network = clearLocalNetwork(options.env);
     return;
   }
   const error =
-    errors.find((item) => isTransportFailure(item)) ?? errors[errors.length - 1];
+    durable.find((item) => isTransportFailure(item)) ?? durable[durable.length - 1];
   const watch = await watchLocalFetchFailure({
     error,
     env: options.env,

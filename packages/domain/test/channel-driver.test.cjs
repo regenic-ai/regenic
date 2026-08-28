@@ -3,9 +3,11 @@ const { describe, it } = require("node:test");
 const {
   ChannelDriverError,
   ChannelDriverRegistry,
+  driverCanReply,
   parseConversationThread,
   requireBindEgress,
   requireCreateThread,
+  requireReplyPorts,
 } = require("../dist");
 
 function stubDriver(partial) {
@@ -500,6 +502,30 @@ describe("channel driver registry", () => {
     );
     assert.throws(
       () => requireBindEgress(slack),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
+  });
+
+  it("does not treat reply as sendable without bindEgress and outboundId", () => {
+    const extra = stubDriver({
+      connector_type: "extra-review",
+      source: "extra",
+      matchesThread: () => true,
+      ownsThread: () => true,
+      capabilities: () => ({ sync: true, reply: true, create: false }),
+    });
+    delete extra.outboundId;
+    const installation = {
+      id: "extra-1",
+      org_id: "local-owner",
+      connector_type: "extra-review",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    assert.equal(driverCanReply(extra, installation), false);
+    assert.throws(
+      () => requireReplyPorts(extra),
       (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
     );
   });
