@@ -47,9 +47,12 @@ export class SqliteWriteClient {
     });
   }
 
-  static async open(path: string): Promise<SqliteWriteClient> {
+  static async open(
+    path: string,
+    options: { readonly?: boolean } = {},
+  ): Promise<SqliteWriteClient> {
     const worker = new Worker(resolveWorkerPath(), {
-      workerData: { path },
+      workerData: { path, readonly: options.readonly === true },
     });
     await waitForReady(worker);
     return new SqliteWriteClient(worker);

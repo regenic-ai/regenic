@@ -1,5 +1,43 @@
 import { AuthorityConflictError } from "@regenic/domain";
 
+export const AUTHORITY_READ_METHODS = [
+  "findBlob",
+  "findBlobs",
+  "findBySourceIdentity",
+  "getEvent",
+  "listEvents",
+  "getDisposition",
+  "listInbox",
+  "summarizeInbox",
+  "listConversationPrefs",
+  "getConversationPref",
+  "findInstallation",
+  "listInstallations",
+  "listAttempts",
+  "latestAttempt",
+  "listQuarantines",
+  "getCursor",
+  "summarizeStore",
+  "listRecipes",
+  "getRecipe",
+  "listWorkItems",
+  "getWorkItem",
+  "getWorkItemByThread",
+  "listWorkRuns",
+  "getWorkRun",
+  "getActiveWorkRun",
+  "listWorkDeliveries",
+  "getWorkDelivery",
+  "getWorkDeliveryByItem",
+  "getUiPref",
+  "listExecutorInstallations",
+  "getExecutorInstallation",
+] as const;
+
+export type AuthorityReadMethod = (typeof AUTHORITY_READ_METHODS)[number];
+
+export const AUTHORITY_READ_METHOD_SET = new Set<string>(AUTHORITY_READ_METHODS);
+
 export const AUTHORITY_WRITE_METHODS = [
   "append",
   "appendRevision",
@@ -27,6 +65,8 @@ export const AUTHORITY_WRITE_METHODS = [
   "resetCursor",
   "beginAttempt",
   "settleAttempt",
+  "pruneIngestAttempts",
+  "checkpointWal",
 ] as const;
 
 export type AuthorityWriteMethod = (typeof AUTHORITY_WRITE_METHODS)[number];
@@ -82,4 +122,10 @@ export function isAuthorityWriteMethod(
   method: string,
 ): method is AuthorityWriteMethod {
   return AUTHORITY_WRITE_METHOD_SET.has(method);
+}
+
+export function isAuthorityReadMethod(
+  method: string,
+): method is AuthorityReadMethod {
+  return AUTHORITY_READ_METHOD_SET.has(method);
 }

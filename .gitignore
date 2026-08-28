@@ -46,3 +46,5 @@ dsh-runs/
 # Sealos secrets (keep secret.yaml.example)
 deploy/sealos/secret.yaml
 deploy/sealos/*.local.yaml
+
+.sealos

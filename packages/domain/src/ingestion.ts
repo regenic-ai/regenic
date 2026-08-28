@@ -523,7 +523,8 @@ export interface ConnectorRuntimeStore {
   resetCursor(input: ResetConnectorCursor): Promise<ConnectorStreamCursor | null>;
   beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt>;
   settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt>;
-  listAttempts(installationId: string): Promise<IngestAttempt[]>;
+  listAttempts(installationId: string, limit?: number): Promise<IngestAttempt[]>;
+  latestAttempt(installationId: string): Promise<IngestAttempt | null>;
   listQuarantines(installationId: string): Promise<IngestQuarantine[]>;
   getCursor(
     installationId: string,

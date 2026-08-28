@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 16;
+export const LATEST_SCHEMA_VERSION = 17;
 
 export const MIGRATIONS = [
   {
@@ -336,6 +336,13 @@ export const MIGRATIONS = [
       ALTER TABLE recipes ADD COLUMN next_run_at TEXT;
       ALTER TABLE work_deliveries ADD COLUMN idempotency_key TEXT;
       ALTER TABLE work_deliveries ADD COLUMN channel_receipt_json TEXT;
+    `,
+  },
+  {
+    version: 17,
+    sql: `
+      CREATE INDEX ingest_attempts_installation_started_idx
+        ON ingest_attempts (connector_installation_id, started_at DESC, id DESC);
     `,
   },
 ] as const;

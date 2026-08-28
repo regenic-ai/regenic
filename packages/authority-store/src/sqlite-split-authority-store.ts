@@ -38,21 +38,23 @@ import type {
   ExecutorInstallation,
   ExecutorStore,
 } from "@regenic/domain";
-import { SqliteAuthorityStore } from "./sqlite-authority-store";
 import { SqliteWriteClient } from "./sqlite-write-client";
+
+export const INGEST_ATTEMPT_KEEP_PER_INSTALLATION = 64;
+export const INGEST_ATTEMPT_PRUNE_BATCH = 5_000;
 
 export class SqliteSplitAuthorityStore
   implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore
 {
   private constructor(
-    private readonly reader: SqliteAuthorityStore,
+    private readonly reader: SqliteWriteClient,
     private readonly writer: SqliteWriteClient,
   ) {}
 
   static async open(path: string): Promise<SqliteSplitAuthorityStore> {
     const writer = await SqliteWriteClient.open(path);
     try {
-      const reader = new SqliteAuthorityStore(path, { readonly: true });
+      const reader = await SqliteWriteClient.open(path, { readonly: true });
       return new SqliteSplitAuthorityStore(reader, writer);
     } catch (error) {
       await writer.close();
@@ -61,82 +63,92 @@ export class SqliteSplitAuthorityStore
   }
 
   get readonly(): boolean {
-    return this.reader.readonly;
+    return true;
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
-    return this.reader.findBlob(contentHash);
+    return this.reader.call("findBlob", [contentHash]);
   }
 
   async findBlobs(
     contentHashes: readonly string[],
   ): Promise<Map<string, BlobRecord>> {
-    return this.reader.findBlobs(contentHashes);
+    const result = await this.reader.call<
+      Map<string, BlobRecord> | Array<[string, BlobRecord]>
+    >("findBlobs", [contentHashes]);
+    return result instanceof Map ? result : new Map(result);
   }
 
   async findBySourceIdentity(
     identity: SourceIdentity,
   ): Promise<EventRecord | null> {
-    return this.reader.findBySourceIdentity(identity);
+    return this.reader.call("findBySourceIdentity", [identity]);
   }
 
   async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {
-    return this.reader.getEvent(orgId, eventId);
+    return this.reader.call("getEvent", [orgId, eventId]);
   }
 
   async listEvents(
     orgId: string,
     query?: EventListQuery,
   ): Promise<EventRecord[]> {
-    return this.reader.listEvents(orgId, query);
+    return this.reader.call("listEvents", [orgId, query]);
   }
 
   async getDisposition(
     eventId: string,
   ): Promise<ArrangementDecision | null> {
-    return this.reader.getDisposition(eventId);
+    return this.reader.call("getDisposition", [eventId]);
   }
 
   async listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]> {
-    return this.reader.listInbox(orgId, query);
+    return this.reader.call("listInbox", [orgId, query]);
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
-    return this.reader.summarizeInbox(orgId);
+    return this.reader.call("summarizeInbox", [orgId]);
   }
 
   async listConversationPrefs(orgId: string): Promise<ConversationPref[]> {
-    return this.reader.listConversationPrefs(orgId);
+    return this.reader.call("listConversationPrefs", [orgId]);
   }
 
   async getConversationPref(
     orgId: string,
     threadId: string,
   ): Promise<ConversationPref | null> {
-    return this.reader.getConversationPref(orgId, threadId);
+    return this.reader.call("getConversationPref", [orgId, threadId]);
   }
 
   async findInstallation(id: string): Promise<ConnectorInstallation | null> {
-    return this.reader.findInstallation(id);
+    return this.reader.call("findInstallation", [id]);
   }
 
   async listInstallations(orgId: string): Promise<ConnectorInstallation[]> {
-    return this.reader.listInstallations(orgId);
+    return this.reader.call("listInstallations", [orgId]);
   }
 
-  async listAttempts(installationId: string): Promise<IngestAttempt[]> {
-    return this.reader.listAttempts(installationId);
+  async listAttempts(
+    installationId: string,
+    limit?: number,
+  ): Promise<IngestAttempt[]> {
+    return this.reader.call("listAttempts", [installationId, limit]);
+  }
+
+  async latestAttempt(installationId: string): Promise<IngestAttempt | null> {
+    return this.reader.call("latestAttempt", [installationId]);
   }
 
   async listQuarantines(installationId: string): Promise<IngestQuarantine[]> {
-    return this.reader.listQuarantines(installationId);
+    return this.reader.call("listQuarantines", [installationId]);
   }
 
   async getCursor(
     installationId: string,
     streamKey: string,
   ): Promise<ConnectorStreamCursor | null> {
-    return this.reader.getCursor(installationId, streamKey);
+    return this.reader.call("getCursor", [installationId, streamKey]);
   }
 
   async append(input: NewEvent): Promise<EventRecord> {
@@ -174,7 +186,7 @@ export class SqliteSplitAuthorityStore
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {
-    return this.reader.summarizeStore(orgId);
+    return this.reader.call("summarizeStore", [orgId]);
   }
 
   async clearOperationalData(
@@ -185,11 +197,11 @@ export class SqliteSplitAuthorityStore
   }
 
   async listRecipes(orgId: string): Promise<Recipe[]> {
-    return this.reader.listRecipes(orgId);
+    return this.reader.call("listRecipes", [orgId]);
   }
 
   async getRecipe(orgId: string, id: string): Promise<Recipe | null> {
-    return this.reader.getRecipe(orgId, id);
+    return this.reader.call("getRecipe", [orgId, id]);
   }
 
   async putRecipe(recipe: Recipe): Promise<Recipe> {
@@ -201,18 +213,18 @@ export class SqliteSplitAuthorityStore
   }
 
   async listWorkItems(orgId: string): Promise<WorkItem[]> {
-    return this.reader.listWorkItems(orgId);
+    return this.reader.call("listWorkItems", [orgId]);
   }
 
   async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
-    return this.reader.getWorkItem(orgId, id);
+    return this.reader.call("getWorkItem", [orgId, id]);
   }
 
   async getWorkItemByThread(
     orgId: string,
     threadId: string,
   ): Promise<WorkItem | null> {
-    return this.reader.getWorkItemByThread(orgId, threadId);
+    return this.reader.call("getWorkItemByThread", [orgId, threadId]);
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {
@@ -220,34 +232,37 @@ export class SqliteSplitAuthorityStore
   }
 
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
-    return this.reader.listWorkRuns(orgId, workItemId);
+    return this.reader.call("listWorkRuns", [orgId, workItemId]);
   }
 
   async getWorkRun(orgId: string, id: string): Promise<WorkRun | null> {
-    return this.reader.getWorkRun(orgId, id);
+    return this.reader.call("getWorkRun", [orgId, id]);
   }
 
   async getActiveWorkRun(
     orgId: string,
     workItemId: string,
   ): Promise<WorkRun | null> {
-    return this.reader.getActiveWorkRun(orgId, workItemId);
+    return this.reader.call("getActiveWorkRun", [orgId, workItemId]);
   }
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return this.writer.call("putWorkRun", [run]);
   }
 
-  async listWorkDeliveries(orgId: string) {
-    return this.reader.listWorkDeliveries(orgId);
+  async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
+    return this.reader.call("listWorkDeliveries", [orgId]);
   }
 
-  async getWorkDelivery(orgId: string, id: string) {
-    return this.reader.getWorkDelivery(orgId, id);
+  async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {
+    return this.reader.call("getWorkDelivery", [orgId, id]);
   }
 
-  async getWorkDeliveryByItem(orgId: string, workItemId: string) {
-    return this.reader.getWorkDeliveryByItem(orgId, workItemId);
+  async getWorkDeliveryByItem(
+    orgId: string,
+    workItemId: string,
+  ): Promise<WorkDelivery | null> {
+    return this.reader.call("getWorkDeliveryByItem", [orgId, workItemId]);
   }
 
   async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
@@ -255,7 +270,7 @@ export class SqliteSplitAuthorityStore
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {
-    return this.reader.getUiPref(orgId, key);
+    return this.reader.call("getUiPref", [orgId, key]);
   }
 
   async putUiPref(
@@ -270,14 +285,14 @@ export class SqliteSplitAuthorityStore
   async listExecutorInstallations(
     orgId: string,
   ): Promise<ExecutorInstallation[]> {
-    return this.reader.listExecutorInstallations(orgId);
+    return this.reader.call("listExecutorInstallations", [orgId]);
   }
 
   async getExecutorInstallation(
     orgId: string,
     id: string,
   ): Promise<ExecutorInstallation | null> {
-    return this.reader.getExecutorInstallation(orgId, id);
+    return this.reader.call("getExecutorInstallation", [orgId, id]);
   }
 
   async putExecutorInstallation(
@@ -340,13 +355,29 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("settleAttempt", [input]);
   }
 
+  async maintainStore(): Promise<{ deleted: number }> {
+    let deleted = 0;
+    for (;;) {
+      const batch = await this.writer.call<{ deleted: number }>(
+        "pruneIngestAttempts",
+        [INGEST_ATTEMPT_KEEP_PER_INSTALLATION, INGEST_ATTEMPT_PRUNE_BATCH],
+      );
+      deleted += batch.deleted;
+      if (batch.deleted === 0) {
+        break;
+      }
+    }
+    await this.writer.call("checkpointWal", []);
+    return { deleted };
+  }
+
   /** @internal Holds the writer so tests can prove inbox reads do not wait. */
   stallWriter(ms: number): Promise<void> {
     return this.writer.call("__sleep", [ms]);
   }
 
   async close(): Promise<void> {
-    this.reader.close();
+    await this.reader.close();
     await this.writer.close();
   }
 }
