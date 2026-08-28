@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld("regenic", {
   getKernelSettings: () => ipcRenderer.invoke("regenic:get-kernel-settings"),
   setKernelSettings: (input: { mode: "local" | "custom"; origin?: string }) =>
     ipcRenderer.invoke("regenic:set-kernel-settings", input),
+  pickDataDirectory: () => ipcRenderer.invoke("regenic:pick-data-directory"),
+  setDataDirectory: (input: {
+    path: string;
+    action: "migrate" | "empty" | "adopt" | "replace";
+  }) => ipcRenderer.invoke("regenic:set-data-directory", input),
   setLocale: (locale: "en" | "zh") => ipcRenderer.invoke("regenic:set-locale", locale),
   onApiOriginChanged: (listener: (origin: string) => void) => {
     const wrapped = (_event: unknown, origin: string) => {

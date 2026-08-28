@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { describe, it } from "node:test";
-import { probeKernelMode } from "../src/main/kernel-probe.ts";
+import {
+  probeKernelDatabase,
+  probeKernelMode,
+} from "../src/main/kernel-probe.ts";
 import { waitForPersonalKernel } from "../src/shared/kernel-ready.ts";
 
 describe("kernel ready wait", () => {
@@ -50,6 +53,33 @@ describe("kernel ready wait", () => {
       /last probe: other/,
     );
     assert.ok(probes >= 2);
+  });
+
+  it("reads database_path from a personal engine", async () => {
+    const server = createServer((request, response) => {
+      if (request.url?.startsWith("/v1/me/engine")) {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ database_path: "/data/regenic.db" }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    try {
+      assert.equal(
+        await probeKernelDatabase(`http://127.0.0.1:${address.port}`),
+        "/data/regenic.db",
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("probes /health over Node http instead of Chromium fetch", async () => {

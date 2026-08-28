@@ -28,6 +28,7 @@ export interface HostStatDeps {
   directorySize?: (path: string) => Promise<number>;
   sidecarPid?: number | null;
   listenPort?: number | null;
+  skipLocalStore?: boolean;
   appBytes?: () => number;
   processRss?: (pid: number) => Promise<number | null>;
   processAlive?: (pid: number) => boolean;
@@ -44,9 +45,12 @@ export async function collectHostStats(
 ): Promise<HostStats> {
   const now = deps.now ?? Date.now;
   const readFs = deps.statfs ?? statfs;
-  const volumePath = dirname(paths.database);
-  const fs = await readVolume(volumePath, readFs);
-  const dataBytes = await readDataBytes(paths, now(), deps);
+  const skipLocalStore = Boolean(deps.skipLocalStore);
+  const volumePath = skipLocalStore || !paths.database ? "" : dirname(paths.database);
+  const fs = skipLocalStore
+    ? { total_bytes: 0, free_bytes: 0 }
+    : await readVolume(volumePath, readFs);
+  const dataBytes = skipLocalStore ? 0 : await readDataBytes(paths, now(), deps);
   const diskKind = classifyDisk(fs);
   const sampled = await sampleAppMemory(deps);
   const memoryKind = classifyMemory(sampled);

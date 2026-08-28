@@ -39,6 +39,9 @@ packages/*/src/**/*.d.ts.map
 *.db
 *.db-shm
 *.db-wal
+regenic.store.lock
+regenic.store.json
+regenic.relocated.json
 blobs/
 blobs-web/
 dsh-runs/

@@ -1,11 +1,41 @@
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
+export type DataPathSource = "env" | "settings" | "repo" | "default" | "relocated";
+export type DataDirectoryAction = "migrate" | "empty" | "adopt" | "replace";
+
+export interface DataDirectoryView {
+  path: string;
+  database: string;
+  blobRoot: string;
+  source: DataPathSource;
+  envOverride: boolean;
+  productRoot: string;
+  checkoutRoot?: string;
+  relocatedFrom?: string;
+  splitLayout: boolean;
+  canChange: boolean;
+  remoteWarning: boolean;
+}
+
+export interface DataDirectoryPlan {
+  path: string;
+  currentRoot: string;
+  sameAsCurrent: boolean;
+  sourceHasData: boolean;
+  destHasData: boolean;
+  destLooksLikeStore: boolean;
+  remoteWarning: boolean;
+  relocatedTo?: string;
+  canChange: boolean;
+  reason?: string;
+}
 
 export interface KernelSettingsView {
   mode: KernelMode;
   customOrigin: string;
   activeOrigin: string;
   locale: Locale;
+  dataDirectory: DataDirectoryView;
 }
 
 export type HostWatchKind = "ok" | "attention" | "critical";
@@ -41,6 +71,11 @@ export interface RegenicDesktop {
   setKernelSettings: (input: {
     mode: KernelMode;
     origin?: string;
+  }) => Promise<KernelSettingsView>;
+  pickDataDirectory: () => Promise<DataDirectoryPlan | null>;
+  setDataDirectory: (input: {
+    path: string;
+    action: DataDirectoryAction;
   }) => Promise<KernelSettingsView>;
   setLocale: (locale: Locale) => Promise<Locale>;
   onApiOriginChanged: (listener: (origin: string) => void) => () => void;
