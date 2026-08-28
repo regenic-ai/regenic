@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  driverCanReply,
   INGEST_SCHEMA_VERSION,
   channelRecord,
   parseConversationThread,
+  requireReplyPorts,
   toReplyParts,
   type ContentPart,
 } from "@regenic/domain";
@@ -113,7 +115,7 @@ export class PersonalReplyService {
         404,
       );
     }
-    if (!found.driver.canReply(found.installation)) {
+    if (!driverCanReply(found.driver, found.installation)) {
       throw new PersonalConnectorError(
         "unsupported_channel",
         `Sending back to ${thread.source} is not available yet`,
@@ -137,8 +139,11 @@ export class PersonalReplyService {
       ),
     ];
     let receipt;
+    let outboundId: ReturnType<typeof requireReplyPorts>["outboundId"];
     try {
-      const egress = await driver.bindEgress(
+      const ports = requireReplyPorts(driver);
+      outboundId = ports.outboundId;
+      const egress = await ports.bindEgress(
         installation,
         thread,
         host,
@@ -162,7 +167,7 @@ export class PersonalReplyService {
       channel: driver.source,
       kind: "user",
       direction: "outbound",
-      external_id: driver.outboundId(thread, receipt),
+      external_id: outboundId(thread, receipt),
       occurred_at: now,
       actor_id: "local-owner",
       scope_id: thread.target,

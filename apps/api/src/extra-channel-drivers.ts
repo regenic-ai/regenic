@@ -1,7 +1,11 @@
 import { createRequire } from "node:module";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-import type { ChannelDriver, TaskExecutor } from "@regenic/domain";
+import {
+  isSupportedConnectorProtocol,
+  type ChannelDriver,
+  type TaskExecutor,
+} from "@regenic/domain";
 
 const nodeRequire = createRequire(__filename);
 
@@ -124,16 +128,25 @@ function driversFromModule(loaded: unknown): ChannelDriver[] {
   if (!loaded || typeof loaded !== "object") {
     return [];
   }
-  return Object.values(loaded).filter(
-    (value): value is ChannelDriver =>
-      Boolean(
-        value &&
-          typeof value === "object" &&
-          typeof (value as ChannelDriver).connector_type === "string" &&
-          typeof (value as ChannelDriver).source === "string" &&
-          typeof (value as ChannelDriver).install === "function",
-      ),
-  );
+  return Object.values(loaded).filter((value): value is ChannelDriver => {
+    if (
+      !value ||
+      typeof value !== "object" ||
+      typeof (value as ChannelDriver).connector_type !== "string" ||
+      typeof (value as ChannelDriver).source !== "string" ||
+      typeof (value as ChannelDriver).install !== "function"
+    ) {
+      return false;
+    }
+    const driver = value as ChannelDriver;
+    if (!isSupportedConnectorProtocol(driver.connector_protocol)) {
+      console.warn(
+        `regenic extra connector: skip ${driver.connector_type} unsupported protocol ${String(driver.connector_protocol)}`,
+      );
+      return false;
+    }
+    return true;
+  });
 }
 
 function executorsFromModule(loaded: unknown): TaskExecutor[] {

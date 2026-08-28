@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const {
   ConnectorConformanceError,
   INGEST_SCHEMA_VERSION,
+  verifyChannelDriverConformance,
   verifyPollConnectorConformance,
 } = require("../dist");
 
@@ -79,6 +80,106 @@ describe("verifyPollConnectorConformance", () => {
         connector: connector([{ batch: duplicate, next_cursor: "cursor-2" }]),
       }),
       ConnectorConformanceError,
+    );
+  });
+
+  it("rejects unknown record types", async () => {
+    const unknown = batch();
+    unknown.records[0].type = "mystery";
+    await assert.rejects(
+      () => verifyPollConnectorConformance({
+        ...input,
+        connector: connector([{ batch: unknown, next_cursor: "cursor-2" }]),
+      }),
+      /unknown record type/,
+    );
+  });
+
+  it("rejects secrets in attrs", async () => {
+    const secret = batch();
+    secret.records[0].attrs = { token: "xoxb-secret" };
+    await assert.rejects(
+      () => verifyPollConnectorConformance({
+        ...input,
+        connector: connector([{ batch: secret, next_cursor: "cursor-2" }]),
+      }),
+      /must not contain secrets/,
+    );
+  });
+});
+
+function fixtureInstall(status = "enabled") {
+  return {
+    id: "dsh-1",
+    org_id: "local-owner",
+    connector_type: "dsh-session",
+    status,
+    config: {},
+    created_at: "2026-08-21T00:00:00.000Z",
+  };
+}
+
+describe("verifyChannelDriverConformance", () => {
+  it("accepts a driver whose methods match declared capabilities", () => {
+    verifyChannelDriverConformance({
+      driver: {
+        capabilities: () => ({
+          sync: true,
+          reply: true,
+          create: true,
+          prompts: true,
+        }),
+        bindEgress() {
+          return Promise.reject(new Error("not used"));
+        },
+        outboundId() {
+          return "out";
+        },
+        createThread() {
+          return Promise.reject(new Error("not used"));
+        },
+        listPrompts() {
+          return Promise.resolve([]);
+        },
+        answerPrompt() {
+          return Promise.resolve({ accepted: true });
+        },
+      },
+      enabled: fixtureInstall(),
+    });
+  });
+
+  it("rejects reply without bindEgress", () => {
+    assert.throws(
+      () => verifyChannelDriverConformance({
+        driver: {
+          capabilities: () => ({ sync: true, reply: true, create: false }),
+          outboundId() {
+            return "out";
+          },
+        },
+        enabled: fixtureInstall(),
+      }),
+      /reply requires bindEgress/,
+    );
+  });
+
+  it("requires a disabled install to drop sync, reply, and create", () => {
+    assert.throws(
+      () => verifyChannelDriverConformance({
+        driver: {
+          capabilities: () => ({ sync: true, reply: true, create: false }),
+          bindEgress() {
+            return Promise.reject(new Error("not used"));
+          },
+          outboundId() {
+            return "out";
+          },
+        },
+        enabled: fixtureInstall(),
+        disabled: fixtureInstall("disabled"),
+      }),
+      /disabled install/,
     );
   });
 });

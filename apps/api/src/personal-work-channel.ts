@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   ChannelDriverRegistry,
+  driverCanReply,
   INGEST_SCHEMA_VERSION,
   WORK_EVIDENCE_FETCH_LIMIT,
   channelRecord,
@@ -10,6 +11,8 @@ import {
   parseConversationThread,
   pickAbsenteeInboxRows,
   recipeWantsWriteBack,
+  requireCreateThread,
+  requireReplyPorts,
   selectThreadEvidenceLines,
   toReplyParts,
   transcriptFromAbsenteeLive,
@@ -57,7 +60,7 @@ export class PersonalWorkChannel {
             501,
           );
         }
-        return found.driver.createThread(
+        return requireCreateThread(found.driver)(
           found.installation,
           host,
           process.env,
@@ -121,7 +124,7 @@ export class PersonalWorkChannel {
       .get("authority")
       .listInstallations(this.runtime.orgId());
     const found = this.drivers.findForThread(installations, thread);
-    if (!found || !found.driver.canReply(found.installation)) {
+    if (!found || !driverCanReply(found.driver, found.installation)) {
       throw new PersonalConnectorError(
         "no_sender",
         "No enabled connector can send in this conversation",
@@ -129,7 +132,8 @@ export class PersonalWorkChannel {
       );
     }
     const content = toReplyParts({ text });
-    const egress = await found.driver.bindEgress(
+    const { bindEgress, outboundId } = requireReplyPorts(found.driver);
+    const egress = await bindEgress(
       found.installation,
       thread,
       host,
@@ -162,7 +166,7 @@ export class PersonalWorkChannel {
           channel: found.driver.source,
           kind: "user",
           direction: "outbound",
-          external_id: found.driver.outboundId(thread, receipt),
+          external_id: outboundId(thread, receipt),
           occurred_at: now,
           actor_id: "local-owner",
           scope_id: thread.target,
@@ -215,7 +219,7 @@ export class PersonalWorkChannel {
       .listInstallations(item.org_id);
     const found = this.drivers.findForThread(installations, thread);
     const recorded = deliveryChannelReceipt(delivery);
-    if (found?.driver.canReply(found.installation)) {
+    if (found && driverCanReply(found.driver, found.installation)) {
       await this.sendText(thread, text, {
         writeBack: true,
         idempotency_key: delivery?.idempotency_key,
@@ -387,7 +391,7 @@ export class PersonalWorkChannel {
     if (!found) {
       return undefined;
     }
-    return found.driver.canReply(found.installation);
+    return driverCanReply(found.driver, found.installation);
   }
 }
 

@@ -3,6 +3,7 @@
 - [Product](PRODUCT.md)
 - [Message orchestration](MESSAGE_ORCHESTRATION.md)
 - [Connectors](CONNECTOR.md)
+- [Built-in connectors](CONNECTOR_DRIVERS.md)
 - [Personal WhatsApp Bridge](WHATSAPP_PERSONAL.md)
 - [WhatsApp Personal Test and Acceptance](WHATSAPP_PERSONAL_TESTING.md)
 - [Technology stack](TECH_STACK.md)

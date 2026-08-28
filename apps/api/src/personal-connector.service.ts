@@ -4,9 +4,15 @@ import {
   ChannelDriverError,
   ChannelDriverRegistry,
   ConnectorRunner,
-  channelLabel,
+  DeadlineExceededError,
+  connectorPollTimeoutMs,
+  connectorSyncTimeoutMs,
+  driverCanReply,
   normalizeListTitle,
   parseConversationThread,
+  requireCreateThread,
+  settleIsolated,
+  withDeadline,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -523,7 +529,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       }
     }
     try {
-      const thread = await found.driver.createThread(
+      const thread = await requireCreateThread(found.driver)(
         found.installation,
         host,
         process.env,
@@ -531,8 +537,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return {
         thread_id: `${thread.source}:${thread.target}`,
         channel: thread.source,
-        channel_label: channelLabel(thread.source),
-        can_send: found.driver.canReply(found.installation),
+        channel_label: this.drivers.sourceLabel(thread.source),
+        can_send: driverCanReply(found.driver, found.installation),
         await_reply: found.driver.capabilities(found.installation).await_reply === true,
         list_title: normalizeListTitle(
           found.driver.capabilities(found.installation).list_title,
@@ -691,25 +697,27 @@ export class PersonalConnectorService implements OnModuleDestroy {
     try {
       const store = this.runtime.requireHost().get("authority");
       const installations = await store.listInstallations(this.runtime.orgId());
-      const errors: unknown[] = [];
-      for (const installation of installations) {
-        if (
-          installation.status !== "enabled" ||
-          !this.drivers.has(installation.connector_type) ||
-          this.inflight.has(installation.id)
-        ) {
-          continue;
-        }
-        try {
-          await this.sync(installation.id, DEFAULT_MAX_PAGES, {
-            skipIdle: true,
-            capCatchUp: true,
-            allowHistory: isHumanIdle(),
-          });
-        } catch (error) {
-          errors.push(error);
-        }
-      }
+      const eligible = installations.filter(
+        (installation) =>
+          installation.status === "enabled" &&
+          this.drivers.has(installation.connector_type) &&
+          !this.inflight.has(installation.id),
+      );
+      const errors = await settleIsolated(
+        eligible.map(
+          (installation) => () =>
+            this.sync(installation.id, DEFAULT_MAX_PAGES, {
+              skipIdle: true,
+              capCatchUp: true,
+              allowHistory: isHumanIdle(),
+            }),
+        ),
+        {
+          timeoutMs: connectorSyncTimeoutMs(),
+          label: (index) =>
+            `sync ${eligible[index]?.connector_type ?? "install"}`,
+        },
+      );
       pullStatus.last_tick_at = new Date().toISOString();
       await applyPullOutcome(errors);
     } catch (error) {
@@ -721,12 +729,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   private async catchUp(installationId: string): Promise<void> {
     try {
-      await this.sync(installationId, DEFAULT_MAX_PAGES, {
-        skipIdle: true,
-        capCatchUp: true,
-        allowHistory: false,
-        discover: true,
-      });
+      await withDeadline(
+        this.sync(installationId, DEFAULT_MAX_PAGES, {
+          skipIdle: true,
+          capCatchUp: true,
+          allowHistory: false,
+          discover: true,
+        }),
+        connectorSyncTimeoutMs(),
+        `catchUp ${installationId}`,
+      );
     } catch (error) {
       await applyPullOutcome([error]);
     }
@@ -1187,6 +1199,13 @@ export function wrapDriverError(
   if (error instanceof PersonalConnectorError) {
     return error;
   }
+  if (error instanceof DeadlineExceededError) {
+    return new PersonalConnectorError(
+      error.code,
+      error.message,
+      httpStatusFor(error.code),
+    );
+  }
   if (error instanceof ChannelDriverError) {
     return new PersonalConnectorError(
       error.code,
@@ -1211,6 +1230,8 @@ function httpStatusFor(code: string): number {
     case "disabled":
     case "lease_unavailable":
       return 409;
+    case "deadline_exceeded":
+      return 504;
     default:
       return 502;
   }
@@ -1235,6 +1256,7 @@ async function pollStream(
       lease_duration_ms: LEASE_MS,
       older: options?.older === true,
       media: options?.media,
+      timeout_ms: connectorPollTimeoutMs(),
     });
     runs.push(run);
     if (run.status === "lease_unavailable") {

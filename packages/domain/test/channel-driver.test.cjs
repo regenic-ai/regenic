@@ -3,7 +3,11 @@ const { describe, it } = require("node:test");
 const {
   ChannelDriverError,
   ChannelDriverRegistry,
+  driverCanReply,
   parseConversationThread,
+  requireBindEgress,
+  requireCreateThread,
+  requireReplyPorts,
 } = require("../dist");
 
 function stubDriver(partial) {
@@ -62,7 +66,11 @@ describe("channel driver registry", () => {
               installation.config.session_id === thread.target),
           ownsThread: (installation, thread) =>
             installation.config.session_id === thread.target,
-          canReply: (installation) => installation.status === "enabled",
+          capabilities: (installation) => ({
+            sync: installation.status === "enabled",
+            reply: installation.status === "enabled",
+            create: false,
+          }),
         }),
       )
       .register(
@@ -430,6 +438,42 @@ describe("channel driver registry", () => {
     assert.equal(drivers.installCatalogs()[0].title, "Slack");
   });
 
+  it("labels a source from the driver catalog, not CHANNELS", () => {
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "dingtalk-chat",
+        source: "dingtalk",
+        matchesThread: () => false,
+        ownsThread: () => false,
+        installCatalog: () => ({
+          title: "DingTalk",
+          channel_label: "DingTalk",
+          description: "Loaded plugin.",
+          credential_hint: "none",
+        }),
+      }),
+    );
+    assert.equal(drivers.sourceLabel("dingtalk"), "DingTalk");
+    assert.equal(drivers.sourceLabel("mail"), "MAIL");
+  });
+
+  it("falls back to catalog title when CHANNELS has no entry", () => {
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "extra-review",
+        source: "extra",
+        matchesThread: () => false,
+        ownsThread: () => false,
+        installCatalog: () => ({
+          title: "Extra review",
+          description: "Loaded plugin.",
+          credential_hint: "none",
+        }),
+      }),
+    );
+    assert.equal(drivers.sourceLabel("extra"), "Extra review");
+  });
+
   it("lists install cards only from drivers that declare them", () => {
     const drivers = new ChannelDriverRegistry()
       .register(
@@ -465,5 +509,60 @@ describe("channel driver registry", () => {
         singleton: true,
       },
     ]);
+  });
+
+  it("reads canSend from capabilities.reply and requires sink methods only when sending", () => {
+    const slack = stubDriver({
+      connector_type: "slack-channel",
+      source: "slack",
+      matchesThread: () => true,
+      ownsThread: () => true,
+      capabilities: () => ({ sync: true, reply: false, create: false }),
+    });
+    delete slack.bindEgress;
+    delete slack.createThread;
+    delete slack.outboundId;
+    const drivers = new ChannelDriverRegistry().register(slack);
+    const installation = {
+      id: "slack-1",
+      org_id: "local-owner",
+      connector_type: "slack-channel",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    assert.equal(drivers.canSend([installation], { source: "slack", target: "C1" }), false);
+    assert.throws(
+      () => requireCreateThread(slack),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
+    assert.throws(
+      () => requireBindEgress(slack),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
+  });
+
+  it("does not treat reply as sendable without bindEgress and outboundId", () => {
+    const extra = stubDriver({
+      connector_type: "extra-review",
+      source: "extra",
+      matchesThread: () => true,
+      ownsThread: () => true,
+      capabilities: () => ({ sync: true, reply: true, create: false }),
+    });
+    delete extra.outboundId;
+    const installation = {
+      id: "extra-1",
+      org_id: "local-owner",
+      connector_type: "extra-review",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    assert.equal(driverCanReply(extra, installation), false);
+    assert.throws(
+      () => requireReplyPorts(extra),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
   });
 });

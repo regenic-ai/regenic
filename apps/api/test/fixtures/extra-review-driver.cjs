@@ -5,6 +5,7 @@ function unused() {
 const extraReviewDriver = {
   connector_type: "extra-review",
   source: "extra",
+  connector_protocol: "1.0",
   install(input) {
     const maxOpen =
       typeof input.config.max_open === "string" && input.config.max_open.trim()
@@ -28,21 +29,14 @@ const extraReviewDriver = {
   capabilities() {
     return { sync: false, reply: false, create: false };
   },
-  canReply() {
-    return false;
-  },
-  createThread: unused,
   resolveStreams() {
     return Promise.resolve([]);
   },
   resolveThreadStream: unused,
-  bindEgress: unused,
-  outboundId() {
-    return "out";
-  },
   installCatalog() {
     return {
       title: "Extra review",
+      channel_label: "Extra review",
       description: "Test plugin.",
       credential_hint: "none",
       singleton: true,

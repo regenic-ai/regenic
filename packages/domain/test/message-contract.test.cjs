@@ -39,6 +39,7 @@ describe("message contract", () => {
   it("labels known channels and leaves unknown ids readable", () => {
     assert.equal(channelLabel("dsh"), "DSH");
     assert.equal(channelLabel("slack"), "Slack");
+    assert.equal(channelLabel("whatsapp-personal"), "WhatsApp");
     assert.equal(channelLabel("mail"), "MAIL");
   });
 

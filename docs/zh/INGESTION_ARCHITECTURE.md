@@ -98,13 +98,14 @@ Phase 1 是面向单人的本地优先采集基础。原生输入和连接器被
 ```ts
 interface ChannelConnector {
   readonly source: string;
+  readonly source_mode?: "poll" | "webhook" | "hybrid";
 
-  capabilities(): ConnectorCapabilities;
-  verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook>;
-  handleWebhook(webhook: VerifiedWebhook): Promise<IngestBatch>;
   poll(cursor: ConnectorCursor | null): Promise<PollResult>;
-  backfill(range: BackfillRange): AsyncIterable<IngestBatch>;
-  syncMembers(scope: ExternalScopeRef): Promise<MembershipBatch>;
+  capabilities?(): ConnectorCapabilities;
+  verifyWebhook?(request: WebhookRequest): Promise<VerifiedWebhook>;
+  handleWebhook?(webhook: VerifiedWebhook): Promise<IngestBatch>;
+  backfill?(range: BackfillRange): AsyncIterable<IngestBatch>;
+  syncMembers?(scope: ExternalScopeRef): Promise<MembershipBatch>;
 }
 
 interface ConnectorCapabilities {
@@ -263,7 +264,7 @@ created_at
 updated_at
 ```
 
-`config` 中绝不出现密钥值。凭据通过 `SecretStore` 解析。
+`config` 中绝不出现密钥值。`credentials_ref` 是 `env:NAME`、`keychain:SERVICE`，或预留的 `oauth:HANDLE` / `app:HANDLE`。本阶段内核只解析 `env`；钥匙串由连接器读；OAuth / 应用凭据尚未接线。
 
 ### 7.2 ConnectorCursor
 
@@ -276,7 +277,7 @@ lease_owner
 lease_expires_at
 ```
 
-Lease 防止轮询器重叠运行。游标推进与已完成批次结果一起提交。个人阶段可使用 SQLite 支撑的进程 lease；组织阶段可使用分布式 lease。
+Lease 防止轮询器重叠运行。游标推进与已完成批次结果一起提交。个人阶段可使用 SQLite 支撑的进程 lease；组织阶段可使用分布式 lease。`poll` 超时后释放租约，不推进游标。tick 并行拉各安装，一处失败或超时不挡其它安装。
 
 ### 7.3 IngestAttempt
 

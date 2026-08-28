@@ -1,6 +1,10 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { MemoryConnectorRegistry, MemoryEgressRegistry } = require("@regenic/domain");
+const {
+  MemoryConnectorRegistry,
+  MemoryEgressRegistry,
+  verifyChannelDriverConformance,
+} = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const {
   dshSessionPlugin,
@@ -183,6 +187,8 @@ describe("dshSessionPlugin", () => {
       });
       assert.equal(installed.config.transport, "web");
       assert.equal(installed.config.base_url, undefined);
+      assert.equal(installed.credentials_ref, "env:REGENIC_DSH_TOKEN");
+      assert.equal(dshSessionDriver.connector_protocol, "1.0");
     });
     withEnv({ REGENIC_DSH_BASE_URL: undefined }, () => {
       assert.throws(() =>
@@ -239,6 +245,18 @@ describe("dshSessionPlugin", () => {
         create: false,
         await_reply: true,
         list_title: "prompt",
+      });
+      verifyChannelDriverConformance({
+        driver: dshSessionDriver,
+        enabled: web,
+      });
+      verifyChannelDriverConformance({
+        driver: dshSessionDriver,
+        enabled: pinned,
+      });
+      verifyChannelDriverConformance({
+        driver: dshSessionDriver,
+        enabled: cli,
       });
     });
   });

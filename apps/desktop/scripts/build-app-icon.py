@@ -5,9 +5,9 @@ Mac and Windows cannot share one PNG:
 * macOS (WeChat / Cursor / Notes, Apple Big Sur grid, Mouser,
   Netcatty): bake a squircle on a 1024 canvas with ~10% gutter
   (824/1024). The Dock does **not** mask a square the way iOS does.
-* Windows / Linux (Mouser 96% refit, Netcatty full-bleed crop):
-  the taskbar slot is the whole tile. The Mac gutter reads as a
-  tiny icon, so the same squircle is scaled to ~96% of 1024.
+* Windows / Linux: opaque full-bleed RGB plate (no alpha). The
+  taskbar / Start slot is the whole tile, and PNG-compressed
+  transparent ICOs often decode as a blank icon in the shell.
 
 Run from anywhere:
 
@@ -36,9 +36,8 @@ OUT_ICNS = BRAND / "app-icon.icns"
 MAC_CANVAS = 1024
 # Apple icon grid / WeChat / Cursor measured fill.
 MAC_SQUIRCLE = 824
-# Windows taskbar has no drop-shadow gutter.
-WIN_FILL_RATIO = 980 / 1024
 GREEN = (0x6B, 0xED, 0x4A, 255)
+GREEN_RGB = (0x6B, 0xED, 0x4A)
 MARK_RATIO = 0.55
 SQUIRCLE_N = 5.0
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
@@ -126,16 +125,20 @@ def main() -> int:
     mac = place_on_canvas(mac_plate, MAC_CANVAS)
     mac.save(OUT_MAC_PNG, "PNG", optimize=True)
 
-    win_side = int(round(MAC_CANVAS * WIN_FILL_RATIO))
-    win_plate = mac_plate.resize((win_side, win_side), Image.Resampling.LANCZOS)
-    win = place_on_canvas(win_plate, MAC_CANVAS)
+    win = Image.new("RGB", (MAC_CANVAS, MAC_CANVAS), GREEN_RGB)
+    mark_side = int(round(MAC_CANVAS * MARK_RATIO))
+    fitted = mark.resize((mark_side, mark_side), Image.Resampling.LANCZOS)
+    origin = (MAC_CANVAS - mark_side) // 2
+    overlay = Image.new("RGBA", (MAC_CANVAS, MAC_CANVAS), (0, 0, 0, 0))
+    overlay.alpha_composite(fitted, (origin, origin))
+    win.paste(overlay, mask=overlay)
     win.save(OUT_WIN_PNG, "PNG", optimize=True)
     win.save(OUT_ICO, format="ICO", sizes=ICO_SIZES)
 
     build_icns(OUT_MAC_PNG, OUT_ICNS)
 
     print(f"mac  {OUT_MAC_PNG.name}  fill={fill_ratio(mac):.3f}  (Apple 824/1024 ≈ 0.805)")
-    print(f"win  {OUT_WIN_PNG.name}  fill={fill_ratio(win):.3f}  (taskbar ~0.96)")
+    print(f"win  {OUT_WIN_PNG.name}  {win.size} {win.mode}  (opaque full-bleed)")
     print(f"ico  {OUT_ICO.name}  {OUT_ICO.stat().st_size} bytes")
     if OUT_ICNS.exists():
         print(f"icns {OUT_ICNS.name} {OUT_ICNS.stat().st_size} bytes")

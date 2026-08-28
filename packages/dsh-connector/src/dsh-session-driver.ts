@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Host } from "@regenic/plugin-host";
 import {
+  CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  envCredentialsRef,
+  readEnvCredential,
   requireConnectorStream,
   type ChannelDriver,
   type ConnectorInstallation,
@@ -31,14 +34,19 @@ import { probeDshCatalog } from "./probe";
 export const dshSessionDriver: ChannelDriver = {
   connector_type: "dsh-session",
   source: "dsh",
+  connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input): NewConnectorInstallation {
+    const config = dshInstallConfig(input.config, input.id);
     return {
       id: input.id,
       org_id: input.org_id,
       connector_type: "dsh-session",
       status: "enabled",
-      config: dshInstallConfig(input.config, input.id),
+      config,
+      ...(config.transport === "web"
+        ? { credentials_ref: envCredentialsRef("REGENIC_DSH_TOKEN") }
+        : {}),
       created_at: input.now,
     };
   },
@@ -97,10 +105,6 @@ export const dshSessionDriver: ChannelDriver = {
       list_title: "prompt",
       prompts: true,
     };
-  },
-
-  canReply(installation) {
-    return this.capabilities(installation).reply;
   },
 
   async createThread(installation, _host, env, options) {
@@ -170,6 +174,7 @@ export const dshSessionDriver: ChannelDriver = {
     if (env.REGENIC_DSH_BASE_URL?.trim()) {
       return {
         title: "DSH",
+        channel_label: "DSH",
         description:
           "Hosted kernel talks to DSH over the cluster Service (REGENIC_DSH_BASE_URL). Leave Session ID empty to follow every session. Do not paste a public DSH URL.",
         credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
@@ -201,6 +206,7 @@ export const dshSessionDriver: ChannelDriver = {
     }
     return {
       title: "DSH",
+      channel_label: "DSH",
       description:
         "One install talks to dsh web (local loopback, or REGENIC_DSH_BASE_URL on a hosted API). The kernel pulls every session after install; set a Session ID to follow only that one.",
       credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
@@ -335,9 +341,25 @@ export async function answerDshPrompt(
   );
 }
 
+function dshAccessToken(
+  installation: { credentials_ref?: string },
+  env: NodeJS.ProcessEnv,
+  extras: { access_token?: string } = {},
+): string | undefined {
+  return (
+    extras.access_token ??
+    readEnvCredential(installation.credentials_ref, env, "REGENIC_DSH_TOKEN")
+  );
+}
+
 export async function mountDshSessions(
   host: Host,
-  installation: { id: string; org_id: string; config: Record<string, unknown> },
+  installation: {
+    id: string;
+    org_id: string;
+    config: Record<string, unknown>;
+    credentials_ref?: string;
+  },
   env: NodeJS.ProcessEnv,
   sessionIds: string[],
   extras: { fetch?: DshFetch; access_token?: string } = {},
@@ -355,7 +377,7 @@ export async function mountDshSessions(
   if (missing.length > 0) {
     const pluginConfig = dshSessionPluginConfigFromInstallation(installation, {
       env,
-      access_token: extras.access_token ?? env.REGENIC_DSH_TOKEN,
+      access_token: dshAccessToken(installation, env, extras),
       fetch: extras.fetch,
     });
     if (pluginConfig.transport === "web" && !pluginConfig.base_url) {
@@ -407,13 +429,13 @@ export async function createDshConversation(
 }
 
 export function dshWebRpcClient(
-  installation: { config: Record<string, unknown> },
+  installation: { config: Record<string, unknown>; credentials_ref?: string },
   env: NodeJS.ProcessEnv,
   extras: { fetch?: DshFetch; access_token?: string } = {},
 ): DshWebRpcClient {
   return new DshWebRpcClient({
     base_url: resolveDshWebBaseUrl(installation, env),
-    access_token: extras.access_token ?? env.REGENIC_DSH_TOKEN,
+    access_token: dshAccessToken(installation, env, extras),
     fetch: extras.fetch,
   });
 }

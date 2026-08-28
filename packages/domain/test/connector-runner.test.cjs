@@ -190,6 +190,33 @@ describe("ConnectorRunner", () => {
     assert.equal(nextLease.lease_owner, "worker-b");
   });
 
+  it("releases the lease when polling exceeds the deadline", async () => {
+    const runtime = await createRuntime();
+    const runner = new ConnectorRunner(
+      {
+        async poll() {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+
+    await assert.rejects(
+      () => runner.poll({ ...input, timeout_ms: 30 }),
+      /timed out after 30ms/,
+    );
+    const nextLease = await runtime.acquireLease({
+      ...input,
+      lease_owner: "worker-b",
+      now: "2026-08-12T00:00:01.000Z",
+    });
+
+    assert.equal(nextLease.lease_owner, "worker-b");
+  });
+
   it("completes a caught-up poll without calling ingest", async () => {
     const runtime = await createRuntime();
     const ingested = [];

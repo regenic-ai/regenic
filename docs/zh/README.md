@@ -3,6 +3,7 @@
 - [产品](PRODUCT.md)
 - [消息编排](MESSAGE_ORCHESTRATION.md)
 - [连接器](CONNECTOR.md)
+- [内置连接器](CONNECTOR_DRIVERS.md)
 - [个人 WhatsApp Bridge](WHATSAPP_PERSONAL.md)
 - [个人 WhatsApp 测试与验收](WHATSAPP_PERSONAL_TESTING.md)
 - [技术栈](TECH_STACK.md)

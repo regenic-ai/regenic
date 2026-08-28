@@ -10,7 +10,7 @@ This document describes the connector API. Types are defined in
 This page is for people who implement a connector.
 
 - **简体中文:** [../zh/CONNECTOR.md](../zh/CONNECTOR.md)
-- **Related:** [Message orchestration](MESSAGE_ORCHESTRATION.md) ·
+- **Related:** [Built-in drivers](CONNECTOR_DRIVERS.md) · [Message orchestration](MESSAGE_ORCHESTRATION.md) ·
   [Executors](EXECUTOR.md) ·
   [Ingestion](INGESTION_ARCHITECTURE.md) · [Technology stack](TECH_STACK.md) ·
   RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md)
@@ -19,7 +19,11 @@ This page is for people who implement a connector.
 ## What a connector is
 
 A connector registers a `ChannelDriver` with a stable `connector_type` and a
-`source` that exists in `CHANNELS` (`dsh`, `slack`, `feishu`, …).
+`source` declared by the driver. `source` does not have to be listed in
+`CHANNELS` first. The display name comes from
+`installCatalog().channel_label`, then `CHANNELS`, then catalog `title`,
+then `SOURCE`. Built-in dsh / slack / feishu stay in `CHANNELS` for old
+Events when no driver is loaded.
 
 The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 `ChannelConnector` and `EgressAdapter` do not persist those records.
@@ -34,13 +38,19 @@ Extra packages load at process start from `REGENIC_PLUGIN_DIR` or
 `REGENIC_CHANNEL_PLUGIN`. The kernel matches the first result line
 exactly to a live prompt option.
 
-## Interfaces
+## Ports
 
-| Interface | Responsibility |
-| --- | --- |
-| `ChannelDriver` | Install, resolve streams, bind send, declare `sync` / `reply` / `create`, and `installCatalog` / `presentInstall` / `writeBackLabels` |
-| `ChannelConnector` | Read the source into `IngestBatch` |
-| `EgressAdapter` | Write `ContentPart[]` back to the same source |
+A driver implements only the facets it declares. Undeclared methods do not
+exist; the kernel returns 501. Drivers must not stub them.
+
+| Port | Responsibility | When |
+| --- | --- | --- |
+| `ChannelDriverCore` | Install, match threads, declare capabilities | Every driver |
+| `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` |
+| `ChannelSinkPort` | `bindEgress` / `outboundId` / optional `createThread` | `reply`; `create` also needs `createThread` |
+| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` | To appear on Engine |
+| Surface | `prompts` / `attention` / `receipts` | Matching capability flags |
+| `EgressAdapter` | Write `ContentPart[]` back to the same source | After `bindEgress` |
 
 ## Requirements
 
@@ -49,15 +59,26 @@ Each connector must:
 - Implement `install()`. Reject invalid config with
   `ChannelDriverError("invalid_config")`.
 - Return `capabilities(installation)` for that install. A disabled install
-  reports `sync`, `reply`, and `create` as `false`.
+  reports `sync`, `reply`, and `create` as `false`. `reply` requires
+  `bindEgress` and `outboundId`. `create` requires `createThread`. The
+  kernel reads the declaration, not `canReply`. Acceptance is
+  `verifyChannelDriverConformance` / `verifyPollConnectorConformance`.
 - Emit records through `channelRecord()`.
 - Use a deterministic `external_id` inside the authority boundary. Console
   outbound ids include `:out:`.
 - Advance a stream cursor only after the ingest service commits or
   quarantines the page.
-- Read credentials from environment variables, or from a `credentials_ref`
-  that names one. The install form does not accept tokens.
-- Fail independently. One install must not stall another.
+- Read credentials through `credentials_ref`: `env:NAME`,
+  `keychain:SERVICE`, and reserved `oauth:HANDLE` / `app:HANDLE`. The
+  part after the colon is a handle, not a token. The install form does
+  not accept secrets. The kernel reads env refs with
+  `readEnvCredential`. Keychain refs stay with the connector. `oauth` /
+  `app` are not resolved in this phase.
+- A driver may declare `connector_protocol`. Omit it for `1.0`. The kernel
+  skips an unsupported version.
+- Fail independently. One install must not stall another. The tick pulls
+  enabled installs in parallel. Each `poll` and each tick/catch-up sync
+  has a deadline; a timeout releases the lease.
 - Implement `installCatalog()` to appear on Engine. Optional
   `presentInstall` labels the installed row. Optional `writeBackLabels`
   lists exact aliases for write-back.
@@ -73,17 +94,35 @@ The following are not allowed:
   `surface.activity`, and inbox `prompts` / `unread` / `can_receipt` /
   `receipt`.
 
+## Isolation
+
+Connectors stay in-process. The kernel isolates with deadlines and
+failure containment. It does not spawn a child process by default.
+
+- The tick pulls enabled installs in parallel. One throw or timeout
+  does not stall the others. An install still in `inflight` is skipped
+  on the next tick.
+- `ConnectorRunner.poll` applies a deadline to `connector.poll`. A
+  timeout releases the lease and does not advance the cursor.
+- Defaults: 20s per poll (`REGENIC_CONNECTOR_POLL_TIMEOUT_MS`) and 30s
+  per tick/catch-up sync (`REGENIC_CONNECTOR_SYNC_TIMEOUT_MS`). Set
+  either to `0` to disable.
+- `probeCatalog`, inbox receipts, and conversation-label lookups already
+  swallow per-driver failures.
+- A stdio out-of-process host is for untrusted third-party plugins, not
+  this phase.
+
 ## Message format
 
 A connector stops at L0: it translates one channel's wire. What it hands over is the L1 envelope (`IngestRecord`: identity, time, author, body, idempotency) and a closed L2 `record_class` (`utterance` / `task` / `status` / `prompt`, mapped from `type`). Speaker (L3) is written only on `utterance`. Thread facet (L4) is a kernel projection. A WorkItem (L5) is opened by policy. Execution (L6) is a separate plugin. See [Message orchestration · Layers](MESSAGE_ORCHESTRATION.md) and [RFC 0009](rfcs/0009-work-orchestration.md). Do not label an install as human-chat or agent.
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `source` | string | Channel id from `CHANNELS` (`dsh`, `slack`, `feishu`) |
+| `source` | string | Channel id declared by the driver. The display name comes from the catalog; it does not have to be registered in `CHANNELS` first |
 | `kind` | `user` \| `assistant` \| `system` | Mapped from the native event |
 | `direction` | `inbound` \| `outbound` | Reads are inbound. Console replies are outbound |
 | `content` | `ContentPart[]` | `body` plus optional `attachment` parts |
-| `capabilities` | `{ sync, reply, create, await_reply?, list_title?, prompts?, attention?, receipts? }` | Returned by `ChannelDriver.capabilities()` |
+| `capabilities` | `{ sync, reply, create, await_reply?, list_title?, hydrate_on_open?, prompts?, attention?, receipts? }` | Returned by `ChannelDriver.capabilities()` |
 
 `channelRecord()` attaches surface metadata (`channel`, `kind`, `direction`,
 and optional `conversation_label` / `conversation_kind` / `actor_label` /
@@ -152,13 +191,12 @@ install matches, `ownsThread` wins over the first match.
 ## ChannelDriver
 
 ```ts
-interface ChannelDriver {
-  readonly connector_type: string;
-  readonly source: string;
-  install(input): NewConnectorInstallation;
-  matchesThread(installation, thread): boolean;
-  ownsThread(installation, thread): boolean;
-  capabilities(installation): { sync; reply; create; await_reply?; list_title?; prompts?; attention?; receipts? };
+interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<ChannelSinkPort> {
+  capabilities(installation): {
+    sync; reply; create;
+    await_reply?; list_title?; hydrate_on_open?;
+    prompts?; attention?; receipts?;
+  };
   resolveConversationLabels?(installation, threads, env): Promise<Map<string, string>>;
   listPrompts?(installation, thread, host, env): Promise<ThreadPrompt[]>;
   answerPrompt?(installation, thread, answer, host, env): Promise<{ accepted: boolean }>;
@@ -166,12 +204,6 @@ interface ChannelDriver {
   ackAttention?(installation, thread, ack, host, env): Promise<void>;
   readReceipts?(installation, threads, host, env): Promise<Map<string, MessageReceipt>>;
   surfaceGeneration?(installation, host): string;
-  canReply(installation): boolean;
-  createThread(installation, host, env): Promise<ConversationThread>;
-  resolveStreams(installation, host, env, options?): Promise<ConnectorStream[]>;
-  resolveThreadStream(installation, thread, host, env): Promise<ConnectorStream>;
-  bindEgress(installation, thread, host, env): Promise<RegisteredEgress>;
-  outboundId(thread, receipt): string;
   installCatalog?(input?): DriverInstallCatalog;
   presentInstall?(installation, input?): { label; detail };
   writeBackLabels?(label): string[];
@@ -184,16 +216,15 @@ interface ChannelDriver {
 | `install` | Persist non-secret config. Slack requires `channel_id`. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
-| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `prompts`, `attention`, and `receipts`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH sets `prompt` (first user message). `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Slack omit it. |
+| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, and `receipts`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH sets `prompt` (first user message). `hydrate_on_open`: pull a recent page when opening a thread; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Slack omit it. |
 | `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Local names only: Feishu uses install `chat_names`, Slack uses `channel_name`. Must not call `listAllChats` or block opening a thread. |
 | `listPrompts` / `answerPrompt` | Optional. Live pending decisions. DSH web mounts mux, maps `question/requested` / `approval/requested` to a channel-agnostic Prompt, and answers on `/api/respond`. `not-pending` is treated as settled. |
 | `readAttention` / `ackAttention` | Optional. Source overlay for *my* unread of their inbound. Feishu calls user-identity `read_status` on the latest inbound `om_`. Failure or an official “read” must not hide a thread the PC has never opened. Ack writes the local cursor first. |
 | `readReceipts` | Optional. Peer read of my outbound. Feishu calls user-identity `read_users` on `:out:om_`. Empty items stay Sent. Do not reuse this as conversation unread. |
 | `surfaceGeneration` | Optional. Live surface generation, appended to `inbox_digest` as `&s=` so a new approval is visible to desktop polling. |
-| `canReply` | Same value as `capabilities().reply`. |
 | `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` for picked chats; when `selection=all`, follow `options.threads` from the kernel (current work ∪ the open thread) plus new `chat_id`s from the latest directory page (cached about 2 minutes). Unmount streams outside that set. Must not read the inbox or call `listAllChats` on every tick. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
-| `createThread` | Required when `create` is true. Otherwise throw `unsupported_channel`. |
-| `bindEgress` | Required when `reply` is true. Otherwise throw `unsupported_channel`. |
+| `createThread` | Optional. Required when `create` is true. Absent means the kernel returns 501. |
+| `bindEgress` | Optional. Required when `reply` is true. Absent means the kernel returns 501. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
 | `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. |
 | `presentInstall` | Optional. Label and detail for an installed row. |
@@ -220,11 +251,21 @@ interface ConnectorStream {
 
 ## ChannelConnector
 
-A poll connector implements `poll`. Webhook, backfill, and member sync are
-optional until the connector declares them.
+The runtime currently requires `source` + `poll`. Omit `source_mode` for
+poll-only. Undeclared webhook, backfill, and member-sync methods do not
+exist; the kernel never calls them.
 
 ```ts
-poll(cursor: ConnectorCursor | null): Promise<PollResult>
+interface ChannelConnector {
+  readonly source: string;
+  readonly source_mode?: "poll" | "webhook" | "hybrid";
+  poll(cursor: ConnectorCursor | null, options?: ConnectorPollOptions): Promise<PollResult>;
+  capabilities?(): ConnectorCapabilities;
+  verifyWebhook?(request): Promise<VerifiedWebhook>;
+  handleWebhook?(webhook): Promise<IngestBatch>;
+  backfill?(range): AsyncIterable<IngestBatch>;
+  syncMembers?(scope): Promise<MembershipBatch>;
+}
 ```
 
 `PollResult.batch` is an `IngestBatch` (`schema_version: "1.0"`).
@@ -297,55 +338,12 @@ The driver owns that check (`probeCatalog()`). The API only merges each
 driver's `ready` / `hint` / field options. The desktop only renders the
 catalog. Adding a source does not change the API or the desktop.
 
-## Built-in drivers
-
-| Driver | `source` | Sync | Reply | Create | Credentials |
-| --- | --- | --- | --- | --- | --- |
-| `slack-channel` | `slack` | one channel | no | no | `REGENIC_SLACK_TOKEN` |
-| `dsh-session` web, no `session_id` | `dsh` | every session | yes | yes | `REGENIC_DSH_TOKEN` if the host asks |
-| `dsh-session` web, with `session_id` | `dsh` | that session | yes | no | same |
-| `dsh-session` cli | `dsh` | one mailbox | yes | no | local `dsh` |
-| `feishu-chat` | `feishu` | selected conversations, or all visible groups and/or p2p chats | yes | no | local `lark-cli` user login |
-
-DSH `kind` map:
-
-| Native event | `kind` |
-| --- | --- |
-| `user/message` with `source.kind=user` | `user` |
-| `assistant/message` (text) | `assistant` |
-| plugin-injected `user/message` | `system` |
-
-Slack humans map to `user`.
-
-Feishu `kind` map:
-
-| Native message | `kind` |
-| --- | --- |
-| `sender_type=user`, `msg_type` `text` / `post` / `image` / `file` / `audio` / `media` | `user` |
-| `sender_type=app` (or `bot`), same | `assistant` |
-| interactive cards and other `msg_type` | dropped |
-
-Thread id: `feishu:<chat_id>`. Login stays on `lark-cli`. History uses in-process HTTP with the `user_access_token` from the CLI keychain, and falls back to `lark-cli api --as user` if the token cannot be read. Images and files download through `im/v1/messages/:id/resources/:file_key` into `attachment` parts when HTTP returns file bytes. User-token HTTP often returns a JSON error instead; then the connector falls back to `lark-cli im +messages-resources-download`. `img` nodes inside `post` are included. Already-synced conversations re-fetch the latest page once to backfill media that used to be dropped, and once more if those rows were empty placeholders so a `revise` can store the bytes. Inbox preview shows images up to 8MB, including `octet-stream` files sniffed as PNG/JPEG/GIF/WebP. New conversations, and ones still paging oldest-first, fetch the latest page first (`ByCreateTimeDesc`), then backfill older messages. Up to 50 messages per page. The conversation list is cached for about 30 seconds. Each record stores the chat name, `group` or `direct`, and the sender name. Mentions in the body use the native `mentions[]` names (`@_user_1` becomes `@Ben`; `@all` becomes `@所有人`). `contact +search-user` is only for remaining sender ids. The form lists groups and p2p chats from `lark-cli im +chat-list --types=p2p,group`. It does not take tokens or a pasted `oc_…`. Default is both kinds. The set can be changed after install.
-
-## Setup
-
-The Engine page blocks Install until required visible prerequisites are
-`ready`. The user does the steps; the kernel only probes.
-
-| Driver | When `ready` is false | What to run |
-| --- | --- | --- |
-| `slack-channel` | `REGENIC_SLACK_TOKEN` unset | Set a bot token from your Slack app, then restart the desktop |
-| `dsh-session` web | `dsh` not on PATH | `dsh` must work in the terminal. Then `dsh web --port 3080` |
-| `dsh-session` web | `dsh` present, port 3080 down | `dsh web --port 3080` |
-| `dsh-session` cli | local `dsh` | `dsh` must work in the terminal |
-| `feishu-chat` | `lark-cli` not on PATH | `npx @larksuite/cli@latest install` ([lark-cli](https://github.com/larksuite/cli)) |
-| `feishu-chat` | CLI present, user not signed in | `lark-cli config init` then `lark-cli auth login --recommend` |
-
-Feishu tokens stay in the OS keychain. Optional `REGENIC_LARK_CLI` points
-at a binary that is not on PATH.
+Capability tables, kind maps, and setup for Slack / DSH / Feishu are in
+[Built-in drivers](CONNECTOR_DRIVERS.md).
 
 ## Out of scope
 
 - OAuth install
 - Connector marketplace
 - Slack send
+- Out-of-process / stdio plugin host

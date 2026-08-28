@@ -98,13 +98,14 @@ A driver understands one source protocol. It may verify signatures, call source 
 ```ts
 interface ChannelConnector {
   readonly source: string;
+  readonly source_mode?: "poll" | "webhook" | "hybrid";
 
-  capabilities(): ConnectorCapabilities;
-  verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook>;
-  handleWebhook(webhook: VerifiedWebhook): Promise<IngestBatch>;
   poll(cursor: ConnectorCursor | null): Promise<PollResult>;
-  backfill(range: BackfillRange): AsyncIterable<IngestBatch>;
-  syncMembers(scope: ExternalScopeRef): Promise<MembershipBatch>;
+  capabilities?(): ConnectorCapabilities;
+  verifyWebhook?(request: WebhookRequest): Promise<VerifiedWebhook>;
+  handleWebhook?(webhook: VerifiedWebhook): Promise<IngestBatch>;
+  backfill?(range: BackfillRange): AsyncIterable<IngestBatch>;
+  syncMembers?(scope: ExternalScopeRef): Promise<MembershipBatch>;
 }
 
 interface ConnectorCapabilities {
@@ -263,7 +264,7 @@ created_at
 updated_at
 ```
 
-Secret values never appear in `config`. Credentials are resolved through `SecretStore`.
+Secret values never appear in `config`. `credentials_ref` is `env:NAME`, `keychain:SERVICE`, or reserved `oauth:HANDLE` / `app:HANDLE`. This phase resolves `env` in the kernel; keychain stays with the connector; OAuth and app credentials are not wired yet.
 
 ### 7.2 ConnectorCursor
 
@@ -276,7 +277,7 @@ lease_owner
 lease_expires_at
 ```
 
-The lease prevents overlapping pollers. Cursor progression is committed with the completed batch outcome. Personal may use a process lease backed by SQLite; Org may use a distributed lease.
+The lease prevents overlapping pollers. Cursor progression is committed with the completed batch outcome. Personal may use a process lease backed by SQLite; Org may use a distributed lease. A timed-out `poll` releases the lease and does not advance the cursor. The tick pulls installs in parallel so one failure or timeout does not stall another.
 
 ### 7.3 IngestAttempt
 

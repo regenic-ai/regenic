@@ -1,5 +1,7 @@
 import {
+  CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  keychainCredentialsRef,
   requireConnectorStream,
   type ChannelDriver,
   type ConnectorInstallation,
@@ -56,6 +58,7 @@ import {
 export const feishuChatDriver: ChannelDriver = {
   connector_type: "feishu-chat",
   source: FEISHU_SOURCE,
+  connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input): NewConnectorInstallation {
     return {
@@ -64,6 +67,7 @@ export const feishuChatDriver: ChannelDriver = {
       connector_type: "feishu-chat",
       status: "enabled",
       config: feishuInstallConfig(input.config),
+      credentials_ref: keychainCredentialsRef("lark-cli"),
       created_at: input.now,
     };
   },
@@ -81,6 +85,7 @@ export const feishuChatDriver: ChannelDriver = {
   installCatalog() {
     return {
       title: "Feishu",
+      channel_label: "Feishu",
       description:
         "Install once. Default is every group and every direct message you can see. Change the set later on the installed row. Replies go back through lark-cli.",
       credential_hint: "lark-cli (user login)",
@@ -169,19 +174,8 @@ export const feishuChatDriver: ChannelDriver = {
     };
   },
 
-  canReply(installation) {
-    return this.capabilities(installation).reply;
-  },
-
   writeBackLabels(label) {
     return feishuWriteBackLabels(label);
-  },
-
-  async createThread() {
-    throw new ChannelDriverError(
-      "unsupported_channel",
-      "Creating a Feishu conversation is not available",
-    );
   },
 
   async resolveStreams(installation, host, env, options?: ResolveStreamsOptions) {

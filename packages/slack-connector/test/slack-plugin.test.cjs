@@ -1,8 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { MemoryConnectorRegistry } = require("@regenic/domain");
+const { MemoryConnectorRegistry, verifyChannelDriverConformance } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
-const { ChannelDriverError } = require("@regenic/domain");
 const { slackChannelPlugin } = require("../dist/plugin");
 const { slackChannelDriver } = require("../dist/slack-channel-driver");
 
@@ -78,9 +77,21 @@ describe("slackChannelPlugin", () => {
       create: false,
       list_title: "conversation",
     });
-    await assert.rejects(
-      () => slackChannelDriver.createThread(installation, {}, process.env),
-      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    assert.equal(slackChannelDriver.createThread, undefined);
+    assert.equal(slackChannelDriver.bindEgress, undefined);
+    assert.equal(slackChannelDriver.connector_protocol, "1.0");
+    assert.equal(
+      slackChannelDriver.install({
+        id: "slack-1",
+        org_id: "local-owner",
+        config: { channel_id: "C123" },
+        now: "2026-08-21T00:00:00.000Z",
+      }).credentials_ref,
+      "env:REGENIC_SLACK_TOKEN",
     );
+    verifyChannelDriverConformance({
+      driver: slackChannelDriver,
+      enabled: installation,
+    });
   });
 });

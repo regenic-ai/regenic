@@ -66,10 +66,6 @@ import {
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
 
-if (process.platform === "win32") {
-  app.setAppUserModelId("ai.regenic.desktop");
-}
-
 let mainWindow: BrowserWindow | null = null;
 let trayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -683,13 +679,31 @@ function appIconFile(): string {
   return appIconWinPng;
 }
 
-function applyAppIcon(): void {
-  const image = nativeImage.createFromPath(appIconFile());
+function loadAppIcon(): Electron.NativeImage {
+  if (process.platform === "darwin") {
+    return nativeImage.createFromPath(appIconPng);
+  }
+  const png = nativeImage.createFromPath(appIconWinPng);
+  if (!png.isEmpty()) {
+    return png;
+  }
+  return nativeImage.createFromPath(appIconIco);
+}
+
+function applyAppIcon(window?: BrowserWindow): void {
+  const image = loadAppIcon();
   if (image.isEmpty()) {
     return;
   }
   if (process.platform === "darwin") {
     app.dock?.setIcon(image);
+    return;
+  }
+  const targets = window ? [window] : BrowserWindow.getAllWindows();
+  for (const win of targets) {
+    if (!win.isDestroyed()) {
+      win.setIcon(image);
+    }
   }
 }
 
@@ -720,7 +734,7 @@ function createMainWindow(): BrowserWindow {
   });
   attachExternalLinks(window);
   void loadSurface(window, "console");
-  applyAppIcon();
+  applyAppIcon(window);
   return window;
 }
 
