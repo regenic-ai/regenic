@@ -18,7 +18,9 @@ export const STORE_BLOBS = "blobs";
 export const STORE_FOLDER = "Regenic";
 export const STORE_META_FILE = "regenic.store.json";
 export const STORE_RELOCATED_FILE = "regenic.relocated.json";
+export const STORE_LOCK_FILE = "regenic.store.lock";
 export const SQLITE_HEADER = Buffer.from("SQLite format 3\0");
+const MAX_FOOTPRINT_FILES = 20_000;
 
 export type DataPathSource = "env" | "settings" | "repo" | "default" | "relocated";
 export type DataDirectoryAction = "migrate" | "empty" | "adopt" | "replace";
@@ -471,7 +473,7 @@ export function cleanupIncomingStaging(root: string): void {
   removeStaging(root, `${STAGING_PREFIX}incoming-`);
 }
 
-export function wipeStoreFiles(root: string): void {
+export function wipeStorePayload(root: string): void {
   const paths = storePaths(root);
   for (const file of [paths.database, ...sidecarFiles(paths.database)]) {
     rmSync(file, { force: true });
@@ -482,13 +484,63 @@ export function wipeStoreFiles(root: string): void {
   if (!existsSync(paths.dataRoot)) {
     return;
   }
-  for (const name of [STORE_META_FILE, STORE_RELOCATED_FILE]) {
+  for (const name of [STORE_META_FILE, STORE_LOCK_FILE]) {
     rmSync(join(paths.dataRoot, name), { force: true });
   }
   for (const name of readdirSync(paths.dataRoot)) {
     if (name.startsWith(STAGING_PREFIX)) {
       rmSync(join(paths.dataRoot, name), { recursive: true, force: true });
     }
+  }
+}
+
+export function wipeStoreFiles(root: string): void {
+  wipeStorePayload(root);
+  const paths = storePaths(root);
+  rmSync(join(paths.dataRoot, STORE_RELOCATED_FILE), { force: true });
+}
+
+export function storeFootprintBytes(root: string): number {
+  const paths = storePaths(root);
+  let total = 0;
+  let files = 0;
+  const addFile = (file: string): void => {
+    if (files >= MAX_FOOTPRINT_FILES) {
+      return;
+    }
+    try {
+      const stat = statSync(file);
+      if (!stat.isFile()) {
+        return;
+      }
+      total += stat.size;
+      files += 1;
+    } catch {
+      // Missing sidecars are normal.
+    }
+  };
+  addFile(paths.database);
+  for (const sidecar of sidecarFiles(paths.database)) {
+    addFile(sidecar);
+  }
+  walkFiles(paths.blobRoot, addFile);
+  return total;
+}
+
+function walkFiles(dir: string, visit: (file: string) => void): void {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const next = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkFiles(next, visit);
+      continue;
+    }
+    visit(next);
   }
 }
 

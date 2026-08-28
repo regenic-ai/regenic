@@ -32,12 +32,20 @@ export interface DataDirectoryPlan {
   reason?: string;
 }
 
+export interface SourceRetentionView {
+  path: string;
+  size: string;
+  bytes: number;
+  canDelete: boolean;
+}
+
 export interface KernelSettingsView {
   mode: KernelMode;
   customOrigin: string;
   activeOrigin: string;
   locale: Locale;
   dataDirectory: DataDirectoryView;
+  sourceRetention?: SourceRetentionView;
 }
 
 export interface ArrangementDecision {

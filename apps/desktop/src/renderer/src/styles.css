@@ -2967,6 +2967,25 @@ button {
   margin: 0 0 10px;
 }
 
+.data-dir-reclaim {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--g300) 28%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--g300) 8%, var(--surface));
+}
+
+.data-dir-reclaim p {
+  margin: 0 0 10px;
+}
+
+.data-dir-reclaim-size {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
 .action-ok {
   color: var(--g300);
   margin: 12px 0 0;

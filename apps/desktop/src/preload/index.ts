@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld("regenic", {
     path: string;
     action: "migrate" | "empty" | "adopt" | "replace";
   }) => ipcRenderer.invoke("regenic:set-data-directory", input),
+  resolveSourceRetention: (input: { action: "keep" | "discard" }) =>
+    ipcRenderer.invoke("regenic:resolve-source-retention", input),
   setLocale: (locale: "en" | "zh") => ipcRenderer.invoke("regenic:set-locale", locale),
   onApiOriginChanged: (listener: (origin: string) => void) => {
     const wrapped = (_event: unknown, origin: string) => {

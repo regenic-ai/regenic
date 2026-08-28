@@ -13,6 +13,8 @@ import {
   STORE_DB,
   STORE_META_FILE,
   STORE_RELOCATED_FILE,
+  storeFootprintBytes,
+  storeHasData,
   storePaths,
   tryParseDataRoot,
   type DataDirectoryAction,
@@ -30,6 +32,12 @@ export interface StoreRelocation {
   to: string;
   at: string;
   storeId: string;
+}
+
+export interface SourceRetention {
+  path: string;
+  bytes: number;
+  canDelete: boolean;
 }
 
 export interface StoreIdentityIo {
@@ -184,6 +192,37 @@ export function sealSourceStore(
     return;
   }
   writeStoreRelocation(source, dest, identity.id, io);
+}
+
+export function inspectSourceRetention(
+  previous: string | null | undefined,
+  current: Pick<ResolvedDataPaths, "dataRoot">,
+  options: { repoRoot?: string } = {},
+  io: StoreIdentityIo = {},
+): SourceRetention | null {
+  const previousRoot = tryParseDataRoot(previous ?? undefined);
+  if (!previousRoot || equalPath(previousRoot, current.dataRoot)) {
+    return null;
+  }
+  if (!storeHasData(storePaths(previousRoot))) {
+    return null;
+  }
+  const relocation = readStoreRelocation(previousRoot, io);
+  if (!relocation || !equalPath(relocation.to, current.dataRoot)) {
+    return null;
+  }
+  const destId = readStoreIdentity(current.dataRoot, io);
+  if (destId && destId.id !== relocation.storeId) {
+    return null;
+  }
+  if (options.repoRoot && equalPath(previousRoot, options.repoRoot)) {
+    return null;
+  }
+  return {
+    path: previousRoot,
+    bytes: storeFootprintBytes(previousRoot),
+    canDelete: true,
+  };
 }
 
 export function reclaimStoreIfRelocated(

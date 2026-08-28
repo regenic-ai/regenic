@@ -54,6 +54,12 @@ describe("desktop locale", () => {
       "这个文件夹里的 regenic.db 不是 SQLite 数据库",
     );
     assert.match(translate("zh", "settings.dataDirSplit"), /不在同一个目录/);
+    assert.match(translate("zh", "settings.dataDirMigrateLead", { path: "/data" }), /腾空间/);
+    assert.equal(translate("en", "settings.dataDirReclaimKeep"), "Keep the copy");
+    assert.equal(
+      translate("zh", "settings.dataDirReclaimRemove", { size: "4.2 GB" }),
+      "腾出 4.2 GB",
+    );
     assert.match(
       translate("zh", "settings.dataDirFollowed", {
         path: "/data/new",

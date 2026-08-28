@@ -7,9 +7,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { parseDataRoot } from "./data-directory.ts";
+import { parseDataRoot, STORE_LOCK_FILE } from "./data-directory.ts";
 
-export const STORE_LOCK_NAME = "regenic.store.lock";
+export const STORE_LOCK_NAME = STORE_LOCK_FILE;
 
 export interface StoreLockHolder {
   pid: number;

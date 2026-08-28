@@ -299,14 +299,26 @@ export const en = {
   "settings.dataDirReplaceLead":
     "The store already in this folder will be replaced. Other files in the folder stay.",
   "settings.dataDirMigrateLead":
-    "Copy current data to {path}? The previous folder is left in place. The local kernel will restart.",
+    "Copy your data to {path} and start using it there. The local kernel will restart. After it works, you can free space in the previous folder.",
   "settings.dataDirMigrate": "Move data",
   "settings.dataDirEmpty": "Start empty",
   "settings.dataDirEmptyLead":
     "Use this folder for new data. Current files stay where they are.",
   "settings.dataDirDone": "Now using {path}",
-  "settings.dataDirDoneMigrated":
-    "Moved data to {path}. The previous folder was left in place.",
+  "settings.dataDirDoneMigrated": "Now using {path}.",
+  "settings.dataDirReclaimLead": "A copy is still in {path}.",
+  "settings.dataDirReclaimHint":
+    "Remove only the database and attachments. Other files in that folder stay. This cannot be undone.",
+  "settings.dataDirReclaimKeep": "Keep the copy",
+  "settings.dataDirReclaimRemove": "Free {size}",
+  "settings.dataDirReclaimConfirmLead":
+    "Remove the previous copy and free {size}? This cannot be undone.",
+  "settings.dataDirReclaimConfirm": "Remove previous data",
+  "settings.dataDirReclaimRemoving": "Removing…",
+  "settings.dataDirReclaimDone": "Removed the previous copy and freed {size}.",
+  "settings.dataDirReclaimError":
+    "Could not remove the previous copy. You are still on the new folder.",
+  "settings.dataDirReclaimGone": "The previous copy is already gone.",
   "settings.dataDirError": "Could not change the data directory",
   "settings.dataDirPickError": "Could not open the folder picker",
   "settings.dataDirReasonAbs": "Data directory must be an absolute path",
@@ -773,12 +785,24 @@ export const zh: Record<MessageKey, string> = {
   "settings.dataDirReplace": "用当前数据覆盖",
   "settings.dataDirReplaceLead": "文件夹里已有的库和附件会被换成现在这份。其它文件不动。",
   "settings.dataDirMigrateLead":
-    "把当前数据拷到 {path}？原来的文件夹会留着。本机内核会重启。",
+    "把数据拷到 {path} 并改用那里。本机内核会重启。成功后可以选择删掉原来的拷贝来腾空间。",
   "settings.dataDirMigrate": "迁移数据",
   "settings.dataDirEmpty": "从空目录开始",
   "settings.dataDirEmptyLead": "之后的新数据写到这个文件夹。现有文件留在原地。",
   "settings.dataDirDone": "已改用 {path}",
-  "settings.dataDirDoneMigrated": "已迁到 {path}。原来的文件夹还在。",
+  "settings.dataDirDoneMigrated": "已改用 {path}。",
+  "settings.dataDirReclaimLead": "原来的拷贝还在 {path}。",
+  "settings.dataDirReclaimHint":
+    "只会删除数据库和附件，文件夹里其它文件不动。删除后不能恢复。",
+  "settings.dataDirReclaimKeep": "保留拷贝",
+  "settings.dataDirReclaimRemove": "腾出 {size}",
+  "settings.dataDirReclaimConfirmLead":
+    "删除原来的拷贝并腾出 {size}？此操作不能撤销。",
+  "settings.dataDirReclaimConfirm": "删除原来的数据",
+  "settings.dataDirReclaimRemoving": "正在删除…",
+  "settings.dataDirReclaimDone": "已删除原来的拷贝，大约腾出 {size}。",
+  "settings.dataDirReclaimError": "删不掉原来的拷贝。现在用的仍是新目录。",
+  "settings.dataDirReclaimGone": "原来的拷贝已经不在了。",
   "settings.dataDirError": "数据目录更改失败",
   "settings.dataDirPickError": "打不开文件夹选择框",
   "settings.dataDirReasonAbs": "数据目录必须是绝对路径",

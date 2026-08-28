@@ -7,6 +7,7 @@ import {
   fetchKernelSettings,
   fetchStore,
   pickDataDirectory,
+  resolveSourceRetention,
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
 import { useLocale } from "./LocaleContext";
@@ -16,6 +17,7 @@ import type {
   DataDirectoryView,
   KernelMode,
   Locale,
+  SourceRetentionView,
   StoreView,
 } from "./types";
 
@@ -66,9 +68,13 @@ export function SettingsPage({
   const [storeDone, setStoreDone] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<DataDirectoryView | null>(null);
   const [dataPlan, setDataPlan] = useState<DataDirectoryPlan | null>(null);
+  const [sourceRetention, setSourceRetention] =
+    useState<SourceRetentionView | null>(null);
   const [dataBusy, setDataBusy] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [dataDone, setDataDone] = useState<string | null>(null);
+  const [reclaimConfirming, setReclaimConfirming] = useState(false);
+  const [reclaimBusy, setReclaimBusy] = useState(false);
 
   useEffect(() => {
     void fetchKernelSettings()
@@ -77,6 +83,7 @@ export function SettingsPage({
         setCustomOrigin(settings.customOrigin);
         setActiveOrigin(settings.activeOrigin);
         setDataDir(settings.dataDirectory);
+        setSourceRetention(settings.sourceRetention ?? null);
       })
       .catch(() => {
         setError(t("settings.readError"));
@@ -128,6 +135,7 @@ export function SettingsPage({
       setCustomOrigin(settings.customOrigin);
       setActiveOrigin(settings.activeOrigin);
       setDataDir(settings.dataDirectory);
+      setSourceRetention(settings.sourceRetention ?? null);
       await onChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.applyError"));
@@ -181,6 +189,8 @@ export function SettingsPage({
       setCustomOrigin(settings.customOrigin);
       setActiveOrigin(settings.activeOrigin);
       setDataDir(settings.dataDirectory);
+      setSourceRetention(settings.sourceRetention ?? null);
+      setReclaimConfirming(false);
       setDataPlan(null);
       setDataDone(
         action === "migrate" || action === "replace"
@@ -203,6 +213,34 @@ export function SettingsPage({
       );
     } finally {
       setDataBusy(false);
+    }
+  };
+
+  const resolveRetention = async (action: "keep" | "discard") => {
+    const freed = sourceRetention?.size ?? "";
+    setReclaimBusy(true);
+    setDataError(null);
+    if (action === "keep") {
+      setDataDone(null);
+    }
+    try {
+      const settings = await resolveSourceRetention({ action });
+      setDataDir(settings.dataDirectory);
+      setSourceRetention(settings.sourceRetention ?? null);
+      setReclaimConfirming(false);
+      if (action === "discard") {
+        setDataDone(t("settings.dataDirReclaimDone", { size: freed }));
+      }
+    } catch (caught) {
+      setDataError(
+        localizeThrown(
+          t,
+          caught instanceof Error ? caught.message : "",
+          "settings.dataDirReclaimError",
+        ),
+      );
+    } finally {
+      setReclaimBusy(false);
     }
   };
 
@@ -490,6 +528,70 @@ export function SettingsPage({
         )}
         {dataDone ? <p className="action-ok">{dataDone}</p> : null}
         {dataError ? <p className="action-error">{dataError}</p> : null}
+        {sourceRetention?.canDelete ? (
+          <div className="data-dir-reclaim">
+            <p className="data-dir-reclaim-size">{sourceRetention.size}</p>
+            <p>
+              {t("settings.dataDirReclaimLead", { path: sourceRetention.path })}
+            </p>
+            {reclaimConfirming ? (
+              <>
+                <p className="muted">
+                  {t("settings.dataDirReclaimConfirmLead", {
+                    size: sourceRetention.size,
+                  })}
+                </p>
+                <div className="install-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={reclaimBusy}
+                    onClick={() => setReclaimConfirming(false)}
+                  >
+                    {t("settings.storeCancel")}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary danger"
+                    disabled={reclaimBusy}
+                    onClick={() => void resolveRetention("discard")}
+                  >
+                    {reclaimBusy
+                      ? t("settings.dataDirReclaimRemoving")
+                      : t("settings.dataDirReclaimConfirm")}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted">{t("settings.dataDirReclaimHint")}</p>
+                <div className="install-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={reclaimBusy || dataBusy}
+                    onClick={() => void resolveRetention("keep")}
+                  >
+                    {t("settings.dataDirReclaimKeep")}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={reclaimBusy || dataBusy}
+                    onClick={() => {
+                      setDataDone(null);
+                      setReclaimConfirming(true);
+                    }}
+                  >
+                    {t("settings.dataDirReclaimRemove", {
+                      size: sourceRetention.size,
+                    })}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
         <div className="store-footprint">
           <StoreStat
             label={t("settings.storeConversations")}

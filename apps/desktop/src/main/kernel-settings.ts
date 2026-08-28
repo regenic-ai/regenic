@@ -19,6 +19,7 @@ export interface KernelPreference {
 export interface DesktopPreference extends KernelPreference {
   locale: Locale;
   dataRoot?: string;
+  previousDataRoot?: string;
 }
 
 export function parseKernelOrigin(raw: string): string {
@@ -45,18 +46,26 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       origin?: unknown;
       locale?: unknown;
       dataRoot?: unknown;
+      previousDataRoot?: unknown;
     };
     const locale = parseLocale(raw.locale ?? DEFAULT_LOCALE);
     const dataRoot = tryParseDataRoot(raw.dataRoot);
+    const previousDataRoot = tryParseDataRoot(raw.previousDataRoot);
     if (raw.mode === "custom" && typeof raw.origin === "string") {
       return {
         mode: "custom",
         origin: parseKernelOrigin(raw.origin),
         locale,
         ...(dataRoot ? { dataRoot } : {}),
+        ...(previousDataRoot ? { previousDataRoot } : {}),
       };
     }
-    return { mode: "local", locale, ...(dataRoot ? { dataRoot } : {}) };
+    return {
+      mode: "local",
+      locale,
+      ...(dataRoot ? { dataRoot } : {}),
+      ...(previousDataRoot ? { previousDataRoot } : {}),
+    };
   } catch {
     return { mode: "local", locale: DEFAULT_LOCALE };
   }
@@ -82,6 +91,9 @@ export function saveDesktopPreference(
   }
   if (preference.dataRoot) {
     body.dataRoot = preference.dataRoot;
+  }
+  if (preference.previousDataRoot) {
+    body.previousDataRoot = preference.previousDataRoot;
   }
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
@@ -122,5 +134,22 @@ export function saveDataRootPreference(
     throw new Error("settings.dataDirReasonAbs");
   }
   saveDesktopPreference(file, { ...current, dataRoot: parsed });
+  return parsed;
+}
+
+export function savePreviousDataRootPreference(
+  file: string,
+  previousDataRoot: string | null,
+): string | undefined {
+  const current = loadDesktopPreference(file);
+  if (previousDataRoot === null) {
+    saveDesktopPreference(file, { ...current, previousDataRoot: undefined });
+    return undefined;
+  }
+  const parsed = tryParseDataRoot(previousDataRoot);
+  if (!parsed) {
+    throw new Error("settings.dataDirReasonAbs");
+  }
+  saveDesktopPreference(file, { ...current, previousDataRoot: parsed });
   return parsed;
 }

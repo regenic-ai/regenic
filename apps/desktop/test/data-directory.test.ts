@@ -26,14 +26,17 @@ import {
   parseDataRoot,
   resolveDataPaths,
   STORE_FOLDER,
+  storeFootprintBytes,
   storeHasData,
   storeLayoutSplit,
   storePaths,
   wipeStoreFiles,
+  wipeStorePayload,
 } from "../src/main/data-directory.ts";
 import {
   applyStoreRelocation,
   followStoreRelocation,
+  inspectSourceRetention,
   prepareDestinationStore,
   readStoreIdentity,
   readStoreRelocation,
@@ -55,6 +58,7 @@ import {
   saveDataRootPreference,
   saveDesktopPreference,
   saveKernelPreference,
+  savePreviousDataRootPreference,
 } from "../src/main/kernel-settings.ts";
 
 function tempDir(): string {
@@ -410,6 +414,49 @@ describe("data directory actions", () => {
     }
   });
 
+  it("wipes the store payload but keeps the relocation tombstone", () => {
+    const root = tempDir();
+    try {
+      const dest = storePaths(join(root, "dest"));
+      mkdirSync(dest.blobRoot, { recursive: true });
+      writeFileSync(dest.database, "db");
+      writeFileSync(`${dest.database}-wal`, "wal");
+      writeFileSync(join(dest.blobRoot, "a.bin"), "blob");
+      writeFileSync(join(dest.dataRoot, "notes.txt"), "keep");
+      writeFileSync(join(dest.dataRoot, "regenic.store.json"), "{}");
+      writeFileSync(join(dest.dataRoot, "regenic.store.lock"), "{}");
+      writeFileSync(join(dest.dataRoot, "regenic.relocated.json"), '{"to":"/new"}');
+      wipeStorePayload(dest.dataRoot);
+      assert.equal(existsSync(dest.database), false);
+      assert.equal(existsSync(`${dest.database}-wal`), false);
+      assert.equal(existsSync(dest.blobRoot), false);
+      assert.equal(existsSync(join(dest.dataRoot, "regenic.store.json")), false);
+      assert.equal(existsSync(join(dest.dataRoot, "regenic.store.lock")), false);
+      assert.equal(
+        readFileSync(join(dest.dataRoot, "regenic.relocated.json"), "utf8"),
+        '{"to":"/new"}',
+      );
+      assert.equal(readFileSync(join(dest.dataRoot, "notes.txt"), "utf8"), "keep");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts only the database sidecars and attachments", () => {
+    const root = tempDir();
+    try {
+      const dest = storePaths(join(root, "dest"));
+      mkdirSync(dest.blobRoot, { recursive: true });
+      writeFileSync(dest.database, "12345");
+      writeFileSync(`${dest.database}-wal`, "ww");
+      writeFileSync(join(dest.blobRoot, "a.bin"), "blob");
+      writeFileSync(join(dest.dataRoot, "notes.txt"), "ignored");
+      assert.equal(storeFootprintBytes(dest.dataRoot), 5 + 2 + 4);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a migrate onto an existing store", () => {
     const plan = {
       path: "/data/other",
@@ -462,6 +509,31 @@ describe("desktop-settings dataRoot", () => {
       const next = loadDesktopPreference(file);
       assert.equal(next.mode, "custom");
       assert.equal(next.dataRoot, saved);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps previousDataRoot when the live dataRoot or kernel changes", () => {
+    const root = tempDir();
+    const file = join(root, "desktop-settings.json");
+    try {
+      saveDataRootPreference(file, join(root, "store"));
+      const previous = savePreviousDataRootPreference(file, join(root, "old"));
+      saveDataRootPreference(file, join(root, "next"));
+      saveKernelPreference(file, {
+        mode: "custom",
+        origin: "http://127.0.0.1:4371",
+      });
+      const loaded = loadDesktopPreference(file);
+      assert.equal(loaded.dataRoot, parseDataRoot(join(root, "next")));
+      assert.equal(loaded.previousDataRoot, previous);
+      savePreviousDataRootPreference(file, null);
+      assert.equal(loadDesktopPreference(file).previousDataRoot, undefined);
+      assert.equal(
+        loadDesktopPreference(file).dataRoot,
+        parseDataRoot(join(root, "next")),
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -718,6 +790,51 @@ describe("store identity", () => {
       assert.equal(readStoreRelocation(from), null);
       assert.equal(readStoreIdentity(from)?.id, "fork-2");
       assert.equal(readStoreIdentity(to)?.id, "store-1");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("offers to discard a sealed leftover that still points at the live store", () => {
+    const root = tempDir();
+    try {
+      const from = join(root, "from");
+      const to = join(root, "to");
+      mkdirSync(from, { recursive: true });
+      mkdirSync(to, { recursive: true });
+      writeFileSync(join(from, "regenic.db"), "old-db");
+      writeFileSync(join(to, "regenic.db"), "new-db");
+      writeStoreIdentity(to, { id: "store-1" });
+      writeStoreRelocation(from, to, "store-1");
+      const retention = inspectSourceRetention(from, { dataRoot: to });
+      assert.equal(retention?.path, parseDataRoot(from));
+      assert.equal(retention?.canDelete, true);
+      assert.equal(retention?.bytes, 6);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not offer discard for a checkout root or a mismatched tombstone", () => {
+    const root = tempDir();
+    try {
+      const from = join(root, "from");
+      const to = join(root, "to");
+      mkdirSync(from, { recursive: true });
+      mkdirSync(to, { recursive: true });
+      writeFileSync(join(from, "regenic.db"), "old-db");
+      writeFileSync(join(to, "regenic.db"), "new-db");
+      writeStoreIdentity(to, { id: "store-1" });
+      writeStoreRelocation(from, to, "store-1");
+      assert.equal(
+        inspectSourceRetention(from, { dataRoot: to }, { repoRoot: from }),
+        null,
+      );
+      writeStoreIdentity(to, { id: "other" });
+      assert.equal(inspectSourceRetention(from, { dataRoot: to }), null);
+      writeStoreIdentity(to, { id: "store-1" });
+      writeStoreRelocation(from, join(root, "elsewhere"), "store-1");
+      assert.equal(inspectSourceRetention(from, { dataRoot: to }), null);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

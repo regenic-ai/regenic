@@ -22,11 +22,14 @@ import {
   materializeDataRoot,
   resolveDataPaths,
   storeLayoutSplit,
+  storePaths,
+  wipeStorePayload,
   type DataDirectoryAction,
   type ResolvedDataPaths,
 } from "./data-directory";
 import {
   applyStoreRelocation,
+  inspectSourceRetention,
   prepareDestinationStore,
   readStoreRelocation,
   reclaimStoreIfRelocated,
@@ -43,7 +46,7 @@ import appIconPng from "../brand/app-icon.png?asset";
 import appIconWinPng from "../brand/app-icon-win.png?asset";
 import trayPng from "../brand/tray-mark.png?asset";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
-import { portFromHttpOrigin } from "../shared/host-watch";
+import { formatBytes, portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
 import { probeKernelDatabase, probeKernelMode } from "./kernel-probe";
 import { isMessageKey, translate } from "../shared/messages.ts";
@@ -56,6 +59,7 @@ import {
   saveDataRootPreference,
   saveKernelPreference,
   saveLocalePreference,
+  savePreviousDataRootPreference,
   type KernelPreference,
 } from "./kernel-settings";
 
@@ -203,6 +207,7 @@ function isUsingCustomKernel(): boolean {
 function kernelView() {
   const preference = loadDesktopPreference(settingsFile());
   const paths = currentDataPaths();
+  const sourceRetention = currentSourceRetention(preference.previousDataRoot, paths);
   return {
     mode: preference.mode,
     customOrigin: preference.origin ?? LOCAL_KERNEL_ORIGIN,
@@ -221,6 +226,28 @@ function kernelView() {
       canChange: preference.mode === "local" && !paths.envOverride,
       remoteWarning: isRemoteOrRemovablePath(paths.dataRoot),
     },
+    ...(sourceRetention ? { sourceRetention } : {}),
+  };
+}
+
+function currentSourceRetention(
+  previousDataRoot: string | undefined,
+  paths: ResolvedDataPaths,
+) {
+  const retention = inspectSourceRetention(previousDataRoot, paths, {
+    repoRoot: repoRoot(),
+  });
+  if (previousDataRoot && !retention) {
+    savePreviousDataRootPreference(settingsFile(), null);
+  }
+  if (!retention) {
+    return undefined;
+  }
+  return {
+    path: retention.path,
+    bytes: retention.bytes,
+    size: formatBytes(retention.bytes),
+    canDelete: retention.canDelete,
   };
 }
 
@@ -570,6 +597,7 @@ async function applyDataDirectory(input: {
       releaseStoreLock(previousLocked, process.pid);
     }
     sealSourceStore(current.dataRoot, plan.path, input.action, identity);
+    rememberSourceRetention(input.action, current.dataRoot);
     committed = true;
     broadcastOrigin();
     return kernelView();
@@ -583,6 +611,60 @@ async function applyDataDirectory(input: {
     }
     throw dataDirectoryCopyError(error);
   }
+}
+
+function rememberSourceRetention(
+  action: DataDirectoryAction,
+  previousRoot: string,
+): void {
+  if (action !== "migrate" && action !== "replace") {
+    savePreviousDataRootPreference(settingsFile(), null);
+    return;
+  }
+  const retention = inspectSourceRetention(previousRoot, currentDataPaths(), {
+    repoRoot: repoRoot(),
+  });
+  savePreviousDataRootPreference(
+    settingsFile(),
+    retention?.canDelete ? previousRoot : null,
+  );
+}
+
+function parseRetentionAction(raw: unknown): "keep" | "discard" {
+  if (raw === "keep" || raw === "discard") {
+    return raw;
+  }
+  throw dataDirectoryError("settings.dataDirReasonAction");
+}
+
+async function resolveSourceRetention(action: "keep" | "discard") {
+  const preference = loadDesktopPreference(settingsFile());
+  const current = currentDataPaths();
+  const retention = inspectSourceRetention(preference.previousDataRoot, current, {
+    repoRoot: repoRoot(),
+  });
+  if (
+    action === "keep" ||
+    !retention?.canDelete ||
+    equalPath(retention.path, current.dataRoot)
+  ) {
+    savePreviousDataRootPreference(settingsFile(), null);
+    return kernelView();
+  }
+  if (storeLockHeldByOther(retention.path, process.pid)) {
+    throw dataDirectoryError("settings.dataDirReasonHeld");
+  }
+  if (await storeHeldByLocalKernel(storePaths(retention.path).database)) {
+    throw dataDirectoryError("settings.dataDirReasonHeld");
+  }
+  try {
+    wipeStorePayload(retention.path);
+  } catch {
+    throw dataDirectoryError("settings.dataDirReclaimError");
+  }
+  savePreviousDataRootPreference(settingsFile(), null);
+  resetHostStatCache();
+  return kernelView();
 }
 
 function appIconFile(): string {
@@ -866,6 +948,12 @@ app.whenReady().then(async () => {
         path: input.path,
         action: parseDataDirectoryAction(input.action),
       });
+    },
+  );
+  ipcMain.handle(
+    "regenic:resolve-source-retention",
+    async (_event, input: { action?: unknown }) => {
+      return resolveSourceRetention(parseRetentionAction(input?.action));
     },
   );
 

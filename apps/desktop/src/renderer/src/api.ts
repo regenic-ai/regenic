@@ -58,7 +58,21 @@ function withKernelLocale(settings: KernelSettingsView): KernelSettingsView {
     ...settings,
     locale: settings.locale === "zh" ? "zh" : "en",
     dataDirectory: settings.dataDirectory ?? emptyDataDirectory,
+    ...(settings.sourceRetention
+      ? { sourceRetention: settings.sourceRetention }
+      : {}),
   };
+}
+
+export async function resolveSourceRetention(input: {
+  action: "keep" | "discard";
+}): Promise<KernelSettingsView> {
+  if (!window.regenic?.resolveSourceRetention) {
+    throw new Error("Desktop settings are not available");
+  }
+  const settings = await window.regenic.resolveSourceRetention(input);
+  currentOrigin = settings.activeOrigin;
+  return withKernelLocale(settings);
 }
 
 export async function fetchKernelSettings(): Promise<KernelSettingsView> {
