@@ -202,13 +202,16 @@ export function formatInboxDigest(input: {
   latest_id?: string;
   pref_count?: number;
   pref_updated_at?: string;
+  work_updated_at?: string;
   surface_generation?: string;
 }): string {
   const base = `${input.count}:${input.latest_at ?? ""}:${input.latest_id ?? ""}:${
     input.pref_count ?? 0
   }:${input.pref_updated_at ?? ""}`;
+  const work = input.work_updated_at?.replace(/\s+/g, " ").trim() ?? "";
+  const withWork = work ? `${base}&w=${work}` : base;
   const surface = input.surface_generation?.replace(/\s+/g, " ").trim() ?? "";
-  return surface ? `${base}&s=${surface}` : base;
+  return surface ? `${withWork}&s=${surface}` : withWork;
 }
 
 export function inboxDigest(

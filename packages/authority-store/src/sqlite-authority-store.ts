@@ -381,6 +381,17 @@ export class SqliteAuthorityStore
         `,
       )
       .get(orgId) as { pref_count: number; pref_updated_at: string };
+    const work = this.database
+      .prepare(
+        `
+          SELECT COALESCE(MAX(updated_at), '') AS work_updated_at FROM (
+            SELECT updated_at FROM work_items WHERE org_id = ?
+            UNION ALL
+            SELECT updated_at FROM work_deliveries WHERE org_id = ?
+          )
+        `,
+      )
+      .get(orgId, orgId) as { work_updated_at: string };
     return {
       count: counted.count,
       digest: formatInboxDigest({
@@ -389,6 +400,7 @@ export class SqliteAuthorityStore
         latest_id: latest?.latest_id ?? "",
         pref_count: prefs.pref_count,
         pref_updated_at: prefs.pref_updated_at,
+        work_updated_at: work.work_updated_at,
       }),
     };
   }

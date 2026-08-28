@@ -20,7 +20,7 @@ export function itemRevision(item: InboxViewItem): string {
     item.unread ? "1" : "0"
   }\t${item.can_receipt ? "1" : "0"}\t${item.receipt?.state ?? ""}\t${(
     item.prompts ?? []
-  ).map((prompt) => prompt.prompt_id).join(",")}`;
+  ).map((prompt) => prompt.prompt_id).join(",")}\t${workRevision(item)}`;
 }
 
 export function inboxRevision(items: InboxViewItem[]): string {
@@ -237,7 +237,9 @@ export function sameInboxProps(
     previous.activity !== next.activity ||
     previous.unread !== next.unread ||
     previous.unread_count !== next.unread_count ||
-    promptRevision(previous) !== promptRevision(next)
+    previous.attention !== next.attention ||
+    promptRevision(previous) !== promptRevision(next) ||
+    workRevision(previous) !== workRevision(next)
   ) {
     return false;
   }
@@ -249,6 +251,48 @@ export function sameInboxProps(
 
 function promptRevision(item: InboxViewItem): string {
   return (item.prompts ?? []).map((prompt) => prompt.prompt_id).join(",");
+}
+
+export function workRevision(item: Pick<InboxViewItem, "work">): string {
+  const work = item.work;
+  if (!work) {
+    return "";
+  }
+  const delivery = work.delivery;
+  return [
+    work.id,
+    work.status,
+    work.has_result ? "1" : "0",
+    work.can_write_back === false ? "0" : "1",
+    work.updated_at ?? "",
+    delivery?.status ?? "",
+    delivery?.write_back ?? "",
+    String(delivery?.attempts ?? 0),
+  ].join("\t");
+}
+
+export function patchInboxWork(
+  previous: InboxViewItem[],
+  heads: InboxViewItem[],
+): InboxViewItem[] {
+  if (previous.length === 0 || heads.length === 0) {
+    return previous;
+  }
+  const byId = new Map(heads.map((item) => [item.event.id, item]));
+  let changed = false;
+  const next = previous.map((item) => {
+    const head = byId.get(item.event.id);
+    if (!head || workRevision(item) === workRevision(head)) {
+      return item;
+    }
+    changed = true;
+    return {
+      ...item,
+      work: head.work,
+      attention: head.attention ?? item.attention,
+    };
+  });
+  return changed ? next : previous;
 }
 
 export function prefixOffsets(sizes: number[]): number[] {
