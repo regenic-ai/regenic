@@ -2,6 +2,7 @@ import type { InboxThread } from "./inbox.ts";
 import {
   normalizeListTitle,
   type CreatedConversation,
+  type InboxViewItem,
   type PersonalEngineView,
 } from "./types.ts";
 
@@ -51,6 +52,61 @@ export function applyOpenedAt(
   return changed ? next : threads;
 }
 
+export function localDraftConversation(target: CreateTarget): CreatedConversation {
+  const id =
+    globalThis.crypto && "randomUUID" in globalThis.crypto
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return {
+    thread_id: `draft:${target.id}:${id}`,
+    channel: target.channel,
+    channel_label: target.channel_label,
+    can_send: true,
+    await_reply: true,
+    list_title: "prompt",
+    draft_installation_id: target.id,
+    opened_at: new Date().toISOString(),
+  };
+}
+
+export function localDraftOutbound(
+  created: CreatedConversation,
+  text: string,
+): InboxViewItem {
+  const now = new Date().toISOString();
+  const colon = created.thread_id.indexOf(":");
+  const target = colon >= 0 ? created.thread_id.slice(colon + 1) : created.thread_id;
+  return {
+    decision: {
+      event_id: `local:${now}`,
+      org_id: "local-owner",
+      disposition: "current_work",
+      layer: "L1_event",
+      reason_codes: ["local"],
+      score: 1,
+      decided_at: now,
+    },
+    event: {
+      id: `local:${now}`,
+      org_id: "local-owner",
+      source: created.channel,
+      external_id: `${target}:out:local`,
+      operation: "create",
+      occurred_at: now,
+      ingested_at: now,
+    },
+    body_text: text,
+    attachments: [],
+    channel: created.channel,
+    channel_label: created.channel_label,
+    kind: "user",
+    direction: "outbound",
+    can_send: created.can_send,
+    await_reply: created.await_reply === true,
+    list_title: normalizeListTitle(created.list_title),
+  };
+}
+
 export function mergeDraftThreads(
   threads: InboxThread[],
   drafts: CreatedConversation[],
@@ -72,6 +128,7 @@ export function mergeDraftThreads(
       conversation_kind: null,
       pinned: draft.pinned === true,
       opened_at: draft.opened_at,
+      draft_installation_id: draft.draft_installation_id,
       messages: [],
       prompts: [],
       unread: false,

@@ -122,11 +122,15 @@ export function Composer({
       return;
     }
     setLocalError(null);
-    await onSend({
-      text,
-      attachments: attachments.map(({ previewUrl: _preview, bytes: _bytes, ...rest }) => rest),
-      reply_to: quote ?? undefined,
-    });
+    try {
+      await onSend({
+        text,
+        attachments: attachments.map(({ previewUrl: _preview, bytes: _bytes, ...rest }) => rest),
+        reply_to: quote ?? undefined,
+      });
+    } catch {
+      return;
+    }
     if (editor) {
       editor.innerHTML = "";
     }

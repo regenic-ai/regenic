@@ -34,8 +34,11 @@ import {
 import {
   applyOpenedAt,
   createConversationTargets,
+  localDraftConversation,
+  localDraftOutbound,
   mergeDraftThreads,
 } from "./inbox-drafts";
+import type { ComposerDraft } from "./Composer";
 import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
@@ -633,26 +636,43 @@ export function ConsoleApp() {
     if (creating || createTargets.length === 0) {
       return;
     }
-    setCreating(true);
-    try {
-      const created = {
-        ...(await createConversation({ installation_id: installationId })),
-        opened_at: new Date().toISOString(),
-      };
-      openedAtRef.current[created.thread_id] = created.opened_at;
-      setDrafts((current) => [
-        created,
-        ...current.filter((item) => item.thread_id !== created.thread_id),
-      ]);
-      setSelectedId(created.thread_id);
-      setError(null);
-      return created;
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Cannot create a conversation");
-      return undefined;
-    } finally {
-      setCreating(false);
+    const target = createTargets.find((item) => item.id === installationId);
+    if (!target) {
+      return;
     }
+    const created = localDraftConversation(target);
+    openedAtRef.current[created.thread_id] = created.opened_at ?? new Date().toISOString();
+    setDrafts((current) => [created, ...current]);
+    setSelectedId(created.thread_id);
+    setError(null);
+    return created;
+  };
+
+  const commitDraft = async (installationId: string, draft: ComposerDraft, draftId: string) => {
+    const created = {
+      ...(await createConversation({
+        installation_id: installationId,
+        text: draft.text,
+      })),
+      opened_at: new Date().toISOString(),
+    };
+    openedAtRef.current[created.thread_id] = created.opened_at;
+    setMessagesByThread((current) => ({
+      ...current,
+      [created.thread_id]: [
+        localDraftOutbound(created, draft.text),
+        ...(current[created.thread_id] ?? []),
+      ],
+    }));
+    setDrafts((current) => [
+      created,
+      ...current.filter(
+        (item) => item.thread_id !== draftId && item.thread_id !== created.thread_id,
+      ),
+    ]);
+    setSelectedId(created.thread_id);
+    setError(null);
+    return created;
   };
 
   const persistPrefs = useCallback(async (
@@ -829,6 +849,7 @@ export function ConsoleApp() {
             createTargets={createTargets}
             creating={creating}
             onCreate={startConversation}
+            onCommitDraft={commitDraft}
             onSelect={setSelectedId}
             onRefresh={refresh}
             onRename={renameThread}

@@ -1,7 +1,7 @@
 # Built-in connectors
 
 The contract is in [Connectors](CONNECTOR.md). This page is implementation
-notes for Slack / DSH / Feishu, not kernel branching rules.
+notes for Slack / DSH / Feishu / Cursor, not kernel branching rules.
 
 - **简体中文:** [../zh/CONNECTOR_DRIVERS.md](../zh/CONNECTOR_DRIVERS.md)
 - **Status:** Phase 1
@@ -15,13 +15,19 @@ notes for Slack / DSH / Feishu, not kernel branching rules.
 | `dsh-session` web, with `session_id` | `dsh` | that session | yes | no | same |
 | `dsh-session` cli | `dsh` | one mailbox | yes | no | local `dsh` |
 | `feishu-chat` | `feishu` | selected conversations, or all visible groups and/or p2p chats | yes | no | local `lark-cli` user login |
+| `cursor-agent` | `cursor` | local SDK sessions | yes | yes | paste on install or `CURSOR_API_KEY` |
 
 Slack does not implement `createThread` / `bindEgress`. Feishu does not
-implement `createThread`. Undeclared methods do not exist.
+implement `createThread`. Undeclared methods do not exist. Session
+connectors open a local draft first; the first task creates the remote
+session and binds its id. A pasted Cursor API key is stored in the
+machine keychain (or `~/.regenic/credentials/cursor`), never in install
+config.
 
 Credential refs: Slack uses `env:REGENIC_SLACK_TOKEN`; DSH web uses
-`env:REGENIC_DSH_TOKEN` (optional); Feishu uses `keychain:lark-cli`. The
-form does not take tokens. `oauth:HANDLE` / `app:HANDLE` are reserved;
+`env:REGENIC_DSH_TOKEN` (optional); Feishu uses `keychain:lark-cli`;
+Cursor uses `keychain:regenic-cursor:<install id>` or
+`env:CURSOR_API_KEY`. `oauth:HANDLE` / `app:HANDLE` are reserved;
 built-in drivers do not use them in this phase.
 
 ## Kind maps
@@ -35,6 +41,46 @@ DSH:
 | plugin-injected `user/message` | `system` |
 
 Slack humans map to `user`.
+
+Cursor local agents:
+
+| Native event | `kind` |
+| --- | --- |
+| user turn | `user` (outbound, so local write-back can echo-match) |
+| final assistant reply in that turn | `assistant` (thinking / progress / tools dropped) |
+| extra assistant envelopes in the same gap | tombstoned; only the last reply is kept |
+| Agent still running | `thread_status` + `activity: working` (in-flight assistant not ingested) |
+| other nodes | dropped |
+
+Cursor:
+
+Thread id: `cursor:<agent_id>`. Local only, following
+[cursor/cookbook `sdk/coding-agent-cli`](https://github.com/cursor/cookbook/tree/main/sdk/coding-agent-cli):
+the first inbox task calls `Agent.create` + `send` immediately (not
+queued). Follow-ups `Agent.resume` then `send` only when the agent is
+IDLE. Two clocks: **accept** is seconds — Inbox HTTP returns after
+`create` / `resume` / `send()` starts the run, and must not wait for
+`run.wait()` or Chromium aborts with a false “cannot reach the
+kernel”. The desktop 120s timeout covers only that start (cold
+`resume`), not the whole job. **Completion** can take hours: poll
+`Agent.get` + `Agent.messages.list` for `thread_status` +
+`activity: working`, then the final assistant line. Do not `resume` to
+observe, and do not `force` a follow-up onto an ACTIVE / CREATING run
+(including a live run that has not finished `wait()`). Those follow-ups
+are queued in `~/.regenic/cursor-pending-sends.json` (no API key on
+disk) and flushed one at a time after an IDLE observation — after the
+poll page is built, or when background `pumpRun` finishes. `Agent.get`
+/ `list` stay read-only so that poll can emit `ended` for the run that
+just finished. Background `wait()` is only leak control, not
+completion truth; after the sidecar exits, the next open only polls.
+Sync scans the local SDK store. Message times follow conversation
+order at poll time, not `Agent.createdAt`, so a later turn cannot land
+beside the first prompt. It does not scrape IDE chat history or
+follow Cloud Agents. The install form keeps a **default model** (SDK
+runs require one; default `composer-2.5`).
+Capabilities follow the session-agent profile: `await_reply` and
+`list_title: "prompt"`. There is no official question-card API, so
+`prompts` is unset. Tests override the host with `REGENIC_CURSOR_API_BASE`.
 
 Feishu:
 
@@ -61,6 +107,7 @@ The Engine page blocks Install until required visible prerequisites are
 | `dsh-session` cli | local `dsh` | `dsh` must work in the terminal |
 | `feishu-chat` | `lark-cli` not on PATH | `npx @larksuite/cli@latest install` ([lark-cli](https://github.com/larksuite/cli)) |
 | `feishu-chat` | CLI present, user not signed in | `lark-cli config init` then `lark-cli auth login --recommend` |
+| `cursor-agent` | no key | Paste a Cursor API key on the install form, or set `CURSOR_API_KEY` |
 
 Feishu tokens stay in the OS keychain. Optional `REGENIC_LARK_CLI` points
 at a binary that is not on PATH.

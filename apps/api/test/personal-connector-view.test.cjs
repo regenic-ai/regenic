@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const { slackChannelDriver } = require("@regenic/slack-connector");
 const { dshSessionDriver } = require("@regenic/dsh-connector");
 const { feishuChatDriver } = require("@regenic/feishu-connector");
+const { cursorAgentDriver } = require("@regenic/cursor-connector");
 const {
   catalogFromDrivers,
   connectorAllowsMultiple,
@@ -14,7 +15,12 @@ const {
 function firstParty(env = {}) {
   return catalogFromDrivers(
     {
-      list: () => [slackChannelDriver, dshSessionDriver, feishuChatDriver],
+      list: () => [
+        slackChannelDriver,
+        dshSessionDriver,
+        feishuChatDriver,
+        cursorAgentDriver,
+      ],
     },
     env,
   );
@@ -134,7 +140,7 @@ describe("connector catalog hints", () => {
     assert.deepEqual(catalog.map((item) => item.connector_type), []);
     assert.deepEqual(
       firstParty({}).map((item) => item.connector_type),
-      ["slack-channel", "dsh-session", "feishu-chat"],
+      ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent"],
     );
     assert.equal(connectorAllowsMultiple("slack-channel", firstParty()), true);
     assert.equal(connectorAllowsMultiple("extra-review"), true);

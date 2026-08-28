@@ -150,7 +150,9 @@ export class PersonalController {
   }
 
   @Post("conversations")
-  createConversation(@Body() body: { installation_id?: string } | undefined) {
+  createConversation(
+    @Body() body: { installation_id?: string; source?: string; text?: string } | undefined,
+  ) {
     noteHumanActivity();
     return this.guard(() => this.connectors.createConversation(body ?? {}));
   }

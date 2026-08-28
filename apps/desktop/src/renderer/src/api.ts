@@ -37,6 +37,58 @@ function origin(): string {
   return currentOrigin;
 }
 
+const KERNEL_FETCH_MS = 120_000;
+
+export function isKernelTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (
+    error.name === "AbortError" ||
+    error.name === "TimeoutError" ||
+    error.name === "KernelTimeoutError"
+  ) {
+    return true;
+  }
+  return /still handling this send|timed out/i.test(error.message);
+}
+
+export function isKernelNetworkError(error: unknown): boolean {
+  if (isKernelTimeoutError(error)) {
+    return false;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("failed to fetch")
+    || message.includes("network request failed")
+    || message.includes("load failed")
+    || message.includes("networkerror")
+    || message.includes("cannot reach the kernel")
+  );
+}
+
+async function kernelFetch(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`${origin()}${path}`, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(KERNEL_FETCH_MS),
+    });
+  } catch (error) {
+    if (isKernelTimeoutError(error)) {
+      const wrapped = new Error(`The kernel is still handling this send at ${origin()}`);
+      wrapped.name = "KernelTimeoutError";
+      throw wrapped;
+    }
+    if (isKernelNetworkError(error) || error instanceof TypeError) {
+      throw new Error(`Cannot reach the kernel at ${origin()}`);
+    }
+    throw error;
+  }
+}
+
 export function currentApiOrigin(): string {
   return currentOrigin;
 }
@@ -407,8 +459,9 @@ export async function importWhatsAppExport(
 
 export async function createConversation(input: {
   installation_id?: string;
+  text?: string;
 } = {}): Promise<CreatedConversation> {
-  const response = await fetch(`${origin()}/v1/me/conversations`, {
+  const response = await kernelFetch("/v1/me/conversations", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -501,7 +554,7 @@ export async function sendReply(input: {
   reply_to_event_id?: string;
   attachments?: ReplyAttachmentInput[];
 }): Promise<ReplyView> {
-  const response = await fetch(`${origin()}/v1/me/replies`, {
+  const response = await kernelFetch("/v1/me/replies", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),

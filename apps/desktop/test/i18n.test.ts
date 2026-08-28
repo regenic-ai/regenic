@@ -93,5 +93,7 @@ describe("desktop locale", () => {
       }),
       "已导入 2/3 个文件 · 新增 5 · 重复 2 · 无效 0 行",
     );
+    assert.match(translate("zh", "chrome.sendTimedOut"), /还在发这条/);
+    assert.match(translate("en", "chrome.sendTimedOut"), /still sending/);
   });
 });

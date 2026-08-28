@@ -1,5 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { answerConversationPrompt, sendReply } from "./api";
+import {
+  answerConversationPrompt,
+  currentApiOrigin,
+  isKernelNetworkError,
+  isKernelTimeoutError,
+  sendReply,
+} from "./api";
 import { Composer, type ComposerDraft } from "./Composer";
 import { MessageBody } from "./MessageBody";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
@@ -10,8 +16,7 @@ import {
   messageRole,
   readingMessages,
   sameUtterance,
-  threadActivityCopy,
-  threadActivityOf,
+  threadActivityNote,
   threadFacetLabel,
   threadLoadedCountCopy,
   threadTitle,
@@ -27,6 +32,7 @@ import {
 } from "./ThreadMessageList";
 import { ThreadTitleField } from "./ThreadTitleField";
 import type { InboxViewItem, PersonalEngineView, PromptAnswerItem, ThreadPrompt } from "./types";
+import type { MessageKey } from "../../shared/i18n.ts";
 
 export const ThreadPane = memo(function ThreadPane({
   thread,
@@ -38,6 +44,7 @@ export const ThreadPane = memo(function ThreadPane({
   onLoadOlder,
   onRetry,
   onRefresh,
+  onCommitDraft,
   onRename,
   onPin,
   onRunWork,
@@ -53,6 +60,11 @@ export const ThreadPane = memo(function ThreadPane({
   onLoadOlder: () => void;
   onRetry: () => void;
   onRefresh: () => Promise<void>;
+  onCommitDraft?: (
+    installationId: string,
+    draft: ComposerDraft,
+    draftId: string,
+  ) => Promise<unknown>;
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
   onRunWork?: () => Promise<void>;
@@ -84,9 +96,7 @@ export const ThreadPane = memo(function ThreadPane({
     readingRef.current = { threadId: thread.id, source, reading };
     return {
       merged: reading,
-      activityNote: threadActivityCopy(
-        threadActivityOf({ ...thread, messages: source }),
-      ),
+      activityNote: threadActivityNote({ ...thread, messages: source }),
     };
   }, [thread, pending]);
   const prompts = thread.prompts;
@@ -133,16 +143,20 @@ export const ThreadPane = memo(function ThreadPane({
     setPending((current) => [...current, optimistic]);
     listRef.current?.scrollToEnd();
     try {
-      await sendReply({
-        thread_id: thread.id,
-        text: draft.text,
-        reply_to_event_id: draft.reply_to?.event.id,
-        attachments: draft.attachments,
-      });
+      if (thread.draft_installation_id && onCommitDraft) {
+        await onCommitDraft(thread.draft_installation_id, draft, thread.id);
+      } else {
+        await sendReply({
+          thread_id: thread.id,
+          text: draft.text,
+          reply_to_event_id: draft.reply_to?.event.id,
+          attachments: draft.attachments,
+        });
+      }
       setQuote(null);
       await onRefresh();
     } catch (caught) {
-      setSendError(caught instanceof Error ? caught.message : t("error.sendFailed"));
+      setSendError(sendFailureCopy(caught, t));
       throw caught instanceof Error ? caught : new Error(t("error.sendFailed"));
     } finally {
       setPending((current) => current.filter((item) => item.event.id !== optimistic.event.id));
@@ -371,4 +385,20 @@ function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem
     can_send: thread.can_send,
     await_reply: thread.await_reply === true,
   };
+}
+
+function sendFailureCopy(
+  caught: unknown,
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): string {
+  if (isKernelTimeoutError(caught)) {
+    return t("chrome.sendTimedOut", { origin: currentApiOrigin() });
+  }
+  if (isKernelNetworkError(caught)) {
+    return t("chrome.cannotReach", { origin: currentApiOrigin() });
+  }
+  if (caught instanceof Error && caught.message.trim()) {
+    return caught.message;
+  }
+  return t("error.sendFailed");
 }

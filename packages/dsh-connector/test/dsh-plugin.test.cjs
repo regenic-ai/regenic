@@ -372,9 +372,12 @@ describe("dshSessionPlugin", () => {
       config: { transport: "web", base_url: "http://127.0.0.1:3080" },
       created_at: "2026-08-21T00:00:00.000Z",
     };
+    const methods = [];
     const created = await createDshConversation(web, {}, {
+      text: "Fix the login bug",
       async fetch(_url, init) {
         const body = JSON.parse(init.body);
+        methods.push(body.method ?? new URL(_url, "http://dsh.test").pathname);
         return {
           ok: true,
           status: 200,
@@ -389,6 +392,10 @@ describe("dshSessionPlugin", () => {
       },
     });
     assert.deepEqual(created, { source: "dsh", target: "sess-new" });
+    assert.equal(
+      methods.some((method) => String(method).includes("session.prompt")),
+      true,
+    );
 
     await assert.rejects(
       () => createDshConversation({

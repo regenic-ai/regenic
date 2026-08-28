@@ -347,6 +347,7 @@ export interface ConnectorField {
   placeholder?: string;
   default?: string;
   multiple?: boolean;
+  secret?: boolean;
   options?: { value: string; label: string }[];
   visible_when?: ConnectorFieldWhen;
 }
@@ -407,6 +408,7 @@ export interface CreatedConversation {
   title?: string | null;
   pinned?: boolean;
   opened_at?: string;
+  draft_installation_id?: string;
 }
 
 export interface ConversationPrefView {

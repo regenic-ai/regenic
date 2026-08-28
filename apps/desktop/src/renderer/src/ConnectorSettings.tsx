@@ -247,7 +247,7 @@ function ConnectorSettingsForm({
               }))
             }
           >
-            {field.options.map((option) => (
+            {selectOptions(field, values[field.key]).map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -255,9 +255,11 @@ function ConnectorSettingsForm({
           </select>
         ) : (
           <input
+            type={field.secret ? "password" : "text"}
             value={values[field.key] ?? ""}
             placeholder={field.placeholder}
             required={field.required}
+            autoComplete={field.secret ? "off" : undefined}
             onChange={(event) =>
               setValues((current) => ({
                 ...current,
@@ -400,6 +402,18 @@ function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisite
       ))}
     </ul>
   );
+}
+
+function selectOptions(
+  field: ConnectorCatalogItem["fields"][number],
+  current: string | undefined,
+): { value: string; label: string }[] {
+  const options = field.options ?? [];
+  const value = current?.trim();
+  if (value && !options.some((option) => option.value === value)) {
+    return [{ value, label: value }, ...options];
+  }
+  return options;
 }
 
 function defaultFieldValues(kind: ConnectorCatalogItem): Record<string, string> {

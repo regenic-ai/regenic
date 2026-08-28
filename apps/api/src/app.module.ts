@@ -3,6 +3,7 @@ import {
   ChannelDriverRegistry,
   LocalExecutorPluginRegistry,
 } from "@regenic/domain";
+import { cursorAgentDriver } from "@regenic/cursor-connector";
 import { dshSessionDriver, dshTaskExecutor } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
 import { slackChannelDriver } from "@regenic/slack-connector";
@@ -36,7 +37,8 @@ import { PersonalWorkService } from "./personal-work.service";
         const registry = new ChannelDriverRegistry()
           .register(slackChannelDriver)
           .register(dshSessionDriver)
-          .register(feishuChatDriver);
+          .register(feishuChatDriver)
+          .register(cursorAgentDriver);
         for (const driver of extraChannelDrivers()) {
           if (registry.has(driver.connector_type)) {
             console.warn(

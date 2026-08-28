@@ -26,6 +26,7 @@ export interface InboxThread {
   can_send: boolean;
   await_reply?: boolean;
   list_title?: ListTitleMode;
+  draft_installation_id?: string;
   messages: InboxViewItem[];
   opened_at?: string;
   prompts: ThreadPrompt[];

@@ -25,6 +25,7 @@ export interface ConnectorField {
   placeholder?: string;
   default?: string;
   multiple?: boolean;
+  secret?: boolean;
   options?: { value: string; label: string }[];
   visible_when?: ConnectorFieldWhen;
 }
@@ -103,6 +104,7 @@ function catalogDefinitionFromDriver(
       placeholder: field.placeholder,
       default: field.default,
       multiple: field.multiple,
+      secret: field.secret === true,
       options: field.options,
       visible_when: field.visible_when,
     })),
@@ -293,11 +295,22 @@ export function configStringList(
   return [];
 }
 
+const SECRET_SETTING_KEYS = new Set([
+  "api_key",
+  "token",
+  "access_token",
+  "secret",
+  "password",
+]);
+
 export function installationSettings(
   config: Record<string, unknown>,
 ): Record<string, string> {
   const settings: Record<string, string> = {};
   for (const [key, value] of Object.entries(config)) {
+    if (SECRET_SETTING_KEYS.has(key) || key.endsWith("_token") || key.endsWith("_secret")) {
+      continue;
+    }
     if (typeof value === "string") {
       settings[key] = value;
     } else if (

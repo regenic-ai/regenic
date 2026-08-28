@@ -113,6 +113,7 @@ export interface DriverCatalogField {
   placeholder?: string;
   default?: string;
   multiple?: boolean;
+  secret?: boolean;
   options?: { value: string; label: string }[];
   visible_when?: DriverCatalogFieldWhen;
 }
@@ -248,7 +249,7 @@ export interface ChannelSinkPort {
     installation: ConnectorInstallation,
     host: Host,
     env: NodeJS.ProcessEnv,
-    options?: { cwd?: string },
+    options?: { cwd?: string; text?: string },
   ): Promise<ConversationThread>;
   bindEgress(
     installation: ConnectorInstallation,
