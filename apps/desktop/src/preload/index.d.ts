@@ -26,6 +26,7 @@ export interface DataDirectoryPlan {
   destLooksLikeStore: boolean;
   remoteWarning: boolean;
   relocatedTo?: string;
+  pickedPath?: string;
   canChange: boolean;
   reason?: string;
 }

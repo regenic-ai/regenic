@@ -273,7 +273,7 @@ export const en = {
     "Conversations, jobs, and imports on the kernel in use. Clearing empties Current work. Installed connectors, executors, and recipes stay; enabled connectors pull again from the start.",
   "settings.dataDir": "Data directory",
   "settings.dataDirLead":
-    "Database and attachments for the local sidecar. Changing the folder restarts the local kernel.",
+    "Database and attachments for the local sidecar. Picking a location creates a Regenic folder there, unless it is already a store. Changing it restarts the local kernel.",
   "settings.dataDirDatabase": "Database",
   "settings.dataDirBlobs": "Attachments",
   "settings.dataDirSplit":
@@ -291,6 +291,7 @@ export const en = {
   "settings.dataDirCustom":
     "Applies only to the local sidecar. Switch the kernel to Local first.",
   "settings.dataDirSame": "Already using this folder.",
+  "settings.dataDirNested": "Using {path} inside the folder you picked.",
   "settings.dataDirRemote":
     "This looks like a network or removable volume. SQLite can break if the drive disconnects.",
   "settings.dataDirDestExists": "This folder already has a Regenic store.",
@@ -762,7 +763,8 @@ export const zh: Record<MessageKey, string> = {
   "settings.storeLead":
     "当前内核上的会话、工单和导入记录。清理后当前工作会空掉。已安装的连接器、执行器和规则会留下；已启用的连接器会从头再拉一遍。",
   "settings.dataDir": "数据目录",
-  "settings.dataDirLead": "本机 sidecar 的数据库和附件。改目录会重启本机内核。",
+  "settings.dataDirLead":
+    "本机 sidecar 的数据库和附件。选位置后会在里面建 Regenic 文件夹；若已经是一份库就直接用。改目录会重启本机内核。",
   "settings.dataDirDatabase": "数据库",
   "settings.dataDirBlobs": "附件",
   "settings.dataDirSplit":
@@ -779,6 +781,7 @@ export const zh: Record<MessageKey, string> = {
     "已被 REGENIC_DATABASE / REGENIC_BLOB_ROOT 覆盖。要在这里改，先去掉这两个环境变量。",
   "settings.dataDirCustom": "只对本机 sidecar 生效。请先把内核切回「本机」。",
   "settings.dataDirSame": "已经在用这个文件夹。",
+  "settings.dataDirNested": "会在所选位置下使用 {path}。",
   "settings.dataDirRemote": "这像是网络盘或可移动磁盘。掉盘时 SQLite 可能会坏。",
   "settings.dataDirDestExists": "这个文件夹里已经有一份 Regenic 数据。",
   "settings.dataDirAdopt": "使用已有数据",

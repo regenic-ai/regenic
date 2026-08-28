@@ -23,6 +23,7 @@ import {
   looksLikeSqliteDatabase,
   materializeDataRoot,
   nestVolumeRoot,
+  nestDataRoot,
   parseDataRoot,
   resolveDataPaths,
   STORE_FOLDER,
@@ -245,6 +246,20 @@ describe("inspectDataDirectory", () => {
     const plan = inspectDataDirectory("/data/regenic", current, () => false);
     assert.equal(plan.sameAsCurrent, true);
     assert.equal(plan.canChange, true);
+  });
+
+  it("creates a Regenic folder under a picked location", () => {
+    const current = resolveDataPaths({
+      repoRoot: "/repo",
+      homeDir: "/home/ada",
+      dataRoot: "/home/ada/.regenic",
+      exists: () => false,
+    });
+    const plan = inspectDataDirectory("/data/projects", current, () => false);
+    assert.equal(plan.path, parseDataRoot(join("/data/projects", STORE_FOLDER)));
+    assert.equal(plan.pickedPath, parseDataRoot("/data/projects"));
+    assert.equal(plan.canChange, true);
+    assert.equal(plan.destHasData, false);
   });
 });
 
@@ -629,6 +644,35 @@ describe("volume root nesting", () => {
     assert.equal(nestVolumeRoot("D:", "win32"), `D:\\${STORE_FOLDER}`);
     assert.equal(nestVolumeRoot("D:\\data", "win32"), "D:\\data");
     assert.equal(nestVolumeRoot("/data/regenic", "darwin"), "/data/regenic");
+  });
+
+  it("nests a picked location unless it is already a store folder", () => {
+    assert.equal(
+      nestDataRoot("/data/projects", { exists: () => false }),
+      parseDataRoot(join("/data/projects", STORE_FOLDER)),
+    );
+    assert.equal(
+      nestDataRoot("/data/Regenic", { exists: () => false }),
+      parseDataRoot("/data/Regenic"),
+    );
+    assert.equal(
+      nestDataRoot("/home/ada/.regenic", { exists: () => false }),
+      parseDataRoot("/home/ada/.regenic"),
+    );
+    assert.equal(
+      nestDataRoot("/", { exists: () => false }),
+      parseDataRoot("/"),
+    );
+  });
+
+  it("does not nest when the picked folder already has a store", () => {
+    const root = tempDir();
+    try {
+      writeFileSync(join(root, "regenic.db"), "db");
+      assert.equal(nestDataRoot(root), parseDataRoot(root));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
