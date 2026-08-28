@@ -271,59 +271,6 @@ export const en = {
   "settings.store": "Local data",
   "settings.storeLead":
     "Conversations, jobs, and imports on the kernel in use. Clearing empties Current work. Installed connectors, executors, and recipes stay; enabled connectors pull again from the start.",
-  "settings.dataDir": "Data directory",
-  "settings.dataDirLead":
-    "Database and attachments for the local sidecar. Changing the folder restarts the local kernel.",
-  "settings.dataDirDatabase": "Database",
-  "settings.dataDirBlobs": "Attachments",
-  "settings.dataDirSplit":
-    "REGENIC_DATABASE and REGENIC_BLOB_ROOT point at different folders. This setting cannot move them together.",
-  "settings.dataDirFollowed":
-    "Using {path}. The previous folder {from} was left in place after a move.",
-  "settings.dataDirDestRelocated":
-    "This folder was moved to {path}. Using it here starts a separate copy.",
-  "settings.dataDirBrowse": "Browse",
-  "settings.dataDirApplying": "Changing…",
-  "settings.dataDirCheckout":
-    "Development checkout: the kernel is using {checkout}. The product default is {product}.",
-  "settings.dataDirEnv":
-    "Overridden by REGENIC_DATABASE / REGENIC_BLOB_ROOT. Unset those to change it here.",
-  "settings.dataDirCustom":
-    "Applies only to the local sidecar. Switch the kernel to Local first.",
-  "settings.dataDirSame": "Already using this folder.",
-  "settings.dataDirRemote":
-    "This looks like a network or removable volume. SQLite can break if the drive disconnects.",
-  "settings.dataDirDestExists": "This folder already has a Regenic store.",
-  "settings.dataDirAdopt": "Use existing",
-  "settings.dataDirReplace": "Replace with current data",
-  "settings.dataDirReplaceLead":
-    "The store already in this folder will be replaced. Other files in the folder stay.",
-  "settings.dataDirMigrateLead":
-    "Copy current data to {path}? The previous folder is left in place. The local kernel will restart.",
-  "settings.dataDirMigrate": "Move data",
-  "settings.dataDirEmpty": "Start empty",
-  "settings.dataDirEmptyLead":
-    "Use this folder for new data. Current files stay where they are.",
-  "settings.dataDirDone": "Now using {path}",
-  "settings.dataDirDoneMigrated":
-    "Moved data to {path}. The previous folder was left in place.",
-  "settings.dataDirError": "Could not change the data directory",
-  "settings.dataDirPickError": "Could not open the folder picker",
-  "settings.dataDirReasonAbs": "Data directory must be an absolute path",
-  "settings.dataDirReasonNested": "Data directory cannot be inside the current store",
-  "settings.dataDirReasonFolder": "Data directory must be a folder",
-  "settings.dataDirReasonSystem": "Data directory cannot be a system folder",
-  "settings.dataDirReasonNoStore": "This folder does not have a Regenic store",
-  "settings.dataDirReasonNotStore":
-    "This folder has a regenic.db that is not a SQLite database",
-  "settings.dataDirReasonNoSource": "There is no local data to move",
-  "settings.dataDirReasonAction": "Unknown data directory action",
-  "settings.dataDirReasonHeld":
-    "A local kernel is already using this database. Quit it first, then change the data directory.",
-  "settings.dataDirCopyBusy":
-    "Could not copy the database. Quit any other Regenic kernel using it and try again.",
-  "settings.dataDirKernelStop":
-    "The local kernel did not exit in time. Try again after it has fully stopped.",
   "settings.storeKernel": "Kernel",
   "settings.storeConversations": "Conversations",
   "settings.storeMessages": "Messages",
@@ -487,10 +434,6 @@ export const en = {
 } as const;
 
 export type MessageKey = keyof typeof en;
-
-export function isMessageKey(value: string): value is MessageKey {
-  return Object.prototype.hasOwnProperty.call(en, value);
-}
 
 export const zh: Record<MessageKey, string> = {
   "nav.inbox": "当前工作",
@@ -749,49 +692,6 @@ export const zh: Record<MessageKey, string> = {
   "settings.store": "本机数据",
   "settings.storeLead":
     "当前内核上的会话、工单和导入记录。清理后当前工作会空掉。已安装的连接器、执行器和规则会留下；已启用的连接器会从头再拉一遍。",
-  "settings.dataDir": "数据目录",
-  "settings.dataDirLead": "本机 sidecar 的数据库和附件。改目录会重启本机内核。",
-  "settings.dataDirDatabase": "数据库",
-  "settings.dataDirBlobs": "附件",
-  "settings.dataDirSplit":
-    "REGENIC_DATABASE 和 REGENIC_BLOB_ROOT 不在同一个目录。这里没法把它们一起搬走。",
-  "settings.dataDirFollowed":
-    "正在用 {path}。上次搬走后，原来的文件夹 {from} 还留着。",
-  "settings.dataDirDestRelocated":
-    "这个文件夹已经迁到 {path}。若在这里接管，会变成另一份数据。",
-  "settings.dataDirBrowse": "浏览",
-  "settings.dataDirApplying": "正在更改…",
-  "settings.dataDirCheckout":
-    "开发检出：当前内核用的是仓库里的库（{checkout}）。未保存时产品默认目录是 {product}。",
-  "settings.dataDirEnv":
-    "已被 REGENIC_DATABASE / REGENIC_BLOB_ROOT 覆盖。要在这里改，先去掉这两个环境变量。",
-  "settings.dataDirCustom": "只对本机 sidecar 生效。请先把内核切回「本机」。",
-  "settings.dataDirSame": "已经在用这个文件夹。",
-  "settings.dataDirRemote": "这像是网络盘或可移动磁盘。掉盘时 SQLite 可能会坏。",
-  "settings.dataDirDestExists": "这个文件夹里已经有一份 Regenic 数据。",
-  "settings.dataDirAdopt": "使用已有数据",
-  "settings.dataDirReplace": "用当前数据覆盖",
-  "settings.dataDirReplaceLead": "文件夹里已有的库和附件会被换成现在这份。其它文件不动。",
-  "settings.dataDirMigrateLead":
-    "把当前数据拷到 {path}？原来的文件夹会留着。本机内核会重启。",
-  "settings.dataDirMigrate": "迁移数据",
-  "settings.dataDirEmpty": "从空目录开始",
-  "settings.dataDirEmptyLead": "之后的新数据写到这个文件夹。现有文件留在原地。",
-  "settings.dataDirDone": "已改用 {path}",
-  "settings.dataDirDoneMigrated": "已迁到 {path}。原来的文件夹还在。",
-  "settings.dataDirError": "数据目录更改失败",
-  "settings.dataDirPickError": "打不开文件夹选择框",
-  "settings.dataDirReasonAbs": "数据目录必须是绝对路径",
-  "settings.dataDirReasonNested": "数据目录不能放在当前数据目录里面",
-  "settings.dataDirReasonFolder": "数据目录必须是文件夹",
-  "settings.dataDirReasonSystem": "不能把系统目录当作数据目录",
-  "settings.dataDirReasonNoStore": "这个文件夹里没有 Regenic 数据",
-  "settings.dataDirReasonNotStore": "这个文件夹里的 regenic.db 不是 SQLite 数据库",
-  "settings.dataDirReasonNoSource": "没有可迁移的本机数据",
-  "settings.dataDirReasonAction": "未知的数据目录操作",
-  "settings.dataDirReasonHeld": "已有本机内核占用这份数据库。请先退出那个内核，再改目录。",
-  "settings.dataDirCopyBusy": "无法拷贝数据库。请先退出占用它的其它 Regenic 内核，再试一次。",
-  "settings.dataDirKernelStop": "本机内核没有及时退出。等它完全停掉后再试。",
   "settings.storeKernel": "内核",
   "settings.storeConversations": "会话",
   "settings.storeMessages": "消息",

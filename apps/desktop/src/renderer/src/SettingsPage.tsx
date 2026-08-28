@@ -1,23 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-  applyDataDirectory,
   applyKernelSettings,
   clearStore,
   currentApiOrigin,
   fetchKernelSettings,
   fetchStore,
-  pickDataDirectory,
 } from "./api";
-import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
 import { useLocale } from "./LocaleContext";
-import type {
-  DataDirectoryAction,
-  DataDirectoryPlan,
-  DataDirectoryView,
-  KernelMode,
-  Locale,
-  StoreView,
-} from "./types";
+import type { KernelMode, Locale, StoreView } from "./types";
 
 const emptyStore: StoreView = {
   events: 0,
@@ -28,14 +18,6 @@ const emptyStore: StoreView = {
   connectors: 0,
   executors: 0,
 };
-
-function localizeThrown(
-  t: (key: MessageKey) => string,
-  message: string,
-  fallback: MessageKey,
-): string {
-  return isMessageKey(message) ? t(message) : message || t(fallback);
-}
 
 function storeHasData(store: StoreView): boolean {
   return (
@@ -64,11 +46,6 @@ export function SettingsPage({
   const [confirming, setConfirming] = useState(false);
   const [storeError, setStoreError] = useState<string | null>(null);
   const [storeDone, setStoreDone] = useState<string | null>(null);
-  const [dataDir, setDataDir] = useState<DataDirectoryView | null>(null);
-  const [dataPlan, setDataPlan] = useState<DataDirectoryPlan | null>(null);
-  const [dataBusy, setDataBusy] = useState(false);
-  const [dataError, setDataError] = useState<string | null>(null);
-  const [dataDone, setDataDone] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchKernelSettings()
@@ -76,7 +53,6 @@ export function SettingsPage({
         setMode(settings.mode);
         setCustomOrigin(settings.customOrigin);
         setActiveOrigin(settings.activeOrigin);
-        setDataDir(settings.dataDirectory);
       })
       .catch(() => {
         setError(t("settings.readError"));
@@ -127,82 +103,11 @@ export function SettingsPage({
       setMode(settings.mode);
       setCustomOrigin(settings.customOrigin);
       setActiveOrigin(settings.activeOrigin);
-      setDataDir(settings.dataDirectory);
       await onChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("settings.applyError"));
     } finally {
       setBusy(false);
-    }
-  };
-
-  const chooseFolder = async () => {
-    setDataBusy(true);
-    setDataError(null);
-    setDataDone(null);
-    try {
-      const plan = await pickDataDirectory();
-      if (!plan) {
-        return;
-      }
-      if (plan.sameAsCurrent) {
-        setDataPlan(null);
-        setDataDone(t("settings.dataDirSame"));
-        return;
-      }
-      if (!plan.canChange) {
-        setDataPlan(null);
-        setDataError(
-          localizeThrown(t, plan.reason ?? "", "settings.dataDirError"),
-        );
-        return;
-      }
-      setDataPlan(plan);
-    } catch (caught) {
-      setDataError(
-        localizeThrown(
-          t,
-          caught instanceof Error ? caught.message : "",
-          "settings.dataDirPickError",
-        ),
-      );
-    } finally {
-      setDataBusy(false);
-    }
-  };
-
-  const commitDataDirectory = async (path: string, action: DataDirectoryAction) => {
-    setDataBusy(true);
-    setDataError(null);
-    setDataDone(null);
-    try {
-      const settings = await applyDataDirectory({ path, action });
-      setMode(settings.mode);
-      setCustomOrigin(settings.customOrigin);
-      setActiveOrigin(settings.activeOrigin);
-      setDataDir(settings.dataDirectory);
-      setDataPlan(null);
-      setDataDone(
-        action === "migrate" || action === "replace"
-          ? t("settings.dataDirDoneMigrated", { path: settings.dataDirectory.path })
-          : t("settings.dataDirDone", { path: settings.dataDirectory.path }),
-      );
-      try {
-        setStore(await fetchStore());
-      } catch {
-        setStore(emptyStore);
-      }
-      await onChanged();
-    } catch (caught) {
-      setDataError(
-        localizeThrown(
-          t,
-          caught instanceof Error ? caught.message : "",
-          "settings.dataDirError",
-        ),
-      );
-    } finally {
-      setDataBusy(false);
     }
   };
 
@@ -349,147 +254,6 @@ export function SettingsPage({
             <code>{activeOrigin}</code>
           </strong>
         </div>
-        <div className="kv">
-          <span>{t("settings.dataDir")}</span>
-          <strong>
-            <code>{dataDir?.path || "—"}</code>
-          </strong>
-        </div>
-        {dataDir?.splitLayout ? (
-          <>
-            <div className="kv">
-              <span>{t("settings.dataDirDatabase")}</span>
-              <strong>
-                <code>{dataDir.database}</code>
-              </strong>
-            </div>
-            <div className="kv">
-              <span>{t("settings.dataDirBlobs")}</span>
-              <strong>
-                <code>{dataDir.blobRoot}</code>
-              </strong>
-            </div>
-            <p className="muted">{t("settings.dataDirSplit")}</p>
-          </>
-        ) : null}
-        <p className="muted">{t("settings.dataDirLead")}</p>
-        {dataDir?.source === "relocated" && dataDir.relocatedFrom ? (
-          <p className="muted">
-            {t("settings.dataDirFollowed", {
-              path: dataDir.path,
-              from: dataDir.relocatedFrom,
-            })}
-          </p>
-        ) : null}
-        {dataDir?.source === "repo" && dataDir.checkoutRoot ? (
-          <p className="muted">
-            {t("settings.dataDirCheckout", {
-              checkout: dataDir.checkoutRoot,
-              product: dataDir.productRoot,
-            })}
-          </p>
-        ) : null}
-        {dataDir?.envOverride ? (
-          <p className="muted">{t("settings.dataDirEnv")}</p>
-        ) : null}
-        {dataDir && !dataDir.canChange && !dataDir.envOverride ? (
-          <p className="muted">{t("settings.dataDirCustom")}</p>
-        ) : null}
-        {dataDir?.remoteWarning || dataPlan?.remoteWarning ? (
-          <p className="action-hint">{t("settings.dataDirRemote")}</p>
-        ) : null}
-        {dataPlan ? (
-          <div className="data-dir-confirm">
-            <p>
-              {dataPlan.destHasData
-                ? dataPlan.destLooksLikeStore === false
-                  ? t("settings.dataDirReasonNotStore")
-                  : t("settings.dataDirDestExists")
-                : dataPlan.sourceHasData
-                  ? t("settings.dataDirMigrateLead", { path: dataPlan.path })
-                  : t("settings.dataDirEmptyLead")}
-            </p>
-            {dataPlan.destHasData ? (
-              <p className="muted">{t("settings.dataDirReplaceLead")}</p>
-            ) : null}
-            {dataPlan.relocatedTo ? (
-              <p className="muted">
-                {t("settings.dataDirDestRelocated", { path: dataPlan.relocatedTo })}
-              </p>
-            ) : null}
-            <p className="muted">
-              <code>{dataPlan.path}</code>
-            </p>
-            <div className="install-actions">
-              <button
-                type="button"
-                className="ghost"
-                disabled={dataBusy}
-                onClick={() => setDataPlan(null)}
-              >
-                {t("settings.storeCancel")}
-              </button>
-              {dataPlan.destHasData ? (
-                <>
-                  <button
-                    type="button"
-                    className="ghost danger"
-                    disabled={dataBusy}
-                    onClick={() => void commitDataDirectory(dataPlan.path, "replace")}
-                  >
-                    {t("settings.dataDirReplace")}
-                  </button>
-                  {dataPlan.destLooksLikeStore !== false ? (
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={dataBusy}
-                      onClick={() => void commitDataDirectory(dataPlan.path, "adopt")}
-                    >
-                      {dataBusy ? t("settings.dataDirApplying") : t("settings.dataDirAdopt")}
-                    </button>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={dataBusy}
-                    onClick={() => void commitDataDirectory(dataPlan.path, "empty")}
-                  >
-                    {t("settings.dataDirEmpty")}
-                  </button>
-                  {dataPlan.sourceHasData ? (
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={dataBusy}
-                      onClick={() => void commitDataDirectory(dataPlan.path, "migrate")}
-                    >
-                      {dataBusy
-                        ? t("settings.dataDirApplying")
-                        : t("settings.dataDirMigrate")}
-                    </button>
-                  ) : null}
-                </>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="install-actions">
-            <button
-              type="button"
-              className="ghost"
-              disabled={!dataDir?.canChange || dataBusy}
-              onClick={() => void chooseFolder()}
-            >
-              {dataBusy ? t("settings.dataDirApplying") : t("settings.dataDirBrowse")}
-            </button>
-          </div>
-        )}
-        {dataDone ? <p className="action-ok">{dataDone}</p> : null}
-        {dataError ? <p className="action-error">{dataError}</p> : null}
         <div className="store-footprint">
           <StoreStat
             label={t("settings.storeConversations")}

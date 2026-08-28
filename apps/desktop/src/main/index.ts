@@ -5,7 +5,6 @@ import { join } from "node:path";
 import {
   app,
   BrowserWindow,
-  dialog,
   ipcMain,
   Menu,
   nativeImage,
@@ -13,31 +12,6 @@ import {
   shell,
   Tray,
 } from "electron";
-import {
-  assertDataDirectoryAction,
-  equalPath,
-  inspectDataDirectory,
-  isRemoteOrRemovablePath,
-  kernelDatabaseMatches,
-  materializeDataRoot,
-  resolveDataPaths,
-  storeLayoutSplit,
-  type DataDirectoryAction,
-  type ResolvedDataPaths,
-} from "./data-directory";
-import {
-  applyStoreRelocation,
-  prepareDestinationStore,
-  readStoreRelocation,
-  reclaimStoreIfRelocated,
-  sealSourceStore,
-} from "./store-identity";
-import {
-  acquireStoreLock,
-  inspectStoreLock,
-  releaseStoreLock,
-  storeLockHeldByOther,
-} from "./store-lock";
 import appIconIco from "../brand/app-icon.ico?asset";
 import appIconPng from "../brand/app-icon.png?asset";
 import appIconWinPng from "../brand/app-icon-win.png?asset";
@@ -45,15 +19,14 @@ import trayPng from "../brand/tray-mark.png?asset";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
-import { probeKernelDatabase, probeKernelMode } from "./kernel-probe";
-import { isMessageKey, translate } from "../shared/messages.ts";
+import { probeKernelMode } from "./kernel-probe";
+import { translate } from "../shared/messages.ts";
 import { parseLocale } from "../shared/locale.ts";
 import {
   LOCAL_KERNEL_ORIGIN,
   loadDesktopPreference,
   loadKernelPreference,
   parseKernelOrigin,
-  saveDataRootPreference,
   saveKernelPreference,
   saveLocalePreference,
   type KernelPreference,
@@ -71,7 +44,6 @@ let trayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let sidecar: ChildProcess | null = null;
 let lastOwnedSidecarPid: number | null = null;
-let ownedStoreRoot: string | null = null;
 let apiOrigin = `http://127.0.0.1:${DEFAULT_PORT}`;
 let quitting = false;
 let lastInboxCount: number | null = null;
@@ -80,20 +52,20 @@ function repoRoot(): string {
   return process.env.REGENIC_REPO_ROOT ?? join(app.getAppPath(), "../..");
 }
 
-function currentDataPaths(): ResolvedDataPaths {
-  const preference = loadDesktopPreference(settingsFile());
-  return applyStoreRelocation(
-    resolveDataPaths({
-      repoRoot: repoRoot(),
-      homeDir: homedir(),
-      dataRoot: preference.dataRoot,
-      allowRepo: !app.isPackaged,
-      env: {
-        REGENIC_DATABASE: process.env.REGENIC_DATABASE,
-        REGENIC_BLOB_ROOT: process.env.REGENIC_BLOB_ROOT,
-      },
-    }),
-  );
+function resolveDataPaths(): { database: string; blobRoot: string } {
+  const root = repoRoot();
+  const repoDb = join(root, "regenic.db");
+  const repoBlobs = join(root, "blobs");
+  const homeDir = join(homedir(), ".regenic");
+  const database =
+    process.env.REGENIC_DATABASE ??
+    (existsSync(repoDb) ? repoDb : join(homeDir, "regenic.db"));
+  const blobRoot =
+    process.env.REGENIC_BLOB_ROOT ??
+    (existsSync(repoDb) || existsSync(repoBlobs)
+      ? repoBlobs
+      : join(homeDir, "blobs"));
+  return { database, blobRoot };
 }
 
 function nodeBinary(): string {
@@ -151,6 +123,21 @@ function countWorkThreads(
   return ids.size;
 }
 
+async function pickKernelPort(): Promise<{ reuse: string } | { port: number; origin: string }> {
+  for (let offset = 0; offset < 10; offset += 1) {
+    const port = DEFAULT_PORT + offset;
+    const origin = `http://127.0.0.1:${port}`;
+    const existing = await probeKernelMode(origin);
+    if (existing === "personal") {
+      return { reuse: origin };
+    }
+    if (existing === "none") {
+      return { port, origin };
+    }
+  }
+  throw new Error("No free local port for the personal kernel");
+}
+
 function electronAppBytes(): number {
   return app.getAppMetrics().reduce((sum, metric) => {
     const kb = metric.memory?.workingSetSize ?? 0;
@@ -191,36 +178,13 @@ function settingsFile(): string {
   return join(app.getPath("userData"), "desktop-settings.json");
 }
 
-function isUsingCustomKernel(): boolean {
-  const preference = loadDesktopPreference(settingsFile());
-  return (
-    preference.mode === "custom" &&
-    Boolean(preference.origin) &&
-    preference.origin === apiOrigin
-  );
-}
-
 function kernelView() {
   const preference = loadDesktopPreference(settingsFile());
-  const paths = currentDataPaths();
   return {
     mode: preference.mode,
     customOrigin: preference.origin ?? LOCAL_KERNEL_ORIGIN,
     activeOrigin: apiOrigin,
     locale: preference.locale,
-    dataDirectory: {
-      path: paths.dataRoot,
-      database: paths.database,
-      blobRoot: paths.blobRoot,
-      source: paths.source,
-      envOverride: paths.envOverride,
-      productRoot: paths.productRoot,
-      checkoutRoot: paths.checkoutRoot,
-      relocatedFrom: paths.relocatedFrom,
-      splitLayout: storeLayoutSplit(paths),
-      canChange: preference.mode === "local" && !paths.envOverride,
-      remoteWarning: isRemoteOrRemovablePath(paths.dataRoot),
-    },
   };
 }
 
@@ -236,70 +200,14 @@ function broadcastLocale(locale: "en" | "zh"): void {
   }
 }
 
-function requestSidecarStop(): ChildProcess | null {
-  const child = sidecar;
+function stopOwnedSidecar(): void {
+  sidecar?.kill();
   sidecar = null;
   lastOwnedSidecarPid = null;
-  child?.kill();
-  return child;
-}
-
-function stopOwnedSidecar(): void {
-  requestSidecarStop();
-}
-
-const SIDECAR_STOP_MS = 15_000;
-const SIDECAR_KILL_WAIT_MS = 3_000;
-
-function sidecarAlreadyExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function waitForSidecarExit(
-  child: ChildProcess,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (sidecarAlreadyExited(child)) {
-    return Promise.resolve(true);
-  }
-  return new Promise((resolve) => {
-    const onExit = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    const timer = setTimeout(() => {
-      child.removeListener("exit", onExit);
-      resolve(sidecarAlreadyExited(child));
-    }, timeoutMs);
-    child.once("exit", onExit);
-  });
-}
-
-async function stopOwnedSidecarAndWait(): Promise<void> {
-  const child = requestSidecarStop();
-  if (!child || sidecarAlreadyExited(child)) {
-    return;
-  }
-  if (await waitForSidecarExit(child, SIDECAR_STOP_MS)) {
-    return;
-  }
-  child.kill("SIGKILL");
-  if (await waitForSidecarExit(child, SIDECAR_KILL_WAIT_MS)) {
-    return;
-  }
-  throw dataDirectoryError("settings.dataDirKernelStop");
-}
-
-function dataDirectoryError(key: string): Error {
-  if (!isMessageKey(key)) {
-    return new Error(key);
-  }
-  const locale = loadDesktopPreference(settingsFile()).locale;
-  return new Error(translate(locale, key));
 }
 
 function spawnSidecar(port: number): void {
-  const { database, blobRoot } = currentDataPaths();
+  const { database, blobRoot } = resolveDataPaths();
   const apiEntry = join(repoRoot(), "apps/api/dist/main.js");
   if (!existsSync(apiEntry)) {
     throw new Error(`API sidecar is not built: ${apiEntry}`);
@@ -323,85 +231,13 @@ function spawnSidecar(port: number): void {
   });
 }
 
-async function pickFreeLocalPort(): Promise<{ port: number; origin: string }> {
-  for (let offset = 0; offset < 10; offset += 1) {
-    const port = DEFAULT_PORT + offset;
-    const origin = `http://127.0.0.1:${port}`;
-    if ((await probeKernelMode(origin)) === "none") {
-      return { port, origin };
-    }
-  }
-  throw new Error("No free local port for the personal kernel");
-}
-
-function releaseOwnedStoreLock(): void {
-  if (!ownedStoreRoot) {
+async function startLocalKernel(): Promise<void> {
+  const picked = await pickKernelPort();
+  if ("reuse" in picked) {
+    apiOrigin = picked.reuse;
     return;
   }
-  releaseStoreLock(ownedStoreRoot, process.pid);
-  ownedStoreRoot = null;
-}
-
-async function originHoldsDatabase(
-  origin: string,
-  database: string,
-): Promise<boolean> {
-  if ((await probeKernelMode(origin)) !== "personal") {
-    return false;
-  }
-  return kernelDatabaseMatches(database, await probeKernelDatabase(origin));
-}
-
-async function findReusableLocalKernel(database: string): Promise<string | null> {
-  const lock = inspectStoreLock(currentDataPaths().dataRoot, process.pid);
-  if (lock.state === "held" && lock.lock.origin) {
-    if (await originHoldsDatabase(lock.lock.origin, database)) {
-      return lock.lock.origin;
-    }
-  }
-  for (let offset = 0; offset < 10; offset += 1) {
-    const origin = `http://127.0.0.1:${DEFAULT_PORT + offset}`;
-    if (await originHoldsDatabase(origin, database)) {
-      return origin;
-    }
-  }
-  return null;
-}
-
-async function storeHeldByLocalKernel(database: string): Promise<boolean> {
-  for (let offset = 0; offset < 10; offset += 1) {
-    const origin = `http://127.0.0.1:${DEFAULT_PORT + offset}`;
-    if ((await probeKernelMode(origin)) !== "personal") {
-      continue;
-    }
-    const reported = await probeKernelDatabase(origin);
-    if (kernelDatabaseMatches(database, reported)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<void> {
-  const paths = currentDataPaths();
-  if (!options?.forceSpawn) {
-    const reusable = await findReusableLocalKernel(paths.database);
-    if (reusable) {
-      apiOrigin = reusable;
-      return;
-    }
-  }
-  if (storeLockHeldByOther(paths.dataRoot, process.pid)) {
-    throw dataDirectoryError("settings.dataDirReasonHeld");
-  }
-  const picked = await pickFreeLocalPort();
   apiOrigin = picked.origin;
-  acquireStoreLock(paths.dataRoot, {
-    pid: process.pid,
-    origin: apiOrigin,
-  });
-  ownedStoreRoot = paths.dataRoot;
-  reclaimStoreIfRelocated(paths.dataRoot);
   spawnSidecar(picked.port);
   try {
     await waitForPersonalKernel({
@@ -411,7 +247,6 @@ async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<voi
     });
   } catch (error) {
     stopOwnedSidecar();
-    releaseOwnedStoreLock();
     throw error;
   }
 }
@@ -449,8 +284,7 @@ async function applyKernelPreference(preference: KernelPreference): Promise<void
   if (preference.mode === "custom" && preference.origin) {
     await assertPersonalKernel(preference.origin);
     saveKernelPreference(settingsFile(), preference);
-    await stopOwnedSidecarAndWait();
-    releaseOwnedStoreLock();
+    stopOwnedSidecar();
     apiOrigin = preference.origin;
     broadcastOrigin();
     return;
@@ -458,131 +292,6 @@ async function applyKernelPreference(preference: KernelPreference): Promise<void
   saveKernelPreference(settingsFile(), { mode: "local" });
   await startLocalKernel();
   broadcastOrigin();
-}
-
-function parseDataDirectoryAction(raw: unknown): DataDirectoryAction {
-  if (
-    raw === "migrate" ||
-    raw === "empty" ||
-    raw === "adopt" ||
-    raw === "replace"
-  ) {
-    return raw;
-  }
-  throw dataDirectoryError("settings.dataDirReasonAction");
-}
-
-function inspectCurrentDataDirectory(dest: string) {
-  const preference = loadDesktopPreference(settingsFile());
-  const plan = inspectDataDirectory(dest, currentDataPaths());
-  const relocatedTo = readStoreRelocation(plan.path)?.to;
-  if (preference.mode === "custom") {
-    return {
-      ...plan,
-      ...(relocatedTo ? { relocatedTo } : {}),
-      canChange: false,
-      reason: "settings.dataDirCustom",
-    };
-  }
-  return {
-    ...plan,
-    ...(relocatedTo ? { relocatedTo } : {}),
-  };
-}
-
-function dataDirectoryCopyError(error: unknown): Error {
-  const code =
-    error instanceof Error && "code" in error
-      ? String((error as { code?: string }).code)
-      : "";
-  if (code === "EBUSY" || code === "EPERM" || code === "EACCES") {
-    return dataDirectoryError("settings.dataDirCopyBusy");
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  if (isMessageKey(message)) {
-    return dataDirectoryError(message);
-  }
-  return error instanceof Error ? error : new Error(message);
-}
-
-async function restoreLocalKernel(database: string): Promise<void> {
-  const reusable = await findReusableLocalKernel(database);
-  if (reusable) {
-    apiOrigin = reusable;
-    broadcastOrigin();
-    return;
-  }
-  if (await storeHeldByLocalKernel(database)) {
-    return;
-  }
-  await startLocalKernel({ forceSpawn: true });
-  broadcastOrigin();
-}
-
-async function applyDataDirectory(input: {
-  path: string;
-  action: DataDirectoryAction;
-}) {
-  const plan = inspectCurrentDataDirectory(input.path);
-  if (plan.sameAsCurrent) {
-    return kernelView();
-  }
-  assertDataDirectoryAction(input.action, plan);
-  const current = currentDataPaths();
-  const hadOwnedSidecar = sidecar != null;
-  const previousLocked = ownedStoreRoot;
-  let committed = false;
-  await stopOwnedSidecarAndWait();
-  try {
-    if (storeLockHeldByOther(current.dataRoot, process.pid)) {
-      throw dataDirectoryError("settings.dataDirReasonHeld");
-    }
-    if (storeLockHeldByOther(plan.path, process.pid)) {
-      throw dataDirectoryError("settings.dataDirReasonHeld");
-    }
-    if (await storeHeldByLocalKernel(current.database)) {
-      throw dataDirectoryError("settings.dataDirReasonHeld");
-    }
-    materializeDataRoot(input.action, current, plan.path);
-    const identity = prepareDestinationStore(
-      plan.path,
-      input.action,
-      current.dataRoot,
-    );
-    const previousRoot = loadDesktopPreference(settingsFile()).dataRoot ?? null;
-    saveDataRootPreference(settingsFile(), plan.path);
-    resetHostStatCache();
-    try {
-      await startLocalKernel({ forceSpawn: true });
-    } catch (error) {
-      saveDataRootPreference(settingsFile(), previousRoot);
-      if (previousLocked) {
-        acquireStoreLock(previousLocked, { pid: process.pid });
-        ownedStoreRoot = previousLocked;
-      }
-      throw error;
-    }
-    if (
-      previousLocked &&
-      ownedStoreRoot &&
-      !equalPath(previousLocked, ownedStoreRoot)
-    ) {
-      releaseStoreLock(previousLocked, process.pid);
-    }
-    sealSourceStore(current.dataRoot, plan.path, input.action, identity);
-    committed = true;
-    broadcastOrigin();
-    return kernelView();
-  } catch (error) {
-    if (!committed && hadOwnedSidecar) {
-      try {
-        await restoreLocalKernel(current.database);
-      } catch {
-        // Keep the original failure; the console can retry or relaunch.
-      }
-    }
-    throw dataDirectoryCopyError(error);
-  }
 }
 
 function appIconFile(): string {
@@ -788,18 +497,7 @@ async function pollNotifications(): Promise<void> {
   }
 }
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
-  app.on("second-instance", () => {
-    showConsole();
-  });
-}
-
 app.whenReady().then(async () => {
-  if (!app.hasSingleInstanceLock()) {
-    return;
-  }
   applyAppIcon();
   ipcMain.handle("regenic:show-console", async () => {
     showConsole();
@@ -816,10 +514,9 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle("regenic:get-host-stats", async () =>
-    collectHostStats(currentDataPaths(), {
+    collectHostStats(resolveDataPaths(), {
       sidecarPid: sidecar?.pid ?? lastOwnedSidecarPid,
       listenPort: portFromHttpOrigin(apiOrigin),
-      skipLocalStore: isUsingCustomKernel(),
       appBytes: electronAppBytes,
     }),
   );
@@ -842,32 +539,6 @@ app.whenReady().then(async () => {
     broadcastLocale(next);
     return next;
   });
-  ipcMain.handle("regenic:pick-data-directory", async () => {
-    const options = {
-      properties: ["openDirectory", "createDirectory"] as Array<
-        "openDirectory" | "createDirectory"
-      >,
-    };
-    const picked = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, options)
-      : await dialog.showOpenDialog(options);
-    if (picked.canceled || !picked.filePaths[0]) {
-      return null;
-    }
-    return inspectCurrentDataDirectory(picked.filePaths[0]);
-  });
-  ipcMain.handle(
-    "regenic:set-data-directory",
-    async (_event, input: { path?: unknown; action?: unknown }) => {
-      if (typeof input?.path !== "string") {
-        throw dataDirectoryError("settings.dataDirReasonAbs");
-      }
-      return applyDataDirectory({
-        path: input.path,
-        action: parseDataDirectoryAction(input.action),
-      });
-    },
-  );
 
   try {
     await connectSavedKernel();
@@ -891,7 +562,6 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   quitting = true;
   sidecar?.kill();
-  releaseOwnedStoreLock();
 });
 
 app.on("window-all-closed", () => {

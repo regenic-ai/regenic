@@ -139,18 +139,6 @@ describe("host watch", () => {
       }),
       "Attention · Data 0 B · 3.0 GB free of 20 GB",
     );
-    assert.equal(
-      diskWatchCopy({
-        kind: "ok",
-        total_bytes: 0,
-        free_bytes: 0,
-        used_bytes: 0,
-        data_bytes: 0,
-        path: "",
-        hint: null,
-      }),
-      "—",
-    );
   });
 
   it("writes memory copy as kernel plus app", () => {

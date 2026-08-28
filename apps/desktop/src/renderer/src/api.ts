@@ -2,8 +2,6 @@ import type {
   ConnectorSyncView,
   ConversationPrefView,
   CreatedConversation,
-  DataDirectoryAction,
-  DataDirectoryPlan,
   EngineExecutorView,
   EngineInstallationView,
   ExecutorCatalogEntry,
@@ -41,26 +39,6 @@ export function currentApiOrigin(): string {
   return currentOrigin;
 }
 
-const emptyDataDirectory: KernelSettingsView["dataDirectory"] = {
-  path: "",
-  database: "",
-  blobRoot: "",
-  source: "default",
-  envOverride: false,
-  productRoot: "",
-  splitLayout: false,
-  canChange: false,
-  remoteWarning: false,
-};
-
-function withKernelLocale(settings: KernelSettingsView): KernelSettingsView {
-  return {
-    ...settings,
-    locale: settings.locale === "zh" ? "zh" : "en",
-    dataDirectory: settings.dataDirectory ?? emptyDataDirectory,
-  };
-}
-
 export async function fetchKernelSettings(): Promise<KernelSettingsView> {
   if (!window.regenic?.getKernelSettings) {
     return {
@@ -68,12 +46,14 @@ export async function fetchKernelSettings(): Promise<KernelSettingsView> {
       customOrigin: currentOrigin,
       activeOrigin: currentOrigin,
       locale: "en",
-      dataDirectory: emptyDataDirectory,
     };
   }
   const settings = await window.regenic.getKernelSettings();
   currentOrigin = settings.activeOrigin;
-  return withKernelLocale(settings);
+  return {
+    ...settings,
+    locale: settings.locale === "zh" ? "zh" : "en",
+  };
 }
 
 export async function applyKernelSettings(input: {
@@ -85,26 +65,10 @@ export async function applyKernelSettings(input: {
   }
   const settings = await window.regenic.setKernelSettings(input);
   currentOrigin = settings.activeOrigin;
-  return withKernelLocale(settings);
-}
-
-export async function pickDataDirectory(): Promise<DataDirectoryPlan | null> {
-  if (!window.regenic?.pickDataDirectory) {
-    throw new Error("Desktop settings are not available");
-  }
-  return window.regenic.pickDataDirectory();
-}
-
-export async function applyDataDirectory(input: {
-  path: string;
-  action: DataDirectoryAction;
-}): Promise<KernelSettingsView> {
-  if (!window.regenic?.setDataDirectory) {
-    throw new Error("Desktop settings are not available");
-  }
-  const settings = await window.regenic.setDataDirectory(input);
-  currentOrigin = settings.activeOrigin;
-  return withKernelLocale(settings);
+  return {
+    ...settings,
+    locale: settings.locale === "zh" ? "zh" : "en",
+  };
 }
 
 export async function saveLocale(locale: Locale): Promise<Locale> {

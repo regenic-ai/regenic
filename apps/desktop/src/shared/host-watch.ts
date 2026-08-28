@@ -243,9 +243,6 @@ export function hostWatchKindLabel(kind: HostWatchKind): string {
 }
 
 export function diskWatchCopy(disk: HostDiskWatch): string {
-  if (!disk.path && disk.total_bytes <= 0) {
-    return "—";
-  }
   const size = `Data ${formatBytes(disk.data_bytes)} · ${formatBytes(disk.free_bytes)} free of ${formatBytes(disk.total_bytes)}`;
   return disk.kind === "ok" ? size : `${hostWatchKindLabel(disk.kind)} · ${size}`;
 }

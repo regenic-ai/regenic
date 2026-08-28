@@ -2,42 +2,12 @@ export type NavId = "inbox" | "recipes" | "engine" | "settings";
 
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
-export type DataPathSource = "env" | "settings" | "repo" | "default" | "relocated";
-export type DataDirectoryAction = "migrate" | "empty" | "adopt" | "replace";
-
-export interface DataDirectoryView {
-  path: string;
-  database: string;
-  blobRoot: string;
-  source: DataPathSource;
-  envOverride: boolean;
-  productRoot: string;
-  checkoutRoot?: string;
-  relocatedFrom?: string;
-  splitLayout: boolean;
-  canChange: boolean;
-  remoteWarning: boolean;
-}
-
-export interface DataDirectoryPlan {
-  path: string;
-  currentRoot: string;
-  sameAsCurrent: boolean;
-  sourceHasData: boolean;
-  destHasData: boolean;
-  destLooksLikeStore: boolean;
-  remoteWarning: boolean;
-  relocatedTo?: string;
-  canChange: boolean;
-  reason?: string;
-}
 
 export interface KernelSettingsView {
   mode: KernelMode;
   customOrigin: string;
   activeOrigin: string;
   locale: Locale;
-  dataDirectory: DataDirectoryView;
 }
 
 export interface ArrangementDecision {
