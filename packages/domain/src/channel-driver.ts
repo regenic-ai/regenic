@@ -140,6 +140,14 @@ export interface DriverCatalogPrerequisite {
   visible_when?: DriverCatalogFieldWhen;
 }
 
+export interface DriverCatalogSetupStep {
+  title: string;
+  body?: string;
+  command?: string;
+  href?: string;
+  visible_when?: DriverCatalogFieldWhen;
+}
+
 export interface DriverInstallCatalog {
   title: string;
   description: string;
@@ -152,6 +160,11 @@ export interface DriverInstallCatalog {
   singleton?: boolean;
   fields?: DriverCatalogField[];
   prerequisites?: DriverCatalogPrerequisite[];
+  /**
+   * Numbered setup the Engine dialog renders above the form.
+   * The desktop does not hard-code steps per connector type.
+   */
+  setup_steps?: DriverCatalogSetupStep[];
   instance_label?: string;
   instance_detail_key?: string;
 }

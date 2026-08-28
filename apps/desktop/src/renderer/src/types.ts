@@ -363,6 +363,14 @@ export interface ConnectorPrerequisite {
   visible_when?: ConnectorFieldWhen;
 }
 
+export interface ConnectorSetupStep {
+  title: string;
+  body?: string;
+  command?: string;
+  href?: string;
+  visible_when?: ConnectorFieldWhen;
+}
+
 export interface CatalogDocRef {
   id: string;
   title: string;
@@ -381,6 +389,7 @@ export interface ConnectorCatalogItem {
   singleton: boolean;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
+  setup_steps: ConnectorSetupStep[];
   docs: CatalogDocRef[];
 }
 

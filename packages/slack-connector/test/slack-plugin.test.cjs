@@ -94,4 +94,10 @@ describe("slackChannelPlugin", () => {
       enabled: installation,
     });
   });
+
+  it("advertises Slack setup steps on the Engine catalog", () => {
+    const catalog = slackChannelDriver.installCatalog();
+    assert.equal(catalog.setup_steps[0].href, "https://api.slack.com/apps");
+    assert.equal(catalog.setup_steps.length, 3);
+  });
 });

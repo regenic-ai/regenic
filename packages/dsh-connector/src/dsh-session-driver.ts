@@ -202,6 +202,19 @@ export const dshSessionDriver: ChannelDriver = {
             hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
           },
         ],
+        setup_steps: [
+          {
+            title: "Use the cluster DSH URL",
+            body: "REGENIC_DSH_BASE_URL is already set. Do not paste a public DSH URL.",
+          },
+          {
+            title: "Set a token if the server requires one",
+            body: "Set REGENIC_DSH_TOKEN, then fully quit and reopen the desktop.",
+          },
+          {
+            title: "Leave Session ID empty to follow every session",
+          },
+        ],
       };
     }
     return {
@@ -268,6 +281,31 @@ export const dshSessionDriver: ChannelDriver = {
           required: false,
           hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
           visible_when: { field: "transport", value: "web" },
+        },
+      ],
+      setup_steps: [
+        {
+          title: "Install dsh",
+          body: "The binary must work in your terminal before the web server or CLI transport will.",
+        },
+        {
+          title: "Start the local web server",
+          command: "dsh web --port 3080",
+          visible_when: { field: "transport", value: "web" },
+        },
+        {
+          title: "Set a token if the server requires one",
+          body: "Set REGENIC_DSH_TOKEN, then fully quit and reopen the desktop.",
+          visible_when: { field: "transport", value: "web" },
+        },
+        {
+          title: "Leave Session ID empty to follow every session",
+          visible_when: { field: "transport", value: "web" },
+        },
+        {
+          title: "Use a mailbox if you do not want the install id",
+          body: "CLI mode follows one mailbox.",
+          visible_when: { field: "transport", value: "cli" },
         },
       ],
     };

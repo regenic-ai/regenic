@@ -202,6 +202,20 @@ export const cursorAgentDriver: ChannelDriver = {
           hint: "Optional if you paste the key in the form.",
         },
       ],
+      setup_steps: [
+        {
+          title: "Create a Cursor API key",
+          href: "https://cursor.com/dashboard",
+        },
+        {
+          title: "Paste the key below, or set CURSOR_API_KEY",
+          body: "A pasted key is stored in the OS keychain or ~/.regenic/credentials/cursor. It is not written into connector settings.",
+        },
+        {
+          title: "Pick a default model",
+          body: "Local agents require a model. composer-2.5 is the default.",
+        },
+      ],
     };
   },
 

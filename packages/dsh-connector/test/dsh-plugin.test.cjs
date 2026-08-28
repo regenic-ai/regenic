@@ -416,4 +416,18 @@ describe("dshSessionPlugin", () => {
       (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
     );
   });
+
+  it("advertises local and hosted setup steps on the Engine catalog", () => {
+    const local = dshSessionDriver.installCatalog({ env: {} });
+    assert.equal(local.setup_steps[1].command, "dsh web --port 3080");
+    assert.equal(local.setup_steps.at(-1).visible_when.value, "cli");
+    const hosted = dshSessionDriver.installCatalog({
+      env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
+    });
+    assert.equal(hosted.setup_steps[0].title, "Use the cluster DSH URL");
+    assert.equal(
+      hosted.fields.some((field) => field.key === "transport"),
+      false,
+    );
+  });
 });

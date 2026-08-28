@@ -100,8 +100,10 @@ Thread id: `feishu:<chat_id>`. Login stays on `lark-cli`. History uses in-proces
 
 ## Setup
 
-The Engine page blocks Install until required visible prerequisites are
-`ready`. The user does the steps; the kernel only probes.
+The Engine page always opens the install dialog. When required
+prerequisites are not ready the card button says Set up; submit stays
+blocked. Steps live on `installCatalog().setup_steps`. The user does
+them; the kernel only probes.
 
 | Driver | When `ready` is false | What to run |
 | --- | --- | --- |

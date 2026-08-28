@@ -130,6 +130,22 @@ export const feishuChatDriver: ChannelDriver = {
           hint: "Not installed. Run: npx @larksuite/cli@latest install. Docs: https://github.com/larksuite/cli",
         },
       ],
+      setup_steps: [
+        {
+          title: "Install lark-cli",
+          command: "npx @larksuite/cli@latest install",
+          href: "https://github.com/larksuite/cli",
+        },
+        {
+          title: "Sign in",
+          body: "Tokens stay in the OS keychain.",
+          command: "lark-cli config init && lark-cli auth login --recommend",
+        },
+        {
+          title: "Choose the conversations to follow",
+          body: "Default is every group and every direct message you can see.",
+        },
+      ],
     };
   },
 

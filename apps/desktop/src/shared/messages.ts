@@ -440,6 +440,11 @@ export const en = {
   "sync.every": "every {seconds}s",
 
   "connector.install": "Install",
+  "connector.setup": "Set up",
+  "connector.setupTitle": "Set up {title}",
+  "connector.setupSteps": "Setup",
+  "connector.copy": "Copy",
+  "connector.copied": "Copied",
   "connector.installing": "Installing…",
   "connector.installed": "{count} installed",
   "connector.notInstalled": "Not installed",
@@ -920,6 +925,11 @@ export const zh: Record<MessageKey, string> = {
   "sync.every": "每 {seconds} 秒",
 
   "connector.install": "安装",
+  "connector.setup": "设置",
+  "connector.setupTitle": "设置 {title}",
+  "connector.setupSteps": "准备步骤",
+  "connector.copy": "复制",
+  "connector.copied": "已复制",
   "connector.installing": "安装中…",
   "connector.installed": "已安装 {count} 个",
   "connector.notInstalled": "未安装",

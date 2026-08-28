@@ -63,6 +63,84 @@ describe("connector catalog hints", () => {
     );
   });
 
+  it("projects setup steps from each first-party catalog", () => {
+    const catalog = catalogOf({ env: {} });
+    const slack = catalog.find((item) => item.connector_type === "slack-channel");
+    const dsh = catalog.find((item) => item.connector_type === "dsh-session");
+    const feishu = catalog.find((item) => item.connector_type === "feishu-chat");
+    const cursor = catalog.find((item) => item.connector_type === "cursor-agent");
+    assert.deepEqual(
+      slack.setup_steps.map((step) => step.title),
+      [
+        "Create a Slack app and copy a bot token",
+        "Set REGENIC_SLACK_TOKEN, then fully quit and reopen the desktop",
+        "Enter the channel ID",
+      ],
+    );
+    assert.equal(slack.setup_steps[0].href, "https://api.slack.com/apps");
+    assert.equal(dsh.setup_steps[1].command, "dsh web --port 3080");
+    assert.equal(dsh.setup_steps[1].visible_when.value, "web");
+    assert.equal(dsh.setup_steps.at(-1).visible_when.value, "cli");
+    assert.equal(
+      feishu.setup_steps[0].command,
+      "npx @larksuite/cli@latest install",
+    );
+    assert.equal(feishu.setup_steps[0].href, "https://github.com/larksuite/cli");
+    assert.equal(cursor.setup_steps[0].href, "https://cursor.com/dashboard");
+    assert.match(cursor.setup_steps[1].body, /keychain/);
+    const hosted = catalogOf({
+      env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
+    }).find((item) => item.connector_type === "dsh-session");
+    assert.equal(hosted.setup_steps[0].title, "Use the cluster DSH URL");
+    assert.equal(
+      hosted.fields.some((field) => field.key === "transport"),
+      false,
+    );
+  });
+
+  it("drops empty setup titles and non-http hrefs", () => {
+    const extras = catalogFromDrivers({
+      list: () => [
+        {
+          connector_type: "extra-review",
+          source: "extra",
+          installCatalog() {
+            return {
+              title: "Extra review",
+              description: "Loaded plugin.",
+              credential_hint: "EXTRA_URL",
+              setup_steps: [
+                { title: "  " },
+                {
+                  title: "Open the docs",
+                  href: "javascript:alert(1)",
+                },
+                {
+                  title: "Run the probe",
+                  command: " extra-probe ",
+                  href: "https://extra.example/docs",
+                },
+              ],
+            };
+          },
+        },
+      ],
+    });
+    const extra = connectorCatalog([], { extras }).find(
+      (item) => item.connector_type === "extra-review",
+    );
+    assert.deepEqual(extra.setup_steps, [
+      {
+        title: "Open the docs",
+      },
+      {
+        title: "Run the probe",
+        command: "extra-probe",
+        href: "https://extra.example/docs",
+      },
+    ]);
+  });
+
   it("lists DSH web and CLI service prerequisites from the catalog", () => {
     const slack = catalogOf({ env: {} }).find(
       (item) => item.connector_type === "slack-channel",
@@ -182,6 +260,7 @@ describe("connector catalog hints", () => {
     assert.equal(catalog[0].connector_type, "slack-channel");
     const extra = catalog.find((item) => item.connector_type === "extra-review");
     assert.equal(extra.title, "Extra review");
+    assert.deepEqual(extra.setup_steps, []);
     assert.equal(extra.setup_ready, true);
     assert.equal(extra.singleton, true);
     assert.equal(extra.fields[0].key, "max_open");
