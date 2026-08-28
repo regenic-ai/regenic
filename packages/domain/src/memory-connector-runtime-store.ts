@@ -239,10 +239,27 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return { ...settled };
   }
 
-  async listAttempts(installationId: string): Promise<IngestAttempt[]> {
-    return [...this.attempts.values()]
+  async listAttempts(
+    installationId: string,
+    limit?: number,
+  ): Promise<IngestAttempt[]> {
+    const rows = [...this.attempts.values()]
       .filter((attempt) => attempt.connector_installation_id === installationId)
+      .sort(
+        (left, right) =>
+          right.started_at.localeCompare(left.started_at)
+          || right.id.localeCompare(left.id),
+      )
       .map((attempt) => ({ ...attempt }));
+    if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
+      return rows.slice(0, limit);
+    }
+    return rows;
+  }
+
+  async latestAttempt(installationId: string): Promise<IngestAttempt | null> {
+    const rows = await this.listAttempts(installationId, 1);
+    return rows[0] ?? null;
   }
 
   async listQuarantines(installationId: string): Promise<IngestQuarantine[]> {

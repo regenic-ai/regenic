@@ -97,6 +97,7 @@ describe("SQLite connector runtime", () => {
 
     const quarantines = await store.listQuarantines(installation.id);
     const attempts = await store.listAttempts(installation.id);
+    const latest = await store.latestAttempt(installation.id);
     const installations = await store.listInstallations(installation.org_id);
     assert.deepEqual(quarantines, [
       {
@@ -111,6 +112,7 @@ describe("SQLite connector runtime", () => {
       },
     ]);
     assert.equal(attempts[0].id, "attempt-1");
+    assert.equal(latest?.id, "attempt-1");
     assert.equal(installations[0].id, installation.id);
     store.close();
   });

@@ -278,4 +278,69 @@ describe("sqlite read/write split", () => {
     assert.deepEqual(Buffer.from(await blobs.get(attachment.content_hash)), png);
     await store.close();
   });
+
+  it("reads the latest ingest attempt without waiting on the writer", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const installation = await store.createInstallation({
+      id: "installation-latest",
+      org_id: "local-owner",
+      connector_type: "native-local",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-28T00:00:00.000Z",
+    });
+    for (const index of [1, 2, 3]) {
+      await store.beginAttempt({
+        id: `attempt-${index}`,
+        org_id: "local-owner",
+        connector_installation_id: installation.id,
+        stream_key: "personal",
+        delivery_id: `page-${index}`,
+        started_at: `2026-08-28T00:00:0${index}.000Z`,
+      });
+    }
+    const held = store.stallWriter(120);
+    const started = Date.now();
+    const latest = await store.latestAttempt(installation.id);
+    const elapsed = Date.now() - started;
+    assert.equal(latest?.id, "attempt-3");
+    assert.ok(
+      elapsed < 80,
+      `latestAttempt waited ${elapsed}ms on the write thread`,
+    );
+    await held;
+    await store.close();
+  });
+
+  it("prunes old ingest attempts and checkpoints WAL on the writer", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const installation = await store.createInstallation({
+      id: "installation-prune",
+      org_id: "local-owner",
+      connector_type: "native-local",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-28T00:00:00.000Z",
+    });
+    for (let index = 0; index < 80; index += 1) {
+      const stamp = `2026-08-28T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`;
+      await store.beginAttempt({
+        id: `attempt-${index}`,
+        org_id: "local-owner",
+        connector_installation_id: installation.id,
+        stream_key: "personal",
+        delivery_id: `page-${index}`,
+        started_at: stamp,
+      });
+    }
+    const result = await store.maintainStore();
+    const remaining = await store.listAttempts(installation.id);
+    const latest = await store.latestAttempt(installation.id);
+    assert.equal(result.deleted, 16);
+    assert.equal(remaining.length, 64);
+    assert.equal(latest?.id, "attempt-79");
+    await store.close();
+  });
 });

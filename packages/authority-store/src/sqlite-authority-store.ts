@@ -1456,19 +1456,120 @@ export class SqliteAuthorityStore
     return transaction.immediate();
   }
 
-  async listAttempts(installationId: string): Promise<IngestAttempt[]> {
-    const rows = this.database
+  async listAttempts(
+    installationId: string,
+    limit?: number,
+  ): Promise<IngestAttempt[]> {
+    const cap =
+      typeof limit === "number" && Number.isInteger(limit) && limit > 0
+        ? limit
+        : undefined;
+    const rows = cap
+      ? (this.database
+          .prepare(
+            `
+              SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
+                     started_at, finished_at, status, accepted_count, duplicate_count,
+                     quarantined_count, retryable_failure_count, error_code
+              FROM ingest_attempts
+              WHERE connector_installation_id = ?
+              ORDER BY started_at DESC, id DESC
+              LIMIT ?
+            `,
+          )
+          .all(installationId, cap) as AttemptRow[])
+      : (this.database
+          .prepare(
+            `
+              SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
+                     started_at, finished_at, status, accepted_count, duplicate_count,
+                     quarantined_count, retryable_failure_count, error_code
+              FROM ingest_attempts
+              WHERE connector_installation_id = ?
+              ORDER BY started_at DESC, id DESC
+            `,
+          )
+          .all(installationId) as AttemptRow[]);
+    return rows.map((row) => this.toAttempt(row));
+  }
+
+  async latestAttempt(installationId: string): Promise<IngestAttempt | null> {
+    const row = this.database
       .prepare(
         `
           SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
                  started_at, finished_at, status, accepted_count, duplicate_count,
                  quarantined_count, retryable_failure_count, error_code
           FROM ingest_attempts
-          WHERE connector_installation_id = ? ORDER BY started_at DESC
+          WHERE connector_installation_id = ?
+          ORDER BY started_at DESC, id DESC
+          LIMIT 1
         `,
       )
-      .all(installationId) as AttemptRow[];
-    return rows.map((row) => this.toAttempt(row));
+      .get(installationId) as AttemptRow | undefined;
+    return row ? this.toAttempt(row) : null;
+  }
+
+  async pruneIngestAttempts(
+    keepPerInstallation = 64,
+  ): Promise<{ deleted: number }> {
+    this.assertWritable();
+    const keep =
+      Number.isInteger(keepPerInstallation) && keepPerInstallation > 0
+        ? keepPerInstallation
+        : 64;
+    const installations = this.database
+      .prepare(`SELECT id FROM connector_installations`)
+      .all() as Array<{ id: string }>;
+    const deleteQuarantines = this.database.prepare(
+      `
+        DELETE FROM ingest_quarantines
+        WHERE attempt_id IN (
+          SELECT id FROM ingest_attempts
+          WHERE connector_installation_id = ?
+            AND id NOT IN (
+              SELECT id FROM (
+                SELECT id FROM ingest_attempts
+                WHERE connector_installation_id = ?
+                ORDER BY started_at DESC, id DESC
+                LIMIT ?
+              )
+            )
+        )
+      `,
+    );
+    const deleteAttempts = this.database.prepare(
+      `
+        DELETE FROM ingest_attempts
+        WHERE connector_installation_id = ?
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id FROM ingest_attempts
+              WHERE connector_installation_id = ?
+              ORDER BY started_at DESC, id DESC
+              LIMIT ?
+            )
+          )
+      `,
+    );
+    let deleted = 0;
+    this.database.transaction(() => {
+      for (const installation of installations) {
+        deleteQuarantines.run(installation.id, installation.id, keep);
+        deleted += deleteAttempts.run(
+          installation.id,
+          installation.id,
+          keep,
+        ).changes;
+      }
+    }).immediate();
+    return { deleted };
+  }
+
+  async checkpointWal(): Promise<void> {
+    this.assertWritable();
+    this.database.pragma("wal_checkpoint(PASSIVE)");
+    this.database.pragma("wal_checkpoint(TRUNCATE)");
   }
 
   async listQuarantines(installationId: string): Promise<IngestQuarantine[]> {

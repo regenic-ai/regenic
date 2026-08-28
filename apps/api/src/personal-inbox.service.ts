@@ -343,12 +343,12 @@ export class PersonalInboxService {
     ]);
     const views = await Promise.all(
       installations.map(async (installation) => {
-        const attempts = detailed
-          ? await authority.listAttempts(installation.id)
-          : [];
+        const attempt = detailed
+          ? await authority.latestAttempt(installation.id)
+          : null;
         return toInstallationView(
           installation,
-          attempts[0] ?? null,
+          attempt,
           this.drivers,
         );
       }),

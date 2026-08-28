@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { SqliteAuthorityStore } from "./sqlite-authority-store";
 import {
+  isAuthorityReadMethod,
   isAuthorityWriteMethod,
   serializeStoreError,
   type SqliteWriteRequest,
@@ -11,7 +12,10 @@ if (!parentPort) {
   throw new Error("sqlite write worker must run in a worker thread");
 }
 
-const store = new SqliteAuthorityStore(String(workerData.path));
+const readonly = workerData?.readonly === true;
+const store = new SqliteAuthorityStore(String(workerData.path), {
+  readonly,
+});
 parentPort.postMessage({ type: "ready" });
 
 parentPort.on("message", async (message: SqliteWriteRequest) => {
@@ -30,10 +34,13 @@ parentPort.on("message", async (message: SqliteWriteRequest) => {
       reply({ id: message.id, ok: true, result: null });
       return;
     }
-    if (!isAuthorityWriteMethod(message.method)) {
-      throw new Error(`Unsupported authority write method: ${message.method}`);
+    const allowed = readonly
+      ? isAuthorityReadMethod(message.method)
+      : isAuthorityWriteMethod(message.method);
+    if (!allowed) {
+      throw new Error(`Unsupported authority method: ${message.method}`);
     }
-    const method = store[message.method] as (
+    const method = store[message.method as keyof SqliteAuthorityStore] as (
       ...args: unknown[]
     ) => Promise<unknown>;
     const result = await method.apply(store, message.args);
