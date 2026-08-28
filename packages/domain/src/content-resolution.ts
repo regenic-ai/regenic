@@ -139,18 +139,19 @@ export function resolutionFromCanonical(canonical: {
 export function resolutionFromStored(
   bytes: Uint8Array,
   mediaType: string,
+  blobs?: ReadonlyMap<string, Uint8Array>,
 ): AttachmentResolution {
   if (mediaType === CONTENT_PARTS_MEDIA_TYPE) {
     const parts = parseStoredContentParts(bytes);
     return parts
-      ? resolutionFromStoredParts(parts)
+      ? resolutionFromStoredParts(parts, blobs)
       : { resolvedHashes: [], unresolvedCount: 0 };
   }
-  if (isTextMediaType(mediaType) || bytes.byteLength === 0) {
-    return {
-      resolvedHashes: [],
-      unresolvedCount: bytes.byteLength === 0 && !isTextMediaType(mediaType) ? 1 : 0,
-    };
+  if (isTextMediaType(mediaType)) {
+    return { resolvedHashes: [], unresolvedCount: 0 };
+  }
+  if (!isUsableAttachmentBytes(bytes, mediaType)) {
+    return { resolvedHashes: [], unresolvedCount: 1 };
   }
   return {
     resolvedHashes: [createHash("sha256").update(bytes).digest("hex")],
@@ -177,6 +178,7 @@ export function incomingWorsensAttachments(
 
 function resolutionFromStoredParts(
   parts: readonly StoredContentPart[],
+  blobs?: ReadonlyMap<string, Uint8Array>,
 ): AttachmentResolution {
   const hashes: string[] = [];
   const seen = new Set<string>();
@@ -186,14 +188,24 @@ function resolutionFromStoredParts(
       continue;
     }
     const hash = storedPartContentHash(part);
-    if (hash) {
-      if (!seen.has(hash)) {
-        seen.add(hash);
-        hashes.push(hash);
-      }
+    if (!hash) {
+      unresolved += 1;
       continue;
     }
-    unresolved += 1;
+    if (blobs) {
+      const stored = blobs.get(hash);
+      if (
+        !stored ||
+        !isUsableAttachmentBytes(stored, part.media_type ?? "")
+      ) {
+        unresolved += 1;
+        continue;
+      }
+    }
+    if (!seen.has(hash)) {
+      seen.add(hash);
+      hashes.push(hash);
+    }
   }
   return { resolvedHashes: hashes, unresolvedCount: unresolved };
 }

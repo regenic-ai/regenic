@@ -19,7 +19,12 @@ import type {
   NewEvent,
   SourceIdentity,
 } from "./ingestion";
-import { AuthorityConflictError } from "./ingestion";
+import { AuthorityConflictError, collectAvailableBlobs } from "./ingestion";
+import {
+  CONTENT_PARTS_MEDIA_TYPE,
+  attachmentHashesFromStoredParts,
+  parseStoredContentParts,
+} from "./content-parts";
 import {
   validateIngestBatch,
   type IngestValidationIssue,
@@ -535,7 +540,17 @@ export class IngestionService {
     if (!stored) {
       return { resolvedHashes: [], unresolvedCount: 0 };
     }
-    return resolutionFromStored(stored.bytes, stored.mediaType);
+    if (stored.mediaType !== CONTENT_PARTS_MEDIA_TYPE) {
+      return resolutionFromStored(stored.bytes, stored.mediaType);
+    }
+    const parts = parseStoredContentParts(stored.bytes);
+    const sidecars = parts
+      ? await collectAvailableBlobs(
+          (hash) => this.blobStore.get(hash),
+          attachmentHashesFromStoredParts(parts),
+        )
+      : undefined;
+    return resolutionFromStored(stored.bytes, stored.mediaType, sidecars);
   }
 
   private async readEventAttachments(event: EventRecord): Promise<string[]> {

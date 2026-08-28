@@ -1,12 +1,16 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
+const { createHash } = require("node:crypto");
 const {
   INGEST_SCHEMA_VERSION,
+  CONTENT_PARTS_MEDIA_TYPE,
   IngestionService,
   MemoryAuthorityStore,
   MemoryBlobStore,
   canonicalizeRecordContent,
   channelRecord,
+  parseStoredContentParts,
+  storedPartContentHash,
 } = require("../dist");
 
 function createBatch(recordOverrides = {}) {
@@ -46,6 +50,38 @@ function createHarness() {
     blobStore,
     service: new IngestionService(blobStore, authorityStore),
   };
+}
+
+async function seedLegacyEmptyAttachment(authorityStore, blobStore) {
+  const empty = new Uint8Array();
+  const emptyHash = createHash("sha256").update(empty).digest("hex");
+  const envelope = Buffer.from(
+    JSON.stringify([
+      {
+        role: "attachment",
+        media_type: "image/png",
+        source_filename: "image.png",
+        content_hash: emptyHash,
+        external_locator: "source://image/1",
+      },
+    ]),
+  );
+  const envelopeHash = createHash("sha256").update(envelope).digest("hex");
+  await blobStore.put(emptyHash, empty, "image/png");
+  await blobStore.put(envelopeHash, envelope, CONTENT_PARTS_MEDIA_TYPE);
+  await authorityStore.append({
+    org_id: "local-owner",
+    source: "regenic",
+    external_id: "source-event-1",
+    content_hash: envelopeHash,
+    content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+    content_byte_size: envelope.byteLength,
+    extra_blobs: [
+      { content_hash: emptyHash, media_type: "image/png", byte_size: 0 },
+    ],
+    occurred_at: "2026-08-07T23:59:00.000Z",
+    expected_head_id: null,
+  });
 }
 
 describe("IngestionService", () => {
@@ -299,6 +335,111 @@ describe("IngestionService", () => {
     assert.equal(emptied.records[0].status, "duplicate");
     assert.equal(junk.records[0].status, "duplicate");
     assert.equal(authorityStore.allEvents().length, 2);
+  });
+
+  it("fills a legacy empty-byte attachment hash on the same identity", async () => {
+    const { authorityStore, blobStore, service } = createHarness();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await seedLegacyEmptyAttachment(authorityStore, blobStore);
+    const filled = await service.ingest(
+      createBatch({
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "shot.png",
+            external_locator: "source://image/1",
+            bytes: png,
+          },
+        ],
+      }),
+    );
+    const events = authorityStore.allEvents();
+    const stored = await blobStore.get(events.at(-1).content_hash);
+    const parts = parseStoredContentParts(stored);
+    const attachment = parts.find((part) => part.role === "attachment");
+
+    assert.equal(filled.records[0].status, "accepted");
+    assert.equal(events.length, 2);
+    assert.equal(events[1].operation, "revise");
+    assert.notEqual(
+      storedPartContentHash(attachment),
+      createHash("sha256").update(new Uint8Array()).digest("hex"),
+    );
+    assert.deepEqual(Array.from(await blobStore.get(attachment.content_hash)), Array.from(png));
+  });
+
+  it("keeps the first filled image when a later revise brings the second", async () => {
+    const { authorityStore, blobStore, service } = createHarness();
+    const first = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+    const second = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 2]);
+    await service.ingest(
+      createBatch({
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "a.png",
+            external_locator: "source://image/a",
+          },
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "b.png",
+            external_locator: "source://image/b",
+          },
+        ],
+      }),
+    );
+    await service.ingest(
+      createBatch({
+        operation: "revise",
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "a.png",
+            external_locator: "source://image/a",
+            bytes: first,
+          },
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "b.png",
+            external_locator: "source://image/b",
+          },
+        ],
+      }),
+    );
+    const filled = await service.ingest(
+      createBatch({
+        operation: "revise",
+        content: [
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "a.png",
+            external_locator: "source://image/a",
+          },
+          {
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "b.png",
+            external_locator: "source://image/b",
+            bytes: second,
+          },
+        ],
+      }),
+    );
+    const stored = await blobStore.get(authorityStore.allEvents().at(-1).content_hash);
+    const hashes = parseStoredContentParts(stored)
+      .filter((part) => part.role === "attachment")
+      .map((part) => storedPartContentHash(part));
+
+    assert.equal(filled.records[0].status, "accepted");
+    assert.equal(hashes.length, 2);
+    assert.deepEqual(Array.from(await blobStore.get(hashes[0])), Array.from(first));
+    assert.deepEqual(Array.from(await blobStore.get(hashes[1])), Array.from(second));
   });
 
   it("treats a DSH history echo as the same utterance as a local outbound", async () => {
