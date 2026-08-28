@@ -18,9 +18,12 @@ notes for Slack / DSH / Feishu / Cursor, not kernel branching rules.
 | `cursor-agent` | `cursor` | local SDK sessions | yes | yes | paste on install or `CURSOR_API_KEY` |
 
 Slack does not implement `createThread` / `bindEgress`. Feishu does not
-implement `createThread`. Undeclared methods do not exist. Session
-connectors open a local draft first; the first task creates the remote
-session and binds its id. A pasted Cursor API key is stored in the
+implement `createThread`. Undeclared methods do not exist. DSH web
+create opens an empty `session.create`; the first user text is a normal
+reply (`session.prompt` queue) and the kernel awaits the first poll.
+Cursor declares `create_with_task`: the desktop keeps a local draft;
+the first task is `Agent.create` + `send`; the kernel seeds that
+outbound and does not await the first poll. A pasted Cursor API key is stored in the
 machine keychain (or `~/.regenic/credentials/cursor`), never in install
 config.
 
@@ -78,8 +81,9 @@ order at poll time, not `Agent.createdAt`, so a later turn cannot land
 beside the first prompt. It does not scrape IDE chat history or
 follow Cloud Agents. The install form keeps a **default model** (SDK
 runs require one; default `composer-2.5`).
-Capabilities follow the session-agent profile: `await_reply` and
-`list_title: "prompt"`. There is no official question-card API, so
+Capabilities follow the session-agent profile: `await_reply`,
+`list_title: "prompt"`, `create_with_task`, and `hold_while_working`.
+There is no official question-card API, so
 `prompts` is unset. Tests override the host with `REGENIC_CURSOR_API_BASE`.
 
 Feishu:

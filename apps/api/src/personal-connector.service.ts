@@ -653,6 +653,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         );
       }
     }
+    const withTask = found.driver.capabilities(found.installation).create_with_task === true;
+    const firstTask = withTask ? input.text?.trim() : undefined;
     try {
       const thread = await requireCreateThread(found.driver)(
         found.installation,
@@ -660,10 +662,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
         process.env,
         {
           ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
-          ...(input.text?.trim() ? { text: input.text.trim() } : {}),
+          ...(firstTask ? { text: firstTask } : {}),
         },
       );
-      const firstTask = input.text?.trim();
       if (firstTask) {
         try {
           await this.seedCreatedOutbound(
@@ -677,14 +678,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
           // Poll below can still land the first task from the connector.
         }
       }
-      // Do not await the first poll on this HTTP request. Local Cursor
-      // Agent.create + send already started wait(); messages.list can sit
-      // behind that sqlite lock until Chromium reports "Network request failed".
-      void this.seedCreatedThread(found.installation, found.driver, thread, host).catch(
-        () => {
-          void this.catchUp(found.installation.id);
-        },
-      );
+      if (withTask) {
+        // Task-create starts the run inside createThread. Do not await the
+        // first poll on this HTTP request — a locked messages.list can sit
+        // until Chromium reports "Network request failed".
+        void this.seedCreatedThread(found.installation, found.driver, thread, host).catch(
+          () => {
+            void this.catchUp(found.installation.id);
+          },
+        );
+      } else {
+        await this.seedCreatedThread(found.installation, found.driver, thread, host);
+      }
       return {
         thread_id: `${thread.source}:${thread.target}`,
         channel: thread.source,

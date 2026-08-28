@@ -108,10 +108,7 @@ export const dshSessionDriver: ChannelDriver = {
   },
 
   async createThread(installation, _host, env, options) {
-    return createDshConversation(installation, env, {
-      cwd: options?.cwd,
-      text: options?.text,
-    });
+    return createDshConversation(installation, env, { cwd: options?.cwd });
   },
 
   async resolveStreams(installation, host, env, options) {
@@ -417,7 +414,7 @@ async function mountInstalled(
 export async function createDshConversation(
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: DshFetch; access_token?: string; cwd?: string; text?: string } = {},
+  extras: { fetch?: DshFetch; access_token?: string; cwd?: string } = {},
 ): Promise<ConversationThread> {
   if (!dshSessionDriver.capabilities(installation).create) {
     throw new ChannelDriverError(
@@ -425,14 +422,9 @@ export async function createDshConversation(
       "This DSH installation cannot create a conversation",
     );
   }
-  const client = dshWebRpcClient(installation, env, extras);
-  const created = await client.sessionCreate(
+  const created = await dshWebRpcClient(installation, env, extras).sessionCreate(
     extras.cwd ? { cwd: extras.cwd } : {},
   );
-  const text = extras.text?.trim();
-  if (text) {
-    await client.sessionPrompt({ sessionId: created.sessionId, text });
-  }
   return { source: "dsh", target: created.sessionId };
 }
 

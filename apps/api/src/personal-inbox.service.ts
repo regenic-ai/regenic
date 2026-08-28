@@ -84,6 +84,7 @@ export interface InboxViewItem {
   direction: MessageDirection;
   can_send: boolean;
   await_reply: boolean;
+  hold_while_working: boolean;
   list_title: ListTitleMode;
   thread_id: string;
   title: string | null;
@@ -821,6 +822,7 @@ function decorateInboxItem(
     direction: surface.direction,
     can_send: drivers.canSend(installations, thread),
     await_reply: drivers.awaitReply(installations, thread),
+    hold_while_working: drivers.holdWhileWorking(installations, thread),
     list_title: drivers.listTitle(installations, thread),
     thread_id: threadId,
     title: pref?.title ?? null,

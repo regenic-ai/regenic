@@ -290,22 +290,25 @@ describe("thread activity", () => {
   });
 
   it("keeps a working marker for hours, then drops it after a day", () => {
-    const working = thread([
-      item({
-        id: "out-1",
-        external_id: "session-1:1",
-        text: "run for hours",
-      }),
-      item({
-        id: "work-1",
-        external_id: "session-1:2",
-        text: "Still working.",
-        kind: "system",
-        direction: "inbound",
-        activity: "working",
-        occurred_at: "2026-08-23T12:00:00.000Z",
-      }),
-    ]);
+    const working = thread(
+      [
+        item({
+          id: "out-1",
+          external_id: "session-1:1",
+          text: "run for hours",
+        }),
+        item({
+          id: "work-1",
+          external_id: "session-1:2",
+          text: "Still working.",
+          kind: "system",
+          direction: "inbound",
+          activity: "working",
+          occurred_at: "2026-08-23T12:00:00.000Z",
+        }),
+      ],
+      { hold_while_working: true },
+    );
     const threeHours = Date.parse("2026-08-23T15:00:00.000Z");
     const twentySixHours = Date.parse("2026-08-24T14:00:00.000Z");
     assert.equal(threadActivityOf(working, threeHours), "working");
@@ -315,6 +318,45 @@ describe("thread activity", () => {
 
   it("keeps working after outbound follow-ups and counts how many are held", () => {
     const now = Date.parse("2026-08-23T15:00:00.000Z");
+    const follow = thread(
+      [
+        item({
+          id: "out-1",
+          external_id: "session-1:1",
+          text: "start the long job",
+          occurred_at: "2026-08-23T12:00:00.000Z",
+        }),
+        item({
+          id: "work-1",
+          external_id: "session-1:2",
+          text: "Still working.",
+          kind: "system",
+          direction: "inbound",
+          activity: "working",
+          occurred_at: "2026-08-23T12:00:01.000Z",
+        }),
+        item({
+          id: "out-2",
+          external_id: "session-1:3",
+          text: "also check the tests",
+          occurred_at: "2026-08-23T12:05:00.000Z",
+        }),
+        item({
+          id: "out-3",
+          external_id: "session-1:4",
+          text: "and the docs",
+          occurred_at: "2026-08-23T12:06:00.000Z",
+        }),
+      ],
+      { hold_while_working: true },
+    );
+    assert.equal(threadActivityOf(follow, now), "working");
+    assert.equal(heldWhileWorkingCount(follow, now), 2);
+    assert.match(threadActivityNote(follow, now) ?? "", /2 newer messages/);
+  });
+
+  it("treats a follow-up as sent when the connector does not hold while working", () => {
+    const now = Date.parse("2026-08-23T12:10:00.000Z");
     const follow = thread([
       item({
         id: "out-1",
@@ -337,16 +379,30 @@ describe("thread activity", () => {
         text: "also check the tests",
         occurred_at: "2026-08-23T12:05:00.000Z",
       }),
+    ]);
+    assert.equal(threadActivityOf(follow, now), "sent");
+    assert.equal(heldWhileWorkingCount(follow, now), 0);
+  });
+
+  it("drops a working marker after 30 minutes when the connector does not hold", () => {
+    const now = Date.parse("2026-08-23T12:35:00.000Z");
+    const stale = thread([
       item({
-        id: "out-3",
-        external_id: "session-1:4",
-        text: "and the docs",
-        occurred_at: "2026-08-23T12:06:00.000Z",
+        id: "out-1",
+        external_id: "session-1:1",
+        text: "run",
+      }),
+      item({
+        id: "work-1",
+        external_id: "session-1:2",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+        occurred_at: "2026-08-23T12:00:00.000Z",
       }),
     ]);
-    assert.equal(threadActivityOf(follow, now), "working");
-    assert.equal(heldWhileWorkingCount(follow, now), 2);
-    assert.match(threadActivityNote(follow, now) ?? "", /2 newer messages/);
+    assert.equal(threadActivityOf(stale, now), undefined);
   });
 
   it("clears working when the latest thread_status has ended", () => {

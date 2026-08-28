@@ -103,6 +103,8 @@ describe("cursorAgentDriver", () => {
       create: true,
       await_reply: true,
       list_title: "prompt",
+      create_with_task: true,
+      hold_while_working: true,
     });
     assert.equal(
       cursorAgentDriver.capabilities(installation({ model: "grok-4.6" })).create,

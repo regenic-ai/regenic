@@ -1757,6 +1757,7 @@ describe("personal /v1/me", () => {
       const createdBody = await created.json();
       assert.equal(created.status, 201, JSON.stringify(createdBody));
       assert.equal(createdBody.can_create, true);
+      assert.equal(createdBody.create_with_task, false);
       assert.equal(createdBody.can_reply, true);
       assert.equal(createdBody.channel, "dsh");
       assert.equal(createdBody.channel_label, "DSH");
@@ -1801,13 +1802,7 @@ describe("personal /v1/me", () => {
       assert.deepEqual(dsh.created, ["created-1", "created-2"]);
       assert.equal(
         dsh.prompts.some((item) => JSON.stringify(item).includes("Fix the login bug")),
-        true,
-      );
-      const afterCreate = await (await fetch(`${origin}/v1/me/inbox`)).json();
-      assert.equal(
-        afterCreate.some((item) => item.body_text?.includes("Fix the login bug")),
-        true,
-        JSON.stringify(afterCreate.map((item) => item.body_text)),
+        false,
       );
 
       const empty = await fetch(`${origin}/v1/me/replies`, {

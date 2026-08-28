@@ -220,7 +220,7 @@ export function threadActivityOf(
   thread: InboxThread,
   now = Date.now(),
 ): InboxViewItem["activity"] | "sent" | undefined {
-  const working = latestLiveWorking(thread, now);
+  const working = liveWorkingOf(thread, now);
   if (working) {
     const lastVisible = lastVisibleMessage(thread);
     if (lastVisible?.activity === "awaiting_user") {
@@ -266,6 +266,23 @@ function latestThreadStatus(thread: InboxThread): InboxViewItem | undefined {
   return undefined;
 }
 
+function liveWorkingOf(
+  thread: InboxThread,
+  now: number,
+): InboxViewItem | undefined {
+  if (thread.hold_while_working === true) {
+    return latestLiveWorking(thread, now);
+  }
+  const latest = thread.messages[thread.messages.length - 1];
+  if (latest?.activity !== "working") {
+    return undefined;
+  }
+  if (!isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)) {
+    return undefined;
+  }
+  return latest;
+}
+
 function latestLiveWorking(
   thread: InboxThread,
   now: number,
@@ -281,6 +298,9 @@ function latestLiveWorking(
 }
 
 export function heldWhileWorkingCount(thread: InboxThread, now = Date.now()): number {
+  if (thread.hold_while_working !== true) {
+    return 0;
+  }
   const working = latestLiveWorking(thread, now);
   if (!working) {
     return 0;

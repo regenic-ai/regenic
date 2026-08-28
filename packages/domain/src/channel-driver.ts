@@ -88,6 +88,19 @@ export interface ChannelCapabilities {
    * Session agents omit it. Chat channels set it only when a real API exists.
    */
   receipts?: boolean;
+  /**
+   * Creating a conversation requires the first user task.
+   * Desktop keeps a local draft; `createThread` receives `text` and starts the run.
+   * The kernel seeds that outbound and does not await the first poll.
+   * Omit it (DSH): `createThread` opens an empty session; the first text is a normal send.
+   */
+  create_with_task?: boolean;
+  /**
+   * Outbound follow-ups during `activity: working` are held by this connector
+   * until the current run ends. Desktop may count them as waiting.
+   * Omit it (DSH): send is accepted immediately (the peer queues).
+   */
+  hold_while_working?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -517,6 +530,16 @@ export class ChannelDriverRegistry {
     const found = this.findForThread(installations, thread);
     return Boolean(
       found && found.driver.capabilities(found.installation).await_reply,
+    );
+  }
+
+  holdWhileWorking(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+  ): boolean {
+    const found = this.findForThread(installations, thread);
+    return Boolean(
+      found && found.driver.capabilities(found.installation).hold_while_working,
     );
   }
 

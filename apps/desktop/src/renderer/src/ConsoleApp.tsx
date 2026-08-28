@@ -640,12 +640,36 @@ export function ConsoleApp() {
     if (!target) {
       return;
     }
-    const created = localDraftConversation(target);
-    openedAtRef.current[created.thread_id] = created.opened_at ?? new Date().toISOString();
-    setDrafts((current) => [created, ...current]);
-    setSelectedId(created.thread_id);
-    setError(null);
-    return created;
+    if (target.create_with_task) {
+      const created = localDraftConversation(target);
+      openedAtRef.current[created.thread_id] = created.opened_at ?? new Date().toISOString();
+      setDrafts((current) => [created, ...current]);
+      setSelectedId(created.thread_id);
+      setError(null);
+      return created;
+    }
+    setCreating(true);
+    try {
+      const created = {
+        ...(await createConversation({ installation_id: installationId })),
+        opened_at: new Date().toISOString(),
+      };
+      openedAtRef.current[created.thread_id] = created.opened_at;
+      setDrafts((current) => [
+        created,
+        ...current.filter((item) => item.thread_id !== created.thread_id),
+      ]);
+      setSelectedId(created.thread_id);
+      setError(null);
+      return created;
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : t("error.cannotSend"),
+      );
+      return undefined;
+    } finally {
+      setCreating(false);
+    }
   };
 
   const commitDraft = async (installationId: string, draft: ComposerDraft, draftId: string) => {

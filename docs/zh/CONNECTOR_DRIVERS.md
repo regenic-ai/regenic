@@ -16,7 +16,7 @@
 | `feishu-chat` | `feishu` | 勾选的会话，或当前能看到的全部群和/或单聊 | 是 | 否 | 本机 `lark-cli` 用户登录 |
 | `cursor-agent` | `cursor` | 本机 SDK 会话 | 是 | 是 | 安装时粘贴或 `CURSOR_API_KEY` |
 
-Slack 不实现 `createThread` / `bindEgress`。飞书不实现 `createThread`。未声明的方法不存在。会话族的新建是先在 Regenic 打开草稿，第一条任务再去对面创建并绑回 session id。Cursor 密钥可在安装表单粘贴，只进本机钥匙串（或 `~/.regenic/credentials/cursor`），不进安装 config。
+Slack 不实现 `createThread` / `bindEgress`。飞书不实现 `createThread`。未声明的方法不存在。DSH web 新建立刻 `session.create` 空会话，第一条用户文本走普通回复（`session.prompt` queue）；内核会等首次 poll。Cursor 声明 `create_with_task`：桌面先开本地草稿，第一条才 `Agent.create` + `send`；内核种出站、不等首次 poll。Cursor 密钥可在安装表单粘贴，只进本机钥匙串（或 `~/.regenic/credentials/cursor`），不进安装 config。
 
 凭证引用：Slack 为 `env:REGENIC_SLACK_TOKEN`；DSH web 为 `env:REGENIC_DSH_TOKEN`（可空）；飞书为 `keychain:lark-cli`；Cursor 为 `keychain:regenic-cursor:<安装 id>` 或 `env:CURSOR_API_KEY`。`oauth:HANDLE` / `app:HANDLE` 已预留，本阶段内置驱动不用。
 
@@ -44,7 +44,7 @@ Cursor 本机 Agent：
 
 Cursor：
 
-线程 id：`cursor:<agent_id>`。只用官方 `@cursor/sdk` 在本机跑会话，形状对齐 [cursor/cookbook `sdk/coding-agent-cli`](https://github.com/cursor/cookbook/tree/main/sdk/coding-agent-cli)：Inbox 新建的第一条任务立刻 `Agent.create` + `send`，不进队列。后续回复只有 Agent 空闲时才 `Agent.resume` 再 `send`。两套时钟：**接单**是秒级——发给桌面的 HTTP 在 `create` / `resume` / `send()` 开工后就返回，不能干等 `run.wait()`，否则 Chromium 会超时并误报连不上本机服务。桌面 120 秒超时只覆盖这段开工（含冷启动 `resume`），不是整场任务。**完成**可以数小时：轮询用 `Agent.get` + `Agent.messages.list` 看 `thread_status` + `activity: working`，再等最终助手句。不要为了看进度去 `resume`，也不要对 ACTIVE / CREATING（含内存里还没 `wait()` 完的 live run）`force` 跟发。忙时的跟发写入 `~/.regenic/cursor-pending-sends.json`（文件里不放 API key），等观察到 IDLE 之后再每次只冲一条：poll 先组好本页（含上一轮 `ended`），或后台 `pumpRun` 结束。`Agent.get` / `list` 保持只读，避免观察时把状态机往前推。后台 `wait()` 只防泄漏，不是完成真相；sidecar 退出后再打开只 poll。点同步会扫本机 SDK 库存。消息时间按会话顺序用本次拉取时刻错开，不用 `Agent.createdAt`，避免后续回合挤到第一条旁边。不爬编辑器 Chat 历史，也不接 Cloud Agents。安装表单有 **默认模型**（SDK 必填，默认 `composer-2.5`）。能力按会话 Agent 声明：`await_reply`、`list_title: "prompt"`。没有官方提问卡，所以不声明 `prompts`。测速用 `REGENIC_CURSOR_API_BASE`。
+线程 id：`cursor:<agent_id>`。只用官方 `@cursor/sdk` 在本机跑会话，形状对齐 [cursor/cookbook `sdk/coding-agent-cli`](https://github.com/cursor/cookbook/tree/main/sdk/coding-agent-cli)：Inbox 新建的第一条任务立刻 `Agent.create` + `send`，不进队列。后续回复只有 Agent 空闲时才 `Agent.resume` 再 `send`。两套时钟：**接单**是秒级——发给桌面的 HTTP 在 `create` / `resume` / `send()` 开工后就返回，不能干等 `run.wait()`，否则 Chromium 会超时并误报连不上本机服务。桌面 120 秒超时只覆盖这段开工（含冷启动 `resume`），不是整场任务。**完成**可以数小时：轮询用 `Agent.get` + `Agent.messages.list` 看 `thread_status` + `activity: working`，再等最终助手句。不要为了看进度去 `resume`，也不要对 ACTIVE / CREATING（含内存里还没 `wait()` 完的 live run）`force` 跟发。忙时的跟发写入 `~/.regenic/cursor-pending-sends.json`（文件里不放 API key），等观察到 IDLE 之后再每次只冲一条：poll 先组好本页（含上一轮 `ended`），或后台 `pumpRun` 结束。`Agent.get` / `list` 保持只读，避免观察时把状态机往前推。后台 `wait()` 只防泄漏，不是完成真相；sidecar 退出后再打开只 poll。点同步会扫本机 SDK 库存。消息时间按会话顺序用本次拉取时刻错开，不用 `Agent.createdAt`，避免后续回合挤到第一条旁边。不爬编辑器 Chat 历史，也不接 Cloud Agents。安装表单有 **默认模型**（SDK 必填，默认 `composer-2.5`）。能力按会话 Agent 声明：`await_reply`、`list_title: "prompt"`、`create_with_task`、`hold_while_working`。没有官方提问卡，所以不声明 `prompts`。测速用 `REGENIC_CURSOR_API_BASE`。
 
 飞书：
 

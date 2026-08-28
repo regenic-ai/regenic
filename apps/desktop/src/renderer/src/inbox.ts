@@ -25,6 +25,7 @@ export interface InboxThread {
   pref_updated_at?: string;
   can_send: boolean;
   await_reply?: boolean;
+  hold_while_working?: boolean;
   list_title?: ListTitleMode;
   draft_installation_id?: string;
   messages: InboxViewItem[];
@@ -245,6 +246,9 @@ export function overlayThreadMessages(
       can_send: messages.some((item) => item.can_send) || thread.can_send,
       await_reply:
         messages.some((item) => item.await_reply === true) || thread.await_reply === true,
+      hold_while_working:
+        messages.some((item) => item.hold_while_working === true)
+        || thread.hold_while_working === true,
       list_title: threadListTitle(messages, thread.list_title),
       ...threadSurface(messages, thread),
       ...threadWork(messages, thread),
@@ -431,6 +435,7 @@ function buildThread(
     pref_updated_at: pref.updated_at,
     can_send: ordered.some((item) => item.can_send),
     await_reply: ordered.some((item) => item.await_reply === true),
+    hold_while_working: ordered.some((item) => item.hold_while_working === true),
     list_title: threadListTitle(ordered),
     messages: ordered,
     ...threadSurface(ordered),

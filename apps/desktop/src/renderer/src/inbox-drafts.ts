@@ -11,6 +11,7 @@ export interface CreateTarget {
   channel: string;
   channel_label: string;
   label: string;
+  create_with_task: boolean;
 }
 
 export function createConversationTargets(
@@ -31,6 +32,7 @@ export function createConversationTargets(
       channel: item.channel ?? item.connector_type,
       channel_label: item.channel_label ?? item.connector_type,
       label: item.label,
+      create_with_task: item.create_with_task === true,
     });
   }
   return targets;
@@ -64,6 +66,7 @@ export function localDraftConversation(target: CreateTarget): CreatedConversatio
     can_send: true,
     await_reply: true,
     list_title: "prompt",
+    hold_while_working: true,
     draft_installation_id: target.id,
     opened_at: new Date().toISOString(),
   };
@@ -103,6 +106,7 @@ export function localDraftOutbound(
     direction: "outbound",
     can_send: created.can_send,
     await_reply: created.await_reply === true,
+    hold_while_working: created.hold_while_working === true,
     list_title: normalizeListTitle(created.list_title),
   };
 }
@@ -122,6 +126,7 @@ export function mergeDraftThreads(
       label: "New conversation",
       can_send: draft.can_send,
       await_reply: draft.await_reply === true,
+      hold_while_working: draft.hold_while_working === true,
       list_title: normalizeListTitle(draft.list_title),
       title: draft.title ?? null,
       conversation_label: null,

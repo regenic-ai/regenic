@@ -393,8 +393,12 @@ describe("dshSessionPlugin", () => {
     });
     assert.deepEqual(created, { source: "dsh", target: "sess-new" });
     assert.equal(
-      methods.some((method) => String(method).includes("session.prompt")),
+      methods.some((method) => String(method).includes("session.create")),
       true,
+    );
+    assert.equal(
+      methods.some((method) => String(method).includes("session.prompt")),
+      false,
     );
 
     await assert.rejects(

@@ -458,13 +458,14 @@ describe("inbox sort", () => {
         ],
         catalog: [],
       }),
-      [{ id: "dsh-1", channel: "dsh", channel_label: "DSH", label: "web" }],
+      [{ id: "dsh-1", channel: "dsh", channel_label: "DSH", label: "web", create_with_task: false }],
     );
     const draft = localDraftConversation({
       id: "dsh-1",
       channel: "dsh",
       channel_label: "DSH",
       label: "web",
+      create_with_task: true,
     });
     assert.match(draft.thread_id, /^draft:dsh-1:/);
     assert.equal(draft.draft_installation_id, "dsh-1");

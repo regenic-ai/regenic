@@ -184,6 +184,7 @@ export interface InboxViewItem {
   direction: MessageDirection;
   can_send: boolean;
   await_reply?: boolean;
+  hold_while_working?: boolean;
   list_title?: ListTitleMode;
   thread_id?: string;
   title?: string | null;
@@ -393,6 +394,7 @@ export interface EngineInstallationView {
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;
+  create_with_task?: boolean;
   channel?: string;
   channel_label?: string;
   last_attempt: IngestAttempt | null;
@@ -409,6 +411,7 @@ export interface CreatedConversation {
   pinned?: boolean;
   opened_at?: string;
   draft_installation_id?: string;
+  hold_while_working?: boolean;
 }
 
 export interface ConversationPrefView {

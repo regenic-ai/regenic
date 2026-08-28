@@ -120,6 +120,9 @@ export function verifyChannelDriverConformance(input: DriverConformanceInput): v
   if (enabledCaps.create && !input.driver.createThread) {
     throw new ConnectorConformanceError("capabilities.create requires createThread");
   }
+  if (enabledCaps.create_with_task && !enabledCaps.create) {
+    throw new ConnectorConformanceError("capabilities.create_with_task requires create");
+  }
   if (enabledCaps.prompts && (!input.driver.listPrompts || !input.driver.answerPrompt)) {
     throw new ConnectorConformanceError("capabilities.prompts requires listPrompts and answerPrompt");
   }

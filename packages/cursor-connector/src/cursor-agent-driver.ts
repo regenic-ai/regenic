@@ -87,6 +87,8 @@ export const cursorAgentDriver: ChannelDriver = {
       create: true,
       await_reply: true,
       list_title: "prompt",
+      create_with_task: true,
+      hold_while_working: true,
     };
   },
 

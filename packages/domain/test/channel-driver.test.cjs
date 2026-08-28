@@ -367,6 +367,47 @@ describe("channel driver registry", () => {
       drivers.awaitReply([feishu], { source: "feishu", target: "oc_1" }),
       false,
     );
+    assert.equal(
+      drivers.holdWhileWorking([dsh], { source: "dsh", target: "sess-a" }),
+      false,
+    );
+    assert.equal(
+      drivers.holdWhileWorking([feishu], { source: "feishu", target: "oc_1" }),
+      false,
+    );
+  });
+
+  it("reads create_with_task and hold_while_working from the driver", () => {
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "cursor-agent",
+        source: "cursor",
+        matchesThread: (_installation, thread) => thread.source === "cursor",
+        ownsThread: () => false,
+        capabilities: () => ({
+          sync: true,
+          reply: true,
+          create: true,
+          await_reply: true,
+          create_with_task: true,
+          hold_while_working: true,
+        }),
+        canReply: () => true,
+      }),
+    );
+    const cursor = {
+      id: "cursor-1",
+      org_id: "local-owner",
+      connector_type: "cursor-agent",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    assert.equal(
+      drivers.holdWhileWorking([cursor], { source: "cursor", target: "agent-1" }),
+      true,
+    );
+    assert.equal(drivers.canCreate([cursor]), true);
   });
 
   it("merges catalog probes from drivers and isolates probe failures", async () => {
