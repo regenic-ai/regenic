@@ -35,6 +35,32 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "settings.store"), "Local data");
     assert.equal(translate("zh", "settings.store"), "本机数据");
     assert.equal(translate("zh", "settings.storeClear"), "清理本机数据");
+    assert.equal(translate("en", "settings.dataDir"), "Data directory");
+    assert.equal(translate("zh", "settings.dataDirBrowse"), "浏览");
+    assert.equal(translate("zh", "settings.dataDirAdopt"), "使用已有数据");
+    assert.equal(
+      translate("zh", "settings.dataDirReasonHeld"),
+      "已有本机内核占用这份数据库。请先退出那个内核，再改目录。",
+    );
+    assert.match(
+      translate("zh", "settings.dataDirCheckout", {
+        checkout: "/repo",
+        product: "/home/ada/.regenic",
+      }),
+      /开发检出/,
+    );
+    assert.equal(
+      translate("zh", "settings.dataDirReasonNotStore"),
+      "这个文件夹里的 regenic.db 不是 SQLite 数据库",
+    );
+    assert.match(translate("zh", "settings.dataDirSplit"), /不在同一个目录/);
+    assert.match(
+      translate("zh", "settings.dataDirFollowed", {
+        path: "/data/new",
+        from: "/home/ada/.regenic",
+      }),
+      /还留着/,
+    );
     assert.equal(translate("zh", "engine.whatsapp.title"), "WhatsApp 个人导出");
     assert.equal(translate("zh", "docs.connector"), "连接器规范");
     assert.equal(translate("en", "docs.executor"), "Executor spec");
