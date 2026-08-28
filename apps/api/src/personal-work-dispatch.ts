@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   advancePullNextRun,
-  composeWorkEvidenceText,
+  WORK_FILE_FETCH_LIMIT,
+  composeWorkConversation,
   conversationId,
   deliveryErrorMessage,
   failedWorkStart,
@@ -251,10 +252,13 @@ export class PersonalWorkDispatch {
     }
     const now = new Date().toISOString();
     const includeContext = recipeWantsContext(recipe);
+    const workspace = Boolean(executor.capabilities().local_workspace);
     const thread = includeContext
-      ? await this.channel.threadContextLines(item.thread_id)
+      ? await this.channel.threadContextLines(item.thread_id, {
+          fetchLimit: workspace ? WORK_FILE_FETCH_LIMIT : undefined,
+        })
       : { lines: [], overflow: false };
-    const text = composeWorkEvidenceText({
+    const composed = composeWorkConversation({
       include_context: includeContext,
       trigger_text: evidenceText,
       head_text:
@@ -275,8 +279,16 @@ export class PersonalWorkDispatch {
             record_class: item.record_class,
             thread_facet: item.thread_facet,
             source: item.thread_id.split(":")[0] ?? "",
-            text,
+            text: composed.inline_text,
           }),
+          conversation: includeContext
+            ? {
+                current: composed.current,
+                current_line: composed.current_line,
+                background: composed.background,
+                omitted: composed.omitted,
+              }
+            : undefined,
         },
         this.channel.contextFor(executor),
       );

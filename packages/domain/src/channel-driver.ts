@@ -192,6 +192,7 @@ export interface ChannelDriver {
     installation: ConnectorInstallation,
     host: Host,
     env: NodeJS.ProcessEnv,
+    options?: { cwd?: string },
   ): Promise<ConversationThread>;
   resolveStreams(
     installation: ConnectorInstallation,

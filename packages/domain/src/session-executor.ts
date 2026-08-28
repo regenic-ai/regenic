@@ -1,4 +1,9 @@
-import { handleFromWait } from "./executor";
+import {
+  composeWorkspaceTaskEvidence,
+  formatWorkEvidence,
+  handleFromWait,
+  stageConversationWorkspace,
+} from "./executor";
 import type {
   ExecutorContext,
   ExecutorResumeInput,
@@ -33,7 +38,13 @@ export function createSessionTaskExecutor(meta?: {
     executor_type: executorType,
 
     capabilities() {
-      return { start: true, resume: true, status: true, prompts: true };
+      return {
+        start: true,
+        resume: true,
+        status: true,
+        prompts: true,
+        local_workspace: true,
+      };
     },
 
     catalog() {
@@ -59,17 +70,33 @@ export function createSessionTaskExecutor(meta?: {
     },
 
     async start(input: ExecutorStartInput, ctx: ExecutorContext) {
-      const thread = await ctx.spawnSysout();
+      const staged = await stageConversationWorkspace(
+        ctx,
+        input.conversation,
+        input.work_item.id,
+      );
+      const thread = await ctx.spawnSysout(staged?.cwd ? { cwd: staged.cwd } : undefined);
       const sysoutId = `${thread.source}:${thread.target}`;
       const prompt =
         typeof input.recipe.executor_config.prompt === "string"
           ? input.recipe.executor_config.prompt
           : "";
+      const evidence_text = staged?.cwd
+        ? formatWorkEvidence({
+            thread_id: input.work_item.thread_id,
+            record_class: input.work_item.record_class,
+            thread_facet: input.work_item.thread_facet,
+            source: input.work_item.thread_id.split(":")[0] ?? "",
+            text: composeWorkspaceTaskEvidence({
+              current_line: input.conversation?.current_line,
+            }),
+          })
+        : input.evidence_text;
       await ctx.writeStdin(
         thread,
         composeSessionStdin({
           prompt,
-          evidence_text: input.evidence_text,
+          evidence_text,
         }),
       );
       return {

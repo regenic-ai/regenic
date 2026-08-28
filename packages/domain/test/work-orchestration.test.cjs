@@ -8,7 +8,14 @@ const {
   WORK_EVIDENCE_OMITTED,
   WORK_EVIDENCE_THREAD_LIMIT,
   budgetThreadEvidence,
+  composeWorkConversation,
   composeWorkEvidenceText,
+  composeWorkspaceInstructionFiles,
+  composeWorkspaceTaskEvidence,
+  WORK_AGENTS_FILENAME,
+  WORK_AGENTS_INLINE_LIMIT,
+  WORK_CONVERSATION_FILENAME,
+  WORK_FILE_THREAD_LIMIT,
   formatThreadContext,
   formatWorkEvidence,
   isExecutorSysoutBody,
@@ -850,6 +857,76 @@ describe("executor registry", () => {
       }),
       "A: history\n\nB: later",
     );
+    const filePack = composeWorkConversation({
+      include_context: true,
+      trigger_text: "latest ticket",
+      thread_lines: [
+        { speaker: "A", text: "history" },
+        { speaker: "B", text: "latest ticket" },
+      ],
+    });
+    assert.equal(filePack.background, "A: history");
+    assert.equal(filePack.current_line, "B: latest ticket");
+    assert.equal(filePack.omitted, false);
+    const omittedRe = new RegExp(WORK_EVIDENCE_OMITTED.replace(/[[\]]/g, "\\$&"));
+    const midHistory = Array.from(
+      { length: WORK_EVIDENCE_THREAD_LIMIT + 5 },
+      (_, index) => ({ speaker: "user", text: `older-${index}` }),
+    );
+    const mid = composeWorkConversation({
+      include_context: true,
+      trigger_text: "do it",
+      thread_lines: [...midHistory, { speaker: "user", text: "do it" }],
+    });
+    assert.equal(mid.omitted, false);
+    assert.equal(mid.background.includes(WORK_EVIDENCE_OMITTED), false);
+    assert.match(mid.inline_text, omittedRe);
+    const midFiles = composeWorkspaceInstructionFiles({
+      background: mid.background,
+      omitted: mid.omitted,
+    });
+    assert.equal(
+      (midFiles[WORK_CONVERSATION_FILENAME] ?? midFiles[WORK_AGENTS_FILENAME] ?? "").includes(
+        WORK_EVIDENCE_OMITTED,
+      ),
+      false,
+    );
+    const fileOmitted = composeWorkConversation({
+      include_context: true,
+      trigger_text: "do it",
+      thread_overflow: true,
+      thread_lines: [
+        { speaker: "A", text: `kept ${"y".repeat(WORK_AGENTS_INLINE_LIMIT)}` },
+        { speaker: "user", text: "do it" },
+      ],
+    });
+    assert.equal(fileOmitted.omitted, true);
+    assert.match(fileOmitted.background, omittedRe);
+    const overflowFiles = composeWorkspaceInstructionFiles({
+      background: fileOmitted.background,
+      omitted: fileOmitted.omitted,
+    });
+    const stamped =
+      overflowFiles[WORK_CONVERSATION_FILENAME] ?? overflowFiles[WORK_AGENTS_FILENAME] ?? "";
+    assert.equal(stamped.split(WORK_EVIDENCE_OMITTED).length - 1, 1);
+    assert.equal(WORK_FILE_THREAD_LIMIT > WORK_EVIDENCE_THREAD_LIMIT, true);
+    const small = composeWorkspaceInstructionFiles({
+      background: "A: history",
+    });
+    assert.equal(small[WORK_CONVERSATION_FILENAME], undefined);
+    assert.match(small[WORK_AGENTS_FILENAME], /## Prior turns/);
+    assert.match(small[WORK_AGENTS_FILENAME], /A: history/);
+    const large = composeWorkspaceInstructionFiles({
+      background: "x".repeat(WORK_AGENTS_INLINE_LIMIT + 1),
+    });
+    assert.ok(large[WORK_CONVERSATION_FILENAME]);
+    assert.match(large[WORK_AGENTS_FILENAME], /conversation\.md/);
+    assert.equal(large[WORK_AGENTS_FILENAME].includes("xxxx"), false);
+    assert.equal(
+      composeWorkspaceTaskEvidence({ current_line: "B: latest ticket" }),
+      "<current>\nB: latest ticket\n</current>",
+    );
+    assert.equal(WORK_CONVERSATION_FILENAME, "conversation.md");
   });
 });
 

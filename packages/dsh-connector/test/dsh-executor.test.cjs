@@ -48,6 +48,72 @@ describe("dshTaskExecutor", () => {
     assert.ok(dshTaskExecutor.catalog().fields[1].hint);
     assert.match(dshTaskExecutor.catalog().fields[1].hint, /line 1/);
     assert.equal(dshTaskExecutor.capabilities().prompts, true);
+    assert.equal(dshTaskExecutor.capabilities().local_workspace, true);
+  });
+
+  it("loads short history through AGENTS.md and keeps stdin as the current task", async () => {
+    const written = [];
+    const spawned = [];
+    const sent = [];
+    await dshTaskExecutor.start(
+      {
+        work_item: {
+          id: "w1",
+          thread_id: "feishu:oc_1",
+          record_class: "utterance",
+          thread_facet: "chat",
+        },
+        recipe: { id: "r1", executor_type: "dsh", executor_config: {} },
+        evidence_text: "inline history should not be sent",
+        conversation: {
+          current_line: "user: 帮我回一下",
+          background: "熊峰: 上周那单怎么了",
+          omitted: false,
+        },
+      },
+      ctx({
+        writeWorkFiles: async (files) => {
+          written.push(files);
+          return { cwd: "/tmp/work-context/w1" };
+        },
+        spawnSysout: async (options) => {
+          spawned.push(options);
+          return { source: "dsh", target: "session-1" };
+        },
+        writeStdin: async (_thread, text) => {
+          sent.push(text);
+        },
+      }),
+    );
+    assert.equal(written[0]["conversation.md"], undefined);
+    assert.match(written[0]["AGENTS.md"], /## Prior turns/);
+    assert.match(written[0]["AGENTS.md"], /上周那单怎么了/);
+    assert.deepEqual(spawned[0], { cwd: "/tmp/work-context/w1" });
+    assert.match(sent[0], /<current>\nuser: 帮我回一下\n<\/current>/);
+    assert.equal(sent[0].includes("inline history should not be sent"), false);
+    assert.equal(sent[0].includes("上周那单怎么了"), false);
+    assert.equal(sent[0].includes("conversation.md"), false);
+
+    const remoteSent = [];
+    await dshTaskExecutor.start(
+      {
+        work_item: { id: "w1", thread_id: "feishu:oc_1" },
+        recipe: { id: "r1", executor_type: "dsh", executor_config: {} },
+        evidence_text: "inline history for a remote DSH",
+        conversation: {
+          current_line: "user: 帮我回一下",
+          background: "熊峰: 上周那单怎么了",
+        },
+      },
+      ctx({
+        env: { REGENIC_DSH_BASE_URL: "http://dsh.internal:3080" },
+        writeWorkFiles: async () => ({ cwd: "/tmp/unused" }),
+        writeStdin: async (_thread, text) => {
+          remoteSent.push(text);
+        },
+      }),
+    );
+    assert.equal(remoteSent[0], "inline history for a remote DSH");
   });
 
   it("composes skill and prompt ahead of the work evidence", async () => {
