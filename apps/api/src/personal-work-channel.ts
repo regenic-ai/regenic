@@ -27,6 +27,7 @@ import {
 } from "@regenic/domain";
 import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
+import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export class PersonalWorkChannel {
@@ -39,7 +40,7 @@ export class PersonalWorkChannel {
     return {
       org_id: this.runtime.orgId(),
       env: process.env,
-      spawnSysout: async () => {
+      spawnSysout: async (options) => {
         const host = this.runtime.requireHost();
         const installations = await host
           .get("authority")
@@ -60,8 +61,17 @@ export class PersonalWorkChannel {
           found.installation,
           host,
           process.env,
+          options?.cwd ? { cwd: options.cwd } : undefined,
         );
       },
+      ...(this.runtime.getOptions()?.blobRoot
+        ? {
+            writeWorkFiles: async (
+              files: Record<string, string>,
+              options?: { work_item_id?: string },
+            ) => this.writeWorkFiles(files, options?.work_item_id),
+          }
+        : {}),
       writeStdin: async (thread, text) => {
         await this.sendText(thread, text);
       },
@@ -74,6 +84,26 @@ export class PersonalWorkChannel {
       },
       readTranscript: async (sysoutId) => this.readTranscript(sysoutId),
     };
+  }
+
+  async writeWorkFiles(
+    files: Record<string, string>,
+    workItemId?: string,
+  ): Promise<{ cwd: string }> {
+    const blobRoot = this.runtime.getOptions()?.blobRoot;
+    if (!blobRoot) {
+      throw new PersonalConnectorError(
+        "unavailable",
+        "Local work files need a blob root",
+        503,
+      );
+    }
+    return writeWorkContextFiles({
+      blobRoot,
+      orgId: this.runtime.orgId(),
+      files,
+      workItemId,
+    });
   }
 
   async sendText(
@@ -272,9 +302,10 @@ export class PersonalWorkChannel {
 
   async threadContextLines(
     threadId: string,
+    options?: { fetchLimit?: number },
   ): Promise<{ lines: WorkEvidenceLine[]; overflow: boolean }> {
     const host = this.runtime.requireHost();
-    const fetchLimit = WORK_EVIDENCE_FETCH_LIMIT;
+    const fetchLimit = options?.fetchLimit ?? WORK_EVIDENCE_FETCH_LIMIT;
     const items = await host.get("authority").listInbox(this.runtime.orgId(), {
       thread_ids: [threadId],
       siblings: true,

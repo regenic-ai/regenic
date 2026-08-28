@@ -1,6 +1,9 @@
 import {
+  composeWorkspaceTaskEvidence,
+  formatWorkEvidence,
   handleFromWait,
   parseConversationThread,
+  stageConversationWorkspace,
   waitFromAbsentee,
   type ExecutorContext,
   type ExecutorResumeInput,
@@ -11,6 +14,7 @@ import {
   type ThreadPrompt,
   type WorkRun,
 } from "@regenic/domain";
+import { resolveOperatorDshBaseUrl } from "./dsh-url";
 
 export const DSH_PROMPT_FIELD = "prompt";
 export const DSH_SKILL_FIELD = "skill";
@@ -67,7 +71,13 @@ export const dshTaskExecutor: TaskExecutor = {
   executor_type: "dsh",
 
   capabilities() {
-    return { start: true, resume: true, status: true, prompts: true };
+    return {
+      start: true,
+      resume: true,
+      status: true,
+      prompts: true,
+      local_workspace: true,
+    };
   },
 
   catalog() {
@@ -97,14 +107,28 @@ export const dshTaskExecutor: TaskExecutor = {
   },
 
   async start(input: ExecutorStartInput, ctx: ExecutorContext) {
-    const thread = await ctx.spawnSysout();
+    const staged = dshCanReadLocalWorkspace(ctx.env)
+      ? await stageConversationWorkspace(ctx, input.conversation, input.work_item.id)
+      : undefined;
+    const thread = await ctx.spawnSysout(staged?.cwd ? { cwd: staged.cwd } : undefined);
     const sysoutId = `${thread.source}:${thread.target}`;
+    const evidence_text = staged?.cwd
+      ? formatWorkEvidence({
+          thread_id: input.work_item.thread_id,
+          record_class: input.work_item.record_class,
+          thread_facet: input.work_item.thread_facet,
+          source: input.work_item.thread_id.split(":")[0] ?? "",
+          text: composeWorkspaceTaskEvidence({
+            current_line: input.conversation?.current_line,
+          }),
+        })
+      : input.evidence_text;
     await ctx.writeStdin(
       thread,
       composeDshStdin({
         skill: dshSkillOf(input.recipe.executor_config),
         prompt: dshPromptOf(input.recipe.executor_config),
-        evidence_text: input.evidence_text,
+        evidence_text,
       }),
     );
     return {
@@ -144,6 +168,12 @@ export const dshTaskExecutor: TaskExecutor = {
     });
   },
 };
+
+export function dshCanReadLocalWorkspace(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !resolveOperatorDshBaseUrl(env);
+}
 
 export function dshExecutorPrompts(handle: ExecutorRunHandle): ThreadPrompt[] {
   return handle.prompts ?? [];

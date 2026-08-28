@@ -14,6 +14,12 @@ export interface ExecutorCapabilities {
   resume: boolean;
   status: boolean;
   prompts?: boolean;
+  /**
+   * Same-machine absentee agents can read a workspace file. The kernel may
+   * pack a longer background and let the executor point at it instead of
+   * stuffing the whole thread into stdin.
+   */
+  local_workspace?: boolean;
 }
 
 /**
@@ -51,16 +57,29 @@ export interface ExecutorContext {
   org_id: string;
   env: NodeJS.ProcessEnv;
   /** Absentee sysout. Not a Session. */
-  spawnSysout(): Promise<ConversationThread>;
+  spawnSysout(options?: { cwd?: string }): Promise<ConversationThread>;
   writeStdin(thread: ConversationThread, text: string): Promise<void>;
   listPrompts(thread: ConversationThread): Promise<ThreadPrompt[]>;
   readTranscript(sysoutId: string): Promise<Transcript | null>;
+  /** Write files the local agent can read from cwd. Same machine only. */
+  writeWorkFiles?(
+    files: Record<string, string>,
+    options?: { work_item_id?: string },
+  ): Promise<{ cwd: string }>;
+}
+
+export interface WorkConversationEvidence {
+  current?: string;
+  current_line?: string;
+  background?: string;
+  omitted?: boolean;
 }
 
 export interface ExecutorStartInput {
   work_item: WorkItem;
   recipe: Recipe;
   evidence_text: string;
+  conversation?: WorkConversationEvidence;
 }
 
 export interface ExecutorResumeInput {
@@ -209,6 +228,16 @@ export const WORK_EVIDENCE_FETCH_LIMIT = 80;
 /** Formatted conversation budget. Oldest lines drop first. */
 export const WORK_EVIDENCE_CHAR_LIMIT = 16_000;
 export const WORK_EVIDENCE_OMITTED = "[Earlier messages omitted]";
+/** Visible lines packed into a local workspace file. */
+export const WORK_FILE_THREAD_LIMIT = 200;
+/** Inbox rows to load when the executor can read a file. */
+export const WORK_FILE_FETCH_LIMIT = 400;
+/** File conversation budget. Oldest lines drop first. */
+export const WORK_FILE_CHAR_LIMIT = 80_000;
+export const WORK_CONVERSATION_FILENAME = "conversation.md";
+export const WORK_AGENTS_FILENAME = "AGENTS.md";
+/** Short history is inlined into AGENTS.md so DSH/Cursor/Codex load it. */
+export const WORK_AGENTS_INLINE_LIMIT = 4_000;
 /** DSH-style checkpoint: older turns are established context, not the task. */
 export const WORK_EVIDENCE_BACKGROUND_OPEN = "<background>";
 export const WORK_EVIDENCE_BACKGROUND_CLOSE = "</background>";
@@ -216,6 +245,8 @@ export const WORK_EVIDENCE_CURRENT_OPEN = "<current>";
 export const WORK_EVIDENCE_CURRENT_CLOSE = "</current>";
 export const WORK_EVIDENCE_SPLIT_HINT =
   "Treat <background> as established context. Act on <current>.";
+export const WORK_WORKSPACE_PULL_HINT =
+  "Review the conversation in this workspace and work from it.";
 
 export function formatEvidenceLine(line: WorkEvidenceLine): string {
   const text = line.text.trim();
@@ -335,6 +366,72 @@ function wrapEvidenceSection(tagOpen: string, tagClose: string, body: string): s
   return `${tagOpen}\n${body}\n${tagClose}`;
 }
 
+export function composeWorkConversation(input: {
+  include_context: boolean;
+  trigger_text?: string;
+  head_text?: string;
+  thread_lines?: WorkEvidenceLine[];
+  thread_overflow?: boolean;
+  file_line_limit?: number;
+  file_char_limit?: number;
+}): WorkConversationEvidence & { inline_text?: string } {
+  const current = input.trigger_text?.trim() || input.head_text?.trim() || undefined;
+  if (!input.include_context) {
+    return {
+      current,
+      current_line: current
+        ? formatEvidenceLine({ speaker: "user", text: current })
+        : undefined,
+      omitted: false,
+      inline_text: current,
+    };
+  }
+  const split = splitCurrentFromHistory(input.thread_lines ?? [], current);
+  const packed = packThreadEvidence({
+    lines: split.history,
+    overflow: input.thread_overflow,
+  });
+  const filePacked = packThreadEvidence({
+    lines: split.history,
+    overflow: input.thread_overflow,
+    lineLimit: input.file_line_limit ?? WORK_FILE_THREAD_LIMIT,
+    charLimit: input.file_char_limit ?? WORK_FILE_CHAR_LIMIT,
+  });
+  const currentLine = current
+    ? formatEvidenceLine({
+        speaker: split.currentSpeaker,
+        text: current,
+      })
+    : undefined;
+  let inline_text: string | undefined;
+  if (!current) {
+    inline_text = packed.text || undefined;
+  } else if (!packed.text) {
+    inline_text = currentLine || current;
+  } else {
+    inline_text = [
+      WORK_EVIDENCE_SPLIT_HINT,
+      wrapEvidenceSection(
+        WORK_EVIDENCE_BACKGROUND_OPEN,
+        WORK_EVIDENCE_BACKGROUND_CLOSE,
+        packed.text,
+      ),
+      wrapEvidenceSection(
+        WORK_EVIDENCE_CURRENT_OPEN,
+        WORK_EVIDENCE_CURRENT_CLOSE,
+        currentLine ?? current,
+      ),
+    ].join("\n\n");
+  }
+  return {
+    current,
+    current_line: currentLine,
+    background: filePacked.text || undefined,
+    omitted: filePacked.omitted,
+    inline_text,
+  };
+}
+
 export function composeWorkEvidenceText(input: {
   include_context: boolean;
   trigger_text?: string;
@@ -342,38 +439,75 @@ export function composeWorkEvidenceText(input: {
   thread_lines?: WorkEvidenceLine[];
   thread_overflow?: boolean;
 }): string | undefined {
-  const current = input.trigger_text?.trim() || input.head_text?.trim() || undefined;
-  if (!input.include_context) {
-    return current;
-  }
-  const split = splitCurrentFromHistory(input.thread_lines ?? [], current);
-  const packed = packThreadEvidence({
-    lines: split.history,
-    overflow: input.thread_overflow,
-  });
+  return composeWorkConversation(input).inline_text;
+}
+
+export function composeWorkspaceTaskEvidence(input: {
+  current_line?: string;
+}): string {
+  const current = input.current_line?.trim();
   if (!current) {
-    return packed.text || undefined;
+    return WORK_WORKSPACE_PULL_HINT;
   }
-  const currentLine = formatEvidenceLine({
-    speaker: split.currentSpeaker,
-    text: current,
-  });
-  if (!packed.text) {
-    return currentLine || current;
+  return wrapEvidenceSection(
+    WORK_EVIDENCE_CURRENT_OPEN,
+    WORK_EVIDENCE_CURRENT_CLOSE,
+    current,
+  );
+}
+
+/** @deprecated Use composeWorkspaceTaskEvidence. */
+export function composeWorkspacePointerEvidence(input: {
+  current_line?: string;
+  omitted?: boolean;
+}): string {
+  void input.omitted;
+  return composeWorkspaceTaskEvidence(input);
+}
+
+export function composeWorkspaceInstructionFiles(input: {
+  background?: string;
+  omitted?: boolean;
+}): Record<string, string> {
+  const background = input.background?.trim() ?? "";
+  const omitted =
+    input.omitted && !background.startsWith(WORK_EVIDENCE_OMITTED)
+      ? `${WORK_EVIDENCE_OMITTED}\n\n`
+      : "";
+  const inline = Boolean(background) && background.length <= WORK_AGENTS_INLINE_LIMIT;
+  const agents = [
+    "This session handles one work item from a source chat.",
+    "The user message is the task. Prior turns are established background.",
+    inline
+      ? "Prior turns follow. Use them as context. Do not restate them."
+      : "Prior turns are in conversation.md. Read that file only if you need background. Do not restate it.",
+    inline && background ? `\n## Prior turns\n\n${omitted}${background}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const files: Record<string, string> = { [WORK_AGENTS_FILENAME]: agents };
+  if (background && !inline) {
+    files[WORK_CONVERSATION_FILENAME] = `${omitted}${background}`.trim();
   }
-  return [
-    WORK_EVIDENCE_SPLIT_HINT,
-    wrapEvidenceSection(
-      WORK_EVIDENCE_BACKGROUND_OPEN,
-      WORK_EVIDENCE_BACKGROUND_CLOSE,
-      packed.text,
-    ),
-    wrapEvidenceSection(
-      WORK_EVIDENCE_CURRENT_OPEN,
-      WORK_EVIDENCE_CURRENT_CLOSE,
-      currentLine,
-    ),
-  ].join("\n\n");
+  return files;
+}
+
+export async function stageConversationWorkspace(
+  ctx: ExecutorContext,
+  conversation: WorkConversationEvidence | undefined,
+  workItemId?: string,
+): Promise<{ cwd: string } | undefined> {
+  const background = conversation?.background?.trim();
+  if (!background || !ctx.writeWorkFiles) {
+    return undefined;
+  }
+  return ctx.writeWorkFiles(
+    composeWorkspaceInstructionFiles({
+      background,
+      omitted: conversation?.omitted,
+    }),
+    workItemId ? { work_item_id: workItemId } : undefined,
+  );
 }
 
 export function formatWorkEvidence(input: {

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   advancePullNextRun,
-  composeWorkEvidenceText,
+  WORK_FILE_FETCH_LIMIT,
+  composeWorkConversation,
   conversationId,
   deliveryErrorMessage,
   failedWorkStart,
@@ -24,6 +25,7 @@ import {
   type EventRecord,
   type InboxItem,
   type Recipe,
+  type TaskExecutor,
   type WorkItem,
   type WorkRun,
 } from "@regenic/domain";
@@ -33,6 +35,8 @@ import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export class PersonalWorkDispatch {
+  private readonly starting = new Set<string>();
+
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly channel: PersonalWorkChannel,
@@ -249,12 +253,40 @@ export class PersonalWorkDispatch {
       await this.noteStartFailed(item, recipe, "Unknown executor", mode);
       return undefined;
     }
+    if (this.starting.has(item.id)) {
+      return undefined;
+    }
+    this.starting.add(item.id);
+    try {
+      return await this.startClaimedItem(
+        item,
+        recipe,
+        executor,
+        evidenceText,
+        mode,
+      );
+    } finally {
+      this.starting.delete(item.id);
+    }
+  }
+
+  private async startClaimedItem(
+    item: WorkItem,
+    recipe: Recipe,
+    executor: TaskExecutor,
+    evidenceText: string | undefined,
+    mode: "auto" | "manual",
+  ): Promise<WorkRun | undefined> {
+    const host = this.runtime.requireHost();
     const now = new Date().toISOString();
     const includeContext = recipeWantsContext(recipe);
+    const workspace = Boolean(executor.capabilities().local_workspace);
     const thread = includeContext
-      ? await this.channel.threadContextLines(item.thread_id)
+      ? await this.channel.threadContextLines(item.thread_id, {
+          fetchLimit: workspace ? WORK_FILE_FETCH_LIMIT : undefined,
+        })
       : { lines: [], overflow: false };
-    const text = composeWorkEvidenceText({
+    const composed = composeWorkConversation({
       include_context: includeContext,
       trigger_text: evidenceText,
       head_text:
@@ -275,8 +307,16 @@ export class PersonalWorkDispatch {
             record_class: item.record_class,
             thread_facet: item.thread_facet,
             source: item.thread_id.split(":")[0] ?? "",
-            text,
+            text: composed.inline_text,
           }),
+          conversation: includeContext
+            ? {
+                current: composed.current,
+                current_line: composed.current_line,
+                background: composed.background,
+                omitted: composed.omitted,
+              }
+            : undefined,
         },
         this.channel.contextFor(executor),
       );
