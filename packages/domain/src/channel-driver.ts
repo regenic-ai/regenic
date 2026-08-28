@@ -4,6 +4,7 @@ import { CHANNELS, channelLabel } from "./message-contract";
 import type {
   ChannelConnector,
   ConnectorInstallation,
+  ConnectorSourceMode,
   NewConnectorInstallation,
 } from "./ingestion";
 import type {
@@ -171,7 +172,11 @@ export interface ConnectorStreamPace {
 
 export interface ConnectorStream {
   stream_key: string;
-  connector: Pick<ChannelConnector, "poll" | "source">;
+  connector: Pick<ChannelConnector, "source"> & {
+    poll: NonNullable<ChannelConnector["poll"]>;
+    source_mode?: ChannelConnector["source_mode"];
+    quota?: ChannelConnector["quota"];
+  };
   pace?: ConnectorStreamPace;
   thread_id?: string;
   label?: string;
@@ -197,6 +202,11 @@ export class ChannelDriverError extends Error {
 export interface ChannelDriverCore {
   readonly connector_type: string;
   readonly source: string;
+  /**
+   * Declared pull/push mode for this driver. Omit for poll-only.
+   * Tick skips webhook-only installs instead of calling poll.
+   */
+  readonly source_mode?: ConnectorSourceMode;
   /** Contract version. Omit for 1.0. Newer values are skipped at load. */
   readonly connector_protocol?: string;
   install(input: {
@@ -216,7 +226,7 @@ export interface ChannelDriverCore {
   capabilities(installation: ConnectorInstallation): ChannelCapabilities;
 }
 
-/** Mount and poll streams. Required while sync is the live source mode. */
+/** Mount and poll streams. Required while poll/hybrid is the live source mode. */
 export interface ChannelSourcePort {
   resolveStreams(
     installation: ConnectorInstallation,
@@ -249,8 +259,23 @@ export interface ChannelSinkPort {
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt): string;
 }
 
+export type WebhookConnector = Pick<
+  ChannelConnector,
+  "source" | "source_mode" | "quota" | "verifyWebhook" | "handleWebhook"
+>;
+
 export interface ChannelDriver
   extends ChannelDriverCore, ChannelSourcePort, Partial<ChannelSinkPort> {
+  /**
+   * Bind the install-level webhook translator. Required when
+   * `source_mode` is webhook or hybrid. The kernel ingest path calls
+   * this; drivers must not write Events themselves.
+   */
+  bindWebhook?(
+    installation: ConnectorInstallation,
+    host: Host,
+    env: NodeJS.ProcessEnv,
+  ): Promise<WebhookConnector>;
   /**
    * Install card. Absent means this driver does not appear in Engine.
    */
@@ -362,6 +387,18 @@ export function requireOutboundId(
     );
   }
   return driver.outboundId.bind(driver);
+}
+
+export function requireWebhookPorts(driver: ChannelDriver): {
+  bindWebhook: NonNullable<ChannelDriver["bindWebhook"]>;
+} {
+  if (!driver.bindWebhook) {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "Webhook ingest is not available",
+    );
+  }
+  return { bindWebhook: driver.bindWebhook.bind(driver) };
 }
 
 export class ChannelDriverRegistry {

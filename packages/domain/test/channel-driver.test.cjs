@@ -8,6 +8,7 @@ const {
   requireBindEgress,
   requireCreateThread,
   requireReplyPorts,
+  requireWebhookPorts,
 } = require("../dist");
 
 function stubDriver(partial) {
@@ -564,5 +565,28 @@ describe("channel driver registry", () => {
       () => requireReplyPorts(extra),
       (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
     );
+  });
+
+  it("requires bindWebhook for webhook ingest", () => {
+    const extra = stubDriver({
+      connector_type: "extra-push",
+      source: "extra",
+      source_mode: "webhook",
+    });
+    assert.throws(
+      () => requireWebhookPorts(extra),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
+    extra.bindWebhook = async () => ({
+      source: "extra",
+      source_mode: "webhook",
+      async verifyWebhook(request) {
+        return { body: request.body, verified_at: request.received_at };
+      },
+      async handleWebhook() {
+        return { records: [] };
+      },
+    });
+    assert.equal(typeof requireWebhookPorts(extra).bindWebhook, "function");
   });
 });

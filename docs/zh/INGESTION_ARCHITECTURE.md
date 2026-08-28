@@ -100,7 +100,7 @@ interface ChannelConnector {
   readonly source: string;
   readonly source_mode?: "poll" | "webhook" | "hybrid";
 
-  poll(cursor: ConnectorCursor | null): Promise<PollResult>;
+  poll?(cursor: ConnectorCursor | null): Promise<PollResult>;
   capabilities?(): ConnectorCapabilities;
   verifyWebhook?(request: WebhookRequest): Promise<VerifiedWebhook>;
   handleWebhook?(webhook: VerifiedWebhook): Promise<IngestBatch>;

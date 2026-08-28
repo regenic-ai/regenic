@@ -9,8 +9,10 @@ import {
   Param,
   Post,
   Query,
+  Req,
   UseGuards,
 } from "@nestjs/common";
+import type { Request } from "express";
 import { PersonalApiGuard } from "./personal-api.guard";
 import {
   PersonalConnectorError,
@@ -317,6 +319,17 @@ export class PersonalController {
     );
   }
 
+  @Post("connectors/:id/webhook")
+  ingestConnectorWebhook(@Param("id") id: string, @Req() req: Request) {
+    return this.guard(() =>
+      this.connectors.ingestWebhook(id, {
+        headers: webhookHeaders(req.headers),
+        body: webhookBody(req),
+        received_at: new Date().toISOString(),
+      }),
+    );
+  }
+
   @Post("connectors/:id/enable")
   enableConnector(@Param("id") id: string) {
     noteHumanActivity();
@@ -352,4 +365,28 @@ export class PersonalController {
       throw error;
     }
   }
+}
+
+function webhookHeaders(
+  headers: Request["headers"],
+): Record<string, string | string[] | undefined> {
+  const out: Record<string, string | string[] | undefined> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    out[key] = value;
+  }
+  return out;
+}
+
+function webhookBody(req: Request): Uint8Array {
+  const raw = (req as Request & { rawBody?: Buffer }).rawBody;
+  if (raw) {
+    return new Uint8Array(raw);
+  }
+  if (Buffer.isBuffer(req.body)) {
+    return new Uint8Array(req.body);
+  }
+  if (typeof req.body === "string") {
+    return new Uint8Array(Buffer.from(req.body));
+  }
+  return new Uint8Array(Buffer.from(JSON.stringify(req.body ?? {})));
 }

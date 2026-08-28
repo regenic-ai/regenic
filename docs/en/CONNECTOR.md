@@ -46,7 +46,8 @@ exist; the kernel returns 501. Drivers must not stub them.
 | Port | Responsibility | When |
 | --- | --- | --- |
 | `ChannelDriverCore` | Install, match threads, declare capabilities | Every driver |
-| `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` |
+| `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` when `source_mode` is poll / hybrid |
+| Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` is webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / optional `createThread` | `reply`; `create` also needs `createThread` |
 | Catalog | `installCatalog` / `presentInstall` / `probeCatalog` | To appear on Engine |
 | Surface | `prompts` / `attention` / `receipts` | Matching capability flags |
@@ -79,6 +80,17 @@ Each connector must:
 - Fail independently. One install must not stall another. The tick pulls
   enabled installs in parallel. Each `poll` and each tick/catch-up sync
   has a deadline; a timeout releases the lease.
+- Declare `source_mode`. Omit it for poll. `webhook` / `hybrid` must
+  implement `verifyWebhook` + `handleWebhook` and `bindWebhook` on the
+  driver. Webhook-only must not declare `poll`; the tick does not pull
+  it. After verify/translate, the kernel ingest path writes Events.
+- Installation quota is a token bucket. Default 60 / 60s
+  (`REGENIC_CONNECTOR_QUOTA_TOKENS` /
+  `REGENIC_CONNECTOR_QUOTA_WINDOW_MS`). `0` disables it. A connector may
+  declare a tighter `quota`. The kernel does not keep per-source rate
+  constants. Poll acquires the lease before spending a token; a missed
+  lease spends nothing. Exhaustion releases the lease and returns
+  `throttled`, not a pull error.
 - Implement `installCatalog()` to appear on Engine. Optional
   `presentInstall` labels the installed row. Optional `writeBackLabels`
   lists exact aliases for write-back.
@@ -103,10 +115,17 @@ failure containment. It does not spawn a child process by default.
   does not stall the others. An install still in `inflight` is skipped
   on the next tick.
 - `ConnectorRunner.poll` applies a deadline to `connector.poll`. A
-  timeout releases the lease and does not advance the cursor.
+  timeout releases the lease and does not advance the cursor. A webhook
+  `source_mode` does not call `poll`.
+- `ConnectorRunner.webhook` runs `verifyWebhook` then `handleWebhook`,
+  then ingest. It does not take a poll lease or advance a poll cursor.
+  The HTTP entry is `POST /v1/me/connectors/:id/webhook`.
 - Defaults: 20s per poll (`REGENIC_CONNECTOR_POLL_TIMEOUT_MS`) and 30s
   per tick/catch-up sync (`REGENIC_CONNECTOR_SYNC_TIMEOUT_MS`). Set
   either to `0` to disable.
+- Each install has one token bucket. Default 60 / 60s; a connector may
+  declare `quota`. The kernel does not hard-code Slack / Feishu /
+  DingTalk rates.
 - `probeCatalog`, inbox receipts, and conversation-label lookups already
   swallow per-driver failures.
 - A stdio out-of-process host is for untrusted third-party plugins, not
@@ -251,15 +270,17 @@ interface ConnectorStream {
 
 ## ChannelConnector
 
-The runtime currently requires `source` + `poll`. Omit `source_mode` for
+The runtime calls methods that match `source_mode`. Omit it for
 poll-only. Undeclared webhook, backfill, and member-sync methods do not
-exist; the kernel never calls them.
+exist; the kernel never calls them. Acceptance is
+`verifyConnectorSourceMode`.
 
 ```ts
 interface ChannelConnector {
   readonly source: string;
   readonly source_mode?: "poll" | "webhook" | "hybrid";
-  poll(cursor: ConnectorCursor | null, options?: ConnectorPollOptions): Promise<PollResult>;
+  readonly quota?: { tokens: number; window_ms: number };
+  poll?(cursor: ConnectorCursor | null, options?: ConnectorPollOptions): Promise<PollResult>;
   capabilities?(): ConnectorCapabilities;
   verifyWebhook?(request): Promise<VerifiedWebhook>;
   handleWebhook?(webhook): Promise<IngestBatch>;

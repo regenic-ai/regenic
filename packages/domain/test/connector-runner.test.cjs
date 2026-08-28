@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const {
   ConnectorRunner,
   INGEST_SCHEMA_VERSION,
+  InstallationQuotaBook,
   MemoryConnectorRuntimeStore,
 } = require("../dist");
 
@@ -240,5 +241,187 @@ describe("ConnectorRunner", () => {
     assert.equal(run.status, "completed");
     assert.deepEqual(run.result.records, []);
     assert.deepEqual(ingested, []);
+  });
+
+  it("does not poll a webhook-only connector", async () => {
+    const runtime = await createRuntime();
+    let polled = 0;
+    const runner = new ConnectorRunner(
+      {
+        source: "push",
+        source_mode: "webhook",
+        async poll() {
+          polled += 1;
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    const run = await runner.poll(input);
+    assert.equal(run.status, "unsupported_mode");
+    assert.equal(polled, 0);
+    const cursor = await runtime.getCursor("installation-1", "personal");
+    assert.equal(cursor?.cursor, undefined);
+  });
+
+  it("releases the lease when quota is exhausted after it is acquired", async () => {
+    const runtime = await createRuntime();
+    let polled = 0;
+    const quota = new InstallationQuotaBook({ tokens: 1, window_ms: 60_000 }, () => 1_000);
+    quota.tryConsume("installation-1");
+    const runner = new ConnectorRunner(
+      {
+        source: "fake",
+        async poll() {
+          polled += 1;
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+      quota,
+    );
+    const run = await runner.poll(input);
+    assert.equal(run.status, "throttled");
+    assert.equal(polled, 0);
+    const nextLease = await runtime.acquireLease({
+      ...input,
+      lease_owner: "worker-b",
+      now: "2026-08-12T00:00:01.000Z",
+    });
+    assert.equal(nextLease.lease_owner, "worker-b");
+  });
+
+  it("does not spend quota when another worker already holds the lease", async () => {
+    const runtime = await createRuntime();
+    await runtime.acquireLease({
+      ...input,
+      now: "2026-08-12T00:00:00.000Z",
+    });
+    let now = 1_000;
+    const quota = new InstallationQuotaBook({ tokens: 1, window_ms: 60_000 }, () => now);
+    const runner = new ConnectorRunner(
+      {
+        source: "fake",
+        async poll() {
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+      quota,
+    );
+    const blocked = await runner.poll({ ...input, lease_owner: "worker-b" });
+    assert.equal(blocked.status, "lease_unavailable");
+    now += 1;
+    await runtime.releaseLease({
+      installation_id: input.installation_id,
+      stream_key: input.stream_key,
+      lease_owner: input.lease_owner,
+      now: "2026-08-12T00:00:01.000Z",
+    });
+    const run = await runner.poll({ ...input, lease_owner: "worker-b" });
+    assert.equal(run.status, "completed");
+  });
+
+  it("verifies a webhook then ingests through the kernel", async () => {
+    const runtime = await createRuntime();
+    const seen = [];
+    const runner = new ConnectorRunner(
+      {
+        source: "push",
+        source_mode: "webhook",
+        async verifyWebhook(request) {
+          seen.push(Buffer.from(request.body).toString());
+          return { body: request.body, verified_at: request.received_at };
+        },
+        async handleWebhook() {
+          return batch();
+        },
+      },
+      {
+        async ingest(input) {
+          return validResult([
+            { external_id: "message-1", status: "accepted", event_id: "event-1" },
+          ]);
+        },
+      },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    const run = await runner.webhook({
+      installation_id: "installation-1",
+      request: {
+        headers: { "x-test": "1" },
+        body: new Uint8Array(Buffer.from('{"ok":true}')),
+        received_at: "2026-08-12T00:00:00.000Z",
+      },
+    });
+    assert.equal(run.status, "completed");
+    assert.deepEqual(seen, ['{"ok":true}']);
+    assert.equal(run.result.records[0].status, "accepted");
+    const cursor = await runtime.getCursor("installation-1", "personal");
+    assert.equal(cursor?.cursor, undefined);
+  });
+
+  it("keeps class-method this when polling", async () => {
+    const runtime = await createRuntime();
+    class ClassConnector {
+      source = "fake";
+      async poll() {
+        return { batch: batch(this.records()), next_cursor: "cursor-2" };
+      }
+      records() {
+        return batch().records;
+      }
+    }
+    const runner = new ConnectorRunner(
+      new ClassConnector(),
+      {
+        async ingest() {
+          return validResult([
+            { external_id: "message-1", status: "accepted", event_id: "event-1" },
+          ]);
+        },
+      },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    const run = await runner.poll(input);
+    assert.equal(run.status, "completed");
+    assert.equal(run.result.records[0].status, "accepted");
+  });
+
+  it("does not ingest a webhook when the mode is poll-only", async () => {
+    const runtime = await createRuntime();
+    const runner = new ConnectorRunner(
+      {
+        source: "fake",
+        async poll() {
+          return { batch: batch([]), next_cursor: undefined };
+        },
+        async verifyWebhook() {
+          throw new Error("must not verify");
+        },
+        async handleWebhook() {
+          throw new Error("must not handle");
+        },
+      },
+      { async ingest() { throw new Error("must not ingest"); } },
+      runtime,
+    );
+    const run = await runner.webhook({
+      installation_id: "installation-1",
+      request: {
+        headers: {},
+        body: new Uint8Array(),
+        received_at: "2026-08-12T00:00:00.000Z",
+      },
+    });
+    assert.equal(run.status, "unsupported_mode");
   });
 });

@@ -2,13 +2,20 @@ import { randomUUID } from "node:crypto";
 import type {
   ChannelConnector,
   ConnectorPollOptions,
+  ConnectorQuotaHint,
   ConnectorRuntimeStore,
-  IngestBatch,
   IngestBatchResult,
   IngestRecordResult,
+  WebhookRequest,
 } from "./ingestion";
 import type { IngestSubmissionResult } from "./ingestion-service";
 import { withDeadline } from "./deadline";
+import {
+  connectorAcceptsWebhook,
+  connectorPolls,
+  connectorSourceMode,
+} from "./source-mode";
+import type { InstallationQuotaBook } from "./quota";
 
 export interface IngestBatchProcessor {
   ingest(input: unknown): Promise<IngestSubmissionResult>;
@@ -26,7 +33,7 @@ export interface RunConnectorPollInput {
 
 export type ConnectorPollRunResult =
   | {
-      status: "lease_unavailable";
+      status: "lease_unavailable" | "throttled" | "unsupported_mode";
       installation_id: string;
       stream_key: string;
     }
@@ -40,15 +47,46 @@ export type ConnectorPollRunResult =
       has_more?: boolean;
     };
 
+export interface RunConnectorWebhookInput {
+  installation_id: string;
+  request: WebhookRequest;
+  timeout_ms?: number;
+}
+
+export type ConnectorWebhookRunResult =
+  | {
+      status: "throttled" | "unsupported_mode";
+      installation_id: string;
+    }
+  | {
+      status: "completed" | "retryable_failure";
+      installation_id: string;
+      result: IngestBatchResult;
+    };
+
+export type RunnerConnector = Pick<
+  ChannelConnector,
+  "source" | "source_mode" | "quota" | "poll" | "verifyWebhook" | "handleWebhook"
+>;
+
 export class ConnectorRunner {
   constructor(
-    private readonly connector: Pick<ChannelConnector, "poll">,
+    private readonly connector: RunnerConnector,
     private readonly processor: IngestBatchProcessor,
     private readonly runtimeStore: ConnectorRuntimeStore,
     private readonly now: () => string = () => new Date().toISOString(),
+    private readonly quota?: Pick<InstallationQuotaBook, "tryConsume">,
   ) {}
 
   async poll(input: RunConnectorPollInput): Promise<ConnectorPollRunResult> {
+    const poll = this.connector.poll?.bind(this.connector);
+    if (!connectorPolls(connectorSourceMode(this.connector)) || !poll) {
+      return {
+        status: "unsupported_mode",
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+      };
+    }
     const startedAt = this.now();
     const lease = await this.runtimeStore.acquireLease({
       installation_id: input.installation_id,
@@ -64,11 +102,24 @@ export class ConnectorRunner {
         stream_key: input.stream_key,
       };
     }
+    if (!this.takeQuota(input.installation_id, this.connector.quota)) {
+      await this.runtimeStore.releaseLease({
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        lease_owner: input.lease_owner,
+        now: this.now(),
+      });
+      return {
+        status: "throttled",
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+      };
+    }
 
     let pollResult;
     try {
       pollResult = await withDeadline(
-        this.connector.poll(
+        poll(
           lease.cursor ? { value: lease.cursor } : null,
           pollOptions(input),
         ),
@@ -177,6 +228,68 @@ export class ConnectorRunner {
       next_cursor: nextCursor,
       has_more: pollResult.has_more,
     };
+  }
+
+  async webhook(
+    input: RunConnectorWebhookInput,
+  ): Promise<ConnectorWebhookRunResult> {
+    const verify = this.connector.verifyWebhook?.bind(this.connector);
+    const handle = this.connector.handleWebhook?.bind(this.connector);
+    if (
+      !connectorAcceptsWebhook(connectorSourceMode(this.connector)) ||
+      !verify ||
+      !handle
+    ) {
+      return {
+        status: "unsupported_mode",
+        installation_id: input.installation_id,
+      };
+    }
+    if (!this.takeQuota(input.installation_id, this.connector.quota)) {
+      return {
+        status: "throttled",
+        installation_id: input.installation_id,
+      };
+    }
+
+    const batch = await withDeadline(
+      (async () => {
+        const verified = await verify(input.request);
+        return handle(verified);
+      })(),
+      input.timeout_ms ?? 0,
+      `webhook ${input.installation_id}`,
+    );
+
+    if (batch.records.length === 0) {
+      return {
+        status: "completed",
+        installation_id: input.installation_id,
+        result: {
+          connector_id: batch.connector_id,
+          delivery_id: batch.delivery_id,
+          records: [],
+        },
+      };
+    }
+
+    const result = this.requireValidResult(await this.processor.ingest(batch));
+    const summary = this.summarize(result.records);
+    return {
+      status:
+        summary.retryable_failure_count === 0
+          ? "completed"
+          : "retryable_failure",
+      installation_id: input.installation_id,
+      result,
+    };
+  }
+
+  private takeQuota(
+    installationId: string,
+    quota?: ConnectorQuotaHint,
+  ): boolean {
+    return this.quota?.tryConsume(installationId, quota) ?? true;
   }
 
   private requireValidResult(

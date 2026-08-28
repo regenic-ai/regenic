@@ -157,6 +157,11 @@ export interface MembershipBatch {
 
 export type ConnectorSourceMode = "poll" | "webhook" | "hybrid";
 
+export interface ConnectorQuotaHint {
+  tokens: number;
+  window_ms: number;
+}
+
 export interface ChannelConnector {
   readonly source: string;
   /**
@@ -164,8 +169,13 @@ export interface ChannelConnector {
    * Undeclared methods must not exist; the kernel never infers them.
    */
   readonly source_mode?: ConnectorSourceMode;
+  /**
+   * Optional install-level token bucket. The kernel applies one default
+   * from env; a connector may declare a tighter budget. Not per-source.
+   */
+  readonly quota?: ConnectorQuotaHint;
 
-  poll(
+  poll?(
     cursor: ConnectorCursor | null,
     options?: ConnectorPollOptions,
   ): Promise<PollResult>;

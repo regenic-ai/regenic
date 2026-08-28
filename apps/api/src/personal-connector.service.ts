@@ -5,12 +5,15 @@ import {
   ChannelDriverRegistry,
   ConnectorRunner,
   DeadlineExceededError,
+  InstallationQuotaBook,
   connectorPollTimeoutMs,
   connectorSyncTimeoutMs,
   driverCanReply,
+  driverPolls,
   normalizeListTitle,
   parseConversationThread,
   requireCreateThread,
+  requireWebhookPorts,
   settleIsolated,
   withDeadline,
   type ChannelDriver,
@@ -18,7 +21,9 @@ import {
   type ConnectorPollRunResult,
   type ConnectorRuntimeStore,
   type ConnectorStream,
+  type ConnectorWebhookRunResult,
   type ConversationThread,
+  type WebhookRequest,
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
@@ -98,6 +103,14 @@ export interface ConnectorSyncView {
   installation: EngineInstallationView;
 }
 
+export interface ConnectorWebhookView {
+  installation_id: string;
+  accepted_count: number;
+  duplicate_count: number;
+  quarantined_count: number;
+  last_run_status: ConnectorWebhookRunResult["status"];
+}
+
 @Injectable()
 export class PersonalConnectorService implements OnModuleDestroy {
   private readonly inflight = new Map<string, Promise<ConnectorSyncView>>();
@@ -120,6 +133,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private ticking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
+  private readonly quota = new InstallationQuotaBook();
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -202,6 +216,83 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
     this.inflight.set(installationId, job);
     return job;
+  }
+
+  async ingestWebhook(
+    installationId: string,
+    request: WebhookRequest,
+  ): Promise<ConnectorWebhookView> {
+    if (this.maintenanceHold) {
+      throw new PersonalConnectorError(
+        "disabled",
+        "Store maintenance in progress",
+        409,
+      );
+    }
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installation = await this.requireInstallation(store, installationId);
+    if (installation.status !== "enabled") {
+      throw new PersonalConnectorError(
+        "disabled",
+        "Connector installation is disabled",
+        409,
+      );
+    }
+    const driver = this.drivers.get(installation.connector_type);
+    if (!driver) {
+      throw new PersonalConnectorError(
+        "unsupported_connector",
+        `Connector type cannot ingest webhooks: ${installation.connector_type}`,
+        400,
+      );
+    }
+    try {
+      const { bindWebhook } = requireWebhookPorts(driver);
+      const connector = await bindWebhook(installation, host, process.env);
+      const runner = new ConnectorRunner(
+        connector,
+        host.get("ingest"),
+        store,
+        () => new Date().toISOString(),
+        this.quota,
+      );
+      const run = await withDeadline(
+        runner.webhook({
+          installation_id: installation.id,
+          request,
+          timeout_ms: connectorPollTimeoutMs(),
+        }),
+        connectorSyncTimeoutMs(),
+        `webhook ${installation.id}`,
+      );
+      if (run.status === "unsupported_mode") {
+        throw new PersonalConnectorError(
+          "unsupported_channel",
+          "Webhook ingest is not available",
+          501,
+        );
+      }
+      if (run.status === "throttled") {
+        throw new PersonalConnectorError(
+          "throttled",
+          "Connector installation is rate limited",
+          429,
+        );
+      }
+      const accepted = run as Extract<
+        ConnectorWebhookRunResult,
+        { status: "completed" | "retryable_failure" }
+      >;
+      const summary = summarizeWebhook(accepted);
+      return {
+        installation_id: installation.id,
+        ...summary,
+        last_run_status: run.status,
+      };
+    } catch (error) {
+      throw wrapDriverError(error, "sync_failed");
+    }
   }
 
   async followThread(
@@ -343,7 +434,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
           installation.id,
           stream.stream_key,
           () =>
-            pollStream(host, store, installation, stream, 1, { older: true }),
+            pollStream(
+              host,
+              store,
+              installation,
+              stream,
+              1,
+              { older: true },
+              this.quota,
+            ),
         );
         if (pages === undefined) {
           return;
@@ -419,10 +518,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
           installation.id,
           stream.stream_key,
           () =>
-            pollStream(host, store, installation, stream, 1, {
-              older: false,
-              media: false,
-            }),
+            pollStream(
+              host,
+              store,
+              installation,
+              stream,
+              1,
+              {
+                older: false,
+                media: false,
+              },
+              this.quota,
+            ),
           { skipIfBusy: true },
         );
         if (pages === undefined) {
@@ -462,10 +569,26 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const threadId = `${thread.source}:${thread.target}`;
     const before = await this.threadFollowState(threadId);
     for (let attempt = 0; attempt < FOLLOW_TRIES; attempt += 1) {
-      await pollStream(host, store, installation, stream, 2, { older: false });
+      await pollStream(
+        host,
+        store,
+        installation,
+        stream,
+        2,
+        { older: false },
+        this.quota,
+      );
       const after = await this.threadFollowState(threadId);
       if (after.latestId && after.latestId !== before.latestId && after.inbound) {
-        await pollStream(host, store, installation, stream, 2, { older: false });
+        await pollStream(
+          host,
+          store,
+          installation,
+          stream,
+          2,
+          { older: false },
+          this.quota,
+        );
         return;
       }
       if (attempt < FOLLOW_TRIES - 1) {
@@ -697,12 +820,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
     try {
       const store = this.runtime.requireHost().get("authority");
       const installations = await store.listInstallations(this.runtime.orgId());
-      const eligible = installations.filter(
-        (installation) =>
+      const eligible = installations.filter((installation) => {
+        const driver = this.drivers.get(installation.connector_type);
+        return (
           installation.status === "enabled" &&
-          this.drivers.has(installation.connector_type) &&
-          !this.inflight.has(installation.id),
-      );
+          driver &&
+          driverPolls(driver) &&
+          !this.inflight.has(installation.id)
+        );
+      });
       const errors = await settleIsolated(
         eligible.map(
           (installation) => () =>
@@ -773,6 +899,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
         `Connector type cannot be synced: ${installation.connector_type}`,
         400,
       );
+    }
+    if (!driverPolls(driver)) {
+      return {
+        installation_id: installation.id,
+        pages_attempted: 0,
+        streams_attempted: 0,
+        accepted_count: 0,
+        duplicate_count: 0,
+        quarantined_count: 0,
+        last_run_status: "idle",
+        installation: await this.viewOf(store, installation),
+      };
     }
     beginPull();
     this.publishStreams();
@@ -903,6 +1041,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
                 item.stream,
                 item.pages,
                 { older: item.older },
+                this.quota,
               ),
             { skipIfBusy: true },
           );
@@ -1232,6 +1371,8 @@ function httpStatusFor(code: string): number {
       return 409;
     case "deadline_exceeded":
       return 504;
+    case "throttled":
+      return 429;
     default:
       return 502;
   }
@@ -1244,8 +1385,15 @@ async function pollStream(
   stream: ConnectorStream,
   maxPages: number,
   options?: { older?: boolean; media?: boolean },
+  quota?: InstallationQuotaBook,
 ): Promise<ConnectorPollRunResult[]> {
-  const runner = new ConnectorRunner(stream.connector, host.get("ingest"), store);
+  const runner = new ConnectorRunner(
+    stream.connector,
+    host.get("ingest"),
+    store,
+    () => new Date().toISOString(),
+    quota,
+  );
   const runs: ConnectorPollRunResult[] = [];
   const seenCursors = new Set<string>();
   for (let page = 0; page < maxPages; page += 1) {
@@ -1265,6 +1413,9 @@ async function pollStream(
         "Connector stream is already leased",
         409,
       );
+    }
+    if (run.status === "throttled" || run.status === "unsupported_mode") {
+      break;
     }
     if (run.status !== "completed") {
       break;
@@ -1351,6 +1502,31 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Connector pull failed";
 }
 
+function summarizeWebhook(run: Extract<
+  ConnectorWebhookRunResult,
+  { status: "completed" | "retryable_failure" }
+>): {
+  accepted_count: number;
+  duplicate_count: number;
+  quarantined_count: number;
+} {
+  return run.result.records.reduce(
+    (acc, record) => {
+      if (record.status === "accepted") {
+        acc.accepted_count += 1;
+      }
+      if (record.status === "duplicate") {
+        acc.duplicate_count += 1;
+      }
+      if (record.status === "quarantined") {
+        acc.quarantined_count += 1;
+      }
+      return acc;
+    },
+    { accepted_count: 0, duplicate_count: 0, quarantined_count: 0 },
+  );
+}
+
 function summarizeRuns(runs: ConnectorPollRunResult[]): {
   accepted_count: number;
   duplicate_count: number;
@@ -1358,7 +1534,7 @@ function summarizeRuns(runs: ConnectorPollRunResult[]): {
 } {
   return runs.reduce(
     (acc, run) => {
-      if (run.status === "lease_unavailable") {
+      if (!("result" in run)) {
         return acc;
       }
       for (const record of run.result.records) {
