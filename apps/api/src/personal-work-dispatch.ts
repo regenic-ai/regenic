@@ -258,7 +258,7 @@ export class PersonalWorkDispatch {
       include_context: includeContext,
       trigger_text: evidenceText,
       head_text:
-        !includeContext && evidenceText
+        evidenceText || !item.head_event_id
           ? undefined
           : await this.channel.evidenceText(item.thread_id, item.head_event_id),
       thread_lines: thread.lines,

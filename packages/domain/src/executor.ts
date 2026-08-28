@@ -209,6 +209,13 @@ export const WORK_EVIDENCE_FETCH_LIMIT = 80;
 /** Formatted conversation budget. Oldest lines drop first. */
 export const WORK_EVIDENCE_CHAR_LIMIT = 16_000;
 export const WORK_EVIDENCE_OMITTED = "[Earlier messages omitted]";
+/** DSH-style checkpoint: older turns are established context, not the task. */
+export const WORK_EVIDENCE_BACKGROUND_OPEN = "<background>";
+export const WORK_EVIDENCE_BACKGROUND_CLOSE = "</background>";
+export const WORK_EVIDENCE_CURRENT_OPEN = "<current>";
+export const WORK_EVIDENCE_CURRENT_CLOSE = "</current>";
+export const WORK_EVIDENCE_SPLIT_HINT =
+  "Treat <background> as established context. Act on <current>.";
 
 export function formatEvidenceLine(line: WorkEvidenceLine): string {
   const text = line.text.trim();
@@ -306,8 +313,26 @@ export function packThreadEvidence(input: {
   };
 }
 
-function evidenceHasText(lines: WorkEvidenceLine[], text: string): boolean {
-  return lines.some((line) => line.text.trim() === text);
+function splitCurrentFromHistory(
+  lines: WorkEvidenceLine[],
+  current?: string,
+): { history: WorkEvidenceLine[]; currentSpeaker: string } {
+  if (!current) {
+    return { history: lines, currentSpeaker: "user" };
+  }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].text.trim() === current) {
+      return {
+        history: [...lines.slice(0, i), ...lines.slice(i + 1)],
+        currentSpeaker: lines[i].speaker.trim() || "user",
+      };
+    }
+  }
+  return { history: lines, currentSpeaker: "user" };
+}
+
+function wrapEvidenceSection(tagOpen: string, tagClose: string, body: string): string {
+  return `${tagOpen}\n${body}\n${tagClose}`;
 }
 
 export function composeWorkEvidenceText(input: {
@@ -317,21 +342,38 @@ export function composeWorkEvidenceText(input: {
   thread_lines?: WorkEvidenceLine[];
   thread_overflow?: boolean;
 }): string | undefined {
-  const trigger = input.trigger_text?.trim() || undefined;
-  const head = input.head_text?.trim() || undefined;
-  if (input.include_context) {
-    const lines = [...(input.thread_lines ?? [])];
-    const tail = trigger || head;
-    if (tail && !evidenceHasText(lines, tail)) {
-      lines.push({ speaker: "user", text: tail });
-    }
-    const packed = packThreadEvidence({
-      lines,
-      overflow: input.thread_overflow,
-    });
-    return packed.text || trigger || head;
+  const current = input.trigger_text?.trim() || input.head_text?.trim() || undefined;
+  if (!input.include_context) {
+    return current;
   }
-  return trigger || head;
+  const split = splitCurrentFromHistory(input.thread_lines ?? [], current);
+  const packed = packThreadEvidence({
+    lines: split.history,
+    overflow: input.thread_overflow,
+  });
+  if (!current) {
+    return packed.text || undefined;
+  }
+  const currentLine = formatEvidenceLine({
+    speaker: split.currentSpeaker,
+    text: current,
+  });
+  if (!packed.text) {
+    return currentLine || current;
+  }
+  return [
+    WORK_EVIDENCE_SPLIT_HINT,
+    wrapEvidenceSection(
+      WORK_EVIDENCE_BACKGROUND_OPEN,
+      WORK_EVIDENCE_BACKGROUND_CLOSE,
+      packed.text,
+    ),
+    wrapEvidenceSection(
+      WORK_EVIDENCE_CURRENT_OPEN,
+      WORK_EVIDENCE_CURRENT_CLOSE,
+      currentLine,
+    ),
+  ].join("\n\n");
 }
 
 export function formatWorkEvidence(input: {

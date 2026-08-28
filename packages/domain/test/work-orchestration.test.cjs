@@ -786,17 +786,18 @@ describe("executor registry", () => {
       }),
       "latest ticket",
     );
-    assert.equal(
-      composeWorkEvidenceText({
-        include_context: true,
-        trigger_text: "latest ticket",
-        thread_lines: [
-          { speaker: "A", text: "history" },
-          { speaker: "B", text: "latest ticket" },
-        ],
-      }),
-      "A: history\n\nB: latest ticket",
-    );
+    const split = composeWorkEvidenceText({
+      include_context: true,
+      trigger_text: "latest ticket",
+      thread_lines: [
+        { speaker: "A", text: "history" },
+        { speaker: "B", text: "latest ticket" },
+      ],
+    });
+    assert.match(split, /Treat <background> as established context/);
+    assert.match(split, /<background>\nA: history\n<\/background>/);
+    assert.match(split, /<current>\nB: latest ticket\n<\/current>/);
+    assert.equal(split.includes("B: latest ticket\n\n"), false);
     const packed = packThreadEvidence({
       lines: [
         { speaker: "A", text: "old" },
@@ -822,22 +823,32 @@ describe("executor registry", () => {
     );
     assert.equal(oneHuge.lines.length, 1);
     assert.ok(oneHuge.lines[0].text.length < 20);
-    assert.equal(
-      composeWorkEvidenceText({
-        include_context: true,
-        head_text: "the ticket",
-        thread_overflow: true,
-        thread_lines: [{ speaker: "A", text: "recent" }],
-      }).startsWith(WORK_EVIDENCE_OMITTED),
-      true,
-    );
+    const overflowed = composeWorkEvidenceText({
+      include_context: true,
+      head_text: "the ticket",
+      thread_overflow: true,
+      thread_lines: [{ speaker: "A", text: "recent" }],
+    });
+    assert.match(overflowed, new RegExp(WORK_EVIDENCE_OMITTED.replace(/[[\]]/g, "\\$&")));
+    assert.match(overflowed, /<background>[\s\S]*A: recent/);
+    assert.match(overflowed, /<current>\nuser: the ticket\n<\/current>$/);
     assert.match(
       composeWorkEvidenceText({
         include_context: true,
         head_text: "the ticket",
         thread_lines: [{ speaker: "A", text: "recent" }],
       }),
-      /user: the ticket$/,
+      /<current>\nuser: the ticket\n<\/current>$/,
+    );
+    assert.equal(
+      composeWorkEvidenceText({
+        include_context: true,
+        thread_lines: [
+          { speaker: "A", text: "history" },
+          { speaker: "B", text: "later" },
+        ],
+      }),
+      "A: history\n\nB: later",
     );
   });
 });
