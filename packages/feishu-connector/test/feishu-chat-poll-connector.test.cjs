@@ -20,6 +20,7 @@ const {
   planFeishuHistoryRequest,
   decodeFeishuCursor,
   deferredHistoryToken,
+  mediaRetryBackoffMs,
   needsMediaReseed,
   needsRecentSeed,
   resetFeishuAttention,
@@ -32,9 +33,17 @@ function createConnector(client, extras = {}) {
     chat_id: "oc_1",
     chat_name: "engineering",
     now: () => "2026-08-12T00:00:00.000Z",
+    sleep: async () => {},
     ...extras,
   });
 }
+
+const MEDIA_DONE = {
+  media_synced: true,
+  media_bytes: true,
+  media_ok: true,
+  media_retry: true,
+};
 
 function textItem(overrides = {}) {
   return {
@@ -108,7 +117,7 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         page_token: "page-1",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     });
 
@@ -142,7 +151,7 @@ describe("FeishuChatPollConnector", () => {
         page_token: "page-2",
         start_time: "1723420860",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
@@ -230,7 +239,7 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     );
   });
@@ -267,7 +276,7 @@ describe("FeishuChatPollConnector", () => {
         start_time: "1723500000",
         recent_seeded: true,
         history_token: "older",
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     );
     assert.equal(result.has_more, true);
@@ -333,9 +342,7 @@ describe("FeishuChatPollConnector", () => {
       start_time: "1723500000",
       recent_seeded: true,
       history_token: "older",
-      media_synced: true,
-      media_bytes: true,
-      media_ok: true,
+      ...MEDIA_DONE,
     });
     const live = await connector.poll({ value: seeded });
     const older = await connector.poll({ value: seeded }, { older: true });
@@ -371,9 +378,7 @@ describe("FeishuChatPollConnector", () => {
     const caughtUp = JSON.stringify({
       start_time: "1723500000",
       recent_seeded: true,
-      media_synced: true,
-      media_bytes: true,
-      media_ok: true,
+      ...MEDIA_DONE,
     });
     const older = await connector.poll({ value: caughtUp }, { older: true });
     assert.deepEqual(calls, []);
@@ -389,9 +394,7 @@ describe("FeishuChatPollConnector", () => {
         sort: "desc",
         head_time: "1723500000",
         recent_seeded: true,
-        media_synced: true,
-        media_bytes: true,
-        media_ok: true,
+        ...MEDIA_DONE,
       }),
     });
     assert.equal(state.start_time, "1723500000");
@@ -443,7 +446,7 @@ describe("FeishuChatPollConnector", () => {
         start_time: "100",
         head_time: "1723600000",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     );
     assert.equal(result.has_more, true);
@@ -513,7 +516,7 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     );
   });
@@ -541,7 +544,7 @@ describe("FeishuChatPollConnector", () => {
         start_time: "1723420800",
         recent_seeded: true,
         history_token: "page-2",
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     );
   });
@@ -690,7 +693,7 @@ describe("FeishuChatPollConnector", () => {
         { items: [], has_more: false },
         "ByCreateTimeAsc",
       ),
-      { start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true },
+      { start_time: "100", recent_seeded: true, ...MEDIA_DONE },
     );
     assert.deepEqual(
       nextFeishuCursor(
@@ -698,7 +701,7 @@ describe("FeishuChatPollConnector", () => {
         { items: [], has_more: false },
         "ByCreateTimeDesc",
       ),
-      { start_time: "200", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true },
+      { start_time: "200", recent_seeded: true, ...MEDIA_DONE },
     );
     assert.equal(needsRecentSeed({}), true);
     assert.equal(needsRecentSeed({ page_token: "p1" }), true);
@@ -714,8 +717,45 @@ describe("FeishuChatPollConnector", () => {
       true,
     );
     assert.equal(
-      needsMediaReseed({ start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true }),
+      needsMediaReseed({
+        start_time: "100",
+        recent_seeded: true,
+        media_synced: true,
+        media_bytes: true,
+        media_ok: true,
+      }),
+      true,
+    );
+    assert.equal(
+      needsMediaReseed({ start_time: "100", recent_seeded: true, ...MEDIA_DONE }),
       false,
+    );
+    assert.equal(mediaRetryBackoffMs(1), 1000);
+    assert.equal(mediaRetryBackoffMs(2), 2000);
+    assert.equal(mediaRetryBackoffMs(20), 15 * 60 * 1000);
+    assert.equal(
+      needsMediaReseed(
+        {
+          start_time: "100",
+          recent_seeded: true,
+          media_retry: true,
+          media_retry_after: "2026-08-12T00:00:01.000Z",
+        },
+        Date.parse("2026-08-12T00:00:00.000Z"),
+      ),
+      false,
+    );
+    assert.equal(
+      needsMediaReseed(
+        {
+          start_time: "100",
+          recent_seeded: true,
+          media_retry: true,
+          media_retry_after: "2026-08-12T00:00:01.000Z",
+        },
+        Date.parse("2026-08-12T00:00:01.000Z"),
+      ),
+      true,
     );
     assert.deepEqual(
       planFeishuHistoryRequest("oc_1", 50, {}),
@@ -729,7 +769,7 @@ describe("FeishuChatPollConnector", () => {
       planFeishuHistoryRequest("oc_1", 50, {
         start_time: "100",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
       {
         chat_id: "oc_1",
@@ -746,9 +786,7 @@ describe("FeishuChatPollConnector", () => {
         {
           start_time: "100",
           recent_seeded: true,
-          media_synced: true,
-          media_bytes: true,
-          media_ok: true,
+          ...MEDIA_DONE,
         },
         { older: true },
       ),
@@ -824,7 +862,7 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     });
     assert.equal(result.batch.records.length, 6);
@@ -883,9 +921,7 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true,
-        media_bytes: true,
-        media_ok: true,
+        ...MEDIA_DONE,
       }),
     });
     const attachment = result.batch.records[0].content.find(
@@ -916,7 +952,7 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        ...MEDIA_DONE,
       }),
     });
     assert.equal(result.batch.records.length, 1);
@@ -960,7 +996,11 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723600000",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
+        media_synced: true,
+        media_bytes: true,
+        media_retry: true,
+        media_attempts: 1,
+        media_retry_after: "2026-08-12T00:00:01.000Z",
       }),
     );
   });
@@ -1004,6 +1044,141 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(result.batch.records[0].operation, "create");
     assert.equal(result.batch.records[1].operation, "revise");
     assert.equal(result.batch.records[0].content.find((part) => part.role === "attachment").bytes.byteLength, 8);
+  });
+
+  it("retries a failed image download in the same poll", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    let downloads = 0;
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [
+            {
+              message_id: "om_img",
+              msg_type: "image",
+              create_time: "1723420800000",
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: { content: JSON.stringify({ image_key: "img_shot" }) },
+            },
+          ],
+          has_more: false,
+        };
+      },
+      async downloadResource() {
+        downloads += 1;
+        if (downloads < 2) {
+          throw new Error("transient");
+        }
+        return { bytes: png, media_type: "image/png", filename: "shot.png" };
+      },
+    });
+    const result = await connector.poll({
+      value: JSON.stringify({
+        start_time: "1723420800",
+        recent_seeded: true,
+        ...MEDIA_DONE,
+      }),
+    });
+    assert.equal(downloads, 2);
+    const attachment = result.batch.records[0].content.find(
+      (part) => part.role === "attachment",
+    );
+    assert.deepEqual(Array.from(attachment.bytes), Array.from(png));
+    assert.equal(result.batch.records[1].operation, "revise");
+    assert.match(result.next_cursor ?? "", /"media_ok":true/);
+  });
+
+  it("does not stamp media_ok when image bytes are still missing after retries", async () => {
+    const downloads = [];
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [
+            {
+              message_id: "om_img",
+              msg_type: "image",
+              create_time: "1723420800000",
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: { content: JSON.stringify({ image_key: "img_shot" }) },
+            },
+          ],
+          has_more: false,
+        };
+      },
+      async downloadResource(input) {
+        downloads.push(input);
+        throw new Error("Feishu HTTP timed out");
+      },
+    });
+    const result = await connector.poll({
+      value: JSON.stringify({
+        start_time: "1723420800",
+        recent_seeded: true,
+        ...MEDIA_DONE,
+      }),
+    });
+    assert.equal(downloads.length, 3);
+    const attachment = result.batch.records[0].content.find(
+      (part) => part.role === "attachment",
+    );
+    assert.equal(attachment.source_filename, "image.png");
+    assert.equal(attachment.bytes.byteLength, 0);
+    assert.doesNotMatch(result.next_cursor ?? "", /"media_ok":true/);
+    assert.match(result.next_cursor ?? "", /"media_retry":true/);
+    assert.match(result.next_cursor ?? "", /"media_attempts":1/);
+    assert.match(result.next_cursor ?? "", /"media_retry_after":"2026-08-12T00:00:01.000Z"/);
+  });
+
+  it("reseeds after backoff so a later poll can revise empty image placeholders", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    let now = "2026-08-12T00:00:00.000Z";
+    let downloads = 0;
+    const connector = createConnector(
+      {
+        async listMessages(input) {
+          if (input.sort_type !== "ByCreateTimeDesc") {
+            return { items: [], has_more: false };
+          }
+          return {
+            items: [
+              {
+                message_id: "om_img",
+                msg_type: "image",
+                create_time: "1723600000000",
+                sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+                body: { content: JSON.stringify({ image_key: "img_shot" }) },
+              },
+            ],
+            has_more: false,
+          };
+        },
+        async downloadResource() {
+          downloads += 1;
+          if (downloads <= 3) {
+            throw new Error("transient");
+          }
+          return { bytes: png, media_type: "image/png", filename: "shot.png" };
+        },
+      },
+      { now: () => now },
+    );
+    const first = await connector.poll({
+      value: JSON.stringify({ start_time: "1723420800", recent_seeded: true }),
+    });
+    assert.equal(downloads, 3);
+    assert.doesNotMatch(first.next_cursor ?? "", /"media_ok":true/);
+    now = "2026-08-12T00:00:00.500Z";
+    const waiting = await connector.poll({ value: first.next_cursor });
+    assert.equal(downloads, 3);
+    now = "2026-08-12T00:00:01.000Z";
+    const retry = await connector.poll({ value: waiting.next_cursor });
+    assert.equal(downloads, 4);
+    const attachment = retry.batch.records[0].content.find(
+      (part) => part.role === "attachment",
+    );
+    assert.equal(retry.batch.records[1].operation, "revise");
+    assert.deepEqual(Array.from(attachment.bytes), Array.from(png));
+    assert.match(retry.next_cursor ?? "", /"media_ok":true/);
   });
 });
 
