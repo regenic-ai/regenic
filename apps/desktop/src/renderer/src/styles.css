@@ -2628,6 +2628,10 @@ button {
   font-weight: 550;
 }
 
+.kv code {
+  word-break: break-all;
+}
+
 .install {
   display: flex;
   justify-content: space-between;
@@ -2948,6 +2952,37 @@ button {
 
 .store-confirm p {
   margin: 0 0 12px;
+  color: var(--text);
+}
+
+.data-dir-confirm {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 42%, var(--surface));
+}
+
+.data-dir-confirm p {
+  margin: 0 0 10px;
+}
+
+.data-dir-reclaim {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--g300) 28%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--g300) 8%, var(--surface));
+}
+
+.data-dir-reclaim p {
+  margin: 0 0 10px;
+}
+
+.data-dir-reclaim-size {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
   color: var(--text);
 }
 
