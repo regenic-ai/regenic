@@ -136,6 +136,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private backgroundStarted = false;
   private maintenanceHold = false;
   private readonly quota = new InstallationQuotaBook();
+  private readonly creatingByClient = new Map<string, Promise<CreatedConversationView>>();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -621,7 +622,40 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   async createConversation(
-    input: { installation_id?: string; source?: string; text?: string; cwd?: string } = {},
+    input: {
+      installation_id?: string;
+      source?: string;
+      text?: string;
+      cwd?: string;
+      client_request_id?: string;
+    } = {},
+  ): Promise<CreatedConversationView> {
+    const clientKey = this.createClientKey(input.client_request_id);
+    if (clientKey) {
+      const pending = this.creatingByClient.get(clientKey);
+      if (pending) {
+        return pending;
+      }
+    }
+    const run = this.createConversationOnce(input).catch((error) => {
+      if (clientKey) {
+        this.creatingByClient.delete(clientKey);
+      }
+      throw error;
+    });
+    if (clientKey) {
+      this.creatingByClient.set(clientKey, run);
+    }
+    return run;
+  }
+
+  private createClientKey(value?: string): string | undefined {
+    const id = value?.trim();
+    return id ? `${this.runtime.orgId()}:${id}` : undefined;
+  }
+
+  private async createConversationOnce(
+    input: { installation_id?: string; source?: string; text?: string; cwd?: string },
   ): Promise<CreatedConversationView> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");

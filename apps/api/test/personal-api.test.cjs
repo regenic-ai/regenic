@@ -1805,6 +1805,30 @@ describe("personal /v1/me", () => {
         false,
       );
 
+      const createdBeforeRetry = dsh.created.length;
+      const retryBody = {
+        installation_id: createdBody.id,
+        client_request_id: "draft:dsh-1:same-send",
+      };
+      const [firstRetry, secondRetry] = await Promise.all([
+        fetch(`${origin}/v1/me/conversations`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(retryBody),
+        }),
+        fetch(`${origin}/v1/me/conversations`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(retryBody),
+        }),
+      ]);
+      const firstRetryBody = await firstRetry.json();
+      const secondRetryBody = await secondRetry.json();
+      assert.equal(firstRetry.status, 201, JSON.stringify(firstRetryBody));
+      assert.equal(secondRetry.status, 201, JSON.stringify(secondRetryBody));
+      assert.equal(secondRetryBody.thread_id, firstRetryBody.thread_id);
+      assert.equal(dsh.created.length, createdBeforeRetry + 1);
+
       const empty = await fetch(`${origin}/v1/me/replies`, {
         method: "POST",
         headers: { "content-type": "application/json" },

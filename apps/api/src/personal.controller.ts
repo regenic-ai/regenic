@@ -159,7 +159,15 @@ export class PersonalController {
 
   @Post("conversations")
   createConversation(
-    @Body() body: { installation_id?: string; source?: string; text?: string } | undefined,
+    @Body()
+    body:
+      | {
+          installation_id?: string;
+          source?: string;
+          text?: string;
+          client_request_id?: string;
+        }
+      | undefined,
   ) {
     noteHumanActivity();
     return this.guard(() => this.connectors.createConversation(body ?? {}));

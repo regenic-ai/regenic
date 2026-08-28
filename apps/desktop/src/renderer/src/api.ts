@@ -462,6 +462,7 @@ export async function importWhatsAppExport(
 export async function createConversation(input: {
   installation_id?: string;
   text?: string;
+  client_request_id?: string;
 } = {}): Promise<CreatedConversation> {
   const response = await kernelFetch("/v1/me/conversations", {
     method: "POST",

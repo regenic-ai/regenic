@@ -677,6 +677,7 @@ export function ConsoleApp() {
       ...(await createConversation({
         installation_id: installationId,
         text: draft.text,
+        client_request_id: draftId,
       })),
       opened_at: new Date().toISOString(),
     };
