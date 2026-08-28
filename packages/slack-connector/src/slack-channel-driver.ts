@@ -99,6 +99,20 @@ export const slackChannelDriver: ChannelDriver = {
           hint: "Set REGENIC_SLACK_TOKEN (bot token from your Slack app) before starting the desktop. The form does not take it.",
         },
       ],
+      setup_steps: [
+        {
+          title: "Create a Slack app and copy a bot token",
+          href: "https://api.slack.com/apps",
+        },
+        {
+          title: "Set REGENIC_SLACK_TOKEN, then fully quit and reopen the desktop",
+          body: "The form does not take the token.",
+        },
+        {
+          title: "Enter the channel ID",
+          body: "Use a C… id. The channel name is optional display text.",
+        },
+      ],
     };
   },
 

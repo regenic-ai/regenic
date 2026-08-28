@@ -40,6 +40,14 @@ export interface ConnectorPrerequisite {
   visible_when?: ConnectorFieldWhen;
 }
 
+export interface ConnectorSetupStep {
+  title: string;
+  body?: string;
+  command?: string;
+  href?: string;
+  visible_when?: ConnectorFieldWhen;
+}
+
 export interface ConnectorCatalogItem {
   connector_type: string;
   title: string;
@@ -51,6 +59,7 @@ export interface ConnectorCatalogItem {
   singleton: boolean;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
+  setup_steps: ConnectorSetupStep[];
   docs: CatalogDocRef[];
 }
 
@@ -74,6 +83,7 @@ interface CatalogDefinition {
   singleton?: boolean;
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
+  setup_steps: ConnectorSetupStep[];
   docs: CatalogDocRef[];
 }
 
@@ -116,8 +126,48 @@ function catalogDefinitionFromDriver(
       hint: prerequisite.hint,
       visible_when: prerequisite.visible_when,
     })),
+    setup_steps: catalogSetupSteps(catalog.setup_steps),
     docs: CONNECTOR_INSTALL_DOCS,
   };
+}
+
+function catalogSetupSteps(
+  steps: DriverInstallCatalog["setup_steps"],
+): ConnectorSetupStep[] {
+  return (steps ?? []).flatMap((step) => {
+    const title = String(step.title ?? "").replace(/\s+/g, " ").trim();
+    if (!title) {
+      return [];
+    }
+    const body = step.body?.replace(/\s+/g, " ").trim();
+    const command = step.command?.trim();
+    const href = safeHttpHref(step.href);
+    return [
+      {
+        title,
+        ...(body ? { body } : {}),
+        ...(command ? { command } : {}),
+        ...(href ? { href } : {}),
+        ...(step.visible_when ? { visible_when: step.visible_when } : {}),
+      },
+    ];
+  });
+}
+
+function safeHttpHref(value: string | undefined): string | undefined {
+  const href = value?.trim();
+  if (!href) {
+    return undefined;
+  }
+  try {
+    const url = new URL(href);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return href;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export function connectorAllowsMultiple(
@@ -165,6 +215,7 @@ export function connectorCatalog(
       setup_ready: requiredVisible.every((prerequisite) => prerequisite.ready),
       singleton: Boolean(definition.singleton),
       prerequisites,
+      setup_steps: definition.setup_steps ?? [],
     };
   });
 }

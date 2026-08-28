@@ -64,7 +64,7 @@ function docTitle(
   return key ? t(key) : doc.title;
 }
 
-function openExternal(href: string): void {
+export function openExternal(href: string): void {
   if (window.regenic?.openExternal) {
     void window.regenic.openExternal(href);
     return;

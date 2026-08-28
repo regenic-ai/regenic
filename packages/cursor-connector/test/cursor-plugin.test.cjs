@@ -168,6 +168,8 @@ describe("cursorAgentDriver", () => {
     assert.equal(catalog.prerequisites[0].required, false);
     assert.equal(catalog.fields.some((field) => field.key === "runtime"), false);
     assert.equal(catalog.fields.some((field) => field.key === "agent_id"), false);
+    assert.equal(catalog.setup_steps[0].href, "https://cursor.com/dashboard");
+    assert.equal(catalog.setup_steps.length, 3);
   });
 
   it("creates a local agent from the first task", async () => {

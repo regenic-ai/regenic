@@ -255,7 +255,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `createThread` | Optional. Required when `create` is true. Absent means the kernel returns 501. When `create_with_task` is set, it receives `options.text` and starts the run; otherwise it opens an empty session and the first user text is a normal send. |
 | `bindEgress` | Optional. Required when `reply` is true. Absent means the kernel returns 501. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
-| `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. |
+| `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. `setup_steps` are the numbered steps in the dialog; the desktop renders them as declared. |
 | `presentInstall` | Optional. Label and detail for an installed row. |
 | `writeBackLabels` | Optional. Exact aliases for a prompt option. The kernel matches the first result line. |
 | `probeCatalog` | Optional. Local service / env readiness and field options. |
@@ -331,7 +331,9 @@ adapter writes that envelope back to the same source and thread.
 ## Catalog
 
 `GET /v1/me/engine` returns a catalog. The Engine page opens a dialog for
-those catalog fields on Install and on Edit sync.
+those catalog fields on Install and on Edit sync. When required
+prerequisites are not ready, the card button says Set up and still
+opens that same dialog.
 
 A driver appears there only when it implements `installCatalog()`. Slack,
 DSH, Feishu, and extra plugins use that same method. The host does not
@@ -357,7 +359,8 @@ for that option. The host does not keep a synonym list.
 | --- | --- |
 | `fields` | `key`, `label`, required, default, `visible_when`, optional `multiple` + `options` |
 | `prerequisites` | Environment variable or local service, with `ready` and a `hint` |
-| `docs` | R&D specs. The Engine page renders these once next to the Connectors title and opens the GitHub page |
+| `setup_steps` | Numbered setup: `title`, optional `body` / `command` / `href` / `visible_when`. Rendered above the dialog form; `command` is copyable. The desktop does not hard-code steps per channel |
+| `docs` | R&D specs. The Engine page renders these once next to the Connectors title and opens the GitHub page. They are not the install wizard |
 
 Tokens are prerequisites, not form fields. The kernel does not install a
 CLI or start a local server. `hint` says what the user should run when

@@ -328,6 +328,7 @@ export async function fetchEngine(
     catalog: (engine.catalog ?? []).map((item) => ({
       ...item,
       prerequisites: item.prerequisites ?? [],
+      setup_steps: catalogSetupSteps(item.setup_steps),
       setup_ready: item.setup_ready ?? false,
       singleton: item.singleton === true,
       docs: catalogDocs(item.docs),
@@ -345,6 +346,34 @@ export async function fetchEngine(
       docs: catalogDocs(item.docs),
     })),
   };
+}
+
+function catalogSetupSteps(
+  steps: PersonalEngineView["catalog"][number]["setup_steps"] | undefined,
+): PersonalEngineView["catalog"][number]["setup_steps"] {
+  if (!Array.isArray(steps)) {
+    return [];
+  }
+  return steps.flatMap((step) => {
+    const title = typeof step.title === "string" ? step.title.trim() : "";
+    if (!title) {
+      return [];
+    }
+    const href = typeof step.href === "string" ? step.href.trim() : "";
+    const command = typeof step.command === "string" ? step.command.trim() : "";
+    const body = typeof step.body === "string" ? step.body.trim() : "";
+    return [
+      {
+        title,
+        ...(body ? { body } : {}),
+        ...(command ? { command } : {}),
+        ...(href.startsWith("http://") || href.startsWith("https://")
+          ? { href }
+          : {}),
+        ...(step.visible_when ? { visible_when: step.visible_when } : {}),
+      },
+    ];
+  });
 }
 
 function catalogDocs(

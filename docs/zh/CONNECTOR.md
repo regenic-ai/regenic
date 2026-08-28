@@ -195,7 +195,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `createThread` | 可选。`create` 为 true 时必须实现。未声明则内核 501。声明了 `create_with_task` 时收 `options.text` 并开工；未声明则只建空会话，第一条用户文本走普通 send。 |
 | `bindEgress` | 可选。`reply` 为 true 时必须实现。未声明则内核 501。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
-| `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。 |
+| `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。`setup_steps` 是弹层里的编号步骤，桌面原样渲染。 |
 | `presentInstall` | 可选。已装行的标题和细节。 |
 | `writeBackLabels` | 可选。某个待办选项的精确别名。内核只对结果第一行做匹配。 |
 | `probeCatalog` | 可选。本机服务 / 环境是否就绪，以及表单选项。 |
@@ -265,7 +265,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 ## 目录
 
-`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。
+`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。未齐前置时主按钮写「设置」，仍打开同一张弹层。
 
 驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
 
@@ -277,7 +277,8 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 | --- | --- |
 | `fields` | `key`、`label`、是否必填、默认值、`visible_when`、可选 `multiple` + `options` |
 | `prerequisites` | 环境变量或本机服务，带 `ready` 和 `hint` |
-| `docs` | 研发规范。引擎页在「连接器」标题旁统一渲染一次，点开跳到 GitHub 网页 |
+| `setup_steps` | 编号步骤：`title`，可选 `body` / `command` / `href` / `visible_when`。弹层表单上方渲染；`command` 可复制。桌面不按渠道名写死步骤 |
+| `docs` | 研发规范。引擎页在「连接器」标题旁统一渲染一次，点开跳到 GitHub 网页。不当安装向导 |
 
 token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起本机服务。
 `ready` 为 false 时，`hint` 写出该跑的命令。飞书会分两档：没装二进制，

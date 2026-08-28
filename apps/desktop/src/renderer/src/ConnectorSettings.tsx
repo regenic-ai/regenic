@@ -8,8 +8,13 @@ import {
   attemptSummary,
   installationStatusLabel,
 } from "./format";
+import { openExternal } from "./CatalogDocs";
 import { useLocale } from "./LocaleContext";
-import type { ConnectorCatalogItem, EngineInstallationView } from "./types";
+import type {
+  ConnectorCatalogItem,
+  ConnectorSetupStep,
+  EngineInstallationView,
+} from "./types";
 
 export function ConnectorKind({
   kind,
@@ -70,17 +75,14 @@ export function ConnectorKind({
             <button
               type="button"
               className={kind.installed ? "ghost" : "primary"}
-              disabled={
-                busyId !== null ||
-                syncingAll ||
-                !kind.setup_ready ||
-                installing
-              }
+              disabled={busyId !== null || syncingAll || installing}
               onClick={onOpenInstall}
             >
               {busyId === kind.connector_type
                 ? t("connector.installing")
-                : t("connector.install")}
+                : kind.setup_ready
+                  ? t("connector.install")
+                  : t("connector.setup")}
             </button>
           ) : null}
         </div>
@@ -90,11 +92,15 @@ export function ConnectorKind({
       ) : null}
       {installing ? (
         <ConnectorSettingsDialog
-          title={t("connector.installTitle", { title: kind.title })}
+          title={t(
+            kind.setup_ready ? "connector.installTitle" : "connector.setupTitle",
+            { title: kind.title },
+          )}
           kind={kind}
           busy={busyId === kind.connector_type}
           submitLabel={t("connector.install")}
           busyLabel={t("connector.installing")}
+          showSetup
           onSubmit={onInstall}
           onClose={onCloseInstall}
         />
@@ -134,6 +140,7 @@ function ConnectorSettingsDialog({
   initialValues,
   submitLabel,
   busyLabel,
+  showSetup = false,
   onSubmit,
   onClose,
 }: {
@@ -143,6 +150,7 @@ function ConnectorSettingsDialog({
   initialValues?: Record<string, string>;
   submitLabel: string;
   busyLabel: string;
+  showSetup?: boolean;
   onSubmit: (config: Record<string, string>) => void;
   onClose: () => void;
 }) {
@@ -178,6 +186,7 @@ function ConnectorSettingsDialog({
           initialValues={initialValues}
           submitLabel={submitLabel}
           busyLabel={busyLabel}
+          showSetup={showSetup}
           onSubmit={onSubmit}
         />
       </div>
@@ -191,6 +200,7 @@ function ConnectorSettingsForm({
   initialValues,
   submitLabel,
   busyLabel,
+  showSetup = false,
   onSubmit,
 }: {
   kind: ConnectorCatalogItem;
@@ -198,6 +208,7 @@ function ConnectorSettingsForm({
   initialValues?: Record<string, string>;
   submitLabel: string;
   busyLabel: string;
+  showSetup?: boolean;
   onSubmit: (config: Record<string, string>) => void;
 }) {
   const { t } = useLocale();
@@ -224,6 +235,13 @@ function ConnectorSettingsForm({
         onSubmit(configWithOptionNames(values, kind.fields));
       }}
     >
+      {showSetup ? (
+        <SetupStepList
+          steps={kind.setup_steps ?? []}
+          values={values}
+          collapsible={kind.setup_ready}
+        />
+      ) : null}
       <PrerequisiteList items={prerequisites} />
       {fields.map((field) => {
         const body = field.multiple ? (
@@ -377,6 +395,91 @@ function filterCheckOptions(
     (option) =>
       option.label.toLowerCase().includes(needle) ||
       option.value.toLowerCase().includes(needle),
+  );
+}
+
+function SetupStepList({
+  steps,
+  values,
+  collapsible,
+}: {
+  steps: ConnectorSetupStep[];
+  values: Record<string, string>;
+  collapsible: boolean;
+}) {
+  const { t } = useLocale();
+  const [copied, setCopied] = useState<string | null>(null);
+  const visible = steps.filter((step) => matchesWhen(step.visible_when, values));
+  if (visible.length === 0) {
+    return null;
+  }
+  const list = (
+    <ol className="setup-step-list">
+      {visible.map((step, index) => {
+        const copyKey = `${index}:${step.command ?? ""}`;
+        return (
+          <li key={`${index}:${step.title}`}>
+            {step.href ? (
+              <a
+                className="setup-step-link"
+                href={step.href}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => {
+                  event.preventDefault();
+                  openExternal(step.href!);
+                }}
+              >
+                {step.title}
+              </a>
+            ) : (
+              <strong>{step.title}</strong>
+            )}
+            {step.body ? <div className="muted">{step.body}</div> : null}
+            {step.command ? (
+              <div className="setup-step-command">
+                <code>{step.command}</code>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(step.command!).then(
+                      () => {
+                        setCopied(copyKey);
+                        window.setTimeout(() => {
+                          setCopied((current) =>
+                            current === copyKey ? null : current,
+                          );
+                        }, 1500);
+                      },
+                      () => undefined,
+                    );
+                  }}
+                >
+                  {copied === copyKey
+                    ? t("connector.copied")
+                    : t("connector.copy")}
+                </button>
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+  if (!collapsible) {
+    return (
+      <div className="setup-steps">
+        <h3>{t("connector.setupSteps")}</h3>
+        {list}
+      </div>
+    );
+  }
+  return (
+    <details className="setup-steps" defaultOpen>
+      <summary>{t("connector.setupSteps")}</summary>
+      {list}
+    </details>
   );
 }
 

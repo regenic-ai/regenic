@@ -572,6 +572,15 @@ describe("feishuChatDriver", () => {
     });
   });
 
+  it("advertises Feishu setup steps on the Engine catalog", () => {
+    const catalog = feishuChatDriver.installCatalog();
+    assert.equal(
+      catalog.setup_steps[0].command,
+      "npx @larksuite/cli@latest install",
+    );
+    assert.equal(catalog.setup_steps[0].href, "https://github.com/larksuite/cli");
+  });
+
   it("aliases Feishu approval labels for write-back", () => {
     assert.ok(feishuWriteBackLabels("同意").includes("通过"));
     assert.ok(feishuWriteBackLabels("通过").includes("同意"));
