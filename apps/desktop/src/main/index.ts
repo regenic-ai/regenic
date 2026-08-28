@@ -12,7 +12,9 @@ import {
   shell,
   Tray,
 } from "electron";
+import appIconIco from "../brand/app-icon.ico?asset";
 import appIconPng from "../brand/app-icon.png?asset";
+import appIconWinPng from "../brand/app-icon-win.png?asset";
 import trayPng from "../brand/tray-mark.png?asset";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { portFromHttpOrigin } from "../shared/host-watch";
@@ -32,6 +34,10 @@ import {
 
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
+
+if (process.platform === "win32") {
+  app.setAppUserModelId("ai.regenic.desktop");
+}
 
 let mainWindow: BrowserWindow | null = null;
 let trayWindow: BrowserWindow | null = null;
@@ -288,8 +294,18 @@ async function applyKernelPreference(preference: KernelPreference): Promise<void
   broadcastOrigin();
 }
 
+function appIconFile(): string {
+  if (process.platform === "darwin") {
+    return appIconPng;
+  }
+  if (process.platform === "win32") {
+    return appIconIco;
+  }
+  return appIconWinPng;
+}
+
 function applyAppIcon(): void {
-  const image = nativeImage.createFromPath(appIconPng);
+  const image = nativeImage.createFromPath(appIconFile());
   if (image.isEmpty()) {
     return;
   }
@@ -308,7 +324,7 @@ function createMainWindow(): BrowserWindow {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: "#0a0a0a",
-    icon: appIconPng,
+    icon: appIconFile(),
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,
