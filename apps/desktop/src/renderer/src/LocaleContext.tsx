@@ -12,7 +12,7 @@ import {
   DEFAULT_LOCALE,
   parseLocale,
   setActiveLocale,
-  t as translateActive,
+  translate,
   type Locale,
   type MessageKey,
 } from "../../shared/i18n.ts";
@@ -24,10 +24,17 @@ interface LocaleContextValue {
   t: (key: MessageKey, vars?: Record<string, string | number>) => string;
 }
 
+function translateDefault(
+  key: MessageKey,
+  vars?: Record<string, string | number>,
+): string {
+  return translate(DEFAULT_LOCALE, key, vars);
+}
+
 const LocaleContext = createContext<LocaleContextValue>({
   locale: DEFAULT_LOCALE,
   setLocale: async () => undefined,
-  t: translateActive,
+  t: translateDefault,
 });
 
 function applyDocumentLocale(locale: Locale): void {
@@ -36,7 +43,10 @@ function applyDocumentLocale(locale: Locale): void {
 }
 
 export function LocaleProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
+  const [locale, setLocaleState] = useState<Locale>(() => {
+    applyDocumentLocale(DEFAULT_LOCALE);
+    return DEFAULT_LOCALE;
+  });
 
   const apply = useCallback((next: Locale) => {
     const parsed = parseLocale(next);
@@ -66,13 +76,19 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     [apply],
   );
 
+  const t = useCallback(
+    (key: MessageKey, vars?: Record<string, string | number>) =>
+      translate(locale, key, vars),
+    [locale],
+  );
+
   const value = useMemo<LocaleContextValue>(
     () => ({
       locale,
       setLocale,
-      t: translateActive,
+      t,
     }),
-    [locale, setLocale],
+    [locale, setLocale, t],
   );
 
   return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;

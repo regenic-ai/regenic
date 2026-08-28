@@ -742,7 +742,7 @@ export const zh: Record<MessageKey, string> = {
   "settings.language": "语言",
   "settings.languageLead": "马上生效，默认是英文。",
   "settings.english": "English",
-  "settings.englishHint": "Default interface language.",
+  "settings.englishHint": "默认界面语言。",
   "settings.chinese": "中文",
   "settings.chineseHint": "简体中文界面。",
   "settings.kernel": "内核地址",
