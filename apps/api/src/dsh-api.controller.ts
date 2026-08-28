@@ -1,10 +1,13 @@
-import { Controller, Post, Req, Res } from "@nestjs/common";
+import { Controller, Inject, Post, Req, Res } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { DshApiService } from "./dsh-api.service";
 
 @Controller("v1/dsh/api")
 export class DshApiController {
-  constructor(private readonly dshApi: DshApiService) {}
+  constructor(
+    @Inject(DshApiService)
+    private readonly dshApi: DshApiService,
+  ) {}
 
   @Post("session.history")
   history(@Req() request: Request, @Res() response: Response): Promise<void> {

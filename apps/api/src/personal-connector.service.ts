@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -136,8 +136,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly quota = new InstallationQuotaBook();
 
   constructor(
+    @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(PersonalInboxService)
     private readonly inbox: PersonalInboxService,
+    @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
   ) {}
 
