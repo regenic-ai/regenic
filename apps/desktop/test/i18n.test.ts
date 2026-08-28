@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseLocale } from "../src/shared/locale.ts";
+import { DEFAULT_LOCALE, parseLocale } from "../src/shared/locale.ts";
 import { translate } from "../src/shared/messages.ts";
 
 describe("desktop locale", () => {
@@ -8,6 +8,14 @@ describe("desktop locale", () => {
     assert.equal(parseLocale(undefined), "en");
     assert.equal(parseLocale("fr"), "en");
     assert.equal(parseLocale("zh"), "zh");
+    assert.equal(DEFAULT_LOCALE, "en");
+  });
+
+  it("keeps language-option copy on the selected catalog", () => {
+    assert.equal(translate("en", "settings.title"), "Settings");
+    assert.equal(translate("en", "settings.englishHint"), "Default interface language.");
+    assert.equal(translate("zh", "settings.title"), "设置");
+    assert.equal(translate("zh", "settings.englishHint"), "默认界面语言。");
   });
 
   it("keeps English as the default catalog", () => {
@@ -85,5 +93,7 @@ describe("desktop locale", () => {
       }),
       "已导入 2/3 个文件 · 新增 5 · 重复 2 · 无效 0 行",
     );
+    assert.match(translate("zh", "chrome.sendTimedOut"), /还在发这条/);
+    assert.match(translate("en", "chrome.sendTimedOut"), /still sending/);
   });
 });

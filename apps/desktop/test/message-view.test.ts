@@ -4,7 +4,9 @@ import type { InboxThread } from "../src/renderer/src/inbox.ts";
 import {
   readingMessages,
   receiptCopy,
+  heldWhileWorkingCount,
   threadActivityCopy,
+  threadActivityNote,
   threadActivityOf,
   threadLoadedCountCopy,
   threadPaneEmptyCopy,
@@ -13,6 +15,7 @@ import {
   threadFacetLabel,
   threadPreview,
   threadTitle,
+  parseRichBlocks,
   heldFollowUpCount,
   workNextStepCopy,
   workStatusLabel,
@@ -27,6 +30,7 @@ function item(input: {
   direction?: InboxViewItem["direction"];
   activity?: ThreadActivity;
   occurred_at?: string;
+  reason_codes?: string[];
 }): InboxViewItem {
   return {
     decision: {
@@ -34,7 +38,7 @@ function item(input: {
       org_id: "org",
       disposition: "current_work",
       layer: "L1_event",
-      reason_codes: [],
+      reason_codes: input.reason_codes ?? [],
       score: 1,
       decided_at: "2026-08-23T12:00:00.000Z",
     },
@@ -283,6 +287,160 @@ describe("thread activity", () => {
     assert.equal(threadActivityOf(stale, now), undefined);
     assert.equal(threadTitle(stale), "只用一句话回复: pong");
     assert.equal(threadPreview(stale), "只用一句话回复: pong");
+  });
+
+  it("keeps a working marker for hours, then drops it after a day", () => {
+    const working = thread(
+      [
+        item({
+          id: "out-1",
+          external_id: "session-1:1",
+          text: "run for hours",
+        }),
+        item({
+          id: "work-1",
+          external_id: "session-1:2",
+          text: "Still working.",
+          kind: "system",
+          direction: "inbound",
+          activity: "working",
+          occurred_at: "2026-08-23T12:00:00.000Z",
+        }),
+      ],
+      { hold_while_working: true },
+    );
+    const threeHours = Date.parse("2026-08-23T15:00:00.000Z");
+    const twentySixHours = Date.parse("2026-08-24T14:00:00.000Z");
+    assert.equal(threadActivityOf(working, threeHours), "working");
+    assert.match(threadActivityNote(working, threeHours) ?? "", /still working/i);
+    assert.equal(threadActivityOf(working, twentySixHours), undefined);
+  });
+
+  it("keeps working after outbound follow-ups and counts how many are held", () => {
+    const now = Date.parse("2026-08-23T15:00:00.000Z");
+    const follow = thread(
+      [
+        item({
+          id: "out-1",
+          external_id: "session-1:1",
+          text: "start the long job",
+          occurred_at: "2026-08-23T12:00:00.000Z",
+        }),
+        item({
+          id: "work-1",
+          external_id: "session-1:2",
+          text: "Still working.",
+          kind: "system",
+          direction: "inbound",
+          activity: "working",
+          occurred_at: "2026-08-23T12:00:01.000Z",
+        }),
+        item({
+          id: "out-2",
+          external_id: "session-1:3",
+          text: "also check the tests",
+          occurred_at: "2026-08-23T12:05:00.000Z",
+        }),
+        item({
+          id: "out-3",
+          external_id: "session-1:4",
+          text: "and the docs",
+          occurred_at: "2026-08-23T12:06:00.000Z",
+        }),
+      ],
+      { hold_while_working: true },
+    );
+    assert.equal(threadActivityOf(follow, now), "working");
+    assert.equal(heldWhileWorkingCount(follow, now), 2);
+    assert.match(threadActivityNote(follow, now) ?? "", /2 newer messages/);
+  });
+
+  it("treats a follow-up as sent when the connector does not hold while working", () => {
+    const now = Date.parse("2026-08-23T12:10:00.000Z");
+    const follow = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:1",
+        text: "start the long job",
+        occurred_at: "2026-08-23T12:00:00.000Z",
+      }),
+      item({
+        id: "work-1",
+        external_id: "session-1:2",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+        occurred_at: "2026-08-23T12:00:01.000Z",
+      }),
+      item({
+        id: "out-2",
+        external_id: "session-1:3",
+        text: "also check the tests",
+        occurred_at: "2026-08-23T12:05:00.000Z",
+      }),
+    ]);
+    assert.equal(threadActivityOf(follow, now), "sent");
+    assert.equal(heldWhileWorkingCount(follow, now), 0);
+  });
+
+  it("drops a working marker after 30 minutes when the connector does not hold", () => {
+    const now = Date.parse("2026-08-23T12:35:00.000Z");
+    const stale = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:1",
+        text: "run",
+      }),
+      item({
+        id: "work-1",
+        external_id: "session-1:2",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+        occurred_at: "2026-08-23T12:00:00.000Z",
+      }),
+    ]);
+    assert.equal(threadActivityOf(stale, now), undefined);
+  });
+
+  it("clears working when the latest thread_status has ended", () => {
+    const now = Date.parse("2026-08-23T15:00:00.000Z");
+    const ended = thread([
+      item({
+        id: "out-1",
+        external_id: "session-1:1",
+        text: "start the long job",
+        occurred_at: "2026-08-23T12:00:00.000Z",
+      }),
+      item({
+        id: "work-1",
+        external_id: "session-1:2",
+        text: "Still working.",
+        kind: "system",
+        direction: "inbound",
+        activity: "working",
+        occurred_at: "2026-08-23T12:00:01.000Z",
+      }),
+      item({
+        id: "end-1",
+        external_id: "session-1:ended",
+        text: "",
+        kind: "system",
+        direction: "inbound",
+        reason_codes: ["thread_status"],
+        occurred_at: "2026-08-23T14:00:00.000Z",
+      }),
+      item({
+        id: "out-2",
+        external_id: "session-1:3",
+        text: "next please",
+        occurred_at: "2026-08-23T14:50:00.000Z",
+      }),
+    ]);
+    assert.equal(threadActivityOf(ended, now), "sent");
+    assert.equal(heldWhileWorkingCount(ended, now), 0);
   });
 
   it("does not title a heads-only working row as Still working", () => {
@@ -584,5 +742,42 @@ describe("thread activity", () => {
     assert.equal(threadTitle(draft), "New conversation");
     assert.equal(threadPreview(draft), "New conversation");
     assert.equal(listPreview(draft, "New conversation"), null);
+  });
+});
+
+describe("rich message body", () => {
+  it("renders headings, tables, and lists from markdown line breaks", () => {
+    const blocks = parseRichBlocks(
+      [
+        "对多数普通企业来说，今天不会立刻改日常经营。",
+        "----",
+        "## 先看结论",
+        "| 法律 | 何时生效 | 一般企业 |",
+        "| ---- | ---- | ---- |",
+        "| 《国防动员法》修订 | 2026年10月1日 | 配合统计调查 |",
+        "",
+        "## 1. 所有企业都可能碰到",
+        "- 职工医保参保仍是法定义务",
+        "- **长护险**已按全国方案推进",
+      ].join("\n"),
+    );
+    assert.deepEqual(
+      blocks.map((block) => block.type),
+      ["paragraph", "heading", "table", "heading", "list"],
+    );
+    const heading = blocks[1];
+    const table = blocks[2];
+    const list = blocks[4];
+    assert.equal(heading.type, "heading");
+    assert.equal(heading.type === "heading" ? heading.text : "", "先看结论");
+    assert.equal(table.type, "table");
+    assert.deepEqual(table.type === "table" ? table.headers : [], [
+      "法律",
+      "何时生效",
+      "一般企业",
+    ]);
+    assert.equal(table.type === "table" ? table.rows[0][1] : "", "2026年10月1日");
+    assert.equal(list.type, "list");
+    assert.equal(list.type === "list" ? list.items[0] : "", "职工医保参保仍是法定义务");
   });
 });

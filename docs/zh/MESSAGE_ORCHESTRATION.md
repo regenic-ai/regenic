@@ -117,7 +117,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 
 入库走 `channelRecord()`，surface 跟正文一起走。旧事件没有 surface 时用 `inferLegacySurface()`。本地出站与渠道 history 回声的同一句话只保留一条 Event。
 
-回复、follow、pull 与新建对话走 `ChannelDriverRegistry`：`installation + thread → driver.resolveStreams / bindEgress / createThread`。`ownsThread` 优先于兜底匹配。同一条流上 follow 与 live pull 串行。桌面只问 `can_send`、`can_create`、`await_reply`、`list_title` 和 `activity`，不问「是不是 DSH」。
+回复、follow、pull 与新建对话走 `ChannelDriverRegistry`：`installation + thread → driver.resolveStreams / bindEgress / createThread`。`ownsThread` 优先于兜底匹配。同一条流上 follow 与 live pull 串行。桌面只问 `can_send`、`can_create`、`create_with_task`、`await_reply`、`hold_while_working`、`list_title` 和 `activity`，不问「是不是 DSH」。
 
 ## 扩展点
 

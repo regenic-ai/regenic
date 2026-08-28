@@ -568,7 +568,7 @@ describe("personal /v1/me", () => {
       const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.deepEqual(
         light.catalog.map((item) => item.connector_type),
-        ["slack-channel", "dsh-session", "feishu-chat"],
+        ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent"],
       );
       assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
@@ -1308,7 +1308,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.installations[0].can_reply, false);
       assert.equal(engine.installations[0].can_create, false);
       assert.equal(engine.installations[0].last_attempt, null);
-      assert.equal(engine.catalog.length, 3);
+      assert.equal(engine.catalog.length, 4);
       assert.equal(engine.catalog[0].connector_type, "slack-channel");
       assert.equal(engine.catalog[0].installed, true);
       assert.equal(engine.catalog[0].prerequisites[0].key, "REGENIC_SLACK_TOKEN");
@@ -1325,6 +1325,15 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[2].fields[2].key, "chat_ids");
       assert.equal(engine.catalog[2].fields[2].multiple, true);
       assert.equal(engine.catalog[2].prerequisites[0].key, "lark-cli");
+      assert.equal(engine.catalog[3].connector_type, "cursor-agent");
+      assert.equal(engine.catalog[3].installed, false);
+      assert.equal(engine.catalog[3].fields[0].key, "api_key");
+      assert.equal(engine.catalog[3].fields[0].secret, true);
+      assert.equal(engine.catalog[3].fields[1].key, "model");
+      assert.equal(engine.catalog[3].fields[1].default, "composer-2.5");
+      assert.equal(engine.catalog[3].fields[1].options[0].value, "composer-2.5");
+      assert.equal(engine.catalog[3].prerequisites[0].key, "CURSOR_API_KEY");
+      assert.equal(engine.catalog[3].prerequisites[0].required, false);
       assert.equal(engine.catalog[0].singleton, false);
       assert.equal(
         engine.catalog.some((item) => item.connector_type.startsWith("crm-")),
@@ -1748,6 +1757,7 @@ describe("personal /v1/me", () => {
       const createdBody = await created.json();
       assert.equal(created.status, 201, JSON.stringify(createdBody));
       assert.equal(createdBody.can_create, true);
+      assert.equal(createdBody.create_with_task, false);
       assert.equal(createdBody.can_reply, true);
       assert.equal(createdBody.channel, "dsh");
       assert.equal(createdBody.channel_label, "DSH");
@@ -1777,6 +1787,47 @@ describe("personal /v1/me", () => {
       assert.equal(openedBody.await_reply, true);
       assert.equal(openedBody.list_title, "prompt");
       assert.deepEqual(dsh.created, ["created-1"]);
+
+      const tasked = await fetch(`${origin}/v1/me/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          installation_id: createdBody.id,
+          text: "Fix the login bug",
+        }),
+      });
+      const taskedBody = await tasked.json();
+      assert.equal(tasked.status, 201, JSON.stringify(taskedBody));
+      assert.equal(taskedBody.thread_id, "dsh:created-2");
+      assert.deepEqual(dsh.created, ["created-1", "created-2"]);
+      assert.equal(
+        dsh.prompts.some((item) => JSON.stringify(item).includes("Fix the login bug")),
+        false,
+      );
+
+      const createdBeforeRetry = dsh.created.length;
+      const retryBody = {
+        installation_id: createdBody.id,
+        client_request_id: "draft:dsh-1:same-send",
+      };
+      const [firstRetry, secondRetry] = await Promise.all([
+        fetch(`${origin}/v1/me/conversations`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(retryBody),
+        }),
+        fetch(`${origin}/v1/me/conversations`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(retryBody),
+        }),
+      ]);
+      const firstRetryBody = await firstRetry.json();
+      const secondRetryBody = await secondRetry.json();
+      assert.equal(firstRetry.status, 201, JSON.stringify(firstRetryBody));
+      assert.equal(secondRetry.status, 201, JSON.stringify(secondRetryBody));
+      assert.equal(secondRetryBody.thread_id, firstRetryBody.thread_id);
+      assert.equal(dsh.created.length, createdBeforeRetry + 1);
 
       const empty = await fetch(`${origin}/v1/me/replies`, {
         method: "POST",
@@ -1819,10 +1870,10 @@ describe("personal /v1/me", () => {
       assert.equal(body.item.direction, "outbound");
       assert.equal(body.item.can_send, true);
       assert.equal(body.item.attachments[0].filename, "shot.png");
-      assert.equal(dsh.prompts.length, 1);
-      assert.equal(dsh.prompts[0].method, "session.prompt");
-      assert.equal(dsh.prompts[0].payload.sessionId, "sess-a");
-      const image = dsh.prompts[0].payload.content.find((part) => part.type === "image");
+      const replyPrompt = dsh.prompts.find((item) => item.payload?.sessionId === "sess-a");
+      assert.equal(replyPrompt?.method, "session.prompt");
+      assert.equal(replyPrompt?.payload.sessionId, "sess-a");
+      const image = replyPrompt.payload.content.find((part) => part.type === "image");
       assert.equal(image.mimeType, "image/png");
       assert.equal(image.mediaType, "image/png");
       assert.equal(image.name, "shot.png");
@@ -2490,6 +2541,7 @@ describe("personal /v1/me", () => {
       assert.deepEqual(
         engine.catalog.map((item) => item.docs.map((doc) => doc.id)),
         [
+          ["connector", "rfc0009"],
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],

@@ -20,6 +20,7 @@ import { useLocale } from "./LocaleContext";
 import { PencilIcon, PinIcon } from "./Icons";
 import { ThreadPane } from "./ThreadPane";
 import { ThreadTitleField } from "./ThreadTitleField";
+import type { ComposerDraft } from "./Composer";
 import type { CreatedConversation, InboxSortMode, PersonalEngineView } from "./types";
 
 export function InboxWorkspace({
@@ -35,6 +36,7 @@ export function InboxWorkspace({
   createTargets,
   creating,
   onCreate,
+  onCommitDraft,
   onSelect,
   onRefresh,
   onRename,
@@ -57,6 +59,11 @@ export function InboxWorkspace({
   createTargets: CreateTarget[];
   creating: boolean;
   onCreate: (installationId: string) => Promise<CreatedConversation | undefined>;
+  onCommitDraft: (
+    installationId: string,
+    draft: ComposerDraft,
+    draftId: string,
+  ) => Promise<CreatedConversation | undefined>;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
   onRename: (thread: InboxThread, title: string | null) => Promise<void>;
@@ -157,7 +164,7 @@ export function InboxWorkspace({
           {!error && threads.length === 0 ? (
             <div className="page-empty">
               {canCreate
-                ? t("inbox.emptyCreate", { channel: createTargets[0].channel_label })
+                ? t("inbox.emptyCreate")
                 : t("inbox.emptyInstall")}
             </div>
           ) : null}
@@ -213,6 +220,7 @@ export function InboxWorkspace({
               void onRefresh();
             }}
             onRefresh={onRefresh}
+            onCommitDraft={onCommitDraft}
             onRename={renameSelected}
             onPin={pinSelected}
             onRunWork={() => onRunWork(selected)}
@@ -376,13 +384,13 @@ function NewConversationButton({
         type="button"
         className="list-new"
         disabled={creating}
-        title={t("inbox.newChannel", { channel: preferred.channel_label })}
+        title={t("inbox.new")}
         onClick={() => {
           void onCreate(preferred.id);
         }}
       >
         <span className="list-new-mark" aria-hidden="true">+</span>
-        {creating ? t("inbox.starting") : t("inbox.newChannel", { channel: preferred.channel_label })}
+        {creating ? t("inbox.starting") : t("inbox.new")}
       </button>
     );
   }

@@ -10,6 +10,8 @@ export const en = {
   "chrome.currentWorkCount": "{count} current work",
   "chrome.kernel": "Kernel {state}",
   "chrome.cannotReach": "Cannot reach the kernel at {origin}",
+  "chrome.sendTimedOut":
+    "The local service is still sending this. Wait a bit, then check the thread — it may already be there.",
 
   "inbox.title": "Current work",
   "inbox.sort": "Sort",
@@ -18,7 +20,7 @@ export const en = {
   "inbox.channel": "Channel",
   "inbox.all": "All",
   "inbox.emptyCreate":
-    "Nothing here yet. Start a {channel} chat, or set a rule for the work an executor should run.",
+    "Nothing here yet. Start a conversation, or set a rule for the work an executor should run.",
   "inbox.emptyInstall":
     "Nothing here yet. Install a connector in Engine, then set a rule.",
   "inbox.noMatch": "No conversations match these filters.",
@@ -27,6 +29,7 @@ export const en = {
   "inbox.showAll": "Show all conversations",
   "inbox.showingPinned": "Showing pinned",
   "inbox.pinnedOnly": "Pinned only",
+  "inbox.new": "New",
   "inbox.newChannel": "New {channel}",
   "inbox.starting": "Starting…",
   "inbox.newMenu": "New ▾",
@@ -515,6 +518,7 @@ export const zh: Record<MessageKey, string> = {
   "chrome.currentWorkCount": "{count} 条当前工作",
   "chrome.kernel": "本机服务 {state}",
   "chrome.cannotReach": "连不上 {origin} 上的本机服务",
+  "chrome.sendTimedOut": "本机服务还在发这条。先等一会儿再看会话，可能已经发出去了。",
 
   "inbox.title": "当前工作",
   "inbox.sort": "排序",
@@ -523,7 +527,7 @@ export const zh: Record<MessageKey, string> = {
   "inbox.channel": "渠道",
   "inbox.all": "全部",
   "inbox.emptyCreate":
-    "还没有当前工作。新建一个 {channel} 会话，或设一条规则。",
+    "还没有当前工作。新建一个会话，或设一条规则。",
   "inbox.emptyInstall":
     "还没有当前工作。先到引擎页装连接器，再设一条规则。",
   "inbox.noMatch": "没有符合筛选的会话。",
@@ -532,6 +536,7 @@ export const zh: Record<MessageKey, string> = {
   "inbox.showAll": "显示全部会话",
   "inbox.showingPinned": "仅置顶",
   "inbox.pinnedOnly": "仅置顶",
+  "inbox.new": "新建",
   "inbox.newChannel": "新建 {channel}",
   "inbox.starting": "正在创建…",
   "inbox.newMenu": "新建 ▾",
@@ -742,7 +747,7 @@ export const zh: Record<MessageKey, string> = {
   "settings.language": "语言",
   "settings.languageLead": "马上生效，默认是英文。",
   "settings.english": "English",
-  "settings.englishHint": "Default interface language.",
+  "settings.englishHint": "默认界面语言。",
   "settings.chinese": "中文",
   "settings.chineseHint": "简体中文界面。",
   "settings.kernel": "内核地址",

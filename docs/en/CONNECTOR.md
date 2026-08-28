@@ -102,7 +102,8 @@ The following are not allowed:
 - Mapping an unknown native type to `message`.
 - Putting bodies or secrets in `attrs`, logs, or quarantine metadata.
 - Adding per-channel switches in the API or desktop. The desktop reads
-  `can_send`, `can_create`, `await_reply`, `list_title`,
+  `can_send`, `can_create`, `create_with_task`, `await_reply`,
+  `hold_while_working`, `list_title`,
   `surface.activity`, and inbox `prompts` / `unread` / `can_receipt` /
   `receipt`.
 
@@ -141,7 +142,7 @@ A connector stops at L0: it translates one channel's wire. What it hands over is
 | `kind` | `user` \| `assistant` \| `system` | Mapped from the native event |
 | `direction` | `inbound` \| `outbound` | Reads are inbound. Console replies are outbound |
 | `content` | `ContentPart[]` | `body` plus optional `attachment` parts |
-| `capabilities` | `{ sync, reply, create, await_reply?, list_title?, hydrate_on_open?, prompts?, attention?, receipts? }` | Returned by `ChannelDriver.capabilities()` |
+| `capabilities` | `{ sync, reply, create, await_reply?, list_title?, hydrate_on_open?, prompts?, attention?, receipts?, create_with_task?, hold_while_working? }` | Returned by `ChannelDriver.capabilities()` |
 
 `channelRecord()` attaches surface metadata (`channel`, `kind`, `direction`,
 and optional `conversation_label` / `conversation_kind` / `actor_label` /
@@ -155,6 +156,14 @@ keeps working after a send (a session agent). Chat channels such as Feishu
 omit it. The desktop shows “Sent. Waiting for a reply” only when
 `await_reply` is true and the latest message is outbound. That banner is
 not a third `activity` value; it is presentation of the driver flag.
+`create_with_task`: creating a conversation requires the first user task.
+The desktop keeps a local draft; `createThread` receives `text` and starts
+the run; the kernel seeds that outbound and does not await the first poll.
+Omit it to open an empty session immediately; the first text is a normal
+send (DSH).
+`hold_while_working`: follow-ups during `working` are held by this
+connector; the desktop may count them. Omit it to treat follow-ups as
+already accepted (the peer queues, DSH `session.prompt` queue).
 `list_title` is the same kind of declaration: chat channels set
 `conversation` so the list title is `conversation_label` (group, channel,
 or DM counterpart). Session agents set `prompt` so the list title is the
@@ -215,6 +224,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
     sync; reply; create;
     await_reply?; list_title?; hydrate_on_open?;
     prompts?; attention?; receipts?;
+    create_with_task?; hold_while_working?;
   };
   resolveConversationLabels?(installation, threads, env): Promise<Map<string, string>>;
   listPrompts?(installation, thread, host, env): Promise<ThreadPrompt[]>;
@@ -235,14 +245,14 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `install` | Persist non-secret config. Slack requires `channel_id`. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
-| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, and `receipts`. `await_reply`: DSH sets it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH sets `prompt` (first user message). `hydrate_on_open`: pull a recent page when opening a thread; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Slack omit it. |
+| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, `receipts`, `create_with_task`, and `hold_while_working`. `await_reply`: DSH / Cursor set it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH / Cursor set `prompt` (first user message). `hydrate_on_open`: pull a recent page when opening a thread; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Slack / Cursor omit it. `create_with_task` / `hold_while_working`: Cursor sets them; DSH omits them. |
 | `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Local names only: Feishu uses install `chat_names`, Slack uses `channel_name`. Must not call `listAllChats` or block opening a thread. |
 | `listPrompts` / `answerPrompt` | Optional. Live pending decisions. DSH web mounts mux, maps `question/requested` / `approval/requested` to a channel-agnostic Prompt, and answers on `/api/respond`. `not-pending` is treated as settled. |
 | `readAttention` / `ackAttention` | Optional. Source overlay for *my* unread of their inbound. Feishu calls user-identity `read_status` on the latest inbound `om_`. Failure or an official “read” must not hide a thread the PC has never opened. Ack writes the local cursor first. |
 | `readReceipts` | Optional. Peer read of my outbound. Feishu calls user-identity `read_users` on `:out:om_`. Empty items stay Sent. Do not reuse this as conversation unread. |
 | `surfaceGeneration` | Optional. Live surface generation, appended to `inbox_digest` as `&s=` so a new approval is visible to desktop polling. |
 | `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` for picked chats; when `selection=all`, follow `options.threads` from the kernel (current work ∪ the open thread) plus new `chat_id`s from the latest directory page (cached about 2 minutes). Unmount streams outside that set. Must not read the inbox or call `listAllChats` on every tick. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
-| `createThread` | Optional. Required when `create` is true. Absent means the kernel returns 501. |
+| `createThread` | Optional. Required when `create` is true. Absent means the kernel returns 501. When `create_with_task` is set, it receives `options.text` and starts the run; otherwise it opens an empty session and the first user text is a normal send. |
 | `bindEgress` | Optional. Required when `reply` is true. Absent means the kernel returns 501. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
 | `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. |

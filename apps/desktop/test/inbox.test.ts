@@ -18,6 +18,8 @@ import {
 import {
   applyOpenedAt,
   createConversationTargets,
+  localDraftConversation,
+  localDraftOutbound,
   mergeDraftThreads,
 } from "../src/renderer/src/inbox-drafts.ts";
 import { reuseInboxList } from "../src/renderer/src/thread-window.ts";
@@ -456,8 +458,26 @@ describe("inbox sort", () => {
         ],
         catalog: [],
       }),
-      [{ id: "dsh-1", channel: "dsh", channel_label: "DSH", label: "web" }],
+      [{ id: "dsh-1", channel: "dsh", channel_label: "DSH", label: "web", create_with_task: false }],
     );
+    const draft = localDraftConversation({
+      id: "dsh-1",
+      channel: "dsh",
+      channel_label: "DSH",
+      label: "web",
+      create_with_task: true,
+    });
+    assert.match(draft.thread_id, /^draft:dsh-1:/);
+    assert.equal(draft.draft_installation_id, "dsh-1");
+    assert.equal(draft.list_title, "prompt");
+    const outbound = localDraftOutbound(
+      { ...draft, thread_id: "dsh:sess-new" },
+      "Fix the login bug",
+    );
+    assert.equal(outbound.body_text, "Fix the login bug");
+    assert.equal(outbound.event.source, "dsh");
+    assert.equal(outbound.kind, "user");
+    assert.equal(outbound.direction, "outbound");
   });
 
   it("carries live prompts and unread from inbox heads", () => {

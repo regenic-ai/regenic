@@ -214,19 +214,14 @@ export function conversationKindLabel(kind: string | null | undefined): string |
 }
 
 const SENT_WAIT_MS = 30 * 60 * 1000;
+const WORKING_WAIT_MS = 24 * 60 * 60 * 1000;
 
 export function threadActivityOf(
   thread: InboxThread,
   now = Date.now(),
 ): InboxViewItem["activity"] | "sent" | undefined {
-  const latest = thread.messages[thread.messages.length - 1];
-  if (!latest) {
-    return undefined;
-  }
-  if (latest.activity === "working") {
-    if (!isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)) {
-      return undefined;
-    }
+  const working = liveWorkingOf(thread, now);
+  if (working) {
     const lastVisible = lastVisibleMessage(thread);
     if (lastVisible?.activity === "awaiting_user") {
       return "awaiting_user";
@@ -236,7 +231,11 @@ export function threadActivityOf(
     }
     return "working";
   }
-  if (latest.activity) {
+  const latest = thread.messages[thread.messages.length - 1];
+  if (!latest) {
+    return undefined;
+  }
+  if (latest.activity && latest.activity !== "working") {
     return latest.activity;
   }
   if (
@@ -248,6 +247,85 @@ export function threadActivityOf(
     return "sent";
   }
   return undefined;
+}
+
+function isThreadStatusRow(item: InboxViewItem): boolean {
+  return (
+    item.activity === "working"
+    || item.decision.reason_codes.includes("thread_status")
+  );
+}
+
+function latestThreadStatus(thread: InboxThread): InboxViewItem | undefined {
+  for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
+    const item = thread.messages[index];
+    if (isThreadStatusRow(item)) {
+      return item;
+    }
+  }
+  return undefined;
+}
+
+function liveWorkingOf(
+  thread: InboxThread,
+  now: number,
+): InboxViewItem | undefined {
+  if (thread.hold_while_working === true) {
+    return latestLiveWorking(thread, now);
+  }
+  const latest = thread.messages[thread.messages.length - 1];
+  if (latest?.activity !== "working") {
+    return undefined;
+  }
+  if (!isRecentStamp(latest.event.occurred_at, now, SENT_WAIT_MS)) {
+    return undefined;
+  }
+  return latest;
+}
+
+function latestLiveWorking(
+  thread: InboxThread,
+  now: number,
+): InboxViewItem | undefined {
+  const status = latestThreadStatus(thread);
+  if (status?.activity !== "working") {
+    return undefined;
+  }
+  if (!isRecentStamp(status.event.occurred_at, now, WORKING_WAIT_MS)) {
+    return undefined;
+  }
+  return status;
+}
+
+export function heldWhileWorkingCount(thread: InboxThread, now = Date.now()): number {
+  if (thread.hold_while_working !== true) {
+    return 0;
+  }
+  const working = latestLiveWorking(thread, now);
+  if (!working) {
+    return 0;
+  }
+  const index = thread.messages.lastIndexOf(working);
+  if (index < 0) {
+    return 0;
+  }
+  return thread.messages.slice(index + 1).filter(
+    (item) => item.kind === "user" && item.direction === "outbound",
+  ).length;
+}
+
+export function threadActivityNote(
+  thread: InboxThread,
+  now = Date.now(),
+): string | undefined {
+  const activity = threadActivityOf(thread, now);
+  if (activity === "working") {
+    const held = heldWhileWorkingCount(thread, now);
+    if (held > 0) {
+      return t("work.hint.held", { count: held });
+    }
+  }
+  return threadActivityCopy(activity);
 }
 
 function isRecentStamp(stamp: string, now: number, windowMs: number): boolean {
@@ -337,7 +415,7 @@ export function threadTitle(thread: InboxThread): string {
 }
 
 export function threadPreview(thread: InboxThread): string {
-  const activity = threadActivityCopy(threadActivityOf(thread));
+  const activity = threadActivityNote(thread);
   if (activity) {
     return activity;
   }
@@ -546,6 +624,10 @@ export function parseRichBlocks(text: string): RichBlock[] {
       index += 1;
       continue;
     }
+    if (isThematicBreak(line)) {
+      index += 1;
+      continue;
+    }
     if (line.startsWith("```")) {
       const closed: string[] = [];
       index += 1;
@@ -652,8 +734,15 @@ function isOrderedItem(line: string): boolean {
   return /^\s*\d+\.\s+/.test(line);
 }
 
+function isThematicBreak(line: string): boolean {
+  return /^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line);
+}
+
 function isBlockBoundary(line: string): boolean {
   if (line.trim() === "") {
+    return true;
+  }
+  if (isThematicBreak(line)) {
     return true;
   }
   if (line.startsWith("```")) {

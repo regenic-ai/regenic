@@ -37,6 +37,58 @@ function origin(): string {
   return currentOrigin;
 }
 
+const KERNEL_FETCH_MS = 120_000;
+
+export function isKernelTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (
+    error.name === "AbortError" ||
+    error.name === "TimeoutError" ||
+    error.name === "KernelTimeoutError"
+  ) {
+    return true;
+  }
+  return /still handling this send|timed out/i.test(error.message);
+}
+
+export function isKernelNetworkError(error: unknown): boolean {
+  if (isKernelTimeoutError(error)) {
+    return false;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("failed to fetch")
+    || message.includes("network request failed")
+    || message.includes("load failed")
+    || message.includes("networkerror")
+    || message.includes("cannot reach the kernel")
+  );
+}
+
+async function kernelFetch(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(`${origin()}${path}`, {
+      ...init,
+      signal: init?.signal ?? AbortSignal.timeout(KERNEL_FETCH_MS),
+    });
+  } catch (error) {
+    if (isKernelTimeoutError(error)) {
+      const wrapped = new Error(`The kernel is still handling this send at ${origin()}`);
+      wrapped.name = "KernelTimeoutError";
+      throw wrapped;
+    }
+    if (isKernelNetworkError(error) || error instanceof TypeError) {
+      throw new Error(`Cannot reach the kernel at ${origin()}`);
+    }
+    throw error;
+  }
+}
+
 export function currentApiOrigin(): string {
   return currentOrigin;
 }
@@ -181,6 +233,7 @@ export async function fetchInbox(
     direction: item.direction ?? "inbound",
     can_send: item.can_send === true,
     await_reply: item.await_reply === true,
+    hold_while_working: item.hold_while_working === true,
     list_title: normalizeListTitle(item.list_title),
     thread_id: item.thread_id,
     title: item.title ?? null,
@@ -268,6 +321,7 @@ export async function fetchEngine(
       syncable: item.syncable === true,
       can_reply: item.can_reply === true,
       can_create: item.can_create === true,
+      create_with_task: item.create_with_task === true,
       channel: item.channel,
       channel_label: item.channel_label,
     })),
@@ -407,8 +461,10 @@ export async function importWhatsAppExport(
 
 export async function createConversation(input: {
   installation_id?: string;
+  text?: string;
+  client_request_id?: string;
 } = {}): Promise<CreatedConversation> {
-  const response = await fetch(`${origin()}/v1/me/conversations`, {
+  const response = await kernelFetch("/v1/me/conversations", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -501,7 +557,7 @@ export async function sendReply(input: {
   reply_to_event_id?: string;
   attachments?: ReplyAttachmentInput[];
 }): Promise<ReplyView> {
-  const response = await fetch(`${origin()}/v1/me/replies`, {
+  const response = await kernelFetch("/v1/me/replies", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),

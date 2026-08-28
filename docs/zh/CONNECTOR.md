@@ -83,7 +83,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 把 token 存进 `config`，或从 `/v1/me` 返回。
 - 把未知的原生类型映射成 `message`。
 - 把正文或密钥放进 `attrs`、日志或隔离区元数据。
-- 在 API 或桌面按渠道名加开关。桌面读 `can_send`、`can_create`、`await_reply`、`list_title`、`surface.activity`，以及 inbox 上的 `prompts` / `unread` / `can_receipt` / `receipt`。
+- 在 API 或桌面按渠道名加开关。桌面读 `can_send`、`can_create`、`create_with_task`、`await_reply`、`hold_while_working`、`list_title`、`surface.activity`，以及 inbox 上的 `prompts` / `unread` / `can_receipt` / `receipt`。
 
 ## 隔离
 
@@ -114,7 +114,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 | `kind` | `user` \| `assistant` \| `system` | 从原生事件映射 |
 | `direction` | `inbound` \| `outbound` | 读进来是 inbound。控制台回复是 outbound |
 | `content` | `ContentPart[]` | `body`，外加可选的 `attachment` |
-| `capabilities` | `{ sync, reply, create, await_reply?, list_title?, hydrate_on_open?, prompts?, attention?, receipts? }` | 由 `ChannelDriver.capabilities()` 返回 |
+| `capabilities` | `{ sync, reply, create, await_reply?, list_title?, hydrate_on_open?, prompts?, attention?, receipts?, create_with_task?, hold_while_working? }` | 由 `ChannelDriver.capabilities()` 返回 |
 
 `channelRecord()` 把 surface（`channel`、`kind`、`direction`，以及可选的
 `conversation_label` / `conversation_kind` / `actor_label` / `activity`）
@@ -125,6 +125,11 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 设为 true；飞书这类聊天渠道不写。桌面只在 `await_reply` 为 true 且最近
 一条是 outbound 时，才显示「已发送，等对端」。这不是第三条 `activity`，
 只是对驱动声明的展示。
+`create_with_task`：创建会话必须带上第一条用户任务。桌面先开本地草稿；
+`createThread` 收 `text` 并开工；内核种出站、不等首次 poll。不写则立刻建
+空会话，第一条走普通回复（DSH）。
+`hold_while_working`：`working` 期间的跟发由本连接器暂存，桌面可显示条数。
+不写则跟发视为已送达（对端自己排队，DSH `session.prompt` queue）。
 `list_title` 同样由驱动声明：聊天渠道设 `conversation`，列表标题用
 `conversation_label`（群名、频道名、单聊对方）；会话 Agent 设 `prompt`，
 列表标题用该会话第一条用户消息（跳过开头的 system 注入，找不到才回退到可见消息脸，避免退化成 session id）；不写则用可见消息脸。桌面不按渠道名分支。旧 Event 缺会话名时，驱动可实现
@@ -159,6 +164,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
     sync; reply; create;
     await_reply?; list_title?; hydrate_on_open?;
     prompts?; attention?; receipts?;
+    create_with_task?; hold_while_working?;
   };
   resolveConversationLabels?(installation, threads, env): Promise<Map<string, string>>;
   listPrompts?(installation, thread, host, env): Promise<ThreadPrompt[]>;
@@ -179,14 +185,14 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书存 `selection=all` 加 `kinds`（`group` / `p2p`，默认两个都开），或勾选的 `chat_ids`。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
-| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`。`await_reply`：DSH 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时拉最近一页；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Slack 不写。 |
+| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`、`create_with_task`、`hold_while_working`。`await_reply`：DSH / Cursor 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH / Cursor 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时拉最近一页；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Slack / Cursor 不写。`create_with_task` / `hold_while_working`：Cursor 为 true；DSH 不写。 |
 | `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。只读本地已有名字：飞书用安装里的 `chat_names`，Slack 用 `channel_name`。不得为了补名去 `listAllChats` 或挡住打开会话。 |
 | `listPrompts` / `answerPrompt` | 可选。活的待决决策。DSH web 挂 mux，把 `question/requested` / `approval/requested` 映射成渠道无关 Prompt，答题走 `/api/respond`。`not-pending` 视为已解决。 |
 | `readAttention` / `ackAttention` | 可选。来源已读覆盖（我看对方）。飞书对最新 inbound `om_` 调用户态 `read_status`；失败或官方已读都不消本机未读。ack 先写本地游标。 |
 | `readReceipts` | 可选。对端是否已读我的出站。飞书对 `:out:om_` 调用户态 `read_users`。空 items 是 Sent。不得用来源会话未读。 |
 | `surfaceGeneration` | 可选。活 surface 世代，拼进 `inbox_digest` 的 `&s=`，审批弹出时桌面轮询能看见。 |
 | `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：勾选的 `chat:<id>`；`selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及会话目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转后隔多久再扫）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支。 |
-| `createThread` | 可选。`create` 为 true 时必须实现。未声明则内核 501。 |
+| `createThread` | 可选。`create` 为 true 时必须实现。未声明则内核 501。声明了 `create_with_task` 时收 `options.text` 并开工；未声明则只建空会话，第一条用户文本走普通 send。 |
 | `bindEgress` | 可选。`reply` 为 true 时必须实现。未声明则内核 501。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
 | `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。 |

@@ -5,7 +5,9 @@ import {
   ChannelDriverRegistry,
   ConnectorRunner,
   DeadlineExceededError,
+  INGEST_SCHEMA_VERSION,
   InstallationQuotaBook,
+  channelRecord,
   connectorPollTimeoutMs,
   connectorSyncTimeoutMs,
   driverCanReply,
@@ -134,6 +136,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private backgroundStarted = false;
   private maintenanceHold = false;
   private readonly quota = new InstallationQuotaBook();
+  private readonly creatingByClient = new Map<string, Promise<CreatedConversationView>>();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -619,7 +622,40 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   async createConversation(
-    input: { installation_id?: string; source?: string } = {},
+    input: {
+      installation_id?: string;
+      source?: string;
+      text?: string;
+      cwd?: string;
+      client_request_id?: string;
+    } = {},
+  ): Promise<CreatedConversationView> {
+    const clientKey = this.createClientKey(input.client_request_id);
+    if (clientKey) {
+      const pending = this.creatingByClient.get(clientKey);
+      if (pending) {
+        return pending;
+      }
+    }
+    const run = this.createConversationOnce(input).catch((error) => {
+      if (clientKey) {
+        this.creatingByClient.delete(clientKey);
+      }
+      throw error;
+    });
+    if (clientKey) {
+      this.creatingByClient.set(clientKey, run);
+    }
+    return run;
+  }
+
+  private createClientKey(value?: string): string | undefined {
+    const id = value?.trim();
+    return id ? `${this.runtime.orgId()}:${id}` : undefined;
+  }
+
+  private async createConversationOnce(
+    input: { installation_id?: string; source?: string; text?: string; cwd?: string },
   ): Promise<CreatedConversationView> {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
@@ -654,12 +690,43 @@ export class PersonalConnectorService implements OnModuleDestroy {
         );
       }
     }
+    const withTask = found.driver.capabilities(found.installation).create_with_task === true;
+    const firstTask = withTask ? input.text?.trim() : undefined;
     try {
       const thread = await requireCreateThread(found.driver)(
         found.installation,
         host,
         process.env,
+        {
+          ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
+          ...(firstTask ? { text: firstTask } : {}),
+        },
       );
+      if (firstTask) {
+        try {
+          await this.seedCreatedOutbound(
+            found.installation,
+            found.driver,
+            thread,
+            firstTask,
+            host,
+          );
+        } catch {
+          // Poll below can still land the first task from the connector.
+        }
+      }
+      if (withTask) {
+        // Task-create starts the run inside createThread. Do not await the
+        // first poll on this HTTP request — a locked messages.list can sit
+        // until Chromium reports "Network request failed".
+        void this.seedCreatedThread(found.installation, found.driver, thread, host).catch(
+          () => {
+            void this.catchUp(found.installation.id);
+          },
+        );
+      } else {
+        await this.seedCreatedThread(found.installation, found.driver, thread, host);
+      }
       return {
         thread_id: `${thread.source}:${thread.target}`,
         channel: thread.source,
@@ -673,6 +740,62 @@ export class PersonalConnectorService implements OnModuleDestroy {
     } catch (error) {
       throw wrapDriverError(error, "send_failed");
     }
+  }
+
+  private async seedCreatedOutbound(
+    installation: ConnectorInstallation,
+    driver: ChannelDriver,
+    thread: ConversationThread,
+    text: string,
+    host: Host,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const receipt = { accepted: true as const, rpc_id: randomUUID() };
+    const externalId = driver.outboundId
+      ? driver.outboundId(thread, receipt)
+      : `${thread.target}:out:${receipt.rpc_id}`;
+    const record = channelRecord({
+      channel: driver.source,
+      kind: "user",
+      direction: "outbound",
+      external_id: externalId,
+      occurred_at: now,
+      actor_id: "local-owner",
+      scope_id: thread.target,
+      text,
+    });
+    record.weight_hints = { importance: 1 };
+    await host.get("ingest").ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: installation.id,
+      org_id: this.runtime.orgId(),
+      delivery_id: `create:${externalId}`,
+      received_at: now,
+      records: [record],
+    });
+  }
+
+  private async seedCreatedThread(
+    installation: ConnectorInstallation,
+    driver: ChannelDriver,
+    thread: ConversationThread,
+    host: Host,
+  ): Promise<void> {
+    const stream = await driver.resolveThreadStream(
+      installation,
+      thread,
+      host,
+      process.env,
+    );
+    await pollStream(
+      host,
+      host.get("authority"),
+      installation,
+      stream,
+      1,
+      undefined,
+      this.quota,
+    );
   }
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
