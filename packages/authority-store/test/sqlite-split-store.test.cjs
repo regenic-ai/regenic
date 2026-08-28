@@ -343,4 +343,37 @@ describe("sqlite read/write split", () => {
     assert.equal(latest?.id, "attempt-79");
     await store.close();
   });
+
+  it("prunes ingest attempts in bounded writer batches", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    const installation = await store.createInstallation({
+      id: "installation-batch",
+      org_id: "local-owner",
+      connector_type: "native-local",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-28T00:00:00.000Z",
+    });
+    for (let index = 0; index < 70; index += 1) {
+      const stamp = `2026-08-28T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}.000Z`;
+      await store.beginAttempt({
+        id: `attempt-${index}`,
+        org_id: "local-owner",
+        connector_installation_id: installation.id,
+        stream_key: "personal",
+        delivery_id: `page-${index}`,
+        started_at: stamp,
+      });
+    }
+    const first = await store.pruneIngestAttempts(64, 3);
+    const mid = await store.listAttempts(installation.id);
+    const second = await store.pruneIngestAttempts(64, 3);
+    const remaining = await store.listAttempts(installation.id);
+    assert.equal(first.deleted, 3);
+    assert.equal(mid.length, 67);
+    assert.equal(second.deleted, 3);
+    assert.equal(remaining.length, 64);
+    store.close();
+  });
 });

@@ -41,6 +41,7 @@ import type {
 import { SqliteWriteClient } from "./sqlite-write-client";
 
 export const INGEST_ATTEMPT_KEEP_PER_INSTALLATION = 64;
+export const INGEST_ATTEMPT_PRUNE_BATCH = 5_000;
 
 export class SqliteSplitAuthorityStore
   implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore
@@ -355,12 +356,19 @@ export class SqliteSplitAuthorityStore
   }
 
   async maintainStore(): Promise<{ deleted: number }> {
-    const result = await this.writer.call<{ deleted: number }>(
-      "pruneIngestAttempts",
-      [INGEST_ATTEMPT_KEEP_PER_INSTALLATION],
-    );
+    let deleted = 0;
+    for (;;) {
+      const batch = await this.writer.call<{ deleted: number }>(
+        "pruneIngestAttempts",
+        [INGEST_ATTEMPT_KEEP_PER_INSTALLATION, INGEST_ATTEMPT_PRUNE_BATCH],
+      );
+      deleted += batch.deleted;
+      if (batch.deleted === 0) {
+        break;
+      }
+    }
     await this.writer.call("checkpointWal", []);
-    return result;
+    return { deleted };
   }
 
   /** @internal Holds the writer so tests can prove inbox reads do not wait. */

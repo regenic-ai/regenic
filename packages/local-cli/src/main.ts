@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { INGEST_ATTEMPT_KEEP_PER_INSTALLATION } from "@regenic/authority-store";
 import {
   ConnectorRunner,
   type ContextConsumer,
@@ -412,7 +413,10 @@ async function showStatus(options: CommandOptions, stdout: CliOutput): Promise<v
     writeJson(stdout, await Promise.all(
       (await store.listInstallations(requireOption(options, "org"))).map(async (installation) => ({
         installation,
-        attempts: await store.listAttempts(installation.id),
+        attempts: await store.listAttempts(
+          installation.id,
+          INGEST_ATTEMPT_KEEP_PER_INSTALLATION,
+        ),
       })),
     ));
   });

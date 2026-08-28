@@ -1171,10 +1171,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
     store: ConnectorRuntimeStore,
     installation: ConnectorInstallation,
   ): Promise<EngineInstallationView> {
-    const attempts = await store.latestAttempt(installation.id);
+    const attempt = await store.latestAttempt(installation.id);
     return toInstallationView(
       installation,
-      attempts,
+      attempt,
       this.drivers,
     );
   }
