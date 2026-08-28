@@ -1,5 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   ChannelDriverRegistry,
@@ -29,6 +27,7 @@ import {
 } from "@regenic/domain";
 import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
+import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export class PersonalWorkChannel {
@@ -65,8 +64,14 @@ export class PersonalWorkChannel {
           options?.cwd ? { cwd: options.cwd } : undefined,
         );
       },
-      writeWorkFiles: async (files, options) =>
-        this.writeWorkFiles(files, options?.work_item_id),
+      ...(this.runtime.getOptions()?.blobRoot
+        ? {
+            writeWorkFiles: async (
+              files: Record<string, string>,
+              options?: { work_item_id?: string },
+            ) => this.writeWorkFiles(files, options?.work_item_id),
+          }
+        : {}),
       writeStdin: async (thread, text) => {
         await this.sendText(thread, text);
       },
@@ -88,19 +93,17 @@ export class PersonalWorkChannel {
     const blobRoot = this.runtime.getOptions()?.blobRoot;
     if (!blobRoot) {
       throw new PersonalConnectorError(
-        "kernel_stopped",
+        "unavailable",
         "Local work files need a blob root",
         503,
       );
     }
-    const folder = workItemId?.replace(/[^A-Za-z0-9._-]/g, "") || randomUUID();
-    const cwd = join(blobRoot, "work-context", this.runtime.orgId(), folder);
-    await mkdir(cwd, { recursive: true });
-    for (const [name, body] of Object.entries(files)) {
-      const safe = name.replace(/[^A-Za-z0-9._-]/g, "") || "file.txt";
-      await writeFile(join(cwd, safe), body, "utf8");
-    }
-    return { cwd };
+    return writeWorkContextFiles({
+      blobRoot,
+      orgId: this.runtime.orgId(),
+      files,
+      workItemId,
+    });
   }
 
   async sendText(
