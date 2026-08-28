@@ -5,6 +5,7 @@
 
 export * from "./ingestion";
 export * from "./content-parts";
+export * from "./content-resolution";
 export * from "./channel-driver";
 export * from "./message-contract";
 export * from "./content-compact";

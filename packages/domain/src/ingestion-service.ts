@@ -19,11 +19,24 @@ import type {
   NewEvent,
   SourceIdentity,
 } from "./ingestion";
-import { AuthorityConflictError } from "./ingestion";
+import { AuthorityConflictError, collectAvailableBlobs } from "./ingestion";
+import {
+  CONTENT_PARTS_MEDIA_TYPE,
+  attachmentHashesFromStoredParts,
+  parseStoredContentParts,
+} from "./content-parts";
 import {
   validateIngestBatch,
   type IngestValidationIssue,
 } from "./ingestion-schema";
+import {
+  incomingImprovesAttachments,
+  incomingWorsensAttachments,
+  preserveResolvedAttachments,
+  resolutionFromCanonical,
+  resolutionFromStored,
+  type AttachmentResolution,
+} from "./content-resolution";
 import {
   attachmentDigestsFromParts,
   attachmentDigestsFromStored,
@@ -180,9 +193,10 @@ export class IngestionService {
       return { kind: "tombstone", identity, record, current };
     }
 
+    const merged = await this.mergeRecordContent(record, current);
     let canonical;
     try {
-      canonical = canonicalizeRecordContent(record);
+      canonical = canonicalizeRecordContent(merged);
     } catch (error) {
       if (error instanceof ContentUnavailableError) {
         return {
@@ -216,21 +230,6 @@ export class IngestionService {
       };
     }
 
-    if (
-      record.operation === "create" &&
-      current &&
-      (current.operation !== "tombstone" || current.parent_event_id !== undefined)
-    ) {
-      return {
-        kind: "result",
-        result: {
-          external_id: record.external_id,
-          status: "quarantined",
-          error_code: "source_identity_conflict",
-        },
-      };
-    }
-
     if (record.operation === "revise" && !current) {
       return {
         kind: "result",
@@ -242,21 +241,70 @@ export class IngestionService {
       };
     }
 
-    if (record.operation === "revise" && current) {
-      return { kind: "revise", identity, record, canonical, current };
+    if (current) {
+      const existing = await this.existingResolution(current);
+      const incoming = resolutionFromCanonical(canonical);
+      if (incomingWorsensAttachments(existing, incoming)) {
+        return this.replayedInspected(record, current, overlayCurrent);
+      }
+      if (record.operation === "revise") {
+        return { kind: "revise", identity, record: merged, canonical, current };
+      }
+      if (
+        current.operation !== "tombstone" ||
+        current.parent_event_id !== undefined
+      ) {
+        if (incomingImprovesAttachments(existing, incoming)) {
+          return { kind: "revise", identity, record: merged, canonical, current };
+        }
+        if (existing.unresolvedCount > 0 || incoming.unresolvedCount > 0) {
+          return this.replayedInspected(record, current, overlayCurrent);
+        }
+        return {
+          kind: "result",
+          result: {
+            external_id: record.external_id,
+            status: "quarantined",
+            error_code: "source_identity_conflict",
+          },
+        };
+      }
     }
 
     if (current) {
       return {
         kind: "create_after_tombstone",
         identity,
-        record,
+        record: merged,
         canonical,
         current,
       };
     }
 
-    return { kind: "create", identity, record, canonical };
+    return { kind: "create", identity, record: merged, canonical };
+  }
+
+  private async mergeRecordContent(
+    record: IngestRecord,
+    current: EventRecord | null | undefined,
+  ): Promise<IngestRecord> {
+    if (!current || !record.content) {
+      return record;
+    }
+    const stored = await this.readEventBytes(current);
+    const content = await preserveResolvedAttachments(
+      record.content,
+      stored?.bytes,
+      stored?.mediaType,
+      async (hash) => {
+        try {
+          return await this.blobStore.get(hash);
+        } catch {
+          return undefined;
+        }
+      },
+    );
+    return content === record.content ? record : { ...record, content };
   }
 
   private async replayedInspected(
@@ -483,6 +531,26 @@ export class IngestionService {
     } catch {
       return undefined;
     }
+  }
+
+  private async existingResolution(
+    event: EventRecord,
+  ): Promise<AttachmentResolution> {
+    const stored = await this.readEventBytes(event);
+    if (!stored) {
+      return { resolvedHashes: [], unresolvedCount: 0 };
+    }
+    if (stored.mediaType !== CONTENT_PARTS_MEDIA_TYPE) {
+      return resolutionFromStored(stored.bytes, stored.mediaType);
+    }
+    const parts = parseStoredContentParts(stored.bytes);
+    const sidecars = parts
+      ? await collectAvailableBlobs(
+          (hash) => this.blobStore.get(hash),
+          attachmentHashesFromStoredParts(parts),
+        )
+      : undefined;
+    return resolutionFromStored(stored.bytes, stored.mediaType, sidecars);
   }
 
   private async readEventAttachments(event: EventRecord): Promise<string[]> {

@@ -108,6 +108,47 @@ describe("resolveInboxBodies", () => {
     assert.equal(meta.get(event.content_hash).attachments[0].data_base64, undefined);
   });
 
+  it("shows a filename chip when the attachment is still only a pointer", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const service = new IngestionService(blobs, authority);
+    const ingested = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "attach-pointer",
+      received_at: "2026-08-28T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_1:om_pointer",
+          occurred_at: "2026-08-28T00:00:00.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "image.png",
+              external_locator: "source://image/1",
+            },
+          ],
+        }),
+      ],
+    });
+    const event = await authority.getEvent(
+      "local-owner",
+      ingested.records[0].event_id,
+    );
+    const preview = await resolveInboxBodies(authority, blobs, [event.content_hash]);
+    const attachment = preview.get(event.content_hash).attachments[0];
+    assert.equal(attachment.filename, "image.png");
+    assert.equal(attachment.media_type, "image/png");
+    assert.equal(attachment.data_base64, undefined);
+  });
+
   it("only inlines the latest few image previews on a thread page", async () => {
     const authority = new MemoryAuthorityStore();
     const blobs = new MemoryBlobStore();

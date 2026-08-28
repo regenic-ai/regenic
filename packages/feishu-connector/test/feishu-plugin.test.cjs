@@ -191,7 +191,7 @@ describe("feishuChatDriver", () => {
         { source: "feishu", target: "oc_1" },
         { accepted: true, rpc_id: "om_out" },
       ),
-      "oc_1:out:om_out",
+      "oc_1:om_out",
     );
   });
 

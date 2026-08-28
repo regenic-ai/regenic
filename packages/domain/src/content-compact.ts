@@ -156,6 +156,10 @@ function partsToContent(parts: StoredContentPart[]): ContentPart[] | undefined {
       content.push({ ...base, bytes });
       continue;
     }
+    if (typeof part.external_locator === "string" && part.external_locator) {
+      content.push({ ...base, external_locator: part.external_locator });
+      continue;
+    }
     return undefined;
   }
   return content.length > 0 ? content : undefined;

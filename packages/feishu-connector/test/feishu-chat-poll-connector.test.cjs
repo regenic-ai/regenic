@@ -20,7 +20,6 @@ const {
   planFeishuHistoryRequest,
   decodeFeishuCursor,
   deferredHistoryToken,
-  needsMediaReseed,
   needsRecentSeed,
   resetFeishuAttention,
 } = require("../dist");
@@ -108,7 +107,6 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         page_token: "page-1",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     });
 
@@ -142,7 +140,6 @@ describe("FeishuChatPollConnector", () => {
         page_token: "page-2",
         start_time: "1723420860",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
     assert.equal(result.next_cursor, result.batch.next_cursor);
@@ -230,7 +227,6 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
   });
@@ -267,7 +263,6 @@ describe("FeishuChatPollConnector", () => {
         start_time: "1723500000",
         recent_seeded: true,
         history_token: "older",
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
     assert.equal(result.has_more, true);
@@ -305,10 +300,11 @@ describe("FeishuChatPollConnector", () => {
       (part) => part.role === "attachment",
     );
     assert.deepEqual(downloads, []);
-    assert.equal(attachment.bytes.byteLength, 0);
+    assert.equal(attachment.external_locator, "feishu:image:img_shot");
+    assert.equal(attachment.bytes, undefined);
     assert.equal(result.has_more, true);
     assert.match(result.next_cursor ?? "", /"recent_seeded":true/);
-    assert.doesNotMatch(result.next_cursor ?? "", /"media_ok":true/);
+    assert.match(result.next_cursor ?? "", /"media_jobs"/);
   });
 
   it("keeps live polling after the recent seed and only walks history when asked", async () => {
@@ -332,11 +328,7 @@ describe("FeishuChatPollConnector", () => {
     const seeded = JSON.stringify({
       start_time: "1723500000",
       recent_seeded: true,
-      history_token: "older",
-      media_synced: true,
-      media_bytes: true,
-      media_ok: true,
-    });
+      history_token: "older",    });
     const live = await connector.poll({ value: seeded });
     const older = await connector.poll({ value: seeded }, { older: true });
     assert.deepEqual(calls[0], {
@@ -370,11 +362,7 @@ describe("FeishuChatPollConnector", () => {
     });
     const caughtUp = JSON.stringify({
       start_time: "1723500000",
-      recent_seeded: true,
-      media_synced: true,
-      media_bytes: true,
-      media_ok: true,
-    });
+      recent_seeded: true,    });
     const older = await connector.poll({ value: caughtUp }, { older: true });
     assert.deepEqual(calls, []);
     assert.deepEqual(older.batch.records, []);
@@ -388,11 +376,7 @@ describe("FeishuChatPollConnector", () => {
         page_token: "older",
         sort: "desc",
         head_time: "1723500000",
-        recent_seeded: true,
-        media_synced: true,
-        media_bytes: true,
-        media_ok: true,
-      }),
+        recent_seeded: true,      }),
     });
     assert.equal(state.start_time, "1723500000");
     assert.equal(deferredHistoryToken(state), "older");
@@ -443,7 +427,6 @@ describe("FeishuChatPollConnector", () => {
         start_time: "100",
         head_time: "1723600000",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
     assert.equal(result.has_more, true);
@@ -513,7 +496,6 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
   });
@@ -541,7 +523,6 @@ describe("FeishuChatPollConnector", () => {
         start_time: "1723420800",
         recent_seeded: true,
         history_token: "page-2",
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     );
   });
@@ -690,7 +671,7 @@ describe("FeishuChatPollConnector", () => {
         { items: [], has_more: false },
         "ByCreateTimeAsc",
       ),
-      { start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true },
+      { start_time: "100", recent_seeded: true },
     );
     assert.deepEqual(
       nextFeishuCursor(
@@ -698,39 +679,18 @@ describe("FeishuChatPollConnector", () => {
         { items: [], has_more: false },
         "ByCreateTimeDesc",
       ),
-      { start_time: "200", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true },
+      { start_time: "200", recent_seeded: true },
     );
     assert.equal(needsRecentSeed({}), true);
     assert.equal(needsRecentSeed({ page_token: "p1" }), true);
     assert.equal(needsRecentSeed({ start_time: "100" }), true);
     assert.equal(needsRecentSeed({ start_time: "100", recent_seeded: true }), false);
-    assert.equal(needsMediaReseed({ start_time: "100", recent_seeded: true }), true);
-    assert.equal(
-      needsMediaReseed({ start_time: "100", recent_seeded: true, media_synced: true }),
-      true,
-    );
-    assert.equal(
-      needsMediaReseed({ start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true }),
-      true,
-    );
-    assert.equal(
-      needsMediaReseed({ start_time: "100", recent_seeded: true, media_synced: true, media_bytes: true, media_ok: true }),
-      false,
-    );
     assert.deepEqual(
       planFeishuHistoryRequest("oc_1", 50, {}),
       { chat_id: "oc_1", page_size: 50, sort_type: "ByCreateTimeDesc" },
     );
     assert.deepEqual(
       planFeishuHistoryRequest("oc_1", 50, { start_time: "100", recent_seeded: true }),
-      { chat_id: "oc_1", page_size: 50, sort_type: "ByCreateTimeDesc" },
-    );
-    assert.deepEqual(
-      planFeishuHistoryRequest("oc_1", 50, {
-        start_time: "100",
-        recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
-      }),
       {
         chat_id: "oc_1",
         page_size: 50,
@@ -743,13 +703,7 @@ describe("FeishuChatPollConnector", () => {
       planFeishuHistoryRequest(
         "oc_1",
         50,
-        {
-          start_time: "100",
-          recent_seeded: true,
-          media_synced: true,
-          media_bytes: true,
-          media_ok: true,
-        },
+        { start_time: "100", recent_seeded: true },
         { older: true },
       ),
       null,
@@ -824,25 +778,27 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     });
     assert.equal(result.batch.records.length, 6);
     assert.equal(result.batch.records[0].operation, "create");
-    assert.equal(result.batch.records[1].operation, "revise");
+    assert.equal(result.batch.records[3].operation, "revise");
     assert.deepEqual(downloads, [
       { message_id: "om_img", file_key: "img_shot", type: "image" },
       { message_id: "om_file", file_key: "file_notes", type: "file" },
       { message_id: "om_post", file_key: "img_inline", type: "image" },
     ]);
-    const image = result.batch.records[0].content.find((part) => part.role === "attachment");
+    const pointer = result.batch.records[0].content.find((part) => part.role === "attachment");
+    assert.equal(pointer.external_locator, "feishu:image:img_shot");
+    assert.equal(pointer.bytes, undefined);
+    const image = result.batch.records[3].content.find((part) => part.role === "attachment");
     assert.equal(image.media_type, "image/png");
     assert.equal(image.source_filename, "shot.png");
     assert.deepEqual(Array.from(image.bytes), Array.from(png));
-    const file = result.batch.records[2].content.find((part) => part.role === "attachment");
+    const file = result.batch.records[4].content.find((part) => part.role === "attachment");
     assert.equal(file.media_type, "application/pdf");
     assert.equal(file.source_filename, "notes.pdf");
-    const post = result.batch.records[4];
+    const post = result.batch.records[5];
     assert.equal(
       post.content.find((part) => part.role === "body").text,
       "see this",
@@ -882,15 +838,12 @@ describe("FeishuChatPollConnector", () => {
     const result = await connector.poll({
       value: JSON.stringify({
         start_time: "1723420800",
-        recent_seeded: true,
-        media_synced: true,
-        media_bytes: true,
-        media_ok: true,
-      }),
+        recent_seeded: true,      }),
     });
-    const attachment = result.batch.records[0].content.find(
+    const attachment = result.batch.records[1].content.find(
       (part) => part.role === "attachment",
     );
+    assert.equal(result.batch.records[0].operation, "create");
     assert.equal(result.batch.records[1].operation, "revise");
     assert.deepEqual(Array.from(attachment.bytes), Array.from(png));
   });
@@ -916,7 +869,6 @@ describe("FeishuChatPollConnector", () => {
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
       }),
     });
     assert.equal(result.batch.records.length, 1);
@@ -924,10 +876,12 @@ describe("FeishuChatPollConnector", () => {
       (part) => part.role === "attachment",
     );
     assert.equal(attachment.source_filename, "image.png");
-    assert.equal(attachment.bytes.byteLength, 0);
+    assert.equal(attachment.external_locator, "feishu:image:img_shot");
+    assert.equal(attachment.bytes, undefined);
+    assert.match(result.next_cursor ?? "", /"media_jobs"/);
   });
 
-  it("reseeds a live cursor once so previously dropped media can ingest", async () => {
+  it("keeps live polling on a seeded cursor instead of rewinding history for media", async () => {
     const calls = [];
     const connector = createConnector({
       async listMessages(input) {
@@ -952,31 +906,71 @@ describe("FeishuChatPollConnector", () => {
     assert.deepEqual(calls[0], {
       chat_id: "oc_1",
       page_size: 50,
-      sort_type: "ByCreateTimeDesc",
+      page_token: undefined,
+      start_time: "1723420800",
+      sort_type: "ByCreateTimeAsc",
     });
     assert.equal(result.batch.records[0].external_id, "oc_1:om_img");
-    assert.equal(
-      result.next_cursor,
-      JSON.stringify({
-        start_time: "1723600000",
-        recent_seeded: true,
-        media_synced: true, media_bytes: true, media_ok: true,
-      }),
-    );
+    assert.equal(result.batch.records[0].operation, "create");
+    assert.match(result.next_cursor ?? "", /"start_time":"1723600000"/);
   });
 
-  it("reseeds a media-synced cursor once more so empty image placeholders can get bytes", async () => {
+  it("downloads queued media on a later poll without rewinding the history cursor", async () => {
     const calls = [];
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const connector = createConnector({
       async listMessages(input) {
         calls.push(input);
+        if (calls.length === 1) {
+          return {
+            items: [
+              {
+                message_id: "om_img",
+                msg_type: "image",
+                create_time: "1723600000000",
+                sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+                body: { content: JSON.stringify({ image_key: "img_shot" }) },
+              },
+            ],
+            has_more: false,
+          };
+        }
+        return { items: [], has_more: false };
+      },
+      async downloadResource() {
+        return { bytes: png, media_type: "image/png", filename: "shot.png" };
+      },
+    });
+    const opened = await connector.poll(
+      {
+        value: JSON.stringify({
+          start_time: "1723420800",
+          recent_seeded: true,
+        }),
+      },
+      { media: false },
+    );
+    const filled = await connector.poll({ value: opened.next_cursor });
+    assert.equal(calls[0].sort_type, "ByCreateTimeAsc");
+    assert.equal(calls[1].sort_type, "ByCreateTimeAsc");
+    assert.equal(opened.batch.records[0].operation, "create");
+    assert.equal(opened.batch.records[0].content.find((part) => part.role === "attachment").bytes, undefined);
+    assert.equal(filled.batch.records[0].operation, "revise");
+    assert.equal(
+      filled.batch.records[0].content.find((part) => part.role === "attachment").bytes.byteLength,
+      8,
+    );
+  });
+
+  it("rejects a JSON error body instead of treating it as image bytes", async () => {
+    const connector = createConnector({
+      async listMessages() {
         return {
           items: [
             {
               message_id: "om_img",
               msg_type: "image",
-              create_time: "1723600000000",
+              create_time: "1723420800000",
               sender: { id: "ou_1", sender_type: "user", name: "Ada" },
               body: { content: JSON.stringify({ image_key: "img_shot" }) },
             },
@@ -985,25 +979,22 @@ describe("FeishuChatPollConnector", () => {
         };
       },
       async downloadResource() {
-        return { bytes: png, media_type: "image/png", filename: "shot.png" };
+        return {
+          bytes: Buffer.from(JSON.stringify({ code: 99991663, msg: "token invalid" })),
+          media_type: "application/json",
+          filename: "image.png",
+        };
       },
     });
     const result = await connector.poll({
       value: JSON.stringify({
         start_time: "1723420800",
         recent_seeded: true,
-        media_synced: true,
-        media_bytes: true,
       }),
     });
-    assert.deepEqual(calls[0], {
-      chat_id: "oc_1",
-      page_size: 50,
-      sort_type: "ByCreateTimeDesc",
-    });
+    assert.equal(result.batch.records.length, 1);
     assert.equal(result.batch.records[0].operation, "create");
-    assert.equal(result.batch.records[1].operation, "revise");
-    assert.equal(result.batch.records[0].content.find((part) => part.role === "attachment").bytes.byteLength, 8);
+    assert.match(result.next_cursor ?? "", /"media_jobs"/);
   });
 });
 

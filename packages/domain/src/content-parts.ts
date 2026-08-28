@@ -10,6 +10,7 @@ export interface StoredContentPart {
   text?: string;
   content_hash?: string;
   bytes_base64?: string;
+  external_locator?: string;
 }
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;

@@ -31,6 +31,29 @@ import {
 } from "./feishu-message";
 
 export const MAX_FEISHU_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+export const MAX_FEISHU_MEDIA_JOBS = 40;
+export const MAX_FEISHU_MEDIA_ATTEMPTS = 5;
+export const MAX_FEISHU_MEDIA_JOBS_PER_POLL = 8;
+
+export interface FeishuMediaJob {
+  message_id: string;
+  key: string;
+  kind: "image" | "file";
+  filename?: string;
+  media_type?: string;
+  attempts: number;
+  retry_after?: number;
+  occurred_at: string;
+  actor_id: string;
+  actor_label?: string;
+  sender_kind: "user" | "assistant";
+  direction: "inbound" | "outbound";
+  text?: string;
+  type?: string;
+  thread_id?: string;
+  parent_external_id?: string;
+  refs: FeishuMediaRef[];
+}
 
 export interface FeishuCursorState {
   page_token?: string;
@@ -39,9 +62,7 @@ export interface FeishuCursorState {
   head_time?: string;
   recent_seeded?: boolean;
   history_token?: string;
-  media_synced?: boolean;
-  media_bytes?: boolean;
-  media_ok?: boolean;
+  media_jobs?: FeishuMediaJob[];
 }
 
 export interface FeishuChatPollConnectorOptions {
@@ -121,7 +142,8 @@ export class FeishuChatPollConnector {
       state,
       { older: options?.older === true },
     );
-    if (!request) {
+    const nowMs = this.clockMs();
+    if (!request && !(wantMedia && hasDueMediaJobs(state.media_jobs, nowMs))) {
       const nextCursor = encodeFeishuCursor(state);
       return {
         batch: {
@@ -137,12 +159,14 @@ export class FeishuChatPollConnector {
         has_more: false,
       };
     }
-    const page = await this.client.listMessages(request);
+    const page = request
+      ? await this.client.listMessages(request)
+      : { items: [], has_more: false };
     const names = await this.resolveNames(page.items);
     const selfId = await this.selfUserId();
     const records: IngestBatch["records"] = [];
     for (const item of page.items) {
-      records.push(...(await this.toRecord(item, names, selfId, wantMedia)));
+      records.push(...this.toRecord(item, names, selfId));
     }
     for (const item of page.items) {
       if (item.deleted || !item.message_id || isFeishuSelfSender(item.sender?.id, selfId)) {
@@ -150,9 +174,19 @@ export class FeishuChatPollConnector {
       }
       rememberFeishuInbound(this.options.chat_id, item.message_id, item.create_time);
     }
-    const nextState = nextFeishuCursor(state, page, request.sort_type, {
-      media: wantMedia,
-    });
+    const jobs = this.enqueueFromItems(state.media_jobs, page.items, names, selfId);
+    const drained = wantMedia
+      ? await this.drainMediaJobs(jobs, nowMs)
+      : { records: [], jobs };
+    records.push(...drained.records);
+    const nextState = nextFeishuCursor(
+      state,
+      page,
+      request?.sort_type ?? "ByCreateTimeAsc",
+    );
+    if (drained.jobs.length > 0) {
+      nextState.media_jobs = drained.jobs;
+    }
     const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
@@ -166,7 +200,9 @@ export class FeishuChatPollConnector {
     return {
       batch,
       next_cursor: nextCursor,
-      has_more: feishuHistoryHasMore(state, page, request.sort_type, nextState),
+      has_more:
+        Boolean(request) &&
+        feishuHistoryHasMore(state, page, request?.sort_type, nextState),
     };
   }
 
@@ -205,14 +241,25 @@ export class FeishuChatPollConnector {
     return names;
   }
 
-  private async toRecord(
+  private toRecord(
     item: FeishuHistoryItem,
     names: ReadonlyMap<string, string>,
     selfId?: string,
-    wantMedia = true,
-  ): Promise<IngestBatch["records"]> {
-    if (item.deleted) {
+  ): IngestBatch["records"] {
+    const snapshot = this.mediaSnapshot(item, names, selfId);
+    if (!snapshot) {
       return [];
+    }
+    return [this.recordFromSnapshot(snapshot, pointerAttachments(snapshot.refs))];
+  }
+
+  private mediaSnapshot(
+    item: FeishuHistoryItem,
+    names: ReadonlyMap<string, string>,
+    selfId?: string,
+  ): Omit<FeishuMediaJob, "key" | "kind" | "filename" | "media_type" | "attempts" | "retry_after"> | undefined {
+    if (item.deleted) {
+      return undefined;
     }
     const kind = senderKind(item.sender?.sender_type);
     const actorId = item.sender?.id;
@@ -224,17 +271,8 @@ export class FeishuChatPollConnector {
     );
     const media = extractFeishuMedia(item.msg_type, item.body?.content);
     if (!kind || !actorId || (!text && media.length === 0)) {
-      return [];
+      return undefined;
     }
-    const attachments = wantMedia
-      ? await this.resolveAttachments(item.message_id, media)
-      : media.map((ref) =>
-          placeholderAttachment(
-            ref.filename ?? (ref.kind === "image" ? "image.png" : "attachment"),
-            ref.media_type ??
-              (ref.kind === "image" ? "image/png" : "application/octet-stream"),
-          ),
-        );
     const chatId = this.options.chat_id;
     const rootId = emptyToUndefined(item.root_id);
     const parentId = emptyToUndefined(item.parent_id);
@@ -243,71 +281,205 @@ export class FeishuChatPollConnector {
         (parentId && parentId !== item.message_id),
     );
     const threadRoot = rootId && rootId !== item.message_id ? rootId : parentId;
-    const record = channelRecord({
-      channel: this.source,
-      kind,
-      direction: isFeishuSelfSender(actorId, selfId) ? "outbound" : "inbound",
-      external_id: `${chatId}:${item.message_id}`,
+    return {
+      message_id: item.message_id,
       occurred_at: feishuCreateTimeToIso(item.create_time, this.now()),
       actor_id: actorId,
       actor_label: this.actorLabel(item, kind, names),
-      scope_id: chatId,
-      scope_name: this.chatName,
-      conversation_kind: feishuConversationKind(this.chatMode),
+      sender_kind: kind,
+      direction: isFeishuSelfSender(actorId, selfId) ? "outbound" : "inbound",
+      text,
       type: isThreadReply ? "thread_reply" : "message",
       thread_id: isThreadReply && threadRoot ? `${chatId}:${threadRoot}` : undefined,
       parent_external_id:
         isThreadReply && (parentId || rootId)
           ? `${chatId}:${parentId ?? rootId}`
           : undefined,
-      text,
-      content: attachments,
-    });
-    if (attachments.some((part) => part.bytes !== undefined && part.bytes.byteLength > 0)) {
-      return [record, { ...record, operation: "revise" }];
-    }
-    return [record];
+      refs: media,
+    };
   }
 
-  private async resolveAttachments(
-    messageId: string,
-    refs: FeishuMediaRef[],
-  ): Promise<ContentPart[]> {
-    const parts: ContentPart[] = [];
-    for (const ref of refs) {
-      parts.push(await this.resolveAttachment(messageId, ref));
-    }
-    return parts;
+  private recordFromSnapshot(
+    snapshot: Pick<
+      FeishuMediaJob,
+      | "message_id"
+      | "occurred_at"
+      | "actor_id"
+      | "actor_label"
+      | "sender_kind"
+      | "direction"
+      | "text"
+      | "type"
+      | "thread_id"
+      | "parent_external_id"
+    >,
+    attachments: ContentPart[],
+    operation: "create" | "revise" = "create",
+  ): IngestBatch["records"][number] {
+    return {
+      ...channelRecord({
+        channel: this.source,
+        kind: snapshot.sender_kind,
+        direction: snapshot.direction,
+        external_id: `${this.options.chat_id}:${snapshot.message_id}`,
+        occurred_at: snapshot.occurred_at,
+        actor_id: snapshot.actor_id,
+        actor_label: snapshot.actor_label,
+        scope_id: this.options.chat_id,
+        scope_name: this.chatName,
+        conversation_kind: feishuConversationKind(this.chatMode),
+        type: snapshot.type,
+        thread_id: snapshot.thread_id,
+        parent_external_id: snapshot.parent_external_id,
+        text: snapshot.text,
+        content: attachments,
+      }),
+      operation,
+    };
   }
 
-  private async resolveAttachment(
-    messageId: string,
-    ref: FeishuMediaRef,
-  ): Promise<ContentPart> {
-    const filename = ref.filename ?? (ref.kind === "image" ? "image.png" : "attachment");
-    const fallbackType =
-      ref.media_type ?? (ref.kind === "image" ? "image/png" : "application/octet-stream");
+  private async drainMediaJobs(
+    jobs: FeishuMediaJob[],
+    nowMs: number,
+  ): Promise<{ records: IngestBatch["records"]; jobs: FeishuMediaJob[] }> {
     if (typeof this.client.downloadResource !== "function") {
-      return placeholderAttachment(filename, fallbackType);
+      return { records: [], jobs };
+    }
+    const due = jobs.filter((job) => isDueMediaJob(job, nowMs)).slice(
+      0,
+      MAX_FEISHU_MEDIA_JOBS_PER_POLL,
+    );
+    if (due.length === 0) {
+      return { records: [], jobs };
+    }
+    const downloaded = new Map<string, ContentPart>();
+    const nextJobs: FeishuMediaJob[] = [];
+    const dueKeys = new Set(due.map(mediaJobKey));
+    for (const job of jobs) {
+      if (!dueKeys.has(mediaJobKey(job))) {
+        nextJobs.push(job);
+        continue;
+      }
+      const part = await this.downloadMediaJob(job);
+      if (part) {
+        downloaded.set(mediaJobKey(job), part);
+        continue;
+      }
+      const attempts = job.attempts + 1;
+      if (attempts >= MAX_FEISHU_MEDIA_ATTEMPTS) {
+        continue;
+      }
+      nextJobs.push({
+        ...job,
+        attempts,
+        retry_after: nowMs + mediaRetryBackoffMs(attempts),
+      });
+    }
+    const records = this.recordsFromDownloads(downloaded, [...due, ...nextJobs]);
+    return { records, jobs: nextJobs };
+  }
+
+  private async downloadMediaJob(job: FeishuMediaJob): Promise<ContentPart | undefined> {
+    if (typeof this.client.downloadResource !== "function") {
+      return undefined;
     }
     try {
       const file = await this.client.downloadResource({
-        message_id: messageId,
-        file_key: ref.key,
-        type: ref.kind,
+        message_id: job.message_id,
+        file_key: job.key,
+        type: job.kind,
       });
-      if (file.bytes.byteLength === 0 || file.bytes.byteLength > MAX_FEISHU_ATTACHMENT_BYTES) {
-        return placeholderAttachment(file.filename ?? filename, file.media_type || fallbackType);
+      if (
+        file.bytes.byteLength === 0 ||
+        file.bytes.byteLength > MAX_FEISHU_ATTACHMENT_BYTES ||
+        looksLikeJsonFile(file.bytes)
+      ) {
+        return undefined;
       }
+      const filename =
+        file.filename ??
+        job.filename ??
+        (job.kind === "image" ? "image.png" : "attachment");
+      const mediaType = sniffMediaType(
+        file.bytes,
+        file.media_type ||
+          job.media_type ||
+          (job.kind === "image" ? "image/png" : "application/octet-stream"),
+      );
       return {
         role: "attachment",
-        media_type: sniffMediaType(file.bytes, file.media_type || fallbackType),
-        source_filename: file.filename ?? filename,
+        media_type: mediaType,
+        source_filename: filename,
+        external_locator: feishuMediaLocator(job.kind, job.key),
         bytes: file.bytes,
       };
     } catch {
-      return placeholderAttachment(filename, fallbackType);
+      return undefined;
     }
+  }
+
+  private recordsFromDownloads(
+    downloaded: Map<string, ContentPart>,
+    jobs: FeishuMediaJob[],
+  ): IngestBatch["records"] {
+    if (downloaded.size === 0) {
+      return [];
+    }
+    const byMessage = new Map<string, FeishuMediaJob>();
+    for (const job of jobs) {
+      if (!byMessage.has(job.message_id)) {
+        byMessage.set(job.message_id, job);
+      }
+    }
+    const records: IngestBatch["records"] = [];
+    for (const job of byMessage.values()) {
+      const attachments = job.refs.map((ref) => {
+        const hit = downloaded.get(mediaJobKey({ message_id: job.message_id, key: ref.key }));
+        return hit ?? pointerAttachment(ref);
+      });
+      if (!attachments.some((part) => part.bytes && part.bytes.byteLength > 0)) {
+        continue;
+      }
+      records.push(this.recordFromSnapshot(job, attachments, "revise"));
+    }
+    return records;
+  }
+
+  private clockMs(): number {
+    const parsed = Date.parse(this.now());
+    return Number.isFinite(parsed) ? parsed : Date.now();
+  }
+
+  private enqueueFromItems(
+    current: FeishuMediaJob[] | undefined,
+    items: FeishuHistoryItem[],
+    names: ReadonlyMap<string, string>,
+    selfId?: string,
+  ): FeishuMediaJob[] {
+    const jobs = [...(current ?? [])];
+    const seen = new Set(jobs.map(mediaJobKey));
+    for (const item of items) {
+      const snapshot = this.mediaSnapshot(item, names, selfId);
+      if (!snapshot || snapshot.refs.length === 0) {
+        continue;
+      }
+      for (const ref of snapshot.refs) {
+        const key = mediaJobKey({ message_id: snapshot.message_id, key: ref.key });
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        jobs.push({
+          ...snapshot,
+          key: ref.key,
+          kind: ref.kind,
+          filename: ref.filename,
+          media_type: ref.media_type,
+          attempts: 0,
+        });
+      }
+    }
+    return jobs.slice(-MAX_FEISHU_MEDIA_JOBS);
   }
 
   private actorLabel(
@@ -362,9 +534,7 @@ export function decodeFeishuCursor(cursor: ConnectorCursor | null): FeishuCursor
         head_time: stringValue(parsed.head_time),
         recent_seeded: parsed.recent_seeded === true,
         history_token: historyToken,
-        media_synced: parsed.media_synced === true,
-        media_bytes: parsed.media_bytes === true,
-        media_ok: parsed.media_ok === true,
+        media_jobs: decodeMediaJobs(parsed.media_jobs),
       };
     }
   } catch {
@@ -381,9 +551,7 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
     !state.recent_seeded &&
     !state.head_time &&
     !state.history_token &&
-    !state.media_synced &&
-    !state.media_bytes &&
-    !state.media_ok
+    (!state.media_jobs || state.media_jobs.length === 0)
   ) {
     return undefined;
   }
@@ -397,22 +565,14 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
       : {}),
     ...(state.recent_seeded ? { recent_seeded: true } : {}),
     ...(state.history_token ? { history_token: state.history_token } : {}),
-    ...(state.media_synced ? { media_synced: true } : {}),
-    ...(state.media_bytes ? { media_bytes: true } : {}),
-    ...(state.media_ok ? { media_ok: true } : {}),
+    ...(state.media_jobs && state.media_jobs.length > 0
+      ? { media_jobs: state.media_jobs }
+      : {}),
   });
 }
 
 export function needsRecentSeed(state: FeishuCursorState): boolean {
   return !state.recent_seeded && state.sort !== "desc";
-}
-
-export function needsMediaReseed(state: FeishuCursorState): boolean {
-  return (
-    state.recent_seeded === true &&
-    state.media_ok !== true &&
-    state.sort !== "desc"
-  );
 }
 
 export function planFeishuHistoryRequest(
@@ -421,7 +581,7 @@ export function planFeishuHistoryRequest(
   state: FeishuCursorState,
   options: { older?: boolean } = {},
 ): FeishuListInput | null {
-  if (needsRecentSeed(state) || needsMediaReseed(state)) {
+  if (needsRecentSeed(state)) {
     return {
       chat_id: chatId,
       page_size: pageSize,
@@ -474,7 +634,7 @@ export function feishuHistoryHasMore(
     return true;
   }
   if (
-    (needsRecentSeed(current) || needsMediaReseed(current)) &&
+    needsRecentSeed(current) &&
     sort === "ByCreateTimeDesc" &&
     current.page_token
   ) {
@@ -487,95 +647,68 @@ export function nextFeishuCursor(
   current: FeishuCursorState,
   page: { items: FeishuHistoryItem[]; has_more: boolean; page_token?: string },
   sort: FeishuSortType = "ByCreateTimeAsc",
-  options: { media?: boolean } = {},
 ): FeishuCursorState {
   const newest = newestStartTime(page.items);
   const head = laterTime(current.head_time, newest);
-  const stamp = (state: FeishuCursorState) =>
-    stampCursor(state, options.media !== false);
   if (needsRecentSeed(current) && sort === "ByCreateTimeDesc") {
     if (current.page_token) {
-      return stamp({
+      return {
         page_token: current.page_token,
         start_time: current.start_time,
         recent_seeded: true,
         ...(head ? { head_time: head } : {}),
-      });
+      };
     }
     if (page.has_more && page.page_token) {
-      return stamp({
+      return {
         ...(head ? { start_time: head, head_time: head } : {}),
         history_token: page.page_token,
         recent_seeded: true,
-      });
+      };
     }
-    return stamp(
-      head ? { start_time: head, recent_seeded: true } : { recent_seeded: true },
-    );
-  }
-  if (needsMediaReseed(current) && sort === "ByCreateTimeDesc") {
-    const live = laterTime(current.start_time, head);
-    return stamp({
-      ...(current.page_token ? { page_token: current.page_token } : {}),
-      ...(live ? { start_time: live } : {}),
-      recent_seeded: true,
-      ...(head && head !== live ? { head_time: head } : {}),
-    });
+    return head ? { start_time: head, recent_seeded: true } : { recent_seeded: true };
   }
   if (sort === "ByCreateTimeDesc") {
     const live = current.start_time ?? current.head_time ?? head;
     if (page.has_more && page.page_token) {
-      return stamp({
+      return {
         ...(live ? { start_time: live } : {}),
         ...(current.head_time || head
           ? { head_time: laterTime(current.head_time, head) }
           : {}),
         history_token: page.page_token,
         recent_seeded: true,
-      });
+      };
     }
-    return stamp(
-      live ? { start_time: live, recent_seeded: true } : { recent_seeded: true },
-    );
+    return live ? { start_time: live, recent_seeded: true } : { recent_seeded: true };
   }
   const lastStart = lastStartTime(page.items) ?? current.start_time;
   const history = deferredHistoryToken(current);
   if (page.has_more && page.page_token) {
-    return stamp({
+    return {
       page_token: page.page_token,
       ...(lastStart ? { start_time: lastStart } : {}),
       recent_seeded: true,
       ...(head && head !== lastStart ? { head_time: head } : {}),
       ...(history ? { history_token: history } : {}),
-    });
+    };
   }
   const liveStart = laterTime(lastStart, current.head_time);
-  return stamp({
+  return {
     ...(liveStart ? { start_time: liveStart } : {}),
     recent_seeded: true,
     ...(history ? { history_token: history } : {}),
-  });
-}
-
-function stampMediaSynced(state: FeishuCursorState): FeishuCursorState {
-  return { ...state, media_synced: true, media_bytes: true, media_ok: true };
-}
-
-function stampCursor(
-  state: FeishuCursorState,
-  media = true,
-): FeishuCursorState {
-  return media ? stampMediaSynced(state) : state;
-}
-
-function placeholderAttachment(filename: string, mediaType: string): ContentPart {
-  return {
-    role: "attachment",
-    media_type: mediaType,
-    source_filename: filename,
-    bytes: new Uint8Array(),
   };
 }
+
+export function feishuMediaLocator(kind: "image" | "file", key: string): string {
+  return `feishu:${kind}:${key}`;
+}
+
+export function mediaRetryBackoffMs(attempts: number): number {
+  return Math.min(60_000, 1000 * 4 ** Math.max(0, attempts - 1));
+}
+
 
 function lastStartTime(items: FeishuHistoryItem[]): string | undefined {
   for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -615,4 +748,130 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+export function pointerAttachments(refs: readonly FeishuMediaRef[]): ContentPart[] {
+  return refs.map((ref) => pointerAttachment(ref));
+}
+
+export function pointerAttachment(ref: FeishuMediaRef): ContentPart {
+  return {
+    role: "attachment",
+    media_type:
+      ref.media_type ??
+      (ref.kind === "image" ? "image/png" : "application/octet-stream"),
+    source_filename: ref.filename ?? (ref.kind === "image" ? "image.png" : "attachment"),
+    external_locator: feishuMediaLocator(ref.kind, ref.key),
+  };
+}
+
+function decodeMediaJobs(value: unknown): FeishuMediaJob[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const jobs = value.flatMap((item) => {
+    if (!isObject(item)) {
+      return [];
+    }
+    const messageId = stringValue(item.message_id);
+    const key = stringValue(item.key);
+    const kind = item.kind === "image" || item.kind === "file" ? item.kind : undefined;
+    const actorId = stringValue(item.actor_id);
+    const occurredAt = stringValue(item.occurred_at);
+    const senderKind =
+      item.sender_kind === "user" || item.sender_kind === "assistant"
+        ? item.sender_kind
+        : undefined;
+    const direction =
+      item.direction === "inbound" || item.direction === "outbound"
+        ? item.direction
+        : undefined;
+    const refs = decodeMediaRefs(item.refs);
+    if (!messageId || !key || !kind || !actorId || !occurredAt || !senderKind || !direction) {
+      return [];
+    }
+    return [
+      {
+        message_id: messageId,
+        key,
+        kind,
+        filename: stringValue(item.filename),
+        media_type: stringValue(item.media_type),
+        attempts: Number.isInteger(item.attempts) ? Number(item.attempts) : 0,
+        retry_after:
+          typeof item.retry_after === "number" && Number.isFinite(item.retry_after)
+            ? item.retry_after
+            : undefined,
+        occurred_at: occurredAt,
+        actor_id: actorId,
+        actor_label: stringValue(item.actor_label),
+        sender_kind: senderKind,
+        direction,
+        text: typeof item.text === "string" ? item.text : undefined,
+        type: stringValue(item.type),
+        thread_id: stringValue(item.thread_id),
+        parent_external_id: stringValue(item.parent_external_id),
+        refs: refs.length > 0 ? refs : [{ kind, key, filename: stringValue(item.filename) }],
+      } satisfies FeishuMediaJob,
+    ];
+  });
+  return jobs.length > 0 ? jobs : undefined;
+}
+
+function decodeMediaRefs(value: unknown): FeishuMediaRef[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (!isObject(item)) {
+      return [];
+    }
+    const key = stringValue(item.key);
+    const kind = item.kind === "image" || item.kind === "file" ? item.kind : undefined;
+    if (!key || !kind) {
+      return [];
+    }
+    return [
+      {
+        kind,
+        key,
+        filename: stringValue(item.filename),
+        media_type: stringValue(item.media_type),
+      },
+    ];
+  });
+}
+
+function hasDueMediaJobs(jobs: FeishuMediaJob[] | undefined, nowMs: number): boolean {
+  return Boolean(jobs?.some((job) => isDueMediaJob(job, nowMs)));
+}
+
+function isDueMediaJob(job: FeishuMediaJob, nowMs: number): boolean {
+  return job.attempts < MAX_FEISHU_MEDIA_ATTEMPTS && (job.retry_after ?? 0) <= nowMs;
+}
+
+function mediaJobKey(job: { message_id: string; key: string }): string {
+  return `${job.message_id}:${job.key}`;
+}
+
+function looksLikeJsonFile(bytes: Uint8Array): boolean {
+  let index = 0;
+  while (
+    index < bytes.length &&
+    (bytes[index] === 0x09 ||
+      bytes[index] === 0x0a ||
+      bytes[index] === 0x0d ||
+      bytes[index] === 0x20)
+  ) {
+    index += 1;
+  }
+  if (index >= bytes.length || (bytes[index] !== 0x7b && bytes[index] !== 0x5b)) {
+    return false;
+  }
+  try {
+    JSON.parse(Buffer.from(bytes).toString("utf8"));
+    return true;
+  } catch {
+    return false;
+  }
 }

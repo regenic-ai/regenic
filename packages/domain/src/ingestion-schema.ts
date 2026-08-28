@@ -67,6 +67,7 @@ export const ContentPartSchema: z.ZodType<ContentPart> = z.union([
     .object({
       ...contentPartBase,
       bytes: z.instanceof(Uint8Array),
+      external_locator: nonEmptyStringSchema.optional(),
     })
     .strict(),
   z
