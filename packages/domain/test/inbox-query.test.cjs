@@ -65,6 +65,26 @@ describe("inbox query helpers", () => {
     assert.match(after, /:1:2026-08-23T00:01:00.000Z$/);
   });
 
+  it("changes the digest when work or write-back updates", () => {
+    const before = formatInboxDigest({
+      count: 1,
+      latest_at: "2026-08-23T00:00:00.000Z",
+      latest_id: "e1",
+      pref_count: 0,
+      pref_updated_at: "",
+    });
+    const after = formatInboxDigest({
+      count: 1,
+      latest_at: "2026-08-23T00:00:00.000Z",
+      latest_id: "e1",
+      pref_count: 0,
+      pref_updated_at: "",
+      work_updated_at: "2026-08-23T00:02:00.000Z",
+    });
+    assert.notEqual(before, after);
+    assert.match(after, /&w=2026-08-23T00:02:00.000Z$/);
+  });
+
   it("escapes LIKE wildcards in a thread target prefix", () => {
     assert.equal(escapeLikeLiteral("a_b%c\\d"), "a\\_b\\%c\\\\d");
     assert.equal(threadExternalIdLike("a_b"), "a\\_b:%");

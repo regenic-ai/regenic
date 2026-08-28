@@ -51,6 +51,7 @@ import {
   olderInboxCursor,
   mergeRecentInbox,
   reuseInboxList,
+  patchInboxWork,
   shouldFetchInboxDelta,
   THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
@@ -195,10 +196,17 @@ export function ConsoleApp() {
         }
         if (delta.length === 0) {
           finishOpen();
+          const heads = inboxRef.current.filter((item) => item.thread_id === threadId);
+          const patched = patchInboxWork(current, heads);
+          if (patched !== current) {
+            setMessagesByThread((prev) =>
+              rememberThreadMessages(prev, threadId, patched),
+            );
+          }
           if (loaded) {
             maybeRefreshOpenedReceipts(threadId);
           }
-          return current;
+          return patched;
         }
         const next = orderThreadMessages(
           mergeInboxDelta(messagesRef.current[threadId] ?? current, delta),

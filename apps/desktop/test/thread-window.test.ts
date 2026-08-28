@@ -16,6 +16,7 @@ import {
   olderInboxCursor,
   reuseInboxItems,
   reuseInboxList,
+  patchInboxWork,
   shouldFetchInboxDelta,
   shouldLoadOlder,
   shouldRearmLoadOlder,
@@ -139,6 +140,63 @@ describe("thread window", () => {
     ];
     const next = reuseInboxItems(first, edited);
     assert.equal(next[0], edited[0]);
+  });
+
+  it("does not reuse an inbox row when write-back status changes", () => {
+    const first = [
+      {
+        ...item("a", "one"),
+        work: {
+          id: "work-1",
+          status: "done" as const,
+          has_result: true,
+          delivery: { status: "write_back" as const, write_back: "pending" as const, attempts: 1 },
+        },
+      },
+    ];
+    const sent = [
+      {
+        ...first[0],
+        event: { ...first[0].event },
+        work: {
+          id: "work-1",
+          status: "done" as const,
+          has_result: true,
+          delivery: { status: "acked" as const, write_back: "sent" as const, attempts: 1 },
+        },
+      },
+    ];
+    const reused = reuseInboxList(first, sent);
+    assert.equal(reused.same, false);
+    assert.equal(reused.items[0], sent[0]);
+    assert.equal(inboxRevision(first) === inboxRevision(sent), false);
+  });
+
+  it("patches opened messages with a later head write-back", () => {
+    const opened = [
+      {
+        ...item("a", "one"),
+        work: {
+          id: "work-1",
+          status: "done" as const,
+          delivery: { status: "write_back" as const, write_back: "pending" as const, attempts: 1 },
+        },
+      },
+    ];
+    const heads = [
+      {
+        ...item("a", "one"),
+        work: {
+          id: "work-1",
+          status: "done" as const,
+          delivery: { status: "dead" as const, write_back: "failed" as const, attempts: 3 },
+        },
+      },
+    ];
+    const patched = patchInboxWork(opened, heads);
+    assert.equal(patched[0].work?.delivery?.status, "dead");
+    assert.equal(patched[0].work?.delivery?.attempts, 3);
+    assert.equal(patchInboxWork(opened, opened), opened);
   });
 
   it("reuses unchanged inbox objects so a later poll does not replace the open thread", () => {
