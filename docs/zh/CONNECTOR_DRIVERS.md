@@ -17,7 +17,7 @@
 
 Slack 不实现 `createThread` / `bindEgress`。飞书不实现 `createThread`。未声明的方法不存在。
 
-凭证引用：Slack 为 `env:REGENIC_SLACK_TOKEN`；DSH web 为 `env:REGENIC_DSH_TOKEN`（可空）；飞书为 `keychain:lark-cli`。表单不收 token。
+凭证引用：Slack 为 `env:REGENIC_SLACK_TOKEN`；DSH web 为 `env:REGENIC_DSH_TOKEN`（可空）；飞书为 `keychain:lark-cli`。表单不收 token。`oauth:HANDLE` / `app:HANDLE` 已预留，本阶段内置驱动不用。
 
 ## kind 映射
 

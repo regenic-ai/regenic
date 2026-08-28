@@ -264,7 +264,7 @@ created_at
 updated_at
 ```
 
-`config` 中绝不出现密钥值。凭据通过 `SecretStore` 解析。
+`config` 中绝不出现密钥值。`credentials_ref` 是 `env:NAME`、`keychain:SERVICE`，或预留的 `oauth:HANDLE` / `app:HANDLE`。本阶段内核只解析 `env`；钥匙串由连接器读；OAuth / 应用凭据尚未接线。
 
 ### 7.2 ConnectorCursor
 

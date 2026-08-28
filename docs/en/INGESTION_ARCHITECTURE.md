@@ -264,7 +264,7 @@ created_at
 updated_at
 ```
 
-Secret values never appear in `config`. Credentials are resolved through `SecretStore`.
+Secret values never appear in `config`. `credentials_ref` is `env:NAME`, `keychain:SERVICE`, or reserved `oauth:HANDLE` / `app:HANDLE`. This phase resolves `env` in the kernel; keychain stays with the connector; OAuth and app credentials are not wired yet.
 
 ### 7.2 ConnectorCursor
 

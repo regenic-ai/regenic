@@ -57,7 +57,10 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 用 `channelRecord()` 发记录。
 - 在权威边界内使用确定的 `external_id`。控制台出站 id 含 `:out:`。
 - 只有采集服务提交或隔离该页之后，才推进流游标。
-- 凭证走 `credentials_ref`：`env:NAME` 或 `keychain:SERVICE`。安装表单不收 token。内核用 `readEnvCredential` 读环境变量；钥匙串由连接器自己读。
+- 凭证走 `credentials_ref`：`env:NAME`、`keychain:SERVICE`，以及预留的
+  `oauth:HANDLE` / `app:HANDLE`。冒号后是句柄，不是 token。安装表单不收
+  密钥。内核用 `readEnvCredential` 读环境变量；钥匙串由连接器自己读。
+  `oauth` / `app` 本阶段不解析，等第二个官方来源再做刷新。
 - 插件可声明 `connector_protocol`。省略视为 `1.0`。内核跳过不支持的版本。
 - 故障彼此隔离。一个安装不得拖住另一个。tick 并行拉各启用安装；单次
   `poll` 和整次 tick/catch-up sync 有截止时间，超时释放租约。

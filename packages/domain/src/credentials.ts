@@ -2,7 +2,19 @@ export const CONNECTOR_PROTOCOL = "1.0" as const;
 
 export type ConnectorProtocol = typeof CONNECTOR_PROTOCOL;
 
-export type CredentialKind = "env" | "keychain";
+export type CredentialKind = "env" | "keychain" | "oauth" | "app";
+
+const CREDENTIAL_KINDS = new Set<CredentialKind>([
+  "env",
+  "keychain",
+  "oauth",
+  "app",
+]);
+
+/** Kernel-resolved today. oauth / app are reserved handles, not tokens. */
+export function isLiveCredentialKind(kind: CredentialKind): boolean {
+  return kind === "env" || kind === "keychain";
+}
 
 export interface ParsedCredentialsRef {
   kind: CredentialKind;
@@ -29,6 +41,22 @@ export function keychainCredentialsRef(service: string): string {
   return `keychain:${trimmed}`;
 }
 
+export function oauthCredentialsRef(handle: string): string {
+  return credentialsRef("oauth", handle);
+}
+
+export function appCredentialsRef(handle: string): string {
+  return credentialsRef("app", handle);
+}
+
+function credentialsRef(kind: CredentialKind, name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error(`${kind} credential handle is empty`);
+  }
+  return `${kind}:${trimmed}`;
+}
+
 export function parseCredentialsRef(
   ref: string | undefined,
 ): ParsedCredentialsRef | undefined {
@@ -42,10 +70,14 @@ export function parseCredentialsRef(
   }
   const kind = trimmed.slice(0, colon);
   const name = trimmed.slice(colon + 1).trim();
-  if ((kind !== "env" && kind !== "keychain") || !name) {
+  if (!isCredentialKind(kind) || !name) {
     return undefined;
   }
   return { kind, name };
+}
+
+function isCredentialKind(value: string): value is CredentialKind {
+  return CREDENTIAL_KINDS.has(value as CredentialKind);
 }
 
 /** Read an env credential. Keychain refs stay with the connector. */

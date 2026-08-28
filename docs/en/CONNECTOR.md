@@ -68,10 +68,12 @@ Each connector must:
   outbound ids include `:out:`.
 - Advance a stream cursor only after the ingest service commits or
   quarantines the page.
-- Read credentials through `credentials_ref`: `env:NAME` or
-  `keychain:SERVICE`. The install form does not accept tokens. The kernel
-  reads env refs with `readEnvCredential`. Keychain refs stay with the
-  connector.
+- Read credentials through `credentials_ref`: `env:NAME`,
+  `keychain:SERVICE`, and reserved `oauth:HANDLE` / `app:HANDLE`. The
+  part after the colon is a handle, not a token. The install form does
+  not accept secrets. The kernel reads env refs with
+  `readEnvCredential`. Keychain refs stay with the connector. `oauth` /
+  `app` are not resolved in this phase.
 - A driver may declare `connector_protocol`. Omit it for `1.0`. The kernel
   skips an unsupported version.
 - Fail independently. One install must not stall another. The tick pulls

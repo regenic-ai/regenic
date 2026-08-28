@@ -21,7 +21,8 @@ implement `createThread`. Undeclared methods do not exist.
 
 Credential refs: Slack uses `env:REGENIC_SLACK_TOKEN`; DSH web uses
 `env:REGENIC_DSH_TOKEN` (optional); Feishu uses `keychain:lark-cli`. The
-form does not take tokens.
+form does not take tokens. `oauth:HANDLE` / `app:HANDLE` are reserved;
+built-in drivers do not use them in this phase.
 
 ## Kind maps
 
