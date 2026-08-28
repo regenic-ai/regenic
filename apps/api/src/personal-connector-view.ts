@@ -1,5 +1,5 @@
 import {
-  channelLabel,
+  sourceLabelFromCatalog,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorInstallationStatus,
@@ -211,7 +211,7 @@ export function toInstallationView(
     can_reply: enabled && capabilities.reply,
     can_create: enabled && capabilities.create,
     channel,
-    channel_label: channelLabel(channel),
+    channel_label: sourceLabelFromCatalog(channel, driver?.installCatalog?.()),
     last_attempt: lastAttempt,
   };
 }

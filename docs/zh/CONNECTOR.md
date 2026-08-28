@@ -15,8 +15,11 @@
 
 ## 连接器是什么
 
-连接器注册一个 `ChannelDriver`，带稳定的 `connector_type`，以及存在于
-`CHANNELS` 里的 `source`（`dsh`、`slack`、`feishu` 等）。
+连接器注册一个 `ChannelDriver`，带稳定的 `connector_type` 和 `source`。
+`source` 由驱动声明，不必事先写进 `CHANNELS`。展示名来自
+`installCatalog().channel_label`；没有则回退 `CHANNELS`，再回退 catalog
+`title`，最后是 `SOURCE`。内置 dsh / slack / feishu 仍在 `CHANNELS` 里，给没有
+加载驱动的旧 Event 用。
 
 Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 `EgressAdapter` 不写这些记录。
@@ -89,7 +92,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
-| `source` | string | `CHANNELS` 里的渠道 id（`dsh`、`slack`、`feishu`） |
+| `source` | string | 驱动声明的渠道 id。展示名走 catalog，不要求先登记 `CHANNELS` |
 | `kind` | `user` \| `assistant` \| `system` | 从原生事件映射 |
 | `direction` | `inbound` \| `outbound` | 读进来是 inbound。控制台回复是 outbound |
 | `content` | `ContentPart[]` | `body`，外加可选的 `attachment` |

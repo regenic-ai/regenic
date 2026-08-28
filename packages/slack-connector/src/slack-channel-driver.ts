@@ -72,6 +72,7 @@ export const slackChannelDriver: ChannelDriver = {
   installCatalog() {
     return {
       title: "Slack",
+      channel_label: "Slack",
       description:
         "Install by channel. The kernel pulls that channel after install and keeps pulling while enabled.",
       credential_hint: "REGENIC_SLACK_TOKEN",

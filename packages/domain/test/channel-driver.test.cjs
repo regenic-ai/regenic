@@ -438,6 +438,42 @@ describe("channel driver registry", () => {
     assert.equal(drivers.installCatalogs()[0].title, "Slack");
   });
 
+  it("labels a source from the driver catalog, not CHANNELS", () => {
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "dingtalk-chat",
+        source: "dingtalk",
+        matchesThread: () => false,
+        ownsThread: () => false,
+        installCatalog: () => ({
+          title: "DingTalk",
+          channel_label: "DingTalk",
+          description: "Loaded plugin.",
+          credential_hint: "none",
+        }),
+      }),
+    );
+    assert.equal(drivers.sourceLabel("dingtalk"), "DingTalk");
+    assert.equal(drivers.sourceLabel("mail"), "MAIL");
+  });
+
+  it("falls back to catalog title when CHANNELS has no entry", () => {
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "extra-review",
+        source: "extra",
+        matchesThread: () => false,
+        ownsThread: () => false,
+        installCatalog: () => ({
+          title: "Extra review",
+          description: "Loaded plugin.",
+          credential_hint: "none",
+        }),
+      }),
+    );
+    assert.equal(drivers.sourceLabel("extra"), "Extra review");
+  });
+
   it("lists install cards only from drivers that declare them", () => {
     const drivers = new ChannelDriverRegistry()
       .register(

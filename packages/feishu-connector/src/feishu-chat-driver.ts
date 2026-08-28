@@ -85,6 +85,7 @@ export const feishuChatDriver: ChannelDriver = {
   installCatalog() {
     return {
       title: "Feishu",
+      channel_label: "Feishu",
       description:
         "Install once. Default is every group and every direct message you can see. Change the set later on the installed row. Replies go back through lark-cli.",
       credential_hint: "lark-cli (user login)",

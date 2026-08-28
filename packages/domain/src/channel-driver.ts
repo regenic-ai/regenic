@@ -1,5 +1,6 @@
 import type { Host } from "@regenic/plugin-host";
 import type { DeliveryReceipt, RegisteredEgress } from "./egress";
+import { CHANNELS, channelLabel } from "./message-contract";
 import type {
   ChannelConnector,
   ConnectorInstallation,
@@ -128,11 +129,34 @@ export interface DriverInstallCatalog {
   title: string;
   description: string;
   credential_hint: string;
+  /**
+   * Human label for `driver.source`. Inbox and Engine read this.
+   * Omit it to use CHANNELS, then title, then SOURCE.
+   */
+  channel_label?: string;
   singleton?: boolean;
   fields?: DriverCatalogField[];
   prerequisites?: DriverCatalogPrerequisite[];
   instance_label?: string;
   instance_detail_key?: string;
+}
+
+export function sourceLabelFromCatalog(
+  source: string | undefined,
+  catalog?: Pick<DriverInstallCatalog, "channel_label" | "title"> | null,
+): string {
+  const declared = catalog?.channel_label?.replace(/\s+/g, " ").trim();
+  if (declared) {
+    return declared;
+  }
+  if (source && CHANNELS[source]) {
+    return CHANNELS[source].label;
+  }
+  const title = catalog?.title?.replace(/\s+/g, " ").trim();
+  if (title) {
+    return title;
+  }
+  return channelLabel(source);
 }
 
 export interface DriverInstallPresentation {
@@ -357,6 +381,17 @@ export class ChannelDriverRegistry {
 
   list(): ChannelDriver[] {
     return [...this.drivers.values()];
+  }
+
+  sourceLabel(
+    source: string | undefined,
+    env: NodeJS.ProcessEnv = process.env,
+  ): string {
+    if (!source) {
+      return channelLabel(source);
+    }
+    const driver = this.list().find((item) => item.source === source);
+    return sourceLabelFromCatalog(source, driver?.installCatalog?.({ env }));
   }
 
   installCatalogs(

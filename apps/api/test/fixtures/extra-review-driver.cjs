@@ -36,6 +36,7 @@ const extraReviewDriver = {
   installCatalog() {
     return {
       title: "Extra review",
+      channel_label: "Extra review",
       description: "Test plugin.",
       credential_hint: "none",
       singleton: true,

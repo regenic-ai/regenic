@@ -39,6 +39,7 @@ export interface ChannelDescriptor {
   label: string;
 }
 
+/** Builtin fallback labels when no live driver catalog is loaded. */
 export const CHANNELS: Record<string, ChannelDescriptor> = {
   dsh: { id: "dsh", label: "DSH" },
   slack: { id: "slack", label: "Slack" },

@@ -19,7 +19,11 @@ This page is for people who implement a connector.
 ## What a connector is
 
 A connector registers a `ChannelDriver` with a stable `connector_type` and a
-`source` that exists in `CHANNELS` (`dsh`, `slack`, `feishu`, …).
+`source` declared by the driver. `source` does not have to be listed in
+`CHANNELS` first. The display name comes from
+`installCatalog().channel_label`, then `CHANNELS`, then catalog `title`,
+then `SOURCE`. Built-in dsh / slack / feishu stay in `CHANNELS` for old
+Events when no driver is loaded.
 
 The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 `ChannelConnector` and `EgressAdapter` do not persist those records.
@@ -112,7 +116,7 @@ A connector stops at L0: it translates one channel's wire. What it hands over is
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `source` | string | Channel id from `CHANNELS` (`dsh`, `slack`, `feishu`) |
+| `source` | string | Channel id declared by the driver. The display name comes from the catalog; it does not have to be registered in `CHANNELS` first |
 | `kind` | `user` \| `assistant` \| `system` | Mapped from the native event |
 | `direction` | `inbound` \| `outbound` | Reads are inbound. Console replies are outbound |
 | `content` | `ContentPart[]` | `body` plus optional `attachment` parts |

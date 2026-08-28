@@ -217,6 +217,7 @@ describe("connector catalog hints", () => {
     assert.equal(view.label, "Extra queue");
     assert.equal(view.detail, "50");
     assert.equal(view.channel, "extra");
+    assert.equal(view.channel_label, "Extra review");
     assert.equal(view.settings.max_open, "50");
   });
 

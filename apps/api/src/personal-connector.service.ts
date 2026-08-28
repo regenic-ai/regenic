@@ -8,7 +8,6 @@ import {
   connectorPollTimeoutMs,
   connectorSyncTimeoutMs,
   driverCanReply,
-  channelLabel,
   normalizeListTitle,
   parseConversationThread,
   requireCreateThread,
@@ -538,7 +537,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return {
         thread_id: `${thread.source}:${thread.target}`,
         channel: thread.source,
-        channel_label: channelLabel(thread.source),
+        channel_label: this.drivers.sourceLabel(thread.source),
         can_send: driverCanReply(found.driver, found.installation),
         await_reply: found.driver.capabilities(found.installation).await_reply === true,
         list_title: normalizeListTitle(

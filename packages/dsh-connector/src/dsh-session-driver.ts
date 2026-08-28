@@ -174,6 +174,7 @@ export const dshSessionDriver: ChannelDriver = {
     if (env.REGENIC_DSH_BASE_URL?.trim()) {
       return {
         title: "DSH",
+        channel_label: "DSH",
         description:
           "Hosted kernel talks to DSH over the cluster Service (REGENIC_DSH_BASE_URL). Leave Session ID empty to follow every session. Do not paste a public DSH URL.",
         credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
@@ -205,6 +206,7 @@ export const dshSessionDriver: ChannelDriver = {
     }
     return {
       title: "DSH",
+      channel_label: "DSH",
       description:
         "One install talks to dsh web (local loopback, or REGENIC_DSH_BASE_URL on a hosted API). The kernel pulls every session after install; set a Session ID to follow only that one.",
       credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
