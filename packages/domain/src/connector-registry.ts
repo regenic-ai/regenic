@@ -1,7 +1,11 @@
 import { ChannelDriverError, type ConnectorStream } from "./channel-driver";
 import type { ChannelConnector } from "./ingestion";
 
-export type RegisteredConnector = Pick<ChannelConnector, "poll" | "source">;
+export type RegisteredConnector = Pick<ChannelConnector, "source"> & {
+  poll: NonNullable<ChannelConnector["poll"]>;
+  source_mode?: ChannelConnector["source_mode"];
+  quota?: ChannelConnector["quota"];
+};
 
 export interface ConnectorStreamBinding {
   stream_key?: string;

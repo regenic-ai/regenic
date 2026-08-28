@@ -4,6 +4,7 @@ const {
   ConnectorConformanceError,
   INGEST_SCHEMA_VERSION,
   verifyChannelDriverConformance,
+  verifyConnectorSourceMode,
   verifyPollConnectorConformance,
 } = require("../dist");
 
@@ -180,6 +181,76 @@ describe("verifyChannelDriverConformance", () => {
         disabled: fixtureInstall("disabled"),
       }),
       /disabled install/,
+    );
+  });
+
+  it("requires bindWebhook when the driver declares webhook", () => {
+    assert.throws(
+      () => verifyChannelDriverConformance({
+        driver: {
+          source_mode: "webhook",
+          capabilities: () => ({ sync: true, reply: false, create: false }),
+        },
+        enabled: fixtureInstall(),
+      }),
+      /requires bindWebhook/,
+    );
+  });
+});
+
+describe("verifyConnectorSourceMode", () => {
+  it("accepts omitted poll-only and hybrid with both ports", () => {
+    verifyConnectorSourceMode({
+      async poll() {
+        return { batch: batch(), next_cursor: "cursor-2" };
+      },
+    });
+    verifyConnectorSourceMode({
+      source_mode: "hybrid",
+      async poll() {
+        return { batch: batch(), next_cursor: "cursor-2" };
+      },
+      async verifyWebhook() {
+        return { body: new Uint8Array(), verified_at: "2026-08-12T00:00:00.000Z" };
+      },
+      async handleWebhook() {
+        return batch();
+      },
+    });
+  });
+
+  it("rejects webhook methods on a poll-only connector", () => {
+    assert.throws(
+      () => verifyConnectorSourceMode({
+        async poll() {
+          return { batch: batch(), next_cursor: "cursor-2" };
+        },
+        async verifyWebhook() {
+          return { body: new Uint8Array(), verified_at: "2026-08-12T00:00:00.000Z" };
+        },
+        async handleWebhook() {
+          return batch();
+        },
+      }),
+      /must not declare webhook methods/,
+    );
+  });
+
+  it("rejects a webhook-only connector that still declares poll", () => {
+    assert.throws(
+      () => verifyConnectorSourceMode({
+        source_mode: "webhook",
+        async poll() {
+          return { batch: batch(), next_cursor: "cursor-2" };
+        },
+        async verifyWebhook() {
+          return { body: new Uint8Array(), verified_at: "2026-08-12T00:00:00.000Z" };
+        },
+        async handleWebhook() {
+          return batch();
+        },
+      }),
+      /must not declare poll/,
     );
   });
 });

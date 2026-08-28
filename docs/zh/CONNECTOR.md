@@ -38,7 +38,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 | 端口 | 职责 | 何时实现 |
 | --- | --- | --- |
 | `ChannelDriverCore` | 安装、匹配线程、声明能力 | 每个驱动 |
-| `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` |
+| `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` 且 `source_mode` 为 poll / hybrid |
+| Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` 为 webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / 可选 `createThread` | `reply`；`create` 另需 `createThread` |
 | Catalog | `installCatalog` / `presentInstall` / `probeCatalog` | 要出现在引擎页 |
 | Surface | `prompts` / `attention` / `receipts` | 对应能力旗标为 true |
@@ -64,6 +65,15 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 插件可声明 `connector_protocol`。省略视为 `1.0`。内核跳过不支持的版本。
 - 故障彼此隔离。一个安装不得拖住另一个。tick 并行拉各启用安装；单次
   `poll` 和整次 tick/catch-up sync 有截止时间，超时释放租约。
+- 声明 `source_mode`。省略为 poll。`webhook` / `hybrid` 必须实现
+  `verifyWebhook` + `handleWebhook`，以及驱动上的 `bindWebhook`。
+  webhook-only 不得声明 `poll`；tick 不拉它。Webhook 校验与翻译之后仍走
+  采集，连接器不写 Event。
+- 安装级配额是 token bucket，默认 60 次 / 60s
+  （`REGENIC_CONNECTOR_QUOTA_TOKENS` /
+  `REGENIC_CONNECTOR_QUOTA_WINDOW_MS`）。`0` 关闭。连接器可自报更紧的
+  `quota`。内核不按来源名写限速常数。配额用尽返回 `throttled`，不当成
+  拉取失败。
 - 要出现在引擎页就实现 `installCatalog()`。可选 `presentInstall` 写已装
   行的文案。可选 `writeBackLabels` 列出回写时的精确别名。
 
@@ -82,10 +92,15 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - tick 并行拉各启用安装。一处抛错或超时不挡其它安装；该安装仍在
   `inflight` 时，下一 tick 跳过它。
 - `ConnectorRunner.poll` 对 `connector.poll` 施加截止时间。超时释放租约，
-  游标不推进。
+  游标不推进。`source_mode` 为 webhook 时不调用 `poll`。
+- `ConnectorRunner.webhook` 先 `verifyWebhook` 再 `handleWebhook`，再交给
+  采集。不占 poll 租约，不推进 poll 游标。入口是
+  `POST /v1/me/connectors/:id/webhook`。
 - 默认：poll 20s（`REGENIC_CONNECTOR_POLL_TIMEOUT_MS`），tick / catch-up
   的整次 sync 30s（`REGENIC_CONNECTOR_SYNC_TIMEOUT_MS`）。设为 `0` 关闭
   超时。
+- 每个安装一个 token bucket。默认 60 / 60s；连接器可声明 `quota`。内核不
+  为 Slack / 飞书 / 钉钉各写一套常数。
 - `probeCatalog`、inbox 回执和会话名查找已经按驱动吞掉失败。
 - stdio 出进程宿主留给不可信第三方插件，不在本阶段。
 
@@ -199,14 +214,16 @@ interface ConnectorStream {
 
 ## ChannelConnector
 
-当前运行时只要求 `source` + `poll`。`source_mode` 省略即为 poll。
-Webhook、回填、成员同步未声明则方法不存在，内核不会调用。
+运行时按 `source_mode` 调用方法。省略即为 poll。Webhook、回填、成员同步
+未声明则方法不存在，内核不会调用。符合性由
+`verifyConnectorSourceMode` 验收。
 
 ```ts
 interface ChannelConnector {
   readonly source: string;
   readonly source_mode?: "poll" | "webhook" | "hybrid";
-  poll(cursor: ConnectorCursor | null, options?: ConnectorPollOptions): Promise<PollResult>;
+  readonly quota?: { tokens: number; window_ms: number };
+  poll?(cursor: ConnectorCursor | null, options?: ConnectorPollOptions): Promise<PollResult>;
   capabilities?(): ConnectorCapabilities;
   verifyWebhook?(request): Promise<VerifiedWebhook>;
   handleWebhook?(webhook): Promise<IngestBatch>;

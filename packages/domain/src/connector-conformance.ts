@@ -3,6 +3,12 @@ import { validateIngestBatch } from "./ingestion-schema";
 import { isIngestRecordType } from "./record-class";
 import type { ChannelDriver } from "./channel-driver";
 import type { ConnectorInstallation } from "./ingestion";
+import {
+  connectorAcceptsWebhook,
+  connectorPolls,
+  connectorSourceMode,
+  driverAcceptsWebhook,
+} from "./source-mode";
 
 export class ConnectorConformanceError extends Error {
   constructor(message: string) {
@@ -24,10 +30,48 @@ const SECRET_ATTR_KEYS = new Set([
 ]);
 
 export interface PollConnectorConformanceInput {
-  connector: Pick<ChannelConnector, "poll">;
+  connector: { poll: NonNullable<ChannelConnector["poll"]> };
   cursor: ConnectorCursor | null;
   connector_id: string;
   source: string;
+}
+
+export function verifyConnectorSourceMode(
+  connector: Pick<
+    ChannelConnector,
+    "source_mode" | "poll" | "verifyWebhook" | "handleWebhook"
+  >,
+): void {
+  const mode = connectorSourceMode(connector);
+  if (connectorPolls(mode) && typeof connector.poll !== "function") {
+    throw new ConnectorConformanceError(
+      `${mode} source_mode requires poll`,
+    );
+  }
+  if (mode === "webhook" && typeof connector.poll === "function") {
+    throw new ConnectorConformanceError(
+      "webhook source_mode must not declare poll",
+    );
+  }
+  if (connectorAcceptsWebhook(mode)) {
+    if (
+      typeof connector.verifyWebhook !== "function" ||
+      typeof connector.handleWebhook !== "function"
+    ) {
+      throw new ConnectorConformanceError(
+        `${mode} source_mode requires verifyWebhook and handleWebhook`,
+      );
+    }
+  }
+  if (
+    mode === "poll" &&
+    (typeof connector.verifyWebhook === "function" ||
+      typeof connector.handleWebhook === "function")
+  ) {
+    throw new ConnectorConformanceError(
+      "poll source_mode must not declare webhook methods",
+    );
+  }
 }
 
 export interface PollConnectorConformanceReport {
@@ -84,6 +128,11 @@ export function verifyChannelDriverConformance(input: DriverConformanceInput): v
   }
   if (enabledCaps.receipts && !input.driver.readReceipts) {
     throw new ConnectorConformanceError("capabilities.receipts requires readReceipts");
+  }
+  if (driverAcceptsWebhook(input.driver) && !input.driver.bindWebhook) {
+    throw new ConnectorConformanceError(
+      "webhook/hybrid source_mode requires bindWebhook",
+    );
   }
   if (!input.disabled) {
     return;

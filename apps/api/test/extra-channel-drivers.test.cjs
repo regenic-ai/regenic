@@ -100,4 +100,22 @@ describe("extraChannelDrivers", () => {
     }
     assert.match(warnings.join("\n"), /unsupported protocol 2.0/);
   });
+
+  it("loads a webhook-only extra driver", () => {
+    const root = mkdtempSync(join(tmpdir(), "regenic-plugin-"));
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "extra-webhook", main: "index.cjs" }),
+    );
+    writeFileSync(
+      join(root, "index.cjs"),
+      `module.exports = require(${JSON.stringify(
+        require.resolve("./fixtures/extra-webhook-driver.cjs"),
+      )});\n`,
+    );
+    const drivers = extraChannelDrivers({ REGENIC_CHANNEL_PLUGIN: root });
+    assert.equal(drivers.length, 1);
+    assert.equal(drivers[0].source_mode, "webhook");
+    assert.equal(typeof drivers[0].bindWebhook, "function");
+  });
 });

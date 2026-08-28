@@ -19,6 +19,8 @@ export * from "./arrangement-service";
 export * from "./ingestion-service";
 export * from "./connector-runner";
 export * from "./deadline";
+export * from "./source-mode";
+export * from "./quota";
 export * from "./connector-registry";
 export * from "./egress";
 export * from "./connector-conformance";

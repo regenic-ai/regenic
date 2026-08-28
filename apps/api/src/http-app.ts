@@ -20,7 +20,12 @@ export async function createHttpApp(
     logger: options.logger,
     bodyParser: false,
   });
-  app.useBodyParser("json", { limit: JSON_BODY_LIMIT });
+  app.useBodyParser("json", {
+    limit: JSON_BODY_LIMIT,
+    verify: (req: { rawBody?: Buffer }, _res: unknown, buf: Buffer) => {
+      req.rawBody = buf;
+    },
+  });
   app.useBodyParser("urlencoded", { limit: JSON_BODY_LIMIT, extended: true });
   return app;
 }
