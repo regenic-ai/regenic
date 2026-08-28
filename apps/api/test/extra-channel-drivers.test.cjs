@@ -72,4 +72,32 @@ describe("extraChannelDrivers", () => {
     assert.equal(executors[0].catalog().source, "extra");
     assert.deepEqual(extraChannelDrivers({ REGENIC_CHANNEL_PLUGIN: root }), []);
   });
+
+  it("skips a driver that declares an unsupported protocol", () => {
+    const root = mkdtempSync(join(tmpdir(), "regenic-plugin-"));
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "future-driver", main: "index.cjs" }),
+    );
+    writeFileSync(
+      join(root, "index.cjs"),
+      `
+        exports.future = {
+          connector_type: "future",
+          source: "future",
+          connector_protocol: "2.0",
+          install() { return { id: "1", org_id: "o", connector_type: "future", status: "enabled", config: {}, created_at: "" }; },
+        };
+      `,
+    );
+    const warnings = [];
+    const original = console.warn;
+    console.warn = (...args) => warnings.push(args.map(String).join(" "));
+    try {
+      assert.deepEqual(extraChannelDrivers({ REGENIC_CHANNEL_PLUGIN: root }), []);
+    } finally {
+      console.warn = original;
+    }
+    assert.match(warnings.join("\n"), /unsupported protocol 2.0/);
+  });
 });

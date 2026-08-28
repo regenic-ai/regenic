@@ -155,18 +155,25 @@ export interface MembershipBatch {
   members: ExternalPrincipalRef[];
 }
 
+export type ConnectorSourceMode = "poll" | "webhook" | "hybrid";
+
 export interface ChannelConnector {
   readonly source: string;
+  /**
+   * Declared pull/push mode. Omit for poll-only.
+   * Undeclared methods must not exist; the kernel never infers them.
+   */
+  readonly source_mode?: ConnectorSourceMode;
 
-  capabilities(): ConnectorCapabilities;
-  verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook>;
-  handleWebhook(webhook: VerifiedWebhook): Promise<IngestBatch>;
   poll(
     cursor: ConnectorCursor | null,
     options?: ConnectorPollOptions,
   ): Promise<PollResult>;
-  backfill(range: BackfillRange): AsyncIterable<IngestBatch>;
-  syncMembers(scope: ExternalScopeRef): Promise<MembershipBatch>;
+  capabilities?(): ConnectorCapabilities;
+  verifyWebhook?(request: WebhookRequest): Promise<VerifiedWebhook>;
+  handleWebhook?(webhook: VerifiedWebhook): Promise<IngestBatch>;
+  backfill?(range: BackfillRange): AsyncIterable<IngestBatch>;
+  syncMembers?(scope: ExternalScopeRef): Promise<MembershipBatch>;
 }
 
 export interface BlobObject {

@@ -8,6 +8,7 @@ import type {
   IngestRecordResult,
 } from "./ingestion";
 import type { IngestSubmissionResult } from "./ingestion-service";
+import { withDeadline } from "./deadline";
 
 export interface IngestBatchProcessor {
   ingest(input: unknown): Promise<IngestSubmissionResult>;
@@ -20,6 +21,7 @@ export interface RunConnectorPollInput {
   lease_duration_ms: number;
   older?: boolean;
   media?: boolean;
+  timeout_ms?: number;
 }
 
 export type ConnectorPollRunResult =
@@ -65,9 +67,13 @@ export class ConnectorRunner {
 
     let pollResult;
     try {
-      pollResult = await this.connector.poll(
-        lease.cursor ? { value: lease.cursor } : null,
-        pollOptions(input),
+      pollResult = await withDeadline(
+        this.connector.poll(
+          lease.cursor ? { value: lease.cursor } : null,
+          pollOptions(input),
+        ),
+        input.timeout_ms ?? 0,
+        `poll ${input.installation_id}:${input.stream_key}`,
       );
     } catch (error) {
       await this.runtimeStore.releaseLease({

@@ -98,13 +98,14 @@ A driver understands one source protocol. It may verify signatures, call source 
 ```ts
 interface ChannelConnector {
   readonly source: string;
+  readonly source_mode?: "poll" | "webhook" | "hybrid";
 
-  capabilities(): ConnectorCapabilities;
-  verifyWebhook(request: WebhookRequest): Promise<VerifiedWebhook>;
-  handleWebhook(webhook: VerifiedWebhook): Promise<IngestBatch>;
   poll(cursor: ConnectorCursor | null): Promise<PollResult>;
-  backfill(range: BackfillRange): AsyncIterable<IngestBatch>;
-  syncMembers(scope: ExternalScopeRef): Promise<MembershipBatch>;
+  capabilities?(): ConnectorCapabilities;
+  verifyWebhook?(request: WebhookRequest): Promise<VerifiedWebhook>;
+  handleWebhook?(webhook: VerifiedWebhook): Promise<IngestBatch>;
+  backfill?(range: BackfillRange): AsyncIterable<IngestBatch>;
+  syncMembers?(scope: ExternalScopeRef): Promise<MembershipBatch>;
 }
 
 interface ConnectorCapabilities {
@@ -276,7 +277,7 @@ lease_owner
 lease_expires_at
 ```
 
-The lease prevents overlapping pollers. Cursor progression is committed with the completed batch outcome. Personal may use a process lease backed by SQLite; Org may use a distributed lease.
+The lease prevents overlapping pollers. Cursor progression is committed with the completed batch outcome. Personal may use a process lease backed by SQLite; Org may use a distributed lease. A timed-out `poll` releases the lease and does not advance the cursor. The tick pulls installs in parallel so one failure or timeout does not stall another.
 
 ### 7.3 IngestAttempt
 

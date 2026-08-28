@@ -1,11 +1,14 @@
 import type { Host } from "@regenic/plugin-host";
 import {
+  CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  envCredentialsRef,
+  readEnvCredential,
   requireConnectorStream,
+  requireEnvCredentialName,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorStream,
-  type ConversationThread,
   type JsonValue,
   type NewConnectorInstallation,
 } from "@regenic/domain";
@@ -14,6 +17,7 @@ import { slackChannelPlugin } from "./plugin";
 export const slackChannelDriver: ChannelDriver = {
   connector_type: "slack-channel",
   source: "slack",
+  connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input): NewConnectorInstallation {
     const channelId = configString(input.config, "channel_id");
@@ -31,7 +35,7 @@ export const slackChannelDriver: ChannelDriver = {
       connector_type: "slack-channel",
       status: "enabled",
       config,
-      credentials_ref: "env:REGENIC_SLACK_TOKEN",
+      credentials_ref: envCredentialsRef("REGENIC_SLACK_TOKEN"),
       created_at: input.now,
     };
   },
@@ -57,34 +61,12 @@ export const slackChannelDriver: ChannelDriver = {
     };
   },
 
-  canReply() {
-    return false;
-  },
-
-  async createThread() {
-    throw new ChannelDriverError(
-      "unsupported_channel",
-      "Creating a Slack conversation is not available",
-    );
-  },
-
   async resolveStreams(installation, host, env) {
     return [await mountChannel(host, installation, env)];
   },
 
   async resolveThreadStream(installation, _thread, host, env) {
     return mountChannel(host, installation, env);
-  },
-
-  async bindEgress() {
-    throw new ChannelDriverError(
-      "unsupported_channel",
-      "Sending back to Slack is not available yet",
-    );
-  },
-
-  outboundId(thread: ConversationThread) {
-    return `${thread.target}:out:local`;
   },
 
   installCatalog() {
@@ -156,7 +138,7 @@ async function mountChannel(
   const streamKey = `channel:${channelId}`;
   if (!host.get("connectors").getStream(installation.id, streamKey)) {
     const tokenEnv = slackTokenEnv(installation.credentials_ref);
-    const token = env[tokenEnv];
+    const token = readEnvCredential(installation.credentials_ref, env, tokenEnv);
     if (!token) {
       throw new ChannelDriverError(
         "missing_credentials",
@@ -176,13 +158,14 @@ async function mountChannel(
 }
 
 function slackTokenEnv(credentialsRef: string | undefined): string {
-  if (!credentialsRef || credentialsRef === "env:REGENIC_SLACK_TOKEN") {
-    return "REGENIC_SLACK_TOKEN";
+  try {
+    return requireEnvCredentialName(credentialsRef, "REGENIC_SLACK_TOKEN");
+  } catch {
+    throw new ChannelDriverError(
+      "invalid_config",
+      "Slack credentials_ref must be env:REGENIC_SLACK_TOKEN",
+    );
   }
-  throw new ChannelDriverError(
-    "invalid_config",
-    "Slack credentials_ref must be env:REGENIC_SLACK_TOKEN",
-  );
 }
 
 function configString(

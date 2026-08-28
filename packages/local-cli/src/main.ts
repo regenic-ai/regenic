@@ -4,6 +4,8 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { INGEST_ATTEMPT_KEEP_PER_INSTALLATION } from "@regenic/authority-store";
 import {
   ConnectorRunner,
+  envCredentialsRef,
+  requireEnvCredentialName,
   type ContextConsumer,
   createGenericImport,
   EVIDENCE_BUNDLE_SCHEMA_VERSION,
@@ -135,7 +137,7 @@ async function installSlack(
       connector_type: "slack-channel",
       status: "enabled",
       config: slackConfig(channelId, optionString(options, "channel-name")),
-      credentials_ref: `env:${tokenEnv}`,
+      credentials_ref: envCredentialsRef(tokenEnv),
       created_at: now(),
     }));
   });
@@ -700,10 +702,11 @@ function resolveUserPath(pathValue: string): string {
 }
 
 function credentialsEnvironment(credentialsRef: string | undefined): string {
-  if (!credentialsRef?.startsWith("env:")) {
+  try {
+    return requireEnvCredentialName(credentialsRef);
+  } catch {
     throw new Error("Slack installation credentials_ref must reference an environment variable");
   }
-  return credentialsRef.slice("env:".length);
 }
 
 function configString(

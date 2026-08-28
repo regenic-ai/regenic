@@ -4,6 +4,7 @@ const {
   ChannelDriverError,
   MemoryConnectorRegistry,
   MemoryEgressRegistry,
+  verifyChannelDriverConformance,
 } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const {
@@ -139,6 +140,8 @@ describe("feishuChatDriver", () => {
       now: "2026-08-22T00:00:00.000Z",
     });
     assert.deepEqual(all.config, { selection: "all", kinds: ["group", "p2p"] });
+    assert.equal(all.credentials_ref, "keychain:lark-cli");
+    assert.equal(feishuChatDriver.connector_protocol, "1.0");
     assert.equal(
       feishuChatDriver.matchesThread(all, { source: "feishu", target: "oc_9" }),
       true,
@@ -562,10 +565,11 @@ describe("feishuChatDriver", () => {
         }),
       (error) => error instanceof ChannelDriverError && error.code === "invalid_config",
     );
-    await assert.rejects(
-      () => feishuChatDriver.createThread(installation, {}, process.env),
-      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
-    );
+    assert.equal(feishuChatDriver.createThread, undefined);
+    verifyChannelDriverConformance({
+      driver: feishuChatDriver,
+      enabled: installation,
+    });
   });
 
   it("aliases Feishu approval labels for write-back", () => {

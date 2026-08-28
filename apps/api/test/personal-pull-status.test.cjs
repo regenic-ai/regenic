@@ -3,6 +3,8 @@ const { afterEach, describe, it } = require("node:test");
 const { LOCAL_PROXY_HINT } = require("@regenic/domain");
 const {
   applyPullOutcome,
+  beginPull,
+  finishPull,
   PREFER_THREAD_MS,
   preferThread,
   preferredThreadId,
@@ -20,6 +22,28 @@ const { shouldSkipLiveChannelOverlays } = require("../dist/personal-inbox.servic
 
 afterEach(() => {
   resetPullStatus({});
+});
+
+describe("pull status overlapping pulls", () => {
+  it("stays pulling until the last overlapping sync finishes", () => {
+    beginPull();
+    beginPull();
+    finishPull({ accepted: 1, pages: 1, catchingUp: 0 });
+    assert.equal(pullStatus.phase, "pulling");
+    assert.equal(pullStatus.last_accepted_count, 1);
+    finishPull({ accepted: 2, pages: 1, catchingUp: 0 });
+    assert.equal(pullStatus.phase, "idle");
+    assert.equal(pullStatus.last_accepted_count, 2);
+  });
+
+  it("clears an in-flight pull count on reset", () => {
+    beginPull();
+    resetPullStatus({});
+    assert.equal(pullStatus.phase, "idle");
+    beginPull();
+    finishPull({ accepted: 0, pages: 0, catchingUp: 0 });
+    assert.equal(pullStatus.phase, "idle");
+  });
 });
 
 describe("pull status network watch", () => {

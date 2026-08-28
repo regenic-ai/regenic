@@ -169,9 +169,12 @@ export class ChannelDriverError extends Error {
   }
 }
 
-export interface ChannelDriver {
+/** Identity, install, match, and declared capabilities. Every driver implements this. */
+export interface ChannelDriverCore {
   readonly connector_type: string;
   readonly source: string;
+  /** Contract version. Omit for 1.0. Newer values are skipped at load. */
+  readonly connector_protocol?: string;
   install(input: {
     id: string;
     org_id: string;
@@ -187,13 +190,10 @@ export interface ChannelDriver {
     thread: ConversationThread,
   ): boolean;
   capabilities(installation: ConnectorInstallation): ChannelCapabilities;
-  canReply(installation: ConnectorInstallation): boolean;
-  createThread(
-    installation: ConnectorInstallation,
-    host: Host,
-    env: NodeJS.ProcessEnv,
-    options?: { cwd?: string },
-  ): Promise<ConversationThread>;
+}
+
+/** Mount and poll streams. Required while sync is the live source mode. */
+export interface ChannelSourcePort {
   resolveStreams(
     installation: ConnectorInstallation,
     host: Host,
@@ -206,6 +206,16 @@ export interface ChannelDriver {
     host: Host,
     env: NodeJS.ProcessEnv,
   ): Promise<ConnectorStream>;
+}
+
+/** Optional send / create. Absent means the kernel returns 501. */
+export interface ChannelSinkPort {
+  createThread(
+    installation: ConnectorInstallation,
+    host: Host,
+    env: NodeJS.ProcessEnv,
+    options?: { cwd?: string },
+  ): Promise<ConversationThread>;
   bindEgress(
     installation: ConnectorInstallation,
     thread: ConversationThread,
@@ -213,6 +223,10 @@ export interface ChannelDriver {
     env: NodeJS.ProcessEnv,
   ): Promise<RegisteredEgress>;
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt): string;
+}
+
+export interface ChannelDriver
+  extends ChannelDriverCore, ChannelSourcePort, Partial<ChannelSinkPort> {
   /**
    * Install card. Absent means this driver does not appear in Engine.
    */
@@ -267,6 +281,49 @@ export interface ChannelDriver {
     installation: ConnectorInstallation,
     host: Host,
   ): string;
+}
+
+export function driverCanReply(
+  driver: ChannelDriver,
+  installation: ConnectorInstallation,
+): boolean {
+  return Boolean(driver.capabilities(installation).reply);
+}
+
+export function requireCreateThread(
+  driver: ChannelDriver,
+): NonNullable<ChannelDriver["createThread"]> {
+  if (!driver.createThread) {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "Creating a conversation is not available",
+    );
+  }
+  return driver.createThread.bind(driver);
+}
+
+export function requireBindEgress(
+  driver: ChannelDriver,
+): NonNullable<ChannelDriver["bindEgress"]> {
+  if (!driver.bindEgress) {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "Sending back to this conversation is not available",
+    );
+  }
+  return driver.bindEgress.bind(driver);
+}
+
+export function requireOutboundId(
+  driver: ChannelDriver,
+): NonNullable<ChannelDriver["outboundId"]> {
+  if (!driver.outboundId) {
+    throw new ChannelDriverError(
+      "unsupported_channel",
+      "Sending back to this conversation is not available",
+    );
+  }
+  return driver.outboundId.bind(driver);
 }
 
 export class ChannelDriverRegistry {
@@ -363,7 +420,7 @@ export class ChannelDriverRegistry {
     thread: ConversationThread,
   ): boolean {
     const found = this.findForThread(installations, thread);
-    return Boolean(found && found.driver.canReply(found.installation));
+    return Boolean(found && driverCanReply(found.driver, found.installation));
   }
 
   awaitReply(

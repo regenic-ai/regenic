@@ -4,6 +4,8 @@ const {
   ChannelDriverError,
   ChannelDriverRegistry,
   parseConversationThread,
+  requireBindEgress,
+  requireCreateThread,
 } = require("../dist");
 
 function stubDriver(partial) {
@@ -62,7 +64,11 @@ describe("channel driver registry", () => {
               installation.config.session_id === thread.target),
           ownsThread: (installation, thread) =>
             installation.config.session_id === thread.target,
-          canReply: (installation) => installation.status === "enabled",
+          capabilities: (installation) => ({
+            sync: installation.status === "enabled",
+            reply: installation.status === "enabled",
+            create: false,
+          }),
         }),
       )
       .register(
@@ -465,5 +471,36 @@ describe("channel driver registry", () => {
         singleton: true,
       },
     ]);
+  });
+
+  it("reads canSend from capabilities.reply and requires sink methods only when sending", () => {
+    const slack = stubDriver({
+      connector_type: "slack-channel",
+      source: "slack",
+      matchesThread: () => true,
+      ownsThread: () => true,
+      capabilities: () => ({ sync: true, reply: false, create: false }),
+    });
+    delete slack.bindEgress;
+    delete slack.createThread;
+    delete slack.outboundId;
+    const drivers = new ChannelDriverRegistry().register(slack);
+    const installation = {
+      id: "slack-1",
+      org_id: "local-owner",
+      connector_type: "slack-channel",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    assert.equal(drivers.canSend([installation], { source: "slack", target: "C1" }), false);
+    assert.throws(
+      () => requireCreateThread(slack),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
+    assert.throws(
+      () => requireBindEgress(slack),
+      (error) => error instanceof ChannelDriverError && error.code === "unsupported_channel",
+    );
   });
 });

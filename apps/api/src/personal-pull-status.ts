@@ -37,6 +37,8 @@ export const PREFER_THREAD_MS = 2 * 60 * 1000;
 
 export const pullStatus: PullStatusView = emptyPullStatus();
 
+let activePulls = 0;
+
 let preferredThread: string | null = null;
 let preferredUntil = 0;
 
@@ -57,6 +59,7 @@ export function preferredThreadId(now = Date.now()): string | null {
 }
 
 export function beginPull(): void {
+  activePulls += 1;
   pullStatus.phase = "pulling";
 }
 
@@ -65,10 +68,13 @@ export function finishPull(input: {
   pages: number;
   catchingUp: number;
 }): void {
-  pullStatus.phase = "idle";
+  activePulls = Math.max(0, activePulls - 1);
   pullStatus.last_accepted_count = input.accepted;
   pullStatus.last_pages = input.pages;
   pullStatus.catching_up_count = input.catchingUp;
+  if (activePulls === 0) {
+    pullStatus.phase = "idle";
+  }
 }
 
 export function publishPullStreams(streams: PullStreamStatus[]): void {
@@ -115,6 +121,7 @@ export function resetPullStatus(
 ): PullStatusView {
   preferredThread = null;
   preferredUntil = 0;
+  activePulls = 0;
   Object.assign(pullStatus, emptyPullStatus(env));
   return pullStatus;
 }
