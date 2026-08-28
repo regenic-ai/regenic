@@ -88,7 +88,9 @@ Each connector must:
   (`REGENIC_CONNECTOR_QUOTA_TOKENS` /
   `REGENIC_CONNECTOR_QUOTA_WINDOW_MS`). `0` disables it. A connector may
   declare a tighter `quota`. The kernel does not keep per-source rate
-  constants. Exhaustion returns `throttled`, not a pull error.
+  constants. Poll acquires the lease before spending a token; a missed
+  lease spends nothing. Exhaustion releases the lease and returns
+  `throttled`, not a pull error.
 - Implement `installCatalog()` to appear on Engine. Optional
   `presentInstall` labels the installed row. Optional `writeBackLabels`
   lists exact aliases for write-back.

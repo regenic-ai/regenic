@@ -266,7 +266,7 @@ describe("ConnectorRunner", () => {
     assert.equal(cursor?.cursor, undefined);
   });
 
-  it("throttles an install before taking a lease or calling poll", async () => {
+  it("releases the lease when quota is exhausted after it is acquired", async () => {
     const runtime = await createRuntime();
     let polled = 0;
     const quota = new InstallationQuotaBook({ tokens: 1, window_ms: 60_000 }, () => 1_000);
@@ -293,6 +293,39 @@ describe("ConnectorRunner", () => {
       now: "2026-08-12T00:00:01.000Z",
     });
     assert.equal(nextLease.lease_owner, "worker-b");
+  });
+
+  it("does not spend quota when another worker already holds the lease", async () => {
+    const runtime = await createRuntime();
+    await runtime.acquireLease({
+      ...input,
+      now: "2026-08-12T00:00:00.000Z",
+    });
+    let now = 1_000;
+    const quota = new InstallationQuotaBook({ tokens: 1, window_ms: 60_000 }, () => now);
+    const runner = new ConnectorRunner(
+      {
+        source: "fake",
+        async poll() {
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+      quota,
+    );
+    const blocked = await runner.poll({ ...input, lease_owner: "worker-b" });
+    assert.equal(blocked.status, "lease_unavailable");
+    now += 1;
+    await runtime.releaseLease({
+      installation_id: input.installation_id,
+      stream_key: input.stream_key,
+      lease_owner: input.lease_owner,
+      now: "2026-08-12T00:00:01.000Z",
+    });
+    const run = await runner.poll({ ...input, lease_owner: "worker-b" });
+    assert.equal(run.status, "completed");
   });
 
   it("verifies a webhook then ingests through the kernel", async () => {

@@ -72,8 +72,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 安装级配额是 token bucket，默认 60 次 / 60s
   （`REGENIC_CONNECTOR_QUOTA_TOKENS` /
   `REGENIC_CONNECTOR_QUOTA_WINDOW_MS`）。`0` 关闭。连接器可自报更紧的
-  `quota`。内核不按来源名写限速常数。配额用尽返回 `throttled`，不当成
-  拉取失败。
+  `quota`。内核不按来源名写限速常数。poll 先抢租约再扣配额；抢不到不扣。
+  配额用尽放租约并返回 `throttled`，不当成拉取失败。
 - 要出现在引擎页就实现 `installCatalog()`。可选 `presentInstall` 写已装
   行的文案。可选 `writeBackLabels` 列出回写时的精确别名。
 

@@ -87,13 +87,6 @@ export class ConnectorRunner {
         stream_key: input.stream_key,
       };
     }
-    if (!this.takeQuota(input.installation_id, this.connector.quota)) {
-      return {
-        status: "throttled",
-        installation_id: input.installation_id,
-        stream_key: input.stream_key,
-      };
-    }
     const startedAt = this.now();
     const lease = await this.runtimeStore.acquireLease({
       installation_id: input.installation_id,
@@ -105,6 +98,19 @@ export class ConnectorRunner {
     if (!lease) {
       return {
         status: "lease_unavailable",
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+      };
+    }
+    if (!this.takeQuota(input.installation_id, this.connector.quota)) {
+      await this.runtimeStore.releaseLease({
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        lease_owner: input.lease_owner,
+        now: this.now(),
+      });
+      return {
+        status: "throttled",
         installation_id: input.installation_id,
         stream_key: input.stream_key,
       };
