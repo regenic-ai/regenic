@@ -455,6 +455,11 @@ export function SettingsPage({
                 {t("settings.dataDirDestRelocated", { path: dataPlan.relocatedTo })}
               </p>
             ) : null}
+            {dataPlan.pickedPath ? (
+              <p className="muted">
+                {t("settings.dataDirNested", { path: dataPlan.path })}
+              </p>
+            ) : null}
             <p className="muted">
               <code>{dataPlan.path}</code>
             </p>

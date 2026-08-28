@@ -48,6 +48,7 @@ export interface DataDirectoryPlan {
   destLooksLikeStore: boolean;
   remoteWarning: boolean;
   relocatedTo?: string;
+  pickedPath?: string;
   canChange: boolean;
   reason?: string;
 }
@@ -120,6 +121,41 @@ export function nestVolumeRoot(
     return `${trimmed}\\${STORE_FOLDER}`;
   }
   return path;
+}
+
+export function isProductStoreFolderName(path: string): boolean {
+  const name = basenameOf(path.replace(/[\\/]+$/, "") || path);
+  const lower = name.toLowerCase();
+  return lower === STORE_FOLDER.toLowerCase() || lower === ".regenic";
+}
+
+export function nestDataRoot(
+  path: string,
+  options: {
+    platform?: NodeJS.Platform;
+    systemRoot?: string;
+    exists?: (path: string) => boolean;
+  } = {},
+): string {
+  const platform = options.platform ?? process.platform;
+  const exists = options.exists ?? existsSync;
+  const next = nestVolumeRoot(parseDataRoot(path), platform);
+  if (
+    isForbiddenDataRoot(next, {
+      platform,
+      systemRoot: options.systemRoot,
+    })
+  ) {
+    return next;
+  }
+  if (isProductStoreFolderName(next)) {
+    return next;
+  }
+  const layout = storePaths(next);
+  if (exists(layout.database) || storeHasData(layout, exists)) {
+    return next;
+  }
+  return parseDataRoot(join(next, STORE_FOLDER));
 }
 
 export function looksLikeSqliteDatabase(
@@ -349,17 +385,23 @@ export function inspectDataDirectory(
   exists: (path: string) => boolean = existsSync,
   options: InspectDataDirectoryOptions = {},
 ): DataDirectoryPlan {
-  const path = parseDataRoot(
-    nestVolumeRoot(parseDataRoot(destRaw), options.platform),
-  );
+  const picked = parseDataRoot(destRaw);
+  const path = nestDataRoot(picked, {
+    platform: options.platform,
+    systemRoot: options.systemRoot,
+    exists,
+  });
   const dest = storePaths(path);
   const sameAsCurrent = equalPath(path, current.dataRoot);
   const remoteWarning = isRemoteOrRemovablePath(path, options.volumeKind);
   const sourceHasData = storeHasData(current, exists);
   const destHasData = storeHasData(dest, exists);
   const destLooksLikeStore = storeLooksLikeRegenic(dest, exists);
+  const pickedPath = equalPath(picked, path) ? undefined : picked;
+  const finish = (plan: DataDirectoryPlan): DataDirectoryPlan =>
+    pickedPath ? { ...plan, pickedPath } : plan;
   if (current.envOverride) {
-    return {
+    return finish({
       path,
       currentRoot: current.dataRoot,
       sameAsCurrent,
@@ -369,10 +411,10 @@ export function inspectDataDirectory(
       remoteWarning,
       canChange: false,
       reason: "settings.dataDirEnv",
-    };
+    });
   }
   if (sameAsCurrent) {
-    return {
+    return finish({
       path,
       currentRoot: current.dataRoot,
       sameAsCurrent: true,
@@ -381,7 +423,7 @@ export function inspectDataDirectory(
       destLooksLikeStore,
       remoteWarning,
       canChange: true,
-    };
+    });
   }
   if (
     isForbiddenDataRoot(path, {
@@ -389,7 +431,7 @@ export function inspectDataDirectory(
       systemRoot: options.systemRoot,
     })
   ) {
-    return {
+    return finish({
       path,
       currentRoot: current.dataRoot,
       sameAsCurrent: false,
@@ -399,10 +441,10 @@ export function inspectDataDirectory(
       remoteWarning,
       canChange: false,
       reason: "settings.dataDirReasonSystem",
-    };
+    });
   }
   if (isNestedPath(current.dataRoot, path) || isNestedPath(path, current.dataRoot)) {
-    return {
+    return finish({
       path,
       currentRoot: current.dataRoot,
       sameAsCurrent: false,
@@ -412,12 +454,12 @@ export function inspectDataDirectory(
       remoteWarning,
       canChange: false,
       reason: "settings.dataDirReasonNested",
-    };
+    });
   }
   if (exists(path)) {
     const stat = statSync(path);
     if (!stat.isDirectory()) {
-      return {
+      return finish({
         path,
         currentRoot: current.dataRoot,
         sameAsCurrent: false,
@@ -427,10 +469,10 @@ export function inspectDataDirectory(
         remoteWarning,
         canChange: false,
         reason: "settings.dataDirReasonFolder",
-      };
+      });
     }
   }
-  return {
+  return finish({
     path,
     currentRoot: current.dataRoot,
     sameAsCurrent: false,
@@ -439,7 +481,7 @@ export function inspectDataDirectory(
     destLooksLikeStore,
     remoteWarning,
     canChange: true,
-  };
+  });
 }
 
 export function assertDataDirectoryAction(

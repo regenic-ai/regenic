@@ -37,6 +37,11 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "settings.storeClear"), "清理本机数据");
     assert.equal(translate("en", "settings.dataDir"), "Data directory");
     assert.equal(translate("zh", "settings.dataDirBrowse"), "浏览");
+    assert.match(translate("zh", "settings.dataDirLead"), /Regenic 文件夹/);
+    assert.equal(
+      translate("zh", "settings.dataDirNested", { path: "/data/projects/Regenic" }),
+      "会在所选位置下使用 /data/projects/Regenic。",
+    );
     assert.equal(translate("zh", "settings.dataDirAdopt"), "使用已有数据");
     assert.equal(
       translate("zh", "settings.dataDirReasonHeld"),
