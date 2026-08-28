@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable, forwardRef } from "@nestjs/common";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -202,9 +202,13 @@ export interface StoreClearView {
 @Injectable()
 export class PersonalInboxService {
   constructor(
+    @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
+    @Inject(forwardRef(() => PersonalWorkService))
     private readonly work: PersonalWorkService,
+    @Inject(forwardRef(() => PersonalExecutorService))
     private readonly executors: PersonalExecutorService,
   ) {}
 

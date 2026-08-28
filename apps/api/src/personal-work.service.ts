@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Inject, Injectable, OnModuleDestroy, forwardRef } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
   INBOX_SORT_PREF_KEY,
@@ -73,8 +73,11 @@ export class PersonalWorkService implements OnModuleDestroy {
   private readonly flush: PersonalWorkFlush;
 
   constructor(
+    @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(ChannelDriverRegistry)
     drivers: ChannelDriverRegistry,
+    @Inject(forwardRef(() => PersonalExecutorService))
     private readonly executors: PersonalExecutorService,
   ) {
     this.channel = new PersonalWorkChannel(runtime, drivers);
@@ -88,7 +91,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       return;
     }
     this.backgroundStarted = true;
-    void this.executors.ensureMounted().catch((error) => {
+    void this.executors?.ensureMounted().catch((error) => {
       if (!isWorkTickShutdown(error)) {
         console.error("executor mount failed", error);
       }

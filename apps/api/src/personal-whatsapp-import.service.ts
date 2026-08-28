@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   createPurrWhatsAppImport,
   createWhatsAppPersonalImport,
@@ -11,7 +11,10 @@ const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
 
 @Injectable()
 export class PersonalWhatsAppImportService {
-  constructor(private readonly runtime: PersonalRuntimeService) {}
+  constructor(
+    @Inject(PersonalRuntimeService)
+    private readonly runtime: PersonalRuntimeService,
+  ) {}
 
   async import(content: string | undefined, fileName?: string) {
     if (typeof content !== "string" || content.length === 0) {

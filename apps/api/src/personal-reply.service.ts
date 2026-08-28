@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
   driverCanReply,
@@ -72,9 +72,13 @@ interface PreparedAttachment {
 @Injectable()
 export class PersonalReplyService {
   constructor(
+    @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(PersonalInboxService)
     private readonly inbox: PersonalInboxService,
+    @Inject(PersonalConnectorService)
     private readonly connectors: PersonalConnectorService,
+    @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
   ) {}
 

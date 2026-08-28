@@ -5,12 +5,14 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Inject,
   NotFoundException,
   Param,
   Post,
   Query,
   Req,
   UseGuards,
+  forwardRef,
 } from "@nestjs/common";
 import type { Request } from "express";
 import { PersonalApiGuard } from "./personal-api.guard";
@@ -45,11 +47,17 @@ import {
 @UseGuards(PersonalApiGuard)
 export class PersonalController {
   constructor(
+    @Inject(forwardRef(() => PersonalInboxService))
     private readonly inbox: PersonalInboxService,
+    @Inject(PersonalConnectorService)
     private readonly connectors: PersonalConnectorService,
+    @Inject(PersonalReplyService)
     private readonly replies: PersonalReplyService,
+    @Inject(forwardRef(() => PersonalWorkService))
     private readonly work: PersonalWorkService,
+    @Inject(forwardRef(() => PersonalExecutorService))
     private readonly executors: PersonalExecutorService,
+    @Inject(PersonalWhatsAppImportService)
     private readonly whatsapp: PersonalWhatsAppImportService,
   ) {}
 

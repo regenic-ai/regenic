@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { loadEnv } from "@regenic/config";
 import {
   createDshHostRpcServices,
@@ -15,7 +15,10 @@ export interface DshApiRequest {
 
 @Injectable()
 export class DshApiService {
-  constructor(private readonly runtime: PersonalRuntimeService) {}
+  constructor(
+    @Inject(PersonalRuntimeService)
+    private readonly runtime: PersonalRuntimeService,
+  ) {}
 
   async handle(method: string, input: DshApiRequest): Promise<DshRpcHttpResult> {
     const env = loadEnv();

@@ -1,4 +1,4 @@
-import { Controller, Get } from "@nestjs/common";
+import { Controller, Get, Inject } from "@nestjs/common";
 import { Client } from "pg";
 import { isPersonalApiEnabled, loadEnv } from "@regenic/config";
 import type { StandardPlaceholder } from "@regenic/domain";
@@ -7,7 +7,10 @@ import { PersonalRuntimeService } from "./personal-runtime.service";
 
 @Controller()
 export class HealthController {
-  constructor(private readonly runtime: PersonalRuntimeService) {}
+  constructor(
+    @Inject(PersonalRuntimeService)
+    private readonly runtime: PersonalRuntimeService,
+  ) {}
 
   @Get("health")
   async health() {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
   DEFAULT_LOCAL_EXECUTOR_ID,
@@ -69,8 +69,11 @@ export class PersonalExecutorService {
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
+    @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
+    @Inject(LocalExecutorPluginRegistry)
     private readonly localPlugins: LocalExecutorPluginRegistry,
   ) {}
 
