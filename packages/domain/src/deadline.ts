@@ -43,6 +43,9 @@ export async function withDeadline<T>(
     return work;
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Keep racing on `work` so a real failure still rejects. The extra
+  // listener only swallows a late rejection after the deadline wins.
+  void work.catch(() => undefined);
   try {
     return await Promise.race([
       work,
