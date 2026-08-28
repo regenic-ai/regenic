@@ -22,7 +22,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 - 品牌绿：G500 `#6BED4A`（运行中 / 主按钮）、G900 `#153B12`（选中底）
 - 语义：AI/PROCESS `#36D6E7`（同步中）、DATA `#B69CFF`（出处）、RISK `#FFB347`（已停止）
 - 标识按 Electron / macOS 常见三套用法：
-  - Dock / 任务栏：1024 圆角方标（画板约 80% 圆角矩形 + 中间斜切圆），对齐 Apple 图标模板
+  - Dock / 任务栏：**两套图**。macOS 与微信 / Cursor / 系统备忘录一样，1024 画板里预切 824 squircle（约 10% 透明边，Dock 不会再切一刀）；Windows / Linux 把同一块 squircle 放到约 96% 画板（多尺寸 `.ico`），任务栏没有 Mac 那种阴影留白。生成脚本：`apps/desktop/scripts/build-app-icon.py`
   - 菜单栏托盘：16×16 / 32×32 template，只有斜切圆
   - 窗口内：22px / 28px 圆角方块，中间放标，旁边是 **Regenic** 字标
 - 顶栏左留 82px 给 macOS 红黄绿灯，侧栏从标题栏下方开始，避免窗口按钮和标识挤在一起
