@@ -5,6 +5,7 @@ import type {
   InboxQuery,
   InboxSummary,
 } from "./ingestion";
+import { normalizeInboxListView } from "./list-surface";
 import { conversationId } from "./message-contract";
 
 export function eventThreadId(event: EventRecord): string {
@@ -289,14 +290,18 @@ export function selectInboxItems(
     );
   }
   if (query?.heads) {
-    const currentThreads = new Set(
-      selected
-        .filter((item) => item.decision.disposition === "current_work")
-        .map((item) => eventThreadId(item.event)),
-    );
-    selected = headsByThread(
-      selected.filter((item) => currentThreads.has(eventThreadId(item.event))),
-    );
+    if (normalizeInboxListView(query.list) === "hidden") {
+      selected = headsByThread(selected);
+    } else {
+      const openThreads = new Set(
+        selected
+          .filter((item) => item.decision.disposition === "current_work")
+          .map((item) => eventThreadId(item.event)),
+      );
+      selected = headsByThread(
+        selected.filter((item) => openThreads.has(eventThreadId(item.event))),
+      );
+    }
   }
   return takeRecentInboxItems(selected, query);
 }

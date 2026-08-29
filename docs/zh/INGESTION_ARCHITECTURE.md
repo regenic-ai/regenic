@@ -187,7 +187,7 @@ interface AuthorityStore {
 }
 ```
 
-`listInbox` 只返回各来源身份当前 head 且 disposition 为 `current_work` 的项。被 tombstone 或改成噪音的旧 Event 仍留在库里，但不进入 inbox。当前 head 若还没有 disposition，下一次采集该来源身份时补写，包括 duplicate 重放。
+`listInbox` 默认只返回各来源身份当前 head 且 disposition 为 `current_work`、且未 `conversation_prefs.hidden` 的项（显示列表）。`list=hidden` 返回被折叠的会话，列表脸仍是最后一条非 tombstone 可见消息。隐藏是列表表面，不由 tombstone / `work_acked` / 工单状态推导。人折叠写 `hidden_reason=human`（新活也不自动回来）；策略折叠写 `policy`（tombstone 离桌、工单结束或稍后处理；新的 `current_work` 会自动取消折叠）。被 tombstone 的 Event 仍留在库里。当前 head 若还没有 disposition，下一次采集该来源身份时补写，包括 duplicate 重放。采集批次结束后内核按线程应用折叠策略，连接器零感知。
 
 ## 6. 规范输入契约
 

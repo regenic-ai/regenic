@@ -29,6 +29,7 @@ import {
   validateIngestBatch,
   type IngestValidationIssue,
 } from "./ingestion-schema";
+import { applyListSurfaceAfterIngest } from "./list-surface";
 import {
   incomingImprovesAttachments,
   incomingWorsensAttachments,
@@ -152,6 +153,12 @@ export class IngestionService {
       records[index] = await this.ingestRecord(batch.org_id, record);
     }
     await flushCreates();
+
+    await applyListSurfaceAfterIngest(
+      this.authorityStore,
+      batch.org_id,
+      records.flatMap((row) => (row?.event_id ? [row.event_id] : [])),
+    );
 
     return {
       valid: true,

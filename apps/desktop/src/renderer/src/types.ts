@@ -134,6 +134,7 @@ export type AttentionClass =
   | "unread"
   | "quiet";
 export type InboxSortMode = "normal" | "attention";
+export type InboxListView = "shown" | "hidden";
 export type WorkItemStatus =
   | "open"
   | "running"
@@ -189,6 +190,7 @@ export interface InboxViewItem {
   thread_id?: string;
   title?: string | null;
   pinned?: boolean;
+  hidden?: boolean;
   pref_updated_at?: string | null;
   conversation_label?: string | null;
   conversation_kind?: string | null;
@@ -334,6 +336,7 @@ export interface RecipeConversationOption {
 
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
+  inbox_list: InboxListView;
 }
 
 export interface IngestAttempt {
@@ -439,6 +442,7 @@ export interface ConversationPrefView {
   thread_id: string;
   title: string | null;
   pinned: boolean;
+  hidden: boolean;
   updated_at: string;
 }
 

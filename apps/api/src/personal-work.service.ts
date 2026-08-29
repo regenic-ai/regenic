@@ -1,17 +1,22 @@
 import { Inject, Injectable, OnModuleDestroy, forwardRef } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  INBOX_LIST_PREF_KEY,
+  INBOX_MEMBERSHIP_PREF_KEY,
   INBOX_SORT_PREF_KEY,
   cancelWorkRun,
+  foldThreadByPolicy,
   deliveryAbandoned,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
   isDeadLetter,
+  normalizeInboxListView,
   normalizeInboxSort,
   parseConversationThread,
   shouldFlushDelivery,
   shouldRefreshActiveRun,
   type ConversationThread,
+  type InboxListView,
   type InboxSortMode,
   type PromptAnswer,
   type Recipe,
@@ -42,6 +47,7 @@ const WORK_TICK_MS = 3_000;
 
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
+  inbox_list: InboxListView;
 }
 
 export interface WorkRunView {
@@ -273,22 +279,44 @@ export class PersonalWorkService implements OnModuleDestroy {
 
   async getPrefs(): Promise<UiPrefsView> {
     const host = this.runtime.requireHost();
-    const raw = await host
-      .get("authority")
-      .getUiPref(this.runtime.orgId(), INBOX_SORT_PREF_KEY);
-    return { inbox_sort: normalizeInboxSort(raw) };
+    const orgId = this.runtime.orgId();
+    const [sort, list, legacy] = await Promise.all([
+      host.get("authority").getUiPref(orgId, INBOX_SORT_PREF_KEY),
+      host.get("authority").getUiPref(orgId, INBOX_LIST_PREF_KEY),
+      host.get("authority").getUiPref(orgId, INBOX_MEMBERSHIP_PREF_KEY),
+    ]);
+    return {
+      inbox_sort: normalizeInboxSort(sort),
+      inbox_list: normalizeInboxListView(list ?? legacy),
+    };
   }
 
-  async putPrefs(input: { inbox_sort?: string }): Promise<UiPrefsView> {
+  async putPrefs(input: {
+    inbox_sort?: string;
+    inbox_list?: string;
+    inbox_membership?: string;
+  }): Promise<UiPrefsView> {
     const host = this.runtime.requireHost();
-    const inbox_sort = normalizeInboxSort(input.inbox_sort);
-    await host.get("authority").putUiPref(
-      this.runtime.orgId(),
-      INBOX_SORT_PREF_KEY,
-      inbox_sort,
-      new Date().toISOString(),
-    );
-    return { inbox_sort };
+    const orgId = this.runtime.orgId();
+    const now = new Date().toISOString();
+    if (input.inbox_sort !== undefined) {
+      await host.get("authority").putUiPref(
+        orgId,
+        INBOX_SORT_PREF_KEY,
+        normalizeInboxSort(input.inbox_sort),
+        now,
+      );
+    }
+    const list = input.inbox_list ?? input.inbox_membership;
+    if (list !== undefined) {
+      await host.get("authority").putUiPref(
+        orgId,
+        INBOX_LIST_PREF_KEY,
+        normalizeInboxListView(list),
+        now,
+      );
+    }
+    return this.getPrefs();
   }
 
   async inboxFaces(
@@ -414,12 +442,19 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!event) {
       return;
     }
+    const now = new Date().toISOString();
     await forceDisposition(
       host.get("authority"),
       event,
       "outside_current_work",
       "work_acked",
-      new Date().toISOString(),
+      now,
+    );
+    await foldThreadByPolicy(
+      host.get("authority"),
+      item.org_id,
+      threadId,
+      now,
     );
   }
 
@@ -520,6 +555,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (delivery && delivery.status !== "acked") {
       await host.get("authority").putWorkDelivery(deliveryAbandoned(delivery, now));
     }
+    await foldThreadByPolicy(host.get("authority"), orgId, next.thread_id, now);
     return {
       work_item: next,
       run: cancelled,

@@ -17,7 +17,7 @@
 2. 连接器只翻译到封闭 `record_class`；未知原生类型隔离，不得默默当成 `message`。
 3. `WorkItem` 由策略从记录/线程投影，不是第三种消息。
 4. 执行走 `TaskExecutor` 插件。内核只认端口，不 import 私有 HTTP。
-5. 列表成员仍是当前工作；排序可在 `attention` 与置顶 + 最近活动之间切换。
+5. 列表成员仍是当前工作；**显不显示**是另一层 `conversation_prefs.hidden`，不由 WorkItem 状态或 tombstone 推导。排序可在 `attention` 与置顶 + 最近活动之间切换。
 
 ## 3. 非目标
 
@@ -248,7 +248,7 @@ interface ExecutorCatalogEntry {
 
 ## 10. 列表
 
-默认成员仍是当前工作，外加状态为 `open` / `running` / `waiting_human` 的工单线程。
+显不显示是列表表面（`conversation_prefs.hidden`），不由 tombstone / `work_acked` / 工单状态推导。默认列表是桌上的活且未折叠；`list=hidden` 看被折叠的会话。人折叠后新活也不自动回来；策略折叠（工单结束、稍后处理、tombstone 离桌）在新的 `current_work` 到来时回到显示列表。桌面过滤栏写入 `ui_prefs.inbox_list`。
 
 排序可切换，选择写入 `ui_prefs.inbox_sort`：
 
@@ -261,7 +261,8 @@ interface ExecutorCatalogEntry {
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/v1/me/inbox` | 另带 `record_class`、`thread_facet`、`attention`、`work` |
+| GET | `/v1/me/inbox` | 另带 `record_class`、`thread_facet`、`attention`、`work`；`list=shown\|hidden` |
+| GET/POST | `/v1/me/prefs` | `inbox_sort`、`inbox_list` |
 | GET/POST | `/v1/me/recipes` | 列出 / 创建 |
 | POST | `/v1/me/recipes/:id` | 更新 |
 | DELETE | `/v1/me/recipes/:id` | 删除 |
@@ -274,7 +275,6 @@ interface ExecutorCatalogEntry {
 | POST | `/v1/me/work-items/:id/run` | 手动启动 |
 | POST | `/v1/me/work-items/:id/dismiss` | 从当前工作拿掉；不写回 |
 | POST | `/v1/me/work-items/:id/complete` | dismiss 的别名；不冒充 `exited` |
-| GET/POST | `/v1/me/prefs` | `inbox_sort` |
 
 ## 12. 验收
 

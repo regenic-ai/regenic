@@ -11,6 +11,8 @@ import {
   isWorkDeliveryStatus,
   isWorkWriteBackState,
   normalizeInboxLimit,
+  normalizeInboxListView,
+  normalizeHiddenReason,
   recipeTriggerOf,
   threadExternalIdLike,
 } from "@regenic/domain";
@@ -149,10 +151,17 @@ interface PrefRow {
   thread_id: string;
   title: string | null;
   pinned: number;
+  hidden: number;
+  hidden_reason: string | null;
   last_read_at: string | null;
   last_read_external_id: string | null;
   updated_at: string;
 }
+
+const PREF_COLUMNS = `
+  org_id, thread_id, title, pinned, hidden, hidden_reason,
+  last_read_at, last_read_external_id, updated_at
+`;
 
 const INBOX_COLUMNS = `
   d.event_id, d.org_id AS disposition_org_id, d.disposition, d.layer,
@@ -345,11 +354,12 @@ export class SqliteAuthorityStore
           WHERE e.org_id = ?
             AND d.disposition = 'current_work'
             AND ${isCurrentHeadSql("e")}
+            AND ${notHiddenSql("e")}
           ORDER BY e.ingested_at DESC, e.id DESC
           LIMIT 1
         `,
       )
-      .get(orgId) as { latest_at: string; latest_id: string } | undefined;
+      .get(orgId, orgId) as { latest_at: string; latest_id: string } | undefined;
     const counted = this.database
       .prepare(
         `
@@ -359,6 +369,7 @@ export class SqliteAuthorityStore
             JOIN message_dispositions d ON d.event_id = e.id
             WHERE e.org_id = ?
               AND ${isCurrentHeadSql("e")}
+              AND ${notHiddenSql("e")}
             GROUP BY e.thread_id
             HAVING
               SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
@@ -371,7 +382,7 @@ export class SqliteAuthorityStore
           )
         `,
       )
-      .get(orgId) as { count: number };
+      .get(orgId, orgId) as { count: number };
     const prefs = this.database
       .prepare(
         `
@@ -409,8 +420,7 @@ export class SqliteAuthorityStore
     const rows = this.database
       .prepare(
         `
-          SELECT org_id, thread_id, title, pinned,
-                 last_read_at, last_read_external_id, updated_at
+          SELECT ${PREF_COLUMNS}
           FROM conversation_prefs WHERE org_id = ?
           ORDER BY pinned DESC, updated_at DESC
         `,
@@ -426,8 +436,7 @@ export class SqliteAuthorityStore
     const row = this.database
       .prepare(
         `
-          SELECT org_id, thread_id, title, pinned,
-                 last_read_at, last_read_external_id, updated_at
+          SELECT ${PREF_COLUMNS}
           FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
         `,
       )
@@ -443,12 +452,13 @@ export class SqliteAuthorityStore
       const current = this.database
         .prepare(
           `
-            SELECT org_id, thread_id, title, pinned,
-                   last_read_at, last_read_external_id, updated_at
+            SELECT ${PREF_COLUMNS}
             FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
           `,
         )
         .get(input.org_id, input.thread_id) as PrefRow | undefined;
+      const hidden =
+        input.hidden !== undefined ? input.hidden : Boolean(current?.hidden);
       const next: ConversationPref = {
         org_id: input.org_id,
         thread_id: input.thread_id,
@@ -457,6 +467,13 @@ export class SqliteAuthorityStore
           input.pinned !== undefined
             ? input.pinned
             : Boolean(current?.pinned),
+        hidden,
+        hidden_reason: hidden
+          ? input.hidden_reason !== undefined
+            ? input.hidden_reason
+            : normalizeHiddenReason(current?.hidden_reason) ??
+              (input.hidden === true ? "human" : null)
+          : null,
         last_read_at:
           input.last_read_at !== undefined
             ? input.last_read_at
@@ -471,12 +488,14 @@ export class SqliteAuthorityStore
         .prepare(
           `
             INSERT INTO conversation_prefs (
-              org_id, thread_id, title, pinned,
+              org_id, thread_id, title, pinned, hidden, hidden_reason,
               last_read_at, last_read_external_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(org_id, thread_id) DO UPDATE SET
               title = excluded.title,
               pinned = excluded.pinned,
+              hidden = excluded.hidden,
+              hidden_reason = excluded.hidden_reason,
               last_read_at = excluded.last_read_at,
               last_read_external_id = excluded.last_read_external_id,
               updated_at = excluded.updated_at
@@ -487,6 +506,8 @@ export class SqliteAuthorityStore
           next.thread_id,
           next.title,
           next.pinned ? 1 : 0,
+          next.hidden ? 1 : 0,
+          next.hidden_reason,
           next.last_read_at,
           next.last_read_external_id,
           next.updated_at,
@@ -1823,12 +1844,23 @@ export class SqliteAuthorityStore
     orgId: string,
     query?: InboxQuery,
   ): { sql: string; params: unknown[] } {
+    const hiddenList = normalizeInboxListView(query?.list) === "hidden";
+    const scoped = inboxScoped(query);
     if (query?.heads) {
+      if (hiddenList) {
+        return this.hiddenHeadsSql(orgId, query);
+      }
       const visible = this.inboxClauses(orgId, query, "any");
       const current = this.inboxClauses(orgId, query, "current_work", {
         event: "e2",
         disposition: "d2",
       });
+      if (!scoped) {
+        visible.clauses.push(notHiddenSql("e"));
+        visible.params.push(orgId);
+        current.clauses.push(notHiddenSql("e2"));
+        current.params.push(orgId);
+      }
       return {
         sql: `
           SELECT * FROM (
@@ -1858,15 +1890,43 @@ export class SqliteAuthorityStore
     }
     if (query?.siblings) {
       const { clauses, params } = this.inboxClauses(orgId, query, "any");
-      if (!query.source && !query.target && !query.thread_ids) {
-        clauses.push(`e.thread_id IN (
+      if (!scoped) {
+        if (hiddenList) {
+          const hidden = hiddenThreadIdSql(orgId);
+          clauses.push(`e.thread_id IN (${hidden.sql})`);
+          params.push(...hidden.params);
+        } else {
+          clauses.push(`e.thread_id IN (
           SELECT e2.thread_id
           FROM message_dispositions d2
           JOIN events e2 ON e2.id = d2.event_id
           WHERE d2.org_id = ? AND d2.disposition = 'current_work'
             AND ${isCurrentHeadSql("e2", "h2")}
         )`);
-        params.push(orgId);
+          params.push(orgId);
+          clauses.push(notHiddenSql("e"));
+          params.push(orgId);
+        }
+      }
+      const tail = inboxTail(query);
+      return {
+        sql: `
+          SELECT ${INBOX_COLUMNS}
+          FROM message_dispositions d
+          JOIN events e ON e.id = d.event_id
+          WHERE ${clauses.join(" AND ")}
+            AND ${isCurrentHeadSql("e")}
+          ${tail.orderSql}
+        `,
+        params: [...params, ...tail.orderParams],
+      };
+    }
+    if (hiddenList) {
+      const { clauses, params } = this.inboxClauses(orgId, query, "any");
+      if (!scoped) {
+        const hidden = hiddenThreadIdSql(orgId);
+        clauses.push(`e.thread_id IN (${hidden.sql})`);
+        params.push(...hidden.params);
       }
       const tail = inboxTail(query);
       return {
@@ -1882,6 +1942,10 @@ export class SqliteAuthorityStore
       };
     }
     const { clauses, params } = this.inboxClauses(orgId, query, "current_work");
+    if (!scoped) {
+      clauses.push(notHiddenSql("e"));
+      params.push(orgId);
+    }
     const tail = inboxTail(query);
     return {
       sql: `
@@ -1893,6 +1957,34 @@ export class SqliteAuthorityStore
         ${tail.orderSql}
       `,
       params: [...params, ...tail.orderParams],
+    };
+  }
+
+  private hiddenHeadsSql(
+    orgId: string,
+    query?: InboxQuery,
+  ): { sql: string; params: unknown[] } {
+    const visible = this.inboxClauses(orgId, query, "any");
+    const hidden = hiddenThreadIdSql(orgId);
+    return {
+      sql: `
+        SELECT * FROM (
+          SELECT ${INBOX_COLUMNS},
+            ROW_NUMBER() OVER (
+              PARTITION BY e.thread_id
+              ORDER BY e.occurred_at DESC, e.id DESC
+            ) AS rn
+          FROM message_dispositions d
+          JOIN events e ON e.id = d.event_id
+          WHERE ${visible.clauses.join(" AND ")}
+            AND d.reason_codes_json NOT LIKE '%thread_status%'
+            AND e.operation != 'tombstone'
+            AND e.thread_id IN (${hidden.sql})
+        ) ranked
+        WHERE rn = 1
+        ORDER BY occurred_at ASC, id ASC
+      `,
+      params: [...visible.params, ...hidden.params],
     };
   }
 
@@ -1980,11 +2072,14 @@ export class SqliteAuthorityStore
   }
 
   private toPref(row: PrefRow): ConversationPref {
+    const hidden = row.hidden === 1;
     return {
       org_id: row.org_id,
       thread_id: row.thread_id,
       title: row.title,
       pinned: row.pinned === 1,
+      hidden,
+      hidden_reason: hidden ? normalizeHiddenReason(row.hidden_reason) : null,
       last_read_at: row.last_read_at,
       last_read_external_id: row.last_read_external_id,
       updated_at: row.updated_at,
@@ -2075,6 +2170,21 @@ function isCurrentHeadSql(event = "e", heads = "h"): string {
     SELECT 1 FROM source_heads ${heads}
     WHERE ${heads}.current_event_id = ${event}.id
   )`;
+}
+
+function hiddenThreadIdSql(orgId: string): { sql: string; params: unknown[] } {
+  return {
+    sql: `SELECT thread_id FROM conversation_prefs WHERE org_id = ? AND hidden = 1`,
+    params: [orgId],
+  };
+}
+
+function notHiddenSql(event = "e"): string {
+  return `${event}.thread_id NOT IN (SELECT p.thread_id FROM conversation_prefs p WHERE p.org_id = ? AND p.hidden = 1)`;
+}
+
+function inboxScoped(query?: InboxQuery): boolean {
+  return Boolean(query?.source || query?.target || query?.thread_ids);
 }
 
 function inboxTail(query?: InboxQuery): {

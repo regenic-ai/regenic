@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 17);
+    assert.equal(authorityStore.schemaVersion, 18);
     const inspect = new Database(join(root, "authority.db"));
     const index = inspect
       .prepare(
@@ -247,12 +247,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 18");
+    database.pragma("user_version = 19");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 18 is newer than supported 17/,
+      /schema 19 is newer than supported 18/,
     );
   });
 
@@ -286,6 +286,19 @@ describe("local ingestion persistence", () => {
     harness = await createHarness(root);
 
     assert.equal((await harness.authorityStore.listInbox("local-owner")).length, 0);
+    const hidden = await harness.authorityStore.listInbox("local-owner", {
+      heads: true,
+      list: "hidden",
+    });
+    assert.equal(hidden.length, 1);
+    assert.equal(hidden[0].event.operation, "create");
+    assert.equal(hidden[0].event.external_id, "source-event-1");
+    const pref = await harness.authorityStore.getConversationPref(
+      "local-owner",
+      "regenic:source-event-1",
+    );
+    assert.equal(pref.hidden, true);
+    assert.equal(pref.hidden_reason, "policy");
     harness.authorityStore.close();
   });
 
@@ -307,7 +320,19 @@ describe("local ingestion persistence", () => {
     const listed = await store.listConversationPrefs("local-owner");
     assert.equal(pref.title, "Release desk");
     assert.equal(pref.pinned, true);
+    assert.equal(pref.hidden, false);
     assert.equal(listed.length, 1);
+    await store.putConversationPref({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      hidden: true,
+      hidden_reason: "human",
+      updated_at: "2026-08-22T00:00:30.000Z",
+    });
+    const folded = await store.getConversationPref("local-owner", "dsh:session-a");
+    assert.equal(folded.hidden, true);
+    assert.equal(folded.hidden_reason, "human");
+    assert.equal(folded.pinned, true);
     await store.putConversationPref({
       org_id: "local-owner",
       thread_id: "dsh:session-a",
@@ -486,7 +511,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 17);
+    assert.equal(store.schemaVersion, 18);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);

@@ -195,6 +195,47 @@ describe("inbox query helpers", () => {
     assert.equal(summarizeInboxItems([working]).count, 0);
   });
 
+  it("lists the last visible message when the list view is hidden", () => {
+    const visible = {
+      decision: {
+        disposition: "outside_current_work",
+        reason_codes: ["task"],
+      },
+      event: {
+        id: "e1",
+        operation: "create",
+        source: "crm",
+        external_id: "order-9:1",
+        occurred_at: "2026-08-22T10:43:00.000Z",
+        ingested_at: "2026-08-22T10:43:00.000Z",
+      },
+    };
+    const gone = {
+      decision: {
+        disposition: "outside_current_work",
+        reason_codes: ["tombstoned"],
+      },
+      event: {
+        id: "e2",
+        operation: "tombstone",
+        source: "crm",
+        external_id: "order-9:1",
+        occurred_at: "2026-08-22T10:44:00.000Z",
+        ingested_at: "2026-08-22T10:44:00.000Z",
+      },
+    };
+    assert.deepEqual(
+      selectInboxItems([visible, gone], { heads: true }).map((item) => item.event.id),
+      [],
+    );
+    assert.deepEqual(
+      selectInboxItems([visible, gone], { heads: true, list: "hidden" }).map(
+        (item) => item.event.id,
+      ),
+      ["e1"],
+    );
+  });
+
   it("takes the latest page and then the page before that cursor", () => {
     const items = [1, 2, 3, 4].map((n) => ({
       decision: { disposition: "current_work" },

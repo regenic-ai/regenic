@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 17;
+export const LATEST_SCHEMA_VERSION = 18;
 
 export const MIGRATIONS = [
   {
@@ -343,6 +343,15 @@ export const MIGRATIONS = [
     sql: `
       CREATE INDEX ingest_attempts_installation_started_idx
         ON ingest_attempts (connector_installation_id, started_at DESC, id DESC);
+    `,
+  },
+  {
+    version: 18,
+    sql: `
+      ALTER TABLE conversation_prefs ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE conversation_prefs ADD COLUMN hidden_reason TEXT;
+      CREATE INDEX conversation_prefs_hidden_idx
+        ON conversation_prefs (org_id, hidden);
     `,
   },
 ] as const;

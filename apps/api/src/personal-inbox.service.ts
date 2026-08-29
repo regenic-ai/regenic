@@ -17,7 +17,10 @@ import {
   takeRecentInboxItems,
   latestForwardedTo,
   type ForwardedFrom,
+  foldByHuman,
   normalizeInboxLimit,
+  normalizeInboxListView,
+  unfold,
   resolveMessageSurface,
   threadIdOf,
   withSurfaceGeneration,
@@ -91,6 +94,7 @@ export interface InboxViewItem {
   thread_id: string;
   title: string | null;
   pinned: boolean;
+  hidden: boolean;
   pref_updated_at: string | null;
   conversation_label: string | null;
   conversation_kind: string | null;
@@ -113,6 +117,7 @@ export interface ConversationPrefView {
   thread_id: string;
   title: string | null;
   pinned: boolean;
+  hidden: boolean;
   last_read_at: string | null;
   last_read_external_id: string | null;
   updated_at: string;
@@ -122,6 +127,7 @@ export interface ConversationPrefInput {
   thread_id?: string;
   title?: string | null;
   pinned?: boolean;
+  hidden?: boolean;
 }
 
 export interface ConversationAttentionInput {
@@ -163,6 +169,7 @@ export interface InboxListQuery {
   live?: boolean;
   thread_id?: string;
   limit?: number;
+  list?: string;
 }
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
@@ -433,7 +440,9 @@ export class PersonalInboxService {
             .getConversationPref(orgId, query.thread_id ?? "")
             .then((pref) => (pref ? [pref] : []))
         : authority.listConversationPrefs(orgId),
-      query.heads === true && !query.thread_id
+      query.heads === true &&
+      !query.thread_id &&
+      normalizeInboxListView(query.list) !== "hidden"
         ? this.work.activeSessionIds()
         : Promise.resolve(new Set<string>()),
     ]);
@@ -447,7 +456,12 @@ export class PersonalInboxService {
           conversationId(item.event.source, item.event.external_id, item.event.id),
         ),
       );
-      const missing = [...jobSessions].filter((id) => !have.has(id));
+      const hiddenPrefIds = new Set(
+        prefs.filter((pref) => pref.hidden).map((pref) => pref.thread_id),
+      );
+      const missing = [...jobSessions].filter(
+        (id) => !have.has(id) && !hiddenPrefIds.has(id),
+      );
       if (missing.length > 0) {
         const extras = await authority.listInbox(orgId, {
           siblings: true,
@@ -646,18 +660,31 @@ export class PersonalInboxService {
           : "thread_id must look like source:target";
       throw new PersonalConnectorError("invalid_config", message, 400);
     }
-    if (input.title === undefined && input.pinned === undefined) {
+    if (
+      input.title === undefined &&
+      input.pinned === undefined &&
+      input.hidden === undefined
+    ) {
       throw new PersonalConnectorError(
         "invalid_config",
-        "title or pinned is required",
+        "title, pinned, or hidden is required",
         400,
       );
     }
+    const fold =
+      input.hidden === undefined
+        ? undefined
+        : input.hidden
+          ? foldByHuman()
+          : unfold();
     const pref = await host.get("authority").putConversationPref({
       org_id: this.runtime.orgId(),
       thread_id: threadId,
       title: input.title !== undefined ? normalizeTitle(input.title) : undefined,
       pinned: input.pinned,
+      ...(fold
+        ? { hidden: fold.hidden, hidden_reason: fold.reason }
+        : {}),
       updated_at: new Date().toISOString(),
     });
     return toPrefView(pref);
@@ -849,6 +876,7 @@ function decorateInboxItem(
     thread_id: threadId,
     title: pref?.title ?? null,
     pinned: pref?.pinned === true,
+    hidden: pref?.hidden === true,
     pref_updated_at: pref?.updated_at ?? null,
     conversation_label:
       surface.conversation_label ?? labels.get(threadId) ?? null,
@@ -1259,9 +1287,13 @@ export function inboxStoreQuery(
     return thread
       ? {
           heads: true,
+          list: normalizeInboxListView(query.list),
           thread_ids: [`${thread.source}:${thread.target}`],
         }
-      : { heads: true };
+      : {
+          heads: true,
+          list: normalizeInboxListView(query.list),
+        };
   }
   if (query.thread_id && thread) {
     return {
@@ -1283,6 +1315,7 @@ export function inboxStoreQuery(
     before_id: query.before_id,
     limit: query.limit,
     siblings: true,
+    list: normalizeInboxListView(query.list),
   };
 }
 
@@ -1307,6 +1340,7 @@ function toPrefView(pref: ConversationPref): ConversationPrefView {
     thread_id: pref.thread_id,
     title: pref.title,
     pinned: pref.pinned,
+    hidden: pref.hidden === true,
     last_read_at: pref.last_read_at,
     last_read_external_id: pref.last_read_external_id,
     updated_at: pref.updated_at,

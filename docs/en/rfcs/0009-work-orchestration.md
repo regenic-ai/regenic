@@ -17,7 +17,7 @@ Execution runtimes (DSH, Cursor, a private Agent OS) must not be welded into the
 2. Connectors translate into a closed `record_class`. Unknown native types are quarantined; they are never silently mapped to `message`.
 3. A `WorkItem` is a policy projection, not a third message type.
 4. Execution is a `TaskExecutor` plugin. The kernel speaks only the port.
-5. List membership stays current work. Sort can switch between `attention` and pin + recency.
+5. List membership stays current work. **Showing vs hidden** is a separate `conversation_prefs.hidden` surface — not derived from WorkItem status or tombstone. Sort can switch between `attention` and pin + recency.
 
 ## 3. Non-goals
 
@@ -250,7 +250,7 @@ Suspend maps to Thread Surface prompts. Answers use `POST /v1/me/conversations/p
 
 ## 10. List
 
-Membership: current work, plus threads whose work item is `open` / `running` / `waiting_human`.
+Shown vs hidden is a list-surface pref (`conversation_prefs.hidden`), not derived from tombstone / `work_acked` / WorkItem status. The default list is current work that is not hidden. `list=hidden` is the folded pile. A human fold stays put when new work arrives. A policy fold (finished or dismissed job, or a tombstone that leaves the thread off the desk) comes back when new `current_work` is accepted. The desktop filter writes `ui_prefs.inbox_list`.
 
 Sort (`ui_prefs.inbox_sort`):
 
@@ -263,7 +263,8 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work` (inclu
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/v1/me/inbox` | Also `record_class`, `thread_facet`, `attention`, `work` |
+| GET | `/v1/me/inbox` | Also `record_class`, `thread_facet`, `attention`, `work`; `list=shown\|hidden` |
+| GET/POST | `/v1/me/prefs` | `inbox_sort`, `inbox_list` |
 | GET/POST | `/v1/me/recipes` | List / create |
 | POST | `/v1/me/recipes/:id` | Update |
 | DELETE | `/v1/me/recipes/:id` | Delete |
@@ -276,7 +277,6 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work` (inclu
 | POST | `/v1/me/work-items/:id/run` | Manual start |
 | POST | `/v1/me/work-items/:id/dismiss` | Drop from current work; no write-back |
 | POST | `/v1/me/work-items/:id/complete` | Alias of dismiss; does not fake `exited` |
-| GET/POST | `/v1/me/prefs` | `inbox_sort` |
 
 ## 12. Acceptance
 

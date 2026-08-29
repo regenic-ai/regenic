@@ -37,7 +37,7 @@ import {
   workStatusLabel,
 } from "./message-view";
 import { useLocale } from "./LocaleContext";
-import { PinIcon } from "./Icons";
+import { HideIcon, PinIcon, ShowIcon } from "./Icons";
 import {
   ThreadMessageList,
   type ThreadMessageListHandle,
@@ -65,6 +65,7 @@ export const ThreadPane = memo(function ThreadPane({
   onCommitDraft,
   onRename,
   onPin,
+  onHide,
   onRunWork,
   onDismissWork,
   onBindRecipe,
@@ -88,6 +89,7 @@ export const ThreadPane = memo(function ThreadPane({
   ) => Promise<unknown>;
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
+  onHide?: (hidden: boolean) => Promise<void>;
   onRunWork?: () => Promise<void>;
   onDismissWork?: () => Promise<void>;
   onBindRecipe?: () => void;
@@ -372,6 +374,19 @@ export const ThreadPane = memo(function ThreadPane({
             >
               <PinIcon filled={thread.pinned} />
             </button>
+            {onHide ? (
+              <button
+                type="button"
+                className="item-tool thread-hide"
+                aria-label={thread.hidden ? t("inbox.show") : t("inbox.hide")}
+                title={thread.hidden ? t("inbox.showTitle") : t("inbox.hideTitle")}
+                onClick={() => {
+                  void onHide(!thread.hidden);
+                }}
+              >
+                {thread.hidden ? <ShowIcon /> : <HideIcon />}
+              </button>
+            ) : null}
           </div>
           <div className="thread-meta-row">
             <div className="thread-tags">

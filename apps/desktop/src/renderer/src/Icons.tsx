@@ -92,6 +92,41 @@ export function PinIcon({ filled = false }: { filled?: boolean }) {
   );
 }
 
+export function HideIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M2 8s2.2-3.6 6-3.6S14 8 14 8s-2.2 3.6-6 3.6S2 8 2 8Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      <circle cx="8" cy="8" r="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M3 13 13 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function ShowIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M2 8s2.2-3.6 6-3.6S14 8 14 8s-2.2 3.6-6 3.6S2 8 2 8Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      <circle cx="8" cy="8" r="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
 export function PencilIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
@@ -107,6 +142,20 @@ export function PencilIcon() {
         fill="none"
         stroke="currentColor"
         strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+      <path
+        d="M6 2.2v7.6M2.2 6h7.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
         strokeLinecap="round"
       />
     </svg>

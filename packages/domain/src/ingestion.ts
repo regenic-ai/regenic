@@ -310,6 +310,9 @@ export interface ConversationPref {
   thread_id: string;
   title: string | null;
   pinned: boolean;
+  /** List surface. Independent of tombstone, current_work, and WorkItem. */
+  hidden: boolean;
+  hidden_reason: "human" | "policy" | null;
   last_read_at: string | null;
   last_read_external_id: string | null;
   updated_at: string;
@@ -320,6 +323,8 @@ export interface ConversationPrefPatch {
   thread_id: string;
   title?: string | null;
   pinned?: boolean;
+  hidden?: boolean;
+  hidden_reason?: "human" | "policy" | null;
   last_read_at?: string | null;
   last_read_external_id?: string | null;
   updated_at: string;
@@ -339,6 +344,8 @@ export interface EventListQuery {
 export interface InboxQuery extends EventListQuery {
   heads?: boolean;
   siblings?: boolean;
+  /** Default `shown`. `hidden` is the folded list, not deleted Events. */
+  list?: "shown" | "hidden";
 }
 
 export interface InboxSummary {

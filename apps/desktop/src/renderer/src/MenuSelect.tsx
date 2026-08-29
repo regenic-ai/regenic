@@ -12,6 +12,8 @@ export function MenuSelect({
   placeholder,
   disabled,
   searchable,
+  className,
+  ariaLabel,
   onChange,
 }: {
   value: string;
@@ -19,6 +21,8 @@ export function MenuSelect({
   placeholder?: string;
   disabled?: boolean;
   searchable?: boolean;
+  className?: string;
+  ariaLabel?: string;
   onChange: (value: string) => void;
 }) {
   const listId = useId();
@@ -80,10 +84,11 @@ export function MenuSelect({
   };
 
   return (
-    <div className="menu-select" ref={rootRef}>
+    <div className={`menu-select${className ? ` ${className}` : ""}`} ref={rootRef}>
       <button
         type="button"
         className={`menu-select-btn${selected ? "" : " is-placeholder"}${open ? " is-open" : ""}`}
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}

@@ -146,6 +146,7 @@ export function mergeDraftThreads(
       conversation_label: null,
       conversation_kind: null,
       pinned: draft.pinned === true,
+      hidden: false,
       opened_at: draft.opened_at,
       draft_installation_id: draft.draft_installation_id,
       messages: [],

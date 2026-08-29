@@ -61,7 +61,8 @@ Receive and send are not the same privilege:
 
 The console is the human/agent surface of orchestration:
 
-- Default view is what needs handling now
+- Default view is what needs handling now and is not hidden
+- A person can fold a conversation off the list; that is a list-surface pref, not an L5 job status and not a tombstone
 - The rest never appear
 - Thread window around an Event, not an isolated snippet
 - Provenance is a lookup
