@@ -44,6 +44,14 @@ const extraReviewDriver = {
       instance_detail_key: "max_open",
     };
   },
+  subjectCatalog() {
+    return {
+      kinds: [
+        { id: "extra.order_review", label: "Order review" },
+        { id: "extra.lead_followup", label: "Lead follow-up" },
+      ],
+    };
+  },
 };
 
 module.exports = { extraReviewDriver };

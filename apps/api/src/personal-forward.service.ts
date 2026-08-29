@@ -312,6 +312,7 @@ export class PersonalForwardService {
       ...(stamp.conversation_kind
         ? { conversation_kind: stamp.conversation_kind }
         : {}),
+      ...(stamp.unit_kind ? { unit_kind: stamp.unit_kind } : {}),
       forwarded_from: packet.forwarded_from,
       content: toReplyParts({
         text,
@@ -480,7 +481,11 @@ export class PersonalForwardService {
   private async conversationStamp(
     threadId: string,
     bound: { installationId: string; host: Host },
-  ): Promise<{ scope_name?: string; conversation_kind?: string }> {
+  ): Promise<{
+    scope_name?: string;
+    conversation_kind?: string;
+    unit_kind?: string;
+  }> {
     const thread = parseConversationThread(threadId);
     const stream = bound.host
       .get("connectors")
@@ -498,6 +503,7 @@ export class PersonalForwardService {
       streamLabel: stream?.label,
       headLabel: head?.conversation_label,
       headKind: head?.conversation_kind,
+      headUnitKind: head?.unit_kind,
     });
   }
 

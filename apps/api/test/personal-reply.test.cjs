@@ -21,6 +21,24 @@ describe("conversationStampForReply", () => {
     );
   });
 
+  it("copies unit_kind from the quoted record before the list head", () => {
+    assert.deepEqual(
+      conversationStampForReply({
+        target: "order-1",
+        quotedUnitKind: "crm.order_review",
+        headUnitKind: "crm.lead_followup",
+      }),
+      { unit_kind: "crm.order_review" },
+    );
+    assert.deepEqual(
+      conversationStampForReply({
+        target: "order-1",
+        headUnitKind: "crm.lead_followup",
+      }),
+      { unit_kind: "crm.lead_followup" },
+    );
+  });
+
   it("ignores a raw chat id so the list does not title itself as oc_…", () => {
     assert.equal(
       usableConversationName("oc_e317d1b82c1bc75e271b0e6a614f3900", "oc_e317d1b82c1bc75e271b0e6a614f3900"),

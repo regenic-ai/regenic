@@ -8,7 +8,7 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 
 ## 分层
 
-渠道 wire、共用语义和执行分属不同层。契约见 [RFC 0009](rfcs/0009-work-orchestration.md)。
+渠道 wire、共用语义和执行分属不同层。协议见 [RFC 0009](rfcs/0009-work-orchestration.md)。
 
 ```text
 L0 协议插件     只懂飞书 / Slack / CRM / DSH 的 wire
@@ -20,13 +20,13 @@ L5 处理         策略才开 WorkItem（可有可无）
 L6 执行         TaskExecutor 插件（DSH / Cursor / 内部）
 ```
 
-连接器安装停在 L0，不是一条 lane。同一个飞书安装可以同时放出单聊（`utterance` + `user` + `chat`）、群机器人（`utterance` + `assistant` + `chat`）和审批（`task` + `ticket`）。L4 由内核投影。L5 只在 `task` 或满足 AutoStart Specification 的 Recipe 上开 Job（Session 上可以有多张，列表只取前台脸）。多数人聊不会变成 WorkItem。
+连接器安装停在 L0，不是一条 lane。同一个飞书安装可以同时放出单聊（`utterance` + `user` + `chat`）、群机器人（`utterance` + `assistant` + `chat`）和审批（`task` + `ticket`）。L4 由内核投影。L5 只在 `task` 或满足 AutoStart Specification 的 Recipe 上开 Job（Session 上可以有多张，列表只取前台脸）。多数人聊不会变成 WorkItem。源系统若把工单分成不同类型，连接器在记录上盖不透明 `unit_kind`，Recipe 按相等匹配；这不是新的 L2 / L4 值，也不写在安装上。
 
 发言者（L3）只作用于 `utterance`。Agent 会话里的人仍是 `user`。人群里的机器人仍是 `assistant`。这两件事不写到安装上。
 
-L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTranscript`），或走通用 HTTP 执行器合同。完成看 `WaitStatus`，不看气泡。执行器在引擎页安装：本机连接器或 HTTP API。默认开源树种子一条 absentee `dsh` 本机绑定。Cursor 后接。私有 Agent OS 只留在内部插件包或经 HTTP 调用。
+L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTranscript`），或走通用 HTTP 执行器协议。完成看 `WaitStatus`，不看气泡。执行器在引擎页安装：本机连接器或 HTTP API。默认开源树种子一条 absentee `dsh` 本机绑定。Cursor 后接。私有 Agent OS 只留在内部插件包或经 HTTP 调用。
 
-内核和桌面读 `record_class`、`thread_facet`、`attention`、`work`，不按连接器名判断人聊 / Agent / 工单。
+内核和桌面读 `record_class`、`thread_facet`、`unit_kind`、`attention`、`work`，不按连接器名判断人聊 / Agent / 工单，也不解释 `unit_kind` 的字面含义。列表和线程头用 catalog `label` 画类型芯片。
 
 ## 消息怎么走
 
@@ -110,11 +110,11 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 
 每条缝都有定义、提供方和消费者。换一个连接器，不得分叉内核。以后加来源是插件，不是重写产品。
 
-连接器遵守[连接器合同](CONNECTOR.md)。它们翻译；采集服务负责校验、鉴权、去重、存储与审计。见[采集架构](INGESTION_ARCHITECTURE.md)。
+连接器遵守[连接器协议](CONNECTOR.md)。它们翻译；采集服务负责校验、鉴权、去重、存储与审计。见[采集架构](INGESTION_ARCHITECTURE.md)。
 
-## 消息契约
+## 消息协议
 
-收发形状由 `@regenic/domain` 的 `message-contract` 定死。连接器实现这份契约，桌面不另写角色规则。实现规则、端口和现有驱动见[连接器](CONNECTOR.md)。
+收发形状由 `@regenic/domain` 的 `message-contract` 定死。连接器实现这份协议，桌面不另写角色规则。实现规则、端口和现有驱动见[连接器](CONNECTOR.md)。
 
 入库走 `channelRecord()`，surface 跟正文一起走。旧事件没有 surface 时用 `inferLegacySurface()`。本地出站与渠道 history 回声的同一句话只保留一条 Event。
 
@@ -124,7 +124,8 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 
 | 目标 | 机制 |
 | --- | --- |
-| 加来源 | [连接器合同](CONNECTOR.md)；实现 `installCatalog()`；额外包由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载 |
+| 加来源 | [连接器协议](CONNECTOR.md)；实现 `installCatalog()`；额外包由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载 |
+| 加一种工单类型 | 连接器 `subjectCatalog` + 记录盖 `unit_kind`；Recipe 相等匹配。不改内核 |
 | 加发送 | 同一渠道打开发送 |
 | 改「什么算重要」 | 排序器 + 版本化标准 |
 | 普通邮件自动处理 | 绑在标准上的调度策略；这些消息不进入当前工作，每次跳过都记审计 |

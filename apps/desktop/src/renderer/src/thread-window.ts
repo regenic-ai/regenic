@@ -231,6 +231,8 @@ export function sameInboxProps(
     previous.actor_label !== next.actor_label ||
     previous.conversation_label !== next.conversation_label ||
     previous.conversation_kind !== next.conversation_kind ||
+    previous.unit_kind !== next.unit_kind ||
+    previous.unit_kind_label !== next.unit_kind_label ||
     previous.thread_id !== next.thread_id ||
     previous.kind !== next.kind ||
     previous.can_send !== next.can_send ||

@@ -124,6 +124,8 @@ function thread(input: {
     title: null,
     conversation_label: null,
     conversation_kind: null,
+    unit_kind: null,
+    unit_kind_label: null,
     pinned: input.pinned === true,
     hidden: false,
     can_send: true,
@@ -315,6 +317,36 @@ describe("inbox sort", () => {
     assert.equal(next[0]?.conversation_kind, "direct");
     const both = groupInboxThreads([inbound, outbound], previous);
     assert.equal(both[0]?.conversation_kind, "direct");
+  });
+
+  it("keeps a stamped unit_kind on the thread from inbound", () => {
+    const inbound = {
+      ...feishuHead(
+        "in-1",
+        "2026-08-27T17:20:00.000Z",
+        "feishu:oc_abc",
+        "李诗婷",
+      ),
+      direction: "inbound" as const,
+      unit_kind: "crm.order_review",
+      unit_kind_label: "Order review",
+    };
+    const outbound = {
+      ...feishuHead(
+        "out-1",
+        "2026-08-27T17:27:00.000Z",
+        "feishu:oc_abc",
+        "李诗婷",
+      ),
+      unit_kind: "crm.lead_followup",
+      unit_kind_label: "Lead follow-up",
+    };
+    const previous = groupInboxThreads([inbound]);
+    assert.equal(previous[0]?.unit_kind, "crm.order_review");
+    assert.equal(previous[0]?.unit_kind_label, "Order review");
+    const next = groupInboxThreads([outbound], previous);
+    assert.equal(next[0]?.unit_kind, "crm.order_review");
+    assert.equal(next[0]?.unit_kind_label, "Order review");
   });
 
   it("appends into one thread without rebuilding the others", () => {

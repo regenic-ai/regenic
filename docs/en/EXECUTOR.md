@@ -24,8 +24,11 @@ The kernel only sees the `TaskExecutor` port. It does not read
 default open-source tree does not import private HTTP.
 
 A connector is not an executor. A connector stops at L0: it translates one
-channel's wire. An executor is L6: it runs a job. The same plugin package
-may mount both a `ChannelDriver` and a `TaskExecutor` (DSH already does).
+channel's wire and may declare a `unit_kind` vocabulary. An executor is
+L6: it runs a job. Different task types are split by different Recipes
+(or one executor with a different opaque `executor_config`). The
+connector does not pick the executor. The same plugin package may mount
+both a `ChannelDriver` and a `TaskExecutor` (DSH already does).
 Swapping an executor is an installation (or plugin) plus a Recipe choice.
 
 Capabilities are declared on the installation and on `catalog()`. The

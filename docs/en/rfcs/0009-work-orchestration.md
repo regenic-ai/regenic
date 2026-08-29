@@ -91,7 +91,7 @@ type RecordClass = "utterance" | "task" | "status" | "prompt";
 
 Map from `IngestRecord.type`: `task` → `task`; `thread_status` → `status`; `prompt` → `prompt`; `message` / `thread_reply` / missing → `utterance`. An unknown native type is not mapped; it is quarantined and does not open a WorkItem. A connector may hint `thread_facet` on the surface. It must not stamp the install as a lane.
 
-A Recipe with an empty `match` does not match any subject. At least one of `thread_id`, `source`, `record_class`, or `thread_facet` is required.
+A Recipe with an empty `match` does not match any subject. At least one of `thread_id`, `unit_kind`, `source`, `record_class`, or `thread_facet` is required. `unit_kind` is an opaque work-unit type stamped by the connector. It is not `record_class`, and it is not the collaboration `subject_kind` from RFC 0003.
 
 ## 6. Speaker
 
@@ -130,12 +130,13 @@ interface Recipe {
   id: string;
   org_id: string;
   name: string;
-  match: {
-    record_class?: RecordClass;
-    thread_facet?: ThreadFacet;
-    source?: string;
-    thread_id?: string;
-  };
+    match: {
+      record_class?: RecordClass;
+      thread_facet?: ThreadFacet;
+      source?: string;
+      thread_id?: string;
+      unit_kind?: string;
+    };
   trigger: {
     kind: "push" | "pull" | "manual";
     interval_ms?: number;
@@ -163,7 +164,7 @@ Identity is three objects (POSIX session / job / inferior):
 | Job (`WorkItem`) | One work unit, `unit_key` | One item for the life of a thread |
 | Inferior (`WorkRun`) | One execution; sysout stays off the list by default | A user-opened agent chat |
 
-`match` must be specific (`thread_id`, or `record_class=task`, or `source` plus a non-utterance class). Empty, source-only, utterance-only, and facet-only matches cannot be saved.
+`match` must be specific (`thread_id`, or `unit_kind`, or `record_class=task`, or `source` plus a non-utterance class). Empty, source-only, utterance-only, and facet-only matches cannot be saved. `unit_kind` is string equality only. Specificity is `thread_id` > `unit_kind` > `source` > `record_class` > `thread_facet`. The connector declares the vocabulary with `subjectCatalog()`. Ids follow `{source}.{native}`; the kernel does not parse them. A connector must not stamp `recipe_id` on a record.
 
 `trigger` is first-class and separate from match:
 
@@ -280,10 +281,11 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work` (inclu
 
 ## 12. Acceptance
 
-1. Kernel and desktop never classify chat / agent / ticket by connector name.
+1. Kernel and desktop never classify chat / agent / ticket by connector name, and they do not interpret `unit_kind`.
 2. Default open-source build has no private Agent dependency.
 3. Swapping an executor is a plugin + Recipe choice. The Recipes invoke form renders only `catalog().fields` and does not special-case keys.
 4. Sort mode persists across refresh.
 5. A source task is one list row; machine progress lives on that row.
 6. A connector test may name Feishu or DSH. A kernel test of L4/L5/L6 may not.
 7. A job that needs write-back enqueues a payload snapshot. Sent or an explicit skip is `acked`. An expired lease returns to the queue. Three send failures become a visible dead letter. Execution failure is not a delivery row.
+8. Different source task types are split by a connector stamp plus Recipe equality match. The kernel does not branch for CRM.

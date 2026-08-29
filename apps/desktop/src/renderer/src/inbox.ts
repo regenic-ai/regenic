@@ -21,6 +21,8 @@ export interface InboxThread {
   title: string | null;
   conversation_label: string | null;
   conversation_kind: string | null;
+  unit_kind: string | null;
+  unit_kind_label: string | null;
   pinned: boolean;
   hidden: boolean;
   pref_updated_at?: string;
@@ -435,6 +437,8 @@ function buildThread(
       rawId,
     ),
     conversation_kind: threadConversationKind(ordered, previous?.conversation_kind),
+    unit_kind: threadUnitKind(ordered, previous?.unit_kind),
+    unit_kind_label: threadUnitKindLabel(ordered, previous?.unit_kind_label),
     pinned: pref.pinned,
     hidden: pref.hidden,
     pref_updated_at: pref.updated_at,
@@ -714,7 +718,11 @@ function threadListTitle(
 
 function conversationField(
   messages: InboxViewItem[],
-  key: "conversation_label" | "conversation_kind",
+  key:
+    | "conversation_label"
+    | "conversation_kind"
+    | "unit_kind"
+    | "unit_kind_label",
 ): string | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const value = messages[index]?.[key]?.trim();
@@ -748,6 +756,38 @@ function threadConversationKind(
     return previous.trim();
   }
   return conversationField(messages, "conversation_kind");
+}
+
+function threadUnitKind(
+  messages: InboxViewItem[],
+  previous?: string | null,
+): string | null {
+  return threadStampedField(messages, "unit_kind", previous);
+}
+
+function threadUnitKindLabel(
+  messages: InboxViewItem[],
+  previous?: string | null,
+): string | null {
+  return threadStampedField(messages, "unit_kind_label", previous);
+}
+
+function threadStampedField(
+  messages: InboxViewItem[],
+  key: "unit_kind" | "unit_kind_label",
+  previous?: string | null,
+): string | null {
+  const inbound = conversationField(
+    messages.filter((item) => item.direction === "inbound"),
+    key,
+  );
+  if (inbound) {
+    return inbound;
+  }
+  if (previous?.trim()) {
+    return previous.trim();
+  }
+  return conversationField(messages, key);
 }
 
 function usableConversationName(

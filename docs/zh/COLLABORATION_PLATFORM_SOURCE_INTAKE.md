@@ -1,4 +1,4 @@
-# 协作平台来源契约收集表
+# 协作平台来源协议收集表
 
 - **English:** [../en/COLLABORATION_PLATFORM_SOURCE_INTAKE.md](../en/COLLABORATION_PLATFORM_SOURCE_INTAKE.md)
 - **相关：** [协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)

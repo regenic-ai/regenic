@@ -1,10 +1,12 @@
 import {
+  readSubjectCatalog,
   sourceLabelFromCatalog,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorInstallationStatus,
   type DriverInstallCatalog,
   type IngestAttempt,
+  type UnitKindEntry,
 } from "@regenic/domain";
 import {
   CONNECTOR_INSTALL_DOCS,
@@ -50,6 +52,7 @@ export interface ConnectorSetupStep {
 
 export interface ConnectorCatalogItem {
   connector_type: string;
+  source: string;
   title: string;
   description: string;
   credential_hint: string;
@@ -60,6 +63,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  unit_kinds: UnitKindEntry[];
   docs: CatalogDocRef[];
 }
 
@@ -77,6 +81,7 @@ export interface CatalogReadiness {
 
 interface CatalogDefinition {
   connector_type: string;
+  source: string;
   title: string;
   description: string;
   credential_hint: string;
@@ -84,6 +89,7 @@ interface CatalogDefinition {
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
   setup_steps: ConnectorSetupStep[];
+  unit_kinds: UnitKindEntry[];
   docs: CatalogDocRef[];
 }
 
@@ -93,20 +99,22 @@ export function catalogFromDrivers(
 ): CatalogDefinition[] {
   return drivers.list().flatMap((driver) => {
     const catalog = driver.installCatalog?.({ env });
-    return catalog ? [catalogDefinitionFromDriver(driver.connector_type, catalog)] : [];
+    return catalog ? [catalogDefinitionFromDriver(driver, catalog)] : [];
   });
 }
 
 function catalogDefinitionFromDriver(
-  connectorType: string,
+  driver: Pick<ChannelDriver, "connector_type" | "source" | "subjectCatalog">,
   catalog: DriverInstallCatalog,
 ): CatalogDefinition {
   return {
-    connector_type: connectorType,
+    connector_type: driver.connector_type,
+    source: driver.source,
     title: catalog.title,
     description: catalog.description,
     credential_hint: catalog.credential_hint,
     singleton: catalog.singleton,
+    unit_kinds: readSubjectCatalog(driver.subjectCatalog?.()).kinds,
     fields: (catalog.fields ?? []).map((field) => ({
       key: field.key,
       label: field.label,

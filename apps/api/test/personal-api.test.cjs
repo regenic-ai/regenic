@@ -2631,6 +2631,19 @@ describe("personal /v1/me", () => {
       assert.equal(created.trigger.kind, "push");
       assert.equal(created.trigger.coalesce, true);
       assert.equal(created.executor_config.skill, "review");
+      const typed = await (
+        await fetch(`${origin}/v1/me/recipes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "CRM order review",
+            match: { unit_kind: "crm.order_review" },
+            executor_type: "dsh",
+          }),
+        })
+      ).json();
+      assert.equal(typed.match.unit_kind, "crm.order_review");
+      assert.equal(typed.trigger.kind, "push");
       const pullMissing = await fetch(`${origin}/v1/me/recipes`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2661,10 +2674,14 @@ describe("personal /v1/me", () => {
       assert.ok(pulled.next_run_at);
       assert.equal(created.executor_config.prompt, "Reply with a decision.");
       const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
-      assert.equal(recipes.length, 2);
+      assert.equal(recipes.length, 3);
       const listed = recipes.find((recipe) => recipe.name === "Feishu tasks");
       assert.equal(listed.executor_config.prompt, "Reply with a decision.");
       assert.equal(listed.include_context, true);
+      assert.equal(
+        recipes.find((recipe) => recipe.name === "CRM order review")?.match.unit_kind,
+        "crm.order_review",
+      );
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",

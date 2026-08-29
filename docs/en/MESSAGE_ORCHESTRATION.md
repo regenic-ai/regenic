@@ -20,13 +20,13 @@ L5 handling           policy may open a WorkItem (optional)
 L6 execution          TaskExecutor plugin (DSH / Cursor / internal)
 ```
 
-A connector install is L0. It is not a lane. One Feishu install can emit a DM (`utterance` + `user` + `chat`), a group bot (`utterance` + `assistant` + `chat`), and an approval (`task` + `ticket`) on the same wire. The kernel projects L4. Policy opens an L5 Job only for a `task` or a Recipe that satisfies the auto-start Specification. A session may have many jobs; the list shows the foreground face. Most chat never becomes a WorkItem.
+A connector install is L0. It is not a lane. One Feishu install can emit a DM (`utterance` + `user` + `chat`), a group bot (`utterance` + `assistant` + `chat`), and an approval (`task` + `ticket`) on the same wire. The kernel projects L4. Policy opens an L5 Job only for a `task` or a Recipe that satisfies the auto-start Specification. A session may have many jobs; the list shows the foreground face. Most chat never becomes a WorkItem. When a source splits tickets into types, the connector stamps an opaque `unit_kind` on the record and a Recipe equality-matches it. That is not a new L2 / L4 value and not an install attribute.
 
 Speaker (L3) applies only to `utterance`. A person inside an agent session is still `user`. A bot inside a human group is still `assistant`. Those facts do not move to the install.
 
 L6 reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `readTranscript`), or through the generic HTTP executor contract. Completion is `WaitStatus`, not a chat bubble. Executors are installed on the Engine page: a local connector or an HTTP API. The default open-source tree seeds an absentee `dsh` local binding. Cursor follows. A private Agent OS stays an internal plugin package or is called over HTTP.
 
-Kernel and desktop read `record_class`, `thread_facet`, `attention`, and `work`. They do not classify chat / agent / ticket by connector name.
+Kernel and desktop read `record_class`, `thread_facet`, `unit_kind`, `attention`, and `work`. They do not classify chat / agent / ticket by connector name, and they do not interpret the `unit_kind` string. The list and thread header draw a type chip from the catalog `label`.
 
 ## Message flow
 
@@ -125,6 +125,7 @@ Reply, follow, pull, and new conversations go through `ChannelDriverRegistry`: `
 | Goal | Mechanism |
 | --- | --- |
 | Add a source | [Connector contract](CONNECTOR.md); implement `installCatalog()`; extra packages load from `REGENIC_PLUGIN_DIR` or `REGENIC_CHANNEL_PLUGIN` |
+| Add a ticket type | Connector `subjectCatalog` plus a `unit_kind` stamp; Recipe equality match. Do not change the kernel |
 | Add a send path | Same channel, send enabled |
 | Change what counts as important | Ranker plus a versioned standard |
 | Auto-handle ordinary mail | Dispatcher policy bound to a standard; those messages stay outside the current work and every skip is audited |

@@ -11,6 +11,7 @@ import {
   threadLoadedCountCopy,
   threadPaneEmptyCopy,
   conversationKindLabel,
+  unitKindChip,
   listPreview,
   threadFacetLabel,
   threadPreview,
@@ -75,6 +76,8 @@ function thread(
     title: null,
     conversation_label: null,
     conversation_kind: null,
+    unit_kind: null,
+    unit_kind_label: null,
     pinned: false,
     can_send: true,
     await_reply: true,
@@ -519,6 +522,18 @@ describe("thread activity", () => {
     assert.equal(threadFacetLabel("agent"), "Agent");
     assert.equal(conversationKindLabel("direct"), null);
     assert.equal(conversationKindLabel("group"), "Group");
+    assert.equal(
+      unitKindChip({
+        unit_kind: "crm.order_review",
+        unit_kind_label: "Order review",
+      }),
+      "Order review",
+    );
+    assert.equal(
+      unitKindChip({ unit_kind: "crm.order_review", unit_kind_label: null }),
+      "crm.order_review",
+    );
+    assert.equal(unitKindChip({ unit_kind: null, unit_kind_label: null }), null);
     assert.equal(workStatusLabel("open"), null);
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
     assert.equal(workStatusLabel("done"), "Done");

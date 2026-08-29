@@ -25,7 +25,7 @@
 
 - 会议工作流/UI（RFC 0003）。
 - 上下文图谱存储（RFC 0002）。
-- Agent 运行时或 LLM prompt（RFC 0004 只定义 API 契约）。
+- Agent 运行时或 LLM prompt（RFC 0004 只定义 API 协议）。
 
 ## 4. 核心类型
 

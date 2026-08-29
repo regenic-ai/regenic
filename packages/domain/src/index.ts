@@ -35,6 +35,7 @@ export * from "./plugin";
 export * from "./local-network";
 export * from "./record-class";
 export * from "./thread-facet";
+export * from "./unit-kind";
 export * from "./work";
 export * from "./recipe-match";
 export * from "./specification";

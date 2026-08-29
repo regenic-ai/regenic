@@ -179,6 +179,7 @@ export class PersonalReplyService {
       ...(stamp.conversation_kind
         ? { conversation_kind: stamp.conversation_kind }
         : {}),
+      ...(stamp.unit_kind ? { unit_kind: stamp.unit_kind } : {}),
       parent_external_id: quoted?.event.external_id,
       content: toReplyParts({
         text: composed,
@@ -232,7 +233,11 @@ export class PersonalReplyService {
     threadId: string,
     quoted: InboxViewItem | null,
     bound: { installationId: string; host: Host },
-  ): Promise<{ scope_name?: string; conversation_kind?: string }> {
+  ): Promise<{
+    scope_name?: string;
+    conversation_kind?: string;
+    unit_kind?: string;
+  }> {
     const stream = bound.host
       .get("connectors")
       .listStreams(bound.installationId)
@@ -241,9 +246,10 @@ export class PersonalReplyService {
       target,
       quotedLabel: quoted?.conversation_label,
       quotedKind: quoted?.conversation_kind,
+      quotedUnitKind: quoted?.unit_kind,
       streamLabel: stream?.label,
     });
-    if (fromKnown.scope_name) {
+    if (fromKnown.scope_name && fromKnown.unit_kind) {
       return fromKnown;
     }
     const head = (
@@ -257,9 +263,11 @@ export class PersonalReplyService {
       target,
       quotedLabel: quoted?.conversation_label,
       quotedKind: quoted?.conversation_kind,
+      quotedUnitKind: quoted?.unit_kind,
       streamLabel: stream?.label,
       headLabel: head?.conversation_label,
       headKind: head?.conversation_kind,
+      headUnitKind: head?.unit_kind,
     });
   }
 
@@ -342,19 +350,28 @@ export function conversationStampForReply(input: {
   target: string;
   quotedLabel?: string | null;
   quotedKind?: string | null;
+  quotedUnitKind?: string | null;
   streamLabel?: string | null;
   headLabel?: string | null;
   headKind?: string | null;
-}): { scope_name?: string; conversation_kind?: string } {
+  headUnitKind?: string | null;
+}): {
+  scope_name?: string;
+  conversation_kind?: string;
+  unit_kind?: string;
+} {
   const scope_name =
     usableConversationName(input.quotedLabel, input.target) ??
     usableConversationName(input.headLabel, input.target) ??
     usableConversationName(input.streamLabel, input.target);
   const conversation_kind =
     optionalKind(input.quotedKind) ?? optionalKind(input.headKind);
+  const unit_kind =
+    optionalKind(input.quotedUnitKind) ?? optionalKind(input.headUnitKind);
   return {
     ...(scope_name ? { scope_name } : {}),
     ...(conversation_kind ? { conversation_kind } : {}),
+    ...(unit_kind ? { unit_kind } : {}),
   };
 }
 

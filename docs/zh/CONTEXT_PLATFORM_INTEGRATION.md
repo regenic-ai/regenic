@@ -35,7 +35,7 @@ Canonical Event + Blob + revision/tombstone + quarantine
 
 上游平台不能直接写 Event、Blob、Digest、Claim 或 Standard。下游 Agent 不能获得未提交记录、连接器凭据，或超出其证据与 ACL 边界的数据。
 
-## 3. 集成契约
+## 3. 集成协议
 
 ### 3.1 上游来源适配器
 
@@ -55,7 +55,7 @@ Canonical Event + Blob + revision/tombstone + quarantine
 
 ## 4. 交付任务
 
-1. **来源契约发现：** 使用[来源契约收集表](COLLABORATION_PLATFORM_SOURCE_INTAKE.md)收集有代表性的 Teamily 导出或 API payload、权限模型、分页行为、编辑/删除语义和 Agent 回合标识。这是硬前置条件；不能从营销材料猜测私有协议。
+1. **来源协议发现：** 使用[来源协议收集表](COLLABORATION_PLATFORM_SOURCE_INTAKE.md)收集有代表性的 Teamily 导出或 API payload、权限模型、分页行为、编辑/删除语义和 Agent 回合标识。这是硬前置条件；不能从营销材料猜测私有协议。
 2. **Teamily 导出适配器：** 为已批准 payload 添加 canonical fixture 与导入 profile。覆盖 chat、thread、人类/Agent actor、文档/工作流输出、编辑、删除、重放和坏记录隔离。
 3. **Teamily 增量连接器：** 只有得到稳定 API 访问后，才添加有界 poll 或 webhook，并通过 conformance suite。
 4. **Evidence Bundle 端口：** 定义 consumer identity、用途、证据列表和按策略过滤的发布。先实现本地 JSONL driver，再考虑直连 Teamily API driver。

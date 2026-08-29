@@ -19,7 +19,7 @@ Issue: [#1](https://github.com/regenic-ai/regenic/issues/1)
 - [x] 与 0002（standard 实体 id）、0003（缺口→提案）、0004（引用钉死）无冲突
 - [x] §9 待决问题已关闭或显式推迟并指定负责人
 
-**强制核对契约点：**
+**强制核对协议点：**
 
 1. Book 五段正文 ↔ `condition` / `action` / `acceptance` / `boundary` /
    `revision_trigger`
@@ -37,7 +37,7 @@ Issue: [#2](https://github.com/regenic-ai/regenic/issues/2)
 - [x] Snapshot / ContextBundle 不可变与重放规则清晰
 - [x] 与 0001 / 0003 / 0004 无冲突；方向兼容 0005/0006
 
-**强制核对契约点：**
+**强制核对协议点：**
 
 1. 同一决策 → 经 Snapshot 同一事实集
 2. opinion 未转换前不得作 trial→active 证据

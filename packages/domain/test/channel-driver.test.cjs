@@ -516,6 +516,26 @@ describe("channel driver registry", () => {
     assert.equal(drivers.sourceLabel("extra"), "Extra review");
   });
 
+  it("labels unit_kind from the declared catalog, not the source name", () => {
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "extra-review",
+        source: "extra",
+        matchesThread: () => false,
+        ownsThread: () => false,
+        subjectCatalog: () => ({
+          kinds: [{ id: "extra.order_review", label: "Order review" }],
+        }),
+      }),
+    );
+    assert.equal(
+      drivers.unitKindLabel("extra", "extra.order_review"),
+      "Order review",
+    );
+    assert.equal(drivers.unitKindLabel("extra", "extra.unknown"), "extra.unknown");
+    assert.equal(drivers.unitKindLabel("extra", undefined), undefined);
+  });
+
   it("lists install cards only from drivers that declare them", () => {
     const drivers = new ChannelDriverRegistry()
       .register(

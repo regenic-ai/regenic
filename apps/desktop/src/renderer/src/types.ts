@@ -194,6 +194,8 @@ export interface InboxViewItem {
   pref_updated_at?: string | null;
   conversation_label?: string | null;
   conversation_kind?: string | null;
+  unit_kind?: string | null;
+  unit_kind_label?: string | null;
   actor_label?: string | null;
   activity?: ThreadActivity;
   prompts?: ThreadPrompt[];
@@ -283,6 +285,7 @@ export interface RecipeMatch {
   thread_facet?: ThreadFacet;
   source?: string;
   thread_id?: string;
+  unit_kind?: string;
 }
 
 export type RecipeTriggerKind = "push" | "pull" | "manual";
@@ -322,9 +325,15 @@ export interface RecipeSeed {
   title?: string;
 }
 
+export interface RecipeUnitKindOption {
+  id: string;
+  label: string;
+}
+
 export interface RecipeSourceOption {
   id: string;
   label: string;
+  unit_kinds?: RecipeUnitKindOption[];
 }
 
 export interface RecipeConversationOption {
@@ -395,6 +404,7 @@ export interface CatalogDocRef {
 
 export interface ConnectorCatalogItem {
   connector_type: string;
+  source?: string;
   title: string;
   description: string;
   credential_hint: string;
@@ -405,6 +415,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  unit_kinds?: RecipeUnitKindOption[];
   docs: CatalogDocRef[];
 }
 

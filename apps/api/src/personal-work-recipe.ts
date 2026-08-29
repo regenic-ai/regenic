@@ -3,6 +3,7 @@ import {
   isRecordClass,
   isThreadFacet,
   normalizeRecipeTrigger,
+  normalizeUnitKind,
   recipeMatchIsSpecific,
   recipeSpecificity,
   shouldKeepPullSchedule,
@@ -56,7 +57,7 @@ export function normalizeRecipe(
   } else if (recipeSpecificity(match) === 0 || !recipeMatchIsSpecific(match)) {
     throw new PersonalConnectorError(
       "invalid_config",
-      "Recipe match needs a thread, a task class, or source plus a non-utterance class",
+      "Recipe match needs a thread, a unit kind, a task class, or source plus a non-utterance class",
       400,
     );
   }
@@ -101,10 +102,12 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
       400,
     );
   }
+  const unit_kind = normalizeUnitKind(match.unit_kind);
   return {
     ...(record_class ? { record_class } : {}),
     ...(thread_facet ? { thread_facet } : {}),
     ...(match.source?.trim() ? { source: match.source.trim() } : {}),
     ...(match.thread_id?.trim() ? { thread_id: match.thread_id.trim() } : {}),
+    ...(unit_kind ? { unit_kind } : {}),
   };
 }

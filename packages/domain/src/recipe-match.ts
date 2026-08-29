@@ -7,21 +7,33 @@ export interface RecipeSubject {
   thread_facet: ThreadFacet;
   source: string;
   thread_id: string;
+  unit_kind?: string;
 }
+
+export const RECIPE_MATCH_WEIGHTS = {
+  thread_id: 16,
+  unit_kind: 8,
+  source: 4,
+  record_class: 2,
+  thread_facet: 1,
+} as const;
 
 export function recipeSpecificity(match: RecipeMatch): number {
   let score = 0;
   if (match.thread_id) {
-    score += 8;
+    score += RECIPE_MATCH_WEIGHTS.thread_id;
+  }
+  if (match.unit_kind) {
+    score += RECIPE_MATCH_WEIGHTS.unit_kind;
   }
   if (match.source) {
-    score += 4;
+    score += RECIPE_MATCH_WEIGHTS.source;
   }
   if (match.record_class) {
-    score += 2;
+    score += RECIPE_MATCH_WEIGHTS.record_class;
   }
   if (match.thread_facet) {
-    score += 1;
+    score += RECIPE_MATCH_WEIGHTS.thread_facet;
   }
   return score;
 }
@@ -31,6 +43,9 @@ export function recipeMatches(match: RecipeMatch, subject: RecipeSubject): boole
     return false;
   }
   if (match.thread_id && match.thread_id !== subject.thread_id) {
+    return false;
+  }
+  if (match.unit_kind && match.unit_kind !== subject.unit_kind) {
     return false;
   }
   if (match.source && match.source !== subject.source) {
@@ -50,6 +65,9 @@ export function recipesCanShareSubject(
   right: RecipeMatch,
 ): boolean {
   if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
+    return false;
+  }
+  if (left.unit_kind && right.unit_kind && left.unit_kind !== right.unit_kind) {
     return false;
   }
   if (left.source && right.source && left.source !== right.source) {

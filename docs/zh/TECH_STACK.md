@@ -33,7 +33,7 @@
 | --- | --- |
 | API | NestJS（TypeScript） |
 | 任务 | `JobQueue`：进程内，或 BullMQ + Redis |
-| API 契约 | OpenAPI 3（`@nestjs/swagger`） |
+| API 协议 | OpenAPI 3（`@nestjs/swagger`） |
 | 权威库 | `AuthorityStore`：SQLite 或 PostgreSQL |
 | 对象存储 | `BlobStore` |
 | 渠道接入 | `ChannelConnector`（连接器） |
@@ -170,7 +170,7 @@ blob_store:
 
 ## 9. 渠道接入（`ChannelConnector`）
 
-实现合同：[连接器](CONNECTOR.md)。
+实现协议：[连接器](CONNECTOR.md)。
 
 ```text
 capabilities() → { webhook, poll, backfill, member_sync }

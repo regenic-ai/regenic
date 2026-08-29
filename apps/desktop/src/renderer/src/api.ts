@@ -247,6 +247,8 @@ export async function fetchInbox(
     hidden: item.hidden === true,
     conversation_label: item.conversation_label ?? null,
     conversation_kind: item.conversation_kind ?? null,
+    unit_kind: item.unit_kind ?? null,
+    unit_kind_label: item.unit_kind_label ?? null,
     actor_label: item.actor_label ?? null,
     pref_updated_at: item.pref_updated_at ?? null,
     activity: item.activity,

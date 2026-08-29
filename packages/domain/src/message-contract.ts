@@ -15,6 +15,7 @@ import {
   type ForwardedTo,
 } from "./forward-packet";
 import type { ThreadFacet } from "./thread-facet";
+import { normalizeUnitKind } from "./unit-kind";
 
 export type ChannelId = string;
 export type MessageKind = "user" | "assistant" | "system";
@@ -33,6 +34,7 @@ export interface MessageSurface {
   direction: MessageDirection;
   conversation_label?: string;
   conversation_kind?: string;
+  unit_kind?: string;
   actor_label?: string;
   activity?: ThreadActivity;
   thread_facet?: ThreadFacet;
@@ -175,6 +177,7 @@ export function channelRecord(input: {
   scope_id: string;
   scope_name?: string;
   conversation_kind?: string;
+  unit_kind?: string;
   thread_facet?: ThreadFacet;
   type?: string;
   parent_external_id?: string;
@@ -185,6 +188,7 @@ export function channelRecord(input: {
   forwarded_from?: ForwardedFrom;
   forwarded_to?: ForwardedTo;
 }): IngestRecord {
+  const unitKind = normalizeUnitKind(input.unit_kind);
   const surface: MessageSurface = {
     channel: input.channel,
     kind: input.kind,
@@ -193,6 +197,7 @@ export function channelRecord(input: {
     ...(input.conversation_kind
       ? { conversation_kind: input.conversation_kind }
       : {}),
+    ...(unitKind ? { unit_kind: unitKind } : {}),
     ...(input.actor_label ? { actor_label: input.actor_label } : {}),
     ...(input.activity ? { activity: input.activity } : {}),
     ...(input.turn ? { turn: input.turn } : {}),
@@ -339,6 +344,7 @@ function readSurface(
 ): MessageSurface {
   const conversationLabel = optionalLabel(value.conversation_label);
   const conversationKind = optionalLabel(value.conversation_kind);
+  const unitKind = optionalLabel(value.unit_kind);
   const actorLabel = optionalLabel(value.actor_label);
   const activity = isActivity(value.activity) ? value.activity : undefined;
   const turn = readTurn(value.turn);
@@ -350,6 +356,7 @@ function readSurface(
     direction: value.direction,
     ...(conversationLabel ? { conversation_label: conversationLabel } : {}),
     ...(conversationKind ? { conversation_kind: conversationKind } : {}),
+    ...(unitKind ? { unit_kind: unitKind } : {}),
     ...(actorLabel ? { actor_label: actorLabel } : {}),
     ...(activity ? { activity } : {}),
     ...(value.thread_facet ? { thread_facet: value.thread_facet } : {}),
