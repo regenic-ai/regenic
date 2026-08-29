@@ -410,6 +410,7 @@ export const en = {
   "engine.stopped": "Stopped",
   "engine.org": "org",
   "engine.database": "Database",
+  "engine.pluginDir": "Plugins",
   "engine.currentWork": "Open",
   "engine.livePull": "Live pull",
   "engine.network": "Network",
@@ -418,6 +419,9 @@ export const en = {
   "engine.connectors": "Connectors",
   "engine.connectorsLead":
     "Install or uninstall connectors here. Credentials are read from local environment variables only.",
+  "engine.unsignedPlugins":
+    "{count} extra plugin(s) loaded without a signature. They run in-process with the kernel.",
+  "engine.failedPlugins": "{count} plugin(s) failed to load.",
   "engine.executors": "Executors",
   "engine.executorsLead":
     "Bind a local connector, or call an external executor over HTTP. Recipes pick from enabled executors.",
@@ -449,6 +453,10 @@ export const en = {
   "engine.whatsapp.summary":
     "Imported {completed}/{total} files · {accepted} new · {duplicates} duplicates · {invalid} invalid lines",
   "engine.whatsapp.fileFailures": "{count} files failed. {file}: {message}",
+  "connector.import": "Import files",
+  "connector.importing": "Importing…",
+  "connector.importFailed": "Import failed",
+  "connector.importFileFailures": "{count} files failed. {file}: {message}",
 
   "tray.openConsole": "Open console",
   "tray.quit": "Quit",
@@ -509,6 +517,12 @@ export const en = {
   "connector.saving": "Saving…",
   "connector.editTitle": "Edit {type} sync",
   "connector.installTitle": "Install {title}",
+  "connector.pairingCode": "Pairing code",
+  "connector.pairingHint":
+    "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not a WhatsApp password.",
+  "connector.showPairing": "Show pairing code",
+  "connector.hidePairing": "Hide",
+  "connector.whatsappCredentials": "Pairing code · created on install",
 
   "docs.connector": "Connector spec",
   "docs.executor": "Executor spec",
@@ -938,6 +952,7 @@ export const zh: Record<MessageKey, string> = {
   "engine.stopped": "已停止",
   "engine.org": "组织",
   "engine.database": "数据库",
+  "engine.pluginDir": "插件",
   "engine.currentWork": "进行中",
   "engine.livePull": "自动拉取",
   "engine.network": "网络",
@@ -945,6 +960,9 @@ export const zh: Record<MessageKey, string> = {
   "engine.memory": "内存",
   "engine.connectors": "连接器",
   "engine.connectorsLead": "在这里安装或卸载连接器。凭证只从本机环境变量读取。",
+  "engine.unsignedPlugins":
+    "已加载 {count} 个未签名的额外插件。它们与内核同进程运行。",
+  "engine.failedPlugins": "{count} 个插件未能加载。",
   "engine.executors": "执行器",
   "engine.executorsLead":
     "绑定本机连接器，或用 HTTP 调用外部执行器。规则页只列出已启用的执行器。",
@@ -974,6 +992,10 @@ export const zh: Record<MessageKey, string> = {
   "engine.whatsapp.summary":
     "已导入 {completed}/{total} 个文件 · 新增 {accepted} · 重复 {duplicates} · 无效 {invalid} 行",
   "engine.whatsapp.fileFailures": "{count} 个文件失败。{file}：{message}",
+  "connector.import": "导入文件",
+  "connector.importing": "导入中…",
+  "connector.importFailed": "导入失败",
+  "connector.importFileFailures": "{count} 个文件失败。{file}：{message}",
 
   "tray.openConsole": "打开控制台",
   "tray.quit": "退出",
@@ -1034,6 +1056,12 @@ export const zh: Record<MessageKey, string> = {
   "connector.saving": "保存中…",
   "connector.editTitle": "编辑 {type} 同步",
   "connector.installTitle": "安装 {title}",
+  "connector.pairingCode": "配对码",
+  "connector.pairingHint":
+    "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是 WhatsApp 密码。",
+  "connector.showPairing": "显示配对码",
+  "connector.hidePairing": "隐藏",
+  "connector.whatsappCredentials": "配对码 · 安装时生成",
 
   "docs.connector": "连接器规范",
   "docs.executor": "执行器规范",

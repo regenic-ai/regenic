@@ -5,6 +5,7 @@
 - [Connectors](CONNECTOR.md)
 - [Built-in connectors](CONNECTOR_DRIVERS.md)
 - [Personal WhatsApp Bridge](WHATSAPP_PERSONAL.md)
+- [WhatsApp Web Live Connector](WHATSAPP_WEB_LIVE_CONNECTOR.md)
 - [WhatsApp Personal Test and Acceptance](WHATSAPP_PERSONAL_TESTING.md)
 - [Technology stack](TECH_STACK.md)
 - [Ingestion architecture](INGESTION_ARCHITECTURE.md)

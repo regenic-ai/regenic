@@ -92,6 +92,7 @@ describe("WhatsApp Personal Export v1", () => {
       conversation_label: "Family",
       conversation_kind: "direct",
       actor_label: "Alex, Sr.",
+      type: "message",
     });
     assert.deepEqual(
       records.map((record) => record.external_id),
@@ -119,6 +120,7 @@ describe("WhatsApp Personal Export v1", () => {
       conversation_label: "Team",
       conversation_kind: "group",
       actor_label: "WhatsApp",
+      type: "message",
     });
   });
 

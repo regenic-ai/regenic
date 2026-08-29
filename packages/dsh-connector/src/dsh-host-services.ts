@@ -1,4 +1,4 @@
-import { ConnectorRunner } from "@regenic/domain";
+import { asConnectorHost, ConnectorRunner } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import { DshApiError, type DshSpawn } from "./dsh-cli-client";
 import type { DshFetch } from "./dsh-rpc-client";
@@ -194,10 +194,16 @@ async function connectorForSession(
   options: DshHostServiceOptions,
 ): Promise<DshSessionPollConnector> {
   const env = options.env ?? process.env;
-  const streams = await mountDshSessions(host, installation, env, [sessionId], {
-    fetch: options.fetch,
-    access_token: options.access_token,
-  });
+  const streams = await mountDshSessions(
+    asConnectorHost(host),
+    installation,
+    env,
+    [sessionId],
+    {
+      fetch: options.fetch,
+      access_token: options.access_token,
+    },
+  );
   const connector = streams[0]?.connector ?? host.get("connectors").get(
     installation.id,
     dshStreamKey(sessionId),
@@ -214,10 +220,16 @@ async function mountedSessionEgress(
   sessionId: string,
   options: DshHostServiceOptions,
 ) {
-  await mountDshSessions(host, installation, options.env ?? process.env, [sessionId], {
-    fetch: options.fetch,
-    access_token: options.access_token,
-  });
+  await mountDshSessions(
+    asConnectorHost(host),
+    installation,
+    options.env ?? process.env,
+    [sessionId],
+    {
+      fetch: options.fetch,
+      access_token: options.access_token,
+    },
+  );
   const egress = host.get("egress").get(installation.id, dshStreamKey(sessionId));
   if (!egress) {
     throw new DshApiError("DSH egress adapter failed to mount", "internal");

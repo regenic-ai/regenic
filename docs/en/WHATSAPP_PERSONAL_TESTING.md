@@ -31,7 +31,7 @@ Expected results:
 - Domain message-contract tests pass.
 - WhatsApp tests cover quoted/multiline CSV, Purr `DD/MM/YYYY HH:mm`, stable identity, sender surface, and system events.
 - Authority-store tests prove thread views return only the current revision while `listEvents` retains append-only history.
-- API tests cover JSONL, Purr CSV, read-only inbox items, repeated import, and presentation metadata.
+- API tests cover JSONL, Purr CSV, read-only inbox items, repeated import, presentation metadata, and WhatsApp Web live webhook ingest plus egress replies.
 - Local CLI tests cover JSONL and Purr CSV import/replay.
 - Desktop tests cover sequential multi-file aggregation and failed-file isolation.
 - Desktop typecheck, repository build, and desktop production build pass.
@@ -53,7 +53,8 @@ Team_120363000000000000_g_us.csv
 Contact_15550001_c_us.csv
 ```
 
-Verify through `POST /v1/me/imports/whatsapp`:
+Verify through `POST /v1/me/imports` (`connector_type=whatsapp-web-live`)
+or the `/v1/me/imports/whatsapp` alias:
 
 1. First import accepts the fixture with zero invalid lines.
 2. A repeated import reports duplicates and creates no duplicate current items.

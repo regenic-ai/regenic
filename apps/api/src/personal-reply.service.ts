@@ -8,6 +8,7 @@ import {
   INGEST_SCHEMA_VERSION,
   channelRecord,
   parseConversationThread,
+  asConnectorHost,
   requireReplyPorts,
   toReplyParts,
   type ContentPart,
@@ -157,7 +158,7 @@ export class PersonalReplyService {
       const egress = await ports.bindEgress(
         installation,
         thread,
-        host,
+        asConnectorHost(host),
         process.env,
       );
       receipt = await egress.send({

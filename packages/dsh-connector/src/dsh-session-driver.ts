@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Host } from "@regenic/plugin-host";
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
@@ -7,6 +6,7 @@ import {
   readEnvCredential,
   requireConnectorStream,
   type ChannelDriver,
+  type ConnectorHost,
   type ConnectorInstallation,
   type ConnectorStream,
   type ConversationThread,
@@ -391,7 +391,7 @@ function dshAccessToken(
 }
 
 export async function mountDshSessions(
-  host: Host,
+  host: ConnectorHost,
   installation: {
     id: string;
     org_id: string;
@@ -433,7 +433,7 @@ export async function mountDshSessions(
 }
 
 async function mountInstalled(
-  host: Host,
+  host: ConnectorHost,
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
 ): Promise<ConnectorStream> {

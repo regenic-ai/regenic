@@ -44,10 +44,20 @@ export interface ConnectorPrerequisite {
 
 export interface ConnectorSetupStep {
   title: string;
+  title_zh?: string;
   body?: string;
+  body_zh?: string;
   command?: string;
   href?: string;
+  href_zh?: string;
   visible_when?: ConnectorFieldWhen;
+}
+
+export interface ConnectorImportFiles {
+  accept: string;
+  max_bytes?: number;
+  title?: string;
+  description?: string;
 }
 
 export interface ConnectorCatalogItem {
@@ -63,6 +73,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  import_files?: ConnectorImportFiles;
   unit_kinds: UnitKindEntry[];
   docs: CatalogDocRef[];
 }
@@ -89,6 +100,7 @@ interface CatalogDefinition {
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
   setup_steps: ConnectorSetupStep[];
+  import_files?: ConnectorImportFiles;
   unit_kinds: UnitKindEntry[];
   docs: CatalogDocRef[];
 }
@@ -104,9 +116,13 @@ export function catalogFromDrivers(
 }
 
 function catalogDefinitionFromDriver(
-  driver: Pick<ChannelDriver, "connector_type" | "source" | "subjectCatalog">,
+  driver: Pick<ChannelDriver, "connector_type" | "source" | "subjectCatalog" | "parseImport">,
   catalog: DriverInstallCatalog,
 ): CatalogDefinition {
+  const importFiles =
+    typeof driver.parseImport === "function"
+      ? catalogImportFiles(catalog.import_files)
+      : undefined;
   return {
     connector_type: driver.connector_type,
     source: driver.source,
@@ -135,7 +151,26 @@ function catalogDefinitionFromDriver(
       visible_when: prerequisite.visible_when,
     })),
     setup_steps: catalogSetupSteps(catalog.setup_steps),
+    ...(importFiles ? { import_files: importFiles } : {}),
     docs: CONNECTOR_INSTALL_DOCS,
+  };
+}
+
+function catalogImportFiles(
+  files: DriverInstallCatalog["import_files"],
+): ConnectorImportFiles | undefined {
+  const accept = files?.accept?.replace(/\s+/g, "").trim();
+  if (!accept || !files) {
+    return undefined;
+  }
+  const title = files.title?.replace(/\s+/g, " ").trim();
+  const description = files.description?.replace(/\s+/g, " ").trim();
+  const maxBytes = files.max_bytes;
+  return {
+    accept,
+    ...(typeof maxBytes === "number" && maxBytes > 0 ? { max_bytes: maxBytes } : {}),
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
   };
 }
 
@@ -147,15 +182,21 @@ function catalogSetupSteps(
     if (!title) {
       return [];
     }
+    const titleZh = step.title_zh?.replace(/\s+/g, " ").trim();
     const body = step.body?.replace(/\s+/g, " ").trim();
+    const bodyZh = step.body_zh?.replace(/\s+/g, " ").trim();
     const command = step.command?.trim();
     const href = safeHttpHref(step.href);
+    const hrefZh = safeHttpHref(step.href_zh);
     return [
       {
         title,
+        ...(titleZh ? { title_zh: titleZh } : {}),
         ...(body ? { body } : {}),
+        ...(bodyZh ? { body_zh: bodyZh } : {}),
         ...(command ? { command } : {}),
         ...(href ? { href } : {}),
+        ...(hrefZh ? { href_zh: hrefZh } : {}),
         ...(step.visible_when ? { visible_when: step.visible_when } : {}),
       },
     ];
@@ -242,6 +283,7 @@ export interface EngineInstallationView {
   channel: string;
   channel_label: string;
   last_attempt: IngestAttempt | null;
+  pairing_code?: string;
 }
 
 export function toInstallationView(

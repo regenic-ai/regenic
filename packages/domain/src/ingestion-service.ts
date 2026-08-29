@@ -267,6 +267,19 @@ export class IngestionService {
         if (existing.unresolvedCount > 0 || incoming.unresolvedCount > 0) {
           return this.replayedInspected(record, current, overlayCurrent);
         }
+        if (await this.sameBodySurfaceCorrection(current, merged)) {
+          return {
+            kind: "revise",
+            identity,
+            record: {
+              ...merged,
+              operation: "revise",
+              revision_id: merged.revision_id ?? "surface-correction",
+            },
+            canonical,
+            current,
+          };
+        }
         return {
           kind: "result",
           result: {
@@ -538,6 +551,18 @@ export class IngestionService {
     } catch {
       return undefined;
     }
+  }
+
+  private async sameBodySurfaceCorrection(
+    current: EventRecord,
+    incoming: IngestRecord,
+  ): Promise<boolean> {
+    const incomingText = normalizeUtterance(recordBodyText(incoming));
+    if (!incomingText) {
+      return false;
+    }
+    const existingText = normalizeUtterance(await this.readEventText(current));
+    return incomingText === existingText;
   }
 
   private async existingResolution(

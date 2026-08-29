@@ -31,7 +31,7 @@ pnpm store 已完整且公共 registry 不可用时，安装门禁可改用
 - Domain message-contract 测试通过。
 - WhatsApp 测试覆盖带引号/多行正文的 CSV、Purr `DD/MM/YYYY HH:mm`、稳定 identity、发送者 surface 和系统事件。
 - Authority-store 测试证明线程视图只返回当前 revision，同时 `listEvents` 保留追加式历史。
-- API 测试覆盖 JSONL、Purr CSV、只读 Inbox、重复导入和展示 metadata。
+- API 测试覆盖 JSONL、Purr CSV、只读 Inbox、重复导入、展示 metadata，以及 WhatsApp Web live webhook 入库和 egress 回复。
 - Local CLI 测试覆盖 JSONL 与 Purr CSV 导入/重放。
 - Desktop 测试覆盖多文件顺序汇总和坏文件隔离。
 - Desktop typecheck、仓库构建与桌面生产构建通过。
@@ -53,7 +53,8 @@ Team_120363000000000000_g_us.csv
 Contact_15550001_c_us.csv
 ```
 
-通过 `POST /v1/me/imports/whatsapp` 验证：
+通过 `POST /v1/me/imports`（`connector_type=whatsapp-web-live`）或
+`/v1/me/imports/whatsapp` 别名验证：
 
 1. 第一次导入接受 fixture，坏行数量为零。
 2. 重复导入报告 duplicate，当前视图不产生重复消息。

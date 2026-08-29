@@ -389,10 +389,20 @@ export interface ConnectorPrerequisite {
 
 export interface ConnectorSetupStep {
   title: string;
+  title_zh?: string;
   body?: string;
+  body_zh?: string;
   command?: string;
   href?: string;
+  href_zh?: string;
   visible_when?: ConnectorFieldWhen;
+}
+
+export interface ConnectorImportFiles {
+  accept: string;
+  max_bytes?: number;
+  title?: string;
+  description?: string;
 }
 
 export interface CatalogDocRef {
@@ -415,6 +425,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  import_files?: ConnectorImportFiles;
   unit_kinds?: RecipeUnitKindOption[];
   docs: CatalogDocRef[];
 }
@@ -433,6 +444,7 @@ export interface EngineInstallationView {
   channel?: string;
   channel_label?: string;
   last_attempt: IngestAttempt | null;
+  pairing_code?: string;
 }
 
 export interface CreatedConversation {
@@ -505,6 +517,24 @@ export interface ProcessMemoryView {
   heap_used_bytes: number;
 }
 
+export type PluginOrigin = "first_party" | "extra";
+export type PluginTrust = "core" | "unsigned";
+export type PluginLoadStatus = "loaded" | "skipped" | "failed";
+
+export interface PluginInventoryItem {
+  id: string;
+  spec: string;
+  version: string | null;
+  display_name: string | null;
+  origin: PluginOrigin;
+  trust: PluginTrust;
+  status: PluginLoadStatus;
+  path: string | null;
+  drivers: string[];
+  executors: string[];
+  error: string | null;
+}
+
 export interface PersonalEngineView {
   kernel: "running" | "stopped";
   org_id: string;
@@ -517,6 +547,8 @@ export interface PersonalEngineView {
   catalog: ConnectorCatalogItem[];
   executor_installations: EngineExecutorView[];
   executor_catalog: ExecutorKindCatalogItem[];
+  plugins?: PluginInventoryItem[];
+  plugin_dir?: string | null;
 }
 
 export interface StoreView {
@@ -570,10 +602,13 @@ export interface ForwardView {
   truncated?: boolean;
 }
 
-export interface WhatsAppImportView {
+export interface ConnectorImportView {
   file_hash: string;
   accepted_count: number;
   duplicate_count: number;
   invalid_line_count: number;
-  errors: Array<{ line: number; code: string; message: string }>;
+  errors: Array<{ line?: number; code?: string; message: string }>;
 }
+
+/** @deprecated Use ConnectorImportView. */
+export type WhatsAppImportView = ConnectorImportView;

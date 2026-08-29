@@ -1,10 +1,12 @@
 import type { Host } from "@regenic/plugin-host";
+import { asConnectorHost, type ConnectorHost } from "./connector-host";
 import type { DeliveryReceipt, RegisteredEgress } from "./egress";
 import { CHANNELS, channelLabel } from "./message-contract";
 import type {
   ChannelConnector,
   ConnectorInstallation,
   ConnectorSourceMode,
+  IngestBatch,
   NewConnectorInstallation,
 } from "./ingestion";
 import type {
@@ -147,10 +149,36 @@ export interface DriverCatalogPrerequisite {
 
 export interface DriverCatalogSetupStep {
   title: string;
+  title_zh?: string;
   body?: string;
+  body_zh?: string;
   command?: string;
   href?: string;
+  href_zh?: string;
   visible_when?: DriverCatalogFieldWhen;
+}
+
+/** Optional file import the Engine card can offer without a per-channel API. */
+export interface DriverImportFiles {
+  accept: string;
+  max_bytes?: number;
+  title?: string;
+  description?: string;
+}
+
+export interface ConnectorImportInput {
+  content: string;
+  file_name?: string;
+  org_id: string;
+  local_principal_id: string;
+  received_at: string;
+  existing_external_ids?: readonly string[];
+}
+
+export interface ConnectorImportParseResult {
+  file_hash: string;
+  batches: IngestBatch[];
+  errors: Array<{ line?: number; code?: string; message: string }>;
 }
 
 export interface DriverInstallCatalog {
@@ -170,6 +198,10 @@ export interface DriverInstallCatalog {
    * The desktop does not hard-code steps per connector type.
    */
   setup_steps?: DriverCatalogSetupStep[];
+  /**
+   * File picker on the Engine card. The desktop does not hard-code importers.
+   */
+  import_files?: DriverImportFiles;
   instance_label?: string;
   instance_detail_key?: string;
 }
@@ -222,7 +254,8 @@ export class ChannelDriverError extends Error {
       | "sync_failed"
       | "send_failed"
       | "unsupported_channel"
-      | "no_sender",
+      | "no_sender"
+      | "throttled",
     message: string,
   ) {
     super(message);
@@ -262,33 +295,54 @@ export interface ChannelDriverCore {
 export interface ChannelSourcePort {
   resolveStreams(
     installation: ConnectorInstallation,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
     options?: ResolveStreamsOptions,
   ): Promise<ConnectorStream[]>;
   resolveThreadStream(
     installation: ConnectorInstallation,
     thread: ConversationThread,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<ConnectorStream>;
 }
 
 /** Optional send / create. Absent means the kernel returns 501. */
+export interface EgressQueueItem {
+  id: string;
+  thread_id: string;
+  chat_id: string;
+  text: string;
+  send_now: boolean;
+  delay_ms: number;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface ChannelSinkPort {
   createThread(
     installation: ConnectorInstallation,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
     options?: { cwd?: string; text?: string },
   ): Promise<ConversationThread>;
   bindEgress(
     installation: ConnectorInstallation,
     thread: ConversationThread,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<RegisteredEgress>;
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt): string;
+  /**
+   * Optional drain for adapters that cannot write the channel in-process
+   * (a local browser extension). The kernel exposes this as a generic
+   * connector egress queue, not a per-channel API.
+   */
+  listEgressQueue?(installation: ConnectorInstallation): EgressQueueItem[];
+  ackEgressQueue?(
+    installation: ConnectorInstallation,
+    id: string,
+  ): { acknowledged: boolean };
 }
 
 export type WebhookConnector = Pick<
@@ -305,13 +359,19 @@ export interface ChannelDriver
    */
   bindWebhook?(
     installation: ConnectorInstallation,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<WebhookConnector>;
   /**
    * Install card. Absent means this driver does not appear in Engine.
    */
   installCatalog?(input?: { env?: NodeJS.ProcessEnv }): DriverInstallCatalog;
+  /**
+   * Translate a user-picked file into ingest batches. Optional.
+   * Declared together with `installCatalog().import_files`. The kernel
+   * writes Events; the driver does not.
+   */
+  parseImport?(input: ConnectorImportInput): ConnectorImportParseResult | Promise<ConnectorImportParseResult>;
   /** Optional aliases for write-back. Kernel matches these exactly. */
   writeBackLabels?(label: string): string[];
   /**
@@ -334,38 +394,38 @@ export interface ChannelDriver
   listPrompts?(
     installation: ConnectorInstallation,
     thread: ConversationThread,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<ThreadPrompt[]>;
   answerPrompt?(
     installation: ConnectorInstallation,
     thread: ConversationThread,
     answer: PromptAnswer,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<{ accepted: boolean }>;
   readAttention?(
     installation: ConnectorInstallation,
     threads: ThreadAttentionQuery[],
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<Map<string, ThreadAttention>>;
   ackAttention?(
     installation: ConnectorInstallation,
     thread: ConversationThread,
     ack: AttentionAck,
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<void>;
   readReceipts?(
     installation: ConnectorInstallation,
     threads: ThreadReceiptQuery[],
-    host: Host,
+    host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<Map<string, MessageReceipt>>;
   surfaceGeneration?(
     installation: ConnectorInstallation,
-    host: Host,
+    host: ConnectorHost,
   ): string;
 }
 
@@ -713,7 +773,7 @@ export class ChannelDriverRegistry {
   async listPrompts(
     installations: ConnectorInstallation[],
     thread: ConversationThread,
-    host: Host,
+    host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<ThreadPrompt[]> {
     const found = this.findForThread(installations, thread);
@@ -727,7 +787,7 @@ export class ChannelDriverRegistry {
       return await found.driver.listPrompts(
         found.installation,
         thread,
-        host,
+        asConnectorHost(host),
         env,
       );
     } catch {
@@ -738,7 +798,7 @@ export class ChannelDriverRegistry {
   async listPromptsForThreads(
     installations: ConnectorInstallation[],
     threads: ConversationThread[],
-    host: Host,
+    host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<Map<string, ThreadPrompt[]>> {
     const prompts = new Map<string, ThreadPrompt[]>();
@@ -757,7 +817,7 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
     answer: PromptAnswer,
-    host: Host,
+    host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<{ accepted: boolean }> {
     const found = this.findForThread(installations, thread);
@@ -770,9 +830,10 @@ export class ChannelDriverRegistry {
         "This conversation cannot answer a live prompt",
       );
     }
+    const drivers = asConnectorHost(host);
     const listed = found.driver.listPrompts
       ? await found.driver
-          .listPrompts(found.installation, thread, host, env)
+          .listPrompts(found.installation, thread, drivers, env)
           .catch(() => [] as ThreadPrompt[])
       : [];
     const prompt = listed.find((item) => item.prompt_id === answer.prompt_id);
@@ -783,7 +844,7 @@ export class ChannelDriverRegistry {
         ...answer,
         answers: normalizePromptAnswers(prompt?.questions ?? [], answer.answers),
       },
-      host,
+      drivers,
       env,
     );
   }
@@ -791,7 +852,7 @@ export class ChannelDriverRegistry {
   async readAttention(
     installations: ConnectorInstallation[],
     threads: ThreadAttentionQuery[],
-    host: Host,
+    host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<Map<string, ThreadAttention>> {
     const attention = new Map<string, ThreadAttention>();
@@ -828,7 +889,7 @@ export class ChannelDriverRegistry {
           const part = await group.driver.readAttention?.(
             group.installation,
             group.threads,
-            host,
+            asConnectorHost(host),
             env,
           );
           if (!part) {
@@ -849,7 +910,7 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
     ack: AttentionAck,
-    host: Host,
+    host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<void> {
     const found = this.findForThread(installations, thread);
@@ -864,7 +925,7 @@ export class ChannelDriverRegistry {
         found.installation,
         thread,
         ack,
-        host,
+        asConnectorHost(host),
         env,
       );
     } catch {
@@ -875,7 +936,7 @@ export class ChannelDriverRegistry {
   async readReceipts(
     installations: ConnectorInstallation[],
     threads: ThreadReceiptQuery[],
-    host: Host,
+    host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<Map<string, MessageReceipt>> {
     const receipts = new Map<string, MessageReceipt>();
@@ -915,7 +976,7 @@ export class ChannelDriverRegistry {
           const part = await group.driver.readReceipts?.(
             group.installation,
             group.threads,
-            host,
+            asConnectorHost(host),
             env,
           );
           if (!part) {
@@ -934,8 +995,9 @@ export class ChannelDriverRegistry {
 
   surfaceGeneration(
     installations: ConnectorInstallation[],
-    host: Host,
+    host: Host | ConnectorHost,
   ): string {
+    const drivers = asConnectorHost(host);
     return formatSurfaceGeneration(
       this.list().flatMap((driver) =>
         installations
@@ -944,7 +1006,9 @@ export class ChannelDriverRegistry {
               installation.connector_type === driver.connector_type &&
               installation.status === "enabled",
           )
-          .map((installation) => driver.surfaceGeneration?.(installation, host)),
+          .map((installation) =>
+            driver.surfaceGeneration?.(installation, drivers),
+          ),
       ),
     );
   }

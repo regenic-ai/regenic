@@ -6,13 +6,14 @@ const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const {
   createHttpApp,
+  enablePersonalCors,
   listenHttpApp,
   HTTP_KEEP_ALIVE_TIMEOUT_MS,
   HTTP_HEADERS_TIMEOUT_MS,
 } = require("../dist/http-app");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
+const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord, setKeychainStoreForTests } = require("@regenic/domain");
 const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
 const { decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
 const {
@@ -27,6 +28,7 @@ const previousEnv = {};
 
 afterEach(async () => {
   restoreEnv();
+  setKeychainStoreForTests();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true })));
 });
 
@@ -347,6 +349,15 @@ async function seedHostedWork(authority, input) {
 }
 
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
+  const secrets = new Map();
+  setKeychainStoreForTests({
+    write(service, account, secret) {
+      secrets.set(`${service}:${account}`, secret);
+    },
+    async read(service, account) {
+      return secrets.get(`${service}:${account}`);
+    },
+  });
   setEnv({
     REGENIC_DATABASE: database,
     REGENIC_BLOB_ROOT: blobRoot,
@@ -355,9 +366,13 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     LISTEN_HOST: "127.0.0.1",
     REGENIC_CONNECTOR_PULL_MS: "0",
     REGENIC_PERSONAL_API: undefined,
+    REGENIC_PERSONAL_LIVE_KEY: undefined,
+    HOME: join(database, ".."),
+    USERPROFILE: join(database, ".."),
     ...extraEnv,
   });
   const app = await createHttpApp({ logger: false });
+  enablePersonalCors(app);
   await listenHttpApp(app, 0, "127.0.0.1");
   return { app, origin: await app.getUrl() };
 }
@@ -636,7 +651,7 @@ describe("personal /v1/me", () => {
       const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.deepEqual(
         light.catalog.map((item) => item.connector_type),
-        ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent"],
+        ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent", "whatsapp-web-live"],
       );
       assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
@@ -732,6 +747,224 @@ describe("personal /v1/me", () => {
       const item = inbox.find((entry) => entry.event.source === "whatsapp-personal");
       assert.equal(item.body_text, "Please call me.");
       assert.equal(item.can_send, false);
+
+      const generic = await fetch(`${origin}/v1/me/imports`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "whatsapp-web-live",
+          content: `${JSON.stringify({
+            schema_version: "1.0",
+            kind: "whatsapp_personal_message",
+            message_id: "message-2",
+            chat_id: "chat-1",
+            sender_id: "contact-1",
+            direction: "incoming",
+            sent_at: "2026-08-21T00:01:00.000Z",
+            text: "Second line.",
+          })}\n`,
+        }),
+      });
+      const genericBody = await generic.json();
+      assert.equal(generic.status, 201, JSON.stringify(genericBody));
+      assert.equal(genericBody.accepted_count, 1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("ingests WhatsApp Web live messages through the connector webhook and replies through egress", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_PERSONAL_LIVE_KEY: "live-key",
+    });
+    const auth = { "content-type": "application/json", "x-regenic-live-key": "live-key" };
+    try {
+      const installed = await (
+        await fetch(`${origin}/v1/me/connectors`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ connector_type: "whatsapp-web-live" }),
+        })
+      ).json();
+      assert.equal(installed.connector_type, "whatsapp-web-live");
+      assert.equal(installed.can_reply, true);
+      assert.equal(typeof installed.pairing_code, "string");
+      assert.ok(installed.pairing_code.length >= 16);
+      const installId = installed.id;
+      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      assert.equal(
+        JSON.stringify(engine).includes(installed.pairing_code),
+        false,
+      );
+
+      const unauthorized = await fetch(`${origin}/v1/me/connectors/${installId}/webhook`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "chrome-extension://abcdefghijklmnop" },
+        body: JSON.stringify({ type: "poll" }),
+      });
+      assert.equal(unauthorized.status, 400);
+
+      const skippedSlug = await fetch(`${origin}/v1/me/connectors/${installId}/webhook`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          chat_id: "example-contact",
+          chat_title: "Example Contact",
+          message_id: "slug-1",
+          text: "Should not ingest a title slug",
+          from_me: false,
+        }),
+      });
+      const skippedBody = await skippedSlug.json();
+      assert.equal(skippedSlug.status, 201, JSON.stringify(skippedBody));
+      assert.equal(skippedBody.accepted_count, 0);
+
+      const accepted = await fetch(`${origin}/v1/me/connectors/${installId}/webhook`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          chat_id: "15550001@c.us",
+          chat_title: "Example Contact",
+          message_id: "live-1",
+          sender_id: "15550001@c.us",
+          sender_name: "Example Contact",
+          text: "Are you there?",
+          timestamp: "2026-08-21T00:00:00.000Z",
+          from_me: false,
+        }),
+      });
+      const acceptedBody = await accepted.json();
+      assert.equal(accepted.status, 201, JSON.stringify(acceptedBody));
+      assert.equal(acceptedBody.accepted_count, 1);
+
+      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const item = inbox.find((entry) => entry.event.external_id === "15550001@c.us:live-1");
+      assert.equal(item.body_text, "Are you there?");
+      assert.equal(item.direction, "inbound");
+      assert.equal(item.actor_label, "Example Contact");
+      assert.equal(item.conversation_label, "Example Contact");
+      assert.equal(item.conversation_kind, "direct");
+      assert.equal(item.can_send, true);
+      assert.equal(item.event.source, "whatsapp-personal");
+
+      const replied = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "whatsapp-personal:15550001@c.us",
+          text: "Draft reply",
+        }),
+      });
+      const repliedBody = await replied.json();
+      assert.equal(replied.status, 201, JSON.stringify(repliedBody));
+      assert.equal(repliedBody.item.event.external_id.startsWith("15550001@c.us:out:"), true);
+
+      const commands = await (
+        await fetch(`${origin}/v1/me/connectors/${installId}/egress`, {
+          headers: { "x-regenic-live-key": "live-key" },
+        })
+      ).json();
+      assert.equal(commands.commands.length, 1);
+      assert.equal(commands.commands[0].chat_id, "15550001@c.us");
+      assert.equal(commands.commands[0].text, "Draft reply");
+      assert.equal(commands.commands[0].send_now, true);
+
+      const ack = await fetch(
+        `${origin}/v1/me/connectors/${installId}/egress/${commands.commands[0].id}/ack`,
+        { method: "POST", headers: { "x-regenic-live-key": "live-key" } },
+      );
+      assert.equal(ack.status, 201);
+      const afterAck = await (
+        await fetch(`${origin}/v1/me/connectors/${installId}/egress`, {
+          headers: { "x-regenic-live-key": "live-key" },
+        })
+      ).json();
+      assert.equal(afterAck.commands.length, 0);
+
+      for (let index = 0; index < 100; index += 1) {
+        const queuedAtCapacity = await fetch(`${origin}/v1/me/replies`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            thread_id: `whatsapp-personal:queue-${index}@c.us`,
+            text: `Draft ${index}`,
+          }),
+        });
+        assert.equal(queuedAtCapacity.status, 201, `queue ${index}`);
+      }
+      const queueFull = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "whatsapp-personal:queue-overflow@c.us",
+          text: "Overflow draft",
+        }),
+      });
+      assert.equal(queueFull.status, 429);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("requires a configured live key for WhatsApp Web webhook browser origins", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const installed = await (
+        await fetch(`${origin}/v1/me/connectors`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ connector_type: "whatsapp-web-live" }),
+        })
+      ).json();
+      const webhook = `${origin}/v1/me/connectors/${installed.id}/webhook`;
+      const body = JSON.stringify({ type: "poll" });
+
+      const browserPage = await fetch(webhook, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://web.whatsapp.com" },
+        body,
+      });
+      assert.equal(browserPage.status, 400);
+
+      const extensionPage = await fetch(webhook, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "chrome-extension://abcdefghijklmnop" },
+        body,
+      });
+      assert.equal(extensionPage.status, 400);
+
+      const localCli = await fetch(webhook, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      assert.equal(localCli.status, 201);
+
+      const revealed = await (
+        await fetch(`${origin}/v1/me/connectors/${installed.id}/pairing-code`)
+      ).json();
+      assert.equal(typeof revealed.pairing_code, "string");
+      const paired = await fetch(webhook, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "chrome-extension://abcdefghijklmnop",
+          "x-regenic-live-key": revealed.pairing_code,
+        },
+        body,
+      });
+      assert.equal(paired.status, 201);
+
+      const egress = await fetch(`${origin}/v1/me/connectors/${installed.id}/egress`, {
+        headers: { origin: "chrome-extension://abcdefghijklmnop" },
+      });
+      assert.equal(egress.status, 401);
     } finally {
       await app.close();
     }
@@ -1376,7 +1609,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.installations[0].can_reply, false);
       assert.equal(engine.installations[0].can_create, false);
       assert.equal(engine.installations[0].last_attempt, null);
-      assert.equal(engine.catalog.length, 4);
+      assert.equal(engine.catalog.length, 5);
       assert.equal(engine.catalog[0].connector_type, "slack-channel");
       assert.equal(engine.catalog[0].installed, true);
       assert.equal(engine.catalog[0].prerequisites[0].key, "REGENIC_SLACK_TOKEN");
@@ -1402,7 +1635,26 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[3].fields[1].options[0].value, "composer-2.5");
       assert.equal(engine.catalog[3].prerequisites[0].key, "CURSOR_API_KEY");
       assert.equal(engine.catalog[3].prerequisites[0].required, false);
+      assert.equal(engine.catalog[4].connector_type, "whatsapp-web-live");
+      assert.equal(engine.catalog[4].installed, false);
+      assert.equal(engine.catalog[4].singleton, true);
+      assert.equal(engine.catalog[4].setup_ready, true);
+      assert.deepEqual(engine.catalog[4].prerequisites, []);
+      assert.match(engine.catalog[4].credential_hint, /Pairing code/);
+      assert.equal(engine.catalog[4].setup_steps[0].title, "Install this connector");
+      assert.equal(engine.catalog[4].import_files.accept.includes(".csv"), true);
+      assert.equal(engine.catalog[4].import_files.max_bytes, 20 * 1024 * 1024);
+      assert.equal(engine.catalog[0].import_files, undefined);
       assert.equal(engine.catalog[0].singleton, false);
+      const firstParty = engine.plugins.filter((item) => item.origin === "first_party");
+      assert.equal(firstParty.length, 5);
+      assert.ok(firstParty.every((item) => item.trust === "core" && item.status === "loaded"));
+      assert.equal(typeof engine.plugin_dir, "string");
+      const listed = await (await fetch(`${origin}/v1/me/plugins`)).json();
+      assert.deepEqual(
+        listed.map((item) => item.id),
+        engine.plugins.map((item) => item.id),
+      );
       assert.equal(
         engine.catalog.some((item) => item.connector_type.startsWith("crm-")),
         false,
@@ -1631,7 +1883,7 @@ describe("personal /v1/me", () => {
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
     const { app, origin } = await startPersonalApi(database, blobRoot, {
-      REGENIC_CHANNEL_PLUGIN: join(__dirname, "fixtures/extra-review-driver.cjs"),
+      REGENIC_CHANNEL_PLUGIN: join(__dirname, "fixtures/extra-review-driver"),
     });
     try {
       const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
@@ -1640,6 +1892,16 @@ describe("personal /v1/me", () => {
       );
       assert.equal(extra.title, "Extra review");
       assert.equal(extra.singleton, true);
+      assert.equal(
+        engine.plugins.some(
+          (item) =>
+            item.origin === "extra" &&
+            item.trust === "unsigned" &&
+            item.status === "loaded" &&
+            item.drivers.includes("extra-review"),
+        ),
+        true,
+      );
 
       const first = await fetch(`${origin}/v1/me/connectors`, {
         method: "POST",
@@ -2819,6 +3081,7 @@ describe("personal /v1/me", () => {
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],
+          ["connector", "rfc0009"],
         ],
       );
       assert.deepEqual(
@@ -2964,11 +3227,42 @@ describe("http keep-alive behind Envoy", () => {
 });
 
 describe("personal CORS origins", () => {
+  it("does not grant WhatsApp Web CORS access to the personal inbox", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const denied = await fetch(`${origin}/v1/me/inbox`, {
+        headers: { origin: "https://web.whatsapp.com" },
+      });
+      assert.equal(denied.status, 200);
+      assert.equal(denied.headers.get("access-control-allow-origin"), null);
+
+      const loopback = await fetch(`${origin}/v1/me/inbox`, {
+        headers: { origin: "http://127.0.0.1:5173" },
+      });
+      assert.equal(loopback.headers.get("access-control-allow-origin"), "http://127.0.0.1:5173");
+
+      const extension = await fetch(`${origin}/v1/me/inbox`, {
+        headers: { origin: "chrome-extension://abcdefghijklmnop" },
+      });
+      assert.equal(
+        extension.headers.get("access-control-allow-origin"),
+        "chrome-extension://abcdefghijklmnop",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("allows file, null, and loopback, and rejects public sites", () => {
     assert.equal(isAllowedPersonalCorsOrigin("null"), true);
     assert.equal(isAllowedPersonalCorsOrigin("file:///Users/local/index.html"), true);
     assert.equal(isAllowedPersonalCorsOrigin("http://localhost:5173"), true);
     assert.equal(isAllowedPersonalCorsOrigin("http://127.0.0.1:4370"), true);
+    assert.equal(isAllowedPersonalCorsOrigin("chrome-extension://abcdefghijklmnop"), true);
+    assert.equal(isAllowedPersonalCorsOrigin("https://web.whatsapp.com"), false);
     assert.equal(isAllowedPersonalCorsOrigin("https://example.com"), false);
     assert.equal(isAllowedPersonalCorsOrigin("http://127.0.0.1.evil.com"), false);
     assert.equal(isAllowedPersonalCorsOrigin("http://user@127.0.0.1"), false);

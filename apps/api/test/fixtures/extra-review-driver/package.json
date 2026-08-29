@@ -1,0 +1,10 @@
+{
+  "name": "extra-review-driver",
+  "main": "index.cjs",
+  "regenic": {
+    "plugin": true,
+    "contributes": {
+      "drivers": ["extraReviewDriver"]
+    }
+  }
+}

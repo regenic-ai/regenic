@@ -4,6 +4,7 @@ const { slackChannelDriver } = require("@regenic/slack-connector");
 const { dshSessionDriver } = require("@regenic/dsh-connector");
 const { feishuChatDriver } = require("@regenic/feishu-connector");
 const { cursorAgentDriver } = require("@regenic/cursor-connector");
+const { whatsappWebLiveDriver } = require("@regenic/whatsapp-personal");
 const {
   catalogFromDrivers,
   connectorAllowsMultiple,
@@ -20,6 +21,7 @@ function firstParty(env = {}) {
         dshSessionDriver,
         feishuChatDriver,
         cursorAgentDriver,
+        whatsappWebLiveDriver,
       ],
     },
     env,
@@ -88,6 +90,12 @@ describe("connector catalog hints", () => {
     assert.equal(feishu.setup_steps[0].href, "https://github.com/larksuite/cli");
     assert.equal(cursor.setup_steps[0].href, "https://cursor.com/dashboard");
     assert.match(cursor.setup_steps[1].body, /keychain/);
+    const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
+    assert.equal(whatsapp.setup_ready, true);
+    assert.deepEqual(whatsapp.prerequisites, []);
+    assert.equal(whatsapp.setup_steps[0].title, "Install this connector");
+    assert.equal(whatsapp.setup_steps[0].title_zh, "安装这个连接器");
+    assert.match(whatsapp.credential_hint, /Pairing code/);
     const hosted = catalogOf({
       env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
     }).find((item) => item.connector_type === "dsh-session");
@@ -247,14 +255,66 @@ describe("connector catalog hints", () => {
     assert.equal(view.settings.kinds, "group,p2p");
   });
 
+  it("projects file import only when the driver can parseImport", () => {
+    const catalog = catalogOf({ env: {} });
+    const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
+    assert.equal(whatsapp.import_files.accept.includes(".csv"), true);
+    assert.equal(whatsapp.import_files.max_bytes, 20 * 1024 * 1024);
+    assert.equal(whatsapp.import_files.title, "WhatsApp personal export");
+
+    const extras = catalogFromDrivers({
+      list: () => [
+        {
+          connector_type: "extra-review",
+          source: "extra",
+          installCatalog() {
+            return {
+              title: "Extra review",
+              description: "Loaded plugin.",
+              credential_hint: "EXTRA_URL",
+              import_files: { accept: " .csv ", title: "  Extra CSV  " },
+            };
+          },
+        },
+        {
+          connector_type: "extra-import",
+          source: "extra",
+          installCatalog() {
+            return {
+              title: "Extra import",
+              description: "Loaded plugin.",
+              credential_hint: "EXTRA_URL",
+              import_files: { accept: " .csv ", title: "  Extra CSV  " },
+            };
+          },
+          parseImport() {
+            return { file_hash: "", batches: [], errors: [] };
+          },
+        },
+      ],
+    });
+    const catalogWithExtras = connectorCatalog([], { extras });
+    assert.equal(
+      catalogWithExtras.find((item) => item.connector_type === "extra-review")
+        .import_files,
+      undefined,
+    );
+    assert.deepEqual(
+      catalogWithExtras.find((item) => item.connector_type === "extra-import")
+        .import_files,
+      { accept: ".csv", title: "Extra CSV" },
+    );
+  });
+
   it("lists no catalog rows until a driver declares installCatalog", () => {
     const catalog = connectorCatalog([], { env: {} });
     assert.deepEqual(catalog.map((item) => item.connector_type), []);
     assert.deepEqual(
       firstParty({}).map((item) => item.connector_type),
-      ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent"],
+      ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent", "whatsapp-web-live"],
     );
     assert.equal(connectorAllowsMultiple("slack-channel", firstParty()), true);
+    assert.equal(connectorAllowsMultiple("whatsapp-web-live", firstParty()), false);
     assert.equal(connectorAllowsMultiple("extra-review"), true);
   });
 

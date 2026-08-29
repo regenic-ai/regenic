@@ -2803,9 +2803,18 @@ button {
 
 .engine-kernel .action-error,
 .engine-kernel .action-hint,
-.engine-import .action-hint,
-.engine-connectors .action-error {
+.engine-connectors .action-error,
+.engine-connectors .action-hint,
+.connector-import .action-error,
+.connector-import .action-ok {
   margin-top: 12px;
+}
+
+.connector-import {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-top: 10px;
 }
 
 .card-head {
@@ -2955,6 +2964,16 @@ button {
   font-size: 11px;
   overflow-x: auto;
   user-select: text;
+}
+
+.pairing-card {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.pairing-card .muted {
+  margin: 0;
 }
 
 .install-docs {
