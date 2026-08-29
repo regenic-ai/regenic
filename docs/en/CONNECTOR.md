@@ -42,9 +42,27 @@ desktop.
 
 You do not rebuild the API or the desktop to add a source. Every driver
 declares `installCatalog()` and optional `presentInstall` /
-`writeBackLabels` / `subjectCatalog`. The host assembles Engine from
-registered drivers. Extra packages load at process start from
-`REGENIC_PLUGIN_DIR` or `REGENIC_CHANNEL_PLUGIN`. The kernel matches the
+`writeBackLabels` / `subjectCatalog` / `parseImport`. The host assembles
+Engine from registered drivers.
+
+Shipped packages declare themselves with `regenic.plugin`, `id`,
+`displayName`, `engines.regenic`, and `contributes` in `package.json`.
+The kernel scans its own dependencies and loads only the named
+`contributes.drivers` / `contributes.executors` exports. It does not
+scan `Object.values`. Extra packages use the same manifest; missing
+`contributes` is a load failure, not a duck-type fallback. Nest does
+not import driver symbols. Extra packages still load from
+`REGENIC_PLUGIN_DIR` or `REGENIC_CHANNEL_PLUGIN`. New extra types can
+appear later (directory watch, or `POST /v1/me/plugins/reload`).
+`GET /v1/me/plugins` and the Engine view list loaded, skipped, and
+failed packages. Extra packages are unsigned and run in-process. The
+default drop folder is `~/.regenic/plugins` (`REGENIC_PLUGIN_DIR`
+overrides). Engine shows that path. Drivers receive `ConnectorHost`
+(`connectors`, `egress`, `plugin`, `now`, `secrets`) — not `authority`
+or `ingest`. Catalog fields marked `secret` are written to the keychain;
+stored `config` keeps no token. Four starter shapes live in
+`examples/connectors`. An already registered `connector_type` is never
+replaced; restart to pick up a changed package. The kernel matches the
 first result line exactly to a live prompt option.
 
 ## Ports
@@ -57,8 +75,8 @@ exist; the kernel returns 501. Drivers must not stub them.
 | `ChannelDriverCore` | Install, match threads, declare capabilities | Every driver |
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` when `source_mode` is poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` is webhook / hybrid |
-| `ChannelSinkPort` | `bindEgress` / `outboundId` / optional `createThread` | `reply`; `create` also needs `createThread` |
-| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` | To appear on Engine; declare a vocabulary when the source has task types |
+| `ChannelSinkPort` | `bindEgress` / `outboundId` / optional `createThread` / optional generic egress queue | `reply`; `create` also needs `createThread` |
+| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / optional `parseImport` | To appear on Engine; declare a vocabulary when the source has task types; file import when `import_files` is set |
 | Surface | `prompts` / `attention` / `receipts` | Matching capability flags |
 | `EgressAdapter` | Write `ContentPart[]` back to the same source | After `bindEgress` |
 
@@ -80,10 +98,12 @@ Each connector must:
   quarantines the page.
 - Read credentials through `credentials_ref`: `env:NAME`,
   `keychain:SERVICE`, and reserved `oauth:HANDLE` / `app:HANDLE`. The
-  part after the colon is a handle, not a token. The install form does
-  not accept secrets. The kernel reads env refs with
-  `readEnvCredential`. Keychain refs stay with the connector. `oauth` /
-  `app` are not resolved in this phase.
+  part after the colon is a handle, not a token. The install form may
+  collect a `secret` field; the kernel writes it to the keychain and
+  strips it from stored `config`. Drivers read it with
+  `readInstallSecret` / `host.secrets`. The kernel still reads env refs
+  with `readEnvCredential`. `oauth` / `app` are not resolved in this
+  phase.
 - A driver may declare `connector_protocol`. Omit it for `1.0`. The kernel
   skips an unsupported version.
 - Fail independently. One install must not stall another. The tick pulls
@@ -104,6 +124,9 @@ Each connector must:
   `presentInstall` labels the installed row. Optional `writeBackLabels`
   lists exact aliases for write-back. When the source splits work into
   types, implement `subjectCatalog()` and stamp `unit_kind` on records.
+  Optional `parseImport` + `installCatalog().import_files` puts a file
+  picker on that card. The kernel writes Events; the driver only
+  returns ingest batches. Import does not require an installation.
 
 The following are not allowed:
 
@@ -122,8 +145,9 @@ The following are not allowed:
 
 ## Isolation
 
-Connectors stay in-process. The kernel isolates with deadlines and
-failure containment. It does not spawn a child process by default.
+Connectors stay in-process. The kernel isolates with deadlines,
+`ConnectorHost` (no authority / ingest), and failure containment. It
+does not spawn a child process by default.
 
 - The tick pulls enabled installs in parallel. One throw or timeout
   does not stall the others. An install still in `inflight` is skipped
@@ -309,6 +333,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `createThread` | Optional. Required when `create` is true. Absent means the kernel returns 501. When `create_with_task` is set, it receives `options.text` and starts the run; otherwise it opens an empty session and the first user text is a normal send. |
 | `bindEgress` | Optional. Required when `reply` is true. Absent means the kernel returns 501. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
+| `listEgressQueue` / `ackEgressQueue` | Optional. Generic drain for an adapter that cannot write the channel in-process (a local browser extension). Exposed as `GET/POST /v1/me/connectors/:id/egress`, not a per-channel API. |
 | `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. `setup_steps` are the numbered steps in the dialog; the desktop renders them as declared. |
 | `presentInstall` | Optional. Label and detail for an installed row. |
 | `writeBackLabels` | Optional. Exact aliases for a prompt option. The kernel matches the first result line. |
@@ -316,7 +341,8 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `probeCatalog` | Optional. Local service / env readiness and field options. |
 
 `ChannelDriverError` codes: `invalid_config`, `missing_credentials`,
-`sync_failed`, `send_failed`, `unsupported_channel`, `no_sender`.
+`sync_failed`, `send_failed`, `unsupported_channel`, `no_sender`,
+`throttled`.
 
 ```ts
 interface ConnectorStreamPace {
@@ -395,16 +421,19 @@ DSH, Feishu, and extra plugins use that same method. The host does not
 keep a parallel list. `singleton: true` allows one install.
 `presentInstall` labels an installed row; without it the host uses
 `instance_label` / `instance_detail_key`, then the installation id. The
-desktop does not hard-code fields or titles per type. Installations
+desktop does not hard-code fields, titles, or importers per type. Installations
 include `settings` (non-secret config as strings) so the edit form can
 prefill. The engine catalog also carries the driver's `source` and
 `subjectCatalog` vocabulary so the Recipes page can pick `unit_kind`.
 
-Extra packages load once at process start from `REGENIC_PLUGIN_DIR` (each
-child directory with a `package.json`) or `REGENIC_CHANNEL_PLUGIN` (one
-module id or path). The public tree does not name private packages. A
-loaded extra cannot replace an already registered `connector_type`. A
-missing or invalid explicit plugin is skipped and logged.
+Extra packages load from `REGENIC_PLUGIN_DIR` (each child directory with
+a `package.json`) or `REGENIC_CHANNEL_PLUGIN` (one module id or path).
+Each extra `package.json` must name `regenic.contributes`. The public
+tree does not name private packages. A loaded extra cannot replace an
+already registered `connector_type`. New extra types can be
+hot-discovered after start; replacing a loaded package still needs a
+restart. A missing or invalid explicit plugin is recorded as failed or
+skipped and logged. `GET /v1/me/plugins` returns that inventory.
 
 When a finished job writes back, the kernel matches the first result line
 exactly to a live prompt option. `writeBackLabels(label)` may add aliases
@@ -415,6 +444,7 @@ for that option. The host does not keep a synonym list.
 | `fields` | `key`, `label`, required, default, `visible_when`, optional `multiple` + `options` |
 | `prerequisites` | Environment variable or local service, with `ready` and a `hint` |
 | `setup_steps` | Numbered setup: `title`, optional `body` / `command` / `href` / `visible_when`. Rendered above the dialog form; `command` is copyable. The desktop does not hard-code steps per channel |
+| `import_files` | File picker on the Engine card: `accept`, optional `max_bytes` / `title` / `description`. Requires `parseImport`. `POST /v1/me/imports` is the generic route |
 | `docs` | R&D specs. The Engine page renders these once next to the Connectors title and opens the GitHub page. They are not the install wizard |
 
 Tokens are prerequisites, not form fields. The kernel does not install a

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Host } from "@regenic/plugin-host";
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
@@ -7,6 +6,7 @@ import {
   readEnvCredential,
   requireConnectorStream,
   type ChannelDriver,
+  type ConnectorHost,
   type ConnectorStream,
   type ConversationThread,
   type DeliveryReceipt,
@@ -232,7 +232,7 @@ export const cursorAgentDriver: ChannelDriver = {
 };
 
 export async function mountCursorAgents(
-  host: Host,
+  host: ConnectorHost,
   installation: {
     id: string;
     org_id: string;

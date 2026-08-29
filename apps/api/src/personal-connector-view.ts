@@ -50,6 +50,13 @@ export interface ConnectorSetupStep {
   visible_when?: ConnectorFieldWhen;
 }
 
+export interface ConnectorImportFiles {
+  accept: string;
+  max_bytes?: number;
+  title?: string;
+  description?: string;
+}
+
 export interface ConnectorCatalogItem {
   connector_type: string;
   source: string;
@@ -63,6 +70,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  import_files?: ConnectorImportFiles;
   unit_kinds: UnitKindEntry[];
   docs: CatalogDocRef[];
 }
@@ -89,6 +97,7 @@ interface CatalogDefinition {
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
   setup_steps: ConnectorSetupStep[];
+  import_files?: ConnectorImportFiles;
   unit_kinds: UnitKindEntry[];
   docs: CatalogDocRef[];
 }
@@ -104,9 +113,13 @@ export function catalogFromDrivers(
 }
 
 function catalogDefinitionFromDriver(
-  driver: Pick<ChannelDriver, "connector_type" | "source" | "subjectCatalog">,
+  driver: Pick<ChannelDriver, "connector_type" | "source" | "subjectCatalog" | "parseImport">,
   catalog: DriverInstallCatalog,
 ): CatalogDefinition {
+  const importFiles =
+    typeof driver.parseImport === "function"
+      ? catalogImportFiles(catalog.import_files)
+      : undefined;
   return {
     connector_type: driver.connector_type,
     source: driver.source,
@@ -135,7 +148,26 @@ function catalogDefinitionFromDriver(
       visible_when: prerequisite.visible_when,
     })),
     setup_steps: catalogSetupSteps(catalog.setup_steps),
+    ...(importFiles ? { import_files: importFiles } : {}),
     docs: CONNECTOR_INSTALL_DOCS,
+  };
+}
+
+function catalogImportFiles(
+  files: DriverInstallCatalog["import_files"],
+): ConnectorImportFiles | undefined {
+  const accept = files?.accept?.replace(/\s+/g, "").trim();
+  if (!accept || !files) {
+    return undefined;
+  }
+  const title = files.title?.replace(/\s+/g, " ").trim();
+  const description = files.description?.replace(/\s+/g, " ").trim();
+  const maxBytes = files.max_bytes;
+  return {
+    accept,
+    ...(typeof maxBytes === "number" && maxBytes > 0 ? { max_bytes: maxBytes } : {}),
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
   };
 }
 

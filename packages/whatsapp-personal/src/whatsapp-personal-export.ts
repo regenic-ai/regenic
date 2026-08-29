@@ -6,6 +6,7 @@ import {
   type IngestOperation,
   type IngestRecord,
 } from "@regenic/domain";
+import { whatsappConversationKind } from "./whatsapp-ids";
 
 export const WHATSAPP_PERSONAL_EXPORT_SCHEMA_VERSION = "1.0" as const;
 export const WHATSAPP_PERSONAL_CONNECTOR_ID = "whatsapp-personal-export-v1";
@@ -165,16 +166,6 @@ function toRecord(message: WhatsAppPersonalExportMessage, localPrincipalId: stri
     record.content = undefined;
   }
   return record;
-}
-
-function whatsappConversationKind(chatId: string): string | undefined {
-  if (chatId.endsWith("@g.us")) {
-    return "group";
-  }
-  if (chatId.endsWith("@c.us") || chatId.endsWith("@lid")) {
-    return "direct";
-  }
-  return undefined;
 }
 
 function toBytes(data: string | Uint8Array): Uint8Array {

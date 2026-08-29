@@ -6,12 +6,6 @@ interface SendCommand {
   delay_ms: number;
 }
 
-interface ExtensionSettings {
-  apiOrigin: string;
-  apiKey: string;
-  allowSend: boolean;
-}
-
 interface SendAttempt {
   id: string;
   existing_message_ids: string[];
@@ -30,21 +24,33 @@ declare const chrome: {
       addListener(listener: (message: unknown, sender: unknown, sendResponse: (response: { result: string }) => void) => boolean | void): void;
       removeListener(listener: (message: unknown, sender: unknown, sendResponse: (response: { result: string; protocol?: number }) => void) => boolean | void): void;
     };
+    sendMessage(message: unknown, callback?: (response: unknown) => void): Promise<unknown> | void;
   };
 };
 
 {
-const CONTENT_SCRIPT_PROTOCOL = 6;
+const CONTENT_SCRIPT_PROTOCOL = 8;
 const CLIENT_ID = "regenic-whatsapp-web-extension";
+const CHAT_ID = /^(?:[\d.-]+|[\w.+-]+)@(?:c\.us|g\.us|lid)$/i;
+const EMBEDDED_CHAT_ID = /([\d.-]+|[\w.+-]+)@(?:c\.us|g\.us|lid)/i;
+const DATA_ID = /^(true|false)_((?:[\d.-]+|[\w.+-]+)@(?:c\.us|g\.us|lid))_(.+)$/i;
 const SEND_ATTEMPTS_KEY = "whatsAppSendAttempts";
 const MAX_SEND_ATTEMPTS = 200;
-const DEFAULT_SETTINGS: ExtensionSettings = {
-  apiOrigin: "http://127.0.0.1:4370",
-  apiKey: "",
-  allowSend: false,
-};
+const SEND_ARIA_LABELS = new Set([
+  "send",
+  "发送",
+  "傳送",
+  "enviar",
+  "envoyer",
+  "senden",
+  "invia",
+  "kirim",
+  "送信",
+  "보내기",
+  "отправить",
+  "ارسال",
+]);
 const seenMessages = new Set<string>();
-const announcedChats = new Set<string>();
 let pollingCommands = false;
 let extensionContextValid = true;
 
@@ -70,7 +76,6 @@ connectorGlobal.__regenicWhatsAppConnector = {
     }
   },
 };
-void announceScriptReady();
 
 function listenForScanRequests() {
   const listener = (message: unknown, _sender: unknown, sendResponse: (response: { result: string; protocol?: number }) => void) => {
@@ -84,21 +89,6 @@ function listenForScanRequests() {
   return listener;
 }
 
-async function announceScriptReady(): Promise<void> {
-  await postLiveMessage({
-    client_id: CLIENT_ID,
-    chat_id: "extension-diagnostics",
-    chat_title: "Extension Diagnostics",
-    message_id: `script-ready-${Date.now()}`,
-    sender_id: "whatsapp-web-live-connector",
-    sender_name: "WhatsApp",
-    text: `Regenic WhatsApp content script ready at ${new Date().toISOString()}`,
-    timestamp: new Date().toISOString(),
-    from_me: false,
-    message_kind: "system",
-  });
-}
-
 function observeMessages(): MutationObserver {
   const observer = new MutationObserver(() => scanVisibleMessages());
   observer.observe(document.body, { childList: true, subtree: true });
@@ -109,9 +99,8 @@ function observeMessages(): MutationObserver {
 function scanVisibleMessages(): string {
   const chat = activeChat();
   if (!chat) {
-    return "no active chat";
+    return "no WhatsApp chat id";
   }
-  announceChat(chat);
   const messages = visibleMessages();
   let sent = 0;
   for (const message of messages) {
@@ -119,46 +108,39 @@ function scanVisibleMessages(): string {
     if (!text) {
       continue;
     }
-    const fromMe = isFromMe(message.element);
-    const messageId = stableMessageId(chat.id, text, fromMe, message.element);
-    if (seenMessages.has(messageId)) {
+    const parsed = parseWhatsAppDataId(dataIdOf(message.element));
+    const chatId = parsed?.chat_id ?? parseWhatsAppChatId(dataIdOf(message.element));
+    if (!chatId || chatId !== chat.id) {
       continue;
     }
-    seenMessages.add(messageId);
+    const fromMe = parsed?.from_me ?? isFromMe(message.element);
+    const messageId = parsed?.message_id || stableMessageId(chatId, text, fromMe, message.element);
+    const seenKey = `${chatId}:${messageId}`;
+    if (seenMessages.has(seenKey)) {
+      continue;
+    }
+    seenMessages.add(seenKey);
+    const senderId = fromMe
+      ? "local-owner"
+      : extractSenderJid(message.element, chatId) ?? (chatId.endsWith("@g.us") ? "" : chatId);
+    if (!fromMe && !senderId) {
+      continue;
+    }
     sent += 1;
     void postLiveMessage({
       client_id: CLIENT_ID,
-      chat_id: chat.id,
+      chat_id: chatId,
       chat_title: chat.title,
       message_id: messageId,
-      sender_id: fromMe ? "local-user" : chat.id,
+      sender_id: senderId,
       sender_name: fromMe ? "You" : chat.title,
       text,
-      timestamp: new Date().toISOString(),
+      timestamp: messageTimestamp(message.element),
       from_me: fromMe,
       message_kind: "user",
     });
   }
   return `sent ${sent} new / ${messages.length} visible from ${chat.title}`;
-}
-
-function announceChat(chat: { id: string; title: string }): void {
-  if (announcedChats.has(chat.id)) {
-    return;
-  }
-  announcedChats.add(chat.id);
-  void postLiveMessage({
-    client_id: CLIENT_ID,
-    chat_id: chat.id,
-    chat_title: chat.title,
-    message_id: `attached-${Date.now()}`,
-    sender_id: "whatsapp-web-live-connector",
-    sender_name: "WhatsApp",
-    text: `Regenic live connector attached to ${chat.title}`,
-    timestamp: new Date().toISOString(),
-    from_me: false,
-    message_kind: "system",
-  });
 }
 
 async function pollCommands(): Promise<void> {
@@ -170,26 +152,23 @@ async function pollCommands(): Promise<void> {
   }
   pollingCommands = true;
   try {
-    const settings = await loadSettings();
-    const response = await fetch(
-      `${settings.apiOrigin}/v1/me/live/whatsapp/commands?client_id=${encodeURIComponent(CLIENT_ID)}`,
-      { headers: settings.apiKey ? { "x-regenic-live-key": settings.apiKey } : {} },
-    );
-    if (!response.ok) {
-      return;
-    }
-    const body = await response.json() as { commands?: SendCommand[] };
-    for (const command of body.commands ?? []) {
+    const response = await sendBackgroundMessage({ type: "regenic.whatsapp.pollCommands" }) as {
+      commands?: SendCommand[];
+      allowSend?: boolean;
+    } | undefined;
+    const commands = response?.commands ?? [];
+    const allowSend = response?.allowSend === true;
+    for (const command of commands) {
       const previousAttempt = await sendAttempt(command.id);
       if (previousAttempt) {
         if (wasSendDelivered(command, previousAttempt)) {
-          await acknowledge(command.id, settings);
+          await acknowledge(command.id);
         }
         continue;
       }
-      const executed = await executeCommand(command, settings.allowSend);
+      const executed = await executeCommand(command, allowSend);
       if (executed) {
-        await acknowledge(command.id, settings);
+        await acknowledge(command.id);
       }
     }
   } catch {
@@ -200,12 +179,14 @@ async function pollCommands(): Promise<void> {
 }
 
 async function executeCommand(command: SendCommand, allowSend: boolean): Promise<boolean> {
-  const chat = activeChat();
-  if (!chat || chat.id !== command.chat_id) {
+  if (!commandTargetsActiveChat(command.chat_id)) {
     return false;
   }
   if (command.delay_ms > 0) {
     await delay(command.delay_ms);
+  }
+  if (!commandTargetsActiveChat(command.chat_id)) {
+    return false;
   }
   const input = composer();
   if (!input) {
@@ -217,6 +198,9 @@ async function executeCommand(command: SendCommand, allowSend: boolean): Promise
     return false;
   }
   if (currentText !== expectedText) {
+    if (!commandTargetsActiveChat(command.chat_id)) {
+      return false;
+    }
     input.focus();
     const selection = window.getSelection();
     const range = document.createRange();
@@ -230,6 +214,9 @@ async function executeCommand(command: SendCommand, allowSend: boolean): Promise
     }
   }
   if (command.send_now && allowSend) {
+    if (!commandTargetsActiveChat(command.chat_id)) {
+      return false;
+    }
     const button = sendButton();
     if (!button) {
       return false;
@@ -253,11 +240,19 @@ async function executeCommand(command: SendCommand, allowSend: boolean): Promise
   return true;
 }
 
+function commandTargetsActiveChat(commandChatId: string): boolean {
+  return activeChat()?.id === commandChatId;
+}
+
 function matchingOutgoingMessageIds(text: string): string[] {
   const expectedText = normalize(text);
+  const chatId = activeChat()?.id;
+  if (!chatId) {
+    return [];
+  }
   return visibleMessages()
     .filter((message) => isFromMe(message.element) && normalize(message.text) === expectedText)
-    .map((message) => stableMessageId(activeChat()?.id ?? "active-chat", message.text, true, message.element));
+    .map((message) => stableMessageId(chatId, message.text, true, message.element));
 }
 
 function wasSendDelivered(command: SendCommand, attempt: SendAttempt): boolean {
@@ -275,10 +270,10 @@ async function sendAttempts(): Promise<SendAttempt[]> {
     return [];
   }
   return stored[SEND_ATTEMPTS_KEY].filter((value): value is SendAttempt => Boolean(
-    value &&
-    typeof value === "object" &&
-    typeof (value as { id?: unknown }).id === "string" &&
-    Array.isArray((value as { existing_message_ids?: unknown }).existing_message_ids),
+    value
+    && typeof value === "object"
+    && typeof (value as { id?: unknown }).id === "string"
+    && Array.isArray((value as { existing_message_ids?: unknown }).existing_message_ids),
   ));
 }
 
@@ -292,20 +287,22 @@ async function markSendAttempt(attempt: SendAttempt): Promise<boolean> {
   });
 }
 
-async function acknowledge(id: string, settings: { apiOrigin: string; apiKey: string }): Promise<void> {
-  await fetch(`${settings.apiOrigin}/v1/me/live/whatsapp/commands/${encodeURIComponent(id)}/ack`, {
-    method: "POST",
-    headers: settings.apiKey ? { "x-regenic-live-key": settings.apiKey } : {},
-  });
+async function acknowledge(id: string): Promise<void> {
+  await sendBackgroundMessage({ type: "regenic.whatsapp.ack", id });
 }
 
 function activeChat(): { id: string; title: string } | null {
-  const header = rightmostVisibleHeader();
-  const title = firstChatTitle(header);
-  if (!title) {
-    return null;
+  for (const message of visibleMessages()) {
+    const parsed = parseWhatsAppDataId(dataIdOf(message.element));
+    const chatId = parsed?.chat_id ?? parseWhatsAppChatId(dataIdOf(message.element));
+    if (chatId) {
+      return {
+        id: chatId,
+        title: firstChatTitle(rightmostVisibleHeader()) ?? chatId,
+      };
+    }
   }
-  return { id: slug(title), title };
+  return null;
 }
 
 function rightmostVisibleHeader(): HTMLElement | null {
@@ -333,7 +330,13 @@ function firstChatTitle(header: HTMLElement | null): string | null {
 }
 
 function isPresenceText(value: string): boolean {
-  return /^(last seen|online|typing|recording|click here)/i.test(value) || /^last seen /i.test(value);
+  return (
+    /^(last seen|online|typing|recording|click here)/i.test(value)
+    || /^last seen /i.test(value)
+    || /^(最后一次出现|最后上线|在线|正在输入|正在录音|点击这里)/.test(value)
+    || /^(visto por último|en línea|escribiendo)/i.test(value)
+    || /^(zuletzt gesehen|online|tippt)/i.test(value)
+  );
 }
 
 function visibleMessages(): Array<{ element: HTMLElement; text: string }> {
@@ -356,6 +359,40 @@ function visibleMessages(): Array<{ element: HTMLElement; text: string }> {
 
 function messageElementFor(span: HTMLElement): HTMLElement | null {
   return span.closest<HTMLElement>("[data-pre-plain-text], div.message-in, div.message-out, [data-id]");
+}
+
+function messageTimestamp(element: HTMLElement): string {
+  const context = element.getAttribute("data-pre-plain-text")
+    ?? element.closest("[data-pre-plain-text]")?.getAttribute("data-pre-plain-text")
+    ?? "";
+  return parseWhatsAppTimestamp(context);
+}
+
+function parseWhatsAppTimestamp(prePlainText: string): string {
+  const raw = prePlainText.match(/\[([^\]]+)\]/)?.[1]?.trim();
+  if (!raw) {
+    return new Date().toISOString();
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isNaN(parsed)) {
+    return new Date(parsed).toISOString();
+  }
+  const european = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?,\s*(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (european) {
+    const [, hour, minute, second, day, month, year] = european;
+    const date = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second ?? 0),
+    );
+    if (!Number.isNaN(date.getTime())) {
+      return date.toISOString();
+    }
+  }
+  return new Date().toISOString();
 }
 
 function isFromMe(element: HTMLElement): boolean {
@@ -387,53 +424,104 @@ function composer(): HTMLElement | null {
 }
 
 function sendButton(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('footer button[aria-label="Send"], footer span[data-icon="send"]')?.closest("button") ?? null;
+  const icon = document.querySelector<HTMLElement>('footer span[data-icon="send"]');
+  if (icon) {
+    return icon.closest("button");
+  }
+  return Array.from(document.querySelectorAll<HTMLElement>("footer button[aria-label]"))
+    .find((button) => SEND_ARIA_LABELS.has(normalize(button.getAttribute("aria-label") ?? "").toLowerCase()))
+    ?? null;
 }
 
 function stableMessageId(chatId: string, text: string, fromMe: boolean, element: HTMLElement): string {
-  const dataId = element.getAttribute("data-id") ?? element.closest<HTMLElement>("[data-id]")?.getAttribute("data-id");
-  const messageContext = element.getAttribute("data-pre-plain-text") ?? "";
-  const raw = dataId ?? `${chatId}:${fromMe ? "out" : "in"}:${messageContext}:${text}`;
-  let hash = 0;
-  for (let index = 0; index < raw.length; index += 1) {
-    hash = Math.imul(31, hash) + raw.charCodeAt(index) | 0;
+  const dataId = dataIdOf(element);
+  if (dataId) {
+    return dataId;
   }
-  return `${fromMe ? "out" : "in"}-${Math.abs(hash)}`;
+  const messageContext = element.getAttribute("data-pre-plain-text")
+    ?? element.closest("[data-pre-plain-text]")?.getAttribute("data-pre-plain-text")
+    ?? "";
+  return `${fromMe ? "out" : "in"}:${chatId}:${messageContext}:${text}`;
 }
 
-function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9._@-]+/g, "-").replace(/^-|-$/g, "") || "active-chat";
+function dataIdOf(element: HTMLElement): string {
+  return (
+    element.getAttribute("data-id")
+    ?? element.closest<HTMLElement>("[data-id]")?.getAttribute("data-id")
+    ?? ""
+  ).trim();
+}
+
+function isWhatsAppChatId(value: string | undefined): boolean {
+  return Boolean(value && CHAT_ID.test(value.trim()));
+}
+
+function parseWhatsAppChatId(value: string | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+  if (isWhatsAppChatId(trimmed)) {
+    return trimmed;
+  }
+  const fromDataId = parseWhatsAppDataId(trimmed);
+  if (fromDataId) {
+    return fromDataId.chat_id;
+  }
+  const embedded = trimmed.match(EMBEDDED_CHAT_ID);
+  return embedded ? embedded[0] : null;
+}
+
+function parseWhatsAppDataId(
+  value: string | undefined,
+): { from_me: boolean; chat_id: string; message_id: string } | null {
+  const match = value?.trim().match(DATA_ID);
+  if (!match) {
+    return null;
+  }
+  return {
+    from_me: match[1].toLowerCase() === "true",
+    chat_id: match[2],
+    message_id: match[3],
+  };
+}
+
+function extractSenderJid(element: HTMLElement, chatId: string): string | undefined {
+  let node: HTMLElement | null = element;
+  for (let depth = 0; node && depth < 8; depth += 1) {
+    for (const name of node.getAttributeNames()) {
+      const parsed = parseWhatsAppChatId(node.getAttribute(name) ?? undefined);
+      if (parsed && parsed !== chatId && !parsed.endsWith("@g.us")) {
+        return parsed;
+      }
+    }
+    node = node.parentElement;
+  }
+  return undefined;
 }
 
 function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-async function loadSettings(): Promise<ExtensionSettings> {
-  const stored = await storageGet(DEFAULT_SETTINGS);
-  return {
-    apiOrigin: typeof stored.apiOrigin === "string" && stored.apiOrigin.trim()
-      ? stored.apiOrigin.trim().replace(/\/$/, "")
-      : DEFAULT_SETTINGS.apiOrigin,
-    apiKey: typeof stored.apiKey === "string" ? stored.apiKey : "",
-    allowSend: stored.allowSend === true,
-  };
+async function postLiveMessage(payload: Record<string, unknown>): Promise<void> {
+  await sendBackgroundMessage({ type: "regenic.whatsapp.message", payload });
 }
 
-async function postLiveMessage(payload: Record<string, unknown>): Promise<void> {
-  try {
-    const settings = await loadSettings();
-    await fetch(`${settings.apiOrigin}/v1/me/live/whatsapp/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(settings.apiKey ? { "x-regenic-live-key": settings.apiKey } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    // Ignore transient localhost/API failures. The next mutation or page reload retries.
-  }
+async function sendBackgroundMessage(message: unknown): Promise<unknown> {
+  return new Promise((resolve) => {
+    try {
+      const result = chrome.runtime.sendMessage(message, resolve);
+      if (isPromiseLike(result)) {
+        result.then(resolve, () => resolve(undefined));
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Extension context invalidated")) {
+        extensionContextValid = false;
+      }
+      resolve(undefined);
+    }
+  });
 }
 
 function storageGet(defaults: object): Promise<Record<string, unknown>> {

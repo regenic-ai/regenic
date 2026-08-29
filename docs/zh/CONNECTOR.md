@@ -33,9 +33,23 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 或桌面。
 
 加来源不用改 API 或桌面。每个驱动自己声明 `installCatalog()`，以及可选的
-`presentInstall` / `writeBackLabels` / `subjectCatalog`。引擎页由已注册
-驱动组装。额外包在进程启动时由 `REGENIC_PLUGIN_DIR` 或
-`REGENIC_CHANNEL_PLUGIN` 加载。内核只对结果第一行与待办选项做精确匹配。
+`presentInstall` / `writeBackLabels` / `subjectCatalog` / `parseImport`。
+引擎页由已注册驱动组装。
+
+随内核发布的包在 `package.json` 里声明 `regenic.plugin`、`id`、
+`displayName`、`engines.regenic` 和 `contributes`。内核扫描自己的依赖，
+只加载 `contributes.drivers` / `contributes.executors` 点名的导出，不再
+扫 `Object.values`。额外包用同一份清单；缺 `contributes` 就是加载失败，
+不会退回 duck-type。Nest 不 import 驱动符号。额外包仍由
+`REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载。启动后新出现的
+extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）。
+`GET /v1/me/plugins` 和引擎页列出已加载、跳过和失败的包。额外包未签名，
+与内核同进程运行。默认投放目录是 `~/.regenic/plugins`（`REGENIC_PLUGIN_DIR`
+可覆盖），引擎页会显示这条路径。驱动拿到的是 `ConnectorHost`
+（`connectors` / `egress` / `plugin` / `now` / `secrets`），没有
+`authority` 或 `ingest`。catalog 里标了 `secret` 的字段写入钥匙串，落库
+`config` 不留 token。四种最小形状在 `examples/connectors`。已注册的
+`connector_type` 不会被替换；改已加载的包需要重启。内核只对结果第一行与待办选项做精确匹配。
 
 ## 端口
 
@@ -46,8 +60,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 | `ChannelDriverCore` | 安装、匹配线程、声明能力 | 每个驱动 |
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` 且 `source_mode` 为 poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` 为 webhook / hybrid |
-| `ChannelSinkPort` | `bindEgress` / `outboundId` / 可选 `createThread` | `reply`；`create` 另需 `createThread` |
-| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` | 要出现在引擎页；有工单类型时再声明词表 |
+| `ChannelSinkPort` | `bindEgress` / `outboundId` / 可选 `createThread` / 可选通用 egress 队列 | `reply`；`create` 另需 `createThread` |
+| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / 可选 `parseImport` | 要出现在引擎页；有工单类型时再声明词表；声明 `import_files` 时提供文件导入 |
 | Surface | `prompts` / `attention` / `receipts` | 对应能力旗标为 true |
 | `EgressAdapter` | 把 `ContentPart[]` 写回同一来源 | 实现了 `bindEgress` |
 
@@ -65,9 +79,10 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 在权威边界内使用确定的 `external_id`。控制台出站 id 含 `:out:`。
 - 只有采集服务提交或隔离该页之后，才推进流游标。
 - 凭证走 `credentials_ref`：`env:NAME`、`keychain:SERVICE`，以及预留的
-  `oauth:HANDLE` / `app:HANDLE`。冒号后是句柄，不是 token。安装表单不收
-  密钥。内核用 `readEnvCredential` 读环境变量；钥匙串由连接器自己读。
-  `oauth` / `app` 本阶段不解析，等第二个官方来源再做刷新。
+  `oauth:HANDLE` / `app:HANDLE`。冒号后是句柄，不是 token。安装表单可以收
+  `secret` 字段；内核写入钥匙串并从落库 `config` 删掉。驱动用
+  `readInstallSecret` / `host.secrets` 读。环境变量仍走
+  `readEnvCredential`。`oauth` / `app` 本阶段不解析。
 - 插件可声明 `connector_protocol`。省略视为 `1.0`。内核跳过不支持的版本。
 - 故障彼此隔离。一个安装不得拖住另一个。tick 并行拉各启用安装；单次
   `poll` 和整次 tick/catch-up sync 有截止时间，超时释放租约。
@@ -83,6 +98,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 要出现在引擎页就实现 `installCatalog()`。可选 `presentInstall` 写已装
   行的文案。可选 `writeBackLabels` 列出回写时的精确别名。源系统把工作
   分成不同类型时，实现 `subjectCatalog()`，并在记录上盖 `unit_kind`。
+  可选 `parseImport` 加上 `installCatalog().import_files` 会在该卡片上
+  放文件选择。内核写 Event；驱动只返回 ingest batch。导入不必先安装。
 
 不允许：
 
@@ -96,7 +113,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 ## 隔离
 
-连接器是进程内插件。内核用超时和失败隔离，不默认出进程。
+连接器是进程内插件。内核用超时、`ConnectorHost`（没有 authority / ingest）和失败隔离，不默认出进程。
 
 - tick 并行拉各启用安装。一处抛错或超时不挡其它安装；该安装仍在
   `inflight` 时，下一 tick 跳过它。
@@ -236,6 +253,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `createThread` | 可选。`create` 为 true 时必须实现。未声明则内核 501。声明了 `create_with_task` 时收 `options.text` 并开工；未声明则只建空会话，第一条用户文本走普通 send。 |
 | `bindEgress` | 可选。`reply` 为 true 时必须实现。未声明则内核 501。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
+| `listEgressQueue` / `ackEgressQueue` | 可选。给无法在进程内写回渠道的适配器（本机浏览器扩展）排空队列。暴露为 `GET/POST /v1/me/connectors/:id/egress`，不是按渠道单独开的 API。 |
 | `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。`setup_steps` 是弹层里的编号步骤，桌面原样渲染。 |
 | `presentInstall` | 可选。已装行的标题和细节。 |
 | `writeBackLabels` | 可选。某个待办选项的精确别名。内核只对结果第一行做匹配。 |
@@ -243,7 +261,8 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `probeCatalog` | 可选。本机服务 / 环境是否就绪，以及表单选项。 |
 
 `ChannelDriverError` 错误码：`invalid_config`、`missing_credentials`、
-`sync_failed`、`send_failed`、`unsupported_channel`、`no_sender`。
+`sync_failed`、`send_failed`、`unsupported_channel`、`no_sender`、
+`throttled`。
 
 ```ts
 interface ConnectorStreamPace {
@@ -309,9 +328,9 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 `GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。未齐前置时主按钮写「设置」，仍打开同一张弹层。
 
-驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
+驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段、标题或导入器。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
 
-额外包在进程启动时加载一次：`REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。显式插件缺失或无效时跳过并打日志。
+额外包由 `REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）加载。每个额外包的 `package.json` 必须写 `regenic.contributes`。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。启动后可以热发现新的 extra 类型；替换已加载的包仍需重启。显式插件缺失或无效时记入失败/跳过并打日志。`GET /v1/me/plugins` 返回这份库存。
 
 工单写回时，内核把结果第一行与活的待办选项做精确匹配。`writeBackLabels(label)` 可给该选项加别名。宿主不维护同义列表。
 
@@ -320,6 +339,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 | `fields` | `key`、`label`、是否必填、默认值、`visible_when`、可选 `multiple` + `options` |
 | `prerequisites` | 环境变量或本机服务，带 `ready` 和 `hint` |
 | `setup_steps` | 编号步骤：`title`，可选 `body` / `command` / `href` / `visible_when`。弹层表单上方渲染；`command` 可复制。桌面不按渠道名写死步骤 |
+| `import_files` | 引擎卡片上的文件选择：`accept`，可选 `max_bytes` / `title` / `description`。需同时实现 `parseImport`。通用入口是 `POST /v1/me/imports` |
 | `docs` | 研发规范。引擎页在「连接器」标题旁统一渲染一次，点开跳到 GitHub 网页。不当安装向导 |
 
 token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起本机服务。

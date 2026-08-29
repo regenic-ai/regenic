@@ -87,14 +87,18 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | GET/POST | `/v1/me/prefs` | `inbox_sort`：`attention` 或 `normal`；`inbox_list`：`shown` 或 `hidden` |
 | POST | `/v1/me/replies` | 把回复发回原渠道。API 按 installation + thread 找 `ChannelDriver`，再 `egress.send`。入库后 follow 该线程直到出现新的 inbound / `working` / `awaiting_user` 或短暂超时；驱动 `canReply: false` 时 501 |
 | POST | `/v1/me/forwards` | 把源线程的 utterance 编译后发到**另一条** `can_send` 线程，或 `create: true` 在 `can_create` 安装上新建（DSH 先 `createThread` 再 send；Cursor `create_with_task` 把第一包当任务，只 ingest 出站）。可多选 `event_ids`。编译正文按句带 `[Attached: 文件名]`，bytes 仍走附件。目标气泡用 `forwarded_from.channel_label` 画出处 chip。不改 `thread_id`，不扩展 replies。不能建会话的安装仍 501。见 [RFC 0010](rfcs/0010-cross-channel-forward.md) |
-| POST | `/v1/me/imports/whatsapp` | 显式导入用户选择的 UTF-8 Purr WA CSV 或 WhatsApp Personal Export v1 JSONL。本机个人 API 每份最多校验 20 MiB，返回入库统计和坏行，且绝不发送消息。桌面端可一次选择多份文件并逐份调用。 |
+| POST | `/v1/me/imports` | 按 catalog `import_files` 导入用户自选文件。`{ connector_type, content, file_name }`。驱动 `parseImport` 译成 ingest batch，内核写 Event。不必先安装该连接器。 |
+| POST | `/v1/me/imports/whatsapp` | 上一路由的别名，固定 `connector_type=whatsapp-web-live`。 |
+| GET | `/v1/me/engine` | 含 `plugin_dir`（默认 `~/.regenic/plugins`）和 `plugins` 库存。 |
+| GET | `/v1/me/plugins` | 插件库存：已加载 / 跳过 / 失败。第一方 `trust=core`，额外包 `trust=unsigned`。引擎页也会带上这份列表。 |
+| POST | `/v1/me/plugins/reload` | 扫描 extra 插件目录，只注册尚未存在的 `connector_type` / executor source。不替换已加载驱动。 |
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |
 
 不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 3 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。人在操作时同 tick 串行、只跟少量会话的新消息；空闲时再补一页历史。流上的 `pace` 由连接器声明：飞书追上后约 15 秒再扫，DSH 不写 `pace`，仍每 tick 跟。对话窗发送后会更快跟当前 DSH session。引擎 Sync 只是漏了再追平。凭证只读环境变量。
 
 ## 连接器：同步范围与前置步骤
 
-安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每个驱动用 `installCatalog()` 声明标题、`fields`（含默认值、是否必填、`visible_when`）和 `prerequisites`（环境变量或本机服务）。Slack、DSH、飞书和额外插件同一套。`ready` / `hint` 由该驱动的 `probeCatalog()` 探测，已装行的文案由 `presentInstall` 提供，API 只合并，引擎页只渲染，不按连接器类型写死 UI。规范链接（`docs`）挂在分区标题旁，点开用系统浏览器打开 GitHub 页。额外包在进程启动时由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载。
+安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每个驱动用 `installCatalog()` 声明标题、`fields`（含默认值、是否必填、`visible_when`）、`prerequisites` 和可选的 `import_files`。Slack、DSH、飞书和额外插件同一套。`ready` / `hint` 由该驱动的 `probeCatalog()` 探测，已装行的文案由 `presentInstall` 提供，API 只合并，引擎页只渲染，不按连接器类型写死 UI。规范链接（`docs`）挂在分区标题旁，点开用系统浏览器打开 GitHub 页。额外包由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载；新类型可热发现，已加载的驱动不会被替换。
 
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |

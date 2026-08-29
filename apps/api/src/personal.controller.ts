@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpException,
   HttpStatus,
   Inject,
@@ -37,6 +38,7 @@ import {
   PersonalReplyService,
   type ReplyInput,
 } from "./personal-reply.service";
+import { PersonalPluginService } from "./personal-plugin.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
 import {
   PersonalExecutorService,
@@ -65,6 +67,8 @@ export class PersonalController {
     private readonly executors: PersonalExecutorService,
     @Inject(PersonalWhatsAppImportService)
     private readonly whatsapp: PersonalWhatsAppImportService,
+    @Inject(PersonalPluginService)
+    private readonly plugins: PersonalPluginService,
   ) {}
 
   @Get("inbox")
@@ -167,9 +171,29 @@ export class PersonalController {
     return this.guard(() => this.forwards.send(body ?? {}));
   }
 
+  @Post("imports")
+  importFile(
+    @Body()
+    body:
+      | { connector_type?: string; content?: string; file_name?: string }
+      | undefined,
+  ) {
+    return this.guard(() => this.whatsapp.importFile(body ?? {}));
+  }
+
   @Post("imports/whatsapp")
   importWhatsApp(@Body() body: { content?: string; file_name?: string } | undefined) {
     return this.guard(() => this.whatsapp.import(body?.content, body?.file_name));
+  }
+
+  @Get("plugins")
+  listPlugins() {
+    return this.guard(async () => this.plugins.list());
+  }
+
+  @Post("plugins/reload")
+  reloadPlugins() {
+    return this.guard(async () => this.plugins.reload());
   }
 
   @Post("conversations")
@@ -376,6 +400,27 @@ export class PersonalController {
         body: webhookBody(req),
         received_at: new Date().toISOString(),
       }),
+    );
+  }
+
+  @Get("connectors/:id/egress")
+  listConnectorEgress(
+    @Param("id") id: string,
+    @Headers("x-regenic-live-key") apiKey?: string,
+    @Headers("origin") origin?: string,
+  ) {
+    return this.guard(() => this.connectors.listEgressQueue(id, { apiKey, origin }));
+  }
+
+  @Post("connectors/:id/egress/:commandId/ack")
+  ackConnectorEgress(
+    @Param("id") id: string,
+    @Param("commandId") commandId: string,
+    @Headers("x-regenic-live-key") apiKey?: string,
+    @Headers("origin") origin?: string,
+  ) {
+    return this.guard(() =>
+      this.connectors.ackEgressQueue(id, commandId, { apiKey, origin }),
     );
   }
 

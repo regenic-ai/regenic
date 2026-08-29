@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import {
   LOCAL_NETWORK_BLOCKED_HINT,
   LOCAL_PROXY_HINT,
+  probeLocalCommand as probeCommandPresent,
   watchLocalFetchFailure,
   type ConnectorCatalogProbe,
   type LocalNetworkKind,
@@ -170,19 +170,6 @@ async function probeLocalService(
 }
 
 export async function probeLocalCommand(command: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(command, ["--help"], { stdio: "ignore" });
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve(true);
-    }, PROBE_TIMEOUT_MS);
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-    child.on("close", () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
+  return (await probeCommandPresent(command, { timeout_ms: PROBE_TIMEOUT_MS }))
+    .ready;
 }

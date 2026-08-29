@@ -1,4 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { importConnectorFile } from "./api";
+import {
+  importWhatsAppFiles,
+  whatsAppImportSummary,
+} from "./whatsapp-import";
 import {
   configWithOptionNames,
   splitValues,
@@ -6,6 +11,7 @@ import {
 } from "./connector-config";
 import {
   attemptSummary,
+  connectorActionError,
   installationStatusLabel,
 } from "./format";
 import { openExternal } from "./CatalogDocs";
@@ -29,6 +35,7 @@ export function ConnectorKind({
   onSync,
   onToggle,
   onUpdate,
+  onRefresh,
   onUninstall,
 }: {
   kind: ConnectorCatalogItem;
@@ -46,6 +53,7 @@ export function ConnectorKind({
     installation: EngineInstallationView,
     config: Record<string, string>,
   ) => Promise<boolean>;
+  onRefresh?: () => Promise<void>;
   onUninstall: (installation: EngineInstallationView) => void;
 }) {
   const { t } = useLocale();
@@ -69,6 +77,11 @@ export function ConnectorKind({
           <PrerequisiteList
             items={visiblePrerequisites(kind, defaultFieldValues(kind))}
           />
+          {kind.import_files ? (
+            <p className="muted">
+              {kind.import_files.description ?? kind.import_files.title}
+            </p>
+          ) : null}
         </div>
         <div className="install-actions">
           {!kind.singleton || !kind.installed ? (
@@ -87,6 +100,13 @@ export function ConnectorKind({
           ) : null}
         </div>
       </div>
+      {kind.import_files ? (
+        <ConnectorFileImport
+          kind={kind}
+          disabled={busyId !== null || syncingAll || installing}
+          onImported={onRefresh}
+        />
+      ) : null}
       {pendingUninstall && installations.length === 0 ? (
         <p className="muted">{t("connector.uninstalling")}</p>
       ) : null}
@@ -129,6 +149,86 @@ export function ConnectorKind({
           onUninstall={() => onUninstall(installation)}
         />
       ))}
+    </div>
+  );
+}
+
+function ConnectorFileImport({
+  kind,
+  disabled,
+  onImported,
+}: {
+  kind: ConnectorCatalogItem;
+  disabled: boolean;
+  onImported?: () => Promise<void>;
+}) {
+  const { t } = useLocale();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const spec = kind.import_files;
+  if (!spec) {
+    return null;
+  }
+  return (
+    <div className="connector-import">
+      <button
+        type="button"
+        className="ghost"
+        disabled={disabled || importing}
+        onClick={() => fileRef.current?.click()}
+      >
+        {importing ? t("connector.importing") : t("connector.import")}
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept={spec.accept}
+        hidden
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = "";
+          if (files.length === 0) {
+            return;
+          }
+          void (async () => {
+            setImporting(true);
+            setError(null);
+            setStatus(null);
+            try {
+              const result = await importWhatsAppFiles(files, (content, fileName) =>
+                importConnectorFile(kind.connector_type, content, fileName),
+              );
+              setStatus(whatsAppImportSummary(result));
+              if (result.completed_files > 0) {
+                await onImported?.();
+              }
+              if (result.failures.length > 0) {
+                const first = result.failures[0];
+                setError(
+                  t("connector.importFileFailures", {
+                    count: result.failures.length,
+                    file: first.file_name,
+                    message: connectorActionError(first.message),
+                  }),
+                );
+              }
+            } catch (caught) {
+              setError(
+                caught instanceof Error
+                  ? connectorActionError(caught.message)
+                  : t("connector.importFailed"),
+              );
+            } finally {
+              setImporting(false);
+            }
+          })();
+        }}
+      />
+      {status ? <p className="action-ok">{status}</p> : null}
+      {error ? <p className="action-error">{error}</p> : null}
     </div>
   );
 }

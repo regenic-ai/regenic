@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node ../config/node_modules/typescript/bin/tsc -p tsconfig.json && node scripts/copy-assets.cjs",
-    "typecheck": "node ../config/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+    "typecheck": "node ../config/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "test": "node ../config/node_modules/typescript/bin/tsc -p tsconfig.json && node --test test/*.test.js"
   }
 }

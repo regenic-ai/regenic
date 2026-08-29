@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import {
-  importWhatsAppExport,
   installConnector,
   installExecutor,
   setConnectorStatus,
@@ -25,10 +24,6 @@ import {
 import type { HostStats } from "../../shared/host-watch.ts";
 import { useLocale } from "./LocaleContext";
 import type { PersonalEngineView } from "./types";
-import {
-  importWhatsAppFiles,
-  whatsAppImportSummary,
-} from "./whatsapp-import";
 
 export function EnginePage({
   engine,
@@ -50,9 +45,6 @@ export function EnginePage({
     null,
   );
   const [actionError, setActionError] = useState<string | null>(null);
-  const [whatsAppStatus, setWhatsAppStatus] = useState<string | null>(null);
-  const [importingWhatsApp, setImportingWhatsApp] = useState(false);
-  const whatsAppFileRef = useRef<HTMLInputElement>(null);
   const actionLock = useRef(false);
 
   const runAction = async (id: string, action: () => Promise<void>) => {
@@ -89,6 +81,8 @@ export function EnginePage({
     );
   }
 
+  const unsignedPlugins = unsignedPluginCount(engine);
+  const failedPlugins = failedPluginCount(engine);
   const syncable = engine.installations.filter((item) => item.syncable);
   const pullCopy = [
     pullStatusLabel(engine.pull),
@@ -166,6 +160,12 @@ export function EnginePage({
               <code>{engine.database_path ?? "—"}</code>
             </dd>
           </div>
+          <div>
+            <dt>{t("engine.pluginDir")}</dt>
+            <dd>
+              <code>{engine.plugin_dir ?? "—"}</code>
+            </dd>
+          </div>
         </dl>
         {engine.pull?.last_error ? (
           <p className="action-error">{engine.pull.last_error}</p>
@@ -179,70 +179,6 @@ export function EnginePage({
         {host?.memory.hint ? (
           <p className="action-hint">{host.memory.hint}</p>
         ) : null}
-      </section>
-      <section className="card engine-import">
-        <div className="card-head">
-          <h2>{t("engine.whatsapp.title")}</h2>
-          <button
-            type="button"
-            className="primary"
-            disabled={importingWhatsApp}
-            onClick={() => whatsAppFileRef.current?.click()}
-          >
-            {importingWhatsApp
-              ? t("engine.whatsapp.importing")
-              : t("engine.whatsapp.import")}
-          </button>
-        </div>
-        <p className="muted">{t("engine.whatsapp.lead")}</p>
-        <input
-          ref={whatsAppFileRef}
-          type="file"
-          multiple
-          accept=".csv,.jsonl,.ndjson,text/csv,application/x-ndjson,application/json"
-          hidden
-          onChange={(event) => {
-            const files = Array.from(event.currentTarget.files ?? []);
-            event.currentTarget.value = "";
-            if (files.length === 0) {
-              return;
-            }
-            void (async () => {
-              setImportingWhatsApp(true);
-              setActionError(null);
-              setWhatsAppStatus(null);
-              try {
-                const result = await importWhatsAppFiles(
-                  files,
-                  importWhatsAppExport,
-                );
-                setWhatsAppStatus(whatsAppImportSummary(result));
-                if (result.completed_files > 0) {
-                  await onChanged();
-                }
-                if (result.failures.length > 0) {
-                  const first = result.failures[0];
-                  setActionError(
-                    t("engine.whatsapp.fileFailures", {
-                      count: result.failures.length,
-                      file: first.file_name,
-                      message: connectorActionError(first.message),
-                    }),
-                  );
-                }
-              } catch (caught) {
-                setActionError(
-                  caught instanceof Error
-                    ? connectorActionError(caught.message)
-                    : t("engine.whatsapp.failed"),
-                );
-              } finally {
-                setImportingWhatsApp(false);
-              }
-            })();
-          }}
-        />
-        {whatsAppStatus ? <p className="action-hint">{whatsAppStatus}</p> : null}
       </section>
       <section className="card engine-connectors">
         <div className="card-head">
@@ -283,6 +219,16 @@ export function EnginePage({
         <p className="muted">
           {t("engine.connectorsLead")}
         </p>
+        {unsignedPlugins > 0 ? (
+          <p className="action-hint">
+            {t("engine.unsignedPlugins", { count: unsignedPlugins })}
+          </p>
+        ) : null}
+        {failedPlugins > 0 ? (
+          <p className="action-error">
+            {t("engine.failedPlugins", { count: failedPlugins })}
+          </p>
+        ) : null}
         {(engine.catalog ?? []).map((kind) => (
           <ConnectorKind
             key={kind.connector_type}
@@ -336,6 +282,7 @@ export function EnginePage({
                 await updateConnectorConfig(installation.id, config);
               })
             }
+            onRefresh={onChanged}
             onUninstall={(installation) => {
               if (
                 actionLock.current ||
@@ -447,6 +394,19 @@ function EngineStat({
       <strong className="engine-stat-value">{value}</strong>
     </div>
   );
+}
+
+function unsignedPluginCount(engine: PersonalEngineView): number {
+  return (engine.plugins ?? []).filter(
+    (item) =>
+      item.origin === "extra" &&
+      item.trust === "unsigned" &&
+      item.status === "loaded",
+  ).length;
+}
+
+function failedPluginCount(engine: PersonalEngineView): number {
+  return (engine.plugins ?? []).filter((item) => item.status === "failed").length;
 }
 
 function watchTone(kind?: string): "ok" | "warn" | "risk" | undefined {

@@ -1,16 +1,26 @@
 # Personal WhatsApp Bridge
 
 - **Chinese:** [../zh/WHATSAPP_PERSONAL.md](../zh/WHATSAPP_PERSONAL.md)
-- **Related:** [Message orchestration](MESSAGE_ORCHESTRATION.md) · [Source intake](COLLABORATION_PLATFORM_SOURCE_INTAKE.md) · [Test and acceptance](WHATSAPP_PERSONAL_TESTING.md)
-- **Status:** Purr WA CSV + WhatsApp Personal Export v1
+- **Related:** [Message orchestration](MESSAGE_ORCHESTRATION.md) · [Source intake](COLLABORATION_PLATFORM_SOURCE_INTAKE.md) · [WhatsApp Web live connector](WHATSAPP_WEB_LIVE_CONNECTOR.md) · [Test and acceptance](WHATSAPP_PERSONAL_TESTING.md)
+- **Status:** Purr WA CSV + WhatsApp Personal Export v1 + optional WhatsApp Web live driver
 
 ## Boundary
 
-Personal WhatsApp support begins with a user-triggered, read-only export from
-WhatsApp Web. Regenic does not ship or modify a browser extension. The reviewed
-path uses the upstream Purr WA userscript, then explicitly imports its CSV into
-the local personal kernel. Regenic does not receive browser cookies, run hidden
-background collection, inspect every chat, or send messages.
+Personal WhatsApp support has two local paths that share the same source
+(`whatsapp-personal`) and the same chat identity (WhatsApp JID).
+
+The import bridge begins with a user-triggered, read-only export from WhatsApp
+Web. That path does not ship or modify a browser extension. The reviewed import
+uses the upstream Purr WA userscript, then explicitly imports its CSV into the
+local personal kernel. The import bridge does not receive browser cookies, run
+hidden background collection, inspect every chat, or send messages.
+
+The optional live path is a separate `ChannelDriver` (`whatsapp-web-live`). It
+is not published to a browser store. A local MV3 extension observes only the
+currently open WhatsApp Web chat, posts to
+`POST /v1/me/connectors/:id/webhook`, and sends only Inbox replies the kernel
+already accepted through `bindEgress`. See
+[WhatsApp Web live connector](WHATSAPP_WEB_LIVE_CONNECTOR.md).
 
 Purr WA writes one CSV per selected chat. Regenic validates and converts each
 file, then sends the result through the normal plugin-host ingestion path. The
@@ -63,7 +73,7 @@ lines, and failed files. It does not keep the uploaded files after import.
 | File consent | User selects files in Regenic | Desktop imports selected files sequentially |
 | Validation | User reviews counts | Parser validates CSV/JSONL and isolates bad rows/files |
 | Identity and display | None | Regenic derives stable IDs, deduplicates, maps senders/system events, and refreshes Inbox |
-| Reply | Not available | None; WhatsApp imports are read-only |
+| Reply | Inbox, only after installing WhatsApp Web live | Import stays read-only. The same JID becomes sendable only when `whatsapp-web-live` is enabled |
 
 ## Export v1
 
@@ -122,13 +132,19 @@ pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
 ```
 
 The same explicit import is available to local desktop clients through
-`POST /v1/me/imports/whatsapp` with `{ "content": "<file text>", "file_name":
-"<original name>" }`. `file_name` is required for Purr CSV identity recovery.
-The route is available only on the personal API and has no egress capability.
+`POST /v1/me/imports` with `{ "connector_type": "whatsapp-web-live",
+"content": "<file text>", "file_name": "<original name>" }`.
+`POST /v1/me/imports/whatsapp` is an alias. `file_name` is required for
+Purr CSV identity recovery. The Engine card shows this picker from
+`installCatalog().import_files`; import does not require installing the
+live connector. Import itself has no egress; reply requires the WhatsApp
+Web live driver on the same JID.
 
 ## Open-source WhatsApp Web exporter
 
-Regenic does not ship a browser extension. The reviewed integration uses
+The import bridge does not ship a browser extension. The optional live
+connector is a separate local MV3 package and is not published to a store.
+The reviewed import integration uses
 [Purr WA Export](https://github.com/0xheycat/purr-wa), MIT-licensed version
 1.0.1 pinned at commit `b5527a349c1ee64d16c0ffff51ad934f52343291`.
 Install it with the upstream Tampermonkey or Violentmonkey instructions. In its
@@ -159,7 +175,8 @@ same timezone.
 
 Invalid lines are reported without discarding valid messages. The normal kernel
 then arranges accepted messages into current work, outside current work, or
-pending. Sending replies is deliberately out of scope for this bridge.
+pending. Sending replies is out of scope for the import bridge. After
+`whatsapp-web-live` is installed, Inbox can reply on the same JID.
 
 Run the reproducible checks in [WhatsApp test and acceptance](WHATSAPP_PERSONAL_TESTING.md)
 before merging changes to this workflow.

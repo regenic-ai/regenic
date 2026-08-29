@@ -1,14 +1,22 @@
 # 个人 WhatsApp Bridge
 
 - **English:** [../en/WHATSAPP_PERSONAL.md](../en/WHATSAPP_PERSONAL.md)
-- **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) · [来源协议收集表](COLLABORATION_PLATFORM_SOURCE_INTAKE.md) · [测试与验收](WHATSAPP_PERSONAL_TESTING.md)
-- **状态：** Purr WA CSV + WhatsApp Personal Export v1
+- **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) · [来源协议收集表](COLLABORATION_PLATFORM_SOURCE_INTAKE.md) · [WhatsApp Web live connector](WHATSAPP_WEB_LIVE_CONNECTOR.md) · [测试与验收](WHATSAPP_PERSONAL_TESTING.md)
+- **状态：** Purr WA CSV + WhatsApp Personal Export v1 + 可选 WhatsApp Web live 驱动
 
 ## 边界
 
-个人 WhatsApp 支持从用户在 WhatsApp Web 上明确触发的只读导出开始。Regenic 不自带、
-也不修改浏览器扩展；已审计的路径使用上游 Purr WA userscript，再把 CSV 显式导入本机个人
-内核。Regenic 不接收浏览器 Cookie、不做隐藏后台采集、不检查所有聊天，也不发送消息。
+个人 WhatsApp 有两条本机路径，共用同一个来源（`whatsapp-personal`）和同一套聊天
+身份（WhatsApp JID）。
+
+导入桥从用户在 WhatsApp Web 上明确触发的只读导出开始。这条路径不自带、也不修改
+浏览器扩展；已审计的导入使用上游 Purr WA userscript，再把 CSV 显式导入本机个人
+内核。导入桥不接收浏览器 Cookie、不做隐藏后台采集、不检查所有聊天，也不发送消息。
+
+可选的 live 路径是单独的 `ChannelDriver`（`whatsapp-web-live`），不会发布到浏览
+器商店。本地 MV3 扩展只观察当前打开的 WhatsApp Web 聊天，把消息打到
+`POST /v1/me/connectors/:id/webhook`，并且只发送内核已经通过 `bindEgress` 接受的
+Inbox 回复。见 [WhatsApp Web live connector](WHATSAPP_WEB_LIVE_CONNECTOR.md)。
 
 Purr WA 为每个选中的聊天写出一份 CSV。Regenic 逐份校验、转换，再让结果走正常的
 plugin-host 采集路径。通用 WhatsApp Personal Export v1 JSONL 仍然支持。两条路径都不得
@@ -52,7 +60,7 @@ plugin-host 采集路径。通用 WhatsApp Personal Export v1 JSONL 仍然支持
 | 文件授权 | 用户在 Regenic 选择文件 | 桌面逐份导入选中的文件 |
 | 校验 | 用户查看统计 | parser 校验 CSV/JSONL，并隔离坏行/坏文件 |
 | identity 与显示 | 无 | Regenic 生成稳定 ID、去重、映射发送者/系统事件并刷新 Inbox |
-| 回复 | 不支持 | 无；WhatsApp 导入保持只读 |
+| 回复 | Inbox，且须先安装 WhatsApp Web live | 导入保持只读。同一 JID 只有启用 `whatsapp-web-live` 后才能发送 |
 
 ## Export v1
 
@@ -109,13 +117,17 @@ pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
   --local-principal local-user
 ```
 
-本地桌面客户端还可通过 `POST /v1/me/imports/whatsapp` 调用同一显式导入：
-`{ "content": "<文件文本>", "file_name": "<原始文件名>" }`。Purr CSV 必须保留
-`file_name` 以恢复 chat identity。该路由仅存在于个人 API，且没有任何外发能力。
+本地桌面客户端还可通过 `POST /v1/me/imports` 调用同一显式导入：
+`{ "connector_type": "whatsapp-web-live", "content": "<文件文本>",
+"file_name": "<原始文件名>" }`。`POST /v1/me/imports/whatsapp` 是别名。
+Purr CSV 必须保留 `file_name` 以恢复 chat identity。引擎卡片上的选择器
+来自 `installCatalog().import_files`，不必先安装 live 连接器。导入本身
+没有外发；回复需要同一 JID 上的 WhatsApp Web live 驱动。
 
 ## 开源 WhatsApp Web 导出工具
 
-Regenic 不自带浏览器扩展。当前审计并接入的是 MIT 许可证的
+导入桥不自带浏览器扩展。可选的 live connector 是单独的本机 MV3 包，不会发布到
+商店。当前审计并接入的导入工具是 MIT 许可证的
 [Purr WA Export](https://github.com/0xheycat/purr-wa)，固定版本 1.0.1、提交
 `b5527a349c1ee64d16c0ffff51ad934f52343291`。按上游说明通过 Tampermonkey 或
 Violentmonkey 安装。进入面板后扫描聊天，先清空默认选择，只勾选要导出的会话；启用 **CSV**，
@@ -137,6 +149,7 @@ message identity；重复导入同一文件会去重，但发送者显示名变�
 Purr 时间按 Kernel 所在机器的本地时区解释，因此应在导出机器或相同时区中导入。
 
 坏行会被报告，不会丢弃合法消息。随后正常内核会把已接受消息安排为当前工作、不进入
-当前工作或 pending。该 bridge 故意不包含发送回复能力。
+当前工作或 pending。导入桥本身不发送回复。安装 `whatsapp-web-live` 之后，Inbox
+可以在同一 JID 上回复。
 
 合并该流程的改动前，按[WhatsApp 测试与验收](WHATSAPP_PERSONAL_TESTING.md)执行可复现检查。

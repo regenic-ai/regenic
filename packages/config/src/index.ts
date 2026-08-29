@@ -53,9 +53,6 @@ export function isAllowedPersonalCorsOrigin(origin: string): boolean {
   if (PERSONAL_EXTENSION_PROTOCOLS.has(parsed.protocol)) {
     return !parsed.username && !parsed.password && parsed.hostname.length > 0;
   }
-  if (parsed.protocol === "https:" && parsed.hostname === "web.whatsapp.com") {
-    return !parsed.username && !parsed.password;
-  }
   if (
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
     parsed.username ||

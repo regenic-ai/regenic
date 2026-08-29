@@ -2,6 +2,16 @@
   "name": "@regenic/cursor-connector",
   "version": "0.0.0",
   "private": true,
+  "regenic": {
+    "plugin": true,
+    "catalogOrder": 40,
+    "id": "@regenic/cursor-connector",
+    "displayName": "Cursor",
+    "engines": { "regenic": "1.0" },
+    "contributes": {
+      "drivers": ["cursorAgentDriver"]
+    }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

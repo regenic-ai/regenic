@@ -32,11 +32,9 @@ async function render(): Promise<void> {
     sendMode.textContent = settings.allowSend ? "send allowed" : "draft only";
   }
   try {
-    const response = await fetch(`${settings.apiOrigin}/v1/me/live/whatsapp/status`, {
-      headers: settings.apiKey ? { "x-regenic-live-key": settings.apiKey } : {},
-    });
+    const response = await fetchLiveStatus(settings);
     if (status) {
-      status.textContent = response.ok ? "connected" : "blocked";
+      status.textContent = response.label;
     }
   } catch {
     if (status) {
@@ -53,31 +51,36 @@ function formattedBuildInfo(): string {
   return build.version ?? "unknown";
 }
 
+async function fetchLiveStatus(settings: { apiOrigin: string; apiKey: string }): Promise<{
+  ok: boolean;
+  status: number;
+  label: string;
+}> {
+  const response = await fetch(`${settings.apiOrigin}/v1/me/engine`, {
+    headers: settings.apiKey ? { "x-regenic-live-key": settings.apiKey } : {},
+  });
+  if (!response.ok) {
+    return { ok: false, status: response.status, label: "blocked" };
+  }
+  const body = await response.json() as {
+    installations?: Array<{ connector_type?: string; status?: string }>;
+  };
+  const found = body.installations?.some(
+    (item) => item.connector_type === "whatsapp-web-live" && item.status === "enabled",
+  );
+  return {
+    ok: Boolean(found),
+    status: response.status,
+    label: found ? "connected" : "not installed",
+  };
+}
+
 async function runSelfTest(): Promise<void> {
   const settings = await loadSettings();
-  const stamp = new Date().toISOString();
   try {
-    const response = await fetch(`${settings.apiOrigin}/v1/me/live/whatsapp/messages`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(settings.apiKey ? { "x-regenic-live-key": settings.apiKey } : {}),
-      },
-      body: JSON.stringify({
-        client_id: "regenic-whatsapp-popup",
-        chat_id: "extension-self-test",
-        chat_title: "Extension Self Test",
-        message_id: `popup-${Date.now()}`,
-        sender_id: "extension-popup",
-        sender_name: "Regenic Extension",
-        text: `Regenic extension popup self-test ${stamp}`,
-        timestamp: stamp,
-        from_me: false,
-        message_kind: "system",
-      }),
-    });
+    const response = await fetchLiveStatus(settings);
     if (testResult) {
-      testResult.textContent = response.ok ? "sent" : `failed ${response.status}`;
+      testResult.textContent = response.ok ? "ok" : `failed ${response.status}`;
     }
   } catch {
     if (testResult) {
@@ -91,7 +94,7 @@ async function reconnectPage(): Promise<void> {
     pageScanResult.textContent = "running";
   }
   try {
-    const result = await scanActiveWhatsAppPage(await loadSettings());
+    const result = await scanActiveWhatsAppPage();
     if (pageScanResult) {
       pageScanResult.textContent = result;
     }

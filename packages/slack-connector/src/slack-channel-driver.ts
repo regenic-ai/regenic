@@ -1,7 +1,7 @@
-import type { Host } from "@regenic/plugin-host";
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  type ConnectorHost,
   envCredentialsRef,
   readEnvCredential,
   requireConnectorStream,
@@ -142,7 +142,7 @@ export const slackChannelDriver: ChannelDriver = {
 };
 
 async function mountChannel(
-  host: Host,
+  host: ConnectorHost,
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
 ): Promise<ConnectorStream> {

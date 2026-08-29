@@ -1,4 +1,9 @@
 import { NestFactory, NestApplication } from "@nestjs/core";
+import {
+  isAllowedPersonalCorsOrigin,
+  isPersonalApiEnabled,
+  type AppEnv,
+} from "@regenic/config";
 import { AppModule } from "./app.module";
 import { startPersonalBackgroundWork } from "./personal-background";
 
@@ -28,6 +33,24 @@ export async function createHttpApp(
   });
   app.useBodyParser("urlencoded", { limit: JSON_BODY_LIMIT, extended: true });
   return app;
+}
+
+/** Personal API CORS is loopback and extension pages only — never WhatsApp Web. */
+export function enablePersonalCors(
+  app: NestApplication,
+  env: AppEnv | NodeJS.ProcessEnv = process.env,
+): void {
+  if (!isPersonalApiEnabled(env)) {
+    return;
+  }
+  app.enableCors({
+    origin: (requestOrigin, callback) => {
+      callback(
+        null,
+        !requestOrigin || isAllowedPersonalCorsOrigin(requestOrigin),
+      );
+    },
+  });
 }
 
 /** Bind the port first, then start connector/work ticks. */

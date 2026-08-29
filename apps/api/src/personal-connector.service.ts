@@ -4,9 +4,12 @@ import {
   ChannelDriverError,
   ChannelDriverRegistry,
   ConnectorRunner,
+  readEnvCredential,
   DeadlineExceededError,
   INGEST_SCHEMA_VERSION,
   InstallationQuotaBook,
+  asConnectorHost,
+  persistInstallSecrets,
   channelRecord,
   connectorPollTimeoutMs,
   connectorSyncTimeoutMs,
@@ -255,7 +258,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
     try {
       const { bindWebhook } = requireWebhookPorts(driver);
-      const connector = await bindWebhook(installation, host, process.env);
+      const connector = await bindWebhook(
+        installation,
+        asConnectorHost(host),
+        process.env,
+      );
       const runner = new ConnectorRunner(
         connector,
         host.get("ingest"),
@@ -301,6 +308,49 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
+  async listEgressQueue(
+    installationId: string,
+    input: { apiKey?: string; origin?: string } = {},
+  ): Promise<{ commands: ReturnType<NonNullable<ChannelDriver["listEgressQueue"]>> }> {
+    const host = this.runtime.requireHost();
+    const installation = await this.requireInstallation(
+      host.get("authority"),
+      installationId,
+    );
+    const driver = this.drivers.get(installation.connector_type);
+    if (!driver?.listEgressQueue) {
+      throw new PersonalConnectorError(
+        "unsupported_channel",
+        "Egress queue is not available",
+        501,
+      );
+    }
+    this.assertInstallSecret(installation, input);
+    return { commands: driver.listEgressQueue(installation) };
+  }
+
+  async ackEgressQueue(
+    installationId: string,
+    commandId: string,
+    input: { apiKey?: string; origin?: string } = {},
+  ): Promise<{ acknowledged: boolean }> {
+    const host = this.runtime.requireHost();
+    const installation = await this.requireInstallation(
+      host.get("authority"),
+      installationId,
+    );
+    const driver = this.drivers.get(installation.connector_type);
+    if (!driver?.ackEgressQueue) {
+      throw new PersonalConnectorError(
+        "unsupported_channel",
+        "Egress queue is not available",
+        501,
+      );
+    }
+    this.assertInstallSecret(installation, input);
+    return driver.ackEgressQueue(installation, commandId);
+  }
+
   async followThread(
     installationId: string,
     thread: ConversationThread,
@@ -320,7 +370,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       stream = await driver.resolveThreadStream(
         installation,
         thread,
-        host,
+        asConnectorHost(host),
         process.env,
       );
     } catch (error) {
@@ -424,7 +474,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         stream = await driver.resolveThreadStream(
           installation,
           thread,
-          host,
+          asConnectorHost(host),
           process.env,
         );
       } catch {
@@ -509,7 +559,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         stream = await driver.resolveThreadStream(
           installation,
           thread,
-          host,
+          asConnectorHost(host),
           process.env,
         );
       } catch {
@@ -672,7 +722,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     try {
       const thread = await requireCreateThread(found.driver)(
         found.installation,
-        host,
+        asConnectorHost(host),
         process.env,
         {
           ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
@@ -811,7 +861,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const stream = await driver.resolveThreadStream(
       installation,
       thread,
-      host,
+      asConnectorHost(host),
       process.env,
     );
     await pollStream(
@@ -845,9 +895,19 @@ export class PersonalConnectorService implements OnModuleDestroy {
       }
     }
     const now = new Date().toISOString();
-    const created = await store.createInstallation(
-      this.buildInstallation(input, now),
-    );
+    const drafted = this.buildInstallation(input, now);
+    const created = await store.createInstallation({
+      ...drafted,
+      config: persistInstallSecrets({
+        connector_type: drafted.connector_type,
+        installation_id: drafted.id,
+        catalog: this.drivers.get(drafted.connector_type)?.installCatalog?.({
+          env: process.env,
+        }),
+        incoming: input.config ?? {},
+        stored: drafted.config ?? {},
+      }),
+    });
     void this.catchUp(created.id);
     return this.viewOf(store, created);
   }
@@ -868,12 +928,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
     let nextConfig: ConnectorInstallation["config"];
     try {
-      nextConfig = driver.install({
-        id: current.id,
-        org_id: current.org_id,
-        config,
-        now: new Date().toISOString(),
-      }).config;
+      nextConfig = persistInstallSecrets({
+        connector_type: current.connector_type,
+        installation_id: current.id,
+        catalog: driver.installCatalog?.({ env: process.env }),
+        incoming: config,
+        stored: driver.install({
+          id: current.id,
+          org_id: current.org_id,
+          config,
+          now: new Date().toISOString(),
+        }).config,
+      });
     } catch (error) {
       throw wrapDriverError(error, "invalid_config");
     }
@@ -1077,7 +1143,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       );
       const streams = await driver.resolveStreams(
         installation,
-        host,
+        asConnectorHost(host),
         process.env,
         { threads, discover: options?.discover === true },
       );
@@ -1282,6 +1348,27 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
     } catch (error) {
       throw wrapDriverError(error, "invalid_config");
+    }
+  }
+
+  private assertInstallSecret(
+    installation: ConnectorInstallation,
+    input: { apiKey?: string; origin?: string },
+  ): void {
+    const expected = readEnvCredential(installation.credentials_ref, process.env);
+    if (input.origin?.trim() && !expected) {
+      throw new PersonalConnectorError(
+        "unauthorized",
+        "Live connector API key is required for browser access",
+        401,
+      );
+    }
+    if (expected && input.apiKey !== expected) {
+      throw new PersonalConnectorError(
+        "unauthorized",
+        "Invalid live connector API key",
+        401,
+      );
     }
   }
 

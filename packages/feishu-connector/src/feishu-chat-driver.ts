@@ -4,6 +4,7 @@ import {
   keychainCredentialsRef,
   requireConnectorStream,
   type ChannelDriver,
+  type ConnectorHost,
   type ConnectorInstallation,
   type ConnectorStream,
   type ConversationThread,
@@ -12,7 +13,6 @@ import {
   type NewConnectorInstallation,
   type ResolveStreamsOptions,
 } from "@regenic/domain";
-import type { Host } from "@regenic/plugin-host";
 import {
   LarkCliClient,
   feishuChatOptionLabel,
@@ -706,7 +706,7 @@ function feishuChatFromStream(stream: ConnectorStream): FeishuChat | undefined {
 }
 
 async function mountFeishuChats(
-  host: Host,
+  host: ConnectorHost,
   installation: ConnectorInstallation,
   chats: FeishuChat[],
   env: NodeJS.ProcessEnv,

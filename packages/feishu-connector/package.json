@@ -2,6 +2,16 @@
   "name": "@regenic/feishu-connector",
   "version": "0.0.0",
   "private": true,
+  "regenic": {
+    "plugin": true,
+    "catalogOrder": 30,
+    "id": "@regenic/feishu-connector",
+    "displayName": "Feishu",
+    "engines": { "regenic": "1.0" },
+    "contributes": {
+      "drivers": ["feishuChatDriver"]
+    }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

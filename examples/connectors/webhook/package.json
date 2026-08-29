@@ -1,0 +1,11 @@
+{
+  "name": "example-webhook",
+  "main": "index.cjs",
+  "regenic": {
+    "plugin": true,
+    "id": "example-webhook",
+    "displayName": "Webhook",
+    "engines": { "regenic": "1.0" },
+    "contributes": { "drivers": ["webhookDriver"] }
+  }
+}

@@ -9,13 +9,15 @@
       input[type="text"], input[type="password"] { box-sizing: border-box; width: 100%; padding: 8px; }
       button { padding: 8px 14px; }
       .note { color: #4b5563; }
+      .error { color: #b91c1c; }
     </style>
   </head>
   <body>
     <h1>Regenic WhatsApp Settings</h1>
-    <p class="note">The connector talks only to a local Regenic API. Automatic sending stays off unless both the server command and this extension allow it.</p>
+    <p class="note">The connector talks only to a local Regenic API on 127.0.0.1 or localhost. Install <code>whatsapp-web-live</code> in Engine first. Automatic sending stays off unless Inbox queued a reply and this extension allows the click.</p>
     <label>Local API origin <input id="apiOrigin" type="text" value="http://127.0.0.1:4370"></label>
     <label>Live API key <input id="apiKey" type="password" autocomplete="off"></label>
+    <label>Installation id <input id="installationId" type="text" placeholder="leave blank to use the enabled Engine install"></label>
     <label><input id="allowSend" type="checkbox"> Allow commands to click WhatsApp's send button</label>
     <button id="save">Save</button>
     <span id="saved"></span>

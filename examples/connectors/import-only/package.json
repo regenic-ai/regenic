@@ -1,0 +1,11 @@
+{
+  "name": "example-import-only",
+  "main": "index.cjs",
+  "regenic": {
+    "plugin": true,
+    "id": "example-import-only",
+    "displayName": "Import only",
+    "engines": { "regenic": "1.0" },
+    "contributes": { "drivers": ["importOnlyDriver"] }
+  }
+}

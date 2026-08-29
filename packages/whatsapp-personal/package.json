@@ -2,6 +2,16 @@
   "name": "@regenic/whatsapp-personal",
   "version": "0.0.0",
   "private": true,
+  "regenic": {
+    "plugin": true,
+    "catalogOrder": 50,
+    "id": "@regenic/whatsapp-personal",
+    "displayName": "WhatsApp",
+    "engines": { "regenic": "1.0" },
+    "contributes": {
+      "drivers": ["whatsappWebLiveDriver"]
+    }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

@@ -1,12 +1,16 @@
+import { normalizeLoopbackApiOrigin } from "./page-logic.js";
+
 export interface ExtensionSettings {
   apiOrigin: string;
   apiKey: string;
+  installationId: string;
   allowSend: boolean;
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   apiOrigin: "http://127.0.0.1:4370",
   apiKey: "",
+  installationId: "",
   allowSend: false,
 };
 
@@ -30,16 +34,21 @@ declare const chrome: {
 export async function loadSettings(): Promise<ExtensionSettings> {
   const stored = await storageGet(DEFAULT_SETTINGS);
   return {
-    apiOrigin: typeof stored.apiOrigin === "string" && stored.apiOrigin.trim()
-      ? stored.apiOrigin.trim().replace(/\/$/, "")
-      : DEFAULT_SETTINGS.apiOrigin,
+    apiOrigin: normalizeLoopbackApiOrigin(
+      typeof stored.apiOrigin === "string" ? stored.apiOrigin : undefined,
+      DEFAULT_SETTINGS.apiOrigin,
+    ),
     apiKey: typeof stored.apiKey === "string" ? stored.apiKey : "",
+    installationId: typeof stored.installationId === "string" ? stored.installationId.trim() : "",
     allowSend: stored.allowSend === true,
   };
 }
 
 export async function saveSettings(settings: ExtensionSettings): Promise<void> {
-  await storageSet(settings);
+  await storageSet({
+    ...settings,
+    apiOrigin: normalizeLoopbackApiOrigin(settings.apiOrigin, DEFAULT_SETTINGS.apiOrigin),
+  });
 }
 
 export function openOptionsPage(): void {
@@ -59,8 +68,8 @@ export function sendRuntimeMessage(message: unknown): Promise<unknown> {
   });
 }
 
-export async function scanActiveWhatsAppPage(settings: ExtensionSettings): Promise<string> {
-  const response = await sendRuntimeMessage({ type: "regenic.whatsapp.popupScan", settings });
+export async function scanActiveWhatsAppPage(): Promise<string> {
+  const response = await sendRuntimeMessage({ type: "regenic.whatsapp.popupScan" });
   if (response && typeof response === "object" && typeof (response as { result?: unknown }).result === "string") {
     return (response as { result: string }).result;
   }

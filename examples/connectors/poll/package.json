@@ -1,0 +1,11 @@
+{
+  "name": "example-poll",
+  "main": "index.cjs",
+  "regenic": {
+    "plugin": true,
+    "id": "example-poll",
+    "displayName": "Poll",
+    "engines": { "regenic": "1.0" },
+    "contributes": { "drivers": ["pollDriver"] }
+  }
+}

@@ -15,6 +15,7 @@ import {
   isForwardMode,
   parseConversationThread,
   parseStoredContentParts,
+  asConnectorHost,
   requireReplyPorts,
   storedPartBytes,
   storedPartContentHash,
@@ -276,7 +277,7 @@ export class PersonalForwardService {
         const egress = await ports.bindEgress(
           found.installation,
           found.thread,
-          host,
+          asConnectorHost(host),
           process.env,
         );
         receipt = {

@@ -15,6 +15,7 @@ import type {
   Locale,
   MessageReceipt,
   PersonalEngineView,
+  PluginInventoryItem,
   PromptAnswerItem,
   RecipeView,
   ReplyAttachmentInput,
@@ -338,6 +339,7 @@ export async function fetchEngine(
       ...item,
       prerequisites: item.prerequisites ?? [],
       setup_steps: catalogSetupSteps(item.setup_steps),
+      import_files: catalogImportFiles(item.import_files),
       setup_ready: item.setup_ready ?? false,
       singleton: item.singleton === true,
       docs: catalogDocs(item.docs),
@@ -354,6 +356,70 @@ export async function fetchEngine(
       setup_ready: item.setup_ready !== false,
       docs: catalogDocs(item.docs),
     })),
+    plugins: catalogPlugins(engine.plugins),
+    plugin_dir: typeof engine.plugin_dir === "string" ? engine.plugin_dir : null,
+  };
+}
+
+function catalogPlugins(
+  plugins: PersonalEngineView["plugins"],
+): PluginInventoryItem[] {
+  if (!Array.isArray(plugins)) {
+    return [];
+  }
+  return plugins.flatMap((item) => {
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    const spec = typeof item.spec === "string" ? item.spec.trim() : "";
+    if (!id && !spec) {
+      return [];
+    }
+    return [
+      {
+        id: id || spec,
+        spec: spec || id,
+        version: typeof item.version === "string" ? item.version : null,
+        display_name:
+          typeof item.display_name === "string" ? item.display_name : null,
+        origin: item.origin === "extra" ? "extra" : "first_party",
+        trust: item.trust === "unsigned" ? "unsigned" : "core",
+        status:
+          item.status === "skipped" || item.status === "failed"
+            ? item.status
+            : "loaded",
+        path: typeof item.path === "string" ? item.path : null,
+        drivers: stringList(item.drivers),
+        executors: stringList(item.executors),
+        error: typeof item.error === "string" ? item.error : null,
+      },
+    ];
+  });
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) =>
+    typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
+  );
+}
+
+function catalogImportFiles(
+  files: PersonalEngineView["catalog"][number]["import_files"] | undefined,
+): PersonalEngineView["catalog"][number]["import_files"] | undefined {
+  const accept = typeof files?.accept === "string" ? files.accept.trim() : "";
+  if (!accept || !files) {
+    return undefined;
+  }
+  const title = typeof files.title === "string" ? files.title.trim() : "";
+  const description =
+    typeof files.description === "string" ? files.description.trim() : "";
+  const maxBytes = files.max_bytes;
+  return {
+    accept,
+    ...(typeof maxBytes === "number" && maxBytes > 0 ? { max_bytes: maxBytes } : {}),
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
   };
 }
 
@@ -475,14 +541,19 @@ export async function uninstallConnector(id: string): Promise<void> {
   }
 }
 
-export async function importWhatsAppExport(
+export async function importConnectorFile(
+  connectorType: string,
   content: string,
   fileName: string,
 ): Promise<WhatsAppImportView> {
-  const response = await fetch(`${origin()}/v1/me/imports/whatsapp`, {
+  const response = await fetch(`${origin()}/v1/me/imports`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content, file_name: fileName }),
+    body: JSON.stringify({
+      connector_type: connectorType,
+      content,
+      file_name: fileName,
+    }),
   });
   const body = (await response.json()) as
     | WhatsAppImportView
@@ -491,10 +562,17 @@ export async function importWhatsAppExport(
     throw new Error(
       "error" in body && body.error?.message
         ? body.error.message
-        : `WhatsApp import ${response.status}`,
+        : `import ${response.status}`,
     );
   }
   return body as WhatsAppImportView;
+}
+
+export async function importWhatsAppExport(
+  content: string,
+  fileName: string,
+): Promise<WhatsAppImportView> {
+  return importConnectorFile("whatsapp-web-live", content, fileName);
 }
 
 export async function createConversation(input: {

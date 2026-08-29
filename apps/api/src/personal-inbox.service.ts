@@ -76,6 +76,11 @@ import {
   type ExecutorKindCatalogItem,
 } from "./personal-executor.service";
 import { PersonalWorkService, type WorkInboxFace } from "./personal-work.service";
+import {
+  listPluginInventory,
+  resolvePluginDirectory,
+  type PluginInventoryItem,
+} from "./channel-plugins";
 
 export interface InboxViewItem {
   decision: ArrangementDecision;
@@ -160,6 +165,8 @@ export interface PersonalEngineView {
   catalog: ConnectorCatalogItem[];
   executor_installations: EngineExecutorView[];
   executor_catalog: ExecutorKindCatalogItem[];
+  plugins: PluginInventoryItem[];
+  plugin_dir: string | null;
 }
 
 export interface InboxListQuery {
@@ -359,6 +366,8 @@ export class PersonalInboxService {
         catalog: await catalogReady([]),
         executor_installations: [],
         executor_catalog: executorCatalog,
+        plugins: listPluginInventory(),
+        plugin_dir: resolvePluginDirectory(),
       };
     }
     const host = this.runtime.requireHost();
@@ -401,6 +410,8 @@ export class PersonalInboxService {
         executorInstallations,
         connectorOptions,
       ),
+      plugins: listPluginInventory(),
+      plugin_dir: resolvePluginDirectory(),
     };
   }
 

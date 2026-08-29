@@ -11,6 +11,7 @@ import {
   parseConversationThread,
   pickAbsenteeInboxRows,
   recipeWantsWriteBack,
+  asConnectorHost,
   requireCreateThread,
   requireReplyPorts,
   selectThreadEvidenceLines,
@@ -63,7 +64,7 @@ export class PersonalWorkChannel {
         }
         return requireCreateThread(found.driver)(
           found.installation,
-          host,
+          asConnectorHost(host),
           process.env,
           options?.cwd ? { cwd: options.cwd } : undefined,
         );
@@ -138,7 +139,7 @@ export class PersonalWorkChannel {
     const egress = await bindEgress(
       found.installation,
       thread,
-      host,
+      asConnectorHost(host),
       process.env,
     );
     const receipt =
