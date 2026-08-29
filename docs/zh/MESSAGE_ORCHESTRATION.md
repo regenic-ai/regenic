@@ -61,7 +61,8 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 
 控制台是编排的人机表面：
 
-- 默认是当前需要处理的
+- 默认是当前需要处理且未「不显示」的
+- 人或不需要再看的会话可以折叠；这是列表表面，不是 L5 工单状态，也不是 tombstone
 - 其余不会出现
 - 围绕 Event 的线程窗，不是孤立摘要
 - 出处可查

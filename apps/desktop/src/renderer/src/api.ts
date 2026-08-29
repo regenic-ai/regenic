@@ -193,6 +193,7 @@ export async function fetchInbox(
     live?: boolean;
     thread_id?: string;
     limit?: number;
+    list?: "shown" | "hidden";
   } = {},
 ): Promise<InboxViewItem[]> {
   const params = new URLSearchParams();
@@ -220,6 +221,9 @@ export async function fetchInbox(
   if (query.limit) {
     params.set("limit", String(query.limit));
   }
+  if (query.list === "hidden") {
+    params.set("list", "hidden");
+  }
   const encoded = params.toString();
   const suffix = encoded ? `?${encoded}` : "";
   const response = await fetch(`${origin()}/v1/me/inbox${suffix}`);
@@ -240,6 +244,7 @@ export async function fetchInbox(
     thread_id: item.thread_id,
     title: item.title ?? null,
     pinned: item.pinned === true,
+    hidden: item.hidden === true,
     conversation_label: item.conversation_label ?? null,
     conversation_kind: item.conversation_kind ?? null,
     actor_label: item.actor_label ?? null,
@@ -517,6 +522,7 @@ export async function updateConversationPrefs(input: {
   thread_id: string;
   title?: string | null;
   pinned?: boolean;
+  hidden?: boolean;
 }): Promise<ConversationPrefView> {
   const response = await fetch(`${origin()}/v1/me/conversations/prefs`, {
     method: "POST",
@@ -857,10 +863,20 @@ export async function fetchUiPrefs(): Promise<UiPrefsView> {
     throw new Error(`prefs ${response.status}`);
   }
   const body = (await response.json()) as UiPrefsView;
-  return { inbox_sort: body.inbox_sort === "attention" ? "attention" : "normal" };
+  return {
+    inbox_sort: body.inbox_sort === "attention" ? "attention" : "normal",
+    inbox_list: normalizeInboxListView(
+      body.inbox_list ??
+        (body as { inbox_membership?: string }).inbox_membership,
+    ),
+  };
 }
 
-export async function saveUiPrefs(input: UiPrefsView): Promise<UiPrefsView> {
+function normalizeInboxListView(value: unknown): UiPrefsView["inbox_list"] {
+  return value === "hidden" || value === "done" ? "hidden" : "shown";
+}
+
+export async function saveUiPrefs(input: Partial<UiPrefsView>): Promise<UiPrefsView> {
   const response = await fetch(`${origin()}/v1/me/prefs`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -877,6 +893,11 @@ export async function saveUiPrefs(input: UiPrefsView): Promise<UiPrefsView> {
   return {
     inbox_sort:
       "inbox_sort" in body && body.inbox_sort === "attention" ? "attention" : "normal",
+    inbox_list: normalizeInboxListView(
+      "inbox_list" in body
+        ? body.inbox_list
+        : (body as { inbox_membership?: string }).inbox_membership,
+    ),
   };
 }
 

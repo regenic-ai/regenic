@@ -1,6 +1,8 @@
 import {
   cancelWorkRun,
   deliveryAbandoned,
+  foldThreadByPolicy,
+  isActiveWorkStatus,
   enqueueWriteBack,
   isAbandonedWorkItem,
   recipeTriggerOf,
@@ -122,6 +124,9 @@ export class PersonalWorkSupervise {
         status,
         updated_at: now,
       });
+      if (!isActiveWorkStatus(status)) {
+        await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
+      }
     }
   }
 

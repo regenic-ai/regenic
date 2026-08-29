@@ -24,7 +24,19 @@ describe("inboxStoreQuery", () => {
     const thread = parseConversationThread("feishu:oc_yiki");
     assert.deepEqual(inboxStoreQuery({ heads: true, thread_id: "feishu:oc_yiki" }, thread), {
       heads: true,
+      list: "shown",
       thread_ids: ["feishu:oc_yiki"],
     });
+    assert.deepEqual(
+      inboxStoreQuery(
+        { heads: true, list: "hidden", thread_id: "feishu:oc_yiki" },
+        thread,
+      ),
+      {
+        heads: true,
+        list: "hidden",
+        thread_ids: ["feishu:oc_yiki"],
+      },
+    );
   });
 });

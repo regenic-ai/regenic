@@ -20,7 +20,7 @@ import type {
   TombstoneEvent,
 } from "./ingestion";
 import { MemoryWorkStore } from "./memory-work-store";
-import type { WorkStore } from "./work";
+import { type WorkStore } from "./work";
 import {
   AuthorityConflictError,
   collectAvailableBlobs,
@@ -32,6 +32,7 @@ import {
   selectInboxItems,
   summarizeInboxItems,
 } from "./inbox-query";
+import { normalizeInboxListView } from "./list-surface";
 
 function sourceKey(identity: SourceIdentity): string {
   return JSON.stringify([identity.org_id, identity.source, identity.external_id]);
@@ -160,10 +161,13 @@ export class MemoryAuthorityStore
   }
 
   async listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]> {
-    const items =
-      query?.siblings || query?.heads
-        ? this.decidedInbox(orgId, query)
-        : this.currentWorkInbox(orgId);
+    const useDecided =
+      query?.siblings ||
+      query?.heads ||
+      normalizeInboxListView(query?.list) === "hidden";
+    const items = useDecided
+      ? await this.decidedInbox(orgId, query)
+      : this.currentWorkInbox(orgId);
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
       if (byTime !== 0) {
@@ -181,9 +185,13 @@ export class MemoryAuthorityStore
   }
 
   private currentWorkInbox(orgId: string): InboxItem[] {
+    const hidden = this.hiddenThreadIds(orgId);
     return [...this.currentBySource.values()].flatMap((event) => {
       const decision = this.dispositions.get(event.id);
       if (event.org_id !== orgId || decision?.disposition !== "current_work") {
+        return [];
+      }
+      if (hidden.has(eventThreadId(event))) {
         return [];
       }
       return [
@@ -198,13 +206,18 @@ export class MemoryAuthorityStore
     });
   }
 
-  private decidedInbox(orgId: string, query?: InboxQuery): InboxItem[] {
+  private async decidedInbox(
+    orgId: string,
+    query?: InboxQuery,
+  ): Promise<InboxItem[]> {
     const scoped = Boolean(query?.source || query?.target || query?.thread_ids);
     const allowed = scoped
       ? undefined
-      : new Set(
-          this.currentWorkInbox(orgId).map((item) => eventThreadId(item.event)),
-        );
+      : normalizeInboxListView(query?.list) === "hidden"
+        ? this.hiddenThreadIds(orgId)
+        : new Set(
+            this.currentWorkInbox(orgId).map((item) => eventThreadId(item.event)),
+          );
     if (allowed && allowed.size === 0) {
       return [];
     }
@@ -231,6 +244,14 @@ export class MemoryAuthorityStore
     });
   }
 
+  private hiddenThreadIds(orgId: string): Set<string> {
+    return new Set(
+      [...this.prefs.values()]
+        .filter((pref) => pref.org_id === orgId && pref.hidden)
+        .map((pref) => pref.thread_id),
+    );
+  }
+
   async listConversationPrefs(orgId: string): Promise<ConversationPref[]> {
     return [...this.prefs.values()]
       .filter((pref) => pref.org_id === orgId)
@@ -249,11 +270,19 @@ export class MemoryAuthorityStore
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
     const current = this.prefs.get(prefKey(input.org_id, input.thread_id));
+    const hidden =
+      input.hidden !== undefined ? input.hidden : (current?.hidden ?? false);
     const next: ConversationPref = {
       org_id: input.org_id,
       thread_id: input.thread_id,
       title: input.title !== undefined ? input.title : (current?.title ?? null),
       pinned: input.pinned !== undefined ? input.pinned : (current?.pinned ?? false),
+      hidden,
+      hidden_reason: hidden
+        ? input.hidden_reason !== undefined
+          ? input.hidden_reason
+          : (current?.hidden_reason ?? (input.hidden === true ? "human" : null))
+        : null,
       last_read_at:
         input.last_read_at !== undefined
           ? input.last_read_at

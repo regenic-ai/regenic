@@ -10,6 +10,7 @@ import {
   orderThreadMessages,
   openedThreadView,
   overlayThreadMessages,
+  applyPrefOverlay,
   resolveThreadAttention,
   sortInboxThreads,
   workThreadId,
@@ -124,6 +125,7 @@ function thread(input: {
     conversation_label: null,
     conversation_kind: null,
     pinned: input.pinned === true,
+    hidden: false,
     can_send: true,
     opened_at: input.opened_at,
     messages,
@@ -577,6 +579,22 @@ describe("inbox sort", () => {
     const next = markInboxThreadRead([unread, other], "feishu:oc_1");
     assert.equal(next[0].unread, false);
     assert.equal(next[1].unread, true);
+  });
+});
+
+describe("pref overlay", () => {
+  it("applies a hide fold without waiting for the next poll", () => {
+    const row = thread({ id: "crm:order-1" });
+    const next = applyPrefOverlay([row], {
+      "crm:order-1": {
+        title: null,
+        pinned: false,
+        hidden: true,
+        updated_at: "2026-08-29T04:00:00.000Z",
+      },
+    });
+    assert.equal(next[0].hidden, true);
+    assert.equal(next[0].pref_updated_at, "2026-08-29T04:00:00.000Z");
   });
 });
 

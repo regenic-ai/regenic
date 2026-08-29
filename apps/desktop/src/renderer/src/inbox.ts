@@ -22,6 +22,7 @@ export interface InboxThread {
   conversation_label: string | null;
   conversation_kind: string | null;
   pinned: boolean;
+  hidden: boolean;
   pref_updated_at?: string;
   can_send: boolean;
   await_reply?: boolean;
@@ -46,6 +47,7 @@ export const MAX_CACHED_THREADS = 8;
 export interface ConversationPrefOverlay {
   title: string | null;
   pinned: boolean;
+  hidden: boolean;
   updated_at: string;
 }
 
@@ -105,6 +107,7 @@ export function applyPrefOverlay(
     if (
       thread.title === local.title &&
       thread.pinned === local.pinned &&
+      thread.hidden === local.hidden &&
       thread.pref_updated_at === local.updated_at
     ) {
       return thread;
@@ -114,6 +117,7 @@ export function applyPrefOverlay(
       ...thread,
       title: local.title,
       pinned: local.pinned,
+      hidden: local.hidden,
       pref_updated_at: local.updated_at,
     };
   });
@@ -432,6 +436,7 @@ function buildThread(
     ),
     conversation_kind: threadConversationKind(ordered, previous?.conversation_kind),
     pinned: pref.pinned,
+    hidden: pref.hidden,
     pref_updated_at: pref.updated_at,
     can_send: ordered.some((item) => item.can_send),
     await_reply: ordered.some((item) => item.await_reply === true),
@@ -642,6 +647,7 @@ function isEmptyRecord(value: Record<string, unknown>): boolean {
 function latestPref(messages: InboxViewItem[]): {
   title: string | null;
   pinned: boolean;
+  hidden: boolean;
   updated_at?: string;
 } {
   let best: InboxViewItem | undefined;
@@ -657,6 +663,7 @@ function latestPref(messages: InboxViewItem[]): {
   return {
     title: source?.title ?? null,
     pinned: source?.pinned === true,
+    hidden: source?.hidden === true,
     updated_at: source?.pref_updated_at ?? undefined,
   };
 }

@@ -187,7 +187,7 @@ interface AuthorityStore {
 }
 ```
 
-`listInbox` returns only current source heads whose disposition is `current_work`. Tombstoned or later-noise Events stay in the store and stay out of the inbox. A current head with no disposition is arranged on the next ingest of that source identity, including a duplicate replay.
+`listInbox` defaults to current source heads whose disposition is `current_work` and whose conversation is not `conversation_prefs.hidden` (shown list). `list=hidden` returns folded conversations; the list face is still the last non-tombstone visible message. Hidden is a list-surface pref, not derived from tombstone / `work_acked` / WorkItem status. A human fold writes `hidden_reason=human` and stays put when new work arrives. A policy fold writes `policy` (tombstone off the desk, a finished or dismissed job) and unhides when new `current_work` is accepted. Tombstoned Events stay in the store. A current head with no disposition is arranged on the next ingest of that source identity, including a duplicate replay. The kernel applies fold policy after each ingest batch; connectors never see this layer.
 
 ## 6. Canonical Input Contract
 

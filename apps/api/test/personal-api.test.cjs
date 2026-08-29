@@ -385,6 +385,74 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("lists a tombstoned thread on the hidden list after policy fold", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const blobs = new FsBlobStore(blobRoot);
+    const service = new IngestionService(blobs, authority);
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "done-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "regenic",
+          external_id: "order-9",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor: { id: "local-owner" },
+          scope: { id: "personal" },
+          type: "task",
+          content: [
+            {
+              role: "body",
+              media_type: "text/plain",
+              text: "Review this order.",
+            },
+          ],
+        },
+      ],
+    });
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "done-2",
+      received_at: "2026-08-21T00:02:00.000Z",
+      records: [
+        {
+          operation: "tombstone",
+          source: "regenic",
+          external_id: "order-9",
+          occurred_at: "2026-08-21T00:02:00.000Z",
+          actor: { id: "local-owner" },
+          scope: { id: "personal" },
+          type: "task",
+        },
+      ],
+    });
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const shown = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
+      const hidden = await (
+        await fetch(`${origin}/v1/me/inbox?heads=1&list=hidden`)
+      ).json();
+      assert.equal(shown.length, 0);
+      assert.equal(hidden.length, 1);
+      assert.equal(hidden[0].event.external_id, "order-9");
+      assert.notEqual(hidden[0].event.operation, "tombstone");
+      assert.equal(hidden[0].hidden, true);
+      assert.match(hidden[0].body_text ?? "", /Review this order/);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("clears local store data and keeps connectors and recipes", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

@@ -77,6 +77,8 @@ export class PersonalController {
     @Query("live") live?: string,
     @Query("thread_id") threadId?: string,
     @Query("limit") limit?: string,
+    @Query("list") list?: string,
+    @Query("membership") membership?: string,
   ) {
     const query = {
       since: since?.trim() || undefined,
@@ -87,6 +89,7 @@ export class PersonalController {
       live: live === "1" || live === "true",
       thread_id: threadId?.trim() || undefined,
       limit: limit?.trim() ? Number(limit) : undefined,
+      list: list?.trim() || membership?.trim() || undefined,
     };
     return this.guard(async () => {
       if (shouldNoteHumanInbox(query)) {
@@ -188,7 +191,14 @@ export class PersonalController {
   @Post("conversations/prefs")
   updateConversationPrefs(
     @Body()
-    body: { thread_id?: string; title?: string | null; pinned?: boolean } | undefined,
+    body:
+      | {
+          thread_id?: string;
+          title?: string | null;
+          pinned?: boolean;
+          hidden?: boolean;
+        }
+      | undefined,
   ) {
     return this.guard(() => this.inbox.updateConversationPrefs(body ?? {}));
   }
@@ -294,7 +304,16 @@ export class PersonalController {
   }
 
   @Post("prefs")
-  putPrefs(@Body() body: { inbox_sort?: string } | undefined) {
+  putPrefs(
+    @Body()
+    body:
+      | {
+          inbox_sort?: string;
+          inbox_list?: string;
+          inbox_membership?: string;
+        }
+      | undefined,
+  ) {
     return this.guard(() => this.work.putPrefs(body ?? {}));
   }
 

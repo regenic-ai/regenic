@@ -46,7 +46,7 @@ Personal ships first so one person can connect a channel, dispatch work, and opt
 3. **Open export** — Markdown / JSON(L); data stays portable.
 4. **Existing channels** — Slack stays Slack. Regenic reads from and writes back to those apps; it does not replace them.
 5. **Not a notes product** — no outliner or bi-directional note graph in Phase 1.
-6. **Console is a workbench** — the default view is what needs handling now, not every channel’s firehose.
+6. **Console is a workbench** — the default view is what needs handling now, not every channel’s firehose. A person can hide a conversation; that is not the same as finishing a job or a source tombstone.
 
 ## Out of scope
 

@@ -46,8 +46,12 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "preview.image"), "Image preview");
     assert.equal(translate("zh", "preview.close"), "关闭预览");
     assert.equal(translate("zh", "preview.counter", { current: 2, total: 5 }), "2 / 5");
-    assert.equal(translate("en", "tray.workCount", { count: 3 }), "3 current work");
-    assert.equal(translate("zh", "tray.workCount", { count: 3 }), "3 条当前工作");
+    assert.equal(translate("en", "tray.workCount", { count: 3 }), "3 open");
+    assert.equal(translate("zh", "tray.workCount", { count: 3 }), "3 条进行中");
+    assert.equal(translate("zh", "inbox.shown"), "显示");
+    assert.equal(translate("zh", "inbox.hidden"), "不显示");
+    assert.equal(translate("en", "inbox.shown"), "Showing");
+    assert.equal(translate("en", "inbox.hide"), "Hide");
     assert.equal(translate("en", "settings.store"), "Local data");
     assert.equal(translate("zh", "settings.store"), "本机数据");
     assert.equal(translate("zh", "settings.storeClear"), "清理本机数据");

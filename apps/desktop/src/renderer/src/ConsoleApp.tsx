@@ -66,6 +66,7 @@ import type {
   CreatedConversation,
   ForwardView,
   InboxSortMode,
+  InboxListView,
   InboxViewItem,
   NavId,
   PersonalEngineView,
@@ -103,6 +104,7 @@ export function ConsoleApp() {
   );
   const [host, setHost] = useState<HostStats | null>(null);
   const [sortMode, setSortMode] = useState<InboxSortMode>("normal");
+  const [listView, setListView] = useState<InboxListView>("shown");
   const [recipeSeed, setRecipeSeed] = useState<RecipeSeed | null>(null);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
@@ -133,6 +135,9 @@ export function ConsoleApp() {
   const lastFullRef = useRef(0);
   const delayRef = useRef(POLL_MS);
   const ackStampRef = useRef<Record<string, string>>({});
+  const listViewRef = useRef(listView);
+  listViewRef.current = listView;
+  const lastFetchedListRef = useRef<InboxListView>("shown");
 
   const applyHeads = (nextHeads: InboxViewItem[]) => {
     const reused = reuseInboxList(inboxRef.current, nextHeads);
@@ -400,17 +405,26 @@ export function ConsoleApp() {
         }
         const digest = nextEngine.inbox_digest ?? "";
         const now = Date.now();
+        const requested = listViewRef.current;
         const skipHeads =
+          requested === lastFetchedListRef.current &&
           digest.length > 0 &&
           digest === inboxDigestRef.current &&
           inboxRef.current.length > 0 &&
           now - lastFullRef.current < FULL_REFRESH_MS;
         if (!skipHeads) {
-          const heads = await fetchInbox({ heads: true });
+          const heads = await fetchInbox({
+            heads: true,
+            list: requested,
+          });
           if (workspaceEpoch.current !== epoch) {
             continue;
           }
+          if (listViewRef.current !== requested) {
+            continue;
+          }
           applyHeads(heads);
+          lastFetchedListRef.current = requested;
           inboxDigestRef.current = digest || inboxDigestRef.current;
           lastFullRef.current = Date.now();
         }
@@ -515,6 +529,7 @@ export function ConsoleApp() {
       .then((prefs) => {
         if (!cancelled) {
           setSortMode(prefs.inbox_sort);
+          setListView(prefs.inbox_list);
         }
       })
       .catch(() => undefined);
@@ -522,6 +537,11 @@ export function ConsoleApp() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    inboxDigestRef.current = null;
+    void refresh();
+  }, [listView, refresh]);
 
   useEffect(() => {
     if (nav === "engine") {
@@ -610,12 +630,15 @@ export function ConsoleApp() {
     groupedInboxRef.current = inbox;
     return sortInboxThreads(
       applyPrefOverlay(
-        applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
+        applyOpenedAt(
+          mergeDraftThreads(grouped, listView === "shown" ? drafts : []),
+          openedAtRef.current,
+        ),
         prefOverlay,
-      ),
+      ).filter((thread) => (listView === "hidden" ? thread.hidden : !thread.hidden)),
       sortMode,
     );
-  }, [inbox, drafts, prefOverlay, sortMode]);
+  }, [inbox, drafts, prefOverlay, sortMode, listView]);
   const threads = useMemo(
     () => overlayThreadMessages(listThreads, messagesByThread),
     [listThreads, messagesByThread],
@@ -637,6 +660,10 @@ export function ConsoleApp() {
   const startConversation = async (installationId: string) => {
     if (creating || createTargets.length === 0) {
       return;
+    }
+    if (listViewRef.current !== "shown") {
+      setListView("shown");
+      void saveUiPrefs({ inbox_list: "shown" }).catch(() => undefined);
     }
     const target = createTargets.find((item) => item.id === installationId);
     if (!target) {
@@ -726,12 +753,13 @@ export function ConsoleApp() {
 
   const persistPrefs = useCallback(async (
     thread: InboxThread,
-    patch: { title?: string | null; pinned?: boolean },
+    patch: { title?: string | null; pinned?: boolean; hidden?: boolean },
   ) => {
     const previous = prefOverlayRef.current[thread.id];
     const optimistic: ConversationPrefOverlay = {
       title: patch.title !== undefined ? patch.title : thread.title,
       pinned: patch.pinned !== undefined ? patch.pinned : thread.pinned,
+      hidden: patch.hidden !== undefined ? patch.hidden : thread.hidden,
       updated_at: new Date().toISOString(),
     };
     setPrefOverlay((current) => ({ ...current, [thread.id]: optimistic }));
@@ -745,6 +773,7 @@ export function ConsoleApp() {
         [thread.id]: {
           title: saved.title,
           pinned: saved.pinned,
+          hidden: saved.hidden,
           updated_at: saved.updated_at,
         },
       }));
@@ -771,9 +800,18 @@ export function ConsoleApp() {
     (thread: InboxThread, pinned: boolean) => persistPrefs(thread, { pinned }),
     [persistPrefs],
   );
+  const hideThread = useCallback(
+    (thread: InboxThread, hidden: boolean) => persistPrefs(thread, { hidden }),
+    [persistPrefs],
+  );
   const changeSortMode = useCallback((mode: InboxSortMode) => {
     setSortMode(mode);
     void saveUiPrefs({ inbox_sort: mode }).catch(() => undefined);
+  }, []);
+  const changeListView = useCallback((next: InboxListView) => {
+    setListView(next);
+    inboxDigestRef.current = null;
+    void saveUiPrefs({ inbox_list: next }).catch(() => undefined);
   }, []);
   const runSelectedWork = useCallback(
     async (thread: InboxThread) => {
@@ -842,7 +880,11 @@ export function ConsoleApp() {
           {host && host.memory.kind !== "ok" ? (
             <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
           ) : null}
-          <span className="chip">{t("chrome.currentWorkCount", { count: listThreads.length })}</span>
+          <span className="chip">
+            {t("chrome.currentWorkCount", {
+              count: engine?.inbox_count ?? (listView === "shown" ? listThreads.length : 0),
+            })}
+          </span>
         </div>
       </header>
       <nav className="rail" aria-label="Main">
@@ -903,8 +945,11 @@ export function ConsoleApp() {
             onRefresh={refresh}
             onRename={renameThread}
             onPin={pinThread}
+            onHide={hideThread}
             sortMode={sortMode}
             onSortMode={changeSortMode}
+            listView={listView}
+            onListView={changeListView}
             onRunWork={runSelectedWork}
             onDismissWork={dismissSelectedWork}
             onBindRecipe={bindSelectedRecipe}
