@@ -11,13 +11,13 @@ Regenic orchestrates **messages**. It does not host the apps where those message
 Channel wire, shared meaning, and execution stay on separate layers. Contract: [RFC 0009](rfcs/0009-work-orchestration.md).
 
 ```text
-L0 protocol plugin    Feishu / Slack / CRM / DSH wire only
+L0 protocol plugin    Feishu / Slack / private plugin / DSH wire only
 L1 envelope           IngestRecord: identity, time, author, body, idempotency
 L2 record class       utterance | task | status | prompt     ← shared across N channels
 L3 speaker            utterance only: user | assistant | system
 L4 thread facet       kernel projection: chat | agent | ticket
 L5 handling           policy may open a WorkItem (optional)
-L6 execution          TaskExecutor plugin (DSH / Cursor / internal)
+L6 execution          TaskExecutor plugin (DSH / Cursor / private plugin)
 ```
 
 A connector install is L0. It is not a lane. One Feishu install can emit a DM (`utterance` + `user` + `chat`), a group bot (`utterance` + `assistant` + `chat`), and an approval (`task` + `ticket`) on the same wire. The kernel projects L4. Policy opens an L5 Job only for a `task` or a Recipe that satisfies the auto-start Specification. A session may have many jobs; the list shows the foreground face. Most chat never becomes a WorkItem. When a source splits tickets into types, the connector stamps an opaque `unit_kind` on the record and a Recipe equality-matches it. That is not a new L2 / L4 value and not an install attribute.
@@ -30,7 +30,7 @@ Kernel and desktop read `record_class`, `thread_facet`, `unit_kind`, `attention`
 
 ## Message flow
 
-A human or an agent should not need to know whether a thread arrived from mail, a chat workspace, an internal ticket system, or a file. Incoming traffic is normalized into one message format and stored as Event and Blob. Replies go back to the original channel. Cross-channel forward compiles then writes into **another** writable thread, or a new conversation on a `can_create` install; it does not reroute a reply. See [RFC 0010](rfcs/0010-cross-channel-forward.md).
+A human or an agent should not need to know whether a thread arrived from mail, a chat workspace, a ticket, or a file. Incoming traffic is normalized into one message format and stored as Event and Blob. Replies go back to the original channel. Cross-channel forward compiles then writes into **another** writable thread, or a new conversation on a `can_create` install; it does not reroute a reply. See [RFC 0010](rfcs/0010-cross-channel-forward.md).
 
 ```text
 channels

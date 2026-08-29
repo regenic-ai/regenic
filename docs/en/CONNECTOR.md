@@ -234,16 +234,16 @@ install matches, `ownsThread` wins over the first match.
 
 ### Work-unit type (`unit_kind`)
 
-CRM and internal systems often split work into types, and send **one
-conversation per task instance**. Conversation titles are not stable, so
-they must not be routing keys. `record_class=task` only means “this is a
-ticket.” It cannot tell “order review” from “lead follow-up.”
+Private plugins often split work into types, and send **one conversation
+per task instance**. Conversation titles are not stable, so they must not
+be routing keys. `record_class=task` only means “this is a ticket.” It
+cannot tell “order review” from “lead follow-up.”
 
 A connector does three declarative things:
 
 1. `subjectCatalog()` publishes the vocabulary. The connector keeps `id`
    unique across plugins (convention `{source}.{native}`, e.g.
-   `crm.order_review`). The kernel does not parse the dot.
+   `private.order_review`). The kernel does not parse the dot.
 2. Stamp `channelRecord({ unit_kind })` on ingest. Read the type from the
    source API, form, or pipeline. Guessing stays at L0. Do not treat a
    conversation title as the type, and do not write the type into
@@ -402,10 +402,9 @@ prefill. The engine catalog also carries the driver's `source` and
 
 Extra packages load once at process start from `REGENIC_PLUGIN_DIR` (each
 child directory with a `package.json`) or `REGENIC_CHANNEL_PLUGIN` (one
-module id or path). `REGENIC_CRM_CONNECTOR` is a compat alias for the
-latter. The public tree does not name private packages. A loaded extra
-cannot replace an already registered `connector_type`. A missing or
-invalid explicit plugin is skipped and logged.
+module id or path). The public tree does not name private packages. A
+loaded extra cannot replace an already registered `connector_type`. A
+missing or invalid explicit plugin is skipped and logged.
 
 When a finished job writes back, the kernel matches the first result line
 exactly to a live prompt option. `writeBackLabels(label)` may add aliases

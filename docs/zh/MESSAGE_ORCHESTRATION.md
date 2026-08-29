@@ -11,13 +11,13 @@ Regenic 编排的是**消息**。它不托管这些消息当初被写下的那�
 渠道 wire、共用语义和执行分属不同层。协议见 [RFC 0009](rfcs/0009-work-orchestration.md)。
 
 ```text
-L0 协议插件     只懂飞书 / Slack / CRM / DSH 的 wire
+L0 协议插件     只懂飞书 / Slack / 私有插件 / DSH 的 wire
 L1 信封         IngestRecord：身份、时间、作者、正文、幂等
 L2 记录类       utterance | task | status | prompt     ← N 渠道的共同点
 L3 发言者       仅 utterance：user | assistant | system
 L4 线程面       内核投影：chat | agent | ticket
 L5 处理         策略才开 WorkItem（可有可无）
-L6 执行         TaskExecutor 插件（DSH / Cursor / 内部）
+L6 执行         TaskExecutor 插件（DSH / Cursor / 私有插件）
 ```
 
 连接器安装停在 L0，不是一条 lane。同一个飞书安装可以同时放出单聊（`utterance` + `user` + `chat`）、群机器人（`utterance` + `assistant` + `chat`）和审批（`task` + `ticket`）。L4 由内核投影。L5 只在 `task` 或满足 AutoStart Specification 的 Recipe 上开 Job（Session 上可以有多张，列表只取前台脸）。多数人聊不会变成 WorkItem。源系统若把工单分成不同类型，连接器在记录上盖不透明 `unit_kind`，Recipe 按相等匹配；这不是新的 L2 / L4 值，也不写在安装上。
@@ -30,7 +30,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 
 ## 消息怎么走
 
-人或 Agent 不必知道一条线程来自邮件、工作区聊天、内部工单还是文件。进来的流量被整理成同一种消息，再存成 Event 与 Blob。回复发回原渠道。跨渠道转发是编译后再写进**另一条**可写线程，或在 `can_create` 安装上新建，不是把回复改道，见 [RFC 0010](rfcs/0010-cross-channel-forward.md)。
+人或 Agent 不必知道一条线程来自邮件、工作区聊天、工单还是文件。进来的流量被整理成同一种消息，再存成 Event 与 Blob。回复发回原渠道。跨渠道转发是编译后再写进**另一条**可写线程，或在 `can_create` 安装上新建，不是把回复改道，见 [RFC 0010](rfcs/0010-cross-channel-forward.md)。
 
 ```text
 渠道
