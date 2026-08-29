@@ -47,7 +47,7 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
 与内核同进程运行。默认投放目录是 `~/.regenic/plugins`（`REGENIC_PLUGIN_DIR`
 可覆盖），引擎页会显示这条路径。驱动拿到的是 `ConnectorHost`
 （`connectors` / `egress` / `plugin` / `now` / `secrets`），没有
-`authority` 或 `ingest`。catalog 里标了 `secret` 的字段写入钥匙串，落库
+`authority` 或 `ingest`。`plugin()` 的 apply 也是同一套窄 `get`。catalog 里标了 `secret` 的字段写入钥匙串，落库
 `config` 不留 token。四种最小形状在 `examples/connectors`。已注册的
 `connector_type` 不会被替换；改已加载的包需要重启。内核只对结果第一行与待办选项做精确匹配。
 
@@ -113,7 +113,7 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
 
 ## 隔离
 
-连接器是进程内插件。内核用超时、`ConnectorHost`（没有 authority / ingest）和失败隔离，不默认出进程。
+连接器是进程内插件。内核用超时、`ConnectorHost`（没有 authority / ingest，包括 `plugin()` apply 里）和失败隔离，不默认出进程。
 
 - tick 并行拉各启用安装。一处抛错或超时不挡其它安装；该安装仍在
   `inflight` 时，下一 tick 跳过它。

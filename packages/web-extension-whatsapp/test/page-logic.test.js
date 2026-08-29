@@ -11,7 +11,7 @@ import {
   isSendAriaLabel,
   normalizeLoopbackApiOrigin,
   parseWhatsAppTimestamp,
-  slug,
+  parseWhatsAppDataId,
   stableMessageId,
 } from "../dist/page-logic.js";
 
@@ -21,12 +21,6 @@ describe("whatsapp page logic", () => {
     assert.equal(isWhatsAppChatId("example-contact"), false);
     assert.equal(parseWhatsAppChatId("true_15550001@c.us_3EB0abc"), "15550001@c.us");
     assert.equal(parseWhatsAppChatId("Example Contact"), null);
-  });
-
-  it("slugs visible titles and collides on case", () => {
-    assert.equal(slug("Example Contact"), "example-contact");
-    assert.equal(slug("Alice"), slug("alice"));
-    assert.equal(slug("!!!"), "active-chat");
   });
 
   it("treats localized presence lines as non-titles", () => {
@@ -46,8 +40,11 @@ describe("whatsapp page logic", () => {
 
   it("classifies outgoing WhatsApp data-id values", () => {
     assert.equal(isFromMeByDataId("true_123"), true);
-    assert.equal(isFromMeByDataId("false_true_hidden"), true);
+    assert.equal(isFromMeByDataId("false_true_hidden"), false);
     assert.equal(isFromMeByDataId("false_123"), false);
+    assert.equal(isFromMeByDataId("true_15550001@c.us_3EB0abc"), true);
+    assert.equal(isFromMeByDataId("false_15550001@c.us_xxx_true_yyy"), false);
+    assert.equal(parseWhatsAppDataId("false_15550001@c.us_xxx_true_yyy")?.from_me, false);
   });
 
   it("prefers the raw WhatsApp data-id over a hashed fallback", () => {

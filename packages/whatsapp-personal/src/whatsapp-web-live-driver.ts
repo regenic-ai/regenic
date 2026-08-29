@@ -5,7 +5,6 @@ import {
   INGEST_SCHEMA_VERSION,
   channelRecord,
   envCredentialsRef,
-  readEnvCredential,
   type ChannelDriver,
   type ConnectorImportParseResult,
   type ConnectorInstallation,
@@ -376,15 +375,4 @@ function headerValue(
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function requireWhatsAppLiveKey(
-  installation: ConnectorInstallation,
-  apiKey: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  const expected = readEnvCredential(installation.credentials_ref, env);
-  if (expected && apiKey !== expected) {
-    throw new ChannelDriverError("missing_credentials", "Invalid live connector API key");
-  }
 }

@@ -1,3 +1,15 @@
+import {
+  commandTargetsActiveChat as commandTargetsChat,
+  firstChatTitleFromLines,
+  isFromMeByDataId,
+  isSendAriaLabel,
+  normalize,
+  parseWhatsAppChatId,
+  parseWhatsAppDataId,
+  parseWhatsAppTimestamp,
+  stableMessageId as pageStableMessageId,
+} from "./page-logic.js";
+
 interface SendCommand {
   id: string;
   chat_id: string;
@@ -28,28 +40,10 @@ declare const chrome: {
   };
 };
 
-{
 const CONTENT_SCRIPT_PROTOCOL = 8;
 const CLIENT_ID = "regenic-whatsapp-web-extension";
-const CHAT_ID = /^(?:[\d.-]+|[\w.+-]+)@(?:c\.us|g\.us|lid)$/i;
-const EMBEDDED_CHAT_ID = /([\d.-]+|[\w.+-]+)@(?:c\.us|g\.us|lid)/i;
-const DATA_ID = /^(true|false)_((?:[\d.-]+|[\w.+-]+)@(?:c\.us|g\.us|lid))_(.+)$/i;
 const SEND_ATTEMPTS_KEY = "whatsAppSendAttempts";
 const MAX_SEND_ATTEMPTS = 200;
-const SEND_ARIA_LABELS = new Set([
-  "send",
-  "发送",
-  "傳送",
-  "enviar",
-  "envoyer",
-  "senden",
-  "invia",
-  "kirim",
-  "送信",
-  "보내기",
-  "отправить",
-  "ارسال",
-]);
 const seenMessages = new Set<string>();
 let pollingCommands = false;
 let extensionContextValid = true;
@@ -241,7 +235,7 @@ async function executeCommand(command: SendCommand, allowSend: boolean): Promise
 }
 
 function commandTargetsActiveChat(commandChatId: string): boolean {
-  return activeChat()?.id === commandChatId;
+  return commandTargetsChat(commandChatId, activeChat()?.id);
 }
 
 function matchingOutgoingMessageIds(text: string): string[] {
@@ -315,27 +309,9 @@ function rightmostVisibleHeader(): HTMLElement | null {
 }
 
 function firstChatTitle(header: HTMLElement | null): string | null {
-  const explicitTitle = normalize(
+  return firstChatTitleFromLines(
     header?.querySelector<HTMLElement>('[data-testid="conversation-info-header-chat-title"]')?.innerText ?? "",
-  );
-  if (explicitTitle) {
-    return explicitTitle;
-  }
-  const lines = (header?.innerText ?? header?.textContent ?? "").split(/\r?\n/).map(normalize).filter(Boolean);
-  const candidates = lines.filter((candidate) => !isPresenceText(candidate) && !candidate.startsWith("ic-"));
-  if (candidates.length > 1 && /^[A-Z]$/.test(candidates[0])) {
-    return candidates[1];
-  }
-  return candidates[0] ?? null;
-}
-
-function isPresenceText(value: string): boolean {
-  return (
-    /^(last seen|online|typing|recording|click here)/i.test(value)
-    || /^last seen /i.test(value)
-    || /^(最后一次出现|最后上线|在线|正在输入|正在录音|点击这里)/.test(value)
-    || /^(visto por último|en línea|escribiendo)/i.test(value)
-    || /^(zuletzt gesehen|online|tippt)/i.test(value)
+    (header?.innerText ?? header?.textContent ?? "").split(/\r?\n/),
   );
 }
 
@@ -368,39 +344,16 @@ function messageTimestamp(element: HTMLElement): string {
   return parseWhatsAppTimestamp(context);
 }
 
-function parseWhatsAppTimestamp(prePlainText: string): string {
-  const raw = prePlainText.match(/\[([^\]]+)\]/)?.[1]?.trim();
-  if (!raw) {
-    return new Date().toISOString();
-  }
-  const parsed = Date.parse(raw);
-  if (!Number.isNaN(parsed)) {
-    return new Date(parsed).toISOString();
-  }
-  const european = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?,\s*(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (european) {
-    const [, hour, minute, second, day, month, year] = european;
-    const date = new Date(
-      Number(year),
-      Number(month) - 1,
-      Number(day),
-      Number(hour),
-      Number(minute),
-      Number(second ?? 0),
-    );
-    if (!Number.isNaN(date.getTime())) {
-      return date.toISOString();
-    }
-  }
-  return new Date().toISOString();
-}
-
 function isFromMe(element: HTMLElement): boolean {
   if (element.closest("div.message-out")) {
     return true;
   }
-  const dataId = element.getAttribute("data-id") ?? element.closest<HTMLElement>("[data-id]")?.getAttribute("data-id") ?? "";
-  if (dataId.startsWith("true_") || dataId.includes("_true_")) {
+  const dataId = dataIdOf(element);
+  const parsed = parseWhatsAppDataId(dataId);
+  if (parsed) {
+    return parsed.from_me;
+  }
+  if (isFromMeByDataId(dataId)) {
     return true;
   }
   let ancestor: HTMLElement | null = element;
@@ -429,19 +382,20 @@ function sendButton(): HTMLElement | null {
     return icon.closest("button");
   }
   return Array.from(document.querySelectorAll<HTMLElement>("footer button[aria-label]"))
-    .find((button) => SEND_ARIA_LABELS.has(normalize(button.getAttribute("aria-label") ?? "").toLowerCase()))
+    .find((button) => isSendAriaLabel(button.getAttribute("aria-label")))
     ?? null;
 }
 
 function stableMessageId(chatId: string, text: string, fromMe: boolean, element: HTMLElement): string {
-  const dataId = dataIdOf(element);
-  if (dataId) {
-    return dataId;
-  }
-  const messageContext = element.getAttribute("data-pre-plain-text")
-    ?? element.closest("[data-pre-plain-text]")?.getAttribute("data-pre-plain-text")
-    ?? "";
-  return `${fromMe ? "out" : "in"}:${chatId}:${messageContext}:${text}`;
+  return pageStableMessageId({
+    chatId,
+    text,
+    fromMe,
+    dataId: dataIdOf(element),
+    messageContext: element.getAttribute("data-pre-plain-text")
+      ?? element.closest("[data-pre-plain-text]")?.getAttribute("data-pre-plain-text")
+      ?? "",
+  });
 }
 
 function dataIdOf(element: HTMLElement): string {
@@ -450,40 +404,6 @@ function dataIdOf(element: HTMLElement): string {
     ?? element.closest<HTMLElement>("[data-id]")?.getAttribute("data-id")
     ?? ""
   ).trim();
-}
-
-function isWhatsAppChatId(value: string | undefined): boolean {
-  return Boolean(value && CHAT_ID.test(value.trim()));
-}
-
-function parseWhatsAppChatId(value: string | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  if (!trimmed) {
-    return null;
-  }
-  if (isWhatsAppChatId(trimmed)) {
-    return trimmed;
-  }
-  const fromDataId = parseWhatsAppDataId(trimmed);
-  if (fromDataId) {
-    return fromDataId.chat_id;
-  }
-  const embedded = trimmed.match(EMBEDDED_CHAT_ID);
-  return embedded ? embedded[0] : null;
-}
-
-function parseWhatsAppDataId(
-  value: string | undefined,
-): { from_me: boolean; chat_id: string; message_id: string } | null {
-  const match = value?.trim().match(DATA_ID);
-  if (!match) {
-    return null;
-  }
-  return {
-    from_me: match[1].toLowerCase() === "true",
-    chat_id: match[2],
-    message_id: match[3],
-  };
 }
 
 function extractSenderJid(element: HTMLElement, chatId: string): string | undefined {
@@ -498,10 +418,6 @@ function extractSenderJid(element: HTMLElement, chatId: string): string | undefi
     node = node.parentElement;
   }
   return undefined;
-}
-
-function normalize(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 async function postLiveMessage(payload: Record<string, unknown>): Promise<void> {
@@ -566,5 +482,4 @@ function isPromiseLike<T>(value: unknown): value is Promise<T> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
 }

@@ -59,7 +59,7 @@ failed packages. Extra packages are unsigned and run in-process. The
 default drop folder is `~/.regenic/plugins` (`REGENIC_PLUGIN_DIR`
 overrides). Engine shows that path. Drivers receive `ConnectorHost`
 (`connectors`, `egress`, `plugin`, `now`, `secrets`) — not `authority`
-or `ingest`. Catalog fields marked `secret` are written to the keychain;
+or `ingest`. `plugin()` apply() sees the same narrow `get`. Catalog fields marked `secret` are written to the keychain;
 stored `config` keeps no token. Four starter shapes live in
 `examples/connectors`. An already registered `connector_type` is never
 replaced; restart to pick up a changed package. The kernel matches the
@@ -146,7 +146,8 @@ The following are not allowed:
 ## Isolation
 
 Connectors stay in-process. The kernel isolates with deadlines,
-`ConnectorHost` (no authority / ingest), and failure containment. It
+`ConnectorHost` (no authority / ingest, including inside `plugin()`
+apply), and failure containment. It
 does not spawn a child process by default.
 
 - The tick pulls enabled installs in parallel. One throw or timeout

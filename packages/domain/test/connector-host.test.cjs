@@ -35,4 +35,32 @@ describe("asConnectorHost", () => {
     const first = asConnectorHost(fakeHost({ connectors: {}, egress: {} }));
     assert.equal(asConnectorHost(first), first);
   });
+
+  it("narrows plugin apply so authority stays hidden", async () => {
+    const { createHost } = require("@regenic/plugin-host");
+    const kernel = await createHost();
+    try {
+      kernel.provide("connectors", { kind: "connectors" });
+      kernel.provide("egress", { kind: "egress" });
+      kernel.provide("authority", { kind: "authority" });
+      const host = asConnectorHost(kernel);
+      const seen = { connectors: "", authority: "" };
+      await host.plugin({
+        name: "probe-narrow",
+        apply(ctx) {
+          seen.connectors = ctx.get("connectors").kind;
+          try {
+            ctx.get("authority");
+            seen.authority = "leaked";
+          } catch {
+            seen.authority = "blocked";
+          }
+        },
+      });
+      assert.equal(seen.connectors, "connectors");
+      assert.equal(seen.authority, "blocked");
+    } finally {
+      await kernel.dispose();
+    }
+  });
 });

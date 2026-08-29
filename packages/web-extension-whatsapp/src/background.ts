@@ -288,7 +288,7 @@ function injectContentScript(tabId: number): Promise<void> {
       }
     };
     const result = chrome.scripting.executeScript(
-      { target: { tabId }, files: ["content-script.js"] },
+      { target: { tabId }, files: ["inject-loader.js"] },
       () => {
         const error = chrome.runtime.lastError;
         if (error) {

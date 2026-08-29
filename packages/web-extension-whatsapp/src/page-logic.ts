@@ -19,10 +19,6 @@ export function normalize(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-export function slug(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9._@-]+/g, "-").replace(/^-|-$/g, "") || "active-chat";
-}
-
 export function isPresenceText(value: string): boolean {
   return (
     /^(last seen|online|typing|recording|click here)/i.test(value)
@@ -55,7 +51,11 @@ export function commandTargetsActiveChat(
 }
 
 export function isFromMeByDataId(dataId: string): boolean {
-  return dataId.startsWith("true_") || dataId.includes("_true_");
+  const parsed = parseWhatsAppDataId(dataId);
+  if (parsed) {
+    return parsed.from_me;
+  }
+  return dataId.startsWith("true_");
 }
 
 export function isSendAriaLabel(label: string | null | undefined): boolean {
@@ -130,6 +130,20 @@ export function isWhatsAppChatId(value: string | undefined): boolean {
   return Boolean(value && CHAT_ID.test(value.trim()));
 }
 
+export function parseWhatsAppDataId(
+  value: string | undefined,
+): { from_me: boolean; chat_id: string; message_id: string } | null {
+  const match = value?.trim().match(DATA_ID);
+  if (!match) {
+    return null;
+  }
+  return {
+    from_me: match[1].toLowerCase() === "true",
+    chat_id: match[2],
+    message_id: match[3],
+  };
+}
+
 export function parseWhatsAppChatId(value: string | undefined): string | null {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) {
@@ -138,9 +152,9 @@ export function parseWhatsAppChatId(value: string | undefined): string | null {
   if (isWhatsAppChatId(trimmed)) {
     return trimmed;
   }
-  const fromDataId = trimmed.match(DATA_ID);
+  const fromDataId = parseWhatsAppDataId(trimmed);
   if (fromDataId) {
-    return fromDataId[2];
+    return fromDataId.chat_id;
   }
   const embedded = trimmed.match(EMBEDDED_CHAT_ID);
   return embedded ? embedded[0] : null;
