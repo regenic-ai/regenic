@@ -37,7 +37,7 @@ import {
   PersonalInboxService,
   type InboxViewItem,
 } from "./personal-inbox.service";
-import { conversationStampForReply } from "./personal-reply.service";
+import { conversationStampForReply } from "./personal-reply-stamp";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 const FOLLOW_RETURN_MS = 2_500;

@@ -30,7 +30,7 @@ import {
 } from "@regenic/domain";
 import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
-import { stampFromThreadSurfaces } from "./personal-reply.service";
+import { stampFromThreadSurfaces } from "./personal-reply-stamp";
 import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
