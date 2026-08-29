@@ -15,6 +15,8 @@ import {
   projectThreadFacet,
   recordClassFromType,
   takeRecentInboxItems,
+  latestForwardedTo,
+  type ForwardedFrom,
   normalizeInboxLimit,
   resolveMessageSurface,
   threadIdOf,
@@ -103,6 +105,8 @@ export interface InboxViewItem {
   thread_facet: ThreadFacet;
   attention: AttentionClass;
   work?: WorkFace;
+  forwarded_from?: ForwardedFrom;
+  forwarded_to?: ForwardedFrom;
 }
 
 export interface ConversationPrefView {
@@ -284,7 +288,7 @@ export class PersonalInboxService {
       }
     }
     const faces = await this.work.inboxFaces([threadId], prompts);
-    return decorateInboxItem(
+    const view = decorateInboxItem(
       item,
       body,
       installations,
@@ -299,6 +303,15 @@ export class PersonalInboxService {
       true,
       faces.get(threadId),
     );
+    const traces = await loadForwardedToTraces(
+      siblings,
+      event.content_hash ? new Map([[event.content_hash, body]]) : new Map(),
+      authority,
+      blobs,
+      this.drivers,
+    );
+    const forwardedTo = traces.get(view.event.id);
+    return forwardedTo ? { ...view, forwarded_to: forwardedTo } : view;
   }
 
   async getEngine(query: EngineQuery = {}): Promise<PersonalEngineView> {
@@ -583,35 +596,40 @@ export class PersonalInboxService {
       [...resolved, ...receiptPage.extras].map((row) => row.threadId),
       livePrompts,
     );
-    return [...resolved, ...receiptPage.extras].flatMap(({ item, threadId, body }) => {
-      if (query.heads === true && hidden.has(threadId)) {
-        return [];
-      }
-      const view = decorateInboxItem(
-        item,
-        body,
-        installations,
-        this.drivers,
-        prefsByThread.get(threadId) ?? null,
-        labels,
-        livePrompts,
-        attention,
-        inboundByThread,
-        awaitingUser,
-        receiptPage.receipts,
-        includeReceipts,
-        faces.get(threadId),
-      );
-      const prompt = prompts.get(threadId);
-      const titled =
-        view.list_title === "prompt" && prompt
-          ? { ...view, conversation_label: prompt }
-          : view;
-      if (query.heads === true) {
-        return trimInboxHead(titled);
-      }
-      return titled;
-    });
+    const views = [...resolved, ...receiptPage.extras].flatMap(
+      ({ item, threadId, body }) => {
+        if (query.heads === true && hidden.has(threadId)) {
+          return [];
+        }
+        const view = decorateInboxItem(
+          item,
+          body,
+          installations,
+          this.drivers,
+          prefsByThread.get(threadId) ?? null,
+          labels,
+          livePrompts,
+          attention,
+          inboundByThread,
+          awaitingUser,
+          receiptPage.receipts,
+          includeReceipts,
+          faces.get(threadId),
+        );
+        const prompt = prompts.get(threadId);
+        const titled =
+          view.list_title === "prompt" && prompt
+            ? { ...view, conversation_label: prompt }
+            : view;
+        if (query.heads === true) {
+          return trimInboxHead(titled);
+        }
+        return titled;
+      },
+    );
+    return query.heads === true
+      ? views
+      : projectForwardedTo(views, this.drivers);
   }
 
   async updateConversationPrefs(
@@ -869,7 +887,95 @@ function decorateInboxItem(
       activity: surface.activity,
     }),
     work: workFace?.work,
+    ...(surface.forwarded_from
+      ? { forwarded_from: labeledForwardTrace(surface.forwarded_from, drivers) }
+      : {}),
+    ...(surface.forwarded_to
+      ? { forwarded_to: labeledForwardTrace(surface.forwarded_to, drivers) }
+      : {}),
   };
+}
+
+function labeledForwardTrace(
+  trace: ForwardedFrom,
+  drivers: ChannelDriverRegistry,
+): ForwardedFrom {
+  return {
+    ...trace,
+    channel_label: drivers.sourceLabel(trace.source),
+  };
+}
+
+function projectForwardedTo(
+  views: InboxViewItem[],
+  drivers: ChannelDriverRegistry,
+): InboxViewItem[] {
+  const traces = latestForwardedTo(
+    views.flatMap((view) => {
+      const trace = view.forwarded_to;
+      if (!trace || trace.event_ids.includes(view.event.id)) {
+        return [];
+      }
+      return [
+        {
+          id: view.event.id,
+          occurred_at: view.event.occurred_at,
+          forwarded_to: labeledForwardTrace(trace, drivers),
+        },
+      ];
+    }),
+  );
+  if (traces.size === 0) {
+    return views;
+  }
+  return views.map((view) => {
+    const joined = traces.get(view.event.id);
+    if (!joined) {
+      return view;
+    }
+    return { ...view, forwarded_to: joined };
+  });
+}
+
+async function loadForwardedToTraces(
+  items: Array<{ decision: ArrangementDecision; event: EventRecord }>,
+  knownBodies: ReadonlyMap<string, InboxBody>,
+  authority: AuthorityStore,
+  blobs: BlobStore,
+  drivers: ChannelDriverRegistry,
+): Promise<Map<string, ForwardedFrom>> {
+  const status = items.filter((item) => isThreadStatusItem(item));
+  if (status.length === 0) {
+    return new Map();
+  }
+  const missing = status
+    .map((item) => item.event.content_hash)
+    .filter((hash): hash is string => {
+      if (!hash) {
+        return false;
+      }
+      return !knownBodies.has(hash);
+    });
+  const extra =
+    missing.length > 0
+      ? await resolveInboxBodies(authority, blobs, missing, "meta")
+      : new Map<string, InboxBody>();
+  return latestForwardedTo(
+    status.map((item) => {
+      const hash = item.event.content_hash;
+      const body = hash
+        ? (knownBodies.get(hash) ?? extra.get(hash) ?? {})
+        : {};
+      const surface = messageSurfaceOf(item.event, body);
+      return {
+        id: item.event.id,
+        occurred_at: item.event.occurred_at,
+        forwarded_to: surface.forwarded_to
+          ? labeledForwardTrace(surface.forwarded_to, drivers)
+          : undefined,
+      };
+    }),
+  );
 }
 
 function mergePromptMap(

@@ -14,6 +14,7 @@ import { HealthController } from "./health.controller";
 import { PersonalConnectorService } from "./personal-connector.service";
 import { PersonalController } from "./personal.controller";
 import { PersonalInboxService } from "./personal-inbox.service";
+import { PersonalForwardService } from "./personal-forward.service";
 import { PersonalReplyService } from "./personal-reply.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
@@ -27,6 +28,7 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalRuntimeService,
     PersonalInboxService,
     PersonalReplyService,
+    PersonalForwardService,
     PersonalWorkService,
     PersonalExecutorService,
     PersonalConnectorService,

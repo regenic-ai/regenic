@@ -9,6 +9,7 @@ export * from "./content-resolution";
 export * from "./channel-driver";
 export * from "./credentials";
 export * from "./message-contract";
+export * from "./forward-packet";
 export * from "./content-compact";
 export * from "./thread-surface";
 export * from "./inbox-query";

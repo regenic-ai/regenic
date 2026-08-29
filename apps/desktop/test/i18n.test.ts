@@ -30,6 +30,14 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "work.dead"), "Not sent");
     assert.equal(translate("zh", "work.queued"), "发送中");
     assert.equal(translate("zh", "thread.retryDelivery"), "重新发送");
+    assert.equal(translate("en", "thread.copy"), "Copy");
+    assert.equal(translate("zh", "thread.copied"), "已复制");
+    assert.equal(translate("zh", "thread.forwardedFrom", { channel: "飞书" }), "转发自 飞书");
+    assert.equal(translate("zh", "thread.forwardedTo", { channel: "DSH" }), "已转发到 DSH");
+    assert.equal(translate("en", "thread.forwardedTo", { channel: "DSH" }), "Forwarded to DSH");
+    assert.equal(translate("en", "edit.copy"), "Copy");
+    assert.equal(translate("en", "thread.forward"), "Forward");
+    assert.equal(translate("zh", "thread.forwardConversation"), "转发会话");
     assert.equal(translate("en", "thread.startRun"), "Handle now");
     assert.match(translate("en", "work.hint.running"), /chat reply/);
     assert.equal(translate("en", "work.hint.running").includes("DSH"), false);

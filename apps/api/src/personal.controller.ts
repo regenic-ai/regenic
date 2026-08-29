@@ -30,6 +30,10 @@ import {
   PersonalKernelStoppedError,
 } from "./personal-inbox.service";
 import {
+  PersonalForwardService,
+  type ForwardInput,
+} from "./personal-forward.service";
+import {
   PersonalReplyService,
   type ReplyInput,
 } from "./personal-reply.service";
@@ -53,6 +57,8 @@ export class PersonalController {
     private readonly connectors: PersonalConnectorService,
     @Inject(PersonalReplyService)
     private readonly replies: PersonalReplyService,
+    @Inject(PersonalForwardService)
+    private readonly forwards: PersonalForwardService,
     @Inject(forwardRef(() => PersonalWorkService))
     private readonly work: PersonalWorkService,
     @Inject(forwardRef(() => PersonalExecutorService))
@@ -150,6 +156,12 @@ export class PersonalController {
   sendReply(@Body() body: ReplyInput) {
     noteHumanActivity();
     return this.guard(() => this.replies.send(body ?? {}));
+  }
+
+  @Post("forwards")
+  sendForward(@Body() body: ForwardInput) {
+    noteHumanActivity();
+    return this.guard(() => this.forwards.send(body ?? {}));
   }
 
   @Post("imports/whatsapp")

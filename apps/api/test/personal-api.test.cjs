@@ -1929,6 +1929,195 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("forwards a DSH message to another writable session", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const dsh = await startDshWebStub();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: dsh.origin },
+        }),
+      });
+      const createdBody = await created.json();
+      assert.equal(created.status, 201, JSON.stringify(createdBody));
+      await waitUntil("dsh sess-a and sess-b after install", async () => {
+        const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
+        return (
+          inbox.some((item) => item.thread_id === "dsh:sess-a") &&
+          inbox.some((item) => item.thread_id === "dsh:sess-b")
+        );
+      });
+
+      const replied = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:sess-a",
+          text: "Please review **this** screenshot.",
+          attachments: [
+            {
+              filename: "shot.png",
+              media_type: "image/png",
+              data_base64:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+            },
+          ],
+        }),
+      });
+      const replyBody = await replied.json();
+      assert.equal(replied.status, 201, JSON.stringify(replyBody));
+
+      const forwarded = await fetch(`${origin}/v1/me/forwards`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source_thread_id: "dsh:sess-a",
+          event_ids: [replyBody.item.event.id],
+          target: { thread_id: "dsh:sess-b" },
+          mode: "messages",
+        }),
+      });
+      const forwardBody = await forwarded.json();
+      assert.equal(forwarded.status, 201, JSON.stringify(forwardBody));
+      assert.equal(forwardBody.accepted, true);
+      assert.equal(forwardBody.created, false);
+      assert.equal(forwardBody.source_thread_id, "dsh:sess-a");
+      assert.equal(forwardBody.target_thread_id, "dsh:sess-b");
+      assert.equal(forwardBody.item.thread_id, "dsh:sess-b");
+      assert.equal(forwardBody.item.direction, "outbound");
+      assert.match(forwardBody.item.body_text, /Please review \*\*this\*\* screenshot/);
+      assert.match(forwardBody.item.body_text, /\[Attached: shot\.png\]/);
+      assert.deepEqual(forwardBody.item.forwarded_from, {
+        thread_id: "dsh:sess-a",
+        event_ids: [replyBody.item.event.id],
+        source: "dsh",
+        channel_label: "DSH",
+      });
+      const sourceItem = await (
+        await fetch(`${origin}/v1/me/inbox/${replyBody.item.event.id}`)
+      ).json();
+      assert.deepEqual(sourceItem.forwarded_to, {
+        thread_id: "dsh:sess-b",
+        event_ids: [replyBody.item.event.id],
+        source: "dsh",
+        channel_label: "DSH",
+      });
+      const sourceThread = await (
+        await fetch(`${origin}/v1/me/inbox?thread_id=${encodeURIComponent("dsh:sess-a")}`)
+      ).json();
+      const sourceRow = sourceThread.find(
+        (item) => item.event.id === replyBody.item.event.id,
+      );
+      assert.deepEqual(sourceRow.forwarded_to, sourceItem.forwarded_to);
+      const sourceHeads = await (
+        await fetch(`${origin}/v1/me/inbox?heads=1`)
+      ).json();
+      const sourceHead = sourceHeads.find((item) => item.thread_id === "dsh:sess-a");
+      assert.ok(sourceHead);
+      assert.notEqual(sourceHead.record_class, "status");
+      assert.equal(sourceHead.forwarded_to, undefined);
+      const targetPrompt = dsh.prompts.find((item) => item.payload?.sessionId === "sess-b");
+      assert.equal(targetPrompt?.method, "session.prompt");
+      assert.match(
+        JSON.stringify(targetPrompt.payload.content),
+        /Please review \*\*this\*\* screenshot/,
+      );
+      const image = targetPrompt.payload.content.find((part) => part.type === "image");
+      assert.equal(image?.name, "shot.png");
+
+      const same = await fetch(`${origin}/v1/me/forwards`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source_thread_id: "dsh:sess-a",
+          event_ids: [replyBody.item.event.id],
+          target: { thread_id: "dsh:sess-a" },
+          mode: "messages",
+        }),
+      });
+      assert.equal(same.status, 400);
+
+      const slack = await fetch(`${origin}/v1/me/forwards`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source_thread_id: "dsh:sess-a",
+          event_ids: [replyBody.item.event.id],
+          target: { thread_id: "slack:C123" },
+          mode: "messages",
+        }),
+      });
+      assert.equal(slack.status, 404);
+
+      const createdBefore = dsh.created.length;
+      const createdForward = await fetch(`${origin}/v1/me/forwards`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source_thread_id: "dsh:sess-a",
+          mode: "transcript",
+          target: { installation_id: createdBody.id, create: true },
+        }),
+      });
+      const createdForwardBody = await createdForward.json();
+      assert.equal(createdForward.status, 201, JSON.stringify(createdForwardBody));
+      assert.equal(createdForwardBody.accepted, true);
+      assert.equal(createdForwardBody.created, true);
+      assert.equal(createdForwardBody.source_thread_id, "dsh:sess-a");
+      assert.equal(createdForwardBody.target_thread_id, "dsh:created-1");
+      assert.equal(createdForwardBody.item.thread_id, "dsh:created-1");
+      assert.equal(createdForwardBody.item.direction, "outbound");
+      assert.match(createdForwardBody.item.body_text, /Need a decision from session A/);
+      assert.deepEqual(createdForwardBody.item.forwarded_from, {
+        thread_id: "dsh:sess-a",
+        event_ids: createdForwardBody.item.forwarded_from.event_ids,
+        source: "dsh",
+        channel_label: "DSH",
+      });
+      assert.ok(createdForwardBody.item.forwarded_from.event_ids.length > 0);
+      const sourceAfterCreate = await (
+        await fetch(`${origin}/v1/me/inbox/${replyBody.item.event.id}`)
+      ).json();
+      assert.deepEqual(sourceAfterCreate.forwarded_to, {
+        thread_id: "dsh:created-1",
+        event_ids: createdForwardBody.item.forwarded_from.event_ids,
+        source: "dsh",
+        channel_label: "DSH",
+      });
+      assert.equal(dsh.created.length, createdBefore + 1);
+      assert.deepEqual(dsh.created, ["created-1"]);
+      const createdPrompt = dsh.prompts.find(
+        (item) => item.payload?.sessionId === "created-1",
+      );
+      assert.equal(createdPrompt?.method, "session.prompt");
+      assert.match(
+        JSON.stringify(createdPrompt.payload.content),
+        /Need a decision from session A/,
+      );
+
+      const slackCreate = await fetch(`${origin}/v1/me/forwards`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source_thread_id: "dsh:sess-a",
+          mode: "transcript",
+          target: { installation_id: "slack-1", create: true },
+        }),
+      });
+      assert.equal(slackCreate.status, 501);
+    } finally {
+      await app.close();
+      await dsh.close();
+    }
+  });
+
   it("lets a hosted kernel reply to DSH sessions through a stored cli install", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
@@ -2648,6 +2837,28 @@ describe("inbox body decode", () => {
     );
     assert.equal(preview.attachments[0].media_type, "image/png");
     assert.equal(preview.attachments[0].data_base64, png.toString("base64"));
+    const surface = decodeInboxBody(
+      Buffer.from(
+        JSON.stringify({
+          channel: "dsh",
+          kind: "system",
+          direction: "outbound",
+          type: "thread_status",
+          forwarded_to: {
+            thread_id: "dsh:sess-b",
+            event_ids: ["ev-1"],
+            source: "dsh",
+          },
+        }),
+        "utf8",
+      ),
+      "application/vnd.regenic.surface+json",
+    );
+    assert.deepEqual(surface.surface?.forwarded_to, {
+      thread_id: "dsh:sess-b",
+      event_ids: ["ev-1"],
+      source: "dsh",
+    });
   });
 });
 
