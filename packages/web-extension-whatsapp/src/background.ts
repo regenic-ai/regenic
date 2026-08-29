@@ -16,6 +16,7 @@ interface AckCommandMessage {
 
 interface PopupScanMessage {
   type: "regenic.whatsapp.popupScan";
+  mode?: "current" | "all";
 }
 
 interface BrowserTab {
@@ -23,16 +24,12 @@ interface BrowserTab {
   url?: string;
 }
 
-interface ScriptInjectionResult {
-  result?: string;
-}
-
 interface PageScanResponse {
   result?: string;
   protocol?: number;
 }
 
-const CONTENT_SCRIPT_PROTOCOL = 8;
+const CONTENT_SCRIPT_PROTOCOL = 14;
 const CONNECTOR_TYPE = "whatsapp-web-live";
 
 declare const chrome: {
@@ -49,22 +46,37 @@ declare const chrome: {
     };
   };
   tabs: {
-    query(queryInfo: { active: boolean; currentWindow: boolean }, callback?: (tabs: BrowserTab[]) => void): Promise<BrowserTab[]> | void;
+    query(
+      queryInfo: { active?: boolean; currentWindow?: boolean; url?: string | string[] },
+      callback?: (tabs: BrowserTab[]) => void,
+    ): Promise<BrowserTab[]> | void;
+    update?(
+      tabId: number,
+      updateProperties: { active?: boolean },
+      callback?: (tab: BrowserTab) => void,
+    ): Promise<BrowserTab> | void;
     sendMessage(
       tabId: number,
       message: unknown,
       callback?: (response: PageScanResponse) => void,
     ): Promise<PageScanResponse> | void;
   };
+  sidePanel?: {
+    setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
+  };
   scripting?: {
     executeScript(
       injection:
-        | { target: { tabId: number }; files: string[] }
-        | { target: { tabId: number }; func: () => string },
-      callback?: (results: ScriptInjectionResult[]) => void,
-    ): Promise<ScriptInjectionResult[]> | void;
+        | { target: { tabId: number }; files: string[]; world?: "ISOLATED" | "MAIN" }
+        | { target: { tabId: number }; func: () => unknown; world?: "ISOLATED" | "MAIN" },
+      callback?: (results: Array<{ result?: unknown }>) => void,
+    ): Promise<Array<{ result?: unknown }>> | void;
   };
 };
+
+void Promise.resolve(
+  chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }),
+).catch(() => undefined);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (isWhatsAppLiveMessage(message)) {
@@ -89,7 +101,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (isPopupScanMessage(message)) {
-    void scanCurrentWhatsAppTab().then(
+    void scanCurrentWhatsAppTab(message.mode === "all" ? "all" : "current").then(
       (result) => sendResponse({ result }),
       (error: unknown) => sendResponse({ result: error instanceof Error ? error.message : "scan failed" }),
     );
@@ -207,45 +219,113 @@ function isPopupScanMessage(value: unknown): value is PopupScanMessage {
   );
 }
 
-async function scanCurrentWhatsAppTab(): Promise<string> {
+const SCRIPT_READY_MS = 5_000;
+const SCRIPT_POLL_MS = 80;
+
+async function scanCurrentWhatsAppTab(mode: "current" | "all" = "current"): Promise<string> {
   if (!chrome.scripting?.executeScript) {
     return "scripting API unavailable";
   }
-  const [tab] = await activeTabs();
+  const tab = await whatsAppTab();
   if (!tab?.id) {
-    return "no active tab";
-  }
-  if (!tab.url?.startsWith("https://web.whatsapp.com/")) {
     return "open WhatsApp tab first";
   }
-  const existingConnection = await requestContentScriptScan(tab.id);
-  if (existingConnection?.protocol === CONTENT_SCRIPT_PROTOCOL) {
-    return `connected: ${existingConnection.result ?? "scan complete"}`;
+  await focusTab(tab.id);
+  const existing = await pingContentScript(tab.id);
+  if (existing === CONTENT_SCRIPT_PROTOCOL) {
+    return connectedScan(tab.id, mode);
   }
   let injectionError = "content script did not respond after injection";
   try {
     await injectContentScript(tab.id);
-    const newConnection = await requestContentScriptScan(tab.id);
-    if (newConnection?.protocol === CONTENT_SCRIPT_PROTOCOL) {
-      return `connected: ${newConnection.result ?? "scan complete"}`;
+    if (await waitForContentScript(tab.id, SCRIPT_READY_MS)) {
+      return connectedScan(tab.id, mode);
     }
   } catch (error) {
     injectionError = error instanceof Error ? error.message : String(error);
   }
   const [result] = await executePageProbe(tab.id);
-  return `one-shot no ingest (${injectionError}): ${result?.result ?? chrome.runtime.lastError?.message ?? "no result"}`;
+  const probe = typeof result?.result === "string" ? result.result : chrome.runtime.lastError?.message ?? "no result";
+  return `one-shot no ingest (${injectionError}): ${probe}`;
 }
 
-function activeTabs(): Promise<BrowserTab[]> {
+async function connectedScan(tabId: number, mode: "current" | "all"): Promise<string> {
+  const response = await requestContentScriptScan(tabId, mode);
+  if (response?.protocol === CONTENT_SCRIPT_PROTOCOL) {
+    return `connected: ${response.result ?? "scan complete"}`;
+  }
+  return `one-shot no ingest (content script did not respond after injection): scan skipped`;
+}
+
+async function pingContentScript(tabId: number): Promise<number | null> {
+  const response = await sendTabMessage(tabId, { type: "regenic.whatsapp.ping" });
+  return typeof response?.protocol === "number" ? response.protocol : null;
+}
+
+async function waitForContentScript(tabId: number, timeoutMs: number): Promise<boolean> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await pingContentScript(tabId) === CONTENT_SCRIPT_PROTOCOL) {
+      return true;
+    }
+    await delay(SCRIPT_POLL_MS);
+  }
+  return (await pingContentScript(tabId)) === CONTENT_SCRIPT_PROTOCOL;
+}
+
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const result = chrome.tabs.query({ active: true, currentWindow: true }, resolve);
+    setTimeout(resolve, ms);
+  });
+}
+
+async function whatsAppTab(): Promise<BrowserTab | null> {
+  const [active] = await queryTabs({ active: true, currentWindow: true });
+  if (active?.id && isWhatsAppTabUrl(active.url)) {
+    return active;
+  }
+  const matches = await queryTabs({ url: "https://web.whatsapp.com/*" });
+  return matches.find((tab) => tab.id) ?? null;
+}
+
+function isWhatsAppTabUrl(url: string | undefined): boolean {
+  return Boolean(url?.startsWith("https://web.whatsapp.com/"));
+}
+
+function queryTabs(queryInfo: {
+  active?: boolean;
+  currentWindow?: boolean;
+  url?: string | string[];
+}): Promise<BrowserTab[]> {
+  return new Promise((resolve) => {
+    const result = chrome.tabs.query(queryInfo, resolve);
     if (isPromiseLike(result)) {
       result.then(resolve, () => resolve([]));
     }
   });
 }
 
-function requestContentScriptScan(tabId: number): Promise<PageScanResponse | null> {
+function focusTab(tabId: number): Promise<void> {
+  const updateTab = chrome.tabs.update;
+  if (!updateTab) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const result = updateTab(tabId, { active: true }, () => resolve());
+    if (isPromiseLike(result)) {
+      result.then(() => resolve(), () => resolve());
+    }
+  });
+}
+
+function requestContentScriptScan(
+  tabId: number,
+  mode: "current" | "all" = "current",
+): Promise<PageScanResponse | null> {
+  return sendTabMessage(tabId, { type: "regenic.whatsapp.scan", mode });
+}
+
+function sendTabMessage(tabId: number, message: unknown): Promise<PageScanResponse | null> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (value: PageScanResponse | null) => {
@@ -255,7 +335,7 @@ function requestContentScriptScan(tabId: number): Promise<PageScanResponse | nul
       }
     };
     try {
-      const result = chrome.tabs.sendMessage(tabId, { type: "regenic.whatsapp.scan" }, (response) => {
+      const result = chrome.tabs.sendMessage(tabId, message, (response) => {
         const error = chrome.runtime.lastError;
         finish(error ? null : response ?? null);
       });
@@ -269,52 +349,48 @@ function requestContentScriptScan(tabId: number): Promise<PageScanResponse | nul
 }
 
 function injectContentScript(tabId: number): Promise<void> {
+  return executeScript(tabId, { files: ["inject-loader.js"] }).then(() => undefined);
+}
+
+function executePageProbe(tabId: number): Promise<Array<{ result?: unknown }>> {
+  return executeScript(tabId, { func: pageProbe });
+}
+
+function executeScript(
+  tabId: number,
+  injection: { files: string[] } | { func: () => unknown },
+): Promise<Array<{ result?: unknown }>> {
   return new Promise((resolve, reject) => {
     if (!chrome.scripting?.executeScript) {
       reject(new Error("scripting API unavailable"));
       return;
     }
     let settled = false;
-    const succeed = () => {
+    const succeed = (value: Array<{ result?: unknown }> = []) => {
       if (!settled) {
         settled = true;
-        resolve();
+        resolve(value);
       }
     };
     const fail = (error: unknown) => {
       if (!settled) {
         settled = true;
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     };
     const result = chrome.scripting.executeScript(
-      { target: { tabId }, files: ["inject-loader.js"] },
-      () => {
+      { target: { tabId }, world: "ISOLATED", ...injection },
+      (results) => {
         const error = chrome.runtime.lastError;
         if (error) {
           fail(new Error(error.message ?? "content script injection failed"));
         } else {
-          succeed();
+          succeed(results ?? []);
         }
       },
     );
     if (isPromiseLike(result)) {
       result.then(succeed, fail);
-    }
-  });
-}
-
-function executePageProbe(tabId: number): Promise<ScriptInjectionResult[]> {
-  return new Promise((resolve, reject) => {
-    const result = chrome.scripting?.executeScript(
-      {
-        target: { tabId },
-        func: pageProbe,
-      },
-      resolve,
-    );
-    if (isPromiseLike(result)) {
-      result.then(resolve, reject);
     }
   });
 }

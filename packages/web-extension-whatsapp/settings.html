@@ -1,26 +1,55 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh">
   <head>
     <meta charset="utf-8">
-    <title>Regenic WhatsApp Settings</title>
+    <title>Regenic WhatsApp</title>
     <style>
       body { max-width: 640px; margin: 32px auto; padding: 0 20px; font: 14px/1.5 sans-serif; color: #1f2937; }
-      label { display: block; margin: 14px 0; }
-      input[type="text"], input[type="password"] { box-sizing: border-box; width: 100%; padding: 8px; }
-      button { padding: 8px 14px; }
-      .note { color: #4b5563; }
+      h1 { font-size: 22px; margin: 0 0 8px; }
+      .note, .hint { color: #4b5563; }
+      .hint { font-size: 13px; margin: 4px 0 0; }
+      label { display: block; margin: 16px 0 0; font-weight: 600; }
+      input[type="text"], input[type="password"] { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 8px; }
+      .check { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; }
+      .check input { margin-top: 3px; }
+      details { margin: 20px 0; }
+      summary { cursor: pointer; color: #374151; }
+      button { margin-top: 18px; padding: 8px 14px; }
       .error { color: #b91c1c; }
+      .ok { color: #166534; }
+      #status { margin-top: 12px; }
     </style>
   </head>
   <body>
-    <h1>Regenic WhatsApp Settings</h1>
-    <p class="note">The connector talks only to a local Regenic API on 127.0.0.1 or localhost. Install <code>whatsapp-web-live</code> in Engine first. Automatic sending stays off unless Inbox queued a reply and this extension allows the click.</p>
-    <label>Local API origin <input id="apiOrigin" type="text" value="http://127.0.0.1:4370"></label>
-    <label>Live API key <input id="apiKey" type="password" autocomplete="off"></label>
-    <label>Installation id <input id="installationId" type="text" placeholder="leave blank to use the enabled Engine install"></label>
-    <label><input id="allowSend" type="checkbox"> Allow commands to click WhatsApp's send button</label>
-    <button id="save">Save</button>
-    <span id="saved"></span>
+    <h1 id="title"></h1>
+    <p class="note" id="intro"></p>
+    <label id="pairingLabel">
+      <span></span>
+      <input id="apiKey" type="password" autocomplete="off">
+    </label>
+    <p class="hint" id="pairingHint"></p>
+    <label class="check" id="sendLabel">
+      <input id="allowSend" type="checkbox">
+      <span>
+        <span id="sendTitle"></span>
+        <span class="hint" id="sendHint"></span>
+      </span>
+    </label>
+    <details>
+      <summary id="advanced"></summary>
+      <label id="originLabel">
+        <span></span>
+        <input id="apiOrigin" type="text" value="http://127.0.0.1:4370">
+      </label>
+      <p class="hint" id="originHint"></p>
+      <label id="installIdLabel">
+        <span></span>
+        <input id="installationId" type="text">
+      </label>
+      <p class="hint" id="installIdHint"></p>
+    </details>
+    <button id="save" type="button"></button>
+    <p id="status"></p>
     <script type="module" src="settings.js"></script>
   </body>
 </html>

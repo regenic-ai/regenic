@@ -15,11 +15,11 @@
 | `dsh-session` cli | `dsh` | 一个 mailbox | 是 | 否 | 本机 `dsh` |
 | `feishu-chat` | `feishu` | 勾选的会话，或当前能看到的全部群和/或单聊 | 是 | 否 | 本机 `lark-cli` 用户登录 |
 | `cursor-agent` | `cursor` | 本机 SDK 会话 | 是 | 是 | 安装时粘贴或 `CURSOR_API_KEY` |
-| `whatsapp-web-live` | `whatsapp-personal` | 当前打开的 WhatsApp Web 聊天，经本机扩展 webhook | 是 | 否 | `REGENIC_PERSONAL_LIVE_KEY` |
+| `whatsapp-web-live` | `whatsapp-personal` | 可见的 WhatsApp Web 会话，经本机扩展 webhook | 是 | 否 | 安装时生成配对码 |
 
 Slack 不实现 `createThread` / `bindEgress`。飞书不实现 `createThread`。未声明的方法不存在。DSH web 新建立刻 `session.create` 空会话，第一条用户文本走普通回复（`session.prompt` queue）；内核会等首次 poll。Cursor 声明 `create_with_task`：桌面先开本地草稿，第一条才 `Agent.create` + `send`；内核种出站、不等首次 poll。Cursor 密钥可在安装表单粘贴，只进本机钥匙串（或 `~/.regenic/credentials/cursor`），不进安装 config。
 
-凭证引用：Slack 为 `env:REGENIC_SLACK_TOKEN`；DSH web 为 `env:REGENIC_DSH_TOKEN`（可空）；飞书为 `keychain:lark-cli`；Cursor 为 `keychain:regenic-cursor:<安装 id>` 或 `env:CURSOR_API_KEY`；WhatsApp Web live 为 `env:REGENIC_PERSONAL_LIVE_KEY`。`oauth:HANDLE` / `app:HANDLE` 已预留，本阶段内置驱动不用。
+凭证引用：Slack 为 `env:REGENIC_SLACK_TOKEN`；DSH web 为 `env:REGENIC_DSH_TOKEN`（可空）；飞书为 `keychain:lark-cli`；Cursor 为 `keychain:regenic-cursor:<安装 id>` 或 `env:CURSOR_API_KEY`；WhatsApp Web live 在安装时把配对码写入本机钥匙串（`REGENIC_PERSONAL_LIVE_KEY` 是可选 CLI 覆盖）。`oauth:HANDLE` / `app:HANDLE` 已预留，本阶段内置驱动不用。
 
 WhatsApp Web live 只走 webhook。本机扩展把观察到的消息打到
 `POST /v1/me/connectors/:id/webhook`，再通过通用连接器 egress 队列排空
@@ -77,6 +77,6 @@ Cursor：
 | `feishu-chat` | PATH 上没有 `lark-cli` | `npx @larksuite/cli@latest install`（[lark-cli](https://github.com/larksuite/cli)） |
 | `feishu-chat` | 有 CLI，用户未登录 | `lark-cli config init`，然后 `lark-cli auth login --recommend` |
 | `cursor-agent` | 没密钥 | 在安装表单粘贴 Cursor API key，或设 `CURSOR_API_KEY` |
-| `whatsapp-web-live` | 未设 `REGENIC_PERSONAL_LIVE_KEY` | 设置 live key，把 API 绑到 127.0.0.1，再加载本机扩展 |
+| `whatsapp-web-live` | — | 在 Engine 安装，把配对码贴进扩展 |
 
 飞书 token 留在系统钥匙串。二进制不在 PATH 上时，可用 `REGENIC_LARK_CLI`。

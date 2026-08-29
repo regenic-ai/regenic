@@ -149,9 +149,12 @@ export interface DriverCatalogPrerequisite {
 
 export interface DriverCatalogSetupStep {
   title: string;
+  title_zh?: string;
   body?: string;
+  body_zh?: string;
   command?: string;
   href?: string;
+  href_zh?: string;
   visible_when?: DriverCatalogFieldWhen;
 }
 

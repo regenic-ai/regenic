@@ -22,7 +22,7 @@ contract.
 | `dsh-session` cli | `dsh` | one mailbox | yes | no | local `dsh` |
 | `feishu-chat` | `feishu` | selected conversations, or all visible groups and/or p2p chats | yes | no | local `lark-cli` user login |
 | `cursor-agent` | `cursor` | local SDK sessions | yes | yes | paste on install or `CURSOR_API_KEY` |
-| `whatsapp-web-live` | `whatsapp-personal` | open WhatsApp Web chat via local extension webhook | yes | no | `REGENIC_PERSONAL_LIVE_KEY` |
+| `whatsapp-web-live` | `whatsapp-personal` | visible WhatsApp Web chats via local extension webhook | yes | no | pairing code created on install |
 
 Slack does not implement `createThread` / `bindEgress`. Feishu does not
 implement `createThread`. Undeclared methods do not exist. DSH web
@@ -37,8 +37,9 @@ config.
 Credential refs: Slack uses `env:REGENIC_SLACK_TOKEN`; DSH web uses
 `env:REGENIC_DSH_TOKEN` (optional); Feishu uses `keychain:lark-cli`;
 Cursor uses `keychain:regenic-cursor:<install id>` or
-`env:CURSOR_API_KEY`. WhatsApp Web live uses
-`env:REGENIC_PERSONAL_LIVE_KEY`. `oauth:HANDLE` / `app:HANDLE` are reserved;
+`env:CURSOR_API_KEY`. WhatsApp Web live stores a pairing code in the
+machine keychain on install (`REGENIC_PERSONAL_LIVE_KEY` is an optional
+CLI override). `oauth:HANDLE` / `app:HANDLE` are reserved;
 built-in drivers do not use them in this phase.
 
 WhatsApp Web live is webhook-only. The local extension posts observed
@@ -128,7 +129,7 @@ them; the kernel only probes.
 | `feishu-chat` | `lark-cli` not on PATH | `npx @larksuite/cli@latest install` ([lark-cli](https://github.com/larksuite/cli)) |
 | `feishu-chat` | CLI present, user not signed in | `lark-cli config init` then `lark-cli auth login --recommend` |
 | `cursor-agent` | no key | Paste a Cursor API key on the install form, or set `CURSOR_API_KEY` |
-| `whatsapp-web-live` | `REGENIC_PERSONAL_LIVE_KEY` unset | Set the live key, bind the API to 127.0.0.1, then load the local extension |
+| `whatsapp-web-live` | — | Install in Engine, copy the pairing code into the extension |
 
 Feishu tokens stay in the OS keychain. Optional `REGENIC_LARK_CLI` points
 at a binary that is not on PATH.

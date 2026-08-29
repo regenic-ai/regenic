@@ -435,15 +435,24 @@ function catalogSetupSteps(
       return [];
     }
     const href = typeof step.href === "string" ? step.href.trim() : "";
+    const hrefZh = typeof step.href_zh === "string" ? step.href_zh.trim() : "";
     const command = typeof step.command === "string" ? step.command.trim() : "";
     const body = typeof step.body === "string" ? step.body.trim() : "";
+    const titleZh =
+      typeof step.title_zh === "string" ? step.title_zh.trim() : "";
+    const bodyZh = typeof step.body_zh === "string" ? step.body_zh.trim() : "";
     return [
       {
         title,
+        ...(titleZh ? { title_zh: titleZh } : {}),
         ...(body ? { body } : {}),
+        ...(bodyZh ? { body_zh: bodyZh } : {}),
         ...(command ? { command } : {}),
         ...(href.startsWith("http://") || href.startsWith("https://")
           ? { href }
+          : {}),
+        ...(hrefZh.startsWith("http://") || hrefZh.startsWith("https://")
+          ? { href_zh: hrefZh }
           : {}),
         ...(step.visible_when ? { visible_when: step.visible_when } : {}),
       },
@@ -507,6 +516,23 @@ export async function installConnector(
     );
   }
   return body as EngineInstallationView;
+}
+
+export async function fetchConnectorPairingCode(id: string): Promise<string> {
+  const response = await fetch(
+    `${origin()}/v1/me/connectors/${id}/pairing-code`,
+  );
+  const body = (await response.json()) as
+    | { pairing_code?: string }
+    | { error?: { message?: string } };
+  if (!response.ok || !("pairing_code" in body) || !body.pairing_code?.trim()) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `pairing-code ${response.status}`,
+    );
+  }
+  return body.pairing_code.trim();
 }
 
 export async function updateConnectorConfig(

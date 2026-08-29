@@ -133,6 +133,52 @@ describe("IngestionService", () => {
     assert.equal(blobStore.size, 1);
   });
 
+  it("revises the same utterance when only actor or direction changed", async () => {
+    const { authorityStore, service } = createHarness();
+    const inbound = channelRecord({
+      channel: "whatsapp-personal",
+      kind: "user",
+      direction: "inbound",
+      external_id: "15558659220652@c.us:3EB0own",
+      occurred_at: "2025-07-09T18:58:00.000Z",
+      actor_id: "15558659220652@c.us",
+      actor_label: "+1 (858) 922-0652",
+      scope_id: "15558659220652@c.us",
+      text: "Hello, Biobyai here.",
+    });
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "wa-1",
+      org_id: "local-owner",
+      delivery_id: "delivery-wa-1",
+      received_at: "2026-08-08T00:00:00.000Z",
+      records: [inbound],
+    });
+    const outbound = channelRecord({
+      channel: "whatsapp-personal",
+      kind: "user",
+      direction: "outbound",
+      external_id: "15558659220652@c.us:3EB0own",
+      occurred_at: "2025-07-09T18:58:00.000Z",
+      actor_id: "local-owner",
+      scope_id: "15558659220652@c.us",
+      text: "Hello, Biobyai here.",
+    });
+    const revised = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "wa-1",
+      org_id: "local-owner",
+      delivery_id: "delivery-wa-2",
+      received_at: "2026-08-08T00:01:00.000Z",
+      records: [outbound],
+    });
+    const events = authorityStore.allEvents();
+    assert.equal(revised.records[0].status, "accepted");
+    assert.equal(events.length, 2);
+    assert.equal(events[1].operation, "revise");
+    assert.equal(events[1].parent_event_id, events[0].id);
+  });
+
   it("quarantines a conflicting create without writing another Blob", async () => {
     const { authorityStore, blobStore, service } = createHarness();
     await service.ingest(createBatch());

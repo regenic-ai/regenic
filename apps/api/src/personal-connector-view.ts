@@ -44,9 +44,12 @@ export interface ConnectorPrerequisite {
 
 export interface ConnectorSetupStep {
   title: string;
+  title_zh?: string;
   body?: string;
+  body_zh?: string;
   command?: string;
   href?: string;
+  href_zh?: string;
   visible_when?: ConnectorFieldWhen;
 }
 
@@ -179,15 +182,21 @@ function catalogSetupSteps(
     if (!title) {
       return [];
     }
+    const titleZh = step.title_zh?.replace(/\s+/g, " ").trim();
     const body = step.body?.replace(/\s+/g, " ").trim();
+    const bodyZh = step.body_zh?.replace(/\s+/g, " ").trim();
     const command = step.command?.trim();
     const href = safeHttpHref(step.href);
+    const hrefZh = safeHttpHref(step.href_zh);
     return [
       {
         title,
+        ...(titleZh ? { title_zh: titleZh } : {}),
         ...(body ? { body } : {}),
+        ...(bodyZh ? { body_zh: bodyZh } : {}),
         ...(command ? { command } : {}),
         ...(href ? { href } : {}),
+        ...(hrefZh ? { href_zh: hrefZh } : {}),
         ...(step.visible_when ? { visible_when: step.visible_when } : {}),
       },
     ];
@@ -274,6 +283,7 @@ export interface EngineInstallationView {
   channel: string;
   channel_label: string;
   last_attempt: IngestAttempt | null;
+  pairing_code?: string;
 }
 
 export function toInstallationView(

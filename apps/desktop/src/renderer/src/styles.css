@@ -2966,6 +2966,16 @@ button {
   user-select: text;
 }
 
+.pairing-card {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.pairing-card .muted {
+  margin: 0;
+}
+
 .install-docs {
   display: flex;
   flex-wrap: wrap;

@@ -40,6 +40,7 @@ export function EnginePage({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [syncingAll, setSyncingAll] = useState(false);
   const [installingType, setInstallingType] = useState<string | null>(null);
+  const [pairingCodes, setPairingCodes] = useState<Record<string, string>>({});
   const [pendingUninstallIds, setPendingUninstallIds] = useState<string[]>([]);
   const [installingExecutor, setInstallingExecutor] = useState<string | null>(
     null,
@@ -246,6 +247,7 @@ export function EnginePage({
                 item.connector_type === kind.connector_type &&
                 pendingUninstallIds.includes(item.id),
             )}
+            pairingCode={pairingCodes}
             onOpenInstall={() => {
               if (actionLock.current || busyId !== null || syncingAll) {
                 return;
@@ -260,7 +262,16 @@ export function EnginePage({
             }}
             onInstall={(config) =>
               void runAction(kind.connector_type, async () => {
-                await installConnector(kind.connector_type, config);
+                const installed = await installConnector(
+                  kind.connector_type,
+                  config,
+                );
+                if (installed.pairing_code?.trim()) {
+                  setPairingCodes((current) => ({
+                    ...current,
+                    [installed.id]: installed.pairing_code!.trim(),
+                  }));
+                }
                 setInstallingType(null);
               })
             }
@@ -283,6 +294,9 @@ export function EnginePage({
               })
             }
             onRefresh={onChanged}
+            onPairingCode={(id, code) => {
+              setPairingCodes((current) => ({ ...current, [id]: code }));
+            }}
             onUninstall={(installation) => {
               if (
                 actionLock.current ||
@@ -308,6 +322,11 @@ export function EnginePage({
               );
               void runAction(installation.id, async () => {
                 await uninstallConnector(installation.id);
+                setPairingCodes((current) => {
+                  const next = { ...current };
+                  delete next[installation.id];
+                  return next;
+                });
               }).then((ok) => {
                 if (!ok) {
                   setPendingUninstallIds((current) =>

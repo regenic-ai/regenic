@@ -435,6 +435,11 @@ export class PersonalController {
     return this.guard(() => this.connectors.setStatus(id, "disabled"));
   }
 
+  @Get("connectors/:id/pairing-code")
+  revealConnectorPairingCode(@Param("id") id: string) {
+    return this.guard(() => this.connectors.revealPairingCode(id));
+  }
+
   private async guard<T>(run: () => Promise<T>): Promise<T> {
     try {
       return await run();

@@ -389,9 +389,12 @@ export interface ConnectorPrerequisite {
 
 export interface ConnectorSetupStep {
   title: string;
+  title_zh?: string;
   body?: string;
+  body_zh?: string;
   command?: string;
   href?: string;
+  href_zh?: string;
   visible_when?: ConnectorFieldWhen;
 }
 
@@ -441,6 +444,7 @@ export interface EngineInstallationView {
   channel?: string;
   channel_label?: string;
   last_attempt: IngestAttempt | null;
+  pairing_code?: string;
 }
 
 export interface CreatedConversation {

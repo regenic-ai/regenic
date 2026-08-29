@@ -1,10 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
   INGEST_SCHEMA_VERSION,
   channelRecord,
   envCredentialsRef,
+  readInstallSecret,
+  writeKeychainSecret,
+  installSecretRef,
   type ChannelDriver,
   type ConnectorImportParseResult,
   type ConnectorInstallation,
@@ -23,7 +26,9 @@ import {
 import {
   isWhatsAppChatId,
   parseWhatsAppChatId,
+  whatsAppLiveActorId,
   whatsappConversationKind,
+  whatsappLiveExternalId,
 } from "./whatsapp-ids";
 import {
   acknowledgeWhatsAppLiveCommand,
@@ -34,6 +39,7 @@ import {
 
 export const WHATSAPP_WEB_LIVE_CONNECTOR_TYPE = "whatsapp-web-live";
 export const WHATSAPP_WEB_LIVE_KEY_ENV = "REGENIC_PERSONAL_LIVE_KEY";
+export const WHATSAPP_WEB_LIVE_PAIRING_FIELD = "pairing_code";
 export const WHATSAPP_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
 const PURR_REVISE_ID = "purr-wa-surface-v1";
 const MAX_MESSAGE_TEXT_CHARS = 12_000;
@@ -46,6 +52,16 @@ export const whatsappWebLiveDriver: ChannelDriver = {
   connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input) {
+    try {
+      writeWhatsAppLivePairingCode(input.id, generateWhatsAppLivePairingCode());
+    } catch (error) {
+      throw new ChannelDriverError(
+        "missing_credentials",
+        error instanceof Error
+          ? error.message
+          : "Could not store the WhatsApp pairing code",
+      );
+    }
     return {
       id: input.id,
       org_id: input.org_id,
@@ -91,7 +107,7 @@ export const whatsappWebLiveDriver: ChannelDriver = {
       source: WHATSAPP_PERSONAL_SOURCE,
       source_mode: "webhook" as const,
       async verifyWebhook(request: WebhookRequest) {
-        verifyLiveAccess(request.headers, env);
+        await verifyLiveAccess(request.headers, env, installation);
         return { body: request.body, verified_at: request.received_at };
       },
       async handleWebhook(webhook: VerifiedWebhook) {
@@ -144,28 +160,39 @@ export const whatsappWebLiveDriver: ChannelDriver = {
       title: "WhatsApp Web",
       channel_label: "WhatsApp",
       description:
-        "Observe the signed-in WhatsApp Web tab through the local extension, and reply from Inbox. Chat identity is the WhatsApp JID, same as a personal export import.",
-      credential_hint: WHATSAPP_WEB_LIVE_KEY_ENV,
+        "Read WhatsApp Web chats you already signed in to, and reply from Inbox. Install first — Regenic creates a pairing code for the browser extension.",
+      credential_hint: "Pairing code · created on install",
       singleton: true,
-      prerequisites: [
-        {
-          kind: "env" as const,
-          key: WHATSAPP_WEB_LIVE_KEY_ENV,
-          label: "Live connector API key",
-          required: true,
-          hint: `Set ${WHATSAPP_WEB_LIVE_KEY_ENV} before starting the API. The form does not take it.`,
-        },
-      ],
       setup_steps: [
         {
-          title: "Set REGENIC_PERSONAL_LIVE_KEY and bind the API to 127.0.0.1",
+          title: "Install this connector",
+          title_zh: "安装这个连接器",
+          body: "Regenic creates a pairing code. Copy it after install — you will paste it into the extension.",
+          body_zh: "安装后会生成配对码。复制它，下一步贴进浏览器扩展。这不是 WhatsApp 密码。",
         },
         {
-          title: "Build and load the WhatsApp Web extension",
-          body: "pnpm --filter @regenic/web-extension-whatsapp build, then load packages/web-extension-whatsapp/dist.",
+          title: "Load the WhatsApp Web extension",
+          title_zh: "在浏览器里加载扩展",
+          body: "Chrome or Edge: Extensions → Developer mode → Load unpacked → packages/web-extension-whatsapp/dist. Build the package first if dist is missing.",
+          body_zh:
+            "Chrome / Edge：打开扩展页 → 开发者模式 → 加载已解压的扩展程序 → 选 packages/web-extension-whatsapp/dist。若没有 dist 目录，先在仓库根目录运行构建命令。",
+          command: "pnpm --filter @regenic/web-extension-whatsapp build",
+          href: "https://github.com/regenic-ai/regenic/blob/main/docs/en/WHATSAPP_WEB_LIVE_CONNECTOR.md",
+          href_zh:
+            "https://github.com/regenic-ai/regenic/blob/main/docs/zh/WHATSAPP_WEB_LIVE_CONNECTOR.md",
         },
         {
-          title: "Install this connector, then reconnect the open WhatsApp Web chat",
+          title: "Paste the pairing code into the extension",
+          title_zh: "把配对码贴进扩展设置",
+          body: "Open extension Settings. Local API origin stays on 127.0.0.1. Paste the pairing code from Engine. Leave Installation id blank.",
+          body_zh:
+            "打开扩展设置。本机 API 地址保持 127.0.0.1。把 Engine 里的配对码贴进去。Installation id 留空即可。",
+        },
+        {
+          title: "Open WhatsApp Web and sync visible chats",
+          title_zh: "打开 WhatsApp Web 并同步可见会话",
+          body: "Sign in yourself, keep the chat list visible, then click Sync visible chats in the extension popup. Inbox replies open the matching chat before drafting or sending.",
+          body_zh: "自己登录 WhatsApp Web，保持左侧会话列表可见，再在扩展弹窗里点「同步可见会话」。Inbox 回复会先打开对应聊天，再填草稿或发送。",
         },
       ],
       import_files: {
@@ -198,20 +225,6 @@ export const whatsappWebLiveDriver: ChannelDriver = {
     return {
       label: "WhatsApp Web",
       detail: "Local browser extension",
-    };
-  },
-
-  async probeCatalog(input) {
-    const ready = Boolean(input.env[WHATSAPP_WEB_LIVE_KEY_ENV]?.trim());
-    return {
-      services: {
-        [WHATSAPP_WEB_LIVE_KEY_ENV]: {
-          ready,
-          hint: ready
-            ? undefined
-            : `Set ${WHATSAPP_WEB_LIVE_KEY_ENV} before starting the API.`,
-        },
-      },
     };
   },
 };
@@ -251,10 +264,59 @@ function matchesWhatsAppLiveThread(
   );
 }
 
-function verifyLiveAccess(
+export function generateWhatsAppLivePairingCode(): string {
+  return randomBytes(16).toString("hex");
+}
+
+export function writeWhatsAppLivePairingCode(
+  installationId: string,
+  secret: string,
+): void {
+  writeKeychainSecret(
+    installSecretRef(
+      WHATSAPP_WEB_LIVE_CONNECTOR_TYPE,
+      installationId,
+      WHATSAPP_WEB_LIVE_PAIRING_FIELD,
+    ),
+    secret,
+  );
+}
+
+export function readWhatsAppLivePairingCode(
+  installationId: string,
+): Promise<string | undefined> {
+  return readInstallSecret(
+    WHATSAPP_WEB_LIVE_CONNECTOR_TYPE,
+    installationId,
+    WHATSAPP_WEB_LIVE_PAIRING_FIELD,
+  );
+}
+
+export async function resolveWhatsAppLiveKeys(
+  installation: Pick<ConnectorInstallation, "id">,
+  env: NodeJS.ProcessEnv,
+): Promise<{ pairingCode?: string; envKey?: string }> {
+  const pairingCode = await readWhatsAppLivePairingCode(installation.id);
+  const envKey = env[WHATSAPP_WEB_LIVE_KEY_ENV]?.trim() || undefined;
+  return { pairingCode, envKey };
+}
+
+export function whatsAppLiveKeyMatches(
+  presented: string | undefined,
+  allowed: { pairingCode?: string; envKey?: string },
+): boolean {
+  const key = presented?.trim() ?? "";
+  if (!key) {
+    return false;
+  }
+  return key === allowed.pairingCode || key === allowed.envKey;
+}
+
+async function verifyLiveAccess(
   headers: WebhookRequest["headers"],
   env: NodeJS.ProcessEnv,
-): void {
+  installation: ConnectorInstallation,
+): Promise<void> {
   const listenHost = (env.LISTEN_HOST ?? "127.0.0.1").trim().toLowerCase();
   if (!LOOPBACK_HOSTS.has(listenHost)) {
     throw new ChannelDriverError(
@@ -264,14 +326,19 @@ function verifyLiveAccess(
   }
   const origin = headerValue(headers, "origin");
   const apiKey = headerValue(headers, "x-regenic-live-key");
-  const expected = env[WHATSAPP_WEB_LIVE_KEY_ENV]?.trim();
-  if (origin && !expected) {
-    throw new ChannelDriverError(
-      "missing_credentials",
-      "Live connector API key is required for browser access",
-    );
+  const allowed = await resolveWhatsAppLiveKeys(installation, env);
+  if (origin) {
+    if (!whatsAppLiveKeyMatches(apiKey, allowed)) {
+      throw new ChannelDriverError(
+        "missing_credentials",
+        allowed.pairingCode || allowed.envKey
+          ? "Invalid live connector API key"
+          : "Live connector API key is required for browser access",
+      );
+    }
+    return;
   }
-  if (expected && apiKey !== expected) {
+  if (allowed.envKey && apiKey !== allowed.envKey) {
     throw new ChannelDriverError("missing_credentials", "Invalid live connector API key");
   }
 }
@@ -326,8 +393,7 @@ function parsePayload(body: Uint8Array): IngestRecord | undefined {
   const senderId = typeof value.sender_id === "string" ? value.sender_id.trim() : "";
   const senderName = typeof value.sender_name === "string" ? value.sender_name.trim() : "";
   const kind = whatsappConversationKind(chatId);
-  const inboundActor = parseWhatsAppChatId(senderId) ?? (kind === "group" ? undefined : chatId);
-  const actorId = fromMe ? "local-owner" : inboundActor;
+  const actorId = whatsAppLiveActorId({ chatId, fromMe, senderId });
   if (!actorId) {
     return undefined;
   }
@@ -335,7 +401,7 @@ function parsePayload(body: Uint8Array): IngestRecord | undefined {
     channel: WHATSAPP_PERSONAL_SOURCE,
     kind: "user",
     direction: fromMe ? "outbound" : "inbound",
-    external_id: echo ? `${chatId}:out:${echo.id}` : `${chatId}:${messageId}`,
+    external_id: echo ? `${chatId}:out:${echo.id}` : whatsappLiveExternalId(chatId, messageId),
     occurred_at: timestamp(typeof value.timestamp === "string" ? value.timestamp : undefined),
     actor_id: actorId,
     actor_label: fromMe ? undefined : senderName || undefined,

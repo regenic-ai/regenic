@@ -14,7 +14,7 @@
 内核。导入桥不接收浏览器 Cookie、不做隐藏后台采集、不检查所有聊天，也不发送消息。
 
 可选的 live 路径是单独的 `ChannelDriver`（`whatsapp-web-live`），不会发布到浏览
-器商店。本地 MV3 扩展只观察当前打开的 WhatsApp Web 聊天，把消息打到
+器商店。本地 MV3 扩展读取 WhatsApp Web 左侧可见会话，把消息打到
 `POST /v1/me/connectors/:id/webhook`，并且只发送内核已经通过 `bindEgress` 接受的
 Inbox 回复。见 [WhatsApp Web live connector](WHATSAPP_WEB_LIVE_CONNECTOR.md)。
 

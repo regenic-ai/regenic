@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Regenic WhatsApp Web Live Connector",
-  "version": "0.1.16",
+  "version": "0.1.29",
   "description": "Local-only WhatsApp Web connector for Regenic. Observes messages and can draft replies through a localhost API.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "minimum_chrome_version": "114",
+  "permissions": ["storage", "activeTab", "scripting", "sidePanel"],
   "host_permissions": [
     "https://web.whatsapp.com/*",
     "http://127.0.0.1/*",
@@ -18,14 +19,15 @@
   "content_scripts": [
     {
       "matches": ["https://web.whatsapp.com/*"],
-      "js": ["content-script.js"],
-      "type": "module",
+      "js": ["inject-loader.js"],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "Regenic WhatsApp",
-    "default_popup": "popup.html"
+    "default_title": "Regenic WhatsApp"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   },
   "options_page": "settings.html",
   "web_accessible_resources": [

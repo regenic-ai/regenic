@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { importConnectorFile } from "./api";
+import { fetchConnectorPairingCode, importConnectorFile } from "./api";
 import {
   importWhatsAppFiles,
   whatsAppImportSummary,
@@ -29,6 +29,7 @@ export function ConnectorKind({
   syncingAll,
   installing,
   pendingUninstall,
+  pairingCode,
   onOpenInstall,
   onCloseInstall,
   onInstall,
@@ -37,6 +38,7 @@ export function ConnectorKind({
   onUpdate,
   onRefresh,
   onUninstall,
+  onPairingCode,
 }: {
   kind: ConnectorCatalogItem;
   installations: EngineInstallationView[];
@@ -44,6 +46,7 @@ export function ConnectorKind({
   syncingAll: boolean;
   installing: boolean;
   pendingUninstall: boolean;
+  pairingCode?: Record<string, string>;
   onOpenInstall: () => void;
   onCloseInstall: () => void;
   onInstall: (config: Record<string, string>) => void;
@@ -55,6 +58,7 @@ export function ConnectorKind({
   ) => Promise<boolean>;
   onRefresh?: () => Promise<void>;
   onUninstall: (installation: EngineInstallationView) => void;
+  onPairingCode?: (id: string, code: string) => void;
 }) {
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -71,7 +75,9 @@ export function ConnectorKind({
                 : t("connector.notInstalled")}
             </span>
             <span className="muted">
-              {t("connector.credentials", { hint: kind.credential_hint })}
+              {kind.connector_type === "whatsapp-web-live"
+                ? t("connector.whatsappCredentials")
+                : t("connector.credentials", { hint: kind.credential_hint })}
             </span>
           </div>
           <PrerequisiteList
@@ -132,6 +138,7 @@ export function ConnectorKind({
           installation={installation}
           busy={busyId === installation.id || syncingAll}
           editing={editingId === installation.id}
+          pairingCode={pairingCode?.[installation.id]}
           onEdit={() =>
             setEditingId((current) =>
               current === installation.id ? null : installation.id,
@@ -147,6 +154,7 @@ export function ConnectorKind({
             });
           }}
           onUninstall={() => onUninstall(installation)}
+          onPairingCode={onPairingCode}
         />
       ))}
     </div>
@@ -507,7 +515,7 @@ function SetupStepList({
   values: Record<string, string>;
   collapsible: boolean;
 }) {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const [copied, setCopied] = useState<string | null>(null);
   const visible = steps.filter((step) => matchesWhen(step.visible_when, values));
   if (visible.length === 0) {
@@ -517,25 +525,28 @@ function SetupStepList({
     <ol className="setup-step-list">
       {visible.map((step, index) => {
         const copyKey = `${index}:${step.command ?? ""}`;
+        const title = localizedStepText(step.title, step.title_zh, locale);
+        const body = localizedStepText(step.body, step.body_zh, locale);
+        const href = locale === "zh" && step.href_zh ? step.href_zh : step.href;
         return (
           <li key={`${index}:${step.title}`}>
-            {step.href ? (
+            {href ? (
               <a
                 className="setup-step-link"
-                href={step.href}
+                href={href}
                 target="_blank"
                 rel="noreferrer"
                 onClick={(event) => {
                   event.preventDefault();
-                  openExternal(step.href!);
+                  openExternal(href);
                 }}
               >
-                {step.title}
+                {title}
               </a>
             ) : (
-              <strong>{step.title}</strong>
+              <strong>{title}</strong>
             )}
-            {step.body ? <div className="muted">{step.body}</div> : null}
+            {body ? <div className="muted">{body}</div> : null}
             {step.command ? (
               <div className="setup-step-command">
                 <code>{step.command}</code>
@@ -648,26 +659,41 @@ function matchesWhen(
   return (values[when.field] ?? "") === when.value;
 }
 
+function localizedStepText(
+  en: string | undefined,
+  zh: string | undefined,
+  locale: string,
+): string | undefined {
+  if (locale === "zh" && zh) {
+    return zh;
+  }
+  return en;
+}
+
 function ConnectorRow({
   kind,
   installation,
   busy,
   editing,
+  pairingCode,
   onEdit,
   onSync,
   onToggle,
   onSave,
   onUninstall,
+  onPairingCode,
 }: {
   kind: ConnectorCatalogItem;
   installation: EngineInstallationView;
   busy: boolean;
   editing: boolean;
+  pairingCode?: string;
   onEdit: () => void;
   onSync: () => void;
   onToggle: () => void;
   onSave: (config: Record<string, string>) => void;
   onUninstall: () => void;
+  onPairingCode?: (id: string, code: string) => void;
 }) {
   const { t } = useLocale();
   const statusChip =
@@ -692,6 +718,13 @@ function ConnectorRow({
             ) : null}
           </div>
           <div className="muted">{attemptSummary(installation.last_attempt)}</div>
+          {kind.connector_type === "whatsapp-web-live" ? (
+            <PairingCodeCard
+              installationId={installation.id}
+              pairingCode={pairingCode}
+              onPairingCode={onPairingCode}
+            />
+          ) : null}
         </div>
         <div className="install-actions">
           <button
@@ -737,6 +770,74 @@ function ConnectorRow({
           onClose={onEdit}
         />
       ) : null}
+    </div>
+  );
+}
+
+function PairingCodeCard({
+  installationId,
+  pairingCode,
+  onPairingCode,
+}: {
+  installationId: string;
+  pairingCode?: string;
+  onPairingCode?: (id: string, code: string) => void;
+}) {
+  const { t } = useLocale();
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const code = pairingCode?.trim() ?? "";
+
+  return (
+    <div className="pairing-card">
+      <strong>{t("connector.pairingCode")}</strong>
+      <p className="muted">{t("connector.pairingHint")}</p>
+      {code ? (
+        <div className="setup-step-command">
+          <code>{code}</code>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => {
+              void navigator.clipboard?.writeText(code).then(
+                () => {
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 1500);
+                },
+                () => undefined,
+              );
+            }}
+          >
+            {copied ? t("connector.copied") : t("connector.copy")}
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="ghost"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setError(null);
+            void fetchConnectorPairingCode(installationId)
+              .then((next) => {
+                onPairingCode?.(installationId, next);
+              })
+              .catch((caught) => {
+                setError(
+                  caught instanceof Error
+                    ? connectorActionError(caught.message)
+                    : t("engine.actionFailed"),
+                );
+              })
+              .finally(() => setBusy(false));
+          }}
+        >
+          {t("connector.showPairing")}
+        </button>
+      )}
+      {error ? <p className="action-error">{error}</p> : null}
     </div>
   );
 }

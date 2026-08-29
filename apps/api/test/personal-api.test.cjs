@@ -13,7 +13,7 @@ const {
 } = require("../dist/http-app");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
+const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord, setKeychainStoreForTests } = require("@regenic/domain");
 const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
 const { decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
 const {
@@ -28,6 +28,7 @@ const previousEnv = {};
 
 afterEach(async () => {
   restoreEnv();
+  setKeychainStoreForTests();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true })));
 });
 
@@ -348,6 +349,15 @@ async function seedHostedWork(authority, input) {
 }
 
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
+  const secrets = new Map();
+  setKeychainStoreForTests({
+    write(service, account, secret) {
+      secrets.set(`${service}:${account}`, secret);
+    },
+    async read(service, account) {
+      return secrets.get(`${service}:${account}`);
+    },
+  });
   setEnv({
     REGENIC_DATABASE: database,
     REGENIC_BLOB_ROOT: blobRoot,
@@ -781,7 +791,14 @@ describe("personal /v1/me", () => {
       ).json();
       assert.equal(installed.connector_type, "whatsapp-web-live");
       assert.equal(installed.can_reply, true);
+      assert.equal(typeof installed.pairing_code, "string");
+      assert.ok(installed.pairing_code.length >= 16);
       const installId = installed.id;
+      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      assert.equal(
+        JSON.stringify(engine).includes(installed.pairing_code),
+        false,
+      );
 
       const unauthorized = await fetch(`${origin}/v1/me/connectors/${installId}/webhook`, {
         method: "POST",
@@ -928,6 +945,21 @@ describe("personal /v1/me", () => {
         body,
       });
       assert.equal(localCli.status, 201);
+
+      const revealed = await (
+        await fetch(`${origin}/v1/me/connectors/${installed.id}/pairing-code`)
+      ).json();
+      assert.equal(typeof revealed.pairing_code, "string");
+      const paired = await fetch(webhook, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "chrome-extension://abcdefghijklmnop",
+          "x-regenic-live-key": revealed.pairing_code,
+        },
+        body,
+      });
+      assert.equal(paired.status, 201);
 
       const egress = await fetch(`${origin}/v1/me/connectors/${installed.id}/egress`, {
         headers: { origin: "chrome-extension://abcdefghijklmnop" },
@@ -1606,8 +1638,10 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[4].connector_type, "whatsapp-web-live");
       assert.equal(engine.catalog[4].installed, false);
       assert.equal(engine.catalog[4].singleton, true);
-      assert.equal(engine.catalog[4].prerequisites[0].key, "REGENIC_PERSONAL_LIVE_KEY");
-      assert.equal(engine.catalog[4].prerequisites[0].required, true);
+      assert.equal(engine.catalog[4].setup_ready, true);
+      assert.deepEqual(engine.catalog[4].prerequisites, []);
+      assert.match(engine.catalog[4].credential_hint, /Pairing code/);
+      assert.equal(engine.catalog[4].setup_steps[0].title, "Install this connector");
       assert.equal(engine.catalog[4].import_files.accept.includes(".csv"), true);
       assert.equal(engine.catalog[4].import_files.max_bytes, 20 * 1024 * 1024);
       assert.equal(engine.catalog[0].import_files, undefined);

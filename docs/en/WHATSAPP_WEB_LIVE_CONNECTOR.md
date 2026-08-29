@@ -10,9 +10,10 @@
 ## Boundary
 
 The WhatsApp Web live connector is a local `ChannelDriver`. A user who is
-already signed in to WhatsApp Web can observe the **currently open** chat
-through a local MV3 extension, ingest those messages through the ordinary
-connector webhook, and reply from Inbox.
+already signed in to WhatsApp Web can sync **visible chats in the left list**
+(the extension clicks through them, up to 30), ingest those messages through
+the ordinary connector webhook, and reply from Inbox. If Inbox replies to a
+chat that is not open, the extension opens that conversation first.
 
 This path does not use the WhatsApp Business API, does not bypass browser
 login, does not collect cookies, does not store data in the cloud, and must
@@ -46,30 +47,35 @@ flowchart TD
 ```
 
 The extension uses localhost HTTP. The kernel owns ingest and reply. The
-content script only observes the page and applies queued commands to the
-currently open chat. All live HTTP goes through the extension background
-worker, so WhatsApp Web is not a CORS origin for the personal API.
+content script observes the page, clicks through visible chats, and applies
+queued commands to the target conversation. All live HTTP goes through the
+extension background worker, so WhatsApp Web is not a CORS origin for the
+personal API.
 
-**Reconnect page** asks the background worker to restore the long-running
+**Sync visible chats** asks the background worker to restore the long-running
 content script after an extension reload or WhatsApp page refresh. A
 one-shot page probe is read-only and does not ingest messages.
 
 ## Install
 
-Start the personal API on loopback and set the live key:
+Start the personal API on loopback. You do **not** set a live-key environment
+variable first.
 
 ```powershell
 $env:LISTEN_HOST="127.0.0.1"
 $env:PORT="4370"
 $env:REGENIC_DATABASE="$PWD\regenic.db"
 $env:REGENIC_BLOB_ROOT="$PWD\blobs"
-$env:REGENIC_PERSONAL_LIVE_KEY=[guid]::NewGuid().ToString("N")
 pnpm --filter @regenic/api start
 ```
 
-In Engine, install **WhatsApp Web** (`whatsapp-web-live`). The form does not
-take the key; it reads `REGENIC_PERSONAL_LIVE_KEY` through
-`credentials_ref`. The driver is a singleton.
+In Engine, install **WhatsApp Web**. The button is available immediately.
+Install creates a **pairing code** (stored in the machine keychain) and shows
+it once so you can paste it into the extension. That code proves the extension
+is talking to your local Regenic. It is not a WhatsApp password.
+
+`REGENIC_PERSONAL_LIVE_KEY` remains an optional CLI override. The product
+never asks you to set it. The driver is a singleton.
 
 The extension then uses the generic connector routes. There is no
 `/v1/me/live/whatsapp/*` API.
@@ -80,13 +86,14 @@ The extension then uses the generic connector routes. There is no
 | `POST` | `/v1/me/connectors/:id/webhook` | Ingest one observed WhatsApp Web message |
 | `GET` | `/v1/me/connectors/:id/egress` | Poll pending send commands |
 | `POST` | `/v1/me/connectors/:id/egress/:commandId/ack` | Acknowledge a command |
+| `GET` | `/v1/me/connectors/:id/pairing-code` | Reveal the pairing code for the extension |
 | `POST` | `/v1/me/replies` | Queue a send through `bindEgress` |
 
-Clients send `REGENIC_PERSONAL_LIVE_KEY` as `x-regenic-live-key`. Any
-request with a browser Origin header is rejected unless the key is
-configured and matches. A local CLI request without an Origin header remains
-available when the key is unset, but configuring the key is recommended.
-The driver also rejects work if the API is not bound to a loopback host.
+The extension sends the pairing code as `x-regenic-live-key`. Any request
+with a browser Origin header is rejected unless the pairing code (or the
+optional env override) matches. A local CLI request without an Origin header
+remains available. The driver also rejects work if the API is not bound to a
+loopback host.
 
 Commands expire after five minutes. The in-memory queue is isolated by
 installation, accepts at most 100 pending commands, and rate-limits a chat
@@ -104,28 +111,31 @@ Load it in Edge or Chrome:
 2. Enable developer mode.
 3. Select **Load unpacked**.
 4. Choose `packages/web-extension-whatsapp/dist`.
-5. Open the popup and confirm that **Version** is present.
-6. Open the extension settings.
-7. Set **Local API origin** to a loopback URL such as `http://127.0.0.1:4370`.
-   Remote origins are rejected.
-8. Set **Live API key** to the value of `REGENIC_PERSONAL_LIVE_KEY`.
-9. Leave **Installation id** blank unless you need to pin a specific install.
-10. Keep **Allow commands to click WhatsApp's send button** off for first tests.
-11. Use **Test connection**, then open WhatsApp Web and select **Reconnect page**.
-12. Continue only when **Page scan** begins with `connected:` and mentions a
-    WhatsApp JID or `no WhatsApp chat id` (not a title slug).
+5. After a code change, click **Reload**, then refresh any open WhatsApp Web tab.
+6. Click the toolbar icon (pin it first if you want). The panel docks on the
+   **right** of the browser, same as the X extension. Paste the **pairing code**
+   from Engine after install.
+   It is not a WhatsApp password. Leave the installation id and API address
+   alone unless you changed them.
+7. Open `https://web.whatsapp.com`, keep the left chat list visible, then select **Sync visible chats**. The extension clicks through the list (up to 30) and ingests them into Inbox.
+8. Success shows `synced N chats`. A contact name is not an ID; the extension reverse-looks-up the WhatsApp ID from page data or local records.
+9. Keep “click Send” off for first tests. Inbox replies open the matching chat, then fill the composer.
 
 ## Manual Test
 
-1. Start the local API and install `whatsapp-web-live` in Engine.
+1. Start the local API and install `whatsapp-web-live` in Engine. Copy the pairing code.
 2. Build and load the extension.
 3. Sign in to `https://web.whatsapp.com` yourself.
-4. Open a test chat.
-5. Open the popup and select **Reconnect page**.
+4. Keep the left chat list visible.
+5. Open the popup and select **Sync visible chats**.
 6. Send a unique message to this account from another WhatsApp account.
 7. Open Regenic Inbox and confirm one WhatsApp item appears, `can_send` is
    true, `conversation_kind` is `direct` or `group`, and `event.source` is
    `whatsapp-personal`. The thread id is `whatsapp-personal:<jid>`.
+   One WhatsApp chat must occupy one Inbox row. If an older build split a
+   group into several rows, fold those orphans and sync again. Sync waits
+   until the conversation pane is stable; phone-number chats match by digits,
+   not exact title strings.
 8. Reply from Inbox while that same chat stays open in WhatsApp Web:
 
 ```powershell
@@ -142,13 +152,12 @@ Invoke-RestMethod -Method Post `
 ## Safety Rules
 
 - Keep the API bound to `127.0.0.1`.
-- Set `REGENIC_PERSONAL_LIVE_KEY` for real testing.
+- Paste the Engine pairing code into the extension. Do not put it in install config.
 - Keep the extension API origin on loopback. The content script never calls
   the local API directly.
 - Start with the extension send checkbox off.
-- Do not queue commands for chats that are not currently open.
-- After any command delay, the extension re-reads the open chat and aborts if
-  it changed.
+- Do not queue commands for chats the extension cannot open.
+- After any command delay, the extension checks the open chat again and switches back to the target if needed.
 - Do not use this connector for bulk outreach, scraping, or unsolicited replies.
 - Do not store production secrets, browser cookies, or npm tokens in the live
   connector.
@@ -165,11 +174,24 @@ Invoke-RestMethod -Method Post `
 
 - The connector relies on WhatsApp Web DOM selectors and may break when the
   page changes.
-- Messages without a WhatsApp JID are dropped. Group inbound messages
-  without a sender JID are also dropped.
+- Messages without a WhatsApp JID are dropped. Group inbound messages keep
+  two fields, same as whatsapp-web.js `author` + `notifyName`: `actor_id` is
+  the participant phone JID when the bubble shows a number (`+34 …` →
+  `3460…@c.us`), and `actor_label` is the display name (`~ Alex Diaz`).
+  `fromMe` comes from WhatsApp's own outgoing flag (`true_` / `message-out` /
+  send ticks), not from the push name in `data-pre-plain-text`. Your own
+  bubbles are `local-owner` and show as You in Inbox; a name like
+  `Jeson Li` is not treated as another person. Current WhatsApp Web often
+  omits `true_`/`false_` on `data-id`; outgoing detection then uses send
+  ticks / `tail-out` on the same row, and whether the bubble sits on the
+  right. Re-syncing the same message with a corrected speaker revises the
+  stored event, so Inbox replaces the old peer label instead of keeping it.
 - Send commands are in-memory, expire after five minutes, and disappear when
   the API restarts.
-- Only the currently open chat can receive a send command.
+- Sync covers chats currently visible in the list (up to 30 after scrolling),
+  not a full offline export of history.
+- Sending opens the target chat first. If the row cannot be found, the
+  command stays pending until it expires.
 - The MVP assumes one active extension instance. Commands are not leased
   across browsers or profiles.
 - Automatic sending executes supplied text; it does not generate a reply.

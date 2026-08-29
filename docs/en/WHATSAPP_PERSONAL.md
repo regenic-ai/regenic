@@ -16,8 +16,8 @@ local personal kernel. The import bridge does not receive browser cookies, run
 hidden background collection, inspect every chat, or send messages.
 
 The optional live path is a separate `ChannelDriver` (`whatsapp-web-live`). It
-is not published to a browser store. A local MV3 extension observes only the
-currently open WhatsApp Web chat, posts to
+is not published to a browser store. A local MV3 extension reads visible
+WhatsApp Web chats, posts to
 `POST /v1/me/connectors/:id/webhook`, and sends only Inbox replies the kernel
 already accepted through `bindEgress`. See
 [WhatsApp Web live connector](WHATSAPP_WEB_LIVE_CONNECTOR.md).

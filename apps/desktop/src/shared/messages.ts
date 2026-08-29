@@ -517,6 +517,12 @@ export const en = {
   "connector.saving": "Saving…",
   "connector.editTitle": "Edit {type} sync",
   "connector.installTitle": "Install {title}",
+  "connector.pairingCode": "Pairing code",
+  "connector.pairingHint":
+    "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not a WhatsApp password.",
+  "connector.showPairing": "Show pairing code",
+  "connector.hidePairing": "Hide",
+  "connector.whatsappCredentials": "Pairing code · created on install",
 
   "docs.connector": "Connector spec",
   "docs.executor": "Executor spec",
@@ -1050,6 +1056,12 @@ export const zh: Record<MessageKey, string> = {
   "connector.saving": "保存中…",
   "connector.editTitle": "编辑 {type} 同步",
   "connector.installTitle": "安装 {title}",
+  "connector.pairingCode": "配对码",
+  "connector.pairingHint":
+    "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是 WhatsApp 密码。",
+  "connector.showPairing": "显示配对码",
+  "connector.hidePairing": "隐藏",
+  "connector.whatsappCredentials": "配对码 · 安装时生成",
 
   "docs.connector": "连接器规范",
   "docs.executor": "执行器规范",

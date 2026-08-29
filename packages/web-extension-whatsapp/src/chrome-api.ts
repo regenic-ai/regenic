@@ -51,6 +51,39 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   });
 }
 
+export type EngineLinkKind =
+  | "needs_pairing"
+  | "offline"
+  | "blocked"
+  | "not_installed"
+  | "connected";
+
+export async function probeEngineLink(
+  settings?: ExtensionSettings,
+): Promise<{ kind: EngineLinkKind; status?: number }> {
+  const current = settings ?? (await loadSettings());
+  if (!current.apiKey.trim()) {
+    return { kind: "needs_pairing" };
+  }
+  try {
+    const response = await fetch(`${current.apiOrigin}/v1/me/engine`, {
+      headers: { "x-regenic-live-key": current.apiKey },
+    });
+    if (!response.ok) {
+      return { kind: "blocked", status: response.status };
+    }
+    const body = (await response.json()) as {
+      installations?: Array<{ connector_type?: string; status?: string }>;
+    };
+    const found = body.installations?.some(
+      (item) => item.connector_type === "whatsapp-web-live" && item.status === "enabled",
+    );
+    return found ? { kind: "connected" } : { kind: "not_installed" };
+  } catch {
+    return { kind: "offline" };
+  }
+}
+
 export function openOptionsPage(): void {
   chrome.runtime.openOptionsPage();
 }
@@ -68,8 +101,8 @@ export function sendRuntimeMessage(message: unknown): Promise<unknown> {
   });
 }
 
-export async function scanActiveWhatsAppPage(): Promise<string> {
-  const response = await sendRuntimeMessage({ type: "regenic.whatsapp.popupScan" });
+export async function scanActiveWhatsAppPage(mode: "current" | "all" = "all"): Promise<string> {
+  const response = await sendRuntimeMessage({ type: "regenic.whatsapp.popupScan", mode });
   if (response && typeof response === "object" && typeof (response as { result?: unknown }).result === "string") {
     return (response as { result: string }).result;
   }

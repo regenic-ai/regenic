@@ -90,6 +90,12 @@ describe("connector catalog hints", () => {
     assert.equal(feishu.setup_steps[0].href, "https://github.com/larksuite/cli");
     assert.equal(cursor.setup_steps[0].href, "https://cursor.com/dashboard");
     assert.match(cursor.setup_steps[1].body, /keychain/);
+    const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
+    assert.equal(whatsapp.setup_ready, true);
+    assert.deepEqual(whatsapp.prerequisites, []);
+    assert.equal(whatsapp.setup_steps[0].title, "Install this connector");
+    assert.equal(whatsapp.setup_steps[0].title_zh, "安装这个连接器");
+    assert.match(whatsapp.credential_hint, /Pairing code/);
     const hosted = catalogOf({
       env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
     }).find((item) => item.connector_type === "dsh-session");

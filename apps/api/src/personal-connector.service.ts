@@ -32,6 +32,12 @@ import {
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
+  WHATSAPP_WEB_LIVE_CONNECTOR_TYPE,
+  readWhatsAppLivePairingCode,
+  resolveWhatsAppLiveKeys,
+  whatsAppLiveKeyMatches,
+} from "@regenic/whatsapp-personal";
+import {
   connectorAllowsMultiple,
   catalogFromDrivers,
   nextPickedChatNames,
@@ -325,7 +331,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         501,
       );
     }
-    this.assertInstallSecret(installation, input);
+    await this.assertInstallSecret(installation, input);
     return { commands: driver.listEgressQueue(installation) };
   }
 
@@ -347,7 +353,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         501,
       );
     }
-    this.assertInstallSecret(installation, input);
+    await this.assertInstallSecret(installation, input);
     return driver.ackEgressQueue(installation, commandId);
   }
 
@@ -909,7 +915,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       }),
     });
     void this.catchUp(created.id);
-    return this.viewOf(store, created);
+    return this.viewWithPairingCode(store, created);
   }
 
   async updateConfig(
@@ -1351,10 +1357,78 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
-  private assertInstallSecret(
+  async revealPairingCode(
+    installationId: string,
+  ): Promise<{ pairing_code: string }> {
+    const host = this.runtime.requireHost();
+    const installation = await this.requireInstallation(
+      host.get("authority"),
+      installationId,
+    );
+    if (installation.connector_type !== WHATSAPP_WEB_LIVE_CONNECTOR_TYPE) {
+      throw new PersonalConnectorError(
+        "not_found",
+        "Pairing code is not available",
+        404,
+      );
+    }
+    const pairing_code = await this.pairingCodeOf(installation);
+    if (!pairing_code) {
+      throw new PersonalConnectorError(
+        "not_found",
+        "Pairing code is not available",
+        404,
+      );
+    }
+    return { pairing_code };
+  }
+
+  private async viewWithPairingCode(
+    store: ConnectorRuntimeStore,
+    installation: ConnectorInstallation,
+  ): Promise<EngineInstallationView> {
+    const view = await this.viewOf(store, installation);
+    const pairing_code = await this.pairingCodeOf(installation);
+    return pairing_code ? { ...view, pairing_code } : view;
+  }
+
+  private pairingCodeOf(
+    installation: ConnectorInstallation,
+  ): Promise<string | undefined> {
+    if (installation.connector_type !== WHATSAPP_WEB_LIVE_CONNECTOR_TYPE) {
+      return Promise.resolve(undefined);
+    }
+    return readWhatsAppLivePairingCode(installation.id);
+  }
+
+  private async assertInstallSecret(
     installation: ConnectorInstallation,
     input: { apiKey?: string; origin?: string },
-  ): void {
+  ): Promise<void> {
+    if (installation.connector_type === WHATSAPP_WEB_LIVE_CONNECTOR_TYPE) {
+      const allowed = await resolveWhatsAppLiveKeys(installation, process.env);
+      const origin = input.origin?.trim();
+      if (origin) {
+        if (!whatsAppLiveKeyMatches(input.apiKey, allowed)) {
+          throw new PersonalConnectorError(
+            "unauthorized",
+            allowed.pairingCode || allowed.envKey
+              ? "Invalid live connector API key"
+              : "Live connector API key is required for browser access",
+            401,
+          );
+        }
+        return;
+      }
+      if (allowed.envKey && input.apiKey !== allowed.envKey) {
+        throw new PersonalConnectorError(
+          "unauthorized",
+          "Invalid live connector API key",
+          401,
+        );
+      }
+      return;
+    }
     const expected = readEnvCredential(installation.credentials_ref, process.env);
     if (input.origin?.trim() && !expected) {
       throw new PersonalConnectorError(
