@@ -3,8 +3,8 @@
 The contract is in [Connectors](CONNECTOR.md). This page is implementation
 notes for Slack / DSH / Feishu / Cursor, not kernel branching rules.
 Built-in chat / agent channels have no business ticket types and omit
-`subjectCatalog`. A CRM or internal-system plugin publishes its own
-vocabulary and stamps `unit_kind` under the declarative contract.
+`subjectCatalog`. A private plugin publishes its own vocabulary and
+stamps `unit_kind` under the declarative contract.
 
 - **简体中文:** [../zh/CONNECTOR_DRIVERS.md](../zh/CONNECTOR_DRIVERS.md)
 - **Status:** Phase 1

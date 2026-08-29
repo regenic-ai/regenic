@@ -32,7 +32,7 @@ Meaning is peeled off the wire in fixed steps. L0 knows one protocol. L2 is what
 
 ```text
 L0 protocol plugin    ChannelConnector / ChannelDriver / Egress
-                      Feishu / Slack / CRM / DSH wire only
+                      Feishu / Slack / private plugin / DSH wire only
 L1 envelope           IngestRecord
                       identity, time, author, body, idempotency
 L2 record class       utterance | task | status | prompt
@@ -43,7 +43,7 @@ L4 thread facet       chat | agent | ticket
                       kernel projection; optional per-record hint
 L5 handling           WorkItem, opened by policy, optional
 L6 execution          TaskExecutor plugin
-                      DSH / Cursor / internal; kernel speaks the port
+                      DSH / Cursor / private plugin; kernel speaks the port
 ```
 
 Tests do not import channel names across seams: connector tests lock L1/L2; kernel tests lock L4/L5; executor tests lock L6.
@@ -288,4 +288,4 @@ The desktop reads `record_class`, `thread_facet`, `attention`, and `work` (inclu
 5. A source task is one list row; machine progress lives on that row.
 6. A connector test may name Feishu or DSH. A kernel test of L4/L5/L6 may not.
 7. A job that needs write-back enqueues a payload snapshot. Sent or an explicit skip is `acked`. An expired lease returns to the queue. Three send failures become a visible dead letter. Execution failure is not a delivery row.
-8. Different source task types are split by a connector stamp plus Recipe equality match. The kernel does not branch for CRM.
+8. Different source task types are split by a connector stamp plus Recipe equality match. The kernel does not branch for a private plugin.

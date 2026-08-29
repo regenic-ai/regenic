@@ -32,7 +32,7 @@
 
 ```text
 L0 协议插件     ChannelConnector / ChannelDriver / Egress
-                只懂飞书 / Slack / CRM / DSH 的 wire
+                只懂飞书 / Slack / 私有插件 / DSH 的 wire
 L1 信封         IngestRecord
                 身份、时间、作者、正文、幂等
 L2 记录类       utterance | task | status | prompt
@@ -43,7 +43,7 @@ L4 线程面       chat | agent | ticket
                 内核投影；记录可提示，安装不可当 lane
 L5 处理         策略才开 WorkItem（可有可无）
 L6 执行         TaskExecutor 插件
-                DSH / Cursor / 内部；内核只认端口
+                DSH / Cursor / 私有插件；内核只认端口
 ```
 
 三层测试互不 import 渠道名：连接器锁 L1/L2，内核锁 L4/L5，执行器锁 L6。
@@ -286,4 +286,4 @@ interface ExecutorCatalogEntry {
 5. 一条来源任务在列表里是一行；机器进度画在这行上。
 6. 连接器测试可以点名飞书或 DSH；内核的 L4/L5/L6 测试不可以。
 7. 需要回写的 Job 入队时带 payload 快照；发出或明确跳过才 `acked`；租约超时会回到队列；三次发送失败进死信并在列表可见。执行失败不计进投递账本。
-8. 不同类型的来源任务靠连接器盖章 + Recipe 相等匹配分流；内核不为 CRM 写分支。
+8. 不同类型的来源任务靠连接器盖章 + Recipe 相等匹配分流；内核不为私有插件写分支。

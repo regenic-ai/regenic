@@ -80,6 +80,7 @@ Mirror English semantics and heading structure.
 - Headings and table labels are dictionary nouns (`仓库结构`, `运行方式`, `组件`), not speech (`长什么样`, `怎么跑`, `用什么`).
 - Prefer 范围外 to 不做 / 当前不做.
 - English `contract` (connector, API, message, HTTP, install) is 协议, never 合同 or 契约. Identifiers stay English (`message-contract`, `contracts.ts`).
+- Out-of-tree connectors and executors are 私有插件 / private plugin. Do not name CRM, 内部系统, or an internal ticket system. Example `unit_kind` ids use `{source}.{native}` with a generic source (`private.order_review`), not a vendor prefix. Do not document private env aliases by vendor name.
 
 ## Codes
 

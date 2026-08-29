@@ -169,14 +169,14 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 ### 工单类型（`unit_kind`）
 
-CRM 或内部系统常把工作分成不同类型，并且**每个任务实例一条对话**。对话名
+私有插件常把工作分成不同类型，并且**每个任务实例一条对话**。对话名
 不稳定，不能当路由键。`record_class=task` 只说明「这是工单」，不能区分
 「订单复审」和「线索跟进」。
 
 连接器做三件申明式的事：
 
 1. `subjectCatalog()` 公布词表。`id` 由连接器保证跨插件唯一（约定
-   `{source}.{native}`，例如 `crm.order_review`）。内核不解析点号。
+   `{source}.{native}`，例如 `private.order_review`）。内核不解析点号。
 2. 入库时用 `channelRecord({ unit_kind })` 盖章。类型从源 API / 表单 /
    管道读出。猜类型留在 L0。不要用对话名当类型，也不要把类型写进
    `conversation_kind`。同一任务实例的**每条**记录都盖同一 id；列表只拉
@@ -311,7 +311,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
 
-额外包在进程启动时加载一次：`REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）。`REGENIC_CRM_CONNECTOR` 是后者的兼容别名。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。显式插件缺失或无效时跳过并打日志。
+额外包在进程启动时加载一次：`REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。显式插件缺失或无效时跳过并打日志。
 
 工单写回时，内核把结果第一行与活的待办选项做精确匹配。`writeBackLabels(label)` 可给该选项加别名。宿主不维护同义列表。
 
