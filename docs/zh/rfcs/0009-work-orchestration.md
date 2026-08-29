@@ -178,7 +178,7 @@ Push 协议：outbound / assistant / 本规则写回不触发；`(recipe, event)
 
 Pull 协议：独立于连接器 pull。`next_run_at` 持久化，休眠醒来仍认账。上一 occurrence 还在跑则跳过。到期只补跑一轮，然后把 `next_run_at` 跳到未来。内核仍不读 `executor_config` 的 key。
 
-投递账本只负责 egress，不负责开跑。Job 完成且需要回写时入队，快照写进 `payload`，并记下稳定 `idempotency_key`。Tick 认 `queued` 和到期的 `failed`；`write_back` 带 60s 租约，超时回 `queued`。渠道发送限 45s，超时不标失败，留下租约。发送成功立刻记下 `channel_receipt`，崩溃后跳过重发、只补 ingest。`applyHandle` 只入队，不在同一趟 `await` 发送。开跑、盯执行、刷投递三路 tick 各持一把锁，egress 卡住不得停采集或 Pull。`acked` / `dead` 只表示有没有发回渠道。Dismiss 把未闭合的账本标 `acked/skipped`。空正文不得当成成功跳过。桌面 `attention` 以内核脸为准：`waiting_you` / `needs_ack` / `running` 压过本地 unread。
+投递账本只负责 egress，不负责开跑。Job 完成且需要回写时入队，快照写进 `payload`，并记下稳定 `idempotency_key`。Tick 认 `queued` 和到期的 `failed`；`write_back` 带 60s 租约，超时回 `queued`。渠道发送限 45s，超时不标失败，留下租约。发送成功立刻记下 `channel_receipt`，崩溃后跳过重发、只补 ingest。回写入库抄来源线程已有的 `unit_kind`（优先 inbound），避免列表 heads 丢掉类型芯片。`applyHandle` 只入队，不在同一趟 `await` 发送。开跑、盯执行、刷投递三路 tick 各持一把锁，egress 卡住不得停采集或 Pull。`acked` / `dead` 只表示有没有发回渠道。Dismiss 把未闭合的账本标 `acked/skipped`。空正文不得当成成功跳过。桌面 `attention` 以内核脸为准：`waiting_you` / `needs_ack` / `running` 压过本地 unread。
 
 同一 Session 上已完成的 Job 遇到新 `head_event_id` 开**新 Job**，不复活旧单。列表脸取当前前台 Job。
 

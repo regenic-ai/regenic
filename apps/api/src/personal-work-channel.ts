@@ -30,6 +30,7 @@ import {
 } from "@regenic/domain";
 import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
+import { stampFromThreadSurfaces } from "./personal-reply.service";
 import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
@@ -114,6 +115,7 @@ export class PersonalWorkChannel {
     text: string,
     options?: {
       writeBack?: boolean;
+      headEventId?: string;
       idempotency_key?: string;
       receipt?: DeliveryReceipt;
       onReceipt?: (receipt: DeliveryReceipt, now: string) => Promise<void>;
@@ -153,6 +155,7 @@ export class PersonalWorkChannel {
     if (options?.onReceipt) {
       await options.onReceipt(receipt, now);
     }
+    const stamp = await this.destinationStamp(thread, options?.headEventId);
     await host.get("ingest").ingest({
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: found.installation.id,
@@ -170,6 +173,11 @@ export class PersonalWorkChannel {
           occurred_at: now,
           actor_id: "local-owner",
           scope_id: thread.target,
+          ...(stamp.scope_name ? { scope_name: stamp.scope_name } : {}),
+          ...(stamp.conversation_kind
+            ? { conversation_kind: stamp.conversation_kind }
+            : {}),
+          ...(stamp.unit_kind ? { unit_kind: stamp.unit_kind } : {}),
           content,
         }),
       ],
@@ -222,6 +230,7 @@ export class PersonalWorkChannel {
     if (found && driverCanReply(found.driver, found.installation)) {
       await this.sendText(thread, text, {
         writeBack: true,
+        headEventId: item.head_event_id,
         idempotency_key: delivery?.idempotency_key,
         receipt: recorded,
         onReceipt,
@@ -374,6 +383,52 @@ export class PersonalWorkChannel {
       "meta",
     );
     return bodies.get(head.event.content_hash)?.body_text;
+  }
+
+  private async destinationStamp(
+    thread: ConversationThread,
+    headEventId?: string,
+  ): Promise<{
+    scope_name?: string;
+    conversation_kind?: string;
+    unit_kind?: string;
+  }> {
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const authority = host.get("authority");
+    const threadId = `${thread.source}:${thread.target}`;
+    const headEvent = headEventId
+      ? await authority.getEvent(orgId, headEventId)
+      : null;
+    const rows = await authority.listInbox(orgId, {
+      thread_ids: [threadId],
+      limit: 40,
+    });
+    const bodies = await resolveInboxBodies(
+      authority,
+      host.get("blobs"),
+      [headEvent?.content_hash, ...rows.map((row) => row.event.content_hash)],
+      "meta",
+    );
+    const surfaces: Array<{
+      surface?: {
+        direction?: string;
+        conversation_label?: string;
+        conversation_kind?: string;
+        unit_kind?: string;
+      };
+    }> = [];
+    if (headEvent?.content_hash) {
+      surfaces.push({ surface: bodies.get(headEvent.content_hash)?.surface });
+    }
+    for (const row of rows) {
+      surfaces.push({
+        surface: row.event.content_hash
+          ? bodies.get(row.event.content_hash)?.surface
+          : undefined,
+      });
+    }
+    return stampFromThreadSurfaces(thread.target, surfaces);
   }
 
   async canReplyThread(threadId: string): Promise<boolean | undefined> {

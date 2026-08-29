@@ -375,6 +375,59 @@ export function conversationStampForReply(input: {
   };
 }
 
+/** Prefer inbound stamps so a later outbound head does not wipe unit_kind. */
+export function stampFromThreadSurfaces(
+  target: string,
+  rows: ReadonlyArray<{
+    surface?: {
+      direction?: string;
+      conversation_label?: string;
+      conversation_kind?: string;
+      unit_kind?: string;
+    };
+  }>,
+): {
+  scope_name?: string;
+  conversation_kind?: string;
+  unit_kind?: string;
+} {
+  const inbound = rows.filter((row) => row.surface?.direction === "inbound");
+  return conversationStampForReply({
+    target,
+    quotedLabel: latestSurfaceField(inbound, "conversation_label"),
+    quotedKind: latestSurfaceField(inbound, "conversation_kind"),
+    quotedUnitKind: latestSurfaceField(inbound, "unit_kind"),
+    headLabel: latestSurfaceField(rows, "conversation_label"),
+    headKind: latestSurfaceField(rows, "conversation_kind"),
+    headUnitKind: latestSurfaceField(rows, "unit_kind"),
+  });
+}
+
+function latestSurfaceField(
+  rows: ReadonlyArray<{
+    surface?: {
+      conversation_label?: string;
+      conversation_kind?: string;
+      unit_kind?: string;
+    };
+  }>,
+  key: "conversation_label" | "conversation_kind" | "unit_kind",
+): string | undefined {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const value = rows[index]?.surface?.[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  for (const row of rows) {
+    const value = row.surface?.[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function optionalKind(value: string | null | undefined): string | undefined {
   const kind = value?.trim();
   return kind ? kind : undefined;

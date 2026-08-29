@@ -193,8 +193,8 @@ CRM 或内部系统常把工作分成不同类型，并且**每个任务实例�
 让粗 Recipe（`source` + `task`）兜底。
 
 列表和线程头用 catalog 的 `label` 画类型芯片，不按渠道名分支。没有词条时
-回退显示 `unit_kind` id。对话名仍然只做标题。本机回复会把线程上已有的
-`unit_kind` 抄到出站记录上，避免 heads 被盖掉。
+回退显示 `unit_kind` id。对话名仍然只做标题。本机回复和自动任务回写都会
+把线程上已有的 `unit_kind` 抄到出站记录上，避免 heads 被盖掉。
 
 ## ChannelDriver
 

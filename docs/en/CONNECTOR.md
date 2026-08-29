@@ -266,8 +266,8 @@ has no type field, omit the stamp and let a coarse Recipe
 The list and thread header render a type chip from the catalog `label`.
 They do not branch on channel name. If the vocabulary has no entry, the
 chip shows the `unit_kind` id. Conversation titles stay titles. A local
-reply copies the thread's existing `unit_kind` onto the outbound record
-so a new head does not wipe the chip.
+reply and an automatic work write-back copy the thread's existing
+`unit_kind` onto the outbound record so a new head does not wipe the chip.
 
 ## ChannelDriver
 

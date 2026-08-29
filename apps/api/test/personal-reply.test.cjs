@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   conversationStampForReply,
+  stampFromThreadSurfaces,
   usableConversationName,
 } = require("../dist/personal-reply.service");
 
@@ -36,6 +37,30 @@ describe("conversationStampForReply", () => {
         headUnitKind: "crm.lead_followup",
       }),
       { unit_kind: "crm.lead_followup" },
+    );
+  });
+
+  it("keeps unit_kind from inbound when a later outbound head has none", () => {
+    assert.deepEqual(
+      stampFromThreadSurfaces("order-1", [
+        {
+          surface: {
+            direction: "inbound",
+            unit_kind: "crm.order_review",
+            conversation_label: "Order 8821",
+          },
+        },
+        {
+          surface: {
+            direction: "outbound",
+            unit_kind: undefined,
+          },
+        },
+      ]),
+      {
+        scope_name: "Order 8821",
+        unit_kind: "crm.order_review",
+      },
     );
   });
 
