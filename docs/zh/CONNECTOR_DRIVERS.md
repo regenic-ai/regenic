@@ -1,6 +1,6 @@
 # 内置连接器
 
-合同见[连接器](CONNECTOR.md)。本页是 Slack / DSH / 飞书 / Cursor 的实现笔记，不是内核分支规则。
+协议见[连接器](CONNECTOR.md)。本页是 Slack / DSH / 飞书 / Cursor 的实现笔记，不是内核分支规则。内置聊天 / Agent 渠道没有业务工单类型，省略 `subjectCatalog`。CRM 或内部系统插件按申明式合同自己公布词表并盖 `unit_kind`。
 
 - **English:** [../en/CONNECTOR_DRIVERS.md](../en/CONNECTOR_DRIVERS.md)
 - **状态：** Phase 1

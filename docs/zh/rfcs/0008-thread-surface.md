@@ -2,7 +2,7 @@
 
 - **状态：** Accepted
 - **English:** [../../en/rfcs/0008-thread-surface.md](../../en/rfcs/0008-thread-surface.md)
-- **依赖：** RFC 0004（人机对称 API）、连接器合同
+- **依赖：** RFC 0004（人机对称 API）、连接器协议
 - **相关：** [连接器](../CONNECTOR.md) · [消息编排](../MESSAGE_ORCHESTRATION.md) · [桌面端](../DESKTOP.md)
 
 ## 1. 问题
@@ -67,7 +67,7 @@ interface PromptAnswer {
 }
 ```
 
-`prompt_id` 对内核不透明。呈现只改 UI：`plan_review` 用选项上的 `emphasized` 点出肯定项，答案编码与 `choice` 相同。单选时 `custom` 覆盖 `selected`（清空已选项），这是呈现合同，不是某个渠道的规则。`approval` 由连接器译成渠道自己的允许/拒绝。
+`prompt_id` 对内核不透明。呈现只改 UI：`plan_review` 用选项上的 `emphasized` 点出肯定项，答案编码与 `choice` 相同。单选时 `custom` 覆盖 `selected`（清空已选项），这是呈现协议，不是某个渠道的规则。`approval` 由连接器译成渠道自己的允许/拒绝。
 
 未读是**会话**属性。内核用 store 里该线程最新 inbound（不是列表脸上那条）对比 `last_read_*`。来源覆盖仍由驱动可选提供；驱动可以把 store 给出的 inbound id 当不透明 hint，不得让内核认识 `om_` / mux `rpcId`。
 

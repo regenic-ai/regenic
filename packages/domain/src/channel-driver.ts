@@ -20,6 +20,11 @@ import {
   normalizePromptAnswers,
   threadIdOf,
 } from "./thread-surface";
+import {
+  labelForUnitKind,
+  readSubjectCatalog,
+  type SubjectCatalog,
+} from "./unit-kind";
 
 export interface ConversationThread {
   source: string;
@@ -309,6 +314,11 @@ export interface ChannelDriver
   installCatalog?(input?: { env?: NodeJS.ProcessEnv }): DriverInstallCatalog;
   /** Optional aliases for write-back. Kernel matches these exactly. */
   writeBackLabels?(label: string): string[];
+  /**
+   * Optional work-unit vocabulary. Recipes equality-match `unit_kind`.
+   * Chat channels omit this. The kernel does not interpret the ids.
+   */
+  subjectCatalog?(): SubjectCatalog;
   presentInstall?(
     installation: ConnectorInstallation,
     input?: { env?: NodeJS.ProcessEnv },
@@ -456,6 +466,20 @@ export class ChannelDriverRegistry {
     }
     const driver = this.list().find((item) => item.source === source);
     return sourceLabelFromCatalog(source, driver?.installCatalog?.({ env }));
+  }
+
+  unitKindLabel(
+    source: string | undefined,
+    unitKind: string | undefined,
+  ): string | undefined {
+    return labelForUnitKind(
+      this.list().map((driver) => ({
+        source: driver.source,
+        kinds: readSubjectCatalog(driver.subjectCatalog?.()).kinds,
+      })),
+      source,
+      unitKind,
+    );
   }
 
   installCatalogs(

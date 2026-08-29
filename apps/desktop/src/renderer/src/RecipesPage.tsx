@@ -311,11 +311,25 @@ export function RecipesPage({
                         label: source.label,
                       }))}
                       onChange={(source) =>
-                        setDraft((current) => withSuggestedName({ ...current, source }))
+                        setDraft((current) =>
+                          withSuggestedName({
+                            ...current,
+                            source,
+                            unit_kind: unitKindsForSource(sources, source).some(
+                              (item) => item.id === current.unit_kind,
+                            )
+                              ? current.unit_kind
+                              : "",
+                          }),
+                        )
                       }
                     />
                   </div>
                 ) : null}
+
+                {draft.trigger_kind !== "pull" && draft.scope !== "thread"
+                  ? unitKindField(draft, sources, setDraft, t)
+                  : null}
 
                 {draft.scope === "thread" || draft.trigger_kind === "pull" ? (
                   <div className="field">
@@ -551,6 +565,69 @@ function SwitchRow({
   );
 }
 
+function unitKindsForSource(
+  sources: RecipeSourceOption[],
+  sourceId: string,
+): Array<{ id: string; label: string }> {
+  return sources.find((item) => item.id === sourceId)?.unit_kinds ?? [];
+}
+
+function unitKindOptions(
+  draft: RecipeDraft,
+  sources: RecipeSourceOption[],
+): Array<{ value: string; label: string }> {
+  if (draft.scope === "source") {
+    return unitKindsForSource(sources, draft.source).map((item) => ({
+      value: item.id,
+      label: item.label,
+    }));
+  }
+  const options: Array<{ value: string; label: string }> = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    for (const kind of source.unit_kinds ?? []) {
+      if (seen.has(kind.id)) {
+        continue;
+      }
+      seen.add(kind.id);
+      options.push({
+        value: kind.id,
+        label: source.label ? `${source.label} · ${kind.label}` : kind.label,
+      });
+    }
+  }
+  return options;
+}
+
+function unitKindField(
+  draft: RecipeDraft,
+  sources: RecipeSourceOption[],
+  setDraft: Dispatch<SetStateAction<RecipeDraft>>,
+  t: Translate,
+) {
+  const options = unitKindOptions(draft, sources);
+  if (options.length === 0 && !draft.unit_kind) {
+    return null;
+  }
+  if (draft.unit_kind && !options.some((item) => item.value === draft.unit_kind)) {
+    options.unshift({ value: draft.unit_kind, label: draft.unit_kind });
+  }
+  return (
+    <div className="field">
+      <span>{t("recipes.unitKind")}</span>
+      <MenuSelect
+        value={draft.unit_kind}
+        placeholder={t("recipes.unitKindAny")}
+        options={[{ value: "", label: t("recipes.unitKindAny") }, ...options]}
+        onChange={(unit_kind) =>
+          setDraft((current) => withSuggestedName({ ...current, unit_kind }))
+        }
+      />
+      <p className="muted">{t("recipes.unitKindHint")}</p>
+    </div>
+  );
+}
+
 function scopeChoices(t: Translate): Array<{ id: RecipeScope; label: string }> {
   return [
     { id: "tasks", label: t("recipes.scopeTasks") },
@@ -687,6 +764,7 @@ interface RecipeDraft {
   thread_id: string;
   thread_title: string;
   thread_facet: ThreadFacet | "";
+  unit_kind: string;
   executor_type: string;
   config: Record<string, string>;
   can_write_back: boolean;
@@ -706,6 +784,7 @@ function emptyDraft(executorType = ""): RecipeDraft {
     thread_id: "",
     thread_title: "",
     thread_facet: "",
+    unit_kind: "",
     executor_type: executorType,
     config: {},
     can_write_back: false,
@@ -777,6 +856,7 @@ function draftFromRecipe(
     thread_id: recipe.match.thread_id ?? "",
     thread_title: recipe.match.thread_id ?? "",
     thread_facet: recipe.match.thread_facet ?? "",
+    unit_kind: recipe.match.unit_kind ?? "",
     executor_type: recipe.executor_type,
     config: configFromCatalog(catalog, config),
     can_write_back: recipe.can_write_back,
@@ -800,6 +880,9 @@ function draftMatch(draft: RecipeDraft): RecipeMatch {
       ? { source: draft.source.trim() }
       : {}),
     ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
+    ...(draft.scope !== "thread" && draft.unit_kind.trim()
+      ? { unit_kind: draft.unit_kind.trim() }
+      : {}),
   };
 }
 
@@ -819,6 +902,7 @@ function canAutoStart(match: RecipeMatch, draft: RecipeDraft): boolean {
   }
   return Boolean(
     match.thread_id ||
+      match.unit_kind ||
       match.record_class === "task" ||
       (match.source && match.record_class && match.record_class !== "utterance"),
   );
@@ -870,9 +954,36 @@ function suggestedRecipeName(
     const source =
       sources.find((item) => item.id === draft.source)?.label ??
       t("recipes.sourceFallback");
+    if (draft.unit_kind.trim()) {
+      return t("recipes.suggestedUnitKind", {
+        source,
+        kind: unitKindLabel(sources, draft.unit_kind) ?? draft.unit_kind,
+        executor,
+      });
+    }
     return t("recipes.suggestedSource", { source, executor });
   }
+  if (draft.unit_kind.trim()) {
+    return t("recipes.suggestedUnitKind", {
+      source: t("recipes.whenAll"),
+      kind: unitKindLabel(sources, draft.unit_kind) ?? draft.unit_kind,
+      executor,
+    });
+  }
   return t("recipes.suggestedTasks", { executor });
+}
+
+function unitKindLabel(
+  sources: RecipeSourceOption[],
+  unitKind: string,
+): string | undefined {
+  for (const source of sources) {
+    const found = source.unit_kinds?.find((item) => item.id === unitKind);
+    if (found) {
+      return found.label;
+    }
+  }
+  return undefined;
 }
 
 function formTitle(
@@ -990,6 +1101,9 @@ function recipesOverlap(
   if (left.source && right.source && left.source !== right.source) {
     return false;
   }
+  if (left.unit_kind && right.unit_kind && left.unit_kind !== right.unit_kind) {
+    return false;
+  }
   if (
     left.record_class &&
     right.record_class &&
@@ -1018,7 +1132,8 @@ function recipeRanksBefore(left: RecipeView, right: RecipeView): boolean {
 
 function matchScore(match: RecipeMatch): number {
   return (
-    (match.thread_id ? 8 : 0) +
+    (match.thread_id ? 16 : 0) +
+    (match.unit_kind ? 8 : 0) +
     (match.source ? 4 : 0) +
     (match.record_class ? 2 : 0) +
     (match.thread_facet ? 1 : 0)
@@ -1081,6 +1196,9 @@ function matchWhenCopy(
     ? (sources.find((item) => item.id === recipe.match.source)?.label ??
       recipe.match.source)
     : null;
+  const kindLabel = recipe.match.unit_kind
+    ? (unitKindLabel(sources, recipe.match.unit_kind) ?? recipe.match.unit_kind)
+    : null;
   const facet =
     recipe.match.thread_facet === "ticket"
       ? t("recipes.facetTickets")
@@ -1089,6 +1207,12 @@ function matchWhenCopy(
         : recipe.match.thread_facet === "chat"
           ? t("recipes.facetChats")
           : null;
+  if (kindLabel && sourceLabel) {
+    return t("recipes.whenSourceUnitKind", { source: sourceLabel, kind: kindLabel });
+  }
+  if (kindLabel) {
+    return t("recipes.whenUnitKind", { kind: kindLabel });
+  }
   if (recipe.match.record_class === "task" && sourceLabel && facet) {
     return t("recipes.whenSourceFacet", { source: sourceLabel, facet });
   }

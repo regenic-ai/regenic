@@ -158,6 +158,7 @@ export class PersonalWorkDispatch {
           type: recipe.match.record_class === "task" ? "task" : "message",
           source: recipe.match.source ?? threadId.split(":")[0] ?? "",
           thread_id: threadId,
+          unit_kind: recipe.match.unit_kind,
           hint: recipe.match.thread_facet,
         });
         if (!subject) {
@@ -379,6 +380,7 @@ export class PersonalWorkDispatch {
       type: surface?.type ?? input.fallbackType,
       source: input.event.source,
       thread_id: input.threadId,
+      unit_kind: surface?.unit_kind,
       prompts: false,
       hint: surface?.thread_facet,
       prior_facet:

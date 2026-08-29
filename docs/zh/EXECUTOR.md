@@ -3,7 +3,7 @@
 执行器是进程内插件。它接下内核开出的工单，在本机连接器或外部 HTTP
 上跑一轮，再把 `WaitStatus` 交回内核。
 
-本文说明执行器 API 与安装合同。类型定义在 `@regenic/domain`。分层见
+本文说明执行器 API 与安装协议。类型定义在 `@regenic/domain`。分层见
 [消息编排](MESSAGE_ORCHESTRATION.md) 与 [RFC 0009](rfcs/0009-work-orchestration.md)。
 
 本页给实现或安装执行器的人看。
@@ -18,8 +18,10 @@
 内核只认 `TaskExecutor` 端口。它不读 `Recipe.executor_config` 的 key，
 不按连接器名分支，默认开源树不 import 私有 HTTP。
 
-连接器 ≠ 执行器。连接器停在 L0：翻译一条渠道的 wire。执行器是 L6：
-跑工单。同一插件包可以同时挂 `ChannelDriver` 和 `TaskExecutor`
+连接器 ≠ 执行器。连接器停在 L0：翻译一条渠道的 wire，并可申明
+`unit_kind` 词表。执行器是 L6：跑工单。不同类型的工单用不同 Recipe
+（或同一执行器、不同的不透明 `executor_config`）分流，不在连接器里选
+执行器。同一插件包可以同时挂 `ChannelDriver` 和 `TaskExecutor`
 （DSH 已如此）。换执行器 = 换安装（或换插件）+ Recipe 选择。
 
 能力写在安装和 `catalog()` 上。内核不按驱动名推断。
@@ -49,7 +51,7 @@ interface TaskExecutor {
 
 - 实现 `catalog()`。规则页只渲染这些字段。内核把 `executor_config` 当不透明袋。
 - 经 `ExecutorContext` 碰渠道。本机绑定不得自带私有 HTTP 客户端。
-- 完成契约是 `WaitStatus`（wait / notify）。气泡里的字不是退出。
+- 完成协议是 `WaitStatus`（wait / notify）。气泡里的字不是退出。
 - 从环境变量读凭证，或从一个指向环境变量的名字读。安装表单不收 token。
 - 故障彼此隔离。一个安装不得拖住另一个。
 
@@ -79,7 +81,7 @@ Recipe 的 `executor_type: "dsh"` 不用改。`GET /v1/me/executors` 只列出
 
 填了 `session_id` 的 DSH 安装 `create: false`，不能当本机执行器。
 
-## HTTP 合同
+## HTTP 协议
 
 远端执行器实现这三条。内核把 `executor_config` 原样转交，不读 key。
 

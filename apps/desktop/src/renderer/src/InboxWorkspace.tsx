@@ -11,6 +11,7 @@ import {
 import type { CreateTarget } from "./inbox-drafts";
 import {
   conversationKindLabel,
+  unitKindChip,
   listPreview,
   threadFacetLabel,
   threadTitle,
@@ -325,6 +326,7 @@ function WorkRow({
   const { t } = useLocale();
   const work = workStatusLabel(thread.work);
   const kind = conversationKindLabel(thread.conversation_kind);
+  const unitKind = unitKindChip(thread);
   return (
     <div
       className={`item${selected ? " selected" : ""}${thread.pinned ? " pinned" : ""}${
@@ -361,6 +363,7 @@ function WorkRow({
               <span className={`channel-tag channel-${thread.channel}`}>
                 {thread.channel_label}
               </span>
+              {unitKind ? <span className="kind-tag">{unitKind}</span> : null}
               {kind ? <span className="kind-tag">{kind}</span> : null}
               {facet ? <span className="kind-tag">{facet}</span> : null}
               {work ? (

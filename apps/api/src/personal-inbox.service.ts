@@ -98,6 +98,8 @@ export interface InboxViewItem {
   pref_updated_at: string | null;
   conversation_label: string | null;
   conversation_kind: string | null;
+  unit_kind: string | null;
+  unit_kind_label: string | null;
   actor_label: string | null;
   activity?: ThreadActivity;
   prompts: ThreadPrompt[];
@@ -881,6 +883,9 @@ function decorateInboxItem(
     conversation_label:
       surface.conversation_label ?? labels.get(threadId) ?? null,
     conversation_kind: surface.conversation_kind ?? null,
+    unit_kind: surface.unit_kind ?? null,
+    unit_kind_label:
+      drivers.unitKindLabel(surface.channel, surface.unit_kind) ?? null,
     actor_label: surface.actor_label ?? null,
     activity: surface.activity,
     prompts,

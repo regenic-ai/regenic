@@ -22,7 +22,7 @@ Regenic 需要**一个对象模型、两种呈现**（人机 UI 与 Agent API）
 
 - 选定具体 LLM 供应商或 agent 框架。
 - Slack/邮件适配器（Phase 3）。
-- 流式 token 协议（可后加；资源契约保持）。
+- 流式 token 协议（可后加；资源协议保持）。
 
 ## 4. 认证 / 鉴权
 
@@ -205,7 +205,7 @@ StandardGap or human intent
 
 - API 版本前缀 `/v1`。
 - 优先加法变更；破坏性变更升 major。
-- Draft 状态下 RFC 对象字段可演进而不升 `/v1`，直至首次生产发布冻结契约。
+- Draft 状态下 RFC 对象字段可演进而不升 `/v1`，直至首次生产发布冻结协议。
 
 ## 13. 验收标准
 

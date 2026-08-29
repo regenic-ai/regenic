@@ -28,6 +28,8 @@ export interface RecipeMatch {
   thread_facet?: ThreadFacet;
   source?: string;
   thread_id?: string;
+  /** Opaque connector stamp. Equality only. Not conversation_kind. */
+  unit_kind?: string;
 }
 
 export const RECIPE_TRIGGER_KINDS = ["push", "pull", "manual"] as const;

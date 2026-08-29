@@ -2,7 +2,7 @@
 
 - **状态：** Draft
 - **English:** [../../en/rfcs/0010-cross-channel-forward.md](../../en/rfcs/0010-cross-channel-forward.md)
-- **依赖：** RFC 0004、RFC 0008、RFC 0009、连接器合同
+- **依赖：** RFC 0004、RFC 0008、RFC 0009、连接器协议
 - **相关：** [消息编排](../MESSAGE_ORCHESTRATION.md) · [连接器](../CONNECTOR.md) · [桌面端](../DESKTOP.md)
 
 ## 1. 问题
@@ -82,7 +82,7 @@ type ForwardView = {
 
 幂等：`hash(org, source_thread, event_ids, target, mode)`。找不到可写目标 → 404 `no_sender`；驱动不能发 → 选择器里就不出现，不要靠 501 当正常路径。
 
-实现落在 `PersonalForwardService`，不改 `PersonalReplyService` 的合同。
+实现落在 `PersonalForwardService`，不改 `PersonalReplyService` 的协议。
 
 ## 7. 编译
 

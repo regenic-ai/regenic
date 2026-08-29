@@ -21,6 +21,9 @@ export class RecipeMatchSpec implements Specification<RecipeMatch> {
     if (match.thread_id?.trim()) {
       return true;
     }
+    if (match.unit_kind?.trim()) {
+      return true;
+    }
     if (match.record_class === "task") {
       return true;
     }

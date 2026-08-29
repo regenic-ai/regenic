@@ -213,6 +213,18 @@ export function conversationKindLabel(kind: string | null | undefined): string |
   return null;
 }
 
+export function unitKindChip(thread: {
+  unit_kind?: string | null;
+  unit_kind_label?: string | null;
+}): string | null {
+  const label = thread.unit_kind_label?.replace(/\s+/g, " ").trim();
+  if (label) {
+    return label;
+  }
+  const id = thread.unit_kind?.trim();
+  return id || null;
+}
+
 const SENT_WAIT_MS = 30 * 60 * 1000;
 const WORKING_WAIT_MS = 24 * 60 * 60 * 1000;
 

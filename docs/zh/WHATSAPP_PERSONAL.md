@@ -1,7 +1,7 @@
 # 个人 WhatsApp Bridge
 
 - **English:** [../en/WHATSAPP_PERSONAL.md](../en/WHATSAPP_PERSONAL.md)
-- **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) · [来源契约收集表](COLLABORATION_PLATFORM_SOURCE_INTAKE.md) · [测试与验收](WHATSAPP_PERSONAL_TESTING.md)
+- **相关：** [消息编排](MESSAGE_ORCHESTRATION.md) · [来源协议收集表](COLLABORATION_PLATFORM_SOURCE_INTAKE.md) · [测试与验收](WHATSAPP_PERSONAL_TESTING.md)
 - **状态：** Purr WA CSV + WhatsApp Personal Export v1
 
 ## 边界

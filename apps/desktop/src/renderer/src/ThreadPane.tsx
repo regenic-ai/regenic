@@ -25,6 +25,7 @@ import { threadSyncLabel, threadSyncTone } from "./format";
 import { latestMessage, type InboxThread } from "./inbox";
 import {
   conversationKindLabel,
+  unitKindChip,
   messageRole,
   readingMessages,
   sameUtterance,
@@ -348,6 +349,7 @@ export const ThreadPane = memo(function ThreadPane({
   const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
   const canForwardConversation = merged.some(canForwardItem);
   const kind = conversationKindLabel(thread.conversation_kind);
+  const unitKind = unitKindChip(thread);
   const facet = threadFacetLabel(thread.thread_facet);
   const work = workStatusLabel(thread.work);
 
@@ -393,6 +395,7 @@ export const ThreadPane = memo(function ThreadPane({
               <span className={`channel-tag channel-${thread.channel}`}>
                 {thread.channel_label}
               </span>
+              {unitKind ? <span className="kind-tag">{unitKind}</span> : null}
               {kind ? <span className="kind-tag">{kind}</span> : null}
               {facet ? <span className="kind-tag">{facet}</span> : null}
               {work ? (

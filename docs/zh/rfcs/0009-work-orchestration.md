@@ -2,7 +2,7 @@
 
 - **状态：** Accepted
 - **English:** [../../en/rfcs/0009-work-orchestration.md](../../en/rfcs/0009-work-orchestration.md)
-- **依赖：** RFC 0004、RFC 0005、RFC 0008、连接器合同
+- **依赖：** RFC 0004、RFC 0005、RFC 0008、连接器协议
 - **相关：** [消息编排](../MESSAGE_ORCHESTRATION.md) · [连接器](../CONNECTOR.md) · [执行器](../EXECUTOR.md) · [桌面端](../DESKTOP.md)
 
 ## 1. 问题
@@ -91,7 +91,7 @@ type RecordClass = "utterance" | "task" | "status" | "prompt";
 
 从现有 `IngestRecord.type` 映射：`task` → `task`；`thread_status` → `status`；`prompt` → `prompt`；`message` / `thread_reply` / 缺省 → `utterance`。未知原生类型不映射成 utterance，也不开 WorkItem。连接器可在 surface 上提示 `thread_facet`，不得把安装标成一种 lane。
 
-`match` 全空的 Recipe 不命中任何主体。至少要有 `thread_id`、`source`、`record_class`、`thread_facet` 之一。
+`match` 全空的 Recipe 不命中任何主体。至少要有 `thread_id`、`unit_kind`、`source`、`record_class`、`thread_facet` 之一。`unit_kind` 是连接器盖在记录上的不透明工单类型，不是 `record_class`，也不是 RFC 0003 的协作 `subject_kind`。
 
 ## 6. 发言者
 
@@ -130,12 +130,13 @@ interface Recipe {
   id: string;
   org_id: string;
   name: string;
-  match: {
-    record_class?: RecordClass;
-    thread_facet?: ThreadFacet;
-    source?: string;
-    thread_id?: string;
-  };
+    match: {
+      record_class?: RecordClass;
+      thread_facet?: ThreadFacet;
+      source?: string;
+      thread_id?: string;
+      unit_kind?: string;
+    };
   trigger: {
     kind: "push" | "pull" | "manual";
     interval_ms?: number;
@@ -163,7 +164,7 @@ interface ResultEnvelope {
 | Job (`WorkItem`) | 一个工作单元，`unit_key` | 一条线程一辈子一张单 |
 | Inferior (`WorkRun`) | 一次执行；sysout 默认不进列表 | 用户自己开的 Agent 闲聊 |
 
-`match` 必须具体（`thread_id`，或 `record_class=task`，或 `source` + 非 utterance 的 class）。空 match、只写 source、只写 utterance、只写 facet 不能保存。
+`match` 必须具体（`thread_id`，或 `unit_kind`，或 `record_class=task`，或 `source` + 非 utterance 的 class）。空 match、只写 source、只写 utterance、只写 facet 不能保存。`unit_kind` 只做字符串相等；特异性为 `thread_id` > `unit_kind` > `source` > `record_class` > `thread_facet`。词表由连接器 `subjectCatalog()` 声明，id 约定 `{source}.{native}`，内核不解析。连接器不得在记录上写 `recipe_id`。
 
 `trigger` 是一等字段，和 match 分开：
 
@@ -173,11 +174,11 @@ interface ResultEnvelope {
 | `pull` | 时钟到期；必须有 `thread_id` + `interval_ms` | `pull:{recipe_id}:{next_run_at}` | 会话上下文是主输入；默认回写 |
 | `manual` | 只在当前工作点「开始执行」 | 与 push 相同 | 同 push |
 
-Push 合同：outbound / assistant / 本规则写回不触发；`(recipe, event)` 幂等；`coalesce` 默认真：running 时不改 `head_event_id`，结束后用最新头再开一轮。`coalesce=false` 时，活跃 Job 遇到新头立刻开新 Job。执行失败留在 `WorkItem.failed`，按 30s / 2min / 8min 最多重试 3 次（计次是 `WorkRun`）。连接器丢消息是 L0 的事。Manual 规则可以绑到对得上的 Job，但不 `start`。
+Push 协议：outbound / assistant / 本规则写回不触发；`(recipe, event)` 幂等；`coalesce` 默认真：running 时不改 `head_event_id`，结束后用最新头再开一轮。`coalesce=false` 时，活跃 Job 遇到新头立刻开新 Job。执行失败留在 `WorkItem.failed`，按 30s / 2min / 8min 最多重试 3 次（计次是 `WorkRun`）。连接器丢消息是 L0 的事。Manual 规则可以绑到对得上的 Job，但不 `start`。
 
-Pull 合同：独立于连接器 pull。`next_run_at` 持久化，休眠醒来仍认账。上一 occurrence 还在跑则跳过。到期只补跑一轮，然后把 `next_run_at` 跳到未来。内核仍不读 `executor_config` 的 key。
+Pull 协议：独立于连接器 pull。`next_run_at` 持久化，休眠醒来仍认账。上一 occurrence 还在跑则跳过。到期只补跑一轮，然后把 `next_run_at` 跳到未来。内核仍不读 `executor_config` 的 key。
 
-投递账本只负责 egress，不负责开跑。Job 完成且需要回写时入队，快照写进 `payload`，并记下稳定 `idempotency_key`。Tick 认 `queued` 和到期的 `failed`；`write_back` 带 60s 租约，超时回 `queued`。渠道发送限 45s，超时不标失败，留下租约。发送成功立刻记下 `channel_receipt`，崩溃后跳过重发、只补 ingest。`applyHandle` 只入队，不在同一趟 `await` 发送。开跑、盯执行、刷投递三路 tick 各持一把锁，egress 卡住不得停采集或 Pull。`acked` / `dead` 只表示有没有发回渠道。Dismiss 把未闭合的账本标 `acked/skipped`。空正文不得当成成功跳过。桌面 `attention` 以内核脸为准：`waiting_you` / `needs_ack` / `running` 压过本地 unread。
+投递账本只负责 egress，不负责开跑。Job 完成且需要回写时入队，快照写进 `payload`，并记下稳定 `idempotency_key`。Tick 认 `queued` 和到期的 `failed`；`write_back` 带 60s 租约，超时回 `queued`。渠道发送限 45s，超时不标失败，留下租约。发送成功立刻记下 `channel_receipt`，崩溃后跳过重发、只补 ingest。回写入库抄来源线程已有的 `unit_kind`（优先 inbound），避免列表 heads 丢掉类型芯片。`applyHandle` 只入队，不在同一趟 `await` 发送。开跑、盯执行、刷投递三路 tick 各持一把锁，egress 卡住不得停采集或 Pull。`acked` / `dead` 只表示有没有发回渠道。Dismiss 把未闭合的账本标 `acked/skipped`。空正文不得当成成功跳过。桌面 `attention` 以内核脸为准：`waiting_you` / `needs_ack` / `running` 压过本地 unread。
 
 同一 Session 上已完成的 Job 遇到新 `head_event_id` 开**新 Job**，不复活旧单。列表脸取当前前台 Job。
 
@@ -200,9 +201,9 @@ interface TaskExecutor {
 
 内核查 `ctx.executors`。执行器碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`），不自带私有 HTTP 客户端。
 
-完成契约是 `WaitStatus`（wait / notify）。气泡里的字不是退出。公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在 `exited` 上 reap Job。写回只发生在这次真退出。内核把结果第一行与活的待办选项做精确匹配。别名来自 `ChannelDriver.writeBackLabels`，不写在宿主名单里。人只回答 Prompt；不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss` 从当前工作拿掉。Dismiss 不是 `exited`，也不写回。被拿掉的 Inferior 记 `cancelled`，不是 `failed`。之后的 status tick 不得把这次 run 救活，也不得写回。
+完成协议是 `WaitStatus`（wait / notify）。气泡里的字不是退出。公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的 `turn/start` 或 `working` 仍是 running），或 session 已不在。内核在 `exited` 上 reap Job。写回只发生在这次真退出。内核把结果第一行与活的待办选项做精确匹配。别名来自 `ChannelDriver.writeBackLabels`，不写在宿主名单里。人只回答 Prompt；不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss` 从当前工作拿掉。Dismiss 不是 `exited`，也不写回。被拿掉的 Inferior 记 `cancelled`，不是 `failed`。之后的 status tick 不得把这次 run 救活，也不得写回。
 
-公开默认：可管理的 `dsh` 本机绑定（种子 id 仍是 `dsh`，旧 Recipe 不用改）。本机 L6 插件按 `catalog.source` 注册，不在挂载路径写 `if (source === "dsh")`。Cursor 与私有 Agent OS（如 bioby-agent）后接，同一目录合同。私有运行时只作内部插件包，或经通用 HTTP 执行器调用；默认开源构建不 import 私有 HTTP。
+公开默认：可管理的 `dsh` 本机绑定（种子 id 仍是 `dsh`，旧 Recipe 不用改）。本机 L6 插件按 `catalog.source` 注册，不在挂载路径写 `if (source === "dsh")`。Cursor 与私有 Agent OS（如 bioby-agent）后接，同一目录协议。私有运行时只作内部插件包，或经通用 HTTP 执行器调用；默认开源构建不 import 私有 HTTP。
 
 执行器是一等安装，和连接器并列：
 
@@ -278,10 +279,11 @@ interface ExecutorCatalogEntry {
 
 ## 12. 验收
 
-1. 内核与桌面不按连接器名判断人聊 / Agent / 工单。
+1. 内核与桌面不按连接器名判断人聊 / Agent / 工单，也不解释 `unit_kind`。
 2. 默认开源构建没有私有 Agent 依赖。
 3. 换执行器 = 换插件 + Recipe 选择，不改内核。规则页调用参数只来自 `catalog().fields`，不按 key 特判。
 4. 列表能在 Attention 与正常排序之间切换，刷新后保持。
 5. 一条来源任务在列表里是一行；机器进度画在这行上。
 6. 连接器测试可以点名飞书或 DSH；内核的 L4/L5/L6 测试不可以。
 7. 需要回写的 Job 入队时带 payload 快照；发出或明确跳过才 `acked`；租约超时会回到队列；三次发送失败进死信并在列表可见。执行失败不计进投递账本。
+8. 不同类型的来源任务靠连接器盖章 + Recipe 相等匹配分流；内核不为 CRM 写分支。

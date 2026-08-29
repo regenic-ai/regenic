@@ -9,6 +9,7 @@ import {
 } from "./recipe-trigger";
 import { recordClassFromType, type RecordClass } from "./record-class";
 import { recipeMatches, recipeSpecificity, type RecipeSubject } from "./recipe-match";
+import { normalizeUnitKind } from "./unit-kind";
 import type { PromptAnswer, ThreadPrompt } from "./thread-surface";
 import {
   mergeThreadFacet,
@@ -41,6 +42,7 @@ export function workSubjectFromEvent(input: {
   type?: string;
   source: string;
   thread_id: string;
+  unit_kind?: string;
   await_reply?: boolean;
   prompts?: boolean;
   hint?: ThreadFacet;
@@ -56,11 +58,13 @@ export function workSubjectFromEvent(input: {
     prompts: input.prompts,
     hint: input.hint,
   });
+  const unit_kind = normalizeUnitKind(input.unit_kind);
   return {
     record_class,
     thread_facet: mergeThreadFacet(input.prior_facet, projected),
     source: input.source,
     thread_id: input.thread_id,
+    ...(unit_kind ? { unit_kind } : {}),
   };
 }
 

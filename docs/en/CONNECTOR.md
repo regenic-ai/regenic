@@ -31,12 +31,21 @@ The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 Capabilities are declared on the installation. The kernel does not infer them
 from the driver name.
 
+A connector is a **declarative** plugin, not a scheduler. It declares
+capabilities, catalogs, vocabularies, and write-back aliases, and
+translates one channel's wire into closed fields. It does not pick a
+Recipe, call an executor, or branch on business types inside the plugin.
+The kernel only reads declarations: equality match, exact aliases,
+catalog rendering. Adding a task type means one `subjectCatalog` entry
+plus stamping `unit_kind` on ingest. Do not change the kernel or the
+desktop.
+
 You do not rebuild the API or the desktop to add a source. Every driver
 declares `installCatalog()` and optional `presentInstall` /
-`writeBackLabels`. The host assembles Engine from registered drivers.
-Extra packages load at process start from `REGENIC_PLUGIN_DIR` or
-`REGENIC_CHANNEL_PLUGIN`. The kernel matches the first result line
-exactly to a live prompt option.
+`writeBackLabels` / `subjectCatalog`. The host assembles Engine from
+registered drivers. Extra packages load at process start from
+`REGENIC_PLUGIN_DIR` or `REGENIC_CHANNEL_PLUGIN`. The kernel matches the
+first result line exactly to a live prompt option.
 
 ## Ports
 
@@ -49,7 +58,7 @@ exist; the kernel returns 501. Drivers must not stub them.
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` when `source_mode` is poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` is webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / optional `createThread` | `reply`; `create` also needs `createThread` |
-| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` | To appear on Engine |
+| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` | To appear on Engine; declare a vocabulary when the source has task types |
 | Surface | `prompts` / `attention` / `receipts` | Matching capability flags |
 | `EgressAdapter` | Write `ContentPart[]` back to the same source | After `bindEgress` |
 
@@ -93,7 +102,8 @@ Each connector must:
   `throttled`, not a pull error.
 - Implement `installCatalog()` to appear on Engine. Optional
   `presentInstall` labels the installed row. Optional `writeBackLabels`
-  lists exact aliases for write-back.
+  lists exact aliases for write-back. When the source splits work into
+  types, implement `subjectCatalog()` and stamp `unit_kind` on records.
 
 The following are not allowed:
 
@@ -101,11 +111,14 @@ The following are not allowed:
 - Storing tokens in `config`, or returning them from `/v1/me`.
 - Mapping an unknown native type to `message`.
 - Putting bodies or secrets in `attrs`, logs, or quarantine metadata.
+- Writing `recipe_id` / `executor_type` on a record or install, or
+  choosing an executor by task type inside the plugin. Type is a
+  declaration. Binding is a Recipe.
 - Adding per-channel switches in the API or desktop. The desktop reads
   `can_send`, `can_create`, `create_with_task`, `await_reply`,
   `hold_while_working`, `list_title`,
   `surface.activity`, and inbox `prompts` / `unread` / `can_receipt` /
-  `receipt`.
+  `receipt`. The Recipes type picker only renders `subjectCatalog`.
 
 ## Isolation
 
@@ -145,8 +158,11 @@ A connector stops at L0: it translates one channel's wire. What it hands over is
 | `capabilities` | `{ sync, reply, create, await_reply?, list_title?, hydrate_on_open?, prompts?, attention?, receipts?, create_with_task?, hold_while_working? }` | Returned by `ChannelDriver.capabilities()` |
 
 `channelRecord()` attaches surface metadata (`channel`, `kind`, `direction`,
-and optional `conversation_label` / `conversation_kind` / `actor_label` /
-`activity`) to the record. `activity` is channel-agnostic thread state:
+and optional `conversation_label` / `conversation_kind` / `unit_kind` /
+`actor_label` / `activity`) to the record. `conversation_kind` is topology
+(`group` / `direct`) for display. `unit_kind` is the work-unit type for
+Recipe equality match. It is not a conversation title and not a
+`record_class`. `activity` is channel-agnostic thread state:
 `working` (the other side is still processing with no visible body) or
 `awaiting_user` (it is waiting for an answer in the original channel). The
 desktop reads that field. It does not infer role, direction, or a stuck
@@ -216,6 +232,43 @@ Examples: `dsh:<sessionId>`, `slack:C123`, `feishu:oc_…`.
 `ChannelDriverRegistry` resolves `installation + thread`. When more than one
 install matches, `ownsThread` wins over the first match.
 
+### Work-unit type (`unit_kind`)
+
+CRM and internal systems often split work into types, and send **one
+conversation per task instance**. Conversation titles are not stable, so
+they must not be routing keys. `record_class=task` only means “this is a
+ticket.” It cannot tell “order review” from “lead follow-up.”
+
+A connector does three declarative things:
+
+1. `subjectCatalog()` publishes the vocabulary. The connector keeps `id`
+   unique across plugins (convention `{source}.{native}`, e.g.
+   `crm.order_review`). The kernel does not parse the dot.
+2. Stamp `channelRecord({ unit_kind })` on ingest. Read the type from the
+   source API, form, or pipeline. Guessing stays at L0. Do not treat a
+   conversation title as the type, and do not write the type into
+   `conversation_kind`. Stamp the **same** id on every record of that
+   task instance. The list only loads heads (the last visible message).
+   Stamping only the first record drops the chip.
+3. If the install form should limit what to sync, filter types with
+   catalog `fields`. That is “what to ingest,” not “how to handle it.”
+
+The kernel only equality-matches `Recipe.match.unit_kind`. Specificity:
+`thread_id` > `unit_kind` > `source` > `record_class` > `thread_facet`.
+`unit_kind` alone is specific enough to save. The org binds an executor
+with a Recipe. `executor_config` stays an opaque bag. A connector must
+not write `recipe_id`.
+
+Chat channels with no business types omit `subjectCatalog`. If the source
+has no type field, omit the stamp and let a coarse Recipe
+(`source` + `task`) catch the rest.
+
+The list and thread header render a type chip from the catalog `label`.
+They do not branch on channel name. If the vocabulary has no entry, the
+chip shows the `unit_kind` id. Conversation titles stay titles. A local
+reply and an automatic work write-back copy the thread's existing
+`unit_kind` onto the outbound record so a new head does not wipe the chip.
+
 ## ChannelDriver
 
 ```ts
@@ -236,6 +289,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   installCatalog?(input?): DriverInstallCatalog;
   presentInstall?(installation, input?): { label; detail };
   writeBackLabels?(label): string[];
+  subjectCatalog?(): { kinds: Array<{ id: string; label: string }> };
   probeCatalog?(input): Promise<ConnectorCatalogProbe>;
 }
 ```
@@ -258,6 +312,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. `setup_steps` are the numbered steps in the dialog; the desktop renders them as declared. |
 | `presentInstall` | Optional. Label and detail for an installed row. |
 | `writeBackLabels` | Optional. Exact aliases for a prompt option. The kernel matches the first result line. |
+| `subjectCatalog` | Optional. Work-unit type vocabulary. The Recipes page renders `id` / `label`. The kernel only equality-matches. Omit it when the source has no type dimension. |
 | `probeCatalog` | Optional. Local service / env readiness and field options. |
 
 `ChannelDriverError` codes: `invalid_config`, `missing_credentials`,
@@ -342,7 +397,8 @@ keep a parallel list. `singleton: true` allows one install.
 `instance_label` / `instance_detail_key`, then the installation id. The
 desktop does not hard-code fields or titles per type. Installations
 include `settings` (non-secret config as strings) so the edit form can
-prefill.
+prefill. The engine catalog also carries the driver's `source` and
+`subjectCatalog` vocabulary so the Recipes page can pick `unit_kind`.
 
 Extra packages load once at process start from `REGENIC_PLUGIN_DIR` (each
 child directory with a `package.json`) or `REGENIC_CHANNEL_PLUGIN` (one

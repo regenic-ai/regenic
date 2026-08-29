@@ -854,18 +854,26 @@ export function ConsoleApp() {
   const consumeRecipeSeed = useCallback(() => {
     setRecipeSeed(null);
   }, []);
-  const recipeSources = useMemo(
-    () =>
-      [
-        ...new Map(
-          (engine?.installations ?? []).map((item) => [
-            item.channel ?? item.connector_type,
-            item.channel_label ?? item.label,
-          ]),
-        ).entries(),
-      ].map(([id, label]) => ({ id, label })),
-    [engine],
-  );
+  const recipeSources = useMemo(() => {
+    const kindsBySource = new Map(
+      (engine?.catalog ?? []).map((item) => [
+        item.source ?? item.connector_type,
+        item.unit_kinds ?? [],
+      ]),
+    );
+    return [
+      ...new Map(
+        (engine?.installations ?? []).map((item) => [
+          item.channel ?? item.connector_type,
+          item.channel_label ?? item.label,
+        ]),
+      ).entries(),
+    ].map(([id, label]) => ({
+      id,
+      label,
+      unit_kinds: kindsBySource.get(id) ?? [],
+    }));
+  }, [engine]);
 
   return (
     <div className="shell">

@@ -117,6 +117,41 @@ describe("recipe match", () => {
     assert.equal(recipePreemptedBy(general, [general, specific])?.id, "specific");
     assert.equal(recipePreemptedBy(specific, [general, specific]), undefined);
   });
+
+  it("equality-matches unit_kind and ranks it above source", () => {
+    const ticket = {
+      record_class: "task",
+      thread_facet: "ticket",
+      source: "crm",
+      thread_id: "crm:order-1",
+      unit_kind: "crm.order_review",
+    };
+    const byKind = makeRecipe("kind", {
+      record_class: "task",
+      source: "crm",
+      unit_kind: "crm.order_review",
+    });
+    const bySource = makeRecipe("source", { record_class: "task", source: "crm" });
+    const otherKind = makeRecipe("other", {
+      record_class: "task",
+      source: "crm",
+      unit_kind: "crm.lead_followup",
+    });
+    assert.equal(matchRecipe([bySource, byKind, otherKind], ticket).id, "kind");
+    assert.equal(
+      matchRecipe([bySource, otherKind], ticket).id,
+      "source",
+    );
+    assert.ok(
+      recipeSpecificity({ thread_id: "crm:order-1" }) >
+        recipeSpecificity({ unit_kind: "crm.order_review" }),
+    );
+    assert.ok(
+      recipeSpecificity({ unit_kind: "crm.order_review" }) >
+        recipeSpecificity({ source: "crm" }),
+    );
+    assert.equal(recipePreemptedBy(bySource, [bySource, byKind])?.id, "kind");
+  });
 });
 
 describe("recipe auto-start specification", () => {
@@ -126,6 +161,7 @@ describe("recipe auto-start specification", () => {
     assert.equal(recipeAllowsAutoStart({ record_class: "utterance" }), false);
     assert.equal(recipeAllowsAutoStart({ thread_facet: "agent" }), false);
     assert.equal(recipeAllowsAutoStart({ record_class: "task" }), true);
+    assert.equal(recipeAllowsAutoStart({ unit_kind: "crm.order_review" }), true);
     assert.equal(recipeAllowsAutoStart({ thread_id: "chat-src:t1" }), true);
     assert.equal(
       recipeAllowsAutoStart({ source: "chat-src", record_class: "status" }),
@@ -267,6 +303,15 @@ describe("work policy", () => {
       thread_id: "chat-src:t1",
     });
     assert.ok(subject);
+    assert.equal(
+      workSubjectFromEvent({
+        type: "task",
+        source: "crm",
+        thread_id: "crm:order-1",
+        unit_kind: "crm.order_review",
+      })?.unit_kind,
+      "crm.order_review",
+    );
     assert.equal(selectRecipeForSubject([recipe], subject).id, "r1");
     assert.equal(
       selectRecipeForSubject([makeRecipe("broad", { source: "chat-src" })], subject),

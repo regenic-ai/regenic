@@ -141,6 +141,40 @@ describe("connector catalog hints", () => {
     ]);
   });
 
+  it("exposes a declared subject catalog without interpreting the ids", () => {
+    const extras = catalogFromDrivers({
+      list: () => [
+        {
+          connector_type: "extra-review",
+          source: "extra",
+          installCatalog() {
+            return {
+              title: "Extra review",
+              description: "Loaded plugin.",
+              credential_hint: "EXTRA_URL",
+            };
+          },
+          subjectCatalog() {
+            return {
+              kinds: [
+                { id: "extra.order_review", label: "Order review" },
+                { id: "  extra.order_review  ", label: "Duplicate" },
+                { id: "", label: "Empty" },
+              ],
+            };
+          },
+        },
+      ],
+    });
+    const extra = connectorCatalog([], { extras }).find(
+      (item) => item.connector_type === "extra-review",
+    );
+    assert.equal(extra.source, "extra");
+    assert.deepEqual(extra.unit_kinds, [
+      { id: "extra.order_review", label: "Order review" },
+    ]);
+  });
+
   it("lists DSH web and CLI service prerequisites from the catalog", () => {
     const slack = catalogOf({ env: {} }).find(
       (item) => item.connector_type === "slack-channel",

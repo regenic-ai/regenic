@@ -6,6 +6,7 @@ const {
   attachmentsCoveredBy,
   channelLabel,
   channelRecord,
+  labelForUnitKind,
   conversationId,
   isLocalOutboundId,
   normalizeUtterance,
@@ -82,6 +83,62 @@ describe("message contract", () => {
         actor_label: "Ada",
       },
     );
+  });
+
+  it("labels unit_kind from the catalog of the same source", () => {
+    const catalogs = [
+      {
+        source: "crm",
+        kinds: [{ id: "crm.order_review", label: "Order review" }],
+      },
+      {
+        source: "extra",
+        kinds: [{ id: "extra.order_review", label: "Extra review" }],
+      },
+    ];
+    assert.equal(
+      labelForUnitKind(catalogs, "crm", "crm.order_review"),
+      "Order review",
+    );
+    assert.equal(
+      labelForUnitKind(catalogs, "extra", "extra.order_review"),
+      "Extra review",
+    );
+    assert.equal(
+      labelForUnitKind(catalogs, "other", "crm.order_review"),
+      "Order review",
+    );
+    assert.equal(
+      labelForUnitKind(catalogs, "crm", "crm.unknown"),
+      "crm.unknown",
+    );
+    assert.equal(labelForUnitKind(catalogs, "crm", "  "), undefined);
+  });
+
+  it("keeps unit_kind on the stored surface without using conversation_kind", () => {
+    const record = channelRecord({
+      channel: "crm",
+      kind: "system",
+      direction: "inbound",
+      external_id: "order-1:task-1",
+      occurred_at: "2026-08-29T00:00:00.000Z",
+      actor_id: "crm",
+      scope_id: "order-1",
+      scope_name: "Order 8821",
+      conversation_kind: "direct",
+      unit_kind: "crm.order_review",
+      type: "task",
+      text: "Review this order",
+    });
+    assert.deepEqual(surfaceFromParts(record.content), {
+      channel: "crm",
+      kind: "system",
+      direction: "inbound",
+      conversation_label: "Order 8821",
+      conversation_kind: "direct",
+      unit_kind: "crm.order_review",
+      type: "task",
+    });
   });
 
   it("keeps a DSH turn boundary on the stored surface", () => {

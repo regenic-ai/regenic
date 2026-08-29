@@ -26,10 +26,16 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 
 能力写在安装上。内核不按驱动名推断能力。
 
+连接器是**申明式**插件，不是调度器。它声明能力、目录、词表和写回别名，
+并把本渠道 wire 译成封闭字段。它不选 Recipe、不调执行器、不按业务类型
+在插件里分支。内核只读声明：相等匹配、精确别名、catalog 渲染。加一种
+任务类型 = 在 `subjectCatalog` 加一条并在入库时盖 `unit_kind`，不改内核
+或桌面。
+
 加来源不用改 API 或桌面。每个驱动自己声明 `installCatalog()`，以及可选的
-`presentInstall` / `writeBackLabels`。引擎页由已注册驱动组装。额外包在
-进程启动时由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载。
-内核只对结果第一行与待办选项做精确匹配。
+`presentInstall` / `writeBackLabels` / `subjectCatalog`。引擎页由已注册
+驱动组装。额外包在进程启动时由 `REGENIC_PLUGIN_DIR` 或
+`REGENIC_CHANNEL_PLUGIN` 加载。内核只对结果第一行与待办选项做精确匹配。
 
 ## 端口
 
@@ -41,7 +47,7 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` 且 `source_mode` 为 poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` 为 webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / 可选 `createThread` | `reply`；`create` 另需 `createThread` |
-| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` | 要出现在引擎页 |
+| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` | 要出现在引擎页；有工单类型时再声明词表 |
 | Surface | `prompts` / `attention` / `receipts` | 对应能力旗标为 true |
 | `EgressAdapter` | 把 `ContentPart[]` 写回同一来源 | 实现了 `bindEgress` |
 
@@ -75,7 +81,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
   `quota`。内核不按来源名写限速常数。poll 先抢租约再扣配额；抢不到不扣。
   配额用尽放租约并返回 `throttled`，不当成拉取失败。
 - 要出现在引擎页就实现 `installCatalog()`。可选 `presentInstall` 写已装
-  行的文案。可选 `writeBackLabels` 列出回写时的精确别名。
+  行的文案。可选 `writeBackLabels` 列出回写时的精确别名。源系统把工作
+  分成不同类型时，实现 `subjectCatalog()`，并在记录上盖 `unit_kind`。
 
 不允许：
 
@@ -83,7 +90,9 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 - 把 token 存进 `config`，或从 `/v1/me` 返回。
 - 把未知的原生类型映射成 `message`。
 - 把正文或密钥放进 `attrs`、日志或隔离区元数据。
-- 在 API 或桌面按渠道名加开关。桌面读 `can_send`、`can_create`、`create_with_task`、`await_reply`、`hold_while_working`、`list_title`、`surface.activity`，以及 inbox 上的 `prompts` / `unread` / `can_receipt` / `receipt`。
+- 在记录或安装上写 `recipe_id` / `executor_type`，或在插件里按任务类型
+  选执行器。类型是声明，绑定是 Recipe。
+- 在 API 或桌面按渠道名加开关。桌面读 `can_send`、`can_create`、`create_with_task`、`await_reply`、`hold_while_working`、`list_title`、`surface.activity`，以及 inbox 上的 `prompts` / `unread` / `can_receipt` / `receipt`。规则页的类型下拉只渲染 `subjectCatalog`。
 
 ## 隔离
 
@@ -117,10 +126,12 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 | `capabilities` | `{ sync, reply, create, await_reply?, list_title?, hydrate_on_open?, prompts?, attention?, receipts?, create_with_task?, hold_while_working? }` | 由 `ChannelDriver.capabilities()` 返回 |
 
 `channelRecord()` 把 surface（`channel`、`kind`、`direction`，以及可选的
-`conversation_label` / `conversation_kind` / `actor_label` / `activity`）
-附在记录上。`activity` 是渠道无关的线程状态：`working`（对端还在处理，
-尚无可见正文）或 `awaiting_user`（对端在等用户在原渠道回答）。桌面只读
-该字段，不按驱动名推断角色、方向或「是不是卡住了」。
+`conversation_label` / `conversation_kind` / `unit_kind` / `actor_label` /
+`activity`）附在记录上。`conversation_kind` 是拓扑（`group` / `direct`），
+只给人看。`unit_kind` 是工单类型，给 Recipe 相等匹配，不是对话名，也不
+是 `record_class`。`activity` 是渠道无关的线程状态：`working`（对端还在
+处理，尚无可见正文）或 `awaiting_user`（对端在等用户在原渠道回答）。桌面
+只读该字段，不按驱动名推断角色、方向或「是不是卡住了」。
 `await_reply` 也由驱动声明：发送后若对端还会继续干活（会话 Agent），
 设为 true；飞书这类聊天渠道不写。桌面只在 `await_reply` 为 true 且最近
 一条是 outbound 时，才显示「已发送，等对端」。这不是第三条 `activity`，
@@ -156,6 +167,35 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 `ChannelDriverRegistry` 用 `installation + thread` 解析。多条安装都能匹配时，
 `ownsThread` 优先于第一条匹配。
 
+### 工单类型（`unit_kind`）
+
+CRM 或内部系统常把工作分成不同类型，并且**每个任务实例一条对话**。对话名
+不稳定，不能当路由键。`record_class=task` 只说明「这是工单」，不能区分
+「订单复审」和「线索跟进」。
+
+连接器做三件申明式的事：
+
+1. `subjectCatalog()` 公布词表。`id` 由连接器保证跨插件唯一（约定
+   `{source}.{native}`，例如 `crm.order_review`）。内核不解析点号。
+2. 入库时用 `channelRecord({ unit_kind })` 盖章。类型从源 API / 表单 /
+   管道读出。猜类型留在 L0。不要用对话名当类型，也不要把类型写进
+   `conversation_kind`。同一任务实例的**每条**记录都盖同一 id；列表只拉
+   heads（最后一条可见消息）。只盖首条，芯片会丢。
+3. 安装表单若要限制同步范围，用 catalog `fields` 筛类型。那是「吃什么」，
+   不是「怎么处理」。
+
+内核只对 `Recipe.match.unit_kind` 做字符串相等。特异性：`thread_id` >
+`unit_kind` > `source` > `record_class` > `thread_facet`。只写
+`unit_kind` 就算具体。组织用 Recipe 绑执行器；`executor_config` 仍是
+不透明袋。连接器禁止写 `recipe_id`。
+
+聊天渠道没有业务类型就省略 `subjectCatalog`。源侧没有类型字段就不要盖章，
+让粗 Recipe（`source` + `task`）兜底。
+
+列表和线程头用 catalog 的 `label` 画类型芯片，不按渠道名分支。没有词条时
+回退显示 `unit_kind` id。对话名仍然只做标题。本机回复和自动任务回写都会
+把线程上已有的 `unit_kind` 抄到出站记录上，避免 heads 被盖掉。
+
 ## ChannelDriver
 
 ```ts
@@ -176,6 +216,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   installCatalog?(input?): DriverInstallCatalog;
   presentInstall?(installation, input?): { label; detail };
   writeBackLabels?(label): string[];
+  subjectCatalog?(): { kinds: Array<{ id: string; label: string }> };
   probeCatalog?(input): Promise<ConnectorCatalogProbe>;
 }
 ```
@@ -198,6 +239,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。`setup_steps` 是弹层里的编号步骤，桌面原样渲染。 |
 | `presentInstall` | 可选。已装行的标题和细节。 |
 | `writeBackLabels` | 可选。某个待办选项的精确别名。内核只对结果第一行做匹配。 |
+| `subjectCatalog` | 可选。工单类型词表。规则页按 `id` / `label` 渲染；内核只做相等匹配。不写则该来源没有类型维。 |
 | `probeCatalog` | 可选。本机服务 / 环境是否就绪，以及表单选项。 |
 
 `ChannelDriverError` 错误码：`invalid_config`、`missing_credentials`、
@@ -267,7 +309,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 `GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。未齐前置时主按钮写「设置」，仍打开同一张弹层。
 
-驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。
+驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段或标题。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
 
 额外包在进程启动时加载一次：`REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）。`REGENIC_CRM_CONNECTOR` 是后者的兼容别名。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。显式插件缺失或无效时跳过并打日志。
 

@@ -6,7 +6,7 @@
 
 ## 1. 目的
 
-Phase 1 是面向单人的本地优先采集基础。原生输入和连接器被译成 `IngestBatch`，并持久化为符合 RFC 形状的 Blob 与 Event。组织层随后使用同一份契约，不替换个人采集管线。
+Phase 1 是面向单人的本地优先采集基础。原生输入和连接器被译成 `IngestBatch`，并持久化为符合 RFC 形状的 Blob 与 Event。组织层随后使用同一份协议，不替换个人采集管线。
 
 连接器是[消息编排](MESSAGE_ORCHESTRATION.md)的接收半边。发送（`EgressAdapter`）更晚，不属于本采集核心。
 
@@ -14,7 +14,7 @@ Phase 1 是面向单人的本地优先采集基础。原生输入和连接器被
 
 > 适配器只翻译。采集核心负责校验、鉴权、去重、存储与审计。
 
-连接器交出的是 L1 信封：`IngestRecord` 带着身份、时间、作者、正文和幂等键（`org_id`、`source`、`external_id`）。L2 `record_class` 由此处的 `type` 映射。线程面、WorkItem 和执行器在这条管线之上。见[消息编排 · 分层](MESSAGE_ORCHESTRATION.md)。
+连接器交出的是 L1 信封：`IngestRecord` 带着身份、时间、作者、正文和幂等键（`org_id`、`source`、`external_id`）。L2 `record_class` 由此处的 `type` 映射。可选的 `unit_kind` 走 surface，给 Recipe 相等匹配，采集核心不解释它。线程面、WorkItem 和执行器在这条管线之上。见[消息编排 · 分层](MESSAGE_ORCHESTRATION.md)。
 
 连接器不得直接写入 Event、Blob、身份或访问策略记录。来源特有行为留在产品不变量之外，因此增加新来源时，无需复制边界、存储或可靠性逻辑。
 
@@ -189,9 +189,9 @@ interface AuthorityStore {
 
 `listInbox` 默认只返回各来源身份当前 head 且 disposition 为 `current_work`、且未 `conversation_prefs.hidden` 的项（显示列表）。`list=hidden` 返回被折叠的会话，列表脸仍是最后一条非 tombstone 可见消息。隐藏是列表表面，不由 tombstone / `work_acked` / 工单状态推导。人折叠写 `hidden_reason=human`（新活也不自动回来）；策略折叠写 `policy`（tombstone 离桌、工单结束或稍后处理；新的 `current_work` 会自动取消折叠）。被 tombstone 的 Event 仍留在库里。当前 head 若还没有 disposition，下一次采集该来源身份时补写，包括 duplicate 重放。采集批次结束后内核按线程应用折叠策略，连接器零感知。
 
-## 6. 规范输入契约
+## 6. 规范输入协议
 
-连接器产出带版本的 `IngestBatch`。该内部契约独立于任一来源 SDK。
+连接器产出带版本的 `IngestBatch`。该内部协议独立于任一来源 SDK。
 
 ```ts
 interface IngestBatch {
@@ -231,7 +231,7 @@ interface ContentPart {
 }
 ```
 
-契约规则：
+协议规则：
 
 - 每个 content part 的 `bytes`、`text`、`external_locator` 恰好出现一个。
 - 连接器通过已认证的来源客户端获取 `external_locator`；核心不接收来源凭据。
@@ -577,13 +577,13 @@ packages/job-queue/
 
 ## 15. 交付切片
 
-### 15.1 契约 Fixture
+### 15.1 协议 Fixture
 
 - 定义 `IngestBatch`、处理结果、错误码与规范化 fixture。
 - 测试重复创建、冲突重复、revision、tombstone、ACL 未解析与乱序投递。
 - 建立连接器一致性测试框架。
 
-退出标准：原生与外部适配器可以复用同一套契约测试。
+退出标准：原生与外部适配器可以复用同一套协议测试。
 
 ### 15.2 本地个人采集
 
