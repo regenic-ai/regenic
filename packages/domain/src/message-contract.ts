@@ -8,6 +8,12 @@ import {
   type StoredContentPart,
 } from "./content-parts";
 import type { ContentPart, IngestRecord } from "./ingestion";
+import {
+  readForwardedFrom,
+  readForwardedTo,
+  type ForwardedFrom,
+  type ForwardedTo,
+} from "./forward-packet";
 import type { ThreadFacet } from "./thread-facet";
 
 export type ChannelId = string;
@@ -32,6 +38,8 @@ export interface MessageSurface {
   thread_facet?: ThreadFacet;
   type?: string;
   turn?: MessageTurn;
+  forwarded_from?: ForwardedFrom;
+  forwarded_to?: ForwardedTo;
 }
 
 export interface ChannelDescriptor {
@@ -174,6 +182,8 @@ export function channelRecord(input: {
   text?: string;
   media_type?: string;
   content?: ContentPart[];
+  forwarded_from?: ForwardedFrom;
+  forwarded_to?: ForwardedTo;
 }): IngestRecord {
   const surface: MessageSurface = {
     channel: input.channel,
@@ -188,6 +198,8 @@ export function channelRecord(input: {
     ...(input.turn ? { turn: input.turn } : {}),
     ...(input.thread_facet ? { thread_facet: input.thread_facet } : {}),
     ...(input.type ? { type: input.type } : {}),
+    ...(input.forwarded_from ? { forwarded_from: input.forwarded_from } : {}),
+    ...(input.forwarded_to ? { forwarded_to: input.forwarded_to } : {}),
   };
   const body = input.content ?? [];
   const hasBody = body.some((part) => part.role === "body");
@@ -330,6 +342,8 @@ function readSurface(
   const actorLabel = optionalLabel(value.actor_label);
   const activity = isActivity(value.activity) ? value.activity : undefined;
   const turn = readTurn(value.turn);
+  const forwardedFrom = readForwardedFrom(value.forwarded_from);
+  const forwardedTo = readForwardedTo(value.forwarded_to);
   return {
     channel: value.channel.trim() || fallbackChannel || value.channel,
     kind: value.kind,
@@ -343,6 +357,8 @@ function readSurface(
       ? { type: value.type.trim() }
       : {}),
     ...(turn ? { turn } : {}),
+    ...(forwardedFrom ? { forwarded_from: forwardedFrom } : {}),
+    ...(forwardedTo ? { forwarded_to: forwardedTo } : {}),
   };
 }
 

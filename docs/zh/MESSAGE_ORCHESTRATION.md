@@ -1,7 +1,7 @@
 # 消息编排
 
 - **English:** [../en/MESSAGE_ORCHESTRATION.md](../en/MESSAGE_ORCHESTRATION.md)
-- **相关：** [产品](PRODUCT.md) · [连接器](CONNECTOR.md) · [执行器](EXECUTOR.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)
+- **相关：** [产品](PRODUCT.md) · [连接器](CONNECTOR.md) · [执行器](EXECUTOR.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · RFC 0004、0005、0006、0008、[0009](rfcs/0009-work-orchestration.md)、[0010](rfcs/0010-cross-channel-forward.md)
 - **状态：** Phase 1 起的公开架构
 
 Regenic 编排的是**消息**。它不托管这些消息当初被写下的那些应用。
@@ -30,7 +30,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 
 ## 消息怎么走
 
-人或 Agent 不必知道一条线程来自邮件、工作区聊天、内部工单还是文件。进来的流量被整理成同一种消息，再存成 Event 与 Blob。回复发回原渠道。
+人或 Agent 不必知道一条线程来自邮件、工作区聊天、内部工单还是文件。进来的流量被整理成同一种消息，再存成 Event 与 Blob。回复发回原渠道。跨渠道转发是编译后再写进**另一条**可写线程，或在 `can_create` 安装上新建，不是把回复改道，见 [RFC 0010](rfcs/0010-cross-channel-forward.md)。
 
 ```text
 渠道

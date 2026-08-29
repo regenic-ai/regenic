@@ -203,6 +203,18 @@ export interface InboxViewItem {
   thread_facet?: ThreadFacet;
   attention?: AttentionClass;
   work?: WorkFace;
+  forwarded_from?: {
+    thread_id: string;
+    event_ids: string[];
+    source: string;
+    channel_label?: string;
+  };
+  forwarded_to?: {
+    thread_id: string;
+    event_ids: string[];
+    source: string;
+    channel_label?: string;
+  };
 }
 
 export interface ExecutorCatalogField {
@@ -530,6 +542,17 @@ export interface ReplyView {
   thread_id: string;
   rpc_id?: string;
   item: InboxViewItem;
+}
+
+export type ForwardMode = "messages" | "transcript";
+
+export interface ForwardView {
+  accepted: true;
+  source_thread_id: string;
+  target_thread_id: string;
+  created: boolean;
+  item: InboxViewItem;
+  truncated?: boolean;
 }
 
 export interface WhatsAppImportView {

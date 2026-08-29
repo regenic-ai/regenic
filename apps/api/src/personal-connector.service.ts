@@ -654,14 +654,60 @@ export class PersonalConnectorService implements OnModuleDestroy {
     return id ? `${this.runtime.orgId()}:${id}` : undefined;
   }
 
-  private async createConversationOnce(
-    input: { installation_id?: string; source?: string; text?: string; cwd?: string },
-  ): Promise<CreatedConversationView> {
+  async openCreatedThread(input: {
+    installation_id?: string;
+    source?: string;
+    text?: string;
+    cwd?: string;
+  }): Promise<{
+    thread: ConversationThread;
+    installation: ConnectorInstallation;
+    driver: ChannelDriver;
+    create_with_task: boolean;
+  }> {
     const host = this.runtime.requireHost();
-    const store = host.get("authority");
-    const installations = await store.listInstallations(this.runtime.orgId());
+    const found = await this.resolveCreatable(input);
+    const withTask = found.driver.capabilities(found.installation).create_with_task === true;
+    const firstTask = withTask ? input.text?.trim() : undefined;
+    try {
+      const thread = await requireCreateThread(found.driver)(
+        found.installation,
+        host,
+        process.env,
+        {
+          ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
+          ...(firstTask ? { text: firstTask } : {}),
+        },
+      );
+      if (withTask) {
+        void this.seedCreatedThread(found.installation, found.driver, thread, host).catch(
+          () => {
+            void this.catchUp(found.installation.id);
+          },
+        );
+      } else {
+        await this.seedCreatedThread(found.installation, found.driver, thread, host);
+      }
+      return {
+        thread,
+        installation: found.installation,
+        driver: found.driver,
+        create_with_task: withTask,
+      };
+    } catch (error) {
+      throw wrapDriverError(error, "send_failed");
+    }
+  }
+
+  private async resolveCreatable(input: {
+    installation_id?: string;
+    source?: string;
+  }): Promise<{ installation: ConnectorInstallation; driver: ChannelDriver }> {
+    const host = this.runtime.requireHost();
+    const installations = await host
+      .get("authority")
+      .listInstallations(this.runtime.orgId());
     const requested = input.installation_id?.trim();
-    let found: { installation: ConnectorInstallation; driver: ChannelDriver } | undefined;
     if (requested) {
       const installation = installations.find((item) => item.id === requested);
       if (!installation) {
@@ -679,67 +725,48 @@ export class PersonalConnectorService implements OnModuleDestroy {
           501,
         );
       }
-      found = { installation, driver };
-    } else {
-      found = this.drivers.findCreatable(installations, input.source);
-      if (!found) {
-        throw new PersonalConnectorError(
-          "unsupported_channel",
-          "No enabled connector can create a conversation",
-          501,
-        );
-      }
+      return { installation, driver };
     }
-    const withTask = found.driver.capabilities(found.installation).create_with_task === true;
-    const firstTask = withTask ? input.text?.trim() : undefined;
-    try {
-      const thread = await requireCreateThread(found.driver)(
-        found.installation,
-        host,
-        process.env,
-        {
-          ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
-          ...(firstTask ? { text: firstTask } : {}),
-        },
+    const found = this.drivers.findCreatable(installations, input.source);
+    if (!found) {
+      throw new PersonalConnectorError(
+        "unsupported_channel",
+        "No enabled connector can create a conversation",
+        501,
       );
-      if (firstTask) {
-        try {
-          await this.seedCreatedOutbound(
-            found.installation,
-            found.driver,
-            thread,
-            firstTask,
-            host,
-          );
-        } catch {
-          // Poll below can still land the first task from the connector.
-        }
-      }
-      if (withTask) {
-        // Task-create starts the run inside createThread. Do not await the
-        // first poll on this HTTP request — a locked messages.list can sit
-        // until Chromium reports "Network request failed".
-        void this.seedCreatedThread(found.installation, found.driver, thread, host).catch(
-          () => {
-            void this.catchUp(found.installation.id);
-          },
-        );
-      } else {
-        await this.seedCreatedThread(found.installation, found.driver, thread, host);
-      }
-      return {
-        thread_id: `${thread.source}:${thread.target}`,
-        channel: thread.source,
-        channel_label: this.drivers.sourceLabel(thread.source),
-        can_send: driverCanReply(found.driver, found.installation),
-        await_reply: found.driver.capabilities(found.installation).await_reply === true,
-        list_title: normalizeListTitle(
-          found.driver.capabilities(found.installation).list_title,
-        ),
-      };
-    } catch (error) {
-      throw wrapDriverError(error, "send_failed");
     }
+    return found;
+  }
+
+  private async createConversationOnce(
+    input: { installation_id?: string; source?: string; text?: string; cwd?: string },
+  ): Promise<CreatedConversationView> {
+    const host = this.runtime.requireHost();
+    const opened = await this.openCreatedThread(input);
+    const firstTask = opened.create_with_task ? input.text?.trim() : undefined;
+    if (firstTask) {
+      try {
+        await this.seedCreatedOutbound(
+          opened.installation,
+          opened.driver,
+          opened.thread,
+          firstTask,
+          host,
+        );
+      } catch {
+        // Poll below can still land the first task from the connector.
+      }
+    }
+    return {
+      thread_id: `${opened.thread.source}:${opened.thread.target}`,
+      channel: opened.thread.source,
+      channel_label: this.drivers.sourceLabel(opened.thread.source),
+      can_send: driverCanReply(opened.driver, opened.installation),
+      await_reply: opened.driver.capabilities(opened.installation).await_reply === true,
+      list_title: normalizeListTitle(
+        opened.driver.capabilities(opened.installation).list_title,
+      ),
+    };
   }
 
   private async seedCreatedOutbound(

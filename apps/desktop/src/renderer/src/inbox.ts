@@ -457,14 +457,58 @@ function sameMessageList(left: InboxViewItem[], right: InboxViewItem[]): boolean
 
 function orderMessages(messages: InboxViewItem[]): InboxViewItem[] {
   if (messages.length < 2) {
-    return messages;
+    return applyForwardedTo(messages);
   }
   for (let index = 1; index < messages.length; index += 1) {
     if (byOccurredAt(messages[index - 1], messages[index]) > 0) {
-      return [...messages].sort(byOccurredAt);
+      return applyForwardedTo([...messages].sort(byOccurredAt));
     }
   }
-  return messages;
+  return applyForwardedTo(messages);
+}
+
+function applyForwardedTo(messages: InboxViewItem[]): InboxViewItem[] {
+  const traces = new Map<string, NonNullable<InboxViewItem["forwarded_to"]>>();
+  const ranked = messages
+    .filter((item) => {
+      const trace = item.forwarded_to;
+      return Boolean(trace && !trace.event_ids.includes(item.event.id));
+    })
+    .sort(byOccurredAt);
+  for (const item of ranked) {
+    const trace = item.forwarded_to;
+    if (!trace) {
+      continue;
+    }
+    for (const eventId of trace.event_ids) {
+      traces.set(eventId, trace);
+    }
+  }
+  if (traces.size === 0) {
+    return messages;
+  }
+  let changed = false;
+  const next = messages.map((item) => {
+    const joined = traces.get(item.event.id);
+    if (!joined || sameForwardedTo(item.forwarded_to, joined)) {
+      return item;
+    }
+    changed = true;
+    return { ...item, forwarded_to: joined };
+  });
+  return changed ? next : messages;
+}
+
+function sameForwardedTo(
+  left?: InboxViewItem["forwarded_to"],
+  right?: InboxViewItem["forwarded_to"],
+): boolean {
+  return (
+    left?.thread_id === right?.thread_id &&
+    left?.source === right?.source &&
+    left?.channel_label === right?.channel_label &&
+    (left?.event_ids ?? []).join("\0") === (right?.event_ids ?? []).join("\0")
+  );
 }
 
 function mergeMessages(
@@ -477,7 +521,7 @@ function mergeMessages(
   if (added.length === 1) {
     const last = existing[existing.length - 1];
     if (!last || byOccurredAt(last, added[0]) <= 0) {
-      return [...existing, added[0]];
+      return applyForwardedTo([...existing, added[0]]);
     }
   }
   return orderMessages([...existing, ...added]);

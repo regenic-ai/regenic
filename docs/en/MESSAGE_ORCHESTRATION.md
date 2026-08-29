@@ -1,7 +1,7 @@
 # Message orchestration
 
 - **简体中文:** [../zh/MESSAGE_ORCHESTRATION.md](../zh/MESSAGE_ORCHESTRATION.md)
-- **Related:** [PRODUCT.md](PRODUCT.md) · [CONNECTOR.md](CONNECTOR.md) · [EXECUTOR.md](EXECUTOR.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md)
+- **Related:** [PRODUCT.md](PRODUCT.md) · [CONNECTOR.md](CONNECTOR.md) · [EXECUTOR.md](EXECUTOR.md) · [INGESTION_ARCHITECTURE.md](INGESTION_ARCHITECTURE.md) · [TECH_STACK.md](TECH_STACK.md) · RFC 0004, 0005, 0006, 0008, [0009](rfcs/0009-work-orchestration.md), [0010](rfcs/0010-cross-channel-forward.md)
 - **Status:** Public architecture for Phase 1+
 
 Regenic orchestrates **messages**. It does not host the apps where those messages were written.
@@ -30,7 +30,7 @@ Kernel and desktop read `record_class`, `thread_facet`, `attention`, and `work`.
 
 ## Message flow
 
-A human or an agent should not need to know whether a thread arrived from mail, a chat workspace, an internal ticket system, or a file. Incoming traffic is normalized into one message format and stored as Event and Blob. Replies go back to the original channel.
+A human or an agent should not need to know whether a thread arrived from mail, a chat workspace, an internal ticket system, or a file. Incoming traffic is normalized into one message format and stored as Event and Blob. Replies go back to the original channel. Cross-channel forward compiles then writes into **another** writable thread, or a new conversation on a `can_create` install; it does not reroute a reply. See [RFC 0010](rfcs/0010-cross-channel-forward.md).
 
 ```text
 channels

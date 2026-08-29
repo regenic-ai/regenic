@@ -45,6 +45,7 @@ import appIconIco from "../brand/app-icon.ico?asset";
 import appIconPng from "../brand/app-icon.png?asset";
 import appIconWinPng from "../brand/app-icon-win.png?asset";
 import trayPng from "../brand/tray-mark.png?asset";
+import { editContextRoles } from "./edit-menu";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { formatBytes, portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
@@ -733,6 +734,7 @@ function createMainWindow(): BrowserWindow {
     }
   });
   attachExternalLinks(window);
+  attachEditContextMenu(window);
   void loadSurface(window, "console");
   applyAppIcon(window);
   return window;
@@ -763,6 +765,7 @@ function createTrayWindow(): BrowserWindow {
     }
   });
   attachExternalLinks(window);
+  attachEditContextMenu(window);
   void loadSurface(window, "tray");
   return window;
 }
@@ -777,6 +780,35 @@ function isHttpUrl(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+function attachEditContextMenu(window: BrowserWindow): void {
+  window.webContents.on("context-menu", (_event, params) => {
+    const locale = parseLocale(loadDesktopPreference(settingsFile()).locale);
+    const roles = editContextRoles({
+      isEditable: params.isEditable,
+      selectionText: params.selectionText,
+      canCut: params.editFlags.canCut,
+      canCopy: params.editFlags.canCopy,
+      canPaste: params.editFlags.canPaste,
+      canSelectAll: params.editFlags.canSelectAll,
+    });
+    if (roles.length === 0) {
+      return;
+    }
+    const labels: Record<(typeof roles)[number], "edit.cut" | "edit.copy" | "edit.paste" | "edit.selectAll"> = {
+      cut: "edit.cut",
+      copy: "edit.copy",
+      paste: "edit.paste",
+      selectAll: "edit.selectAll",
+    };
+    Menu.buildFromTemplate(
+      roles.map((role) => ({
+        role,
+        label: translate(locale, labels[role]),
+      })),
+    ).popup({ window });
+  });
 }
 
 function attachExternalLinks(window: BrowserWindow): void {

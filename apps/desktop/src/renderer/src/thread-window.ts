@@ -20,7 +20,9 @@ export function itemRevision(item: InboxViewItem): string {
     item.unread ? "1" : "0"
   }\t${item.can_receipt ? "1" : "0"}\t${item.receipt?.state ?? ""}\t${(
     item.prompts ?? []
-  ).map((prompt) => prompt.prompt_id).join(",")}\t${workRevision(item)}`;
+  ).map((prompt) => prompt.prompt_id).join(",")}\t${
+    item.forwarded_from?.thread_id ?? ""
+  }\t${item.forwarded_to?.thread_id ?? ""}\t${workRevision(item)}`;
 }
 
 export function inboxRevision(items: InboxViewItem[]): string {
@@ -343,7 +345,9 @@ export function estimateMessageHeight(
   const files = (item.attachments ?? []).reduce((sum, file) => {
     return sum + (file.media_type.startsWith("image/") ? 168 : 32);
   }, 0);
-  return 36 + (follow ? 2 : 20) + body + files + (follow ? 10 : 18);
+  const forwarded =
+    (item.forwarded_from ? 22 : 0) + (item.forwarded_to ? 22 : 0);
+  return 36 + (follow ? 2 : 20) + body + files + forwarded + (follow ? 10 : 18);
 }
 
 export function paddingYFromStyle(style: {

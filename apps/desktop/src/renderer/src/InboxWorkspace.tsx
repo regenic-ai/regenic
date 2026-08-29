@@ -21,7 +21,12 @@ import { PencilIcon, PinIcon } from "./Icons";
 import { ThreadPane } from "./ThreadPane";
 import { ThreadTitleField } from "./ThreadTitleField";
 import type { ComposerDraft } from "./Composer";
-import type { CreatedConversation, InboxSortMode, PersonalEngineView } from "./types";
+import type {
+  CreatedConversation,
+  ForwardView,
+  InboxSortMode,
+  PersonalEngineView,
+} from "./types";
 
 export function InboxWorkspace({
   threads,
@@ -46,6 +51,7 @@ export function InboxWorkspace({
   onRunWork,
   onDismissWork,
   onBindRecipe,
+  onForwardCreated,
 }: {
   threads: InboxThread[];
   selected: InboxThread | null;
@@ -73,6 +79,7 @@ export function InboxWorkspace({
   onRunWork: (thread: InboxThread) => Promise<void>;
   onDismissWork: (thread: InboxThread) => Promise<void>;
   onBindRecipe: (thread: InboxThread) => void;
+  onForwardCreated: (result: ForwardView) => Promise<void>;
 }) {
   const { t } = useLocale();
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
@@ -226,6 +233,9 @@ export function InboxWorkspace({
             onRunWork={() => onRunWork(selected)}
             onDismissWork={() => onDismissWork(selected)}
             onBindRecipe={() => onBindRecipe(selected)}
+            forwardTargets={threads}
+            createTargets={createTargets}
+            onForwardCreated={onForwardCreated}
           />
         ) : (
           <div className="thread-empty">{t("inbox.selectConversation")}</div>

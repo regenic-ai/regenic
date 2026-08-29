@@ -16,6 +16,7 @@ Phase 0 先以已接纳的 RFC 定模型，再写业务代码。
 | [0007](0007-daily-distillation.md) | 日蒸馏 | 已接纳 |
 | [0008](0008-thread-surface.md) | Thread Surface | 已接纳 |
 | [0009](0009-work-orchestration.md) | 记录类、线程面与托管执行（L0–L6） | 已接纳 |
+| [0010](0010-cross-channel-forward.md) | 跨渠道转发 | Draft |
 
 相关文档：
 
@@ -44,6 +45,7 @@ Phase 0 先以已接纳的 RFC 定模型，再写业务代码。
 0001 标准 → 0002 图谱 → 0003 协作 → 0004 API
 → 0005 物理存储 → 0006 ACL → 0007 日蒸馏 → 0008 Thread Surface
 → 0009 记录类 / 线程面 / 工单 / 执行器（L0–L6）
+→ 0010 跨渠道转发（编译 + 发送，不搬家）
 ```
 
 ## 讨论

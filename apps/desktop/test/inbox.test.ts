@@ -18,6 +18,7 @@ import {
 import {
   applyOpenedAt,
   createConversationTargets,
+  draftFromForward,
   localDraftConversation,
   localDraftOutbound,
   mergeDraftThreads,
@@ -361,6 +362,40 @@ describe("inbox sort", () => {
     );
   });
 
+  it("joins a source-side forward trace onto the original messages", () => {
+    const source = message("ev-1", "2026-08-23T10:00:00.000Z", "dsh:one");
+    const later = {
+      thread_id: "dsh:created-1",
+      event_ids: ["ev-1"],
+      source: "dsh",
+      channel_label: "DSH",
+    };
+    const first = {
+      ...message("st-1", "2026-08-23T10:01:00.000Z", "dsh:one"),
+      body_text: undefined,
+      kind: "system" as const,
+      record_class: "status" as const,
+      forwarded_to: {
+        thread_id: "dsh:sess-b",
+        event_ids: ["ev-1"],
+        source: "dsh",
+        channel_label: "DSH",
+      },
+    };
+    const newest = {
+      ...message("st-2", "2026-08-23T10:02:00.000Z", "dsh:one"),
+      body_text: undefined,
+      kind: "system" as const,
+      record_class: "status" as const,
+      forwarded_to: later,
+    };
+    const ordered = orderThreadMessages([source, newest, first]);
+    assert.deepEqual(
+      ordered.find((item) => item.event.id === "ev-1")?.forwarded_to,
+      later,
+    );
+  });
+
   it("does not treat the list head as the opened transcript", () => {
     const head = message("a", "2026-08-23T10:00:00.000Z", "feishu:oc_yiki");
     const extra = message("b", "2026-08-23T10:01:00.000Z", "feishu:oc_yiki");
@@ -478,6 +513,24 @@ describe("inbox sort", () => {
     assert.equal(outbound.event.source, "dsh");
     assert.equal(outbound.kind, "user");
     assert.equal(outbound.direction, "outbound");
+    const forwarded = draftFromForward({
+      accepted: true,
+      source_thread_id: "feishu:oc",
+      target_thread_id: "dsh:created-1",
+      created: true,
+      item: {
+        ...outbound,
+        channel: "dsh",
+        channel_label: "DSH",
+        can_send: true,
+        await_reply: true,
+        list_title: "prompt",
+      },
+    });
+    assert.equal(forwarded.thread_id, "dsh:created-1");
+    assert.equal(forwarded.channel, "dsh");
+    assert.equal(forwarded.can_send, true);
+    assert.equal(forwarded.list_title, "prompt");
   });
 
   it("carries live prompts and unread from inbox heads", () => {

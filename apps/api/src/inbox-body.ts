@@ -124,7 +124,19 @@ export function decodeInboxBody(
   if (mediaType === CONTENT_PARTS_MEDIA_TYPE) {
     return decodeContentParts(bytes, attachments);
   }
-  if (isTextMediaType(mediaType) && mediaType !== SURFACE_MEDIA_TYPE) {
+  if (mediaType === SURFACE_MEDIA_TYPE) {
+    return {
+      media_type: mediaType,
+      surface: surfaceFromParts([
+        {
+          role: "metadata",
+          media_type: SURFACE_MEDIA_TYPE,
+          text: Buffer.from(bytes).toString("utf8"),
+        },
+      ]),
+    };
+  }
+  if (isTextMediaType(mediaType)) {
     return {
       media_type: mediaType,
       body_text: Buffer.from(bytes).toString("utf8"),

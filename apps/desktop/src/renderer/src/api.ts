@@ -8,6 +8,8 @@ import type {
   EngineInstallationView,
   ExecutorCatalogEntry,
   ExecutorKind,
+  ForwardMode,
+  ForwardView,
   InboxViewItem,
   KernelSettingsView,
   Locale,
@@ -602,6 +604,38 @@ export async function sendReply(input: {
     throw new Error(replyErrorMessage(response.status, body));
   }
   return body as ReplyView;
+}
+
+export async function sendForward(input: {
+  source_thread_id: string;
+  event_ids?: string[];
+  target: { thread_id: string } | { installation_id: string; create: true };
+  mode: ForwardMode;
+  attribution?: boolean;
+  text?: string;
+}): Promise<ForwardView> {
+  const response = await kernelFetch("/v1/me/forwards", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const raw = await response.text();
+  let body: ForwardView | { error?: { message?: string }; message?: string } = {};
+  try {
+    body = raw ? (JSON.parse(raw) as typeof body) : {};
+  } catch {
+    body = {};
+  }
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : typeof body.message === "string" && body.message.length > 0
+          ? body.message
+          : `forward ${response.status}`,
+    );
+  }
+  return body as ForwardView;
 }
 
 function replyErrorMessage(

@@ -4,9 +4,21 @@ import {
   currentApiOrigin,
   isKernelNetworkError,
   isKernelTimeoutError,
+  sendForward,
   sendReply,
 } from "./api";
 import { Composer, type ComposerDraft } from "./Composer";
+import { formatSelectedCopy, writeClipboard } from "./copy-message";
+import { ForwardSheet } from "./ForwardSheet";
+import {
+  canForwardItem,
+  forwardAttachmentNames,
+  forwardPickerTargets,
+  previewForwardText,
+  type ForwardPickerTarget,
+} from "./forward-preview";
+import { nextMessageSelection, selectedInOrder } from "./message-selection";
+import type { CreateTarget } from "./inbox-drafts";
 import { MessageBody } from "./MessageBody";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
@@ -31,7 +43,13 @@ import {
   type ThreadMessageListHandle,
 } from "./ThreadMessageList";
 import { ThreadTitleField } from "./ThreadTitleField";
-import type { InboxViewItem, PersonalEngineView, PromptAnswerItem, ThreadPrompt } from "./types";
+import type {
+  ForwardView,
+  InboxViewItem,
+  PersonalEngineView,
+  PromptAnswerItem,
+  ThreadPrompt,
+} from "./types";
 import type { MessageKey } from "../../shared/i18n.ts";
 
 export const ThreadPane = memo(function ThreadPane({
@@ -50,6 +68,9 @@ export const ThreadPane = memo(function ThreadPane({
   onRunWork,
   onDismissWork,
   onBindRecipe,
+  forwardTargets = [],
+  createTargets = [],
+  onForwardCreated,
 }: {
   thread: InboxThread;
   pull?: PersonalEngineView["pull"];
@@ -70,12 +91,28 @@ export const ThreadPane = memo(function ThreadPane({
   onRunWork?: () => Promise<void>;
   onDismissWork?: () => Promise<void>;
   onBindRecipe?: () => void;
+  forwardTargets?: InboxThread[];
+  createTargets?: CreateTarget[];
+  onForwardCreated?: (result: ForwardView) => Promise<void>;
 }) {
   const { t } = useLocale();
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [forward, setForward] = useState<{
+    mode: "messages" | "transcript";
+    eventIds?: string[];
+    preview: string;
+    files: string[];
+  } | null>(null);
+  const [forwardError, setForwardError] = useState<string | null>(null);
+  const [forwarding, setForwarding] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectAnchor, setSelectAnchor] = useState<string | null>(null);
+  const selectedIdsRef = useRef<string[]>([]);
+  const selectAnchorRef = useRef<string | null>(null);
+  const selectableIdsRef = useRef<string[]>([]);
   const listRef = useRef<ThreadMessageListHandle>(null);
   const readingRef = useRef<{
     threadId: string;
@@ -106,11 +143,98 @@ export const ThreadPane = memo(function ThreadPane({
   const quoteMessage = useCallback((item: InboxViewItem) => {
     setQuote(item);
   }, []);
+  const pickerTargets = useMemo(
+    () =>
+      forwardPickerTargets({
+        sourceThreadId: thread.id,
+        threads: forwardTargets.map((item) => ({
+          id: item.id,
+          can_send: item.can_send,
+          channel_label: item.channel_label,
+          title: threadTitle(item),
+        })),
+        createTargets,
+        newChannel: (channel) => t("inbox.newChannel", { channel }),
+      }),
+    [createTargets, forwardTargets, t, thread.id],
+  );
+  const selectableIds = useMemo(
+    () => merged.filter(canForwardItem).map((item) => item.event.id),
+    [merged],
+  );
+  selectedIdsRef.current = selectedIds;
+  selectAnchorRef.current = selectAnchor;
+  selectableIdsRef.current = selectableIds;
+  const selectedItems = useMemo(
+    () => selectedInOrder(merged.filter(canForwardItem), selectedIds),
+    [merged, selectedIds],
+  );
+  const openForwardItems = useCallback(
+    (items: InboxViewItem[], mode: "messages" | "transcript") => {
+      const utterances = items.filter(canForwardItem);
+      if (utterances.length === 0) {
+        return;
+      }
+      setForwardError(null);
+      setForward({
+        mode,
+        eventIds: utterances.map((item) => item.event.id),
+        preview: previewForwardText({
+          mode,
+          title: mode === "transcript" ? threadTitle(thread) : undefined,
+          utterances: utterances.map((item) => ({
+            occurred_at: item.event.occurred_at,
+            channel_label: item.channel_label,
+            actor_label: item.actor_label,
+            body_text: item.body_text,
+            attachments: item.attachments,
+          })),
+        }),
+        files: forwardAttachmentNames(utterances),
+      });
+    },
+    [thread],
+  );
+  const openForwardMessage = useCallback(
+    (item: InboxViewItem) => {
+      const batch =
+        selectedIds.includes(item.event.id) && selectedItems.length > 1
+          ? selectedItems
+          : [item];
+      openForwardItems(batch, "messages");
+    },
+    [openForwardItems, selectedIds, selectedItems],
+  );
+  const openForwardConversation = useCallback(() => {
+    openForwardItems(merged.filter(canForwardItem), "transcript");
+  }, [merged, openForwardItems]);
+  const toggleSelect = useCallback((id: string, range: boolean) => {
+    const next = nextMessageSelection({
+      selected: selectedIdsRef.current,
+      id,
+      orderedIds: selectableIdsRef.current,
+      range,
+      anchor: selectAnchorRef.current,
+    });
+    selectedIdsRef.current = next.selected;
+    selectAnchorRef.current = next.anchor;
+    setSelectedIds(next.selected);
+    setSelectAnchor(next.anchor);
+  }, []);
+  const copySelected = useCallback(() => {
+    void writeClipboard(formatSelectedCopy(selectedItems));
+  }, [selectedItems]);
 
   useEffect(() => {
     setQuote(null);
     setSendError(null);
     setPending([]);
+    setForward(null);
+    setForwardError(null);
+    selectedIdsRef.current = [];
+    selectAnchorRef.current = null;
+    setSelectedIds([]);
+    setSelectAnchor(null);
   }, [thread.id]);
 
   useEffect(() => {
@@ -133,6 +257,42 @@ export const ThreadPane = memo(function ThreadPane({
       setSendError(caught instanceof Error ? caught.message : t("error.cannotSend"));
     } finally {
       setSending(false);
+    }
+  };
+
+  const submitForward = async (target: ForwardPickerTarget, text: string) => {
+    if (!forward) {
+      return;
+    }
+    setForwarding(true);
+    setForwardError(null);
+    try {
+      const result = await sendForward({
+        source_thread_id: thread.id,
+        event_ids: forward.eventIds,
+        target:
+          target.kind === "create"
+            ? { installation_id: target.id, create: true }
+            : { thread_id: target.id },
+        mode: forward.mode,
+        text,
+      });
+      setForward(null);
+      selectedIdsRef.current = [];
+      selectAnchorRef.current = null;
+      setSelectedIds([]);
+      setSelectAnchor(null);
+      if (result.created) {
+        await onForwardCreated?.(result);
+      } else {
+        await onRefresh();
+      }
+    } catch (caught) {
+      setForwardError(
+        caught instanceof Error ? caught.message : t("error.cannotForward"),
+      );
+    } finally {
+      setForwarding(false);
     }
   };
 
@@ -184,6 +344,7 @@ export const ThreadPane = memo(function ThreadPane({
       thread.work?.status === "running" ||
       thread.work?.status === "waiting_human");
   const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
+  const canForwardConversation = merged.some(canForwardItem);
   const kind = conversationKindLabel(thread.conversation_kind);
   const facet = threadFacetLabel(thread.thread_facet);
   const work = workStatusLabel(thread.work);
@@ -225,8 +386,18 @@ export const ThreadPane = memo(function ThreadPane({
                 </span>
               ) : null}
             </div>
-            {canRun || canDismiss || canBind ? (
+            {canForwardConversation || canRun || canDismiss || canBind ? (
               <div className="thread-actions">
+                {canForwardConversation ? (
+                  <button
+                    type="button"
+                    className="ghost thread-run"
+                    title={t("thread.forwardConversationTitle")}
+                    onClick={openForwardConversation}
+                  >
+                    {t("thread.forwardConversation")}
+                  </button>
+                ) : null}
                 {canBind ? (
                   <button
                     type="button"
@@ -312,8 +483,60 @@ export const ThreadPane = memo(function ThreadPane({
         onLoadOlder={onLoadOlder}
         onRetry={onRetry}
         onReply={quoteMessage}
+        onForward={openForwardMessage}
+        selectedIds={selectedIds}
+        selecting={selectedIds.length > 0}
+        onToggleSelect={toggleSelect}
       />
       <div className="composer-dock">
+        {selectedIds.length > 0 && !forward ? (
+          <div className="selection-bar" role="toolbar" aria-label={t("thread.selectedCount", { count: selectedIds.length })}>
+            <span>{t("thread.selectedCount", { count: selectedIds.length })}</span>
+            <div className="selection-bar-actions">
+              <button type="button" className="ghost" onClick={copySelected}>
+                {t("thread.copySelected")}
+              </button>
+              <button
+                type="button"
+                className="primary"
+                disabled={selectedItems.length === 0}
+                onClick={() => openForwardItems(selectedItems, "messages")}
+              >
+                {t("thread.forwardSelected")}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  selectedIdsRef.current = [];
+                  selectAnchorRef.current = null;
+                  setSelectedIds([]);
+                  setSelectAnchor(null);
+                }}
+              >
+                {t("thread.clearSelection")}
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {forward ? (
+          <ForwardSheet
+            mode={forward.mode}
+            preview={forward.preview}
+            files={forward.files}
+            targets={pickerTargets}
+            sending={forwarding}
+            error={forwardError}
+            onPreviewChange={(text) =>
+              setForward((current) => (current ? { ...current, preview: text } : current))
+            }
+            onSend={submitForward}
+            onCancel={() => {
+              setForward(null);
+              setForwardError(null);
+            }}
+          />
+        ) : null}
         {activityNote && prompts.length === 0 ? (
           <p className="thread-activity">{activityNote}</p>
         ) : null}

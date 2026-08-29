@@ -2,6 +2,7 @@ import type { InboxThread } from "./inbox.ts";
 import {
   normalizeListTitle,
   type CreatedConversation,
+  type ForwardView,
   type InboxViewItem,
   type PersonalEngineView,
 } from "./types.ts";
@@ -52,6 +53,19 @@ export function applyOpenedAt(
     return { ...thread, opened_at: opened };
   });
   return changed ? next : threads;
+}
+
+export function draftFromForward(result: ForwardView): CreatedConversation {
+  return {
+    thread_id: result.target_thread_id,
+    channel: result.item.channel,
+    channel_label: result.item.channel_label,
+    can_send: result.item.can_send,
+    await_reply: result.item.await_reply === true,
+    hold_while_working: result.item.hold_while_working === true,
+    list_title: normalizeListTitle(result.item.list_title),
+    opened_at: new Date().toISOString(),
+  };
 }
 
 export function localDraftConversation(target: CreateTarget): CreatedConversation {

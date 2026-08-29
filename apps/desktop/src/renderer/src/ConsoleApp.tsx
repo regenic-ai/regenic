@@ -34,6 +34,7 @@ import {
 import {
   applyOpenedAt,
   createConversationTargets,
+  draftFromForward,
   localDraftConversation,
   localDraftOutbound,
   mergeDraftThreads,
@@ -63,6 +64,7 @@ import {
 import type { HostStats } from "../../shared/host-watch.ts";
 import type {
   CreatedConversation,
+  ForwardView,
   InboxSortMode,
   InboxViewItem,
   NavId,
@@ -700,6 +702,28 @@ export function ConsoleApp() {
     return created;
   };
 
+  const openForwardedConversation = async (result: ForwardView) => {
+    const created = draftFromForward(result);
+    openedAtRef.current[created.thread_id] = created.opened_at ?? new Date().toISOString();
+    setMessagesByThread((current) => ({
+      ...current,
+      [created.thread_id]: [
+        result.item,
+        ...(current[created.thread_id] ?? []).filter(
+          (item) => item.event.id !== result.item.event.id,
+        ),
+      ],
+    }));
+    setDrafts((current) => [
+      created,
+      ...current.filter((item) => item.thread_id !== created.thread_id),
+    ]);
+    selectedIdRef.current = created.thread_id;
+    setSelectedId(created.thread_id);
+    setError(null);
+    await refresh();
+  };
+
   const persistPrefs = useCallback(async (
     thread: InboxThread,
     patch: { title?: string | null; pinned?: boolean },
@@ -884,6 +908,7 @@ export function ConsoleApp() {
             onRunWork={runSelectedWork}
             onDismissWork={dismissSelectedWork}
             onBindRecipe={bindSelectedRecipe}
+            onForwardCreated={openForwardedConversation}
           />
         ) : null}
         {nav === "recipes" ? (

@@ -69,5 +69,6 @@ Personal ships first so one person can connect a channel, dispatch work, and opt
 | ACL / non-escalation / send privilege | 0006 |
 | Live prompts / attention | 0008 |
 | Record class / thread facet / hosted run | 0009 |
+| Cross-channel forward | [0010](rfcs/0010-cross-channel-forward.md) (Draft) |
 
 Personal orchestration ships first, then Org. See [ROADMAP.md](ROADMAP.md). Accepted RFCs are the shared target schema.

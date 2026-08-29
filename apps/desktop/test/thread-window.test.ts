@@ -100,6 +100,21 @@ describe("thread window", () => {
     assert.ok(estimateMessageHeight(message, true) < estimateMessageHeight(message, false));
   });
 
+  it("counts a source-side forwarded chip in height and revision", () => {
+    const message = item("m1", "hello");
+    const marked = {
+      ...message,
+      forwarded_to: {
+        thread_id: "dsh:sess-b",
+        event_ids: ["m1"],
+        source: "dsh",
+        channel_label: "DSH",
+      },
+    };
+    assert.ok(estimateMessageHeight(marked, false) > estimateMessageHeight(message, false));
+    assert.notEqual(inboxRevision([message]), inboxRevision([marked]));
+  });
+
   it("estimates ticket system messages from the body instead of a collapsed line", () => {
     const ticket = {
       ...item("t1", "# 订单 AI 内审待人工\n- 达人: 小红\n\n## 项目需求\n要竖屏带货"),

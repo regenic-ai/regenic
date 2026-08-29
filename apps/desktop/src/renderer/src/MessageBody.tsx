@@ -1,4 +1,5 @@
 import { memo, type ReactNode } from "react";
+import { stripAttachmentLines } from "./copy-message";
 import { imagePreviewSrc } from "./image-preview";
 import { useLocale } from "./LocaleContext";
 import { parseRichBlocks } from "./message-view";
@@ -117,15 +118,6 @@ export const MessageBody = memo(function MessageBody({
     </div>
   );
 });
-
-function stripAttachmentLines(text: string): string {
-  return text
-    .split(/\r?\n/)
-    .filter((line) => !/^\[Attached: .+\]$/.test(line.trim()))
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
 
 function renderInline(text: string): ReactNode[] {
   const pieces = text.split(/(`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g);
