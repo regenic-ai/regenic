@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Regenic WhatsApp</title>
+    <style>
+      body { width: 280px; margin: 0; padding: 14px; font: 13px/1.4 sans-serif; color: #1f2937; }
+      h1 { font-size: 15px; margin: 0 0 10px; }
+      .row { display: flex; justify-content: space-between; gap: 12px; margin: 8px 0; }
+      code { font-size: 12px; }
+      .muted { color: #6b7280; font-size: 12px; }
+      button { width: 100%; margin-top: 12px; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Regenic WhatsApp</h1>
+    <div class="row muted"><span>Version</span><code id="buildInfo">unknown</code></div>
+    <div class="row"><span>Status</span><strong id="status">checking</strong></div>
+    <div class="row"><span>Endpoint</span><code id="endpoint"></code></div>
+    <div class="row"><span>Send mode</span><strong id="sendMode">draft only</strong></div>
+    <div class="row"><span>Self-test</span><strong id="testResult">not run</strong></div>
+    <div class="row"><span>Page scan</span><strong id="pageScanResult">not run</strong></div>
+    <button id="testConnection">Test connection</button>
+    <button id="scanPage">Reconnect page</button>
+    <button id="openOptions">Settings</button>
+    <script src="build-info.js"></script>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -17,12 +17,14 @@ import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalForwardService } from "./personal-forward.service";
 import { PersonalReplyService } from "./personal-reply.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { PersonalWhatsAppLiveController } from "./personal-whatsapp-live.controller";
+import { PersonalWhatsAppLiveService } from "./personal-whatsapp-live.service";
 import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
 
 @Module({
-  controllers: [HealthController, DshApiController, PersonalController],
+  controllers: [HealthController, DshApiController, PersonalController, PersonalWhatsAppLiveController],
   providers: [
     DshApiService,
     PersonalRuntimeService,
@@ -33,6 +35,7 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalExecutorService,
     PersonalConnectorService,
     PersonalWhatsAppImportService,
+    PersonalWhatsAppLiveService,
     {
       provide: ChannelDriverRegistry,
       useFactory: () => {

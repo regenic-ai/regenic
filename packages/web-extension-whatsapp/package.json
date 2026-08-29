@@ -1,0 +1,10 @@
+{
+  "name": "@regenic/web-extension-whatsapp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../config/node_modules/typescript/bin/tsc -p tsconfig.json && node scripts/copy-assets.cjs",
+    "typecheck": "node ../config/node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  }
+}

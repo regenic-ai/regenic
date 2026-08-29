@@ -17,11 +17,16 @@ const envSchema = z.object({
   REGENIC_DSH_TOKEN: z.string().optional(),
   REGENIC_DSH_BASE_URL: z.string().optional(),
   REGENIC_PERSONAL_API: z.string().optional(),
+  REGENIC_PERSONAL_LIVE_KEY: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const PERSONAL_EXTENSION_PROTOCOLS = new Set([
+  "chrome-extension:",
+  "ms-browser-extension:",
+]);
 
 export function loadEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
   return envSchema.parse(env);
@@ -44,6 +49,12 @@ export function isAllowedPersonalCorsOrigin(origin: string): boolean {
   }
   if (parsed.protocol === "file:") {
     return true;
+  }
+  if (PERSONAL_EXTENSION_PROTOCOLS.has(parsed.protocol)) {
+    return !parsed.username && !parsed.password && parsed.hostname.length > 0;
+  }
+  if (parsed.protocol === "https:" && parsed.hostname === "web.whatsapp.com") {
+    return !parsed.username && !parsed.password;
   }
   if (
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||

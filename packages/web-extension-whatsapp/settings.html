@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Regenic WhatsApp Settings</title>
+    <style>
+      body { max-width: 640px; margin: 32px auto; padding: 0 20px; font: 14px/1.5 sans-serif; color: #1f2937; }
+      label { display: block; margin: 14px 0; }
+      input[type="text"], input[type="password"] { box-sizing: border-box; width: 100%; padding: 8px; }
+      button { padding: 8px 14px; }
+      .note { color: #4b5563; }
+    </style>
+  </head>
+  <body>
+    <h1>Regenic WhatsApp Settings</h1>
+    <p class="note">The connector talks only to a local Regenic API. Automatic sending stays off unless both the server command and this extension allow it.</p>
+    <label>Local API origin <input id="apiOrigin" type="text" value="http://127.0.0.1:4370"></label>
+    <label>Live API key <input id="apiKey" type="password" autocomplete="off"></label>
+    <label><input id="allowSend" type="checkbox"> Allow commands to click WhatsApp's send button</label>
+    <button id="save">Save</button>
+    <span id="saved"></span>
+    <script type="module" src="settings.js"></script>
+  </body>
+</html>

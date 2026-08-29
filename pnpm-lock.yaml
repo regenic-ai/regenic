@@ -326,6 +326,8 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/web-extension-whatsapp: {}
+
   packages/whatsapp-personal:
     dependencies:
       '@regenic/domain':
