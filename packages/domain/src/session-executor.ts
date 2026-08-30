@@ -1,3 +1,4 @@
+import { executorLocaleTables } from "./executor-copy";
 import {
   composeWorkspaceTaskEvidence,
   formatWorkEvidence,
@@ -47,23 +48,27 @@ export function createSessionTaskExecutor(meta?: {
       };
     },
 
+    locales() {
+      return executorLocaleTables;
+    },
+
     catalog() {
       return {
         executor_type: executorType,
-        label: meta?.label ?? "Session",
-        description:
-          meta?.description ??
-          "Prompt goes on stdin ahead of the work evidence.",
+        label: meta?.label ? { literal: meta.label } : "session.label",
+        description: meta?.description
+          ? { literal: meta.description }
+          : "session.description",
         source: meta?.source,
         attach: "absentee",
         kind: "local_connector",
         fields: [
           {
             key: "prompt",
-            label: "Prompt",
+            label: "session.field.prompt",
             kind: "textarea",
-            hint: "Task instruction sent before the work evidence.",
-            placeholder: "What this run should do.",
+            hint: "session.field.prompt.hint",
+            placeholder: "session.field.prompt.placeholder",
           },
         ],
       };

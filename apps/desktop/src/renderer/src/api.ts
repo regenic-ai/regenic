@@ -26,6 +26,7 @@ import type {
   UiPrefsView,
   WhatsAppImportView,
 } from "./types";
+import { activeLocale } from "../../shared/i18n.ts";
 import { normalizeListTitle } from "./types";
 
 let currentOrigin = window.regenic?.apiOrigin ?? "http://127.0.0.1:4370";
@@ -225,6 +226,7 @@ export async function fetchInbox(
   if (query.list === "hidden") {
     params.set("list", "hidden");
   }
+  params.set("locale", activeLocale());
   const encoded = params.toString();
   const suffix = encoded ? `?${encoded}` : "";
   const response = await fetch(`${origin()}/v1/me/inbox${suffix}`);
@@ -301,7 +303,12 @@ function normalizePrompts(value: InboxViewItem["prompts"]): ThreadPrompt[] {
 export async function fetchEngine(
   query: { detailed?: boolean } = {},
 ): Promise<PersonalEngineView> {
-  const suffix = query.detailed === false ? "?detail=0" : "";
+  const params = new URLSearchParams();
+  if (query.detailed === false) {
+    params.set("detail", "0");
+  }
+  params.set("locale", activeLocale());
+  const suffix = `?${params.toString()}`;
   const response = await fetch(`${origin()}/v1/me/engine${suffix}`);
   if (!response.ok) {
     throw new Error(`engine ${response.status}`);
@@ -435,24 +442,15 @@ function catalogSetupSteps(
       return [];
     }
     const href = typeof step.href === "string" ? step.href.trim() : "";
-    const hrefZh = typeof step.href_zh === "string" ? step.href_zh.trim() : "";
     const command = typeof step.command === "string" ? step.command.trim() : "";
     const body = typeof step.body === "string" ? step.body.trim() : "";
-    const titleZh =
-      typeof step.title_zh === "string" ? step.title_zh.trim() : "";
-    const bodyZh = typeof step.body_zh === "string" ? step.body_zh.trim() : "";
     return [
       {
         title,
-        ...(titleZh ? { title_zh: titleZh } : {}),
         ...(body ? { body } : {}),
-        ...(bodyZh ? { body_zh: bodyZh } : {}),
         ...(command ? { command } : {}),
         ...(href.startsWith("http://") || href.startsWith("https://")
           ? { href }
-          : {}),
-        ...(hrefZh.startsWith("http://") || hrefZh.startsWith("https://")
-          ? { href_zh: hrefZh }
           : {}),
         ...(step.visible_when ? { visible_when: step.visible_when } : {}),
       },
@@ -606,7 +604,9 @@ export async function createConversation(input: {
   text?: string;
   client_request_id?: string;
 } = {}): Promise<CreatedConversation> {
-  const response = await kernelFetch("/v1/me/conversations", {
+  const response = await kernelFetch(
+    `/v1/me/conversations?locale=${encodeURIComponent(activeLocale())}`,
+    {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -853,7 +853,9 @@ export async function uninstallExecutor(id: string): Promise<void> {
 }
 
 export async function fetchExecutors(): Promise<ExecutorCatalogEntry[]> {
-  const response = await fetch(`${origin()}/v1/me/executors`);
+  const response = await fetch(
+    `${origin()}/v1/me/executors?locale=${encodeURIComponent(activeLocale())}`,
+  );
   if (!response.ok) {
     throw new Error(`executors ${response.status}`);
   }

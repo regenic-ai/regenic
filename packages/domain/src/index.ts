@@ -3,10 +3,12 @@
  * Do not treat shapes as Accepted until the owning RFC is Accepted.
  */
 
+export * from "./copy";
 export * from "./ingestion";
 export * from "./content-parts";
 export * from "./content-resolution";
 export * from "./channel-driver";
+export * from "./copy-catalog";
 export * from "./connector-host";
 export * from "./credentials";
 export * from "./keychain";
@@ -46,6 +48,7 @@ export * from "./specification";
 export * from "./recipe-trigger";
 export * from "./job-control";
 export * from "./attention";
+export * from "./executor-copy";
 export * from "./executor";
 export * from "./executor-installation";
 export * from "./session-executor";

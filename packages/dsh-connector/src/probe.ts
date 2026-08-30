@@ -4,6 +4,7 @@ import {
   probeLocalCommand as probeCommandPresent,
   watchLocalFetchFailure,
   type ConnectorCatalogProbe,
+  type CopyRef,
   type LocalNetworkKind,
   type TcpConnect,
 } from "@regenic/domain";
@@ -33,27 +34,27 @@ export interface DshWebProbe {
 
 let cache: { at: number; probe: DshWebProbe } | null = null;
 
-export function dshWebCatalogHint(input: DshWebProbe): string {
+export function dshWebCatalogHint(input: DshWebProbe): CopyRef {
   if (input.up) {
-    return input.hosted ? DSH_CLUSTER_READY_HINT : DSH_WEB_READY_HINT;
+    return input.hosted ? "probe.clusterReady" : "probe.webReady";
   }
   if (input.network_kind === "proxy") {
-    return LOCAL_PROXY_HINT;
+    return { literal: LOCAL_PROXY_HINT };
   }
   if (input.network_kind === "blocked") {
-    return LOCAL_NETWORK_BLOCKED_HINT;
+    return { literal: LOCAL_NETWORK_BLOCKED_HINT };
   }
   if (input.hosted) {
-    return DSH_CLUSTER_DOWN_HINT;
+    return "probe.clusterDown";
   }
   if (!input.command_present) {
-    return DSH_WEB_MISSING_HINT;
+    return "probe.webMissing";
   }
-  return DSH_WEB_DOWN_HINT;
+  return "probe.webDown";
 }
 
-export function dshCliCatalogHint(commandPresent: boolean): string {
-  return commandPresent ? DSH_CLI_READY_HINT : DSH_CLI_MISSING_HINT;
+export function dshCliCatalogHint(commandPresent: boolean): CopyRef {
+  return commandPresent ? "probe.cliReady" : "probe.cliMissing";
 }
 
 export async function probeDshCatalog(options: {

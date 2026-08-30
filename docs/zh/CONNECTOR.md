@@ -18,8 +18,9 @@
 连接器注册一个 `ChannelDriver`，带稳定的 `connector_type` 和 `source`。
 `source` 由驱动声明，不必事先写进 `CHANNELS`。展示名来自
 `installCatalog().channel_label`；没有则回退 `CHANNELS`，再回退 catalog
-`title`，最后是 `SOURCE`。内置 dsh / slack / feishu 仍在 `CHANNELS` 里，给没有
-加载驱动的旧 Event 用。
+`title`，最后是 `SOURCE`。这些 catalog 字段是 `CopyRef`，由 API 视图按
+`GET /v1/me/engine?locale=` 或 `Accept-Language` 解析。内置 dsh / slack /
+feishu 仍在 `CHANNELS` 里，给没有加载驱动的旧 Event 用。
 
 Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 `EgressAdapter` 不写这些记录。
@@ -33,8 +34,8 @@ Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
 或桌面。
 
 加来源不用改 API 或桌面。每个驱动自己声明 `installCatalog()`，以及可选的
-`presentInstall` / `writeBackLabels` / `subjectCatalog` / `parseImport`。
-引擎页由已注册驱动组装。
+`locales` / `presentInstall` / `writeBackLabels` / `subjectCatalog` /
+`parseImport`。引擎页由已注册驱动组装。
 
 随内核发布的包在 `package.json` 里声明 `regenic.plugin`、`id`、
 `displayName`、`engines.regenic` 和 `contributes`。内核扫描自己的依赖，
@@ -61,7 +62,7 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` 且 `source_mode` 为 poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` 为 webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / 可选 `createThread` / 可选通用 egress 队列 | `reply`；`create` 另需 `createThread` |
-| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / 可选 `parseImport` | 要出现在引擎页；有工单类型时再声明词表；声明 `import_files` 时提供文件导入 |
+| Catalog | `locales` / `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / 可选 `parseImport` | 要出现在引擎页；自带 UI 文案；有工单类型时再声明词表；声明 `import_files` 时提供文件导入 |
 | Surface | `prompts` / `attention` / `receipts` | 对应能力旗标为 true |
 | `EgressAdapter` | 把 `ContentPart[]` 写回同一来源 | 实现了 `bindEgress` |
 
@@ -230,10 +231,11 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   ackAttention?(installation, thread, ack, host, env): Promise<void>;
   readReceipts?(installation, threads, host, env): Promise<Map<string, MessageReceipt>>;
   surfaceGeneration?(installation, host): string;
+  locales?(): PluginLocaleTable[];
   installCatalog?(input?): DriverInstallCatalog;
-  presentInstall?(installation, input?): { label; detail };
+  presentInstall?(installation, input?): { label: CopyRef; detail: CopyRef | null };
   writeBackLabels?(label): string[];
-  subjectCatalog?(): { kinds: Array<{ id: string; label: string }> };
+  subjectCatalog?(): { kinds: Array<{ id: string; label: CopyRef }> };
   probeCatalog?(input): Promise<ConnectorCatalogProbe>;
 }
 ```
@@ -254,8 +256,9 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `bindEgress` | 可选。`reply` 为 true 时必须实现。未声明则内核 501。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
 | `listEgressQueue` / `ackEgressQueue` | 可选。给无法在进程内写回渠道的适配器（本机浏览器扩展）排空队列。暴露为 `GET/POST /v1/me/connectors/:id/egress`，不是按渠道单独开的 API。 |
-| `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。`setup_steps` 是弹层里的编号步骤，桌面原样渲染。 |
-| `presentInstall` | 可选。已装行的标题和细节。 |
+| `locales` | 可选。插件自带的英文（源）和中文表。第一方驱动必须实现，否则 catalog 会露出 key。 |
+| `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。文案字段是 `CopyRef`，不是已译句子。`setup_steps` 是弹层里的编号步骤；桌面渲染已经解析好的字符串。 |
+| `presentInstall` | 可选。已装行的标题和细节（`CopyRef`）。 |
 | `writeBackLabels` | 可选。某个待办选项的精确别名。内核只对结果第一行做匹配。 |
 | `subjectCatalog` | 可选。工单类型词表。规则页按 `id` / `label` 渲染；内核只做相等匹配。不写则该来源没有类型维。 |
 | `probeCatalog` | 可选。本机服务 / 环境是否就绪，以及表单选项。 |
@@ -330,16 +333,18 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段、标题或导入器。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
 
+catalog、展示、词表标签、探测 hint 和执行器调用字段返回 `CopyRef`：消息 id、`{ key, params }` 或 `{ literal }`。表里没有的裸字符串按原样显示（extra 和机器名）。`locales()` 是插件表。API 视图按 `GET /v1/me/engine?locale=` / `Accept-Language` 解析（收件箱、会话、执行器同样）。poll / ingest / send 永不收 locale。文档 URL 用 `href: string | { en, zh }`，不用 `_zh` 后缀。宿主不另维护一份翻译表。
+
 额外包由 `REGENIC_PLUGIN_DIR`（每个带子 `package.json` 的子目录）或 `REGENIC_CHANNEL_PLUGIN`（一个模块 id 或路径）加载。每个额外包的 `package.json` 必须写 `regenic.contributes`。公开树不写私有包名。已注册的 `connector_type` 不会被额外包盖掉。启动后可以热发现新的 extra 类型；替换已加载的包仍需重启。显式插件缺失或无效时记入失败/跳过并打日志。`GET /v1/me/plugins` 返回这份库存。
 
 工单写回时，内核把结果第一行与活的待办选项做精确匹配。`writeBackLabels(label)` 可给该选项加别名。宿主不维护同义列表。
 
 | 字段 | 说明 |
 | --- | --- |
-| `fields` | `key`、`label`、是否必填、默认值、`visible_when`、可选 `multiple` + `options` |
-| `prerequisites` | 环境变量或本机服务，带 `ready` 和 `hint` |
-| `setup_steps` | 编号步骤：`title`，可选 `body` / `command` / `href` / `visible_when`。弹层表单上方渲染；`command` 可复制。桌面不按渠道名写死步骤 |
-| `import_files` | 引擎卡片上的文件选择：`accept`，可选 `max_bytes` / `title` / `description`。需同时实现 `parseImport`。通用入口是 `POST /v1/me/imports` |
+| `fields` | `key`、`label`（`CopyRef`）、是否必填、默认值、`visible_when`、可选 `multiple` + `options` |
+| `prerequisites` | 环境变量或本机服务，带 `ready` 和 `hint`（`CopyRef`） |
+| `setup_steps` | 编号步骤：`title`（`CopyRef`），可选 `body` / `command` / `href` / `visible_when`。`href` 是 URL 或 `{ en, zh }`。弹层表单上方渲染；`command` 可复制。桌面不按渠道名写死步骤 |
+| `import_files` | 引擎卡片上的文件选择：`accept`，可选 `max_bytes` / `title` / `description`（`CopyRef`）。需同时实现 `parseImport`。通用入口是 `POST /v1/me/imports` |
 | `docs` | 研发规范。引擎页在「连接器」标题旁统一渲染一次，点开跳到 GitHub 网页。不当安装向导 |
 
 token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起本机服务。

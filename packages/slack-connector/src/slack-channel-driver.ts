@@ -12,6 +12,7 @@ import {
   type JsonValue,
   type NewConnectorInstallation,
 } from "@regenic/domain";
+import { slackLocaleTables } from "./locales";
 import { slackChannelPlugin } from "./plugin";
 
 export const slackChannelDriver: ChannelDriver = {
@@ -69,48 +70,51 @@ export const slackChannelDriver: ChannelDriver = {
     return mountChannel(host, installation, env);
   },
 
+  locales() {
+    return slackLocaleTables;
+  },
+
   installCatalog() {
     return {
-      title: "Slack",
-      channel_label: "Slack",
-      description:
-        "Install by channel. The kernel pulls that channel after install and keeps pulling while enabled.",
-      credential_hint: "REGENIC_SLACK_TOKEN",
+      title: "catalog.title",
+      channel_label: "catalog.channelLabel",
+      description: "catalog.description",
+      credential_hint: "catalog.credentialHint",
       fields: [
         {
           key: "channel_id",
-          label: "Channel ID",
+          label: "field.channelId",
           required: true,
-          placeholder: "C01234567",
+          placeholder: "field.channelId.placeholder",
         },
         {
           key: "channel_name",
-          label: "Channel name",
+          label: "field.channelName",
           required: false,
-          placeholder: "Optional, display only",
+          placeholder: "field.channelName.placeholder",
         },
       ],
       prerequisites: [
         {
           kind: "env" as const,
           key: "REGENIC_SLACK_TOKEN",
-          label: "Local Slack token",
+          label: "prereq.token",
           required: true,
-          hint: "Set REGENIC_SLACK_TOKEN (bot token from your Slack app) before starting the desktop. The form does not take it.",
+          hint: "prereq.token.hint",
         },
       ],
       setup_steps: [
         {
-          title: "Create a Slack app and copy a bot token",
+          title: "setup.createApp.title",
           href: "https://api.slack.com/apps",
         },
         {
-          title: "Set REGENIC_SLACK_TOKEN, then fully quit and reopen the desktop",
-          body: "The form does not take the token.",
+          title: "setup.setToken.title",
+          body: "setup.setToken.body",
         },
         {
-          title: "Enter the channel ID",
-          body: "Use a C… id. The channel name is optional display text.",
+          title: "setup.channelId.title",
+          body: "setup.channelId.body",
         },
       ],
     };
@@ -120,8 +124,8 @@ export const slackChannelDriver: ChannelDriver = {
     const channelName = configString(installation.config, "channel_name");
     const channelId = configString(installation.config, "channel_id");
     return {
-      label: channelName ?? channelId ?? installation.id,
-      detail: channelName && channelId ? channelId : null,
+      label: { literal: channelName ?? channelId ?? installation.id },
+      detail: channelName && channelId ? { literal: channelId } : null,
     };
   },
 

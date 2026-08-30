@@ -1,3 +1,4 @@
+import { executorLocaleTables } from "./executor-copy";
 import type { JsonValue } from "./ingestion";
 import type {
   ExecutorCatalogEntry,
@@ -28,19 +29,19 @@ export function httpExecutorCatalog(
 ): ExecutorCatalogEntry {
   return {
     executor_type: options.executor_type,
-    label: options.label,
-    description:
-      options.description ??
-      "Start, resume, and status go to this HTTP executor.",
+    label: { literal: options.label },
+    description: options.description
+      ? { literal: options.description }
+      : "http.description",
     attach: "absentee",
     kind: "http",
     fields: [
       {
         key: "prompt",
-        label: "Prompt",
+        label: "http.field.prompt",
         kind: "textarea",
-        hint: "Sent in executor_config. The remote executor reads the keys.",
-        placeholder: "What this run should do.",
+        hint: "http.field.prompt.hint",
+        placeholder: "http.field.prompt.placeholder",
       },
     ],
   };
@@ -55,6 +56,10 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
 
     capabilities() {
       return { start: true, resume: true, status: true, prompts: true };
+    },
+
+    locales() {
+      return executorLocaleTables;
     },
 
     catalog() {

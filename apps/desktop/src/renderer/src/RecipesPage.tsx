@@ -43,7 +43,7 @@ export function RecipesPage({
   onSeedConsumed?: () => void;
   onBound?: () => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const formRef = useRef<HTMLElement>(null);
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
   const [executors, setExecutors] = useState<ExecutorCatalogEntry[]>([]);
@@ -68,7 +68,7 @@ export function RecipesPage({
     void reload().catch((caught: unknown) => {
       setError(caught instanceof Error ? caught.message : t("recipes.loadError"));
     });
-  }, []);
+  }, [locale, t]);
 
   useEffect(() => {
     if (!seed) {

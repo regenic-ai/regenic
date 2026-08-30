@@ -14,6 +14,7 @@ import {
   type ThreadPrompt,
   type WorkRun,
 } from "@regenic/domain";
+import { dshLocaleTables } from "./locales";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
 
 export const DSH_PROMPT_FIELD = "prompt";
@@ -80,27 +81,31 @@ export const dshTaskExecutor: TaskExecutor = {
     };
   },
 
+  locales() {
+    return dshLocaleTables;
+  },
+
   catalog() {
     return {
       executor_type: "dsh",
-      label: "DSH",
-      description: "Skill and prompt go on stdin ahead of the work evidence.",
+      label: "executor.label",
+      description: "executor.description",
       source: "dsh",
       attach: "absentee",
       fields: [
         {
           key: DSH_SKILL_FIELD,
-          label: "Skill",
+          label: "executor.field.skill",
           kind: "text",
-          hint: "Optional DSH skill or preset for this run.",
-          placeholder: "review",
+          hint: "executor.field.skill.hint",
+          placeholder: { literal: "review" },
         },
         {
           key: DSH_PROMPT_FIELD,
-          label: "Prompt",
+          label: "executor.field.prompt",
           kind: "textarea",
-          hint: "Optional. Sent before the work evidence. If the recipe writes back, put the option on line 1. Feishu approvals also accept 同意/通过 and 拒绝/驳回.",
-          placeholder: "option-label\nReason on the following lines.",
+          hint: "executor.field.prompt.hint",
+          placeholder: "executor.field.prompt.placeholder",
         },
       ],
     };

@@ -24,6 +24,7 @@ import {
 import { createLarkUserTokenSource } from "./feishu-user-token";
 import { FEISHU_SOURCE } from "./feishu-message";
 import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
+import { feishuLocaleTables } from "./locales";
 import { feishuChatPlugin } from "./plugin";
 import { feishuChatIdFromStreamKey, feishuStreamKey } from "./feishu-streams";
 
@@ -82,42 +83,45 @@ export const feishuChatDriver: ChannelDriver = {
     return feishuPickedChatIds(installation.config).includes(thread.target);
   },
 
+  locales() {
+    return feishuLocaleTables;
+  },
+
   installCatalog() {
     return {
-      title: "Feishu",
-      channel_label: "Feishu",
-      description:
-        "Install once. Default is every group and every direct message you can see. Change the set later on the installed row. Replies go back through lark-cli.",
-      credential_hint: "lark-cli (user login)",
+      title: "catalog.title",
+      channel_label: "catalog.channelLabel",
+      description: "catalog.description",
+      credential_hint: "catalog.credentialHint",
       fields: [
         {
           key: "selection",
-          label: "Sync set",
+          label: "field.selection",
           required: true,
           default: "all",
           options: [
-            { value: "all", label: "All conversations of the kinds below" },
-            { value: "pick", label: "Choose conversations" },
+            { value: "all", label: "option.selection.all" },
+            { value: "pick", label: "option.selection.pick" },
           ],
         },
         {
           key: "kinds",
-          label: "Kinds",
+          label: "field.kinds",
           required: true,
           multiple: true,
           default: "group,p2p",
           options: [
-            { value: "group", label: "All groups" },
-            { value: "p2p", label: "All direct messages" },
+            { value: "group", label: "option.kinds.group" },
+            { value: "p2p", label: "option.kinds.p2p" },
           ],
           visible_when: { field: "selection", value: "all" },
         },
         {
           key: "chat_ids",
-          label: "Conversations",
+          label: "field.chatIds",
           required: true,
           multiple: true,
-          placeholder: "Sign in with lark-cli to load groups and direct messages",
+          placeholder: "field.chatIds.placeholder",
           visible_when: { field: "selection", value: "pick" },
         },
       ],
@@ -125,25 +129,25 @@ export const feishuChatDriver: ChannelDriver = {
         {
           kind: "local_service" as const,
           key: "lark-cli",
-          label: "lark-cli",
+          label: "prereq.larkCli",
           required: true,
-          hint: "Not installed. Run: npx @larksuite/cli@latest install. Docs: https://github.com/larksuite/cli",
+          hint: "prereq.larkCli.hint",
         },
       ],
       setup_steps: [
         {
-          title: "Install lark-cli",
+          title: "setup.installCli.title",
           command: "npx @larksuite/cli@latest install",
           href: "https://github.com/larksuite/cli",
         },
         {
-          title: "Sign in",
-          body: "Tokens stay in the OS keychain.",
+          title: "setup.signIn.title",
+          body: "setup.signIn.body",
           command: "lark-cli config init && lark-cli auth login --recommend",
         },
         {
-          title: "Choose the conversations to follow",
-          body: "Default is every group and every direct message you can see.",
+          title: "setup.choose.title",
+          body: "setup.choose.body",
         },
       ],
     };
@@ -156,15 +160,20 @@ export const feishuChatDriver: ChannelDriver = {
     const chatName = configString(config, "chat_name");
     const chatId = configString(config, "chat_id");
     if (selection === "all" || (!selection && chatIds.length === 0 && !chatId)) {
-      return { label: feishuAllLabel(config), detail: "cli" };
+      return { label: feishuAllLabel(config), detail: { literal: "cli" } };
     }
     const names = configStringList(config, "chat_names");
     if (chatIds.length > 1) {
-      return { label: `${chatIds.length} conversations`, detail: "cli" };
+      return {
+        label: { key: "present.pickedCount", params: { count: chatIds.length } },
+        detail: { literal: "cli" },
+      };
     }
     return {
-      label: names[0] ?? chatName ?? chatIds[0] ?? chatId ?? installation.id,
-      detail: "cli",
+      label: {
+        literal: names[0] ?? chatName ?? chatIds[0] ?? chatId ?? installation.id,
+      },
+      detail: { literal: "cli" },
     };
   },
 
@@ -457,12 +466,12 @@ function feishuAllLabel(config: Record<string, unknown>): string {
   const groups = kinds.includes("group");
   const p2p = kinds.includes("p2p");
   if (groups && p2p) {
-    return "All conversations";
+    return "present.allConversations";
   }
   if (p2p) {
-    return "All direct messages";
+    return "present.allDirect";
   }
-  return "All groups";
+  return "present.allGroups";
 }
 
 export function feishuInstallConfig(

@@ -11,7 +11,7 @@ const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
 
 export function TrayApp() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [engine, setEngine] = useState<PersonalEngineView | null>(null);
   const digestRef = useRef<string | null>(null);
@@ -19,6 +19,7 @@ export function TrayApp() {
   const inFlight = useRef(false);
 
   useEffect(() => {
+    digestRef.current = null;
     let cancelled = false;
     let timer = 0;
     const load = async () => {
@@ -70,7 +71,7 @@ export function TrayApp() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [locale]);
 
   const chip = engineChip(engine);
   const threads = sortInboxThreads(groupInboxThreads(inbox));

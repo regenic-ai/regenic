@@ -17,6 +17,7 @@ import {
 } from "@nestjs/common";
 import type { Request } from "express";
 import { PersonalApiGuard } from "./personal-api.guard";
+import { requestLocale } from "./request-locale";
 import {
   PersonalConnectorError,
   PersonalConnectorService,
@@ -83,6 +84,8 @@ export class PersonalController {
     @Query("limit") limit?: string,
     @Query("list") list?: string,
     @Query("membership") membership?: string,
+    @Query("locale") locale?: string,
+    @Headers("accept-language") acceptLanguage?: string,
   ) {
     const query = {
       since: since?.trim() || undefined,
@@ -94,6 +97,7 @@ export class PersonalController {
       thread_id: threadId?.trim() || undefined,
       limit: limit?.trim() ? Number(limit) : undefined,
       list: list?.trim() || membership?.trim() || undefined,
+      locale: requestLocale(locale, acceptLanguage),
     };
     return this.guard(async () => {
       if (shouldNoteHumanInbox(query)) {
@@ -120,8 +124,14 @@ export class PersonalController {
   }
 
   @Get("inbox/:event_id")
-  async getInboxItem(@Param("event_id") eventId: string) {
-    const item = await this.guard(() => this.inbox.getInboxItem(eventId));
+  async getInboxItem(
+    @Param("event_id") eventId: string,
+    @Query("locale") locale?: string,
+    @Headers("accept-language") acceptLanguage?: string,
+  ) {
+    const item = await this.guard(() =>
+      this.inbox.getInboxItem(eventId, requestLocale(locale, acceptLanguage)),
+    );
     if (!item) {
       throw new NotFoundException({
         error: { code: "not_found", message: "Inbox item not found" },
@@ -131,9 +141,16 @@ export class PersonalController {
   }
 
   @Get("engine")
-  getEngine(@Query("detail") detail?: string) {
+  getEngine(
+    @Query("detail") detail?: string,
+    @Query("locale") locale?: string,
+    @Headers("accept-language") acceptLanguage?: string,
+  ) {
     return this.guard(() =>
-      this.inbox.getEngine({ detailed: detail !== "0" }),
+      this.inbox.getEngine({
+        detailed: detail !== "0",
+        locale: requestLocale(locale, acceptLanguage),
+      }),
     );
   }
 
@@ -207,9 +224,16 @@ export class PersonalController {
           client_request_id?: string;
         }
       | undefined,
+    @Query("locale") locale?: string,
+    @Headers("accept-language") acceptLanguage?: string,
   ) {
     noteHumanActivity();
-    return this.guard(() => this.connectors.createConversation(body ?? {}));
+    return this.guard(() =>
+      this.connectors.createConversation({
+        ...(body ?? {}),
+        locale: requestLocale(locale, acceptLanguage),
+      }),
+    );
   }
 
   @Post("conversations/prefs")
@@ -278,8 +302,13 @@ export class PersonalController {
   }
 
   @Get("executors")
-  listExecutors() {
-    return this.guard(() => this.work.listExecutors());
+  listExecutors(
+    @Query("locale") locale?: string,
+    @Headers("accept-language") acceptLanguage?: string,
+  ) {
+    return this.guard(() =>
+      this.work.listExecutors(requestLocale(locale, acceptLanguage)),
+    );
   }
 
   @Post("executors")

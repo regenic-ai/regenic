@@ -22,8 +22,9 @@ A connector registers a `ChannelDriver` with a stable `connector_type` and a
 `source` declared by the driver. `source` does not have to be listed in
 `CHANNELS` first. The display name comes from
 `installCatalog().channel_label`, then `CHANNELS`, then catalog `title`,
-then `SOURCE`. Built-in dsh / slack / feishu stay in `CHANNELS` for old
-Events when no driver is loaded.
+then `SOURCE`. Those catalog fields are `CopyRef`s; the API view resolves
+them for `GET /v1/me/engine?locale=` or `Accept-Language`. Built-in dsh /
+slack / feishu stay in `CHANNELS` for old Events when no driver is loaded.
 
 The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 `ChannelConnector` and `EgressAdapter` do not persist those records.
@@ -41,7 +42,7 @@ plus stamping `unit_kind` on ingest. Do not change the kernel or the
 desktop.
 
 You do not rebuild the API or the desktop to add a source. Every driver
-declares `installCatalog()` and optional `presentInstall` /
+declares `installCatalog()` and optional `locales` / `presentInstall` /
 `writeBackLabels` / `subjectCatalog` / `parseImport`. The host assembles
 Engine from registered drivers.
 
@@ -76,7 +77,7 @@ exist; the kernel returns 501. Drivers must not stub them.
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` when `source_mode` is poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` is webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / optional `createThread` / optional generic egress queue | `reply`; `create` also needs `createThread` |
-| Catalog | `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / optional `parseImport` | To appear on Engine; declare a vocabulary when the source has task types; file import when `import_files` is set |
+| Catalog | `locales` / `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / optional `parseImport` | To appear on Engine; own UI copy; declare a vocabulary when the source has task types; file import when `import_files` is set |
 | Surface | `prompts` / `attention` / `receipts` | Matching capability flags |
 | `EgressAdapter` | Write `ContentPart[]` back to the same source | After `bindEgress` |
 
@@ -311,10 +312,11 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   ackAttention?(installation, thread, ack, host, env): Promise<void>;
   readReceipts?(installation, threads, host, env): Promise<Map<string, MessageReceipt>>;
   surfaceGeneration?(installation, host): string;
+  locales?(): PluginLocaleTable[];
   installCatalog?(input?): DriverInstallCatalog;
-  presentInstall?(installation, input?): { label; detail };
+  presentInstall?(installation, input?): { label: CopyRef; detail: CopyRef | null };
   writeBackLabels?(label): string[];
-  subjectCatalog?(): { kinds: Array<{ id: string; label: string }> };
+  subjectCatalog?(): { kinds: Array<{ id: string; label: CopyRef }> };
   probeCatalog?(input): Promise<ConnectorCatalogProbe>;
 }
 ```
@@ -335,8 +337,9 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `bindEgress` | Optional. Required when `reply` is true. Absent means the kernel returns 501. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
 | `listEgressQueue` / `ackEgressQueue` | Optional. Generic drain for an adapter that cannot write the channel in-process (a local browser extension). Exposed as `GET/POST /v1/me/connectors/:id/egress`, not a per-channel API. |
-| `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. `setup_steps` are the numbered steps in the dialog; the desktop renders them as declared. |
-| `presentInstall` | Optional. Label and detail for an installed row. |
+| `locales` | Optional. Plugin-owned English (source) and Chinese tables. First-party drivers implement this so catalog keys resolve. |
+| `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. Copy fields are `CopyRef`s, not translated sentences. `setup_steps` are the numbered steps in the dialog; the desktop renders already-resolved strings. |
+| `presentInstall` | Optional. Label and detail for an installed row (`CopyRef`). |
 | `writeBackLabels` | Optional. Exact aliases for a prompt option. The kernel matches the first result line. |
 | `subjectCatalog` | Optional. Work-unit type vocabulary. The Recipes page renders `id` / `label`. The kernel only equality-matches. Omit it when the source has no type dimension. |
 | `probeCatalog` | Optional. Local service / env readiness and field options. |
@@ -427,6 +430,15 @@ include `settings` (non-secret config as strings) so the edit form can
 prefill. The engine catalog also carries the driver's `source` and
 `subjectCatalog` vocabulary so the Recipes page can pick `unit_kind`.
 
+Catalog, presentation, subject labels, probe hints, and executor invoke
+fields return `CopyRef`: a message id, `{ key, params }`, or
+`{ literal }`. A bare string missing from the table is shown as-is
+(extras and machine names). `locales()` is the plugin table. The API view
+resolves copy for `GET /v1/me/engine?locale=` / `Accept-Language` (same
+for inbox, conversations, and executors). Poll, ingest, and send never
+take a locale. Docs URLs use `href: string | { en, zh }`, not a `_zh`
+suffix. The host does not keep a parallel translation list.
+
 Extra packages load from `REGENIC_PLUGIN_DIR` (each child directory with
 a `package.json`) or `REGENIC_CHANNEL_PLUGIN` (one module id or path).
 Each extra `package.json` must name `regenic.contributes`. The public
@@ -442,10 +454,10 @@ for that option. The host does not keep a synonym list.
 
 | Field | Description |
 | --- | --- |
-| `fields` | `key`, `label`, required, default, `visible_when`, optional `multiple` + `options` |
-| `prerequisites` | Environment variable or local service, with `ready` and a `hint` |
-| `setup_steps` | Numbered setup: `title`, optional `body` / `command` / `href` / `visible_when`. Rendered above the dialog form; `command` is copyable. The desktop does not hard-code steps per channel |
-| `import_files` | File picker on the Engine card: `accept`, optional `max_bytes` / `title` / `description`. Requires `parseImport`. `POST /v1/me/imports` is the generic route |
+| `fields` | `key`, `label` (`CopyRef`), required, default, `visible_when`, optional `multiple` + `options` |
+| `prerequisites` | Environment variable or local service, with `ready` and a `hint` (`CopyRef`) |
+| `setup_steps` | Numbered setup: `title` (`CopyRef`), optional `body` / `command` / `href` / `visible_when`. `href` is a URL or `{ en, zh }`. Rendered above the dialog form; `command` is copyable. The desktop does not hard-code steps per channel |
+| `import_files` | File picker on the Engine card: `accept`, optional `max_bytes` / `title` / `description` (`CopyRef`). Requires `parseImport`. `POST /v1/me/imports` is the generic route |
 | `docs` | R&D specs. The Engine page renders these once next to the Connectors title and opens the GitHub page. They are not the install wizard |
 
 Tokens are prerequisites, not form fields. The kernel does not install a

@@ -15,13 +15,19 @@ export function createLocalConnectorExecutor(input: {
       return input.plugin.capabilities();
     },
 
+    locales() {
+      return input.plugin.locales?.() ?? [];
+    },
+
     catalog() {
       const base = input.plugin.catalog();
       return {
         ...base,
         executor_type: input.executor_type,
-        label: input.label,
-        description: input.description ?? base.description,
+        label: { literal: input.label },
+        description: input.description
+          ? { literal: input.description }
+          : base.description,
         source: input.source ?? base.source,
         installation_id: input.installation_id,
         kind: "local_connector",

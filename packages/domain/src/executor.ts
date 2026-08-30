@@ -1,3 +1,4 @@
+import type { CopyRef, PluginLocaleTable } from "./copy";
 import type { JsonValue } from "./ingestion";
 import type { ConversationThread } from "./channel-driver";
 import type {
@@ -30,21 +31,21 @@ export interface ExecutorCapabilities {
  */
 export interface ExecutorCatalogField {
   key: string;
-  label: string;
+  label: CopyRef;
   required?: boolean;
-  placeholder?: string;
+  placeholder?: CopyRef;
   default?: string;
-  hint?: string;
+  hint?: CopyRef;
   kind?: "text" | "textarea" | "select";
-  options?: Array<{ value: string; label: string }>;
+  options?: Array<{ value: string; label: CopyRef }>;
 }
 
 export interface ExecutorCatalogEntry {
   executor_type: string;
-  label: string;
-  description?: string;
+  label: CopyRef;
+  description?: CopyRef;
   /** Section title above invoke fields. Desktop falls back to its own copy. */
-  params_label?: string;
+  params_label?: CopyRef;
   source?: string;
   attach?: AttachMode;
   /** Local binding: pin spawnSysout to this connector installation. */
@@ -131,6 +132,7 @@ export function handleFromWait(
 
 export interface TaskExecutor {
   readonly executor_type: string;
+  locales?(): readonly PluginLocaleTable[];
   capabilities(): ExecutorCapabilities;
   catalog(): ExecutorCatalogEntry;
   start(

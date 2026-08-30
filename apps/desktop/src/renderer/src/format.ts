@@ -93,33 +93,10 @@ export function installationStatusLabel(
   return t("status.needsAttention");
 }
 
-export function connectorActionError(message: string): string {
-  if (message.includes("already installed")) {
-    return "This connector is already installed";
-  }
-  if (message.includes("already syncing") || message.includes("already leased")) {
-    return "This connector is already syncing";
-  }
-  if (message.includes("is disabled")) {
-    return "Connector is disabled. Enable it before syncing.";
-  }
-  if (message.includes("missing from")) {
-    return `Missing channel credentials. ${message}`;
-  }
-  if (message.includes("not found")) {
-    return "Connector not found";
-  }
-  if (message.includes("requires channel_id")) {
-    return "Slack requires a channel ID";
-  }
-  if (message.includes("requires session_id")) {
-    return "DSH web requires a session ID";
-  }
-  if (message.includes("requires chat_id") || message.includes("at least one group")) {
-    return "Choose all groups or tick the ones to sync";
-  }
-  return message;
-}
+export {
+  connectorActionError,
+  networkWatchHint,
+} from "./connector-errors.ts";
 
 export {
   diskWatchCopy,

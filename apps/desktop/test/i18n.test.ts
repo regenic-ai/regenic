@@ -92,14 +92,14 @@ describe("desktop locale", () => {
       }),
       /还留着/,
     );
-    assert.equal(translate("zh", "engine.whatsapp.title"), "WhatsApp 个人导出");
+    assert.equal(translate("zh", "connector.import"), "导入文件");
     assert.equal(translate("zh", "docs.connector"), "连接器规范");
     assert.equal(translate("en", "connector.setup"), "Set up");
     assert.equal(translate("zh", "connector.setupTitle", { title: "飞书" }), "设置 飞书");
     assert.equal(translate("zh", "connector.setupSteps"), "准备步骤");
     assert.equal(translate("en", "docs.executor"), "Executor spec");
     assert.equal(
-      translate("zh", "engine.whatsapp.summary", {
+      translate("zh", "connector.importSummary", {
         completed: 2,
         total: 3,
         accepted: 5,
@@ -110,5 +110,10 @@ describe("desktop locale", () => {
     );
     assert.match(translate("zh", "chrome.sendTimedOut"), /还在发这条/);
     assert.match(translate("en", "chrome.sendTimedOut"), /still sending/);
+    assert.equal(translate("en", "executor.field.baseUrl"), "Base URL");
+    assert.equal(translate("zh", "executor.field.baseUrl"), "接口地址");
+    assert.equal(translate("zh", "executor.detail.autoFirst"), "自动 · 第一个可新建会话的连接器");
+    assert.equal(translate("zh", "error.connector.feishuConversation"), "选全部会话，或勾选要同步的会话");
+    assert.equal(translate("zh", "connector.noOptions"), "还没有可选项");
   });
 });

@@ -1,12 +1,17 @@
 import {
-  readSubjectCatalog,
+  DEFAULT_COPY_LOCALE,
+  resolveCopy,
+  resolveInstallCatalog,
+  resolveInstallPresentation,
+  resolveSubjectKinds,
   sourceLabelFromCatalog,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorInstallationStatus,
+  type CopyLocale,
+  type CopyRef,
   type DriverInstallCatalog,
   type IngestAttempt,
-  type UnitKindEntry,
 } from "@regenic/domain";
 import {
   CONNECTOR_INSTALL_DOCS,
@@ -44,12 +49,9 @@ export interface ConnectorPrerequisite {
 
 export interface ConnectorSetupStep {
   title: string;
-  title_zh?: string;
   body?: string;
-  body_zh?: string;
   command?: string;
   href?: string;
-  href_zh?: string;
   visible_when?: ConnectorFieldWhen;
 }
 
@@ -74,19 +76,21 @@ export interface ConnectorCatalogItem {
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
   import_files?: ConnectorImportFiles;
-  unit_kinds: UnitKindEntry[];
+  unit_kinds: Array<{ id: string; label: string }>;
   docs: CatalogDocRef[];
 }
 
 export interface CatalogServiceState {
   ready: boolean;
-  hint?: string;
+  hint?: CopyRef;
 }
 
 export interface CatalogReadiness {
   env?: NodeJS.ProcessEnv;
+  locale?: CopyLocale;
+  drivers?: { list(): ChannelDriver[]; get?(type: string): ChannelDriver | undefined };
   services?: Record<string, boolean | CatalogServiceState>;
-  field_options?: Record<string, Record<string, { value: string; label: string }[]>>;
+  field_options?: Record<string, Record<string, { value: string; label: CopyRef }[]>>;
   extras?: CatalogDefinition[];
 }
 
@@ -101,37 +105,42 @@ interface CatalogDefinition {
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
   setup_steps: ConnectorSetupStep[];
   import_files?: ConnectorImportFiles;
-  unit_kinds: UnitKindEntry[];
+  unit_kinds: Array<{ id: string; label: string }>;
   docs: CatalogDocRef[];
 }
 
 export function catalogFromDrivers(
   drivers: { list(): ChannelDriver[] },
   env: NodeJS.ProcessEnv = process.env,
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): CatalogDefinition[] {
   return drivers.list().flatMap((driver) => {
     const catalog = driver.installCatalog?.({ env });
-    return catalog ? [catalogDefinitionFromDriver(driver, catalog)] : [];
+    return catalog ? [catalogDefinitionFromDriver(driver, catalog, locale)] : [];
   });
 }
 
 function catalogDefinitionFromDriver(
-  driver: Pick<ChannelDriver, "connector_type" | "source" | "subjectCatalog" | "parseImport">,
+  driver: Pick<
+    ChannelDriver,
+    "connector_type" | "source" | "subjectCatalog" | "parseImport" | "locales"
+  >,
   catalog: DriverInstallCatalog,
+  locale: CopyLocale,
 ): CatalogDefinition {
+  const tables = driver.locales?.() ?? [];
+  const resolved = resolveInstallCatalog(catalog, tables, locale);
   const importFiles =
-    typeof driver.parseImport === "function"
-      ? catalogImportFiles(catalog.import_files)
-      : undefined;
+    typeof driver.parseImport === "function" ? resolved.import_files : undefined;
   return {
     connector_type: driver.connector_type,
     source: driver.source,
-    title: catalog.title,
-    description: catalog.description,
-    credential_hint: catalog.credential_hint,
-    singleton: catalog.singleton,
-    unit_kinds: readSubjectCatalog(driver.subjectCatalog?.()).kinds,
-    fields: (catalog.fields ?? []).map((field) => ({
+    title: resolved.title,
+    description: resolved.description,
+    credential_hint: resolved.credential_hint,
+    singleton: resolved.singleton,
+    unit_kinds: resolveSubjectKinds(driver.subjectCatalog?.(), tables, locale),
+    fields: (resolved.fields ?? []).map((field) => ({
       key: field.key,
       label: field.label,
       required: field.required === true,
@@ -142,7 +151,7 @@ function catalogDefinitionFromDriver(
       options: field.options,
       visible_when: field.visible_when,
     })),
-    prerequisites: (catalog.prerequisites ?? []).map((prerequisite) => ({
+    prerequisites: (resolved.prerequisites ?? []).map((prerequisite) => ({
       kind: prerequisite.kind,
       key: prerequisite.key,
       label: prerequisite.label,
@@ -150,53 +159,35 @@ function catalogDefinitionFromDriver(
       hint: prerequisite.hint,
       visible_when: prerequisite.visible_when,
     })),
-    setup_steps: catalogSetupSteps(catalog.setup_steps),
+    setup_steps: catalogSetupSteps(resolved.setup_steps),
     ...(importFiles ? { import_files: importFiles } : {}),
     docs: CONNECTOR_INSTALL_DOCS,
   };
 }
 
-function catalogImportFiles(
-  files: DriverInstallCatalog["import_files"],
-): ConnectorImportFiles | undefined {
-  const accept = files?.accept?.replace(/\s+/g, "").trim();
-  if (!accept || !files) {
-    return undefined;
-  }
-  const title = files.title?.replace(/\s+/g, " ").trim();
-  const description = files.description?.replace(/\s+/g, " ").trim();
-  const maxBytes = files.max_bytes;
-  return {
-    accept,
-    ...(typeof maxBytes === "number" && maxBytes > 0 ? { max_bytes: maxBytes } : {}),
-    ...(title ? { title } : {}),
-    ...(description ? { description } : {}),
-  };
-}
-
 function catalogSetupSteps(
-  steps: DriverInstallCatalog["setup_steps"],
+  steps: Array<{
+    title: string;
+    body?: string;
+    command?: string;
+    href?: string;
+    visible_when?: ConnectorFieldWhen;
+  }> | undefined,
 ): ConnectorSetupStep[] {
   return (steps ?? []).flatMap((step) => {
     const title = String(step.title ?? "").replace(/\s+/g, " ").trim();
     if (!title) {
       return [];
     }
-    const titleZh = step.title_zh?.replace(/\s+/g, " ").trim();
     const body = step.body?.replace(/\s+/g, " ").trim();
-    const bodyZh = step.body_zh?.replace(/\s+/g, " ").trim();
     const command = step.command?.trim();
     const href = safeHttpHref(step.href);
-    const hrefZh = safeHttpHref(step.href_zh);
     return [
       {
         title,
-        ...(titleZh ? { title_zh: titleZh } : {}),
         ...(body ? { body } : {}),
-        ...(bodyZh ? { body_zh: bodyZh } : {}),
         ...(command ? { command } : {}),
         ...(href ? { href } : {}),
-        ...(hrefZh ? { href_zh: hrefZh } : {}),
         ...(step.visible_when ? { visible_when: step.visible_when } : {}),
       },
     ];
@@ -232,18 +223,25 @@ export function connectorCatalog(
   readiness: CatalogReadiness = {},
 ): ConnectorCatalogItem[] {
   const env = readiness.env ?? process.env;
+  const locale = readiness.locale ?? DEFAULT_COPY_LOCALE;
   return (readiness.extras ?? []).map((item) => {
     const definition = item;
+    const tables =
+      readiness.drivers
+        ?.list()
+        .find((driver) => driver.connector_type === item.connector_type)
+        ?.locales?.() ?? [];
     const instanceCount = installations.filter(
       (installation) => installation.connector_type === item.connector_type,
     ).length;
     const defaults = defaultFieldValues(definition.fields);
     const prerequisites = definition.prerequisites.map((prerequisite) => {
       const service = serviceState(readiness.services, prerequisite.key);
+      const hint = resolveCopy(tables, locale, service?.hint) ?? service?.hint ?? prerequisite.hint;
       return {
         ...prerequisite,
         ready: prerequisiteReady(prerequisite, env, service),
-        hint: service?.hint ?? prerequisite.hint,
+        hint: typeof hint === "string" ? hint : prerequisite.hint,
       };
     });
     const requiredVisible = prerequisites.filter(
@@ -255,9 +253,13 @@ export function connectorCatalog(
       ...definition,
       fields: definition.fields.map((field) => ({
         ...field,
-        options:
+        options: (
           readiness.field_options?.[item.connector_type]?.[field.key] ??
-          field.options,
+          field.options
+        )?.map((option) => ({
+          value: option.value,
+          label: resolveCopy(tables, locale, option.label) ?? String(option.label),
+        })),
       })),
       installed: instanceCount > 0,
       instance_count: instanceCount,
@@ -290,12 +292,14 @@ export function toInstallationView(
   installation: ConnectorInstallation,
   lastAttempt: IngestAttempt | null,
   drivers: { get(connectorType: string): ChannelDriver | undefined },
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): EngineInstallationView {
   const driver = drivers.get(installation.connector_type);
   const { label, detail } = connectorPresentation(
     installation,
     driver,
     process.env,
+    locale,
   );
   const capabilities = driver?.capabilities(installation) ?? {
     sync: false,
@@ -316,7 +320,12 @@ export function toInstallationView(
     can_create: enabled && capabilities.create,
     create_with_task: enabled && capabilities.create === true && capabilities.create_with_task === true,
     channel,
-    channel_label: sourceLabelFromCatalog(channel, driver?.installCatalog?.()),
+    channel_label: sourceLabelFromCatalog(
+      channel,
+      driver?.installCatalog?.(),
+      driver?.locales?.() ?? [],
+      locale,
+    ),
     last_attempt: lastAttempt,
   };
 }
@@ -325,18 +334,29 @@ function connectorPresentation(
   installation: ConnectorInstallation,
   driver?: ChannelDriver,
   env: NodeJS.ProcessEnv = process.env,
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): {
   label: string;
   detail: string | null;
 } {
+  const tables = driver?.locales?.() ?? [];
   const presented = driver?.presentInstall?.(installation, { env });
   if (presented) {
-    return presented;
+    return resolveInstallPresentation(presented, tables, locale);
   }
   const extra = driver?.installCatalog?.({ env });
   if (extra?.instance_label) {
     return {
-      label: extra.instance_label,
+      label: resolveInstallPresentation(
+        {
+          label: extra.instance_label,
+          detail: extra.instance_detail_key
+            ? { literal: configString(installation.config, extra.instance_detail_key) ?? "" }
+            : null,
+        },
+        tables,
+        locale,
+      ).label,
       detail: extra.instance_detail_key
         ? (configString(installation.config, extra.instance_detail_key) ?? null)
         : null,

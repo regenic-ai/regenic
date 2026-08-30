@@ -82,7 +82,7 @@ const OPEN_RETRIES = 5;
 const RECEIPT_REFRESH_MS = 15_000;
 
 export function ConsoleApp() {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [nav, setNav] = useState<NavId>("inbox");
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [messagesByThread, setMessagesByThread] = useState<
@@ -463,6 +463,27 @@ export function ConsoleApp() {
       refreshInFlight.current = false;
     }
   }, []);
+
+  const localeReady = useRef(false);
+  useEffect(() => {
+    if (!localeReady.current) {
+      localeReady.current = true;
+      return;
+    }
+    inboxDigestRef.current = null;
+    lastFullRef.current = 0;
+    loadedThreadsRef.current.clear();
+    messagesRef.current = {};
+    setMessagesByThread({});
+    groupedRef.current = [];
+    groupedInboxRef.current = null;
+    reuseHintRef.current = undefined;
+    const openId = selectedIdRef.current;
+    if (openId) {
+      threadLoadSeq.current[openId] = (threadLoadSeq.current[openId] ?? 0) + 1;
+    }
+    void refresh();
+  }, [locale, refresh]);
 
   const resetWorkspace = useCallback(async () => {
     workspaceEpoch.current += 1;

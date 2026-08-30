@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  DEFAULT_COPY_LOCALE,
   DEFAULT_LOCAL_EXECUTOR_ID,
+  resolveExecutorCatalog,
+  type CopyLocale,
   EXECUTOR_DEFAULTS_SEEDED_PREF,
   LocalExecutorPluginRegistry,
   createHttpTaskExecutor,
@@ -86,12 +89,24 @@ export class PersonalExecutorService {
     return next;
   }
 
-  async listCatalog(): Promise<ExecutorCatalogEntry[]> {
+  async listCatalog(locale: CopyLocale = DEFAULT_COPY_LOCALE): Promise<ExecutorCatalogEntry[]> {
     await this.ensureMounted();
-    return this.runtime.requireHost().get("executors").catalog();
+    return this.runtime
+      .requireHost()
+      .get("executors")
+      .list()
+      .map((executor) =>
+        resolveExecutorCatalog(
+          executor.catalog(),
+          executor.locales?.() ?? [],
+          locale,
+        ),
+      );
   }
 
-  async listViews(): Promise<EngineExecutorView[]> {
+  async listViews(
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  ): Promise<EngineExecutorView[]> {
     await this.ensureMounted();
     const orgId = this.runtime.orgId();
     const host = this.runtime.requireHost();
@@ -99,7 +114,7 @@ export class PersonalExecutorService {
       host.get("authority").listExecutorInstallations(orgId),
       host.get("authority").listInstallations(orgId),
     ]);
-    return rows.map((row) => this.toView(row, connectors));
+    return rows.map((row) => this.toView(row, connectors, locale));
   }
 
   kindCatalog(
@@ -168,7 +183,9 @@ export class PersonalExecutorService {
     ];
   }
 
-  async creatableConnectorOptions(): Promise<Array<{ value: string; label: string }>> {
+  async creatableConnectorOptions(
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  ): Promise<Array<{ value: string; label: string }>> {
     if (!this.runtime.isReady()) {
       return [];
     }
@@ -181,7 +198,7 @@ export class PersonalExecutorService {
       if (!driver?.capabilities(installation).create) {
         return [];
       }
-      const view = toInstallationView(installation, null, this.drivers);
+      const view = toInstallationView(installation, null, this.drivers, locale);
       return [{ value: installation.id, label: view.label }];
     });
   }
@@ -454,6 +471,7 @@ export class PersonalExecutorService {
   private toView(
     row: ExecutorInstallation,
     connectors: ConnectorInstallation[],
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
   ): EngineExecutorView {
     const pin = executorConfigText(row.config, "installation_id");
     const connector = pin
@@ -463,7 +481,7 @@ export class PersonalExecutorService {
     if (row.kind === "http") {
       detail = hostOf(executorConfigText(row.config, "base_url"));
     } else if (connector) {
-      detail = toInstallationView(connector, null, this.drivers).label;
+      detail = toInstallationView(connector, null, this.drivers, locale).label;
     } else if (row.id === DEFAULT_LOCAL_EXECUTOR_ID) {
       detail = "Auto · first creatable connector";
     } else if (pin) {

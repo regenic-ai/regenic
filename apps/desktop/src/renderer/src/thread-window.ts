@@ -16,7 +16,7 @@ export function itemRevision(item: InboxViewItem): string {
     item.title ?? ""
   }\t${item.pinned ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
     item.conversation_label ?? ""
-  }\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}\t${
+  }\t${item.channel_label ?? ""}\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}\t${
     item.unread ? "1" : "0"
   }\t${item.can_receipt ? "1" : "0"}\t${item.receipt?.state ?? ""}\t${(
     item.prompts ?? []
@@ -230,6 +230,7 @@ export function sameInboxProps(
     previous.pref_updated_at !== next.pref_updated_at ||
     previous.actor_label !== next.actor_label ||
     previous.conversation_label !== next.conversation_label ||
+    previous.channel_label !== next.channel_label ||
     previous.conversation_kind !== next.conversation_kind ||
     previous.unit_kind !== next.unit_kind ||
     previous.unit_kind_label !== next.unit_kind_label ||
