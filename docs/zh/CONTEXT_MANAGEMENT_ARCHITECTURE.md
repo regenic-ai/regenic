@@ -105,6 +105,13 @@ interface ContextRequest {
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
   }>;
+  filters?: {
+    sources?: string[];
+    thread_ids?: string[];
+    actor_ids?: string[];
+    occurred_after?: string;
+    occurred_before?: string;
+  };
   temporal: ContextTemporalSelection;
   budget: ContextBudget;
   requested_kinds?: ContextCandidateKind[];
@@ -192,8 +199,11 @@ interface ContextCandidate {
 }
 ```
 
-Retriever 特有分数保留命名值。planner 使用版本化 retrieval profile；不能假设 BM25、
-cosine、图距离和模型分数处于同一数值尺度。
+Retriever 特有分数保留命名值。融合时，内核按 canonical tuple
+`[retriever_id, score_name]` 为每项贡献建立 namespace。版本化 retrieval profile 可以为
+该精确 tuple 设置权重，也可以显式回退到通用 score-name 权重；不同 retriever 的同名分数
+不能通过取同名最大值发生碰撞。Profile 不能假设 BM25、cosine、图距离和模型分数处于同一
+数值尺度。
 
 ### 4.4 `ContextSnapshot`
 
@@ -207,6 +217,7 @@ interface ContextSnapshot {
   read_epoch: string;
   retrieval_profile_version: string;
   assembly_profile_version: string;
+  bundle_payload_hash: string;
   selected: ContextSelectedReference[];
   budget_ledger: ContextBudgetLedger;
   degradation_flags: string[];
@@ -230,15 +241,18 @@ type ContextSelectedReference =
     };
 ```
 
-每个选中的 Event 必须提供 `content_hash`；每个投影派生项必须提供
+`bundle_payload_hash` 钉住除 snapshot ID 与 bundle hash 之外的完整 canonical bundle
+payload。每个选中的 Event 必须提供 `content_hash`；每个投影派生项必须提供
 `projection_generation`，也可以同时钉住 `content_hash`。Snapshot 因而钉住 ID、hash
 或 generation 和策略版本，不暴露裸 Blob 读取能力。
 
 Canonical hash 使用 UTF-8 JSON，对 object key 按 JavaScript code-unit 顺序排序。Array
 顺序保留，因为 selected 与渲染顺序属于语义。Object 中的 `undefined` 属性会被省略，`-0`
 归一为 `0`，非有限数字和非 plain object 会被拒绝。Request hash 排除生成的 request ID；
-Snapshot hash 排除 snapshot ID、`created_at` 与 hash 字段本身；Bundle hash 只排除自身
-hash 字段。固定 fixture 锁定这些规则；若语义发生变化，必须升级合同版本。
+Snapshot hash 只排除 snapshot ID 与 hash 字段本身，`created_at` 属于语义。合法 snapshot
+ID 必须严格等于 `context-snapshot:${content_hash}`，从而把 replay 完整性锚定到存储查询使用
+的 ID。Bundle hash 只排除自身 hash 字段。固定 fixture 锁定这些规则；若语义发生变化，
+必须升级合同版本。
 
 ### 4.5 `ContextBundle`
 
@@ -250,6 +264,7 @@ interface ContextBundle {
   principal: ActorRef;
   consumer_id: string;
   purpose: string;
+  allowed_uses: Array<"display" | "reason" | "draft" | "execute">;
   sections: Array<{
     kind: "policy" | "memory" | "working" | "facts" | "summaries" | "evidence";
     items: ContextBundleItem[];
@@ -294,6 +309,13 @@ Event 继续保留 `occurred_at` 与 `ingested_at`。Claim 和其他语义 artif
 valid/recorded 词汇。`current`、`history` 与 `as_of` query 编译成显式谓词；调用方不能通过
 文本匹配排序猜测时间。
 
+对于 `as_of`，最大 age 过滤与 recency 评分使用 request 的 `temporal.recorded_at`；
+`current` 和 `history` 使用 authority read time。请求的 as-of recorded time 不能晚于
+authority read 的 `recorded_at`；较旧 read 无法证明未来知识状态。Request timestamp 在
+request hash 前归一为 UTC。相对地，`EvidenceReference.occurred_at` 是权威记录的字面表示，
+按原值参与 evidence、snapshot payload 与 bundle hash。Source adapter 必须保留该值，不能
+改写成等价的时区 offset 表示。
+
 被取代的上下文不静默丢弃。如果与 request 有关，bundle 同时标记当前和 superseded 陈述，
 并显示其有效时间范围。
 
@@ -314,6 +336,29 @@ valid/recorded 词汇。`current`、`history` 与 `as_of` query 编译成显式�
 ### 6.2 插件端口
 
 ```ts
+interface ContextEvidenceSource {
+  openRead(request: ContextRequest): Promise<ContextSourceRead>;
+}
+
+interface ContextSourceRead {
+  read_epoch: string;
+  recorded_at: string;
+  lifecycle_complete: true;
+  lifecycle_heads: Array<{
+    source: string;
+    external_id: string;
+    head_event_id: string;
+  }>;
+  events: ContextSourceEvent[];
+}
+
+interface ContextPolicyEvaluator {
+  policyHash(request: ContextRequest): Promise<string>;
+  visible(input: ContextVisibilityInput): Promise<boolean>;
+  protectedEventIds(plan: AuthorizedRetrievalPlan): Promise<string[]>;
+  canReplay(input: ContextReplayInput): Promise<boolean>;
+}
+
 interface ContextProjector {
   readonly id: string;
   readonly algorithm_version: string;
@@ -359,15 +404,29 @@ interface RetrievalCapabilities {
 | `context-retrievers` | `ContextRetrieverRegistry` |
 
 Projector 与 retriever 只能返回 proposal 或 candidate，不能扩大 ACL、接受 Claim、修改 Event
-或绕过内核独立发布 bundle。
+或绕过内核独立发布 bundle。Event-only retriever 只能发布 evidence candidate。特权 policy
+evaluator 从已授权生命周期视图中显式返回 protected Event ID；内核验证这些 ID，并且只有
+内核可以把对应 section 提升为 `policy`。
+
+Authority adapter 必须返回验证每个 `(source, external_id)` 生命周期所需的全部 Event，
+并为每个 identity 精确声明一个 head。内核拒绝缺失 parent、非法 create/revise/tombstone
+形状、cycle、fork、scope 或 thread 漂移、parent 到 child 非单调的 `occurred_at` 或
+`ingested_at`，以及与返回链不匹配的声明 head。任何 temporal slice 都必须保持 parent-closed；
+出现孤立 revision 或 tombstone 时，整个 request 失败。Read 的 `recorded_at` 必须不早于
+任一返回 Event 的 `ingested_at`；一个 read 不能声明位于自身未来的完整 head。没有匹配
+head manifest 时，单独的 `lifecycle_complete` 不能构成充分边界。该约束与 as-of 覆盖规则
+共同定义 read 的闭合 recorded-time 窗口。
 
 ## 7. 构建流程
 
 1. 校验 `ContextRequest`、principal 状态、purpose 与 allowed use。
-2. 固定 authority `read_epoch` 和 projection generation。
-3. 把 ACL 与 temporal constraint 编译成已授权 retrieval plan。
-4. 让可用 retriever 只在已授权全集内并行召回。
-5. 按稳定 resource identity 与 evidence lineage 归一化候选。
+2. 固定 authority `read_epoch`，验证 lifecycle head manifest，并固定 projection generation。
+3. 在解析 status 前对完整 lifecycle chain 授权，再把 temporal constraint 编译成已授权
+  retrieval plan。
+4. 让特权 policy evaluator 从该 plan 声明 protected Event ID，再让可用 retriever 只在
+  已授权全集内并行召回。
+5. 按稳定 resource identity 与 evidence lineage 归一化候选；只有内核能把已验证的
+  protected ID 提升到 `policy` section。
 6. 按版本化 profile 融合排名，再应用确定性的权威度、时序和冲突规则。
 7. 去冗余，并按命名 budget profile 分配候选。
 8. 保存不可变 snapshot 及 budget ledger。
@@ -395,6 +454,8 @@ Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 ## 9. ACL 与隐私
 
 - 每个检索通道都先执行 `visible(principal, resource, purpose)`，bundle 投影前再次校验；
+- 生命周期授权采用 all-or-nothing：同一 identity chain 中任一 revision 或 tombstone 不可见
+  时，不向 retriever 暴露该链的任何成员或派生 status；
 - Artifact 从全部证据派生 `required_scope_ids`，projector 不能选择更宽 scope；
 - Blob 读取需要已授权的 `via_event_id`、`via_artifact_id` 或 `via_snapshot_id`，裸 content
   hash 不是 bearer capability；
@@ -447,7 +508,9 @@ Planner 根据能力构建 plan，并记录缺失能力：
 citation，也不只统计 evidence section。Citation 仍是必需 provenance，但本身不携带原文正文。
 
 Assembler 输出 ledger，记录每个 section 的 requested、selected、truncated 与 reserved 容量。
-具体降级顺序由 profile 决定，但 policy 与强制安全上下文不能被检索结果挤出。
+具体降级顺序由 profile 决定。Protected Event ID 是特权 policy 的显式决策，空集合也必须
+显式返回；retriever 不能自行提升 candidate。所有声明的 protected Event 必须先于普通
+evidence 被召回并放入硬预算，否则 assembly 失败，不能静默省略强制安全上下文。
 
 第一版使用确定性 token estimate。模型特有 tokenizer 可以作为可选 adapter，但不能改变哪些
 资源有权进入候选集。
@@ -490,7 +553,10 @@ Context Request/Snapshot/Bundle v2、重放保证、read-epoch 语义与 canonic
 验收标准：
 
 - 相同 request 与 read epoch 生成相同 snapshot content hash；
+- 每次 authority read 都有经过验证的 lifecycle head manifest，隐藏 successor 既不能暴露
+  过时正文，也不能泄露 lifecycle status；
 - revision 或 tombstone 产生新 snapshot，旧 snapshot 在保留策略内仍可重放；
+- 只有 policy evaluator 能声明 protected Event，并且所有声明项都必须放入预算；
 - 每个 selected item 都有 evidence path；
 - 未授权证据不影响排名，也不影响调用方可见诊断；
 - 永不超过硬预算；

@@ -2,6 +2,7 @@ import type { ActorRef } from "./actor";
 import type { ContextBudgetLedger, ContextSectionKind } from "./context-budget";
 import type { ContextCandidateKind } from "./context-candidate";
 import type { EvidenceReference } from "./context-consumer";
+import type { ContextAllowedUse } from "./context-request";
 
 export const CONTEXT_BUNDLE_SCHEMA_VERSION = "2.0" as const;
 
@@ -41,6 +42,7 @@ export interface ContextBundle {
   principal: ActorRef;
   consumer_id: string;
   purpose: string;
+  allowed_uses: ContextAllowedUse[];
   sections: ContextBundleSection[];
   citations: EvidenceReference[];
   conflicts: ContextConflict[];
@@ -49,3 +51,5 @@ export interface ContextBundle {
   degradation_flags: string[];
   content_hash: string;
 }
+
+export type ContextBundlePayload = Omit<ContextBundle, "snapshot_id" | "content_hash">;

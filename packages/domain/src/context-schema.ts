@@ -24,6 +24,7 @@ import {
   hashContextSnapshot,
 } from "./context-canonical";
 import type { EvidenceReference } from "./context-consumer";
+import type { ContextReplayRequest } from "./context-port";
 import {
   CONTEXT_ALLOWED_USES,
   CONTEXT_ANCHOR_KINDS,
@@ -48,6 +49,12 @@ const querySchema = z
   .string()
   .max(8_000)
   .refine((value) => value.trim().length > 0, "Query cannot be blank");
+
+const uniqueNonEmptyStringsSchema = z
+  .array(nonEmptyStringSchema)
+  .min(1)
+  .max(1_000)
+  .refine((values) => !hasDuplicates(values), "Values must be unique");
 
 function hasDuplicates(values: readonly string[]): boolean {
   return new Set(values).size !== values.length;
@@ -188,13 +195,46 @@ export const ContextRequestSchema: z.ZodType<ContextRequest> = z
       .array(z.object({ kind: z.enum(CONTEXT_ANCHOR_KINDS), id: nonEmptyStringSchema }).strict())
       .max(100)
       .optional(),
+    filters: z
+      .object({
+        sources: uniqueNonEmptyStringsSchema.optional(),
+        thread_ids: uniqueNonEmptyStringsSchema.optional(),
+        actor_ids: uniqueNonEmptyStringsSchema.optional(),
+        occurred_after: timestampSchema.optional(),
+        occurred_before: timestampSchema.optional(),
+      })
+      .strict()
+      .superRefine((filters, context) => {
+        if (Object.values(filters).every((value) => value === undefined)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "At least one context filter is required",
+          });
+        }
+        if (
+          filters.occurred_after &&
+          filters.occurred_before &&
+          Date.parse(filters.occurred_after) > Date.parse(filters.occurred_before)
+        ) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["occurred_before"],
+            message: "occurred_before cannot precede occurred_after",
+          });
+        }
+      })
+      .optional(),
     temporal: z.discriminatedUnion("mode", [
       z.object({ mode: z.literal("current") }).strict(),
       z.object({ mode: z.literal("history"), valid_at: timestampSchema.optional() }).strict(),
       z.object({ mode: z.literal("as_of"), valid_at: timestampSchema.optional(), recorded_at: timestampSchema }).strict(),
     ]),
     budget: ContextBudgetSchema,
-    requested_kinds: z.array(z.enum(CONTEXT_CANDIDATE_KINDS)).max(CONTEXT_CANDIDATE_KINDS.length).optional(),
+    requested_kinds: z
+      .array(z.enum(CONTEXT_CANDIDATE_KINDS))
+      .min(1)
+      .max(CONTEXT_CANDIDATE_KINDS.length)
+      .optional(),
   })
   .strict()
   .superRefine((request, context) => {
@@ -207,6 +247,26 @@ export const ContextRequestSchema: z.ZodType<ContextRequest> = z
     }
     if (request.requested_kinds && hasDuplicates(request.requested_kinds)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["requested_kinds"], message: "Requested kinds must be unique" });
+    }
+  });
+
+export const ContextReplayRequestSchema: z.ZodType<ContextReplayRequest> = z
+  .object({
+    org_id: nonEmptyStringSchema,
+    snapshot_id: nonEmptyStringSchema,
+    principal: ActorRefSchema,
+    consumer_id: nonEmptyStringSchema,
+    purpose: nonEmptyStringSchema,
+    allowed_uses: z.array(z.enum(CONTEXT_ALLOWED_USES)).min(1).max(CONTEXT_ALLOWED_USES.length),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (hasDuplicates(request.allowed_uses)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowed_uses"],
+        message: "Allowed uses must be unique",
+      });
     }
   });
 
@@ -312,6 +372,7 @@ export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
     read_epoch: nonEmptyStringSchema,
     retrieval_profile_version: nonEmptyStringSchema,
     assembly_profile_version: nonEmptyStringSchema,
+    bundle_payload_hash: contentHashSchema,
     selected: z.array(ContextSelectedReferenceSchema).max(10_000),
     budget_ledger: ContextBudgetLedgerSchema,
     degradation_flags: z.array(nonEmptyStringSchema).max(100),
@@ -328,6 +389,9 @@ export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
     }
     if (snapshot.content_hash !== hashContextSnapshot(snapshot)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["content_hash"], message: "content_hash does not match snapshot" });
+    }
+    if (snapshot.id !== `context-snapshot:${snapshot.content_hash}`) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["id"], message: "id does not match snapshot content_hash" });
     }
   });
 
@@ -387,6 +451,7 @@ export const ContextBundleSchema: z.ZodType<ContextBundle> = z
     principal: ActorRefSchema,
     consumer_id: nonEmptyStringSchema,
     purpose: nonEmptyStringSchema,
+    allowed_uses: z.array(z.enum(CONTEXT_ALLOWED_USES)).min(1).max(CONTEXT_ALLOWED_USES.length),
     sections: z.array(ContextBundleSectionSchema).max(CONTEXT_SECTION_KINDS.length),
     citations: z.array(EvidenceReferenceSchema).max(10_000),
     conflicts: z.array(ContextConflictSchema).max(1_000),
@@ -399,6 +464,9 @@ export const ContextBundleSchema: z.ZodType<ContextBundle> = z
   .superRefine((bundle, context) => {
     if (hasDuplicates(bundle.sections.map((section) => section.kind))) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["sections"], message: "Bundle section kinds must be unique" });
+    }
+    if (hasDuplicates(bundle.allowed_uses)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["allowed_uses"], message: "Allowed uses must be unique" });
     }
     const candidateIds = bundle.sections.flatMap((section) => section.items.map((item) => item.candidate_id));
     if (hasDuplicates(candidateIds)) {
@@ -464,6 +532,10 @@ function validate<T>(schema: z.ZodType<T>, input: unknown): ContextValidationRes
 
 export function validateContextRequest(input: unknown): ContextValidationResult<ContextRequest> {
   return validate(ContextRequestSchema, input);
+}
+
+export function validateContextReplayRequest(input: unknown): ContextValidationResult<ContextReplayRequest> {
+  return validate(ContextReplayRequestSchema, input);
 }
 
 export function validateContextBudget(input: unknown): ContextValidationResult<ContextBudget> {

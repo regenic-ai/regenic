@@ -31,6 +31,7 @@ export interface ContextSnapshot {
   read_epoch: string;
   retrieval_profile_version: string;
   assembly_profile_version: string;
+  bundle_payload_hash: string;
   selected: ContextSelectedReference[];
   budget_ledger: ContextBudgetLedger;
   degradation_flags: string[];

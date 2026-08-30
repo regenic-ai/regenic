@@ -33,6 +33,14 @@ export type ContextTemporalSelection =
   | { mode: "history"; valid_at?: string; recorded_at?: never }
   | { mode: "as_of"; valid_at?: string; recorded_at: string };
 
+export interface ContextRequestFilters {
+  sources?: string[];
+  thread_ids?: string[];
+  actor_ids?: string[];
+  occurred_after?: string;
+  occurred_before?: string;
+}
+
 export interface ContextRequest {
   schema_version: typeof CONTEXT_REQUEST_SCHEMA_VERSION;
   id: string;
@@ -43,6 +51,7 @@ export interface ContextRequest {
   allowed_uses: ContextAllowedUse[];
   query?: string;
   anchors?: ContextAnchor[];
+  filters?: ContextRequestFilters;
   temporal: ContextTemporalSelection;
   budget: ContextBudget;
   requested_kinds?: ContextCandidateKind[];

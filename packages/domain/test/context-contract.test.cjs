@@ -80,6 +80,7 @@ function request(overrides = {}) {
     allowed_uses: ["display", "reason"],
     query: "What changed?",
     anchors: [{ kind: "conversation", id: "conversation-1" }],
+    filters: { sources: ["example-chat"], thread_ids: ["conversation-1"] },
     temporal: { mode: "current" },
     budget: budget(),
     requested_kinds: ["event", "claim"],
@@ -90,13 +91,14 @@ function request(overrides = {}) {
 function snapshot(overrides = {}) {
   const value = {
     schema_version: CONTEXT_SNAPSHOT_SCHEMA_VERSION,
-    id: "snapshot-1",
+    id: "pending",
     org_id: "example-org",
     request_hash: hashContextRequest(request()),
     principal_policy_hash: HASH_B,
     read_epoch: "authority:42",
     retrieval_profile_version: "deterministic-v1",
     assembly_profile_version: "interactive-v1",
+    bundle_payload_hash: HASH_A,
     selected: [
       {
         candidate_id: "candidate-1",
@@ -112,6 +114,7 @@ function snapshot(overrides = {}) {
     ...overrides,
   };
   value.content_hash = hashContextSnapshot(value);
+  value.id = `context-snapshot:${value.content_hash}`;
   return value;
 }
 
@@ -123,6 +126,7 @@ function bundle(overrides = {}) {
     principal: { actor_type: "human", actor_id: "person-1" },
     consumer_id: "test-consumer",
     purpose: "answer a synthetic question",
+    allowed_uses: ["display", "reason"],
     sections: [
       {
         kind: "facts",
@@ -174,13 +178,14 @@ describe("context contracts", () => {
     const second = request({
       id: "request-2",
       allowed_uses: ["reason", "display"],
+      filters: { sources: ["example-chat"], thread_ids: ["conversation-1"] },
       requested_kinds: ["claim", "event"],
     });
 
     assert.equal(validateContextRequest(first).success, true);
     assert.equal(
       hashContextRequest(first),
-      "96f10ba512921740ad46f9c3c5bb5d57387ffbea824b6e0ebaf26a04dd3e2539",
+      "d0de61c1a792d6a94be542b1bee51c29027c85f03f7b8b9d6a598219598f12d3",
     );
     assert.equal(hashContextRequest(first), hashContextRequest(second));
     assert.notEqual(hashContextRequest(first), hashContextRequest(request({ purpose: "different purpose" })));
@@ -196,6 +201,24 @@ describe("context contracts", () => {
     assert.equal(
       validateContextRequest(request({ temporal: { mode: "current", valid_at: "2026-08-30T00:00:00.000Z" } })).success,
       false,
+    );
+    assert.equal(
+      validateContextRequest(request({
+        filters: {
+          occurred_after: "2026-08-30T01:00:00.000Z",
+          occurred_before: "2026-08-30T00:00:00.000Z",
+        },
+      })).success,
+      false,
+    );
+    assert.equal(validateContextRequest(request({ filters: {} })).success, false);
+    assert.equal(
+      hashContextRequest(request({
+        temporal: { mode: "as_of", recorded_at: "2026-08-30T08:00:00+08:00" },
+      })),
+      hashContextRequest(request({
+        temporal: { mode: "as_of", recorded_at: "2026-08-30T00:00:00.000Z" },
+      })),
     );
     assert.equal(
       validateContextRequest(request({ temporal: { mode: "history", valid_at: "2026-08-30T00:00:00.000Z" } })).success,
@@ -264,26 +287,29 @@ describe("context contracts", () => {
     );
   });
 
-  it("pins snapshot semantics while excluding generated identity and time from its hash", () => {
+  it("pins snapshot creation time and derives identity from its semantic hash", () => {
     const first = snapshot();
     const second = snapshot({
-      id: "snapshot-2",
-      created_at: "2026-08-30T01:00:00.000Z",
       degradation_flags: ["model_absent", "vector_absent"],
     });
+    const later = snapshot({ created_at: "2026-08-30T01:00:00.000Z" });
 
     assert.equal(validateContextSnapshot(first).success, true);
     assert.equal(
       first.content_hash,
-      "20349d9ad48b16897541106a5c08b4b3d5c14464a665d0853f2edde9c30e529f",
+      "e8f4457277178188ab526ff0ca0ccfd2c84a1b5fb0fa4899a5ff37215e2b2a4b",
     );
     assert.equal(first.content_hash, second.content_hash);
+    assert.equal(first.id, second.id);
+    assert.notEqual(first.content_hash, later.content_hash);
+    assert.equal(validateContextSnapshot({ ...first, id: "context-snapshot:stale" }).success, false);
     assert.equal(validateContextSnapshot({ ...first, content_hash: HASH_A }).success, false);
     const missingReplayPin = {
       ...first,
       selected: [{ candidate_id: "candidate-1", resource_id: "event-1", kind: "event" }],
     };
     missingReplayPin.content_hash = hashContextSnapshot(missingReplayPin);
+    missingReplayPin.id = `context-snapshot:${missingReplayPin.content_hash}`;
     assert.equal(validateContextSnapshot(missingReplayPin).success, false);
   });
 
@@ -292,7 +318,7 @@ describe("context contracts", () => {
     assert.equal(validateContextBundle(value).success, true);
     assert.equal(
       value.content_hash,
-      "e399da096986c566dd32c3a726e177d10f67ede2fadefc952df1bd265e50e429",
+      "dba360b8546e08b28bbb5e0446e8592878dd9af9251ddc4b810c6cde5b05f455",
     );
     assert.equal(
       validateContextBundle({
