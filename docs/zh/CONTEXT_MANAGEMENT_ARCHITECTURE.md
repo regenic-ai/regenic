@@ -105,18 +105,21 @@ interface ContextRequest {
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
   }>;
-  temporal: {
-    mode: "current" | "history" | "as_of";
-    valid_at?: string;
-    recorded_at?: string;
-  };
+  temporal: ContextTemporalSelection;
   budget: ContextBudget;
   requested_kinds?: ContextCandidateKind[];
 }
+
+type ContextTemporalSelection =
+  | { mode: "current"; valid_at?: never; recorded_at?: never }
+  | { mode: "history"; valid_at?: string; recorded_at?: never }
+  | { mode: "as_of"; valid_at?: string; recorded_at: string };
 ```
 
 `purpose` 与 `allowed_uses` 是授权输入，不是说明性标签。同一个 principal 用于展示和用于
 执行时，可以获得不同 bundle。
+`current` 不接受时间覆盖；`history` 返回生命周期，并可用 `valid_at` 选择现实时间点；
+`as_of` 必须提供 `recorded_at`，也可以同时约束 `valid_at`。
 
 ### 4.2 `ContextArtifact`
 
@@ -204,20 +207,38 @@ interface ContextSnapshot {
   read_epoch: string;
   retrieval_profile_version: string;
   assembly_profile_version: string;
-  selected: Array<{
-    candidate_id: string;
-    resource_id: string;
-    content_hash?: string;
-    projection_generation?: string;
-  }>;
+  selected: ContextSelectedReference[];
   budget_ledger: ContextBudgetLedger;
   degradation_flags: string[];
   content_hash: string;
   created_at: string;
 }
+
+type ContextSelectedReference =
+  | {
+      candidate_id: string;
+      resource_id: string;
+      kind: "event";
+      content_hash: string;
+    }
+  | {
+      candidate_id: string;
+      resource_id: string;
+      kind: Exclude<ContextCandidateKind, "event">;
+      content_hash?: string;
+      projection_generation: string;
+    };
 ```
 
-Snapshot 钉住 ID、hash、projection generation 和策略版本，不暴露裸 Blob 读取能力。
+每个选中的 Event 必须提供 `content_hash`；每个投影派生项必须提供
+`projection_generation`，也可以同时钉住 `content_hash`。Snapshot 因而钉住 ID、hash
+或 generation 和策略版本，不暴露裸 Blob 读取能力。
+
+Canonical hash 使用 UTF-8 JSON，对 object key 按 JavaScript code-unit 顺序排序。Array
+顺序保留，因为 selected 与渲染顺序属于语义。Object 中的 `undefined` 属性会被省略，`-0`
+归一为 `0`，非有限数字和非 plain object 会被拒绝。Request hash 排除生成的 request ID；
+Snapshot hash 排除 snapshot ID、`created_at` 与 hash 字段本身；Bundle hash 只排除自身
+hash 字段。固定 fixture 锁定这些规则；若语义发生变化，必须升级合同版本。
 
 ### 4.5 `ContextBundle`
 
@@ -236,18 +257,24 @@ interface ContextBundle {
   }>;
   citations: EvidenceReference[];
   conflicts: ContextConflict[];
-  redactions: string[];
+  redactions: ContextRedaction[];
   budget_ledger: ContextBudgetLedger;
   degradation_flags: string[];
   content_hash: string;
+}
+
+interface ContextRedaction {
+  section: ContextSectionKind;
+  category: string;
+  count: number;
 }
 ```
 
 继续支持 `EvidenceBundle` v1。Bundle v2 是 snapshot 的新投影，不能破坏性地重新解释 v1
 的 Event 引用合同。
-Bundle v2 的 `redactions` 默认只包含不透明的 slot、类别或数量；只有调用方另行获得知晓
-被省略 claim/resource ID 的权限时，才可包含这些 ID。改变 RFC 0002 的 claim-ID redaction
-合同必须先修订 RFC。
+Bundle v2 的 `redactions` 只包含不透明的 section、类别与数量，永不包含被省略的
+claim/resource ID。只有在 RFC 修订后，独立且另行授权的审计资源才可暴露这些 ID；它不能
+扩大 `ContextRedaction` 合同。
 
 ### 4.6 `ContextBuildTrace`
 
@@ -415,6 +442,9 @@ Planner 根据能力构建 plan，并记录缺失能力：
 
 预算是命名且版本化的 profile，不是一张全局固定 token 表。Request 可以约束总 token、
 各 section token、item 数、原文证据数和最大时间范围。
+
+`max_raw_evidence` 统计 bundle 任意 section 中暴露正文的 Event item，不统计只有引用的
+citation，也不只统计 evidence section。Citation 仍是必需 provenance，但本身不携带原文正文。
 
 Assembler 输出 ledger，记录每个 section 的 requested、selected、truncated 与 reserved 容量。
 具体降级顺序由 profile 决定，但 policy 与强制安全上下文不能被检索结果挤出。

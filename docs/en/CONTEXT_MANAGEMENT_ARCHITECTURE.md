@@ -121,18 +121,22 @@ interface ContextRequest {
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
   }>;
-  temporal: {
-    mode: "current" | "history" | "as_of";
-    valid_at?: string;
-    recorded_at?: string;
-  };
+  temporal: ContextTemporalSelection;
   budget: ContextBudget;
   requested_kinds?: ContextCandidateKind[];
 }
+
+type ContextTemporalSelection =
+  | { mode: "current"; valid_at?: never; recorded_at?: never }
+  | { mode: "history"; valid_at?: string; recorded_at?: never }
+  | { mode: "as_of"; valid_at?: string; recorded_at: string };
 ```
 
 `purpose` and `allowed_uses` are authorization inputs, not descriptive labels.
 The same principal may receive different bundles for display and execution.
+`current` accepts no time override. `history` returns the lifecycle and may use
+`valid_at` to select a world-time point. `as_of` requires `recorded_at` and may
+also constrain `valid_at`.
 
 ### 4.2 `ContextArtifact`
 
@@ -223,21 +227,41 @@ interface ContextSnapshot {
   read_epoch: string;
   retrieval_profile_version: string;
   assembly_profile_version: string;
-  selected: Array<{
-    candidate_id: string;
-    resource_id: string;
-    content_hash?: string;
-    projection_generation?: string;
-  }>;
+  selected: ContextSelectedReference[];
   budget_ledger: ContextBudgetLedger;
   degradation_flags: string[];
   content_hash: string;
   created_at: string;
 }
+
+type ContextSelectedReference =
+  | {
+      candidate_id: string;
+      resource_id: string;
+      kind: "event";
+      content_hash: string;
+    }
+  | {
+      candidate_id: string;
+      resource_id: string;
+      kind: Exclude<ContextCandidateKind, "event">;
+      content_hash?: string;
+      projection_generation: string;
+    };
 ```
 
-The snapshot pins identifiers, hashes, projection generations, and policy
-versions. It does not expose a bare Blob capability.
+Each selected Event requires `content_hash`. Every projection-derived selection
+requires `projection_generation` and may also pin `content_hash`. The snapshot
+therefore pins identifiers, hashes or generations, and policy versions. It does
+not expose a bare Blob capability.
+
+Canonical hashes use UTF-8 JSON with object keys sorted by JavaScript code-unit
+order. Array order is preserved because selected and rendered order is semantic.
+Undefined object properties are omitted; `-0` is normalized to `0`; non-finite
+numbers and non-plain objects are rejected. Request hashes exclude the generated
+request ID. Snapshot hashes exclude snapshot ID, `created_at`, and the hash field
+itself. Bundle hashes exclude only their hash field. Fixed fixtures lock these
+rules; changing their semantics requires a contract version change.
 
 ### 4.5 `ContextBundle`
 
@@ -256,19 +280,25 @@ interface ContextBundle {
   }>;
   citations: EvidenceReference[];
   conflicts: ContextConflict[];
-  redactions: string[];
+  redactions: ContextRedaction[];
   budget_ledger: ContextBudgetLedger;
   degradation_flags: string[];
   content_hash: string;
+}
+
+interface ContextRedaction {
+  section: ContextSectionKind;
+  category: string;
+  count: number;
 }
 ```
 
 `EvidenceBundle` v1 remains supported. Bundle v2 is a new projection over a
 snapshot, not a breaking reinterpretation of the v1 event-reference contract.
-Bundle v2 `redactions` contain opaque slot, category, or count information by
-default. They include omitted claim or resource IDs only when the caller is
-separately authorized to know those IDs. Changing RFC 0002's claim-ID redaction
-contract requires an RFC amendment.
+Bundle v2 `redactions` contain only opaque section, category, and count
+information. They never contain omitted claim or resource IDs. A separately
+authorized audit resource may expose such IDs only after an RFC amendment; it
+does not widen the `ContextRedaction` contract.
 
 ### 4.6 `ContextBuildTrace`
 
@@ -449,6 +479,11 @@ capabilities never disable ACL or provenance checks.
 Budgets are named, versioned profiles rather than one global token table. A
 request may constrain total tokens, per-section tokens, item count, raw evidence
 count, and maximum age.
+
+`max_raw_evidence` counts content-bearing Event items exposed anywhere in the
+bundle, not citation references and not only items placed in the evidence
+section. Citations remain mandatory provenance and carry no raw body by
+themselves.
 
 The assembler emits a ledger containing requested, selected, truncated, and
 reserved capacity per section. Its default reduction order is profile-specific,
