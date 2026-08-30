@@ -4,6 +4,7 @@
  */
 
 export * from "./ingestion";
+export * from "./actor";
 export * from "./content-parts";
 export * from "./content-resolution";
 export * from "./channel-driver";
@@ -31,6 +32,14 @@ export * from "./connector-registry";
 export * from "./egress";
 export * from "./connector-conformance";
 export * from "./context-consumer";
+export * from "./context-budget";
+export * from "./context-candidate";
+export * from "./context-request";
+export * from "./context-artifact";
+export * from "./context-snapshot";
+export * from "./context-bundle";
+export * from "./context-canonical";
+export * from "./context-schema";
 export * from "./generic-import";
 export * from "./memory-ingestion-stores";
 export * from "./memory-connector-runtime-store";
@@ -54,15 +63,6 @@ export * from "./http-executor";
 export * from "./work-delivery";
 export * from "./work-policy";
 export * from "./memory-work-store";
-
-/** @unstable RFC 0001 */
-export type ActorType = "human" | "agent" | "system";
-
-/** @unstable RFC 0001 / 0004 */
-export interface ActorRef {
-  actor_type: ActorType;
-  actor_id: string;
-}
 
 /** @unstable RFC 0001 */
 export type StandardLayer = "stable_core" | "adjacent" | "frontier";
