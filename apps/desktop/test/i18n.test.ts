@@ -110,5 +110,10 @@ describe("desktop locale", () => {
     );
     assert.match(translate("zh", "chrome.sendTimedOut"), /还在发这条/);
     assert.match(translate("en", "chrome.sendTimedOut"), /still sending/);
+    assert.equal(translate("en", "executor.field.baseUrl"), "Base URL");
+    assert.equal(translate("zh", "executor.field.baseUrl"), "接口地址");
+    assert.equal(translate("zh", "executor.detail.autoFirst"), "自动 · 第一个可新建会话的连接器");
+    assert.equal(translate("zh", "error.connector.feishuConversation"), "选全部会话，或勾选要同步的会话");
+    assert.equal(translate("zh", "connector.noOptions"), "还没有可选项");
   });
 });

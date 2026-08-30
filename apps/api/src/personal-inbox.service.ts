@@ -403,7 +403,7 @@ export class PersonalInboxService {
       }),
     );
     const [executorInstallations, connectorOptions] = await Promise.all([
-      this.executors.listViews(),
+      this.executors.listViews(query.locale),
       this.executors.creatableConnectorOptions(query.locale),
     ]);
     return {

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { setActiveLocale } from "../src/shared/i18n.ts";
+import {
+  connectorActionError,
+  networkWatchHint,
+} from "../src/renderer/src/connector-errors.ts";
 import {
   engineChip,
   pullStatusLabel,
@@ -100,5 +105,35 @@ describe("engine chip and pull copy", () => {
     assert.equal(threadSyncLabel("feishu:oc_1", status), "Sync interrupted · retrying");
     assert.equal(threadSyncTone("feishu:oc_1", status), "error");
     assert.equal(pullStatusLabel(status), "Retrying after a drop");
+  });
+});
+
+describe("connector action errors", () => {
+  it("maps install failures onto the active desktop catalog", () => {
+    setActiveLocale("zh");
+    try {
+      assert.equal(
+        connectorActionError(
+          "Feishu install requires at least one conversation when choosing conversations",
+        ),
+        "选全部会话，或勾选要同步的会话",
+      );
+      assert.equal(
+        connectorActionError("Slack install requires channel_id"),
+        "Slack 需要填写频道 ID",
+      );
+      assert.equal(
+        networkWatchHint(
+          "Local network looks blocked. Check the VPN or firewall, then retry.",
+        ),
+        "本机网络看起来被拦住了。检查 VPN 或防火墙后再试。",
+      );
+    } finally {
+      setActiveLocale("en");
+    }
+    assert.equal(
+      connectorActionError("feishu-chat is already installed"),
+      "This connector is already installed",
+    );
   });
 });

@@ -18,6 +18,7 @@ import {
   diskWatchCopy,
   formatChatTime,
   memoryWatchCopy,
+  networkWatchHint,
   networkWatchLabel,
   pullStatusLabel,
 } from "./format";
@@ -173,7 +174,9 @@ export function EnginePage({
         ) : null}
         {engine.pull?.last_error_hint || engine.pull?.network?.hint ? (
           <p className="action-hint">
-            {engine.pull.last_error_hint ?? engine.pull.network?.hint}
+            {networkWatchHint(
+              engine.pull.last_error_hint ?? engine.pull.network?.hint,
+            )}
           </p>
         ) : null}
         {host?.disk.hint ? <p className="action-hint">{host.disk.hint}</p> : null}

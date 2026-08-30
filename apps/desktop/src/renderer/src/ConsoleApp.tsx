@@ -472,6 +472,16 @@ export function ConsoleApp() {
     }
     inboxDigestRef.current = null;
     lastFullRef.current = 0;
+    loadedThreadsRef.current.clear();
+    messagesRef.current = {};
+    setMessagesByThread({});
+    groupedRef.current = [];
+    groupedInboxRef.current = null;
+    reuseHintRef.current = undefined;
+    const openId = selectedIdRef.current;
+    if (openId) {
+      threadLoadSeq.current[openId] = (threadLoadSeq.current[openId] ?? 0) + 1;
+    }
     void refresh();
   }, [locale, refresh]);
 

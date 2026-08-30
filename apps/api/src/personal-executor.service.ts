@@ -104,7 +104,9 @@ export class PersonalExecutorService {
       );
   }
 
-  async listViews(): Promise<EngineExecutorView[]> {
+  async listViews(
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  ): Promise<EngineExecutorView[]> {
     await this.ensureMounted();
     const orgId = this.runtime.orgId();
     const host = this.runtime.requireHost();
@@ -112,7 +114,7 @@ export class PersonalExecutorService {
       host.get("authority").listExecutorInstallations(orgId),
       host.get("authority").listInstallations(orgId),
     ]);
-    return rows.map((row) => this.toView(row, connectors));
+    return rows.map((row) => this.toView(row, connectors, locale));
   }
 
   kindCatalog(
@@ -469,6 +471,7 @@ export class PersonalExecutorService {
   private toView(
     row: ExecutorInstallation,
     connectors: ConnectorInstallation[],
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
   ): EngineExecutorView {
     const pin = executorConfigText(row.config, "installation_id");
     const connector = pin
@@ -478,7 +481,7 @@ export class PersonalExecutorService {
     if (row.kind === "http") {
       detail = hostOf(executorConfigText(row.config, "base_url"));
     } else if (connector) {
-      detail = toInstallationView(connector, null, this.drivers).label;
+      detail = toInstallationView(connector, null, this.drivers, locale).label;
     } else if (row.id === DEFAULT_LOCAL_EXECUTOR_ID) {
       detail = "Auto · first creatable connector";
     } else if (pin) {

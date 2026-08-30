@@ -441,7 +441,7 @@ function CheckOptionList({
   const options = field.options ?? [];
   if (options.length === 0) {
     return (
-      <p className="field-empty">{field.placeholder ?? "No options yet"}</p>
+      <p className="field-empty">{field.placeholder ?? t("connector.noOptions")}</p>
     );
   }
   const searchable = options.length > 4;

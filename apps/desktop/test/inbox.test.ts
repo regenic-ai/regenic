@@ -630,6 +630,21 @@ describe("pref overlay", () => {
   });
 });
 
+describe("inbox reuse", () => {
+  it("does not reuse a row when only the channel label changed", () => {
+    const english = feishuHead(
+      "m1",
+      "2026-08-24T10:00:00.000Z",
+      "feishu:oc_1",
+      "熊峰",
+    );
+    const chinese = { ...english, channel_label: "飞书" };
+    const reused = reuseInboxList([english], [chinese]);
+    assert.equal(reused.same, false);
+    assert.equal(reused.items[0].channel_label, "飞书");
+  });
+});
+
 describe("prompt answers", () => {
   it("keeps single-select custom exclusive of a picked option", async () => {
     const { togglePromptOption, typePromptCustom } = await import(
