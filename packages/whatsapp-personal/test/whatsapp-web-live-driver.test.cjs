@@ -203,9 +203,9 @@ describe("whatsapp-web-live driver", () => {
     try {
       const catalog = whatsappWebLiveDriver.installCatalog();
       assert.equal(catalog.prerequisites, undefined);
-      assert.match(catalog.credential_hint, /Pairing code/);
-      assert.equal(catalog.setup_steps[0].title, "Install this connector");
-      assert.equal(catalog.setup_steps[0].title_zh, "安装这个连接器");
+      assert.equal(catalog.credential_hint, "catalog.credentialHint");
+      assert.equal(catalog.setup_steps[0].title, "setup.install.title");
+      assert.equal(catalog.setup_steps[0].title_zh, undefined);
       const installed = whatsappWebLiveDriver.install({
         id: "wa-1",
         org_id: "local-owner",

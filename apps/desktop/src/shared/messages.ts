@@ -443,19 +443,11 @@ export const en = {
   "engine.actionFailed": "Action failed",
   "engine.uninstallConfirm":
     "Uninstall {type} “{name}”? Ingested messages stay.",
-  "engine.whatsapp.title": "WhatsApp personal export",
-  "engine.whatsapp.import": "Import files",
-  "engine.whatsapp.importing": "Importing…",
-  "engine.whatsapp.lead":
-    "Import Purr WA CSV or WhatsApp Personal Export v1 JSONL that you picked yourself. Read-only: no cookies, no sending.",
-  "engine.whatsapp.failed": "WhatsApp import failed",
-  "engine.whatsapp.importFailed": "Import failed",
-  "engine.whatsapp.summary":
-    "Imported {completed}/{total} files · {accepted} new · {duplicates} duplicates · {invalid} invalid lines",
-  "engine.whatsapp.fileFailures": "{count} files failed. {file}: {message}",
   "connector.import": "Import files",
   "connector.importing": "Importing…",
   "connector.importFailed": "Import failed",
+  "connector.importSummary":
+    "Imported {completed}/{total} files · {accepted} new · {duplicates} duplicates · {invalid} invalid lines",
   "connector.importFileFailures": "{count} files failed. {file}: {message}",
 
   "tray.openConsole": "Open console",
@@ -522,7 +514,6 @@ export const en = {
     "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not a WhatsApp password.",
   "connector.showPairing": "Show pairing code",
   "connector.hidePairing": "Hide",
-  "connector.whatsappCredentials": "Pairing code · created on install",
 
   "docs.connector": "Connector spec",
   "docs.executor": "Executor spec",
@@ -982,19 +973,11 @@ export const zh: Record<MessageKey, string> = {
   "engine.syncFailed": "同步失败",
   "engine.actionFailed": "操作失败",
   "engine.uninstallConfirm": "卸载 {type}「{name}」？已经入库的消息会留着。",
-  "engine.whatsapp.title": "WhatsApp 个人导出",
-  "engine.whatsapp.import": "导入文件",
-  "engine.whatsapp.importing": "导入中…",
-  "engine.whatsapp.lead":
-    "导入你自己选的 Purr WA CSV，或 WhatsApp Personal Export v1 JSONL。只读，不碰 Cookie，也不会发消息。",
-  "engine.whatsapp.failed": "WhatsApp 导入失败",
-  "engine.whatsapp.importFailed": "导入失败",
-  "engine.whatsapp.summary":
-    "已导入 {completed}/{total} 个文件 · 新增 {accepted} · 重复 {duplicates} · 无效 {invalid} 行",
-  "engine.whatsapp.fileFailures": "{count} 个文件失败。{file}：{message}",
   "connector.import": "导入文件",
   "connector.importing": "导入中…",
   "connector.importFailed": "导入失败",
+  "connector.importSummary":
+    "已导入 {completed}/{total} 个文件 · 新增 {accepted} · 重复 {duplicates} · 无效 {invalid} 行",
   "connector.importFileFailures": "{count} 个文件失败。{file}：{message}",
 
   "tray.openConsole": "打开控制台",
@@ -1061,7 +1044,6 @@ export const zh: Record<MessageKey, string> = {
     "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是 WhatsApp 密码。",
   "connector.showPairing": "显示配对码",
   "connector.hidePairing": "隐藏",
-  "connector.whatsappCredentials": "配对码 · 安装时生成",
 
   "docs.connector": "连接器规范",
   "docs.executor": "执行器规范",

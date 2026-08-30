@@ -3,6 +3,8 @@ import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
+  DEFAULT_COPY_LOCALE,
+  type CopyLocale,
   ConnectorRunner,
   readEnvCredential,
   DeadlineExceededError,
@@ -684,6 +686,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       text?: string;
       cwd?: string;
       client_request_id?: string;
+      locale?: CopyLocale;
     } = {},
   ): Promise<CreatedConversationView> {
     const clientKey = this.createClientKey(input.client_request_id);
@@ -795,7 +798,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   private async createConversationOnce(
-    input: { installation_id?: string; source?: string; text?: string; cwd?: string },
+    input: {
+      installation_id?: string;
+      source?: string;
+      text?: string;
+      cwd?: string;
+      locale?: CopyLocale;
+    },
   ): Promise<CreatedConversationView> {
     const host = this.runtime.requireHost();
     const opened = await this.openCreatedThread(input);
@@ -816,7 +825,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
     return {
       thread_id: `${opened.thread.source}:${opened.thread.target}`,
       channel: opened.thread.source,
-      channel_label: this.drivers.sourceLabel(opened.thread.source),
+      channel_label: this.drivers.sourceLabel(
+        opened.thread.source,
+        process.env,
+        input.locale ?? DEFAULT_COPY_LOCALE,
+      ),
       can_send: driverCanReply(opened.driver, opened.installation),
       await_reply: opened.driver.capabilities(opened.installation).await_reply === true,
       list_title: normalizeListTitle(

@@ -1,3 +1,4 @@
+import type { CopyRef } from "@regenic/domain";
 import {
   FeishuApiError,
   LarkCliClient,
@@ -52,14 +53,14 @@ export function larkCliReady(probe: LarkCliProbe): boolean {
   return probe.installed && probe.authenticated;
 }
 
-export function larkCliCatalogHint(probe: LarkCliProbe): string {
+export function larkCliCatalogHint(probe: LarkCliProbe): CopyRef {
   if (!probe.installed) {
-    return LARK_CLI_INSTALL_HINT;
+    return "probe.notInstalled";
   }
   if (!probe.authenticated) {
-    return LARK_CLI_LOGIN_HINT;
+    return "probe.notSignedIn";
   }
-  return LARK_CLI_READY_HINT;
+  return "probe.ready";
 }
 
 export function isLarkCliMissing(error: unknown): boolean {

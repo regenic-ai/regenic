@@ -2,11 +2,6 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const { LOCAL_PROXY_HINT } = require("@regenic/domain");
 const {
-  DSH_CLI_MISSING_HINT,
-  DSH_CLI_READY_HINT,
-  DSH_WEB_DOWN_HINT,
-  DSH_WEB_MISSING_HINT,
-  DSH_WEB_READY_HINT,
   dshCliCatalogHint,
   dshSessionDriver,
   dshWebCatalogHint,
@@ -18,27 +13,27 @@ describe("DSH catalog probe", () => {
   it("tells the user to start dsh web, or install dsh first", () => {
     assert.equal(
       dshWebCatalogHint({ up: false, command_present: false, hosted: false }),
-      DSH_WEB_MISSING_HINT,
+      "probe.webMissing",
     );
     assert.equal(
       dshWebCatalogHint({ up: false, command_present: true, hosted: false }),
-      DSH_WEB_DOWN_HINT,
+      "probe.webDown",
     );
     assert.equal(
       dshWebCatalogHint({ up: true, command_present: true, hosted: false }),
-      DSH_WEB_READY_HINT,
+      "probe.webReady",
     );
-    assert.equal(
+    assert.deepEqual(
       dshWebCatalogHint({
         up: false,
         command_present: true,
         hosted: false,
         network_kind: "proxy",
       }),
-      LOCAL_PROXY_HINT,
+      { literal: LOCAL_PROXY_HINT },
     );
-    assert.equal(dshCliCatalogHint(false), DSH_CLI_MISSING_HINT);
-    assert.equal(dshCliCatalogHint(true), DSH_CLI_READY_HINT);
+    assert.equal(dshCliCatalogHint(false), "probe.cliMissing");
+    assert.equal(dshCliCatalogHint(true), "probe.cliReady");
   });
 
   it("probes dsh web and the local dsh binary from the driver", async () => {
@@ -62,7 +57,7 @@ describe("DSH catalog probe", () => {
       { url: "http://127.0.0.1:3080/api/session.list", method: "POST" },
     ]);
     assert.equal(probe.services["dsh-web"].ready, false);
-    assert.equal(probe.services["dsh-web"].hint, DSH_WEB_MISSING_HINT);
+    assert.equal(probe.services["dsh-web"].hint, "probe.webMissing");
     assert.equal(probe.services["dsh-cli"].ready, false);
     assert.equal(typeof dshSessionDriver.probeCatalog, "function");
     resetDshProbeCache();
@@ -84,7 +79,7 @@ describe("DSH catalog probe", () => {
       },
     });
     assert.equal(probe.services["dsh-web"].ready, false);
-    assert.equal(probe.services["dsh-web"].hint, LOCAL_PROXY_HINT);
+    assert.deepEqual(probe.services["dsh-web"].hint, { literal: LOCAL_PROXY_HINT });
     resetDshProbeCache();
   });
 
@@ -103,7 +98,7 @@ describe("DSH catalog probe", () => {
       },
     });
     assert.equal(probe.services["dsh-web"].ready, true);
-    assert.equal(probe.services["dsh-web"].hint, DSH_WEB_READY_HINT);
+    assert.equal(probe.services["dsh-web"].hint, "probe.webReady");
     assert.equal(probe.services["dsh-cli"].ready, true);
     assert.equal(lookedUp, 0);
     resetDshProbeCache();

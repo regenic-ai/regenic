@@ -87,7 +87,7 @@ describe("local connector executor", () => {
     });
     const catalog = executor.catalog();
     assert.equal(catalog.executor_type, "ex-1");
-    assert.equal(catalog.label, "Office DSH");
+    assert.deepEqual(catalog.label, { literal: "Office DSH" });
     assert.equal(catalog.installation_id, "inst-dsh");
     assert.equal(catalog.kind, "local_connector");
     const spawned = [];

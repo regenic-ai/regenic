@@ -424,7 +424,7 @@ describe("dshSessionPlugin", () => {
     const hosted = dshSessionDriver.installCatalog({
       env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
     });
-    assert.equal(hosted.setup_steps[0].title, "Use the cluster DSH URL");
+    assert.equal(hosted.setup_steps[0].title, "setup.clusterUrl.title");
     assert.equal(
       hosted.fields.some((field) => field.key === "transport"),
       false,

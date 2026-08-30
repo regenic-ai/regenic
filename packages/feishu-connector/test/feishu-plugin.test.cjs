@@ -184,7 +184,9 @@ describe("feishuChatDriver", () => {
       chat_ids: ["oc_1"],
       chat_names: ["engineering"],
     });
-    assert.equal(feishuChatDriver.presentInstall(created).label, "engineering");
+    assert.deepEqual(feishuChatDriver.presentInstall(created).label, {
+      literal: "engineering",
+    });
     assert.equal(
       feishuChatDriver.matchesThread(installation, { source: "feishu", target: "oc_1" }),
       true,

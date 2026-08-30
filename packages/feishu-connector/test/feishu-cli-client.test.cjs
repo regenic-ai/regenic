@@ -2,8 +2,6 @@ const assert = require("node:assert/strict");
 const { afterEach, describe, it } = require("node:test");
 const {
   FeishuApiError,
-  LARK_CLI_INSTALL_HINT,
-  LARK_CLI_LOGIN_HINT,
   LarkCliClient,
   isTransientLarkError,
   feishuChatOptionLabel,
@@ -782,7 +780,7 @@ describe("LarkCliClient", () => {
       },
     });
     assert.deepEqual(missing, { installed: false, authenticated: false });
-    assert.equal(larkCliCatalogHint(missing), LARK_CLI_INSTALL_HINT);
+    assert.equal(larkCliCatalogHint(missing), "probe.notInstalled");
 
     resetLarkCliProbeCache();
     const signedOut = await probeLarkCli({
@@ -796,7 +794,7 @@ describe("LarkCliClient", () => {
       },
     });
     assert.deepEqual(signedOut, { installed: true, authenticated: false });
-    assert.equal(larkCliCatalogHint(signedOut), LARK_CLI_LOGIN_HINT);
+    assert.equal(larkCliCatalogHint(signedOut), "probe.notSignedIn");
     resetLarkCliProbeCache();
   });
 

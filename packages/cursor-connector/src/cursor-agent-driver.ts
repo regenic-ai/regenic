@@ -35,6 +35,7 @@ import {
   listCursorLocalAgents,
   rememberCursorAgentCwd,
 } from "./cursor-local-cwd";
+import { cursorLocaleTables } from "./locales";
 import { cursorAgentPlugin, cursorStreamKey } from "./plugin";
 import { probeCursorCatalog } from "./probe";
 
@@ -164,65 +165,70 @@ export const cursorAgentDriver: ChannelDriver = {
     return `${thread.target}:out:${receipt.rpc_id ?? randomUUID()}`;
   },
 
+  locales() {
+    return cursorLocaleTables;
+  },
+
   installCatalog() {
     return {
-      title: "Cursor",
-      channel_label: "Cursor",
-      description:
-        "Open a local Cursor agent from the inbox. The first message creates the session. Paste an API key here; it is stored on this machine, not in connector settings.",
-      credential_hint: "Paste CURSOR_API_KEY or set the env var",
+      title: "catalog.title",
+      channel_label: "catalog.channelLabel",
+      description: "catalog.description",
+      credential_hint: "catalog.credentialHint",
       fields: [
         {
           key: "api_key",
-          label: "Cursor API key",
+          label: "field.apiKey",
           required: false,
           secret: true,
-          placeholder: "Leave empty to use CURSOR_API_KEY or a saved key",
+          placeholder: "field.apiKey.placeholder",
         },
         {
           key: "model",
-          label: "Default model",
+          label: "field.model",
           required: true,
           default: DEFAULT_CURSOR_MODEL,
           options: [...CURSOR_MODEL_OPTIONS],
         },
         {
           key: "cwd",
-          label: "Working directory",
+          label: "field.cwd",
           required: false,
-          placeholder: "Defaults to the current workspace",
+          placeholder: "field.cwd.placeholder",
         },
       ],
       prerequisites: [
         {
           kind: "env" as const,
           key: CURSOR_API_KEY_ENV,
-          label: "Cursor API key",
+          label: "prereq.apiKey",
           required: false,
-          hint: "Optional if you paste the key in the form.",
+          hint: "prereq.apiKey.hint",
         },
       ],
       setup_steps: [
         {
-          title: "Create a Cursor API key",
+          title: "setup.createKey.title",
           href: "https://cursor.com/dashboard",
         },
         {
-          title: "Paste the key below, or set CURSOR_API_KEY",
-          body: "A pasted key is stored in the OS keychain or ~/.regenic/credentials/cursor. It is not written into connector settings.",
+          title: "setup.pasteKey.title",
+          body: "setup.pasteKey.body",
         },
         {
-          title: "Pick a default model",
-          body: "Local agents require a model. composer-2.5 is the default.",
+          title: "setup.model.title",
+          body: "setup.model.body",
         },
       ],
     };
   },
 
   presentInstall(installation) {
+    const cwd = configString(installation.config, "cwd");
+    const model = cursorModel(installation.config);
     return {
-      label: configString(installation.config, "cwd") ?? "Local agent",
-      detail: cursorModel(installation.config),
+      label: cwd ? { literal: cwd } : "present.localAgent",
+      detail: model ? { literal: model } : null,
     };
   },
 

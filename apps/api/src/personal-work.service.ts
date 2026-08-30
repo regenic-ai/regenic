@@ -1,6 +1,7 @@
 import { Inject, Injectable, OnModuleDestroy, forwardRef } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  resolveExecutorCatalog,
   INBOX_LIST_PREF_KEY,
   INBOX_MEMBERSHIP_PREF_KEY,
   INBOX_SORT_PREF_KEY,
@@ -224,8 +225,8 @@ export class PersonalWorkService implements OnModuleDestroy {
     }));
   }
 
-  async listExecutors() {
-    return this.executors.listCatalog();
+  async listExecutors(locale?: import("@regenic/domain").CopyLocale) {
+    return this.executors.listCatalog(locale);
   }
 
   async putRecipe(input: RecipeInput, id?: string): Promise<Recipe> {
@@ -248,7 +249,11 @@ export class PersonalWorkService implements OnModuleDestroy {
         400,
       );
     }
-    const missing = missingCatalogFields(executor.catalog().fields, recipe.executor_config);
+    const missing = missingCatalogFields(
+      resolveExecutorCatalog(executor.catalog(), executor.locales?.() ?? [])
+        .fields,
+      recipe.executor_config,
+    );
     if (missing) {
       throw new PersonalConnectorError(
         "invalid_config",
@@ -593,7 +598,7 @@ function lastRunForRecipe(
 }
 
 function missingCatalogFields(
-  fields: Array<{ key: string; label: string; required?: boolean }>,
+  fields: Array<{ key: string; label: unknown; required?: boolean }>,
   config: Record<string, unknown>,
 ): string | undefined {
   for (const field of fields) {
@@ -602,7 +607,7 @@ function missingCatalogFields(
     }
     const value = config[field.key];
     if (typeof value !== "string" || !value.trim()) {
-      return field.label;
+      return typeof field.label === "string" ? field.label : field.key;
     }
   }
   return undefined;

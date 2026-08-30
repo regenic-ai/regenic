@@ -2,6 +2,8 @@ import { Inject, Injectable, forwardRef } from "@nestjs/common";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
+  DEFAULT_COPY_LOCALE,
+  type CopyLocale,
   attentionOf,
   collectLatestInbound,
   computeThreadUnread,
@@ -179,6 +181,7 @@ export interface InboxListQuery {
   thread_id?: string;
   limit?: number;
   list?: string;
+  locale?: CopyLocale;
 }
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
@@ -193,6 +196,7 @@ export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
 
 export interface EngineQuery {
   detailed?: boolean;
+  locale?: CopyLocale;
 }
 
 export interface StoreView {
@@ -239,7 +243,10 @@ export class PersonalInboxService {
     });
   }
 
-  async getInboxItem(eventId: string): Promise<InboxViewItem | null> {
+  async getInboxItem(
+    eventId: string,
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  ): Promise<InboxViewItem | null> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const blobs = host.get("blobs");
@@ -318,6 +325,7 @@ export class PersonalInboxService {
       receipts,
       true,
       faces.get(threadId),
+      locale,
     );
     const traces = await loadForwardedToTraces(
       siblings,
@@ -325,6 +333,7 @@ export class PersonalInboxService {
       authority,
       blobs,
       this.drivers,
+      locale,
     );
     const forwardedTo = traces.get(view.event.id);
     return forwardedTo ? { ...view, forwarded_to: forwardedTo } : view;
@@ -337,16 +346,20 @@ export class PersonalInboxService {
     const catalogReady = async (
       installations: EngineInstallationView[],
     ) => {
-      const extras = catalogFromDrivers(this.drivers, process.env);
+      const extras = catalogFromDrivers(this.drivers, process.env, query.locale);
       if (!detailed) {
         return connectorCatalog(installations, {
           env: process.env,
+          locale: query.locale,
+          drivers: this.drivers,
           extras,
         });
       }
       const probed = await this.drivers.probeCatalog(process.env);
       return connectorCatalog(installations, {
         env: process.env,
+        locale: query.locale,
+        drivers: this.drivers,
         services: probed.services,
         field_options: probed.field_options,
         extras,
@@ -385,12 +398,13 @@ export class PersonalInboxService {
           installation,
           attempt,
           this.drivers,
+          query.locale,
         );
       }),
     );
     const [executorInstallations, connectorOptions] = await Promise.all([
       this.executors.listViews(),
-      this.executors.creatableConnectorOptions(),
+      this.executors.creatableConnectorOptions(query.locale),
     ]);
     return {
       kernel: "running",
@@ -642,6 +656,7 @@ export class PersonalInboxService {
           receiptPage.receipts,
           includeReceipts,
           faces.get(threadId),
+          query.locale,
         );
         const prompt = prompts.get(threadId);
         const titled =
@@ -656,7 +671,7 @@ export class PersonalInboxService {
     );
     return query.heads === true
       ? views
-      : projectForwardedTo(views, this.drivers);
+      : projectForwardedTo(views, this.drivers, query.locale);
   }
 
   async updateConversationPrefs(
@@ -862,6 +877,7 @@ function decorateInboxItem(
   receiptsByOutbound: ReadonlyMap<string, MessageReceipt> = new Map(),
   includeReceipts = true,
   workFace?: WorkInboxFace,
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): InboxViewItem {
   const surface = messageSurfaceOf(item.event, body);
   const thread = threadOf(item.event);
@@ -879,7 +895,7 @@ function decorateInboxItem(
     ...item,
     ...body,
     channel: surface.channel,
-    channel_label: drivers.sourceLabel(surface.channel),
+    channel_label: drivers.sourceLabel(surface.channel, process.env, locale),
     kind: surface.kind,
     direction: surface.direction,
     can_send: drivers.canSend(installations, thread),
@@ -896,7 +912,7 @@ function decorateInboxItem(
     conversation_kind: surface.conversation_kind ?? null,
     unit_kind: surface.unit_kind ?? null,
     unit_kind_label:
-      drivers.unitKindLabel(surface.channel, surface.unit_kind) ?? null,
+      drivers.unitKindLabel(surface.channel, surface.unit_kind, locale) ?? null,
     actor_label: surface.actor_label ?? null,
     activity: surface.activity,
     prompts,
@@ -932,10 +948,10 @@ function decorateInboxItem(
     }),
     work: workFace?.work,
     ...(surface.forwarded_from
-      ? { forwarded_from: labeledForwardTrace(surface.forwarded_from, drivers) }
+      ? { forwarded_from: labeledForwardTrace(surface.forwarded_from, drivers, locale) }
       : {}),
     ...(surface.forwarded_to
-      ? { forwarded_to: labeledForwardTrace(surface.forwarded_to, drivers) }
+      ? { forwarded_to: labeledForwardTrace(surface.forwarded_to, drivers, locale) }
       : {}),
   };
 }
@@ -943,16 +959,18 @@ function decorateInboxItem(
 function labeledForwardTrace(
   trace: ForwardedFrom,
   drivers: ChannelDriverRegistry,
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): ForwardedFrom {
   return {
     ...trace,
-    channel_label: drivers.sourceLabel(trace.source),
+    channel_label: drivers.sourceLabel(trace.source, process.env, locale),
   };
 }
 
 function projectForwardedTo(
   views: InboxViewItem[],
   drivers: ChannelDriverRegistry,
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): InboxViewItem[] {
   const traces = latestForwardedTo(
     views.flatMap((view) => {
@@ -964,7 +982,7 @@ function projectForwardedTo(
         {
           id: view.event.id,
           occurred_at: view.event.occurred_at,
-          forwarded_to: labeledForwardTrace(trace, drivers),
+          forwarded_to: labeledForwardTrace(trace, drivers, locale),
         },
       ];
     }),
@@ -987,6 +1005,7 @@ async function loadForwardedToTraces(
   authority: AuthorityStore,
   blobs: BlobStore,
   drivers: ChannelDriverRegistry,
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): Promise<Map<string, ForwardedFrom>> {
   const status = items.filter((item) => isThreadStatusItem(item));
   if (status.length === 0) {
@@ -1015,7 +1034,7 @@ async function loadForwardedToTraces(
         id: item.event.id,
         occurred_at: item.event.occurred_at,
         forwarded_to: surface.forwarded_to
-          ? labeledForwardTrace(surface.forwarded_to, drivers)
+          ? labeledForwardTrace(surface.forwarded_to, drivers, locale)
           : undefined,
       };
     }),

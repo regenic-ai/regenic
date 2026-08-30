@@ -1,8 +1,10 @@
 /** Opaque work-unit type stamped by a connector. Kernel equality-matches only. */
 
+import type { CopyRef } from "./copy";
+
 export interface UnitKindEntry {
   id: string;
-  label: string;
+  label: CopyRef;
 }
 
 export interface SubjectCatalog {
@@ -18,7 +20,10 @@ export function normalizeUnitKind(value: unknown): string | undefined {
 }
 
 export function labelForUnitKind(
-  catalogs: ReadonlyArray<{ source?: string; kinds: readonly UnitKindEntry[] }>,
+  catalogs: ReadonlyArray<{
+    source?: string;
+    kinds: ReadonlyArray<{ id: string; label: string }>;
+  }>,
   source: string | undefined,
   unitKind: string | undefined,
 ): string | undefined {
@@ -51,10 +56,7 @@ export function readSubjectCatalog(input?: { kinds?: unknown } | null): SubjectC
     }
     const record = entry as { id?: unknown; label?: unknown };
     const id = normalizeUnitKind(record.id);
-    const label =
-      typeof record.label === "string" && record.label.trim()
-        ? record.label.replace(/\s+/g, " ").trim()
-        : id;
+    const label = readCopyRef(record.label) ?? id;
     if (!id || !label || seen.has(id)) {
       continue;
     }
@@ -62,4 +64,26 @@ export function readSubjectCatalog(input?: { kinds?: unknown } | null): SubjectC
     kinds.push({ id, label });
   }
   return { kinds };
+}
+
+function readCopyRef(value: unknown): CopyRef | undefined {
+  if (typeof value === "string") {
+    const text = value.replace(/\s+/g, " ").trim();
+    return text || undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as { key?: unknown; literal?: unknown; params?: unknown };
+  if (typeof record.literal === "string") {
+    const text = record.literal.replace(/\s+/g, " ").trim();
+    return text ? { literal: text } : undefined;
+  }
+  if (typeof record.key === "string" && record.key.replace(/\s+/g, " ").trim()) {
+    const key = record.key.replace(/\s+/g, " ").trim();
+    return typeof record.params === "object" && record.params
+      ? { key, params: record.params as Record<string, string | number> }
+      : key;
+  }
+  return undefined;
 }

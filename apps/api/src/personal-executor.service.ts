@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  DEFAULT_COPY_LOCALE,
   DEFAULT_LOCAL_EXECUTOR_ID,
+  resolveExecutorCatalog,
+  type CopyLocale,
   EXECUTOR_DEFAULTS_SEEDED_PREF,
   LocalExecutorPluginRegistry,
   createHttpTaskExecutor,
@@ -86,9 +89,19 @@ export class PersonalExecutorService {
     return next;
   }
 
-  async listCatalog(): Promise<ExecutorCatalogEntry[]> {
+  async listCatalog(locale: CopyLocale = DEFAULT_COPY_LOCALE): Promise<ExecutorCatalogEntry[]> {
     await this.ensureMounted();
-    return this.runtime.requireHost().get("executors").catalog();
+    return this.runtime
+      .requireHost()
+      .get("executors")
+      .list()
+      .map((executor) =>
+        resolveExecutorCatalog(
+          executor.catalog(),
+          executor.locales?.() ?? [],
+          locale,
+        ),
+      );
   }
 
   async listViews(): Promise<EngineExecutorView[]> {
@@ -168,7 +181,9 @@ export class PersonalExecutorService {
     ];
   }
 
-  async creatableConnectorOptions(): Promise<Array<{ value: string; label: string }>> {
+  async creatableConnectorOptions(
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  ): Promise<Array<{ value: string; label: string }>> {
     if (!this.runtime.isReady()) {
       return [];
     }
@@ -181,7 +196,7 @@ export class PersonalExecutorService {
       if (!driver?.capabilities(installation).create) {
         return [];
       }
-      const view = toInstallationView(installation, null, this.drivers);
+      const view = toInstallationView(installation, null, this.drivers, locale);
       return [{ value: installation.id, label: view.label }];
     });
   }

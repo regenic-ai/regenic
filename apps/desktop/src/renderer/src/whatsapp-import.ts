@@ -43,7 +43,7 @@ export async function importWhatsAppFiles(
       result.failures.push({
         file_name: file.name,
         message:
-          error instanceof Error ? error.message : t("engine.whatsapp.importFailed"),
+          error instanceof Error ? error.message : t("connector.importFailed"),
       });
     }
   }
@@ -51,7 +51,7 @@ export async function importWhatsAppFiles(
 }
 
 export function whatsAppImportSummary(result: WhatsAppImportBatchResult): string {
-  return t("engine.whatsapp.summary", {
+  return t("connector.importSummary", {
     completed: result.completed_files,
     total: result.total_files,
     accepted: result.accepted_count,

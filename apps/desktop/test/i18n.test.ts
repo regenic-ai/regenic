@@ -92,14 +92,14 @@ describe("desktop locale", () => {
       }),
       /还留着/,
     );
-    assert.equal(translate("zh", "engine.whatsapp.title"), "WhatsApp 个人导出");
+    assert.equal(translate("zh", "connector.import"), "导入文件");
     assert.equal(translate("zh", "docs.connector"), "连接器规范");
     assert.equal(translate("en", "connector.setup"), "Set up");
     assert.equal(translate("zh", "connector.setupTitle", { title: "飞书" }), "设置 飞书");
     assert.equal(translate("zh", "connector.setupSteps"), "准备步骤");
     assert.equal(translate("en", "docs.executor"), "Executor spec");
     assert.equal(
-      translate("zh", "engine.whatsapp.summary", {
+      translate("zh", "connector.importSummary", {
         completed: 2,
         total: 3,
         accepted: 5,

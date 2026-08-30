@@ -157,7 +157,7 @@ describe("cursorAgentDriver", () => {
 
   it("advertises Cursor on the Engine catalog", () => {
     const catalog = cursorAgentDriver.installCatalog();
-    assert.equal(catalog.channel_label, "Cursor");
+    assert.equal(catalog.channel_label, "catalog.channelLabel");
     assert.equal(catalog.fields[0].key, "api_key");
     assert.equal(catalog.fields[0].secret, true);
     assert.equal(catalog.fields[1].key, "model");

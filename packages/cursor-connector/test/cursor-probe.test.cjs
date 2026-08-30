@@ -1,9 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
-  CURSOR_KEY_INVALID_HINT,
-  CURSOR_KEY_MISSING_HINT,
-  CURSOR_KEY_READY_HINT,
   cursorApiCatalogHint,
   cursorAgentDriver,
   probeCursorCatalog,
@@ -14,15 +11,15 @@ describe("Cursor catalog probe", () => {
   it("tells the user to set or replace CURSOR_API_KEY", () => {
     assert.equal(
       cursorApiCatalogHint({ present: false, ready: false }),
-      CURSOR_KEY_MISSING_HINT,
+      "probe.missing",
     );
     assert.equal(
       cursorApiCatalogHint({ present: true, ready: false }),
-      CURSOR_KEY_INVALID_HINT,
+      "probe.invalid",
     );
     assert.equal(
       cursorApiCatalogHint({ present: true, ready: true }),
-      CURSOR_KEY_READY_HINT,
+      "probe.ready",
     );
   });
 
@@ -39,7 +36,7 @@ describe("Cursor catalog probe", () => {
     });
     assert.equal(called, false);
     assert.equal(probe.services["cursor-api"].ready, false);
-    assert.match(probe.services["cursor-api"].hint, /Paste a Cursor API key/);
+    assert.equal(probe.services["cursor-api"].hint, "probe.missing");
     assert.equal(typeof cursorAgentDriver.probeCatalog, "function");
     resetCursorProbeCache();
   });
@@ -69,7 +66,7 @@ describe("Cursor catalog probe", () => {
     });
     assert.deepEqual(urls, ["https://api.cursor.test/v1/me"]);
     assert.equal(probe.services["cursor-api"].ready, true);
-    assert.equal(probe.services["cursor-api"].hint, CURSOR_KEY_READY_HINT);
+    assert.equal(probe.services["cursor-api"].hint, "probe.ready");
     resetCursorProbeCache();
   });
 });

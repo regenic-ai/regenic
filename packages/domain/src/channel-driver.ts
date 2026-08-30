@@ -1,5 +1,13 @@
 import type { Host } from "@regenic/plugin-host";
 import { asConnectorHost, type ConnectorHost } from "./connector-host";
+import {
+  DEFAULT_COPY_LOCALE,
+  resolveCopyText,
+  type CopyLocale,
+  type CopyRef,
+  type LocaleHref,
+  type PluginLocaleTable,
+} from "./copy";
 import type { DeliveryReceipt, RegisteredEgress } from "./egress";
 import { CHANNELS, channelLabel } from "./message-contract";
 import type {
@@ -112,12 +120,12 @@ export interface ChannelCapabilities {
 
 export interface ConnectorCatalogServiceState {
   ready: boolean;
-  hint?: string;
+  hint?: CopyRef;
 }
 
 export interface ConnectorCatalogProbe {
   services?: Record<string, ConnectorCatalogServiceState>;
-  field_options?: Record<string, { value: string; label: string }[]>;
+  field_options?: Record<string, { value: string; label: CopyRef }[]>;
 }
 
 /** Drivers declare their own install card. The host does not keep a parallel catalog. */
@@ -128,33 +136,30 @@ export interface DriverCatalogFieldWhen {
 
 export interface DriverCatalogField {
   key: string;
-  label: string;
+  label: CopyRef;
   required?: boolean;
-  placeholder?: string;
+  placeholder?: CopyRef;
   default?: string;
   multiple?: boolean;
   secret?: boolean;
-  options?: { value: string; label: string }[];
+  options?: { value: string; label: CopyRef }[];
   visible_when?: DriverCatalogFieldWhen;
 }
 
 export interface DriverCatalogPrerequisite {
   kind: "env" | "local_service";
   key: string;
-  label: string;
+  label: CopyRef;
   required?: boolean;
-  hint?: string;
+  hint?: CopyRef;
   visible_when?: DriverCatalogFieldWhen;
 }
 
 export interface DriverCatalogSetupStep {
-  title: string;
-  title_zh?: string;
-  body?: string;
-  body_zh?: string;
+  title: CopyRef;
+  body?: CopyRef;
   command?: string;
-  href?: string;
-  href_zh?: string;
+  href?: LocaleHref;
   visible_when?: DriverCatalogFieldWhen;
 }
 
@@ -162,8 +167,8 @@ export interface DriverCatalogSetupStep {
 export interface DriverImportFiles {
   accept: string;
   max_bytes?: number;
-  title?: string;
-  description?: string;
+  title?: CopyRef;
+  description?: CopyRef;
 }
 
 export interface ConnectorImportInput {
@@ -182,14 +187,14 @@ export interface ConnectorImportParseResult {
 }
 
 export interface DriverInstallCatalog {
-  title: string;
-  description: string;
-  credential_hint: string;
+  title: CopyRef;
+  description: CopyRef;
+  credential_hint: CopyRef;
   /**
    * Human label for `driver.source`. Inbox and Engine read this.
    * Omit it to use CHANNELS, then title, then SOURCE.
    */
-  channel_label?: string;
+  channel_label?: CopyRef;
   singleton?: boolean;
   fields?: DriverCatalogField[];
   prerequisites?: DriverCatalogPrerequisite[];
@@ -202,22 +207,28 @@ export interface DriverInstallCatalog {
    * File picker on the Engine card. The desktop does not hard-code importers.
    */
   import_files?: DriverImportFiles;
-  instance_label?: string;
+  instance_label?: CopyRef;
   instance_detail_key?: string;
 }
 
 export function sourceLabelFromCatalog(
   source: string | undefined,
   catalog?: Pick<DriverInstallCatalog, "channel_label" | "title"> | null,
+  tables: readonly PluginLocaleTable[] = [],
+  locale: CopyLocale = DEFAULT_COPY_LOCALE,
 ): string {
-  const declared = catalog?.channel_label?.replace(/\s+/g, " ").trim();
+  const declared = resolveCopyText(tables, locale, catalog?.channel_label)
+    .replace(/\s+/g, " ")
+    .trim();
   if (declared) {
     return declared;
   }
   if (source && CHANNELS[source]) {
     return CHANNELS[source].label;
   }
-  const title = catalog?.title?.replace(/\s+/g, " ").trim();
+  const title = resolveCopyText(tables, locale, catalog?.title)
+    .replace(/\s+/g, " ")
+    .trim();
   if (title) {
     return title;
   }
@@ -225,8 +236,8 @@ export function sourceLabelFromCatalog(
 }
 
 export interface DriverInstallPresentation {
-  label: string;
-  detail: string | null;
+  label: CopyRef;
+  detail: CopyRef | null;
 }
 
 export interface ConnectorStreamPace {
@@ -362,6 +373,11 @@ export interface ChannelDriver
     host: ConnectorHost,
     env: NodeJS.ProcessEnv,
   ): Promise<WebhookConnector>;
+  /**
+   * Plugin-owned locale tables. English is the source. Host chrome
+   * stays in the desktop catalog.
+   */
+  locales?(): readonly PluginLocaleTable[];
   /**
    * Install card. Absent means this driver does not appear in Engine.
    */
@@ -520,22 +536,32 @@ export class ChannelDriverRegistry {
   sourceLabel(
     source: string | undefined,
     env: NodeJS.ProcessEnv = process.env,
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
   ): string {
     if (!source) {
       return channelLabel(source);
     }
     const driver = this.list().find((item) => item.source === source);
-    return sourceLabelFromCatalog(source, driver?.installCatalog?.({ env }));
+    return sourceLabelFromCatalog(
+      source,
+      driver?.installCatalog?.({ env }),
+      driver?.locales?.() ?? [],
+      locale,
+    );
   }
 
   unitKindLabel(
     source: string | undefined,
     unitKind: string | undefined,
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
   ): string | undefined {
     return labelForUnitKind(
       this.list().map((driver) => ({
         source: driver.source,
-        kinds: readSubjectCatalog(driver.subjectCatalog?.()).kinds,
+        kinds: readSubjectCatalog(driver.subjectCatalog?.()).kinds.map((kind) => ({
+          id: kind.id,
+          label: resolveCopyText(driver.locales?.() ?? [], locale, kind.label) || kind.id,
+        })),
       })),
       source,
       unitKind,
@@ -559,13 +585,13 @@ export class ChannelDriverRegistry {
     services: Record<string, ConnectorCatalogServiceState>;
     field_options: Record<
       string,
-      Record<string, { value: string; label: string }[]>
+      Record<string, { value: string; label: CopyRef }[]>
     >;
   }> {
     const services: Record<string, ConnectorCatalogServiceState> = {};
     const field_options: Record<
       string,
-      Record<string, { value: string; label: string }[]>
+      Record<string, { value: string; label: CopyRef }[]>
     > = {};
     await Promise.all(
       this.list().map(async (driver) => {

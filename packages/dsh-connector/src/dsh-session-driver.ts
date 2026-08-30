@@ -29,6 +29,7 @@ import {
   resolveEffectiveDshTransport,
 } from "./plugin";
 import { loopbackHttpUrl, resolveOperatorDshBaseUrl } from "./dsh-url";
+import { dshLocaleTables } from "./locales";
 import { probeDshCatalog } from "./probe";
 
 export const dshSessionDriver: ChannelDriver = {
@@ -169,91 +170,93 @@ export const dshSessionDriver: ChannelDriver = {
     return `${thread.target}:out:${receipt.rpc_id ?? randomUUID()}`;
   },
 
+  locales() {
+    return dshLocaleTables;
+  },
+
   installCatalog(input = {}) {
     const env = input.env ?? process.env;
     if (env.REGENIC_DSH_BASE_URL?.trim()) {
       return {
-        title: "DSH",
-        channel_label: "DSH",
-        description:
-          "Hosted kernel talks to DSH over the cluster Service (REGENIC_DSH_BASE_URL). Leave Session ID empty to follow every session. Do not paste a public DSH URL.",
-        credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
+        title: "catalog.title",
+        channel_label: "catalog.channelLabel",
+        description: "catalog.descriptionHosted",
+        credential_hint: "catalog.credentialHint",
         fields: [
           {
             key: "session_id",
-            label: "Session ID",
+            label: "field.sessionId",
             required: false,
-            placeholder: "Leave empty to sync all sessions",
+            placeholder: "field.sessionId.placeholder",
           },
         ],
         prerequisites: [
           {
             kind: "local_service" as const,
             key: "dsh-web",
-            label: "Cluster DSH",
+            label: "prereq.cluster",
             required: false,
-            hint: "Uses REGENIC_DSH_BASE_URL (cluster DNS, not a public URL)",
+            hint: "prereq.cluster.hint",
           },
           {
             kind: "env" as const,
             key: "REGENIC_DSH_TOKEN",
-            label: "DSH web token",
+            label: "prereq.token",
             required: false,
-            hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
+            hint: "prereq.token.hint",
           },
         ],
         setup_steps: [
           {
-            title: "Use the cluster DSH URL",
-            body: "REGENIC_DSH_BASE_URL is already set. Do not paste a public DSH URL.",
+            title: "setup.clusterUrl.title",
+            body: "setup.clusterUrl.body",
           },
           {
-            title: "Set a token if the server requires one",
-            body: "Set REGENIC_DSH_TOKEN, then fully quit and reopen the desktop.",
+            title: "setup.token.title",
+            body: "setup.token.body",
           },
           {
-            title: "Leave Session ID empty to follow every session",
+            title: "setup.allSessions.title",
           },
         ],
       };
     }
     return {
-      title: "DSH",
-      channel_label: "DSH",
-      description:
-        "One install talks to dsh web (local loopback, or REGENIC_DSH_BASE_URL on a hosted API). The kernel pulls every session after install; set a Session ID to follow only that one.",
-      credential_hint: "REGENIC_DSH_TOKEN (web, optional)",
+      title: "catalog.title",
+      channel_label: "catalog.channelLabel",
+      description: "catalog.description",
+      credential_hint: "catalog.credentialHint",
       fields: [
         {
           key: "transport",
-          label: "Transport",
+          label: "field.transport",
           required: true,
           default: "web",
           options: [
-            { value: "web", label: "Web" },
-            { value: "cli", label: "CLI" },
+            { value: "web", label: "option.transport.web" },
+            { value: "cli", label: "option.transport.cli" },
           ],
         },
         {
           key: "session_id",
-          label: "Session ID",
+          label: "field.sessionId",
           required: false,
-          placeholder: "Leave empty to sync all sessions",
+          placeholder: "field.sessionId.placeholder",
           visible_when: { field: "transport", value: "web" },
         },
         {
           key: "base_url",
-          label: "Base URL",
+          label: "field.baseUrl",
           required: false,
           default: "http://127.0.0.1:3080",
-          placeholder: "Loopback only (127.0.0.1 / localhost)",
+          placeholder: "field.baseUrl.placeholder",
           visible_when: { field: "transport", value: "web" },
         },
         {
           key: "mailbox",
-          label: "Mailbox",
+          label: "field.mailbox",
           required: false,
-          placeholder: "CLI mode; defaults to the install ID",
+          placeholder: "field.mailbox.placeholder",
           visible_when: { field: "transport", value: "cli" },
         },
       ],
@@ -261,50 +264,50 @@ export const dshSessionDriver: ChannelDriver = {
         {
           kind: "local_service" as const,
           key: "dsh-web",
-          label: "Local dsh web",
+          label: "prereq.dshWeb",
           required: false,
-          hint: "dsh must work in your terminal. Then start dsh web --port 3080.",
+          hint: "prereq.dshWeb.hint",
           visible_when: { field: "transport", value: "web" },
         },
         {
           kind: "local_service" as const,
           key: "dsh-cli",
-          label: "Local dsh",
+          label: "prereq.dshCli",
           required: true,
-          hint: "dsh must work in your terminal.",
+          hint: "prereq.dshCli.hint",
           visible_when: { field: "transport", value: "cli" },
         },
         {
           kind: "env" as const,
           key: "REGENIC_DSH_TOKEN",
-          label: "DSH web token",
+          label: "prereq.token",
           required: false,
-          hint: "Set REGENIC_DSH_TOKEN before starting the desktop if dsh web requires a Bearer token.",
+          hint: "prereq.token.hint",
           visible_when: { field: "transport", value: "web" },
         },
       ],
       setup_steps: [
         {
-          title: "Install dsh",
-          body: "The binary must work in your terminal before the web server or CLI transport will.",
+          title: "setup.install.title",
+          body: "setup.install.body",
         },
         {
-          title: "Start the local web server",
+          title: "setup.web.title",
           command: "dsh web --port 3080",
           visible_when: { field: "transport", value: "web" },
         },
         {
-          title: "Set a token if the server requires one",
-          body: "Set REGENIC_DSH_TOKEN, then fully quit and reopen the desktop.",
+          title: "setup.token.title",
+          body: "setup.token.body",
           visible_when: { field: "transport", value: "web" },
         },
         {
-          title: "Leave Session ID empty to follow every session",
+          title: "setup.allSessions.title",
           visible_when: { field: "transport", value: "web" },
         },
         {
-          title: "Use a mailbox if you do not want the install id",
-          body: "CLI mode follows one mailbox.",
+          title: "setup.mailbox.title",
+          body: "setup.mailbox.body",
           visible_when: { field: "transport", value: "cli" },
         },
       ],
@@ -318,15 +321,16 @@ export const dshSessionDriver: ChannelDriver = {
       ? "web"
       : resolveEffectiveDshTransport(installation.config, env);
     if (transport === "cli") {
+      const mailbox = configString(installation.config, "mailbox");
       return {
-        label: configString(installation.config, "mailbox") ?? installation.id,
-        detail: "cli",
+        label: { literal: mailbox ?? installation.id },
+        detail: { literal: "cli" },
       };
     }
     const sessionId = configString(installation.config, "session_id");
     return {
-      label: sessionId ?? "All sessions",
-      detail: transport === "web" || hosted ? "web" : null,
+      label: sessionId ? { literal: sessionId } : "present.allSessions",
+      detail: transport === "web" || hosted ? { literal: "web" } : null,
     };
   },
 

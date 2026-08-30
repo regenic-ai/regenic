@@ -13,25 +13,25 @@ const {
   toInstallationView,
 } = require("../dist/personal-connector-view");
 
-function firstParty(env = {}) {
-  return catalogFromDrivers(
-    {
-      list: () => [
-        slackChannelDriver,
-        dshSessionDriver,
-        feishuChatDriver,
-        cursorAgentDriver,
-        whatsappWebLiveDriver,
-      ],
-    },
-    env,
-  );
+function firstPartyDrivers() {
+  return [
+    slackChannelDriver,
+    dshSessionDriver,
+    feishuChatDriver,
+    cursorAgentDriver,
+    whatsappWebLiveDriver,
+  ];
+}
+
+function firstParty(env = {}, locale) {
+  return catalogFromDrivers({ list: () => firstPartyDrivers() }, env, locale);
 }
 
 function catalogOf(readiness = {}) {
   return connectorCatalog([], {
     ...readiness,
-    extras: readiness.extras ?? firstParty(readiness.env ?? {}),
+    drivers: readiness.drivers ?? { list: () => firstPartyDrivers() },
+    extras: readiness.extras ?? firstParty(readiness.env ?? {}, readiness.locale),
   });
 }
 
@@ -94,7 +94,7 @@ describe("connector catalog hints", () => {
     assert.equal(whatsapp.setup_ready, true);
     assert.deepEqual(whatsapp.prerequisites, []);
     assert.equal(whatsapp.setup_steps[0].title, "Install this connector");
-    assert.equal(whatsapp.setup_steps[0].title_zh, "安装这个连接器");
+    assert.equal(whatsapp.setup_steps[0].title_zh, undefined);
     assert.match(whatsapp.credential_hint, /Pairing code/);
     const hosted = catalogOf({
       env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
@@ -103,6 +103,20 @@ describe("connector catalog hints", () => {
     assert.equal(
       hosted.fields.some((field) => field.key === "transport"),
       false,
+    );
+  });
+
+  it("resolves plugin catalog copy for Chinese", () => {
+    const catalog = catalogOf({ env: {}, locale: "zh" });
+    const feishu = catalog.find((item) => item.connector_type === "feishu-chat");
+    const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
+    assert.equal(feishu.title, "飞书");
+    assert.equal(feishu.fields[0].label, "同步范围");
+    assert.equal(whatsapp.setup_steps[0].title, "安装这个连接器");
+    assert.match(whatsapp.import_files.description, /只读/);
+    assert.equal(
+      whatsapp.setup_steps[1].href,
+      "https://github.com/regenic-ai/regenic/blob/main/docs/zh/WHATSAPP_WEB_LIVE_CONNECTOR.md",
     );
   });
 

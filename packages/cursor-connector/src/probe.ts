@@ -5,7 +5,7 @@ import {
   DEFAULT_CURSOR_API_BASE,
   type CursorFetch,
 } from "./cursor-api-client";
-import type { ConnectorCatalogProbe } from "@regenic/domain";
+import type { ConnectorCatalogProbe, CopyRef } from "@regenic/domain";
 
 export const CURSOR_KEY_MISSING_HINT =
   "Paste a Cursor API key in the install form, or set CURSOR_API_KEY.";
@@ -16,16 +16,16 @@ export const CURSOR_KEY_READY_HINT = "Cursor API key is valid.";
 const PROBE_TTL_MS = 20_000;
 const PROBE_FAIL_TTL_MS = 2_000;
 
-let cache: { at: number; ready: boolean; hint: string } | null = null;
+let cache: { at: number; ready: boolean; hint: CopyRef } | null = null;
 
 export function cursorApiCatalogHint(input: {
   present: boolean;
   ready: boolean;
-}): string {
+}): CopyRef {
   if (!input.present) {
-    return CURSOR_KEY_MISSING_HINT;
+    return "probe.missing";
   }
-  return input.ready ? CURSOR_KEY_READY_HINT : CURSOR_KEY_INVALID_HINT;
+  return input.ready ? "probe.ready" : "probe.invalid";
 }
 
 export function resetCursorProbeCache(): void {
@@ -44,7 +44,7 @@ export async function probeCursorCatalog(options: {
       services: {
         "cursor-api": {
           ready: false,
-          hint: CURSOR_KEY_MISSING_HINT,
+          hint: cursorApiCatalogHint({ present: false, ready: false }),
         },
       },
     };

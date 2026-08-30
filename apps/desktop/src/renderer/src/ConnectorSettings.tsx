@@ -75,9 +75,7 @@ export function ConnectorKind({
                 : t("connector.notInstalled")}
             </span>
             <span className="muted">
-              {kind.connector_type === "whatsapp-web-live"
-                ? t("connector.whatsappCredentials")
-                : t("connector.credentials", { hint: kind.credential_hint })}
+              {t("connector.credentials", { hint: kind.credential_hint })}
             </span>
           </div>
           <PrerequisiteList
@@ -515,7 +513,7 @@ function SetupStepList({
   values: Record<string, string>;
   collapsible: boolean;
 }) {
-  const { locale, t } = useLocale();
+  const { t } = useLocale();
   const [copied, setCopied] = useState<string | null>(null);
   const visible = steps.filter((step) => matchesWhen(step.visible_when, values));
   if (visible.length === 0) {
@@ -525,9 +523,9 @@ function SetupStepList({
     <ol className="setup-step-list">
       {visible.map((step, index) => {
         const copyKey = `${index}:${step.command ?? ""}`;
-        const title = localizedStepText(step.title, step.title_zh, locale);
-        const body = localizedStepText(step.body, step.body_zh, locale);
-        const href = locale === "zh" && step.href_zh ? step.href_zh : step.href;
+        const title = step.title;
+        const body = step.body;
+        const href = step.href;
         return (
           <li key={`${index}:${step.title}`}>
             {href ? (
@@ -657,17 +655,6 @@ function matchesWhen(
     return true;
   }
   return (values[when.field] ?? "") === when.value;
-}
-
-function localizedStepText(
-  en: string | undefined,
-  zh: string | undefined,
-  locale: string,
-): string | undefined {
-  if (locale === "zh" && zh) {
-    return zh;
-  }
-  return en;
 }
 
 function ConnectorRow({
