@@ -10,6 +10,7 @@
 - [Technology stack](TECH_STACK.md)
 - [Ingestion architecture](INGESTION_ARCHITECTURE.md)
 - [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md)
+- [Context management architecture](CONTEXT_MANAGEMENT_ARCHITECTURE.md)
 - [Roadmap](ROADMAP.md)
 - [Architecture RFCs](rfcs/)
 - [Personal → org](rfcs/personal-to-org.md)
