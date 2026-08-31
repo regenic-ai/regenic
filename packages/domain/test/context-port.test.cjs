@@ -120,6 +120,48 @@ describe("context ports", () => {
       }),
       /cannot change at the same sequence/,
     );
+
+    const malformed = [
+      {
+        org_id: "example-org",
+        projector_id: "malformed",
+        algorithm_version: "1",
+        generation: "generation-1",
+        sequence: 1,
+        watermark: "0001",
+        updated_at: 0,
+      },
+      {
+        org_id: "example-org",
+        projector_id: "malformed",
+        algorithm_version: "1",
+        generation: "generation-1",
+        sequence: 1,
+        watermark: "0001",
+        updated_at: "not-a-timestamp",
+      },
+      {
+        org_id: "example-org",
+        projector_id: "malformed",
+        algorithm_version: "1",
+        generation: "generation-1",
+        sequence: 1,
+        watermark: "0001",
+        updated_at: "2026-08-30T00:00:00.000Z",
+        unexpected: { secret: "must-not-persist" },
+      },
+      null,
+    ];
+    for (const checkpoint of malformed) {
+      await assert.rejects(
+        store.putCheckpoint(checkpoint),
+        /Invalid context projection checkpoint/,
+      );
+    }
+    assert.equal(
+      await store.getCheckpoint("example-org", "malformed", "generation-1"),
+      null,
+    );
   });
 
   it("does not collide bundle keys across delimiter-bearing identities", async () => {

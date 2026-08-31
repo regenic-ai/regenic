@@ -11,7 +11,7 @@ const {
   IngestionService,
 } = require("@regenic/domain");
 const { SqliteAuthorityStore } = require("../dist");
-const { MIGRATIONS } = require("../dist/migrations");
+const { LATEST_SCHEMA_VERSION, MIGRATIONS } = require("../dist/migrations");
 
 const roots = [];
 
@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 19);
+    assert.equal(authorityStore.schemaVersion, LATEST_SCHEMA_VERSION);
     const inspect = new Database(join(root, "authority.db"));
     const index = inspect
       .prepare(
@@ -247,12 +247,13 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 20");
+    const futureVersion = LATEST_SCHEMA_VERSION + 1;
+    database.pragma(`user_version = ${futureVersion}`);
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 20 is newer than supported 19/,
+      new RegExp(`schema ${futureVersion} is newer than supported ${LATEST_SCHEMA_VERSION}`),
     );
   });
 
@@ -524,7 +525,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 19);
+    assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);

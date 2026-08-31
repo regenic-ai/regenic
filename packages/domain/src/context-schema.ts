@@ -24,7 +24,11 @@ import {
   hashContextSnapshot,
 } from "./context-canonical";
 import type { EvidenceReference } from "./context-consumer";
-import type { ContextReplayRequest } from "./context-port";
+import type {
+  ContextArtifactQuery,
+  ContextProjectionCheckpoint,
+  ContextReplayRequest,
+} from "./context-port";
 import {
   CONTEXT_ALLOWED_USES,
   CONTEXT_ANCHOR_KINDS,
@@ -300,6 +304,36 @@ export const ContextArtifactSchema: z.ZodType<ContextArtifact> = z
     }
   });
 
+export const ContextArtifactQuerySchema: z.ZodType<ContextArtifactQuery> = z
+  .object({
+    org_id: nonEmptyStringSchema,
+    kinds: z
+      .array(z.enum(CONTEXT_ARTIFACT_KINDS))
+      .max(CONTEXT_ARTIFACT_KINDS.length)
+      .refine((values) => !hasDuplicates(values), "Artifact kinds must be unique")
+      .optional(),
+    statuses: z
+      .array(z.enum(CONTEXT_ARTIFACT_STATUSES))
+      .max(CONTEXT_ARTIFACT_STATUSES.length)
+      .refine((values) => !hasDuplicates(values), "Artifact statuses must be unique")
+      .optional(),
+    generation: nonEmptyStringSchema.optional(),
+    limit: nonNegativeIntegerSchema.max(10_000).optional(),
+  })
+  .strict();
+
+export const ContextProjectionCheckpointSchema: z.ZodType<ContextProjectionCheckpoint> = z
+  .object({
+    org_id: nonEmptyStringSchema,
+    projector_id: nonEmptyStringSchema,
+    algorithm_version: nonEmptyStringSchema,
+    generation: nonEmptyStringSchema,
+    sequence: nonNegativeIntegerSchema.max(Number.MAX_SAFE_INTEGER),
+    watermark: nonEmptyStringSchema,
+    updated_at: timestampSchema,
+  })
+  .strict();
+
 const ContextProjectionReferenceSchema = z
   .object({
     projector_id: nonEmptyStringSchema,
@@ -548,6 +582,16 @@ export function validateContextBudgetLedger(input: unknown): ContextValidationRe
 
 export function validateContextArtifact(input: unknown): ContextValidationResult<ContextArtifact> {
   return validate(ContextArtifactSchema, input);
+}
+
+export function validateContextArtifactQuery(input: unknown): ContextValidationResult<ContextArtifactQuery> {
+  return validate(ContextArtifactQuerySchema, input);
+}
+
+export function validateContextProjectionCheckpoint(
+  input: unknown,
+): ContextValidationResult<ContextProjectionCheckpoint> {
+  return validate(ContextProjectionCheckpointSchema, input);
 }
 
 export function validateContextCandidate(input: unknown): ContextValidationResult<ContextCandidate> {

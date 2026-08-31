@@ -406,7 +406,14 @@ interface ContextArtifactStore {
   listArtifacts(query: ArtifactQuery): Promise<ContextArtifact[]>;
   putSnapshot(input: ContextSnapshot): Promise<void>;
   getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null>;
+  putBundle(input: ContextBundle): Promise<void>;
+  getBundle(query: ContextBundleLookup): Promise<ContextBundle | null>;
   putCheckpoint(input: ProjectionCheckpoint): Promise<void>;
+  getCheckpoint(
+    orgId: string,
+    projectorId: string,
+    generation: string,
+  ): Promise<ProjectionCheckpoint | null>;
 }
 ```
 
@@ -526,6 +533,15 @@ The same ports support both deployment profiles:
 
 PostgreSQL, pgvector, OpenSearch, Neo4j, Azure AI Search, and model vendors are
 driver choices. None are required by the domain model.
+
+The Personal SQLite authority plugin also provides `context-artifacts` from its
+existing split reader/writer instance. Artifact manifests, snapshots, bundles,
+and projection checkpoints are stored as validated canonical JSON with indexed
+lookup columns. Artifact, snapshot, and bundle writes are immutable and
+idempotent; checkpoint advancement is monotonic within one projector generation.
+Clearing an organization's operational data deletes these context records in
+the same transaction as its Event-derived state, while connector, executor, and
+recipe configuration remains intact.
 
 ## 11. Graceful Degradation
 

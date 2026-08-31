@@ -366,6 +366,10 @@ export interface StoreFootprint {
   conversations: number;
   work_items: number;
   blobs: number;
+  context_artifacts: number;
+  context_snapshots: number;
+  context_bundles: number;
+  context_checkpoints: number;
   recipes: number;
   connectors: number;
   executors: number;
@@ -377,6 +381,10 @@ export interface StoreClearResult {
     conversations: number;
     work_items: number;
     blobs: number;
+    context_artifacts: number;
+    context_snapshots: number;
+    context_bundles: number;
+    context_checkpoints: number;
   };
   kept: {
     recipes: number;

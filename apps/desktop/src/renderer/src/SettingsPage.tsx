@@ -26,6 +26,10 @@ const emptyStore: StoreView = {
   conversations: 0,
   work_items: 0,
   blobs: 0,
+  context_artifacts: 0,
+  context_snapshots: 0,
+  context_bundles: 0,
+  context_checkpoints: 0,
   recipes: 0,
   connectors: 0,
   executors: 0,
@@ -44,8 +48,24 @@ function storeHasData(store: StoreView): boolean {
     store.events > 0 ||
     store.conversations > 0 ||
     store.work_items > 0 ||
-    store.blobs > 0
+    store.blobs > 0 ||
+    store.context_artifacts > 0 ||
+    store.context_snapshots > 0 ||
+    store.context_bundles > 0 ||
+    store.context_checkpoints > 0
   );
+}
+
+function contextRecordCount(
+  store: Pick<
+    StoreView,
+    "context_artifacts" | "context_snapshots" | "context_bundles" | "context_checkpoints"
+  >,
+): number {
+  return store.context_artifacts +
+    store.context_snapshots +
+    store.context_bundles +
+    store.context_checkpoints;
 }
 
 export function SettingsPage({
@@ -262,6 +282,10 @@ export function SettingsPage({
         conversations: 0,
         work_items: 0,
         blobs: 0,
+        context_artifacts: 0,
+        context_snapshots: 0,
+        context_bundles: 0,
+        context_checkpoints: 0,
         recipes: result.kept.recipes,
         connectors: result.kept.connectors,
         executors: result.kept.executors ?? 0,
@@ -605,6 +629,10 @@ export function SettingsPage({
           <StoreStat label={t("settings.storeMessages")} value={currentStore.events} />
           <StoreStat label={t("settings.storeWork")} value={currentStore.work_items} />
           <StoreStat label={t("settings.storeBlobs")} value={currentStore.blobs} />
+          <StoreStat
+            label={t("settings.storeContext")}
+            value={contextRecordCount(currentStore)}
+          />
         </div>
         {!canClear ? <p className="muted">{t("settings.storeEmpty")}</p> : null}
         {confirming ? (

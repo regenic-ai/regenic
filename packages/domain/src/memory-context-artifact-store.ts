@@ -10,7 +10,9 @@ import type {
 import type { ContextSnapshot } from "./context-snapshot";
 import {
   validateContextArtifact,
+  validateContextArtifactQuery,
   validateContextBundle,
+  validateContextProjectionCheckpoint,
   validateContextSnapshot,
 } from "./context-schema";
 
@@ -31,15 +33,18 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
   }
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
-    const kinds = query.kinds ? new Set(query.kinds) : undefined;
-    const statuses = query.statuses ? new Set(query.statuses) : undefined;
+    const validation = validateContextArtifactQuery(query);
+    requireValid(validation, "artifact query");
+    const stableQuery = validation.success ? validation.data : query;
+    const kinds = stableQuery.kinds ? new Set(stableQuery.kinds) : undefined;
+    const statuses = stableQuery.statuses ? new Set(stableQuery.statuses) : undefined;
     return [...this.artifacts.values()]
-      .filter((artifact) => artifact.org_id === query.org_id)
+      .filter((artifact) => artifact.org_id === stableQuery.org_id)
       .filter((artifact) => !kinds || kinds.has(artifact.kind))
       .filter((artifact) => !statuses || statuses.has(artifact.status))
-      .filter((artifact) => !query.generation || artifact.generation === query.generation)
+      .filter((artifact) => !stableQuery.generation || artifact.generation === stableQuery.generation)
       .sort((left, right) => compare(`${left.recorded_at}\u0000${left.id}`, `${right.recorded_at}\u0000${right.id}`))
-      .slice(0, query.limit ?? Number.POSITIVE_INFINITY)
+      .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY)
       .map(clone);
   }
 
@@ -62,24 +67,28 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
   }
 
   async putCheckpoint(checkpoint: ContextProjectionCheckpoint): Promise<void> {
-    const key = checkpointKey(checkpoint.org_id, checkpoint.projector_id, checkpoint.generation);
+    const stableCheckpoint = validatedCheckpoint(checkpoint);
+    const key = checkpointKey(
+      stableCheckpoint.org_id,
+      stableCheckpoint.projector_id,
+      stableCheckpoint.generation,
+    );
     const current = this.checkpoints.get(key);
-    validateCheckpoint(checkpoint);
     if (current) {
-      if (current.algorithm_version !== checkpoint.algorithm_version) {
+      if (current.algorithm_version !== stableCheckpoint.algorithm_version) {
         throw new Error("Projection checkpoint algorithm cannot change within a generation");
       }
-      if (current.sequence > checkpoint.sequence) {
+      if (current.sequence > stableCheckpoint.sequence) {
         throw new Error("Projection checkpoint cannot move backwards");
       }
-      if (current.sequence === checkpoint.sequence) {
-        if (canonicalContextJson(current) !== canonicalContextJson(checkpoint)) {
+      if (current.sequence === stableCheckpoint.sequence) {
+        if (canonicalContextJson(current) !== canonicalContextJson(stableCheckpoint)) {
           throw new Error("Projection checkpoint cannot change at the same sequence");
         }
         return;
       }
     }
-    this.checkpoints.set(key, clone(checkpoint));
+    this.checkpoints.set(key, clone(stableCheckpoint));
   }
 
   async getCheckpoint(
@@ -148,17 +157,11 @@ function requireValid(
   }
 }
 
-function validateCheckpoint(checkpoint: ContextProjectionCheckpoint): void {
-  if (
-    !checkpoint.org_id.trim() ||
-    !checkpoint.projector_id.trim() ||
-    !checkpoint.algorithm_version.trim() ||
-    !checkpoint.generation.trim() ||
-    !checkpoint.watermark.trim() ||
-    !Number.isSafeInteger(checkpoint.sequence) ||
-    checkpoint.sequence < 0 ||
-    Number.isNaN(Date.parse(checkpoint.updated_at))
-  ) {
-    throw new Error("Invalid projection checkpoint");
+function validatedCheckpoint(checkpoint: unknown): ContextProjectionCheckpoint {
+  const validation = validateContextProjectionCheckpoint(checkpoint);
+  requireValid(validation, "projection checkpoint");
+  if (!validation.success) {
+    throw new Error("Invalid context projection checkpoint");
   }
+  return validation.data;
 }

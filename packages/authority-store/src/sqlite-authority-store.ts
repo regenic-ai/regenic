@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import {
   AuthorityConflictError,
   applySyncCatalogMembers,
+  canonicalContextJson,
   conversationId,
   formatInboxDigest,
   headsScanQuery,
@@ -17,6 +18,11 @@ import {
   normalizeHiddenReason,
   recipeTriggerOf,
   threadExternalIdLike,
+  validateContextArtifact,
+  validateContextArtifactQuery,
+  validateContextBundle,
+  validateContextProjectionCheckpoint,
+  validateContextSnapshot,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -31,6 +37,13 @@ import type {
   ConnectorLease,
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
+  ContextArtifact,
+  ContextArtifactQuery,
+  ContextArtifactStore,
+  ContextBundle,
+  ContextBundleLookup,
+  ContextProjectionCheckpoint,
+  ContextSnapshot,
   EventListQuery,
   EventRecord,
   EventRevision,
@@ -227,7 +240,7 @@ export interface SqliteOpenOptions {
 }
 
 export class SqliteAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore
+  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore, ContextArtifactStore
 {
   private readonly database: Database.Database;
   readonly readonly: boolean;
@@ -331,6 +344,225 @@ export class SqliteAuthorityStore
       )
       .all(...(limit === undefined ? params : [...params, limit])) as EventRow[];
     return rows.map((row) => this.toEvent(row));
+  }
+
+  async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
+    requireContextValue(validateContextArtifact(artifact), "artifact");
+    this.assertWritable();
+    const payload = canonicalContextJson(artifact);
+    this.putImmutableContextJson(
+      "context_artifacts",
+      "org_id = ? AND id = ?",
+      [artifact.org_id, artifact.id],
+      payload,
+      "artifact",
+      `
+        INSERT INTO context_artifacts (
+          org_id, id, kind, status, generation, recorded_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        artifact.org_id,
+        artifact.id,
+        artifact.kind,
+        artifact.status,
+        artifact.generation,
+        artifact.recorded_at,
+        payload,
+      ],
+    );
+    return parseContextJson<ContextArtifact>(payload);
+  }
+
+  async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
+    return this.getContextJson<ContextArtifact>(
+      "context_artifacts",
+      "org_id = ? AND id = ?",
+      [orgId, id],
+    );
+  }
+
+  async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
+    const validation = validateContextArtifactQuery(query);
+    requireContextValue(validation, "artifact query");
+    const stableQuery = validation.success ? validation.data : query;
+    const clauses = ["org_id = ?"];
+    const params: unknown[] = [stableQuery.org_id];
+    if (stableQuery.kinds) {
+      if (stableQuery.kinds.length === 0) {
+        return [];
+      }
+      clauses.push(`kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
+      params.push(...stableQuery.kinds);
+    }
+    if (stableQuery.statuses) {
+      if (stableQuery.statuses.length === 0) {
+        return [];
+      }
+      clauses.push(`status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
+      params.push(...stableQuery.statuses);
+    }
+    if (stableQuery.generation) {
+      clauses.push("generation = ?");
+      params.push(stableQuery.generation);
+    }
+    const rows = this.database
+      .prepare(
+        `
+          SELECT payload_json FROM context_artifacts
+          WHERE ${clauses.join(" AND ")}
+        `,
+      )
+      .all(...params) as Array<{ payload_json: string }>;
+    return rows
+      .map((row) => parseContextJson<ContextArtifact>(row.payload_json))
+      .sort((left, right) => compareContextArtifactOrder(left, right))
+      .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY);
+  }
+
+  async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
+    requireContextValue(validateContextSnapshot(snapshot), "snapshot");
+    this.assertWritable();
+    const payload = canonicalContextJson(snapshot);
+    this.putImmutableContextJson(
+      "context_snapshots",
+      "org_id = ? AND id = ?",
+      [snapshot.org_id, snapshot.id],
+      payload,
+      "snapshot",
+      "INSERT INTO context_snapshots (org_id, id, payload_json) VALUES (?, ?, ?)",
+      [snapshot.org_id, snapshot.id, payload],
+    );
+  }
+
+  async getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null> {
+    return this.getContextJson<ContextSnapshot>(
+      "context_snapshots",
+      "org_id = ? AND id = ?",
+      [orgId, id],
+    );
+  }
+
+  async putBundle(bundle: ContextBundle): Promise<void> {
+    requireContextValue(validateContextBundle(bundle), "bundle");
+    this.assertWritable();
+    const payload = canonicalContextJson(bundle);
+    const lookup = [
+      bundle.org_id,
+      bundle.snapshot_id,
+      bundle.principal.actor_type,
+      bundle.principal.actor_id,
+      bundle.consumer_id,
+    ];
+    this.putImmutableContextJson(
+      "context_bundles",
+      `
+        org_id = ? AND snapshot_id = ? AND principal_actor_type = ?
+        AND principal_actor_id = ? AND consumer_id = ?
+      `,
+      lookup,
+      payload,
+      "bundle",
+      `
+        INSERT INTO context_bundles (
+          org_id, snapshot_id, principal_actor_type, principal_actor_id,
+          consumer_id, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      [...lookup, payload],
+    );
+  }
+
+  async getBundle(query: ContextBundleLookup): Promise<ContextBundle | null> {
+    return this.getContextJson<ContextBundle>(
+      "context_bundles",
+      `
+        org_id = ? AND snapshot_id = ? AND principal_actor_type = ?
+        AND principal_actor_id = ? AND consumer_id = ?
+      `,
+      [
+        query.org_id,
+        query.snapshot_id,
+        query.principal.actor_type,
+        query.principal.actor_id,
+        query.consumer_id,
+      ],
+    );
+  }
+
+  async putCheckpoint(checkpoint: ContextProjectionCheckpoint): Promise<void> {
+    const validation = validateContextProjectionCheckpoint(checkpoint);
+    requireContextValue(validation, "projection checkpoint");
+    const stableCheckpoint = validation.success ? validation.data : checkpoint;
+    this.assertWritable();
+    const transaction = this.database.transaction(() => {
+      const current = this.database
+        .prepare(
+          `
+            SELECT payload_json FROM context_projection_checkpoints
+            WHERE org_id = ? AND projector_id = ? AND generation = ?
+          `,
+        )
+        .get(
+          stableCheckpoint.org_id,
+          stableCheckpoint.projector_id,
+          stableCheckpoint.generation,
+        ) as { payload_json: string } | undefined;
+      if (current) {
+        const stored = parseContextJson<ContextProjectionCheckpoint>(current.payload_json);
+        if (stored.algorithm_version !== stableCheckpoint.algorithm_version) {
+          throw new Error("Projection checkpoint algorithm cannot change within a generation");
+        }
+        if (stored.sequence > stableCheckpoint.sequence) {
+          throw new Error("Projection checkpoint cannot move backwards");
+        }
+        if (stored.sequence === stableCheckpoint.sequence) {
+          if (current.payload_json !== canonicalContextJson(stableCheckpoint)) {
+            throw new Error("Projection checkpoint cannot change at the same sequence");
+          }
+          return;
+        }
+      }
+      const payload = canonicalContextJson(stableCheckpoint);
+      this.database
+        .prepare(
+          `
+            INSERT INTO context_projection_checkpoints (
+              org_id, projector_id, generation, algorithm_version,
+              sequence, watermark, updated_at, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(org_id, projector_id, generation) DO UPDATE SET
+              algorithm_version = excluded.algorithm_version,
+              sequence = excluded.sequence,
+              watermark = excluded.watermark,
+              updated_at = excluded.updated_at,
+              payload_json = excluded.payload_json
+          `,
+        )
+        .run(
+          stableCheckpoint.org_id,
+          stableCheckpoint.projector_id,
+          stableCheckpoint.generation,
+          stableCheckpoint.algorithm_version,
+          stableCheckpoint.sequence,
+          stableCheckpoint.watermark,
+          stableCheckpoint.updated_at,
+          payload,
+        );
+    });
+    transaction.immediate();
+  }
+
+  async getCheckpoint(
+    orgId: string,
+    projectorId: string,
+    generation: string,
+  ): Promise<ContextProjectionCheckpoint | null> {
+    return this.getContextJson<ContextProjectionCheckpoint>(
+      "context_projection_checkpoints",
+      "org_id = ? AND projector_id = ? AND generation = ?",
+      [orgId, projectorId, generation],
+    );
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
@@ -578,6 +810,12 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_artifacts WHERE org_id = ?`).run(orgId);
+      this.database
+        .prepare(`DELETE FROM context_projection_checkpoints WHERE org_id = ?`)
+        .run(orgId);
       this.database
         .prepare(`DELETE FROM message_dispositions WHERE org_id = ?`)
         .run(orgId);
@@ -661,6 +899,10 @@ export class SqliteAuthorityStore
           conversations: before.conversations,
           work_items: before.work_items,
           blobs: before.blobs,
+          context_artifacts: before.context_artifacts,
+          context_snapshots: before.context_snapshots,
+          context_bundles: before.context_bundles,
+          context_checkpoints: before.context_checkpoints,
         },
         kept: {
           recipes: after.recipes,
@@ -695,6 +937,22 @@ export class SqliteAuthorityStore
           FROM events
           WHERE org_id = ? AND content_hash IS NOT NULL
         `,
+        orgId,
+      ),
+      context_artifacts: count(
+        `SELECT COUNT(*) AS n FROM context_artifacts WHERE org_id = ?`,
+        orgId,
+      ),
+      context_snapshots: count(
+        `SELECT COUNT(*) AS n FROM context_snapshots WHERE org_id = ?`,
+        orgId,
+      ),
+      context_bundles: count(
+        `SELECT COUNT(*) AS n FROM context_bundles WHERE org_id = ?`,
+        orgId,
+      ),
+      context_checkpoints: count(
+        `SELECT COUNT(*) AS n FROM context_projection_checkpoints WHERE org_id = ?`,
         orgId,
       ),
       recipes: count(`SELECT COUNT(*) AS n FROM recipes WHERE org_id = ?`, orgId),
@@ -1912,6 +2170,41 @@ export class SqliteAuthorityStore
     }
   }
 
+  private getContextJson<T>(
+    table: string,
+    where: string,
+    params: unknown[],
+  ): T | null {
+    const row = this.database
+      .prepare(`SELECT payload_json FROM ${table} WHERE ${where}`)
+      .get(...params) as { payload_json: string } | undefined;
+    return row ? parseContextJson<T>(row.payload_json) : null;
+  }
+
+  private putImmutableContextJson(
+    table: string,
+    where: string,
+    lookupParams: unknown[],
+    payload: string,
+    label: string,
+    insertSql: string,
+    insertParams: unknown[],
+  ): void {
+    const transaction = this.database.transaction(() => {
+      const current = this.database
+        .prepare(`SELECT payload_json FROM ${table} WHERE ${where}`)
+        .get(...lookupParams) as { payload_json: string } | undefined;
+      if (current) {
+        if (current.payload_json !== payload) {
+          throw new Error(`Cannot replace immutable context ${label}`);
+        }
+        return;
+      }
+      this.database.prepare(insertSql).run(...insertParams);
+    });
+    transaction.immediate();
+  }
+
   private findCurrent(identity: SourceIdentity): EventRecord | null {
     const row = this.database
       .prepare(
@@ -2730,4 +3023,26 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function parseContextJson<T>(value: string): T {
+  return JSON.parse(value) as T;
+}
+
+function requireContextValue(
+  result: { success: true } | { success: false; issues: Array<{ message: string }> },
+  label: string,
+): void {
+  if (!result.success) {
+    throw new Error(
+      `Invalid context ${label}: ${result.issues.map((issue) => issue.message).join("; ")}`,
+    );
+  }
+}
+
+
+function compareContextArtifactOrder(left: ContextArtifact, right: ContextArtifact): number {
+  const leftKey = `${left.recorded_at}\u0000${left.id}`;
+  const rightKey = `${right.recorded_at}\u0000${right.id}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }

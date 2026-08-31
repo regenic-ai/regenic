@@ -11,6 +11,7 @@ export const sqliteAuthorityPlugin = definePlugin<SqliteAuthorityPluginConfig>({
   async apply(ctx, config) {
     const store = await SqliteSplitAuthorityStore.open(config.path);
     ctx.provide("authority", store);
+    ctx.provide("context-artifacts", store);
     ctx.effect(() => () => store.close());
   },
 });

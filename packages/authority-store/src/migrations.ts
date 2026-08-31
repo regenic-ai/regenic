@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 19;
+export const LATEST_SCHEMA_VERSION = 20;
 
 export const MIGRATIONS = [
   {
@@ -394,6 +394,59 @@ export const MIGRATIONS = [
         generation INTEGER NOT NULL,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (installation_id, stream_key)
+      );
+    `,
+  },
+  {
+    version: 20,
+    sql: `
+      CREATE TABLE context_artifacts (
+        org_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (org_id, id)
+      );
+
+      CREATE INDEX context_artifacts_query_idx
+        ON context_artifacts (org_id, kind, status, generation, recorded_at, id);
+
+      CREATE TABLE context_snapshots (
+        org_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (org_id, id)
+      );
+
+      CREATE TABLE context_bundles (
+        org_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        principal_actor_type TEXT NOT NULL,
+        principal_actor_id TEXT NOT NULL,
+        consumer_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (
+          org_id,
+          snapshot_id,
+          principal_actor_type,
+          principal_actor_id,
+          consumer_id
+        )
+      );
+
+      CREATE TABLE context_projection_checkpoints (
+        org_id TEXT NOT NULL,
+        projector_id TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        algorithm_version TEXT NOT NULL,
+        sequence INTEGER NOT NULL CHECK (sequence >= 0),
+        watermark TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (org_id, projector_id, generation)
       );
     `,
   },

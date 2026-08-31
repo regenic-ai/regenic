@@ -6,6 +6,13 @@ import type {
   ConnectorLease,
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
+  ContextArtifact,
+  ContextArtifactQuery,
+  ContextArtifactStore,
+  ContextBundle,
+  ContextBundleLookup,
+  ContextProjectionCheckpoint,
+  ContextSnapshot,
   ConversationPref,
   ConversationPrefPatch,
   EventListQuery,
@@ -47,7 +54,7 @@ export const INGEST_ATTEMPT_KEEP_PER_INSTALLATION = 64;
 export const INGEST_ATTEMPT_PRUNE_BATCH = 5_000;
 
 export class SqliteSplitAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore
+  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore, ContextArtifactStore
 {
   private constructor(
     private readonly reader: SqliteWriteClient,
@@ -97,6 +104,46 @@ export class SqliteSplitAuthorityStore
     query?: EventListQuery,
   ): Promise<EventRecord[]> {
     return this.reader.call("listEvents", [orgId, query]);
+  }
+
+  async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
+    return this.writer.call("putArtifact", [artifact]);
+  }
+
+  async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
+    return this.reader.call("getArtifact", [orgId, id]);
+  }
+
+  async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
+    return this.reader.call("listArtifacts", [query]);
+  }
+
+  async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
+    await this.writer.call("putSnapshot", [snapshot]);
+  }
+
+  async getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null> {
+    return this.reader.call("getSnapshot", [orgId, id]);
+  }
+
+  async putBundle(bundle: ContextBundle): Promise<void> {
+    await this.writer.call("putBundle", [bundle]);
+  }
+
+  async getBundle(query: ContextBundleLookup): Promise<ContextBundle | null> {
+    return this.reader.call("getBundle", [query]);
+  }
+
+  async putCheckpoint(checkpoint: ContextProjectionCheckpoint): Promise<void> {
+    await this.writer.call("putCheckpoint", [checkpoint]);
+  }
+
+  async getCheckpoint(
+    orgId: string,
+    projectorId: string,
+    generation: string,
+  ): Promise<ContextProjectionCheckpoint | null> {
+    return this.reader.call("getCheckpoint", [orgId, projectorId, generation]);
   }
 
   async getDisposition(
