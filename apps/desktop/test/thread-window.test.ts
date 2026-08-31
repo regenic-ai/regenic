@@ -412,7 +412,7 @@ describe("thread window", () => {
     pinned.event.occurred_at = "2026-08-22T00:00:00.000Z";
     const cursor = olderHeadsCursor([pinned, recent, mid]);
     assert.equal(cursor?.before_id, "n1");
-    const merged = mergeHeadPages([older, mid], [pinned, recent, mid]);
+    const merged = mergeHeadPages([older, mid], [pinned, recent, mid], 2);
     assert.deepEqual(
       merged.map((row) => row.thread_id),
       ["crm:order-0", "crm:order-pin", "crm:order-2", "crm:order-1"],
@@ -420,6 +420,36 @@ describe("thread window", () => {
     const appended = appendHeadPages([pinned, recent, mid], [older]);
     assert.equal(appended[appended.length - 1], older);
     assert.equal(appendHeadPages([mid], [mid]).length, 1);
+  });
+
+  it("keeps loaded older heads when the first page includes an extra old face", () => {
+    const extra = item("job", "job", "dsh:session-job");
+    extra.event.occurred_at = "2026-08-20T00:00:00.000Z";
+    const recent = item("n2", "new", "crm:order-2");
+    recent.event.occurred_at = "2026-08-23T00:02:00.000Z";
+    const mid = item("n1", "mid", "crm:order-1");
+    mid.event.occurred_at = "2026-08-23T00:01:00.000Z";
+    const older = item("n0", "old", "crm:order-0");
+    older.event.occurred_at = "2026-08-23T00:00:00.000Z";
+    const merged = mergeHeadPages([older, mid], [extra, recent, mid], 2);
+    assert.deepEqual(
+      merged.map((row) => row.thread_id),
+      ["crm:order-0", "dsh:session-job", "crm:order-2", "crm:order-1"],
+    );
+  });
+
+  it("drops a loaded head that still ranks on the first recency page but is gone", () => {
+    const recent = item("n2", "new", "crm:order-2");
+    recent.event.occurred_at = "2026-08-23T00:02:00.000Z";
+    const gone = item("n1", "gone", "crm:order-1");
+    gone.event.occurred_at = "2026-08-23T00:01:00.000Z";
+    const older = item("n0", "old", "crm:order-0");
+    older.event.occurred_at = "2026-08-23T00:00:00.000Z";
+    const merged = mergeHeadPages([older, gone], [recent], 2);
+    assert.deepEqual(
+      merged.map((row) => row.thread_id),
+      ["crm:order-0", "crm:order-2"],
+    );
   });
 
   it("loads more list heads when the scroller is at the bottom or still short", () => {

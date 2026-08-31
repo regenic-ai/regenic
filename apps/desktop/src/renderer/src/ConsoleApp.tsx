@@ -164,6 +164,7 @@ export function ConsoleApp() {
     if (reused.same) {
       return;
     }
+    inboxRef.current = reused.items;
     setInbox(reused.items);
     const synced = groupInboxThreads(reused.items, groupedRef.current, reused);
     groupedRef.current = synced;
@@ -466,7 +467,7 @@ export function ConsoleApp() {
           digest === inboxDigestRef.current &&
           inboxRef.current.length > 0 &&
           now - lastFullRef.current < FULL_REFRESH_MS;
-        if (!skipHeads) {
+        if (!skipHeads && !headsBusyRef.current) {
           const replace =
             inboxRef.current.length === 0 ||
             lastFetchedListRef.current !== requested;
