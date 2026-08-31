@@ -69,6 +69,16 @@ describe("decideInboxSync", () => {
     assert.deepEqual(decide({ digest: PREF }), { mode: "patch", replace: false });
     assert.deepEqual(decide({ digest: SURFACE }), { mode: "full", replace: false });
     assert.deepEqual(decide({ digest: WORK }), { mode: "full", replace: false });
+    assert.deepEqual(
+      decide({ digest: "0:2026-08-23T00:00:00.000Z:e1:0:" }),
+      { mode: "full", replace: false },
+    );
+    assert.deepEqual(
+      decide({
+        digest: "0:2026-08-23T00:00:01.000Z:e2:0:&w=2026-08-23T00:02:00.000Z",
+      }),
+      { mode: "full", replace: false },
+    );
   });
 
   it("forces a full page when the 45s clock is due, even if the digest moved", () => {

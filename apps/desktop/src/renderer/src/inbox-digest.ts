@@ -129,5 +129,8 @@ export function shouldFetchChangedHeads(input: {
   if (!previous || !next || !previous.latest_at) {
     return false;
   }
+  if (previous.count !== next.count) {
+    return false;
+  }
   return inboxDigestEventOrPrefChanged(previous, next);
 }

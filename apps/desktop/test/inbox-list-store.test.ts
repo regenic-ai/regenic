@@ -609,6 +609,22 @@ describe("InboxListStore", () => {
       }),
       false,
     );
+    assert.equal(
+      shouldFetchChangedHeads({
+        replace: false,
+        previousDigest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        nextDigest: "0:2026-08-23T00:00:00.000Z:e1:0:",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldFetchChangedHeads({
+        replace: false,
+        previousDigest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        nextDigest: "0:2026-08-23T00:00:01.000Z:e2:0:&w=2026-08-23T00:02:00.000Z",
+      }),
+      false,
+    );
   });
 
   it("keeps active work extras off the live ranking after a touch", () => {

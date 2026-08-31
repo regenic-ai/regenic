@@ -220,6 +220,7 @@ export function shouldLoadChangedInboxHeads(query: InboxListQuery): boolean {
 }
 
 export function parseSinceInboxDigest(value: string): {
+  count: number;
   latest_at: string;
   latest_id: string;
   pref_updated_at: string;
@@ -256,6 +257,7 @@ export function parseSinceInboxDigest(value: string): {
     return null;
   }
   return {
+    count,
     latest_at: latestAt,
     latest_id: middle.slice(idSep + 1),
     pref_updated_at: pref.tail,
@@ -282,8 +284,12 @@ function peelInboxDigestTail(base: string): { head: string; tail: string } {
 export function shouldFallbackChangedInboxHeads(collected: {
   ids: readonly string[];
   tooMany: boolean;
+  countChanged?: boolean;
 }): boolean {
-  return collected.tooMany;
+  return (
+    collected.tooMany ||
+    (collected.ids.length === 0 && collected.countChanged === true)
+  );
 }
 
 export function collectChangedInboxThreadIds(input: {
@@ -717,7 +723,11 @@ export class PersonalInboxService {
       prefs,
       prefSince: previous.pref_updated_at,
     });
-    if (shouldFallbackChangedInboxHeads(collected)) {
+    const countChanged =
+      collected.ids.length === 0 && !collected.tooMany
+        ? (await authority.summarizeInbox(orgId)).count !== previous.count
+        : false;
+    if (shouldFallbackChangedInboxHeads({ ...collected, countChanged })) {
       return this.loadThreadInbox({
         ...query,
         changed: false,

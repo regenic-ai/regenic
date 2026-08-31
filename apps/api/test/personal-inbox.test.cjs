@@ -132,6 +132,7 @@ describe("changed inbox heads", () => {
     assert.deepEqual(
       parseSinceInboxDigest("1:2026-08-23T00:00:01.000Z:e2:1:2026-08-23T00:01:00.000Z&s=dsh:2"),
       {
+        count: 1,
         latest_at: "2026-08-23T00:00:01.000Z",
         latest_id: "e2",
         pref_updated_at: "2026-08-23T00:01:00.000Z",
@@ -184,6 +185,14 @@ describe("changed inbox heads", () => {
     assert.equal(
       shouldFallbackChangedInboxHeads({ ids: [], tooMany: false }),
       false,
+    );
+    assert.equal(
+      shouldFallbackChangedInboxHeads({
+        ids: [],
+        tooMany: false,
+        countChanged: true,
+      }),
+      true,
     );
     assert.equal(
       shouldFallbackChangedInboxHeads({ ids: [], tooMany: true }),
