@@ -714,4 +714,104 @@ describe("InboxListStore", () => {
       ["crm:order-0", "crm:order-2", "crm:order-1"],
     );
   });
+
+  it("drops a queued live page after a workspace reset", async () => {
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const store = new InboxListStore();
+    const pending = store.enqueue({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent],
+      activeWork: [],
+      nextBefore: { before: recent.event.occurred_at, before_id: recent.event.id },
+      hasOlder: false,
+    });
+    store.reduce({ kind: "reset" });
+    const snap = await pending;
+    assert.deepEqual(snap.items, []);
+    assert.equal(store.items.length, 0);
+  });
+
+  it("drops a queued live page after a list bump", async () => {
+    const first = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const next = at(item("n1", "mid", "crm:order-1"), "2026-08-23T00:01:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [first],
+      activeWork: [],
+      nextBefore: { before: first.event.occurred_at, before_id: first.event.id },
+      hasOlder: false,
+    });
+    const pending = store.enqueue({
+      kind: "liveChanged",
+      pinned: [],
+      live: [next],
+      activeWork: [],
+      nextBefore: { before: next.event.occurred_at, before_id: next.event.id },
+      hasOlder: false,
+    });
+    store.bumpList();
+    const snap = await pending;
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-2"],
+    );
+  });
+
+  it("drops a queued older page after a live refresh bumps the page token", async () => {
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const older = at(item("n0", "old", "crm:order-0"), "2026-08-23T00:00:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent],
+      activeWork: [],
+      nextBefore: { before: recent.event.occurred_at, before_id: recent.event.id },
+      hasOlder: true,
+    });
+    const pending = store.enqueue({
+      kind: "olderLoaded",
+      items: [older],
+      nextBefore: { before: older.event.occurred_at, before_id: older.event.id },
+      hasOlder: true,
+    });
+    store.reduce({
+      kind: "liveChanged",
+      pinned: [],
+      live: [recent],
+      activeWork: [],
+      nextBefore: { before: recent.event.occurred_at, before_id: recent.event.id },
+      hasOlder: false,
+    });
+    const snap = await pending;
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-2"],
+    );
+  });
+
+  it("applies a live page enqueued after reset", async () => {
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({ kind: "reset" });
+    const snap = await store.enqueue({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent],
+      activeWork: [],
+      nextBefore: { before: recent.event.occurred_at, before_id: recent.event.id },
+      hasOlder: false,
+    });
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-2"],
+    );
+  });
 });

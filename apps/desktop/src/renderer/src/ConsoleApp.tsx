@@ -496,6 +496,13 @@ export function ConsoleApp() {
             pageSize: LIST_HEADS_PAGE_SIZE,
           });
           await commitHeads(fact);
+          if (
+            workspaceEpoch.current !== epoch ||
+            listViewRef.current !== requested ||
+            !listStoreRef.current.acceptsList(token)
+          ) {
+            continue;
+          }
           const clocks = nextInboxSyncClocks(
             {
               digest: inboxDigestRef.current,

@@ -149,12 +149,33 @@ export class InboxListStore {
   }
 
   enqueue(fact: InboxListFact): Promise<InboxListSnapshot> {
-    const run = this.tail.then(() => this.reduce(fact));
+    const token = this.token;
+    const run = this.tail.then(() => {
+      if (!this.shouldApply(fact, token)) {
+        return this.commit();
+      }
+      return this.reduce(fact);
+    });
     this.tail = run.then(
       () => undefined,
       () => undefined,
     );
     return run;
+  }
+
+  private shouldApply(fact: InboxListFact, token: InboxListToken): boolean {
+    switch (fact.kind) {
+      case "reset":
+        return true;
+      case "olderLoaded":
+        return this.acceptsPage(token);
+      case "liveLoaded":
+      case "liveChanged":
+      case "headsTouched":
+        return this.acceptsList(token);
+      default:
+        return token.workspace === this.tokenState.workspace;
+    }
   }
 
   reduce(fact: InboxListFact): InboxListSnapshot {
