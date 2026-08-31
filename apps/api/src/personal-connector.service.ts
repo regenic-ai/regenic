@@ -141,6 +141,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly hydrating = new Map<string, Promise<void>>();
   private readonly hydrateCooldown = new Map<string, number>();
   private lastCatchUpCursor: string | undefined;
+  private lastSeedCursor: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private startTimer: ReturnType<typeof setTimeout> | undefined;
   private ticking = false;
@@ -1043,6 +1044,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     this.streamPullingHistory.clear();
     this.hydrateCooldown.clear();
     this.lastCatchUpCursor = undefined;
+    this.lastSeedCursor = undefined;
     resetPullStatus();
     pullStatus.interval_ms = interval;
   }
@@ -1211,6 +1213,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         preferredThreadId: preferredThreadId(),
         humanIdle,
         rotateFrom: this.lastCatchUpCursor,
+        rotateSeedFrom: this.lastSeedCursor,
         pages: options?.capCatchUp ? DEFAULT_MAX_PAGES : maxPages,
         fallbackMembers: catalogMembersFromStreams(installation.id, streams),
         cursorStates,
@@ -1253,6 +1256,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
       const olderKey = engine.lastHistoryKey(work);
       if (olderKey) {
         this.lastCatchUpCursor = olderKey;
+      }
+      const seedKey = engine.lastSeedKey(work);
+      if (seedKey) {
+        this.lastSeedCursor = seedKey;
       }
       for (const item of selected) {
         this.streamPulling.add(item.key);

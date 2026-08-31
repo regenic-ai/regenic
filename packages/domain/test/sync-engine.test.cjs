@@ -184,6 +184,52 @@ describe("sync engine heal", () => {
       ["session:a", "session:b"],
     );
   });
+
+  it("does not heal live streams that were not mounted this tick", async () => {
+    const store = new MemorySyncStore();
+    await store.putSyncState({
+      installation_id: "dsh-1",
+      stream_key: "session:orphan",
+      phase: "live",
+      live_cursor: "99",
+      history_cursor: "99",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-08-31T00:00:00.000Z",
+    });
+    await store.putSyncState({
+      installation_id: "dsh-1",
+      stream_key: "session:mounted",
+      phase: "live",
+      live_cursor: "10",
+      history_cursor: "10",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-08-31T00:00:00.000Z",
+    });
+    const engine = new SyncEngine(store, {
+      now: () => "2026-08-31T00:01:00.000Z",
+    });
+    await engine.plan({
+      installation_id: "dsh-1",
+      humanIdle: true,
+      cursorStates: new Map([["session:mounted", undefined]]),
+      fallbackMembers: [
+        {
+          ...member("session:mounted", "dsh:mounted"),
+          installation_id: "dsh-1",
+        },
+      ],
+    });
+    assert.equal(
+      (await store.getSyncState("dsh-1", "session:orphan"))?.phase,
+      "live",
+    );
+    assert.equal(
+      (await store.getSyncState("dsh-1", "session:mounted"))?.phase,
+      "unseeded",
+    );
+  });
 });
 
 describe("sync scheduler", () => {
@@ -283,7 +329,7 @@ describe("sync scheduler", () => {
       states,
       humanIdle: false,
       catalogIncomplete: false,
-      rotateFrom: "chat:b",
+      rotateSeedFrom: "chat:b",
       now: "2026-08-31T00:00:01.000Z",
     });
     assert.deepEqual(

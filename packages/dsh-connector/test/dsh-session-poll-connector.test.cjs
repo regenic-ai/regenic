@@ -258,6 +258,27 @@ describe("DshSessionPollConnector", () => {
 
     const result = await connector.poll(null);
     assert.deepEqual(result.batch.records, []);
+    // Invisible-only history still advances past the walked seqs.
+    assert.equal(result.next_cursor, "2");
+  });
+
+  it("seeds an empty tip with a concrete cursor so unseeded slots free", async () => {
+    const connector = new DshSessionPollConnector(
+      {
+        async sessionHistory() {
+          return { hasMore: false, events: [] };
+        },
+      },
+      {
+        connector_id: "dsh-session",
+        org_id: "local-owner",
+        session_id: "sess-blank",
+        now: () => "2026-08-21T00:00:00.000Z",
+      },
+    );
+
+    const result = await connector.poll(null);
+    assert.deepEqual(result.batch.records, []);
     assert.equal(result.next_cursor, "-1");
   });
 
