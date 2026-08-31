@@ -125,12 +125,66 @@ describe("feishuChatDriver", () => {
       config: { selection: "all" },
       now: "2026-08-22T00:00:00.000Z",
     });
-    const live = await feishuChatDriver.resolveConversationLabels(
-      all,
-      [{ source: "feishu", target: "oc_hot" }],
-      {},
+    const { LarkCliClient } = require("../dist/feishu-cli-client");
+    const original = LarkCliClient.prototype.getChat;
+    LarkCliClient.prototype.getChat = async function getChat(chatId) {
+      assert.equal(chatId, "oc_hot");
+      return { chat_id: chatId, name: "工程群", chat_mode: "group" };
+    };
+    try {
+      const live = await feishuChatDriver.resolveConversationLabels(
+        all,
+        [{ source: "feishu", target: "oc_hot" }],
+        {},
+      );
+      assert.equal(live.get("feishu:oc_hot"), "工程群");
+    } finally {
+      LarkCliClient.prototype.getChat = original;
+    }
+  });
+
+  it("applies SyncEngine catalog labels when mounting known chats", async () => {
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    const streams = await feishuChatDriver.resolveStreams(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all", kinds: ["group", "p2p"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+      },
+      host,
+      { REGENIC_LARK_CLI: "/missing-lark-cli" },
+      {
+        threads: [{ source: "feishu", target: "oc_eng" }],
+        catalog: [
+          {
+            stream_key: "chat:oc_eng",
+            thread_id: "feishu:oc_eng",
+            label: "工程群",
+            kind: "group",
+          },
+        ],
+      },
     );
-    assert.equal(live.size, 0);
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].thread_id, "feishu:oc_eng");
+    assert.equal(connectors.getStream("feishu-1", "chat:oc_eng")?.label, "工程群");
+    assert.equal(
+      connectors.getStream("feishu-1", "chat:oc_eng")?.connector.describeChat().name,
+      "工程群",
+    );
+    await host.dispose();
   });
 
   it("installs all groups or a picked set", () => {
@@ -670,15 +724,19 @@ describe("createFeishuSyncSource", () => {
       groups.members.map((member) => member.thread_id),
       ["feishu:oc_g"],
     );
+    assert.equal(groups.members[0].label, "Eng");
     assert.equal(groups.complete, false);
     assert.equal(calls[0].types[0], "group");
     assert.equal(calls[0].page_size, 100);
+    assert.equal(calls[0].names, false);
     const p2p = await source.listDirectory(groups.next_cursor);
     assert.deepEqual(
       p2p.members.map((member) => member.thread_id),
       ["feishu:oc_dm"],
     );
+    assert.equal(p2p.members[0].label, "Ada");
     assert.equal(p2p.complete, true);
     assert.deepEqual(calls[1].types, ["p2p"]);
+    assert.equal(calls[1].names, true);
   });
 });

@@ -1190,6 +1190,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         process.env,
         {
           threads,
+          catalog: catalog.members,
           discover: !driver.bindSyncSource && options?.discover === true,
         },
       );
@@ -1260,13 +1261,21 @@ export class PersonalConnectorService implements OnModuleDestroy {
         }
       }
       this.publishStreams();
-      const concurrency = syncExecutionBudget({
+      const textItems = selected.filter((item) => !item.media);
+      const mediaItems = selected.filter((item) => item.media);
+      const textConcurrency = syncExecutionBudget({
         humanIdle,
         capCatchUp: options?.capCatchUp,
         lane: "live",
         pages: 1,
       }).concurrency;
-      const batches = await mapLimit(selected, concurrency, async (item) => {
+      const mediaConcurrency = syncExecutionBudget({
+        humanIdle,
+        capCatchUp: options?.capCatchUp,
+        lane: "media",
+        pages: 1,
+      }).concurrency;
+      const runSelected = async (item: (typeof selected)[number]) => {
         try {
           const pages = await this.exclusiveStream(
             installation.id,
@@ -1317,7 +1326,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
           this.publishStreams();
           return result;
         }
-      });
+      };
+      // Text first so the open thread's lease is free before its media drain.
+      const textBatches = await mapLimit(textItems, textConcurrency, runSelected);
+      const mediaBatches = await mapLimit(mediaItems, mediaConcurrency, runSelected);
+      const batches = [...textBatches, ...mediaBatches];
       const runs = batches.flatMap((batch) => batch.pages);
       const firstError = batches.find((batch) => batch.error)?.error;
       if (runs.length === 0 && firstError) {

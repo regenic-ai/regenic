@@ -17,7 +17,7 @@ import type {
   IngestBatch,
   NewConnectorInstallation,
 } from "./ingestion";
-import type { SyncSource } from "./sync-contracts";
+import type { SyncCatalogMember, SyncSource } from "./sync-contracts";
 import type {
   AttentionAck,
   MessageReceipt,
@@ -45,6 +45,11 @@ export interface ConversationThread {
 /** Kernel-owned threads this install should keep live. Drivers may add a cheap peek. */
 export interface ResolveStreamsOptions {
   threads?: ConversationThread[];
+  /**
+   * Directory members from SyncEngine. Drivers may use labels without another
+   * census so live ticks stay cheap.
+   */
+  catalog?: readonly SyncCatalogMember[];
   /** First seed or an explicit sync. Not the paced live tick. */
   discover?: boolean;
 }

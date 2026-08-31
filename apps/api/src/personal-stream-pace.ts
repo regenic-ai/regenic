@@ -4,6 +4,8 @@ export const CATCH_UP_STREAMS_PER_TICK = 3;
 export const LIVE_STREAM_CONCURRENCY = 4;
 export const IDLE_STREAM_CONCURRENCY = 6;
 export const BUSY_STREAM_CONCURRENCY = 2;
+export const IDLE_MEDIA_CONCURRENCY = 2;
+export const BUSY_MEDIA_CONCURRENCY = 1;
 export const IDLE_CATALOG_PAGES = 3;
 export const DISCOVER_CATALOG_PAGES = 10;
 export const HUMAN_LIVE_STREAMS_BUSY = 2;
@@ -168,7 +170,15 @@ export function syncExecutionBudget(input: {
   const pages =
     input.lane === "history" && input.humanIdle
       ? Math.max(input.pages, catchUp)
-      : input.pages;
+      : input.lane === "media"
+        ? 1
+        : input.pages;
+  if (input.lane === "media") {
+    return {
+      pages,
+      concurrency: input.humanIdle ? IDLE_MEDIA_CONCURRENCY : BUSY_MEDIA_CONCURRENCY,
+    };
+  }
   const concurrency = input.humanIdle
     ? IDLE_STREAM_CONCURRENCY
     : input.capCatchUp

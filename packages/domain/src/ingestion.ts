@@ -137,8 +137,10 @@ export interface ConnectorPollOptions {
   /** One older/history page instead of the live/recent page. */
   older?: boolean;
   /**
-   * Download attachments. Default true.
-   * Live/history/interactive pass false; the media lane omits it.
+   * Download attachments.
+   * - `false`: text/history only; enqueue media jobs but do not download.
+   * - `true`: media lane only; drain queued downloads without fetching text.
+   * - omitted: text page and drain (legacy connectors / tests).
    */
   media?: boolean;
 }

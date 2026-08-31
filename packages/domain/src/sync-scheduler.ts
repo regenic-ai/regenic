@@ -17,7 +17,7 @@ export function syncLaneLimits(
       live: 1,
       catalog: catalogIncomplete ? 1 : 0,
       history: 2,
-      media: 1,
+      media: 2,
     };
   }
   return {
@@ -25,7 +25,7 @@ export function syncLaneLimits(
     live: 2,
     catalog: catalogIncomplete ? 1 : 0,
     history: 0,
-    media: 0,
+    media: 1,
   };
 }
 
@@ -127,12 +127,15 @@ export function planSyncWork(input: SyncScheduleInput): SyncWorkItem[] {
   }
 
   if (limits.media > 0) {
-    const mediaPool = input.members.filter((member) => {
-      if (taken.has(member.stream_key) || member.thread_id === preferredId) {
-        return false;
-      }
-      return input.states.get(member.stream_key)?.media_pending === true;
-    });
+    const pending = input.members.filter(
+      (member) => input.states.get(member.stream_key)?.media_pending === true,
+    );
+    // Text may already have claimed a stream this tick; media still runs
+    // after text releases the stream lock.
+    const mediaPool = [
+      ...pending.filter((member) => member.thread_id === preferredId),
+      ...pending.filter((member) => member.thread_id !== preferredId),
+    ];
     for (const member of mediaPool.slice(0, limits.media)) {
       planned.push({
         lane: "media",

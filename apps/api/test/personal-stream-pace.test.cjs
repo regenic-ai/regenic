@@ -215,6 +215,26 @@ describe("syncExecutionBudget", () => {
       { pages: 1, concurrency: 2 },
     );
   });
+
+  it("keeps media on a small dedicated concurrency budget", () => {
+    assert.deepEqual(
+      syncExecutionBudget({
+        humanIdle: true,
+        lane: "media",
+        pages: 3,
+      }),
+      { pages: 1, concurrency: 2 },
+    );
+    assert.deepEqual(
+      syncExecutionBudget({
+        humanIdle: false,
+        capCatchUp: true,
+        lane: "media",
+        pages: 3,
+      }),
+      { pages: 1, concurrency: 1 },
+    );
+  });
 });
 
 describe("catalogRefreshPages", () => {

@@ -36,18 +36,19 @@ async function listPhase(
   phase: DirectoryPhase,
   continueToP2p: boolean,
 ): Promise<SyncDirectoryPage> {
-  const page = await client.listChats!({
+      const page = await client.listChats!({
     page_size: phase === "group" ? GROUP_PAGE_SIZE : P2P_PAGE_SIZE,
     page_token: token,
     types,
-    names: false,
+    // Groups already carry name on /im/v1/chats. P2p needs contact fill.
+    names: phase === "p2p" || phase === "mixed",
   });
   const members = page.items
     .filter((chat) => chatMatchesKinds(chat, types))
     .map((chat) => ({
       stream_key: feishuStreamKey(chat.chat_id),
       thread_id: `${FEISHU_SOURCE}:${chat.chat_id}`,
-      label: chat.name,
+      ...(chat.name?.trim() ? { label: chat.name.trim() } : {}),
       kind: chat.chat_mode,
     }));
   if (page.has_more === true && page.page_token) {

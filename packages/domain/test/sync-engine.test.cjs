@@ -213,6 +213,36 @@ describe("sync scheduler", () => {
       ["interactive:chat:open:text", "live:chat:other:text", "media:chat:pic:media"],
     );
   });
+
+  it("drains media for the open thread after its text page", () => {
+    const states = stateMap([
+      ["chat:open", "live"],
+      ["chat:other", "live"],
+    ]);
+    states.get("chat:open").media_pending = true;
+    states.get("chat:other").media_pending = true;
+    const selected = planSyncWork({
+      members: [
+        member("chat:open", "feishu:open"),
+        member("chat:other", "feishu:other"),
+      ],
+      states,
+      preferredThreadId: "feishu:open",
+      humanIdle: false,
+      catalogIncomplete: false,
+      now: "2026-08-31T00:00:00.000Z",
+      limits: { media: 2 },
+    });
+    assert.deepEqual(
+      selected.map((item) => `${item.lane}:${item.stream_key}:${item.media ? "media" : "text"}`),
+      [
+        "interactive:chat:open:text",
+        "live:chat:other:text",
+        "media:chat:open:media",
+        "media:chat:other:media",
+      ],
+    );
+  });
 });
 
 describe("sync slot pool", () => {

@@ -676,6 +676,7 @@ export class PersonalInboxService {
       [{ item, body }],
       installations,
       this.drivers,
+      authority,
     );
     const thread = threadOf(event);
     const siblings = await authority.listInbox(orgId, {
@@ -1117,6 +1118,7 @@ export class PersonalInboxService {
       resolved,
       installations,
       this.drivers,
+      authority,
     );
     const threads = [
       ...new Map(
@@ -1672,6 +1674,7 @@ async function conversationLabelsFor(
   }>,
   installations: ConnectorInstallation[],
   drivers: ChannelDriverRegistry,
+  store?: Pick<SyncStore, "getSyncCatalog">,
 ): Promise<Map<string, string>> {
   const missing = items.flatMap(({ item, body }) => {
     const surface = messageSurfaceOf(item.event, body);
@@ -1680,7 +1683,49 @@ async function conversationLabelsFor(
   if (missing.length === 0) {
     return new Map();
   }
-  return drivers.resolveConversationLabels(installations, missing);
+  const labels = await catalogConversationLabels(installations, store);
+  const stillMissing = missing.filter(
+    (thread) => !labels.has(`${thread.source}:${thread.target}`),
+  );
+  if (stillMissing.length === 0) {
+    return labels;
+  }
+  const live = await drivers.resolveConversationLabels(
+    installations,
+    stillMissing,
+  );
+  for (const [threadId, label] of live) {
+    labels.set(threadId, label);
+  }
+  return labels;
+}
+
+async function catalogConversationLabels(
+  installations: ConnectorInstallation[],
+  store?: Pick<SyncStore, "getSyncCatalog">,
+): Promise<Map<string, string>> {
+  const labels = new Map<string, string>();
+  if (!store?.getSyncCatalog) {
+    return labels;
+  }
+  await Promise.all(
+    installations.map(async (installation) => {
+      try {
+        const catalog = await store.getSyncCatalog(installation.id);
+        for (const member of catalog.members) {
+          const label = member.label?.replace(/\s+/g, " ").trim();
+          const threadId = member.thread_id?.trim();
+          if (!label || !threadId) {
+            continue;
+          }
+          labels.set(threadId, label);
+        }
+      } catch {
+        // Catalog is optional. Drivers may still fill titles.
+      }
+    }),
+  );
+  return labels;
 }
 
 const PROMPT_USER_SCAN_LIMIT = 24;

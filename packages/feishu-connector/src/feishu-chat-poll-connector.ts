@@ -135,14 +135,18 @@ export class FeishuChatPollConnector {
     options?: { older?: boolean; media?: boolean },
   ): Promise<PollResult> {
     const state = decodeFeishuCursor(cursor);
+    const mediaOnly = options?.media === true;
     const wantMedia = options?.media !== false;
+    const nowMs = this.clockMs();
+    if (mediaOnly) {
+      return this.pollMediaOnly(state, cursor, nowMs);
+    }
     const request = planFeishuHistoryRequest(
       this.options.chat_id,
       this.pageSize,
       state,
       { older: options?.older === true },
     );
-    const nowMs = this.clockMs();
     if (!request && !(wantMedia && hasDueMediaJobs(state.media_jobs, nowMs))) {
       const nextCursor = encodeFeishuCursor(state);
       return {
@@ -204,6 +208,53 @@ export class FeishuChatPollConnector {
       has_more:
         Boolean(request) &&
         feishuHistoryHasMore(state, page, request?.sort_type, nextState),
+      media_pending: drained.jobs.length > 0,
+    };
+  }
+
+  /** Drain queued attachment downloads without touching the text watermark. */
+  private async pollMediaOnly(
+    state: FeishuCursorState,
+    cursor: ConnectorCursor | null,
+    nowMs: number,
+  ): Promise<PollResult> {
+    if (!hasDueMediaJobs(state.media_jobs, nowMs)) {
+      const nextCursor = encodeFeishuCursor(state);
+      return {
+        batch: {
+          schema_version: INGEST_SCHEMA_VERSION,
+          connector_id: this.options.connector_id,
+          org_id: this.options.org_id,
+          delivery_id: this.deliveryId(cursor?.value, nextCursor),
+          received_at: this.now(),
+          next_cursor: nextCursor,
+          records: [],
+        },
+        next_cursor: nextCursor,
+        has_more: false,
+        media_pending: (state.media_jobs?.length ?? 0) > 0,
+      };
+    }
+    const drained = await this.drainMediaJobs(state.media_jobs ?? [], nowMs);
+    const nextState: FeishuCursorState = { ...state };
+    if (drained.jobs.length > 0) {
+      nextState.media_jobs = drained.jobs;
+    } else {
+      delete nextState.media_jobs;
+    }
+    const nextCursor = encodeFeishuCursor(nextState);
+    return {
+      batch: {
+        schema_version: INGEST_SCHEMA_VERSION,
+        connector_id: this.options.connector_id,
+        org_id: this.options.org_id,
+        delivery_id: this.deliveryId(cursor?.value, nextCursor),
+        received_at: this.now(),
+        next_cursor: nextCursor,
+        records: drained.records,
+      },
+      next_cursor: nextCursor,
+      has_more: false,
       media_pending: drained.jobs.length > 0,
     };
   }

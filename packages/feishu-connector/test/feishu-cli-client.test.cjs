@@ -3,6 +3,7 @@ const { afterEach, describe, it } = require("node:test");
 const {
   FeishuApiError,
   LarkCliClient,
+  appendFeishuOpenApiParams,
   isTransientLarkError,
   feishuChatOptionLabel,
   larkCliCatalogHint,
@@ -14,6 +15,7 @@ const {
   probeLarkCli,
   probeLarkCliAuth,
   resetFeishuChatListCache,
+  resetFeishuChatInfoCache,
   resetFeishuUserNameCache,
   resetLarkCliProbeCache,
   resetLarkCliSlot,
@@ -25,6 +27,8 @@ const {
 afterEach(() => {
   resetLarkCliSlot();
   resetLarkUserTokenCache();
+  resetFeishuUserNameCache();
+  resetFeishuChatInfoCache();
 });
 
 describe("LarkCliClient", () => {
@@ -188,6 +192,56 @@ describe("LarkCliClient", () => {
     assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/im\/v1\/chats/);
     assert.match(fetched[0].url, /sort_type=ByActiveTimeDesc/);
     assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
+  });
+
+  it("loads one chat by id over HTTP and caches the name", async () => {
+    const fetched = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn() {
+        throw new Error("CLI should not run when HTTP works");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url, init) {
+        fetched.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: {
+                chat_id: "oc_eng",
+                name: "工程群",
+                chat_mode: "group",
+                chat_status: "normal",
+              },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const first = await client.getChat("oc_eng");
+    assert.equal(first?.name, "工程群");
+    assert.equal(first?.chat_mode, "group");
+    assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/im\/v1\/chats\/oc_eng/);
+    const second = await client.getChat("oc_eng");
+    assert.equal(second?.name, "工程群");
+    assert.equal(fetched.length, 1);
   });
 
   it("falls back to HTTP when CLI download fails", async () => {
@@ -592,6 +646,7 @@ describe("LarkCliClient", () => {
 
   it("resolves sender names through contact +search-user", async () => {
     resetLarkCliProbeCache();
+    resetFeishuUserNameCache();
     const calls = [];
     const client = new LarkCliClient({
       async spawn(input) {
@@ -611,10 +666,177 @@ describe("LarkCliClient", () => {
     const names = await client.resolveUserNames(["ou_1", "ou_1"]);
     assert.equal(calls[0].command.includes("+search-user"), true);
     assert.equal(names.get("ou_1"), "Ada");
+    const again = await client.resolveUserNames(["ou_1"]);
+    assert.equal(calls.length, 1);
+    assert.equal(again.get("ou_1"), "Ada");
     assert.deepEqual(
       [...parseUserNamePage({ users: [{ open_id: "ou_2", localized_name: { zh_cn: "本" } }] })],
       [["ou_2", "本"]],
     );
+    resetFeishuUserNameCache();
+  });
+
+  it("resolves sender names over HTTP when a user token is available", async () => {
+    resetFeishuUserNameCache();
+    const spawned = [];
+    const fetched = [];
+    const client = new LarkCliClient({
+      async spawn(input) {
+        spawned.push(input);
+        throw new Error("CLI should not run when HTTP works");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_me", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url, init) {
+        fetched.push({ url: String(url), init });
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: {
+                items: [
+                  { open_id: "ou_1", name: "Ada" },
+                  { open_id: "ou_2", nickname: "Ben" },
+                ],
+              },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const names = await client.resolveUserNames(["ou_2", "ou_1", "ou_1"]);
+    assert.equal(spawned.length, 0);
+    assert.equal(names.get("ou_1"), "Ada");
+    assert.equal(names.get("ou_2"), "Ben");
+    assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/contact\/v3\/users\/batch/);
+    assert.match(fetched[0].url, /user_ids=ou_1/);
+    assert.match(fetched[0].url, /user_ids=ou_2/);
+    assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
+    const again = await client.resolveUserNames(["ou_1", "ou_2"]);
+    assert.equal(fetched.length, 1);
+    assert.equal(again.get("ou_1"), "Ada");
+    resetFeishuUserNameCache();
+  });
+
+  it("falls back to CLI for names the contact batch omits", async () => {
+    resetFeishuUserNameCache();
+    const spawned = [];
+    const client = new LarkCliClient({
+      async spawn(input) {
+        spawned.push(input);
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: { users: [{ open_id: "ou_out", name: "Out of scope" }] },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_me", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch() {
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: { items: [{ open_id: "ou_in", name: "In scope" }] },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const names = await client.resolveUserNames(["ou_in", "ou_out"]);
+    assert.equal(names.get("ou_in"), "In scope");
+    assert.equal(names.get("ou_out"), "Out of scope");
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0].command.includes("+search-user"), true);
+    assert.equal(
+      spawned[0].command[spawned[0].command.indexOf("--user-ids") + 1],
+      "ou_out",
+    );
+    resetFeishuUserNameCache();
+  });
+
+  it("coalesces concurrent name lookups for the same ids", async () => {
+    resetFeishuUserNameCache();
+    let fetches = 0;
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const client = new LarkCliClient({
+      async spawn() {
+        throw new Error("CLI should not run");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_me", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch() {
+        fetches += 1;
+        await gate;
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: { items: [{ open_id: "ou_1", name: "Ada" }] },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const first = client.resolveUserNames(["ou_1"]);
+    const second = client.resolveUserNames(["ou_1"]);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    assert.equal(fetches, 1);
+    assert.equal(a.get("ou_1"), "Ada");
+    assert.equal(b.get("ou_1"), "Ada");
+    resetFeishuUserNameCache();
   });
 
   it("sends text through the raw IM API", async () => {
@@ -871,5 +1093,17 @@ describe("LarkCliClient", () => {
     assert.equal(await probeLarkCliAuth({ spawn, now: () => 22_000 }), true);
     assert.equal(calls, 2);
     resetLarkCliProbeCache();
+  });
+});
+
+describe("appendFeishuOpenApiParams", () => {
+  it("repeats array query keys for contact batch lookups", () => {
+    const url = new URL("https://open.feishu.cn/open-apis/contact/v3/users/batch");
+    appendFeishuOpenApiParams(url, {
+      user_id_type: "open_id",
+      user_ids: ["ou_1", "ou_2"],
+    });
+    assert.equal(url.searchParams.get("user_id_type"), "open_id");
+    assert.deepEqual(url.searchParams.getAll("user_ids"), ["ou_1", "ou_2"]);
   });
 });
