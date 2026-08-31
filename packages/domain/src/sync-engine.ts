@@ -22,6 +22,7 @@ export interface SyncPlanInput {
   preferredThreadId?: string | null;
   humanIdle: boolean;
   rotateFrom?: string;
+  rotateSeedFrom?: string;
   pages?: number;
   fallbackMembers?: readonly SyncCatalogMember[];
   cursorStates?: ReadonlyMap<string, string | undefined>;
@@ -92,6 +93,11 @@ export class SyncEngine {
         if (state.phase !== "live" && state.phase !== "steady") {
           continue;
         }
+        // Only heal streams we actually mounted this tick. A missing map key
+        // is not the same as an empty cursor — orphans would false-unseed.
+        if (!input.cursorStates.has(streamKey)) {
+          continue;
+        }
         const runtimeCursor = input.cursorStates.get(streamKey);
         const derived = syncStateFromCursor({
           installation_id: input.installation_id,
@@ -132,6 +138,7 @@ export class SyncEngine {
       humanIdle: input.humanIdle,
       catalogIncomplete,
       rotateFrom: input.rotateFrom,
+      rotateSeedFrom: input.rotateSeedFrom,
       now,
       pages: input.pages,
       limits: syncLaneLimits(input.humanIdle, catalogIncomplete),
@@ -147,7 +154,11 @@ export class SyncEngine {
   }
 
   lastHistoryKey(items: readonly SyncWorkItem[]): string | undefined {
-    return lastHistoryWorkKey(items) ?? lastSeedWorkKey(items);
+    return lastHistoryWorkKey(items);
+  }
+
+  lastSeedKey(items: readonly SyncWorkItem[]): string | undefined {
+    return lastSeedWorkKey(items);
   }
 
   catalogFresh(view: SyncCatalogView, now = this.now()): boolean {

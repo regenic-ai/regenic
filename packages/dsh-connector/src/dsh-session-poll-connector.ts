@@ -108,13 +108,20 @@ export class DshSessionPollConnector {
     }
     const surface = toSurfaceEvents(collected.events).filter((event) => event.seq > afterSeq);
     const window = surface.slice(0, this.pageSize);
-    // An empty tip still needs a concrete cursor so SyncEngine can leave
-    // "unseeded" and free the seed slots for other sessions.
+    // Prefer surface progress; if everything was invisible, still advance past
+    // the raw history we walked so tip polls do not restart from seq -1.
+    const collectedSeqs = collected.events
+      .map((event) => event.seq)
+      .filter((seq) => Number.isInteger(seq));
+    const maxCollected =
+      collectedSeqs.length > 0 ? Math.max(...collectedSeqs) : undefined;
     const nextCursor = window.length > 0
       ? String(window[window.length - 1].seq)
-      : afterSeq >= 0
-        ? String(afterSeq)
-        : "-1";
+      : maxCollected !== undefined
+        ? String(maxCollected)
+        : afterSeq >= 0
+          ? String(afterSeq)
+          : "-1";
     this.lastSurfacePage = {
       events: window,
       hasMore: surface.length > window.length,

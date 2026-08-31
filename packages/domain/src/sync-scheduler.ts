@@ -36,6 +36,7 @@ export interface SyncScheduleInput {
   humanIdle: boolean;
   catalogIncomplete: boolean;
   rotateFrom?: string;
+  rotateSeedFrom?: string;
   now: string;
   limits?: Partial<SyncLaneLimits>;
   pages?: number;
@@ -71,7 +72,7 @@ export function planSyncWork(input: SyncScheduleInput): SyncWorkItem[] {
     const state = input.states.get(member.stream_key);
     return !state || state.phase === "unseeded";
   });
-  const seeds = rotateFromKey(unseen, input.rotateFrom).slice(
+  const seeds = rotateFromKey(unseen, input.rotateSeedFrom ?? input.rotateFrom).slice(
     0,
     UNSEEN_SEED_PER_TICK,
   );
