@@ -39,6 +39,7 @@
 | 文件导入 | CSV / JSONL，用一份对照表说明哪一列是什么 | CLI |
 | WhatsApp | 用户明确选择的只读 Purr WA CSV 或 Export v1 JSONL | 桌面端 + CLI |
 | 导出 | 消息记录 JSONL、按日整理的 Markdown、给外部用的引用清单 | CLI |
+| Context | 确定性 snapshot 与可选的带引用模型回答 | API + CLI |
 
 ## 安装与快速开始
 
@@ -294,6 +295,54 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 	--output ./evidence-bundles.jsonl
 ```
 
+### Context 与带引用的模型回答
+
+Context 装配是确定性的，不配置模型也能使用。它只读取已提交的 Event/Blob 证据，在排名前
+应用 Personal 权威边界，持久化不可变 snapshot 与 bundle，并支持进程重启后 replay。
+
+```bash
+pnpm local context-assemble --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --query "release approved"
+
+pnpm local context-snapshot --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --snapshot <snapshot-id>
+
+pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --snapshot <snapshot-id>
+```
+
+模型回答是可选能力。第一版 driver 接受 numeric loopback 上的 OpenAI-compatible API，例如
+本机 Ollama；本版本不接受远程模型 URL。API key 配置只保存环境变量引用，不保存 key 本身。
+
+```bash
+export REGENIC_MODEL_DRIVER=openai_compatible
+export REGENIC_MODEL_BASE_URL=http://127.0.0.1:11434/v1
+export REGENIC_MODEL_NAME=<local-model>
+# 供应商需要 key 时：
+# export REGENIC_MODEL_API_KEY_REF=env:OPENAI_API_KEY
+
+pnpm local context-ask --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --question "What was approved?"
+```
+
+Personal API 提供同一条持久化路径：
+
+```http
+POST /v1/me/context/assemble
+GET  /v1/me/context/snapshots/:snapshot_id
+POST /v1/me/context/replay
+POST /v1/me/context/ask
+```
+
+证据正文作为不可信 user data 发送给模型，绝不作为模型 instruction。只有当模型提交的每条
+citation 都指向授权 bundle 中已有的 candidate 与 Event 时，回答才会返回。模型输出不会
+写回 Event、Artifact、Claim，也不会直接成为已接受事实。
+
+带浏览器 Origin 的 `/v1/me` 请求还必须携带临时 Personal API key。桌面端为自己拥有的
+loopback sidecar 每次生成并自动注入该 key，不向 renderer 代码暴露，也不持久化。手工启动的
+loopback 浏览器客户端必须共享 `REGENIC_PERSONAL_API_KEY`；无 Origin 的本机 CLI 调用保持
+可用。Personal API 不允许公网监听。
+
 ## 状态
 
 Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本机上的飞书 / Slack / DSH 和后台服务。
@@ -305,7 +354,7 @@ Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本机上的飞书
 | 个人 | 单人；可导出；远端备份可选 | Phase 1（进行中） |
 | 组织 | 多人共用一份记录，每人看到自己的那一份 | Phase 3（[从个人到组织](docs/zh/rfcs/personal-to-org.md)） |
 | 判断规则 | 可改、可版本化的共用规则 | RFC 已接纳（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |
-| 上下文 | Claim、Snapshot、Event/Blob | RFC 已接纳（[0002](docs/zh/rfcs/0002-context-graph.md)、[0005](docs/zh/rfcs/0005-context-storage-lifecycle.md)） |
+| 上下文 | Event-backed 持久 snapshot、replay 与可选的带引用模型回答 | Personal API + CLI baseline（[架构](docs/zh/CONTEXT_MANAGEMENT_ARCHITECTURE.md)） |
 | 协作 | Proposal / Decision / Review / Handoff | RFC 已接纳（[0003](docs/zh/rfcs/0003-collaboration-objects.md)） |
 | API | 人和自动化使用同一套 `/v1` | RFC 已接纳（[0004](docs/zh/rfcs/0004-human-agent-api.md)） |
 | 权限 | `visible()`；整理摘要时不会多拿到权限；能发消息是单独授权 | RFC 已接纳（[0006](docs/zh/rfcs/0006-acl-agent-identity.md)） |

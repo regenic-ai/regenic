@@ -267,6 +267,16 @@ Scoring, quotas, ACL, and conflict handling live in the kernel (RFC 0007), not
 inside the model driver. Personal can default to `none`, or talk to local
 Ollama.
 
+The implemented Personal completion drivers are `none` and
+`openai_compatible`. Configuration uses `REGENIC_MODEL_DRIVER`,
+`REGENIC_MODEL_BASE_URL`, `REGENIC_MODEL_NAME`, and the optional
+`REGENIC_MODEL_API_KEY_REF=env:NAME`. Timeout and bounded-response settings are
+`REGENIC_MODEL_TIMEOUT_MS` and `REGENIC_MODEL_MAX_RESPONSE_BYTES`. A bad or
+absent model configuration degrades model calls without disabling deterministic
+context assembly and replay. The first driver accepts only numeric-loopback
+model servers and rejects redirects. Remote providers require a future
+connection adapter that pins validated DNS and network destinations.
+
 ## 11. Identity (`IdentityProvider`)
 
 ```text

@@ -39,6 +39,7 @@ What you can use now is **one person, data on this machine**. Shared use across 
 | File import | CSV / JSONL, with a map of which column is which | CLI |
 | WhatsApp | Read-only Purr WA CSV or Export v1 JSONL selected by the user | desktop + CLI |
 | Export | Message JSONL, daily Markdown, a citation list for another tool | CLI |
+| Context | Deterministic snapshots and optional cited model answers | API + CLI |
 
 ## Installation & Quick Start
 
@@ -294,6 +295,60 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 	--output ./evidence-bundles.jsonl
 ```
 
+### Context and cited model answers
+
+Context assembly is deterministic and works without a model. It reads only
+committed Event/Blob evidence, applies the Personal authority boundary before
+ranking, persists an immutable snapshot and bundle, and supports replay after a
+restart.
+
+```bash
+pnpm local context-assemble --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --query "release approved"
+
+pnpm local context-snapshot --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --snapshot <snapshot-id>
+
+pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --snapshot <snapshot-id>
+```
+
+Model answers are optional. The first driver accepts an OpenAI-compatible API
+on numeric loopback, such as a local Ollama server. Remote model URLs are not
+accepted in this version. The API key setting is a reference to an environment
+variable; the key itself is not stored.
+
+```bash
+export REGENIC_MODEL_DRIVER=openai_compatible
+export REGENIC_MODEL_BASE_URL=http://127.0.0.1:11434/v1
+export REGENIC_MODEL_NAME=<local-model>
+# For a provider that requires a key:
+# export REGENIC_MODEL_API_KEY_REF=env:OPENAI_API_KEY
+
+pnpm local context-ask --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --question "What was approved?"
+```
+
+The Personal API exposes the same durable path:
+
+```http
+POST /v1/me/context/assemble
+GET  /v1/me/context/snapshots/:snapshot_id
+POST /v1/me/context/replay
+POST /v1/me/context/ask
+```
+
+Evidence text is sent as untrusted user data, never as model instructions. A
+model answer is returned only when every submitted citation names a candidate
+and Event already present in the authorized bundle. Model output is not written
+back as an Event, Artifact, Claim, or accepted fact.
+
+Browser-origin requests to `/v1/me` also require an ephemeral Personal API key.
+The desktop creates and injects this key for its owned loopback sidecar without
+exposing it to renderer code or storing it. A manually started loopback browser
+client must share `REGENIC_PERSONAL_API_KEY`; requests without an `Origin`
+remain available to local CLI tools. Public Personal API binds are disabled.
+
 ## Status
 
 Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is Feishu / Slack / DSH on this machine, plus the local service.
@@ -305,7 +360,7 @@ Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is Feishu / Slack / 
 | Personal | One person; export; optional remote backup | Phase 1 (now) |
 | Team | One shared record, each person sees their own view | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
 | Rules | Shared rules you can change and version | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
-| Context | Claims, snapshots, Event/Blob | RFC Accepted ([0002](docs/en/rfcs/0002-context-graph.md), [0005](docs/en/rfcs/0005-context-storage-lifecycle.md)) |
+| Context | Durable Event-backed snapshots, replay, and optional cited model answers | Personal API + CLI baseline ([architecture](docs/en/CONTEXT_MANAGEMENT_ARCHITECTURE.md)) |
 | Collaboration | Proposal / Decision / Review / Handoff | RFC Accepted ([0003](docs/en/rfcs/0003-collaboration-objects.md)) |
 | API | People and automation use the same `/v1` | RFC Accepted ([0004](docs/en/rfcs/0004-human-agent-api.md)) |
 | Access | `visible()`; summarizing does not grant extra access; sending is a separate grant | RFC Accepted ([0006](docs/en/rfcs/0006-acl-agent-identity.md)) |

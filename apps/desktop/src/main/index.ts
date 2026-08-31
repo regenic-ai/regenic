@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
   Menu,
   nativeImage,
   Notification,
+  session,
   shell,
   Tray,
 } from "electron";
@@ -63,6 +65,7 @@ import {
   savePreviousDataRootPreference,
   type KernelPreference,
 } from "./kernel-settings";
+import { personalApiRequestHeaders } from "./personal-api-key";
 
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
@@ -74,6 +77,7 @@ let sidecar: ChildProcess | null = null;
 let lastOwnedSidecarPid: number | null = null;
 let ownedStoreRoot: string | null = null;
 let apiOrigin = `http://127.0.0.1:${DEFAULT_PORT}`;
+let personalApiKey: string | null = null;
 let quitting = false;
 let lastInboxCount: number | null = null;
 
@@ -149,6 +153,11 @@ function sidecarEnv(
   env.REGENIC_ORG = process.env.REGENIC_ORG ?? "local-owner";
   env.PORT = String(port);
   env.LISTEN_HOST = "127.0.0.1";
+  if (personalApiKey) {
+    env.REGENIC_PERSONAL_API_KEY = personalApiKey;
+  } else {
+    delete env.REGENIC_PERSONAL_API_KEY;
+  }
   if (!Number(env.REGENIC_CONNECTOR_PULL_MS)) {
     env.REGENIC_CONNECTOR_PULL_MS = "3000";
   }
@@ -178,6 +187,10 @@ function isUsingCustomKernel(): boolean {
     Boolean(preference.origin) &&
     preference.origin === apiOrigin
   );
+}
+
+function configuredPersonalApiKey(): string | null {
+  return process.env.REGENIC_PERSONAL_API_KEY?.trim() || null;
 }
 
 function kernelView() {
@@ -242,6 +255,7 @@ function broadcastLocale(locale: "en" | "zh"): void {
 function requestSidecarStop(): ChildProcess | null {
   const child = sidecar;
   sidecar = null;
+  personalApiKey = null;
   lastOwnedSidecarPid = null;
   child?.kill();
   return child;
@@ -307,23 +321,44 @@ function spawnSidecar(port: number): void {
   if (!existsSync(apiEntry)) {
     throw new Error(`API sidecar is not built: ${apiEntry}`);
   }
-  sidecar = spawn(nodeBinary(), [apiEntry], {
+  personalApiKey = randomBytes(32).toString("base64url");
+  const child = spawn(nodeBinary(), [apiEntry], {
     env: sidecarEnv(port, database, blobRoot),
     stdio: ["ignore", "pipe", "pipe"],
   });
-  lastOwnedSidecarPid = sidecar.pid ?? null;
-  sidecar.stdout?.on("data", (chunk) => {
+  sidecar = child;
+  lastOwnedSidecarPid = child.pid ?? null;
+  child.stdout?.on("data", (chunk) => {
     process.stdout.write(`[kernel] ${chunk}`);
   });
-  sidecar.stderr?.on("data", (chunk) => {
+  child.stderr?.on("data", (chunk) => {
     process.stderr.write(`[kernel] ${chunk}`);
   });
-  sidecar.on("exit", (code) => {
+  child.on("exit", (code) => {
     if (!quitting) {
       process.stderr.write(`[kernel] exited (${code ?? "null"})\n`);
     }
-    sidecar = null;
+    if (sidecar === child) {
+      sidecar = null;
+      personalApiKey = null;
+    }
   });
+}
+
+function installPersonalApiKeyInjection(): void {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ["<all_urls>"] },
+    (details, callback) => {
+      callback({
+        requestHeaders: personalApiRequestHeaders({
+          requestUrl: details.url,
+          apiOrigin,
+          key: personalApiKey,
+          headers: details.requestHeaders,
+        }),
+      });
+    },
+  );
 }
 
 async function pickFreeLocalPort(): Promise<{ port: number; origin: string }> {
@@ -390,8 +425,11 @@ async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<voi
   if (!options?.forceSpawn) {
     const reusable = await findReusableLocalKernel(paths.database);
     if (reusable) {
-      apiOrigin = reusable;
-      return;
+      if (sidecar && personalApiKey) {
+        apiOrigin = reusable;
+        return;
+      }
+      throw dataDirectoryError("settings.dataDirReasonHeld");
     }
   }
   if (storeLockHeldByOther(paths.dataRoot, process.pid)) {
@@ -405,8 +443,8 @@ async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<voi
   });
   ownedStoreRoot = paths.dataRoot;
   reclaimStoreIfRelocated(paths.dataRoot);
-  spawnSidecar(picked.port);
   try {
+    spawnSidecar(picked.port);
     await waitForPersonalKernel({
       origin: apiOrigin,
       probe: probeKernelMode,
@@ -426,7 +464,7 @@ async function assertPersonalKernel(origin: string): Promise<void> {
   }
   if (mode !== "personal") {
     throw new Error(
-      `Kernel at ${origin} is not personal. On that server set REGENIC_PERSONAL_API=1; /v1/me stays off when LISTEN_HOST is not loopback.`,
+      `Kernel at ${origin} is not personal. Remote Personal API access is disabled until authenticated remote identity is available.`,
     );
   }
 }
@@ -435,8 +473,13 @@ async function connectSavedKernel(): Promise<void> {
   const preference = loadKernelPreference(settingsFile());
   if (preference.mode === "custom" && preference.origin) {
     try {
+      const key = configuredPersonalApiKey();
+      if (!key) {
+        throw new Error("A custom Personal API requires REGENIC_PERSONAL_API_KEY");
+      }
       await assertPersonalKernel(preference.origin);
       apiOrigin = preference.origin;
+      personalApiKey = key;
       return;
     } catch (error) {
       process.stderr.write(
@@ -450,11 +493,16 @@ async function connectSavedKernel(): Promise<void> {
 async function applyKernelPreference(preference: KernelPreference): Promise<void> {
   resetHostStatCache();
   if (preference.mode === "custom" && preference.origin) {
+    const key = configuredPersonalApiKey();
+    if (!key) {
+      throw new Error("A custom Personal API requires REGENIC_PERSONAL_API_KEY");
+    }
     await assertPersonalKernel(preference.origin);
     saveKernelPreference(settingsFile(), preference);
     await stopOwnedSidecarAndWait();
     releaseOwnedStoreLock();
     apiOrigin = preference.origin;
+    personalApiKey = key;
     broadcastOrigin();
     return;
   }
@@ -912,6 +960,7 @@ app.whenReady().then(async () => {
     return;
   }
   applyAppIcon();
+  installPersonalApiKeyInjection();
   ipcMain.handle("regenic:show-console", async () => {
     showConsole();
   });
@@ -1007,6 +1056,7 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   quitting = true;
+  personalApiKey = null;
   sidecar?.kill();
   releaseOwnedStoreLock();
 });

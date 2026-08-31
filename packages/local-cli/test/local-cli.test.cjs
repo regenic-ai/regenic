@@ -1,10 +1,13 @@
 const assert = require("node:assert/strict");
+const { createServer } = require("node:http");
 const { access } = require("node:fs/promises");
 const { mkdir, mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
+const { FsBlobStore } = require("@regenic/blob-store");
+const { INGEST_SCHEMA_VERSION, IngestionService } = require("@regenic/domain");
 const { runLocalCli } = require("../dist/main");
 
 const roots = [];
@@ -32,6 +35,118 @@ async function run(args, options = {}) {
 }
 
 describe("regenic-local", () => {
+  it("assembles, inspects, replays, and asks over durable context", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const authority = new SqliteAuthorityStore(database);
+    const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
+    await ingestion.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "synthetic-chat",
+      org_id: "local-owner",
+      delivery_id: "delivery-context-cli",
+      received_at: "2026-08-30T01:00:00.000Z",
+      records: [{
+        operation: "create",
+        source: "synthetic-chat",
+        external_id: "chat-1:message-1",
+        occurred_at: "2026-08-30T00:00:00.000Z",
+        actor: { id: "person-1" },
+        scope: { id: "chat-1" },
+        type: "message",
+        content: [{
+          role: "body",
+          media_type: "text/plain",
+          text: "The release is approved for Monday.",
+        }],
+      }],
+    });
+    authority.close();
+
+    const common = [
+      "--database", database,
+      "--blob-root", blobRoot,
+      "--org", "local-owner",
+    ];
+    const assembled = await run([
+      "context-assemble",
+      ...common,
+      "--query", "release approved",
+    ], { env: { REGENIC_MODEL_DRIVER: "none" } });
+    assert.equal(
+      assembled.bundle.sections[0].items[0].text,
+      "The release is approved for Monday.",
+    );
+
+    const snapshot = await run([
+      "context-snapshot",
+      ...common,
+      "--snapshot", assembled.snapshot.id,
+    ], { env: { REGENIC_MODEL_DRIVER: "none" } });
+    assert.equal(snapshot.id, assembled.snapshot.id);
+
+    const replayed = await run([
+      "context-replay",
+      ...common,
+      "--snapshot", assembled.snapshot.id,
+    ], { env: { REGENIC_MODEL_DRIVER: "none" } });
+    assert.equal(replayed.content_hash, assembled.bundle.content_hash);
+
+    let modelRequest;
+    const modelServer = createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) {
+        chunks.push(chunk);
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      modelRequest = { authorization: request.headers.authorization, body };
+      const prompt = JSON.parse(body.messages[1].content);
+      const item = prompt.context_bundle.sections[0].items[0];
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        model: "cli-test-model",
+        choices: [{
+          message: {
+            role: "assistant",
+            content: JSON.stringify({
+              answer: "The release is approved for Monday.",
+              citations: [{
+                candidate_id: item.candidate_id,
+                event_ids: [item.evidence[0].event_id],
+              }],
+            }),
+          },
+          finish_reason: "stop",
+        }],
+      }));
+    });
+    await new Promise((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = modelServer.address();
+      const answer = await run([
+        "context-ask",
+        ...common,
+        "--question", "What release is approved?",
+      ], {
+        env: {
+          REGENIC_MODEL_DRIVER: "openai_compatible",
+          REGENIC_MODEL_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
+          REGENIC_MODEL_NAME: "cli-test-model",
+          REGENIC_MODEL_API_KEY_REF: "env:CLI_MODEL_KEY",
+          CLI_MODEL_KEY: "cli-model-test-secret",
+        },
+      });
+      assert.equal(answer.answer, "The release is approved for Monday.");
+      assert.equal(answer.model, "cli-test-model");
+      assert.equal(answer.citations[0].event_ids.length, 1);
+      assert.equal(modelRequest.authorization, "Bearer cli-model-test-secret");
+      assert.equal(JSON.stringify(answer).includes("cli-model-test-secret"), false);
+    } finally {
+      await new Promise((resolve) => modelServer.close(resolve));
+    }
+  });
+
   it("installs Slack without persisting its token and reports safe status", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

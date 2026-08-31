@@ -57,6 +57,11 @@ ACL、provenance、时序正确性、snapshot 不可变性或预算约束。
 模型可以提出摘要、Claim、身份链接、query interpretation 或话题归属。确定性代码负责
 schema 校验、证据绑定、ACL 派生、状态转换、配额、冲突与接受。
 
+可选的 `ContextQuestionAnswerer` 是 bundle consumer，不是 projector 或权威来源。固定回答
+规则作为 system message 发送，question 与 `ContextBundle` 则放在独立的不可信 data message
+中。只有当 answer 的 candidate 与 Event citation 能重新绑定到该 bundle 时，代码才接受
+输出。模型失败或输出非法时，不修改 Event、Artifact、snapshot 或 bundle。
+
 ## 3. 逻辑架构
 
 ```mermaid

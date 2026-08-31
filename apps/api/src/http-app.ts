@@ -50,6 +50,12 @@ export function enablePersonalCors(
         !requestOrigin || isAllowedPersonalCorsOrigin(requestOrigin),
       );
     },
+    allowedHeaders: [
+      "content-type",
+      "x-regenic-live-key",
+      "x-regenic-personal-key",
+    ],
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   });
 }
 

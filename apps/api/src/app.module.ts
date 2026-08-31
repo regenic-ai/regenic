@@ -11,6 +11,9 @@ import { DshApiController } from "./dsh-api.controller";
 import { DshApiService } from "./dsh-api.service";
 import { HealthController } from "./health.controller";
 import { PersonalConnectorService } from "./personal-connector.service";
+import { PersonalApiGuard } from "./personal-api.guard";
+import { PersonalContextController } from "./personal-context.controller";
+import { PersonalContextService } from "./personal-context.service";
 import { PersonalController } from "./personal.controller";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalForwardService } from "./personal-forward.service";
@@ -22,16 +25,23 @@ import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
 
 @Module({
-  controllers: [HealthController, DshApiController, PersonalController],
+  controllers: [
+    HealthController,
+    DshApiController,
+    PersonalController,
+    PersonalContextController,
+  ],
   providers: [
     DshApiService,
     PersonalRuntimeService,
+    PersonalContextService,
     PersonalInboxService,
     PersonalReplyService,
     PersonalForwardService,
     PersonalWorkService,
     PersonalExecutorService,
     PersonalConnectorService,
+    PersonalApiGuard,
     PersonalWhatsAppImportService,
     PersonalPluginService,
     {

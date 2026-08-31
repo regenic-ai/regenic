@@ -308,7 +308,7 @@ export const en = {
     "Start or reuse the sidecar on this computer (127.0.0.1, default port 4370).",
   "settings.custom": "Custom",
   "settings.customHint":
-    "Point at another personal kernel. Apply probes /health first; a remote server needs REGENIC_PERSONAL_API=1.",
+    "Use another loopback kernel with the same REGENIC_PERSONAL_API_KEY. Authenticated remote identity is not available yet.",
   "settings.url": "URL",
   "settings.customUnused":
     "Saved custom kernel is unused. Console is on {origin} until Apply succeeds.",
@@ -893,7 +893,7 @@ export const zh: Record<MessageKey, string> = {
   "settings.localHint": "启动或复用这台电脑上的本地服务（127.0.0.1，默认端口 4370）。",
   "settings.custom": "自定义",
   "settings.customHint":
-    "连到另一台个人内核。点「应用」会先检查 /health；远程服务需要 REGENIC_PERSONAL_API=1。",
+    "连接另一个回环内核时，两边必须使用同一个 REGENIC_PERSONAL_API_KEY；经过认证的远程身份尚未提供。",
   "settings.url": "地址",
   "settings.customUnused": "已保存的自定义地址还没生效。点「应用」成功前，仍连着 {origin}。",
   "settings.apply": "应用",
