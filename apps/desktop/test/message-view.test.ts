@@ -800,7 +800,7 @@ describe("rich message body", () => {
 });
 
 describe("work result card", () => {
-  it("lifts a short verdict line and colors approve/reject", () => {
+  it("lifts only a leading decision token, not any short first line", () => {
     assert.deepEqual(splitWorkResult("APPROVED\nH1 PASS: rider is outdoor"), {
       headline: "APPROVED",
       body: "H1 PASS: rider is outdoor",
@@ -809,17 +809,18 @@ describe("work result card", () => {
       headline: "REJECTED",
       body: "H2 FAIL: stale videos",
     });
-    assert.deepEqual(splitWorkResult("审核不通过：地区不符"), {
-      headline: "审核不通过：地区不符",
-      body: "",
+    assert.deepEqual(splitWorkResult("不通过\n地区不符"), {
+      headline: "不通过",
+      body: "地区不符",
     });
-    assert.equal(
-      splitWorkResult("H1 PASS: a long first line without a verdict token").headline,
-      null,
-    );
+    assert.deepEqual(splitWorkResult("审核不通过：地区不符"), {
+      headline: null,
+      body: "审核不通过：地区不符",
+    });
+    assert.equal(splitWorkResult("H1 PASS\nmore detail").headline, null);
     assert.equal(workResultTone("APPROVED"), "ok");
     assert.equal(workResultTone("REJECTED"), "no");
-    assert.equal(workResultTone("审核不通过：地区不符"), "no");
     assert.equal(workResultTone("Pending"), "neutral");
+    assert.equal(workResultTone("H1 PASS"), "neutral");
   });
 });

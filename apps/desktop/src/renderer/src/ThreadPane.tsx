@@ -341,7 +341,7 @@ export const ThreadPane = memo(function ThreadPane({
     Boolean(activityNote && prompts.length === 0) ||
     prompts.length > 0 ||
     canReply ||
-    Boolean(conversationClosed && resultSummary);
+    conversationClosed;
   const subLabel = thread.conversation_label || thread.label;
   const showSubLabel = Boolean(subLabel && subLabel !== heading);
   const canRun =
@@ -585,6 +585,8 @@ export const ThreadPane = memo(function ThreadPane({
             />
           ) : conversationClosed && resultSummary && !forward ? (
             workResult
+          ) : conversationClosed && !forward && !activityNote ? (
+            <p className="thread-activity">{t("composer.unavailable")}</p>
           ) : null}
         </div>
       ) : null}

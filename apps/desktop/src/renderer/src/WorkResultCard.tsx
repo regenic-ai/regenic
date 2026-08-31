@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { writeClipboard } from "./copy-message";
 import { ChevronIcon } from "./Icons";
 import { useLocale } from "./LocaleContext";
@@ -7,12 +7,21 @@ import { splitWorkResult, workResultTone } from "./message-view";
 
 export function WorkResultCard({ text }: { text: string }) {
   const { t } = useLocale();
+  const clipId = useId();
   const { headline, body } = splitWorkResult(text);
-  const tone = workResultTone(headline ?? (body.length <= 24 ? body : null));
+  const tone = workResultTone(headline);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(body.length > 140);
   const [copied, setCopied] = useState(false);
   const clipRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   useLayoutEffect(() => {
     const node = clipRef.current;
@@ -44,11 +53,9 @@ export function WorkResultCard({ text }: { text: string }) {
           className="work-result-copy"
           onClick={() => {
             void writeClipboard(text).then((ok) => {
-              if (!ok) {
-                return;
+              if (ok) {
+                setCopied(true);
               }
-              setCopied(true);
-              window.setTimeout(() => setCopied(false), 1500);
             });
           }}
         >
@@ -60,6 +67,7 @@ export function WorkResultCard({ text }: { text: string }) {
         <>
           <div className="work-result-body">
             <div
+              id={clipId}
               ref={clipRef}
               className={`work-result-clip${expanded ? " is-expanded" : " is-collapsed"}`}
             >
@@ -74,6 +82,7 @@ export function WorkResultCard({ text }: { text: string }) {
               type="button"
               className={`work-result-toggle${expanded ? " is-open" : ""}`}
               aria-expanded={expanded}
+              aria-controls={clipId}
               onClick={() => setExpanded((current) => !current)}
             >
               {expanded ? t("work.resultCollapse") : t("work.resultExpand")}

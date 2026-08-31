@@ -391,6 +391,10 @@ export function firstLine(text: string | undefined, max = 80): string {
 
 export type WorkResultTone = "ok" | "no" | "neutral";
 
+const WORK_RESULT_OK = /^(approved|passed|pass|通过)(?:$|\b)/i;
+const WORK_RESULT_NO = /^(rejected|failed|fail|denied|blocked|不通过)(?:$|\b)/i;
+const WORK_RESULT_OTHER = /^(pending|skipped)(?:$|\b)/i;
+
 export function splitWorkResult(text: string): {
   headline: string | null;
   body: string;
@@ -417,28 +421,17 @@ export function workResultTone(headline: string | null | undefined): WorkResultT
   if (!headline) {
     return "neutral";
   }
-  if (/reject|fail|denied|block|不通过|驳回|拒绝|未通过/i.test(headline)) {
+  if (WORK_RESULT_NO.test(headline)) {
     return "no";
   }
-  if (/approv|pass|accept|通过|核准|同意/i.test(headline)) {
+  if (WORK_RESULT_OK.test(headline)) {
     return "ok";
   }
   return "neutral";
 }
 
 function isWorkResultHeadline(line: string): boolean {
-  if (!line || line.length > 32) {
-    return false;
-  }
-  if (
-    /^(approved|rejected|passed|failed|pass|fail|pending|skipped|blocked|denied)\b/i.test(
-      line,
-    ) ||
-    /^(通过|不通过|待定|驳回|核准|拒绝|未通过)\b/.test(line)
-  ) {
-    return true;
-  }
-  return line.length <= 24 && !/[.。;；!！?？]/.test(line);
+  return WORK_RESULT_OK.test(line) || WORK_RESULT_NO.test(line) || WORK_RESULT_OTHER.test(line);
 }
 
 export function threadTitle(thread: InboxThread): string {
