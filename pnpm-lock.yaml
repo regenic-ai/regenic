@@ -43,6 +43,9 @@ importers:
       '@regenic/feishu-connector':
         specifier: workspace:*
         version: link:../../packages/feishu-connector
+      '@regenic/model-provider':
+        specifier: workspace:*
+        version: link:../../packages/model-provider
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
@@ -299,12 +302,18 @@ importers:
       '@regenic/blob-store':
         specifier: workspace:*
         version: link:../blob-store
+      '@regenic/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@regenic/domain':
         specifier: workspace:*
         version: link:../domain
       '@regenic/dsh-connector':
         specifier: workspace:*
         version: link:../dsh-connector
+      '@regenic/model-provider':
+        specifier: workspace:*
+        version: link:../model-provider
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
@@ -314,6 +323,22 @@ importers:
       '@regenic/whatsapp-personal':
         specifier: workspace:*
         version: link:../whatsapp-personal
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/model-provider:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
     devDependencies:
       '@types/node':
         specifier: ^22.10.2

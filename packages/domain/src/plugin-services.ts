@@ -12,6 +12,7 @@ import type {
   ContextProjectorRegistry,
   ContextRetrieverRegistry,
 } from "./context-port";
+import type { ModelProvider } from "./model-provider";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -26,5 +27,6 @@ declare module "@regenic/plugin-host" {
     "context-artifacts": ContextArtifactStore;
     "context-projectors": ContextProjectorRegistry;
     "context-retrievers": ContextRetrieverRegistry;
+    model: ModelProvider;
   }
 }

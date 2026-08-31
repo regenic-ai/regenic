@@ -53,6 +53,7 @@ export * from "./context-port";
 export * from "./context-registry";
 export * from "./memory-context-artifact-store";
 export * from "./context-plugin";
+export * from "./model-provider";
 export * from "./generic-import";
 export * from "./memory-ingestion-stores";
 export * from "./memory-connector-runtime-store";

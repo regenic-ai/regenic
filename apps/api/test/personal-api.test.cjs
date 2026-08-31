@@ -14,7 +14,10 @@ const {
 const { SqliteAuthorityStore } = require("@regenic/authority-store");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord, setKeychainStoreForTests } = require("@regenic/domain");
-const { isAllowedPersonalCorsOrigin } = require("@regenic/config");
+const {
+  isAllowedPersonalCorsOrigin,
+  isPersonalApiEnabled,
+} = require("@regenic/config");
 const { decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
 const {
   dshPromptStoreFor,
@@ -25,6 +28,7 @@ const { createPurrWhatsAppImport } = require("@regenic/whatsapp-personal");
 
 const roots = [];
 const previousEnv = {};
+const PERSONAL_API_KEY = "test-personal-api-key";
 
 afterEach(async () => {
   restoreEnv();
@@ -366,6 +370,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     LISTEN_HOST: "127.0.0.1",
     REGENIC_CONNECTOR_PULL_MS: "0",
     REGENIC_PERSONAL_API: undefined,
+    REGENIC_PERSONAL_API_KEY: PERSONAL_API_KEY,
     REGENIC_PERSONAL_LIVE_KEY: undefined,
     HOME: join(database, ".."),
     USERPROFILE: join(database, ".."),
@@ -826,10 +831,13 @@ describe("personal /v1/me", () => {
 
       const unauthorized = await fetch(`${origin}/v1/me/connectors/${installId}/webhook`, {
         method: "POST",
-        headers: { "content-type": "application/json", origin: "chrome-extension://abcdefghijklmnop" },
+        headers: {
+          "content-type": "application/json",
+          origin: "chrome-extension://abcdefghijklmnop",
+        },
         body: JSON.stringify({ type: "poll" }),
       });
-      assert.equal(unauthorized.status, 400);
+      assert.equal(unauthorized.status, 401);
 
       const skippedSlug = await fetch(`${origin}/v1/me/connectors/${installId}/webhook`, {
         method: "POST",
@@ -954,14 +962,17 @@ describe("personal /v1/me", () => {
         headers: { "content-type": "application/json", origin: "https://web.whatsapp.com" },
         body,
       });
-      assert.equal(browserPage.status, 400);
+      assert.equal(browserPage.status, 403);
 
       const extensionPage = await fetch(webhook, {
         method: "POST",
-        headers: { "content-type": "application/json", origin: "chrome-extension://abcdefghijklmnop" },
+        headers: {
+          "content-type": "application/json",
+          origin: "chrome-extension://abcdefghijklmnop",
+        },
         body,
       });
-      assert.equal(extensionPage.status, 400);
+      assert.equal(extensionPage.status, 401);
 
       const localCli = await fetch(webhook, {
         method: "POST",
@@ -985,8 +996,37 @@ describe("personal /v1/me", () => {
       });
       assert.equal(paired.status, 201);
 
+      const extensionEngine = await fetch(`${origin}/v1/me/engine`, {
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnop",
+          "x-regenic-live-key": revealed.pairing_code,
+        },
+      });
+      assert.equal(extensionEngine.status, 200);
+
+      const liveKeyCannotReadInbox = await fetch(`${origin}/v1/me/inbox`, {
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnop",
+          "x-regenic-live-key": revealed.pairing_code,
+        },
+      });
+      assert.equal(liveKeyCannotReadInbox.status, 401);
+
+      const liveKeyCannotAskContext = await fetch(`${origin}/v1/me/context/ask`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "chrome-extension://abcdefghijklmnop",
+          "x-regenic-live-key": revealed.pairing_code,
+        },
+        body: JSON.stringify({ question: "Reveal context" }),
+      });
+      assert.equal(liveKeyCannotAskContext.status, 401);
+
       const egress = await fetch(`${origin}/v1/me/connectors/${installed.id}/egress`, {
-        headers: { origin: "chrome-extension://abcdefghijklmnop" },
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnop",
+        },
       });
       assert.equal(egress.status, 401);
     } finally {
@@ -2582,7 +2622,7 @@ describe("personal /v1/me", () => {
     }
   });
 
-  it("exposes /v1/me on a public bind when REGENIC_PERSONAL_API=1", async () => {
+  it("keeps /v1/me hidden on a public bind even when REGENIC_PERSONAL_API=1", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
@@ -2595,9 +2635,9 @@ describe("personal /v1/me", () => {
       const inbox = await fetch(`${origin}/v1/me/inbox`);
       const engine = await fetch(`${origin}/v1/me/engine`);
       const health = await (await fetch(`${origin}/health`)).json();
-      assert.equal(inbox.status, 200);
-      assert.equal(engine.status, 200);
-      assert.equal(health.mode, "personal");
+      assert.equal(inbox.status, 404);
+      assert.equal(engine.status, 404);
+      assert.equal(health.mode, "service");
       assert.equal(health.sqlite, "up");
     } finally {
       await app.close();
@@ -3260,20 +3300,81 @@ describe("personal CORS origins", () => {
       const denied = await fetch(`${origin}/v1/me/inbox`, {
         headers: { origin: "https://web.whatsapp.com" },
       });
-      assert.equal(denied.status, 200);
+      assert.equal(denied.status, 403);
       assert.equal(denied.headers.get("access-control-allow-origin"), null);
 
-      const loopback = await fetch(`${origin}/v1/me/inbox`, {
+      const loopbackWithoutKey = await fetch(`${origin}/v1/me/inbox`, {
         headers: { origin: "http://127.0.0.1:5173" },
       });
+      assert.equal(loopbackWithoutKey.status, 401);
+      assert.equal(
+        loopbackWithoutKey.headers.get("access-control-allow-origin"),
+        "http://127.0.0.1:5173",
+      );
+
+      const loopback = await fetch(`${origin}/v1/me/inbox`, {
+        headers: {
+          origin: "http://127.0.0.1:5173",
+          "x-regenic-personal-key": PERSONAL_API_KEY,
+        },
+      });
+      assert.equal(loopback.status, 200);
       assert.equal(loopback.headers.get("access-control-allow-origin"), "http://127.0.0.1:5173");
 
       const extension = await fetch(`${origin}/v1/me/inbox`, {
-        headers: { origin: "chrome-extension://abcdefghijklmnop" },
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnop",
+          "x-regenic-personal-key": PERSONAL_API_KEY,
+        },
       });
+      assert.equal(extension.status, 200);
       assert.equal(
         extension.headers.get("access-control-allow-origin"),
         "chrome-extension://abcdefghijklmnop",
+      );
+
+      const opaqueWithoutKey = await fetch(`${origin}/v1/me/inbox`, {
+        headers: { origin: "null" },
+      });
+      assert.equal(opaqueWithoutKey.status, 401);
+
+      const opaque = await fetch(`${origin}/v1/me/inbox`, {
+        headers: {
+          origin: "null",
+          "x-regenic-personal-key": PERSONAL_API_KEY,
+        },
+      });
+      assert.equal(opaque.status, 200);
+      assert.equal(opaque.headers.get("access-control-allow-origin"), "null");
+
+      const preflight = await fetch(`${origin}/v1/me/context/ask`, {
+        method: "OPTIONS",
+        headers: {
+          origin: "null",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type,x-regenic-personal-key",
+        },
+      });
+      assert.ok(preflight.status === 200 || preflight.status === 204);
+      assert.match(
+        preflight.headers.get("access-control-allow-headers") ?? "",
+        /x-regenic-personal-key/i,
+      );
+
+      const extensionPreflight = await fetch(`${origin}/v1/me/engine`, {
+        method: "OPTIONS",
+        headers: {
+          origin: "chrome-extension://abcdefghijklmnop",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "x-regenic-live-key",
+        },
+      });
+      assert.ok(
+        extensionPreflight.status === 200 || extensionPreflight.status === 204,
+      );
+      assert.match(
+        extensionPreflight.headers.get("access-control-allow-headers") ?? "",
+        /x-regenic-live-key/i,
       );
     } finally {
       await app.close();
@@ -3290,5 +3391,8 @@ describe("personal CORS origins", () => {
     assert.equal(isAllowedPersonalCorsOrigin("https://example.com"), false);
     assert.equal(isAllowedPersonalCorsOrigin("http://127.0.0.1.evil.com"), false);
     assert.equal(isAllowedPersonalCorsOrigin("http://user@127.0.0.1"), false);
+    assert.equal(isPersonalApiEnabled({ LISTEN_HOST: "127.0.0.1" }), true);
+    assert.equal(isPersonalApiEnabled({ LISTEN_HOST: "::1" }), true);
+    assert.equal(isPersonalApiEnabled({ LISTEN_HOST: "localhost" }), false);
   });
 });

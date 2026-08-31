@@ -257,6 +257,14 @@ model_provider:
 打分、配额、权限、冲突处理写在内核里（见 RFC 0007），
 不放入模型驱动。个人阶段可以默认 `none`，或接本机 Ollama。
 
+个人版已实现的 completion driver 是 `none` 与 `openai_compatible`。配置使用
+`REGENIC_MODEL_DRIVER`、`REGENIC_MODEL_BASE_URL`、`REGENIC_MODEL_NAME`，以及可选的
+`REGENIC_MODEL_API_KEY_REF=env:NAME`。Timeout 与有界响应分别使用
+`REGENIC_MODEL_TIMEOUT_MS` 和 `REGENIC_MODEL_MAX_RESPONSE_BYTES`。模型配置缺失或错误时，
+模型调用降级，但不会关闭确定性 Context 装配与 replay。第一版 driver 只接受 numeric
+loopback 模型服务，并拒绝 redirect。远端 provider 需要后续连接 adapter 固定经过验证的 DNS
+与网络目标。
+
 ## 11. 身份（`IdentityProvider`）
 
 ```text

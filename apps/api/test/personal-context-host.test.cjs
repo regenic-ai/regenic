@@ -25,10 +25,15 @@ describe("personal context host", () => {
     assert.equal(host.get("authority"), host.get("context-authority"));
     assert.equal(host.get("authority"), host.get("context-artifacts"));
     assert.ok(host.get("context-retrievers").get("event-deterministic"));
+    assert.deepEqual(await host.get("model").health(), {
+      status: "degraded",
+      driver: "none",
+    });
 
     await host.dispose();
     assert.throws(() => host.get("context"), /Service is not available/);
     assert.throws(() => host.get("context-authority"), /Service is not available/);
     assert.throws(() => host.get("context-artifacts"), /Service is not available/);
+    assert.throws(() => host.get("model"), /Service is not available/);
   });
 });

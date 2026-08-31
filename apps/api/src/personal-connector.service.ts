@@ -1454,6 +1454,46 @@ export class PersonalConnectorService implements OnModuleDestroy {
     return { pairing_code };
   }
 
+  async allowsBrowserLiveRequest(path: string, apiKey: string): Promise<boolean> {
+    try {
+      const host = this.runtime.requireHost();
+      const store = host.get("authority");
+      if (path === "/v1/me/engine") {
+        const installations = await store.listInstallations(this.runtime.orgId());
+        for (const installation of installations) {
+          if (
+            installation.status === "enabled" &&
+            installation.connector_type === WHATSAPP_WEB_LIVE_CONNECTOR_TYPE &&
+            whatsAppLiveKeyMatches(
+              apiKey,
+              await resolveWhatsAppLiveKeys(installation, process.env),
+            )
+          ) {
+            return true;
+          }
+        }
+        return false;
+      }
+      const match = /^\/v1\/me\/connectors\/([^/]+)\/(webhook|egress(?:\/[^/]+\/ack)?)$/.exec(path);
+      if (!match) {
+        return false;
+      }
+      const installation = await store.findInstallation(decodeURIComponent(match[1]));
+      return Boolean(
+        installation &&
+        installation.org_id === this.runtime.orgId() &&
+        installation.status === "enabled" &&
+        installation.connector_type === WHATSAPP_WEB_LIVE_CONNECTOR_TYPE &&
+        whatsAppLiveKeyMatches(
+          apiKey,
+          await resolveWhatsAppLiveKeys(installation, process.env),
+        ),
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private async viewWithPairingCode(
     store: ConnectorRuntimeStore,
     installation: ConnectorInstallation,

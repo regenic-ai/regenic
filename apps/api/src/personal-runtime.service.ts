@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { loadEnv } from "@regenic/config";
 import { compactEmbeddedContent } from "@regenic/domain";
+import { modelProviderConfigFromEnv } from "@regenic/model-provider";
 import type { Host } from "@regenic/plugin-host";
 import {
   HUMAN_IDLE_MS,
@@ -34,6 +35,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       database: env.REGENIC_DATABASE,
       blobRoot: env.REGENIC_BLOB_ROOT,
       orgId: env.REGENIC_ORG,
+      model: modelProviderConfigFromEnv(process.env),
     };
     this.host = await createPersonalHost(this.options);
   }

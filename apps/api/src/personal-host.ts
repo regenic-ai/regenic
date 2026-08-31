@@ -5,12 +5,17 @@ import {
   personalContextEnginePlugin,
 } from "@regenic/context-engine";
 import { contextRegistriesPlugin, ingestPlugin } from "@regenic/domain";
+import {
+  modelProviderPlugin,
+  type ModelProviderPluginConfig,
+} from "@regenic/model-provider";
 import { createHost, type Host } from "@regenic/plugin-host";
 
 export interface PersonalHostOptions {
   database: string;
   blobRoot: string;
   orgId: string;
+  model?: ModelProviderPluginConfig;
 }
 
 export async function createPersonalHost(
@@ -24,6 +29,7 @@ export async function createPersonalHost(
     await host.plugin(contextRegistriesPlugin);
     await host.plugin(deterministicEventRetrieverPlugin);
     await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });
+    await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
     return host;
   } catch (error) {
     await host.dispose();

@@ -70,6 +70,13 @@ Models may propose summaries, claims, identity links, query interpretations, or
 topic assignments. Deterministic code owns schema validation, evidence binding,
 ACL derivation, state transitions, quotas, conflicts, and acceptance.
 
+The optional `ContextQuestionAnswerer` is a bundle consumer, not a projector or
+authority. It sends the fixed answering rules as a system message and the
+question plus `ContextBundle` as a separate untrusted-data message. Code rejects
+answers unless their candidate and Event citations bind back to that bundle.
+Model failure or invalid output does not alter Events, Artifacts, snapshots, or
+bundles.
+
 ## 3. Logical Architecture
 
 ```mermaid

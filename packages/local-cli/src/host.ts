@@ -1,6 +1,14 @@
 import { sqliteAuthorityPlugin } from "@regenic/authority-store";
 import { fsBlobPlugin } from "@regenic/blob-store";
-import { ingestPlugin, MemoryBlobStore } from "@regenic/domain";
+import {
+  deterministicEventRetrieverPlugin,
+  personalContextEnginePlugin,
+} from "@regenic/context-engine";
+import { contextRegistriesPlugin, ingestPlugin, MemoryBlobStore } from "@regenic/domain";
+import {
+  modelProviderPlugin,
+  type ModelProviderPluginConfig,
+} from "@regenic/model-provider";
 import { createHost, definePlugin, type Host } from "@regenic/plugin-host";
 
 const memoryBlobPlugin = definePlugin({
@@ -13,6 +21,8 @@ const memoryBlobPlugin = definePlugin({
 export interface LocalHostOptions {
   database: string;
   blobRoot?: string;
+  orgId?: string;
+  model?: ModelProviderPluginConfig;
 }
 
 export async function createLocalHost(options: LocalHostOptions): Promise<Host> {
@@ -25,6 +35,15 @@ export async function createLocalHost(options: LocalHostOptions): Promise<Host> 
       await host.plugin(memoryBlobPlugin);
     }
     await host.plugin(ingestPlugin);
+    if (options.orgId !== undefined) {
+      if (options.blobRoot === undefined) {
+        throw new Error("Context commands require a Blob root");
+      }
+      await host.plugin(contextRegistriesPlugin);
+      await host.plugin(deterministicEventRetrieverPlugin);
+      await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });
+      await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
+    }
     return host;
   } catch (error) {
     await host.dispose();
