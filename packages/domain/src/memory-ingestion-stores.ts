@@ -145,9 +145,14 @@ export class MemoryAuthorityStore
     orgId: string,
     query?: EventListQuery,
   ): Promise<EventRecord[]> {
-    return this.events
+    const matched = this.events
       .filter((event) => matchesEventQuery(event, orgId, query))
       .map((event) => ({ ...event }));
+    const limit = query?.limit;
+    if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
+      return matched.slice(0, limit);
+    }
+    return matched;
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {

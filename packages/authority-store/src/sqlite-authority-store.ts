@@ -276,15 +276,22 @@ export class SqliteAuthorityStore
       clauses.push("(ingested_at > ? OR (ingested_at = ? AND id > ?))");
       params.push(query.since, query.since, query.since_id ?? "");
     }
+    const limit =
+      typeof query?.limit === "number" &&
+      Number.isInteger(query.limit) &&
+      query.limit > 0
+        ? query.limit
+        : undefined;
     const rows = this.database
       .prepare(
         `
           SELECT id, org_id, source, external_id, operation, content_hash,
                  parent_event_id, occurred_at, ingested_at
           FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
+          ${limit === undefined ? "" : "LIMIT ?"}
         `,
       )
-      .all(...params) as EventRow[];
+      .all(...(limit === undefined ? params : [...params, limit])) as EventRow[];
     return rows.map((row) => this.toEvent(row));
   }
 

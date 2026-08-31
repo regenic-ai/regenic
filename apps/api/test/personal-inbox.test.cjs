@@ -2,8 +2,13 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const { parseConversationThread } = require("@regenic/domain");
 const {
+  CHANGED_INBOX_EVENT_CAP,
+  CHANGED_INBOX_THREAD_CAP,
+  collectChangedInboxThreadIds,
   inboxStoreQuery,
   headsNextBefore,
+  parseSinceInboxDigest,
+  shouldLoadChangedInboxHeads,
   shouldSplitInboxHeads,
   splitInboxHeadViews,
 } = require("../dist/personal-inbox.service");
@@ -67,6 +72,112 @@ describe("inboxStoreQuery", () => {
         before_id: "e1",
         limit: 40,
       },
+    );
+  });
+
+  it("drops page cursors when heads ask for specific threads", () => {
+    assert.deepEqual(
+      inboxStoreQuery(
+        {
+          heads: true,
+          limit: 40,
+          before: "2026-08-23T00:00:00.000Z",
+          before_id: "e1",
+          thread_ids: ["crm:order-2", "crm:order-pin"],
+        },
+        undefined,
+      ),
+      {
+        heads: true,
+        list: "shown",
+        before: undefined,
+        before_id: undefined,
+        limit: undefined,
+        thread_ids: ["crm:order-2", "crm:order-pin"],
+      },
+    );
+  });
+});
+
+describe("changed inbox heads", () => {
+  it("loads a patch only when split heads carry a previous digest", () => {
+    assert.equal(
+      shouldLoadChangedInboxHeads({
+        heads: true,
+        split: true,
+        changed: true,
+        since_digest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldLoadChangedInboxHeads({ heads: true, split: true, changed: true }),
+      false,
+    );
+    assert.equal(
+      shouldLoadChangedInboxHeads({
+        heads: true,
+        split: true,
+        changed: true,
+        since_digest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        before: "2026-08-23T00:00:00.000Z",
+      }),
+      false,
+    );
+  });
+
+  it("keeps ISO timestamps that contain colons", () => {
+    assert.deepEqual(
+      parseSinceInboxDigest("1:2026-08-23T00:00:01.000Z:e2:1:2026-08-23T00:01:00.000Z&s=dsh:2"),
+      {
+        latest_at: "2026-08-23T00:00:01.000Z",
+        latest_id: "e2",
+        pref_updated_at: "2026-08-23T00:01:00.000Z",
+      },
+    );
+    assert.equal(parseSinceInboxDigest("0:::0:"), null);
+  });
+
+  it("collects threads from new ingest and later prefs", () => {
+    const collected = collectChangedInboxThreadIds({
+      events: [
+        { source: "crm", external_id: "order-2:n2", id: "n2" },
+      ],
+      prefs: [
+        { thread_id: "crm:order-pin", updated_at: "2026-08-23T00:01:00.000Z" },
+        { thread_id: "crm:old", updated_at: "2026-08-22T00:00:00.000Z" },
+      ],
+      prefSince: "2026-08-23T00:00:30.000Z",
+    });
+    assert.deepEqual(collected.ids.sort(), ["crm:order-2", "crm:order-pin"]);
+    assert.equal(collected.tooMany, false);
+  });
+
+  it("falls back when too many events or threads changed", () => {
+    const events = Array.from({ length: CHANGED_INBOX_EVENT_CAP }, (_, i) => ({
+      source: "crm",
+      external_id: `order-${i}:n`,
+      id: `n${i}`,
+    }));
+    assert.equal(
+      collectChangedInboxThreadIds({
+        events,
+        prefs: [],
+        prefSince: "2026-08-23T00:00:00.000Z",
+      }).tooMany,
+      true,
+    );
+    const prefs = Array.from({ length: CHANGED_INBOX_THREAD_CAP + 1 }, (_, i) => ({
+      thread_id: `crm:order-${i}`,
+      updated_at: "2026-08-23T00:02:00.000Z",
+    }));
+    assert.equal(
+      collectChangedInboxThreadIds({
+        events: [],
+        prefs,
+        prefSince: "2026-08-23T00:00:00.000Z",
+      }).tooMany,
+      true,
     );
   });
 });

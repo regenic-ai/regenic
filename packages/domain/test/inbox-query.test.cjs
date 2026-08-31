@@ -5,12 +5,77 @@ const {
   formatInboxDigest,
   headsByThread,
   inboxDigest,
+  inboxDigestEventOrPrefChanged,
+  parseInboxDigest,
   normalizeInboxLimit,
   selectInboxItems,
   summarizeInboxItems,
   takeRecentInboxItems,
   threadExternalIdLike,
 } = require("../dist");
+
+describe("inbox digest parse", () => {
+  it("round-trips ISO timestamps that contain colons", () => {
+    const digest = formatInboxDigest({
+      count: 3,
+      latest_at: "2026-08-23T00:00:01.000Z",
+      latest_id: "e2",
+      pref_count: 1,
+      pref_updated_at: "2026-08-23T00:01:00.000Z",
+      work_updated_at: "2026-08-23T00:02:00.000Z",
+      surface_generation: "dsh:inst-1:3",
+    });
+    assert.deepEqual(parseInboxDigest(digest), {
+      count: 3,
+      latest_at: "2026-08-23T00:00:01.000Z",
+      latest_id: "e2",
+      pref_count: 1,
+      pref_updated_at: "2026-08-23T00:01:00.000Z",
+      work_updated_at: "2026-08-23T00:02:00.000Z",
+      surface_generation: "dsh:inst-1:3",
+    });
+    assert.deepEqual(parseInboxDigest("0:::0:"), {
+      count: 0,
+      latest_at: "",
+      latest_id: "",
+      pref_count: 0,
+      pref_updated_at: "",
+      work_updated_at: "",
+      surface_generation: "",
+    });
+  });
+
+  it("treats a new ingest as an event change, not a surface-only bump", () => {
+    const previous = parseInboxDigest(
+      formatInboxDigest({
+        count: 1,
+        latest_at: "2026-08-23T00:00:00.000Z",
+        latest_id: "e1",
+        pref_count: 0,
+        pref_updated_at: "",
+      }),
+    );
+    const next = parseInboxDigest(
+      formatInboxDigest({
+        count: 1,
+        latest_at: "2026-08-23T00:00:01.000Z",
+        latest_id: "e2",
+        pref_count: 0,
+        pref_updated_at: "",
+        surface_generation: "dsh:1",
+      }),
+    );
+    assert.equal(inboxDigestEventOrPrefChanged(previous, next), true);
+    const surfaceOnly = parseInboxDigest(`${formatInboxDigest({
+      count: 1,
+      latest_at: "2026-08-23T00:00:00.000Z",
+      latest_id: "e1",
+      pref_count: 0,
+      pref_updated_at: "",
+    })}&s=dsh:2`);
+    assert.equal(inboxDigestEventOrPrefChanged(previous, surfaceOnly), false);
+  });
+});
 
 describe("inbox query helpers", () => {
   it("counts current work by conversation, not every event", () => {

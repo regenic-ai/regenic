@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { shouldFetchChangedHeads } from "../src/renderer/src/inbox-digest.ts";
 import { InboxListStore } from "../src/renderer/src/inbox-list-store.ts";
 import { markInboxThreadRead } from "../src/renderer/src/inbox.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
@@ -189,6 +190,109 @@ describe("InboxListStore", () => {
       snap.items.some((row) => row.thread_id === "crm:order-0"),
       true,
     );
+  });
+
+  it("promotes a touched older head into the live window and drops gone rows", () => {
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const mid = at(item("n1", "mid", "crm:order-1"), "2026-08-23T00:01:00.000Z");
+    const older = at(item("n0", "old", "crm:order-0"), "2026-08-23T00:00:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+    });
+    store.reduce({
+      kind: "olderLoaded",
+      items: [older],
+      nextBefore: { before: older.event.occurred_at, before_id: older.event.id },
+      hasOlder: true,
+    });
+    const bumped = at(item("n0", "old+", "crm:order-0"), "2026-08-23T00:03:00.000Z");
+    const snap = store.reduce({
+      kind: "headsTouched",
+      items: [bumped],
+      gone: ["crm:order-1"],
+      pageSize: 2,
+    });
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-0", "crm:order-2"],
+    );
+    assert.equal(store.cursor?.before_id, "n2");
+  });
+
+  it("patches from a digest change only when events or prefs moved", () => {
+    assert.equal(
+      shouldFetchChangedHeads({
+        replace: false,
+        previousDigest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        nextDigest: "1:2026-08-23T00:00:01.000Z:e2:0:",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldFetchChangedHeads({
+        replace: false,
+        previousDigest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        nextDigest: "1:2026-08-23T00:00:00.000Z:e1:0:&s=dsh:2",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldFetchChangedHeads({
+        replace: true,
+        previousDigest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        nextDigest: "1:2026-08-23T00:00:01.000Z:e2:0:",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldFetchChangedHeads({
+        replace: false,
+        previousDigest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        nextDigest: "1:2026-08-23T00:00:00.000Z:e1:0:&w=2026-08-23T00:02:00.000Z",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldFetchChangedHeads({
+        replace: false,
+        previousDigest: "1:2026-08-23T00:00:00.000Z:e1:0:",
+        nextDigest: "1:2026-08-23T00:00:00.000Z:e1:1:2026-08-23T00:01:00.000Z",
+      }),
+      true,
+    );
+  });
+
+  it("keeps active work extras off the live ranking after a touch", () => {
+    const live = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const work = at(item("job", "job", "dsh:job"), "2026-08-23T00:03:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [live],
+      activeWork: [work],
+      nextBefore: { before: live.event.occurred_at, before_id: live.event.id },
+      hasOlder: false,
+    });
+    const bumped = at(item("job", "job+", "dsh:job"), "2026-08-23T00:04:00.000Z");
+    const snap = store.reduce({
+      kind: "headsTouched",
+      items: [bumped],
+      pageSize: 2,
+    });
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-2", "dsh:job"],
+    );
+    assert.equal(store.cursor?.before_id, "n2");
   });
 
   it("lets an older page and a live refresh commute", async () => {

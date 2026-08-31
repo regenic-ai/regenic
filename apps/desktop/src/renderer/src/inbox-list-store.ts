@@ -36,6 +36,13 @@ export type InboxListFact =
   | {
       kind: "headPatched";
       items: InboxViewItem[];
+    }
+  | {
+      kind: "headsTouched";
+      items: InboxViewItem[];
+      gone?: string[];
+      activeWork?: InboxViewItem[];
+      pageSize?: number;
     };
 
 export type InboxListSnapshot = {
@@ -112,6 +119,9 @@ export class InboxListStore {
         break;
       case "headPatched":
         upsertHeads(this.catalog, fact.items);
+        break;
+      case "headsTouched":
+        this.applyTouched(fact);
         break;
     }
     return this.commit();
@@ -239,6 +249,42 @@ export class InboxListStore {
     this.historyIds = [...this.historyIds, ...added];
     this.nextBefore = fact.nextBefore ?? this.nextBefore;
     this.hasOlder = fact.hasOlder;
+    this.prune();
+  }
+
+  private applyTouched(fact: {
+    items: InboxViewItem[];
+    gone?: string[];
+    activeWork?: InboxViewItem[];
+    pageSize?: number;
+  }) {
+    const gone = new Set(fact.gone ?? []);
+    for (const id of gone) {
+      this.catalog.delete(id);
+    }
+    upsertHeads(this.catalog, fact.items);
+    upsertHeads(this.catalog, fact.activeWork ?? []);
+    const pageSize = fact.pageSize ?? LIST_HEADS_PAGE_SIZE;
+    const nextWork = [
+      ...this.workIds.filter((id) => !gone.has(id) && this.catalog.has(id)),
+      ...idsOf(fact.activeWork ?? []),
+    ].filter((id, index, all) => all.indexOf(id) === index);
+    const pinned: string[] = [];
+    const unpinned: InboxViewItem[] = [];
+    for (const [id, item] of this.catalog) {
+      if (item.pinned) {
+        pinned.push(id);
+      } else {
+        unpinned.push(item);
+      }
+    }
+    const ranked = rankUnpinnedNewest(unpinned, new Set(nextWork));
+    this.pinnedIds = pinned;
+    this.liveIds = idsOf(ranked.slice(0, pageSize));
+    this.historyIds = idsOf(ranked.slice(pageSize));
+    const occupied = new Set([...this.pinnedIds, ...this.liveIds]);
+    this.workIds = nextWork.filter((id) => !occupied.has(id) && !gone.has(id));
+    this.nextBefore = headsCursorOf(takeHeads(this.catalog, this.liveIds));
     this.prune();
   }
 

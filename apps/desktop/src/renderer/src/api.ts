@@ -191,6 +191,8 @@ export type InboxHeadsPage = {
   active_work: InboxViewItem[];
   next_before: { before: string; before_id: string } | null;
   has_older: boolean;
+  patch?: boolean;
+  gone?: string[];
 };
 
 export async function fetchInbox(
@@ -220,6 +222,8 @@ export async function fetchInboxHeads(
     before_id?: string;
     limit?: number;
     list?: "shown" | "hidden";
+    changed?: boolean;
+    since_digest?: string;
   } = {},
 ): Promise<InboxHeadsPage> {
   const response = await fetchInboxResponse({
@@ -241,6 +245,8 @@ export async function fetchInboxHeads(
         ? { before: next.before, before_id: next.before_id }
         : null,
     has_older: page.has_older === true,
+    patch: page.patch === true,
+    gone: Array.isArray(page.gone) ? page.gone.filter((id) => id.length > 0) : [],
   };
 }
 
@@ -253,6 +259,8 @@ async function fetchInboxResponse(
     heads?: boolean;
     live?: boolean;
     split?: boolean;
+    changed?: boolean;
+    since_digest?: string;
     thread_id?: string;
     limit?: number;
     list?: "shown" | "hidden";
@@ -279,6 +287,12 @@ async function fetchInboxResponse(
   }
   if (query.split) {
     params.set("split", "1");
+  }
+  if (query.changed) {
+    params.set("changed", "1");
+  }
+  if (query.since_digest) {
+    params.set("since_digest", query.since_digest);
   }
   if (query.thread_id) {
     params.set("thread_id", query.thread_id);

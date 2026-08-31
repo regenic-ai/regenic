@@ -48,6 +48,7 @@ import { EngineIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
 import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
+import { shouldFetchChangedHeads } from "./inbox-digest.ts";
 import {
   InboxListStore,
   type InboxListSnapshot,
@@ -471,9 +472,20 @@ export function ConsoleApp() {
             listStoreRef.current.size === 0 ||
             lastFetchedListRef.current !== requested;
           const gen = listStoreRef.current.generation;
+          const useChanged = shouldFetchChangedHeads({
+            replace,
+            previousDigest: inboxDigestRef.current,
+            nextDigest: digest,
+          });
           const page = await fetchInboxHeads({
             list: requested,
             limit: LIST_HEADS_PAGE_SIZE,
+            ...(useChanged
+              ? {
+                  changed: true,
+                  since_digest: inboxDigestRef.current ?? undefined,
+                }
+              : {}),
           });
           if (workspaceEpoch.current !== epoch) {
             continue;
@@ -484,29 +496,43 @@ export function ConsoleApp() {
           if (listStoreRef.current.generation !== gen) {
             continue;
           }
-          const fact = {
-            pinned: page.pinned,
-            live: page.live,
-            activeWork: page.active_work,
-            nextBefore: page.next_before,
-            hasOlder: page.has_older,
-            pageSize: LIST_HEADS_PAGE_SIZE,
-          };
-          publishHeads(
-            replace
-              ? listStoreRef.current.reduce({
-                  kind: "liveLoaded",
-                  list: requested,
-                  ...fact,
-                })
-              : listStoreRef.current.reduce({
-                  kind: "liveChanged",
-                  ...fact,
-                }),
-          );
-          lastFetchedListRef.current = requested;
-          inboxDigestRef.current = digest || inboxDigestRef.current;
-          lastFullRef.current = Date.now();
+          if (useChanged && page.patch) {
+            publishHeads(
+              listStoreRef.current.reduce({
+                kind: "headsTouched",
+                items: [...page.pinned, ...page.live, ...page.active_work],
+                gone: page.gone,
+                activeWork: page.active_work,
+                pageSize: LIST_HEADS_PAGE_SIZE,
+              }),
+            );
+            lastFetchedListRef.current = requested;
+            inboxDigestRef.current = digest || inboxDigestRef.current;
+          } else {
+            const fact = {
+              pinned: page.pinned,
+              live: page.live,
+              activeWork: page.active_work,
+              nextBefore: page.next_before,
+              hasOlder: page.has_older,
+              pageSize: LIST_HEADS_PAGE_SIZE,
+            };
+            publishHeads(
+              replace
+                ? listStoreRef.current.reduce({
+                    kind: "liveLoaded",
+                    list: requested,
+                    ...fact,
+                  })
+                : listStoreRef.current.reduce({
+                    kind: "liveChanged",
+                    ...fact,
+                  }),
+            );
+            lastFetchedListRef.current = requested;
+            inboxDigestRef.current = digest || inboxDigestRef.current;
+            lastFullRef.current = Date.now();
+          }
         }
         const openId = selectedIdRef.current;
         if (openId) {
