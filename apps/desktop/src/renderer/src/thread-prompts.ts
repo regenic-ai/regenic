@@ -60,13 +60,53 @@ export function shouldShowQuestionLegend(
   return true;
 }
 
-/** SCREAMING_SNAKE or lowercase_snake — not a human sentence. */
+/** SCREAMING_SNAKE, lowercase_snake, or single decision tokens. */
 export function looksLikeMachineKey(label: string): boolean {
   const trimmed = label.trim();
   return (
     /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(trimmed) ||
-    /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(trimmed)
+    /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(trimmed) ||
+    /^(APPROVED|REJECTED|APPROVE|REJECT|ALLOW|REFUSE|DENY)$/i.test(trimmed)
   );
+}
+
+type DecisionCopy = (key: "prompt.approve" | "prompt.reject" | "prompt.confirmResult") => string;
+
+/** Display-only. Answers still submit the raw option.label. */
+export function decisionDisplayLabel(label: string, t: DecisionCopy): string {
+  const trimmed = label.trim();
+  if (/^(approved|approve|allow)$/i.test(trimmed)) {
+    return t("prompt.approve");
+  }
+  if (/^(rejected|reject|refuse|deny)$/i.test(trimmed)) {
+    return t("prompt.reject");
+  }
+  return label;
+}
+
+/** Soften jargon titles like 写回 / Write back without CRM-specific wording. */
+export function promptTitleDisplay(title: string, t: DecisionCopy): string {
+  const trimmed = title.replace(/\s+/g, " ").trim();
+  if (/^(写回|回写|write\s*back)$/i.test(trimmed)) {
+    return t("prompt.confirmResult");
+  }
+  return title;
+}
+
+/**
+ * Soften English control words leaked into CJK prompt copy.
+ * Does not rewrite domain nouns — only common decision/control tokens.
+ */
+export function humanizePromptProse(text: string, locale: string): string {
+  if (locale !== "zh" || !/[\u4e00-\u9fff]/.test(text)) {
+    return text;
+  }
+  return text
+    .replace(/\bAPPROVED\s*\/\s*REJECTED\b/g, "通过 / 驳回")
+    .replace(/\bAPPROVED\b/g, "通过")
+    .replace(/\bREJECTED\b/g, "驳回")
+    .replace(/不得\s*complete\s*/gi, "不要结束")
+    .replace(/\bcomplete\b/gi, "结束");
 }
 
 export function optionPrimaryLabel(option: {

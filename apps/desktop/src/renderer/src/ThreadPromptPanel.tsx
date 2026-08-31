@@ -1,8 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "./LocaleContext";
 import {
+  decisionDisplayLabel,
+  humanizePromptProse,
   optionPrimaryLabel,
   optionSecondaryLabel,
+  promptTitleDisplay,
   shouldShowQuestionLegend,
   togglePromptOption,
   typePromptCustom,
@@ -20,7 +23,7 @@ export function ThreadPromptPanel({
   error: string | null;
   onAnswer: (prompt: ThreadPrompt, answers: PromptAnswerItem[]) => Promise<void>;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const prompt = prompts[0];
   if (!prompt) {
     return null;
@@ -31,6 +34,10 @@ export function ThreadPromptPanel({
       : prompt.presentation === "plan_review"
         ? t("prompt.plan")
         : t("prompt.answer");
+  const title = prompt.title ? promptTitleDisplay(prompt.title, t) : null;
+  const detail = prompt.detail
+    ? humanizePromptProse(prompt.detail, locale)
+    : null;
   return (
     <form
       className={`prompt-panel presentation-${prompt.presentation}`}
@@ -40,8 +47,8 @@ export function ThreadPromptPanel({
     >
       <div className="prompt-head">
         <p className="prompt-kicker">{heading}</p>
-        {prompt.title ? <h2>{prompt.title}</h2> : null}
-        {prompt.detail ? <PromptDetail text={prompt.detail} /> : null}
+        {title ? <h2>{title}</h2> : null}
+        {detail ? <PromptDetail text={detail} /> : null}
         {prompts.length > 1 ? (
           <p className="prompt-count">{t("prompt.of", { count: prompts.length })}</p>
         ) : null}
@@ -122,6 +129,7 @@ function ApprovalPrompt({
   submitting: boolean;
   onAnswer: (prompt: ThreadPrompt, answers: PromptAnswerItem[]) => Promise<void>;
 }) {
+  const { t } = useLocale();
   const question = prompt.questions[0];
   const options = question?.options ?? [
     { label: "Allow" },
@@ -141,7 +149,7 @@ function ApprovalPrompt({
             ]);
           }}
         >
-          {option.label}
+          {decisionDisplayLabel(option.label, t)}
         </button>
       ))}
     </div>
@@ -181,7 +189,10 @@ function ChoicePrompt({
                   const selected = answers[question.id]?.selected.includes(option.label);
                   const emphasized =
                     prompt.presentation === "plan_review" && option.emphasized === true;
-                  const primary = optionPrimaryLabel(option);
+                  const primary = decisionDisplayLabel(
+                    optionPrimaryLabel(option),
+                    t,
+                  );
                   const secondary = optionSecondaryLabel(option);
                   return (
                     <button

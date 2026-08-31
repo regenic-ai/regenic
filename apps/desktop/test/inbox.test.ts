@@ -706,6 +706,9 @@ describe("prompt answers", () => {
       optionPrimaryLabel,
       optionSecondaryLabel,
       shouldShowQuestionLegend,
+      decisionDisplayLabel,
+      promptTitleDisplay,
+      humanizePromptProse,
     } = await import("../src/renderer/src/thread-prompts.ts");
     assert.equal(
       optionPrimaryLabel({
@@ -729,6 +732,27 @@ describe("prompt answers", () => {
       "不发信、不关单",
     );
     assert.equal(optionPrimaryLabel({ label: "Allow" }), "Allow");
+    const t = (key: "prompt.approve" | "prompt.reject" | "prompt.confirmResult") =>
+      ({
+        "prompt.approve": "通过",
+        "prompt.reject": "驳回",
+        "prompt.confirmResult": "确认结果",
+      })[key];
+    assert.equal(decisionDisplayLabel("APPROVED", t), "通过");
+    assert.equal(decisionDisplayLabel("REJECTED", t), "驳回");
+    assert.equal(decisionDisplayLabel("Allow", t), "通过");
+    assert.equal(promptTitleDisplay("写回", t), "确认结果");
+    assert.equal(
+      humanizePromptProse(
+        "只改本订单内审（APPROVED / REJECTED）。不得 complete 关联运营任务。",
+        "zh",
+      ),
+      "只改本订单内审（通过 / 驳回）。不要结束关联运营任务。",
+    );
+    assert.equal(
+      humanizePromptProse("Do not complete related work.", "en"),
+      "Do not complete related work.",
+    );
     assert.equal(
       shouldShowQuestionLegend(
         {
