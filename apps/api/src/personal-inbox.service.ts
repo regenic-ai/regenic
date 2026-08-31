@@ -390,6 +390,87 @@ export function headsNextBefore(
     : null;
 }
 
+export function splitHeadExcludeIds(input: {
+  prefs: Array<{ thread_id: string; pinned?: boolean; hidden?: boolean }>;
+  workIds: readonly string[];
+  list?: string;
+}): { pinnedIds: string[]; workIds: string[] } {
+  const hiddenList = normalizeInboxListView(input.list) === "hidden";
+  const pinnedIds = [
+    ...new Set(
+      input.prefs
+        .filter(
+          (pref) => pref.pinned && (hiddenList ? pref.hidden : !pref.hidden),
+        )
+        .map((pref) => pref.thread_id),
+    ),
+  ];
+  const pinned = new Set(pinnedIds);
+  const workIds = hiddenList
+    ? []
+    : [...new Set(input.workIds.filter((id) => id && !pinned.has(id)))];
+  return { pinnedIds, workIds };
+}
+
+export function headsLiveFetchLimit(
+  limit: number | undefined,
+  excludeCount: number,
+): number | undefined {
+  if (typeof limit !== "number") {
+    return undefined;
+  }
+  return normalizeInboxLimit(limit + Math.max(0, excludeCount)) ?? limit;
+}
+
+export function partitionLiveInboxHeads<
+  T extends {
+    thread_id?: string;
+    event: {
+      id: string;
+      source?: string;
+      external_id?: string;
+      occurred_at: string;
+    };
+  },
+>(input: {
+  items: T[];
+  pinnedIds: readonly string[];
+  workIds: readonly string[];
+  limit?: number;
+  fetchedCount: number;
+  fetchLimit?: number;
+}): {
+  live: T[];
+  pinned: T[];
+  work: T[];
+  hasOlder: boolean;
+} {
+  const pinnedSet = new Set(input.pinnedIds);
+  const workSet = new Set(input.workIds);
+  const pinned: T[] = [];
+  const work: T[] = [];
+  const liveAll: T[] = [];
+  for (const item of input.items) {
+    const id = headThreadId(item);
+    if (!id) {
+      continue;
+    }
+    if (pinnedSet.has(id)) {
+      pinned.push(item);
+    } else if (workSet.has(id)) {
+      work.push(item);
+    } else {
+      liveAll.push(item);
+    }
+  }
+  const live = takeRecentHeads(liveAll, input.limit);
+  const hasOlder =
+    (typeof input.limit === "number" && liveAll.length > live.length) ||
+    (typeof input.fetchLimit === "number" &&
+      input.fetchedCount >= input.fetchLimit);
+  return { live, pinned, work, hasOlder };
+}
+
 export function splitInboxHeadViews(
   views: InboxViewItem[],
   input: {
@@ -398,6 +479,7 @@ export function splitInboxHeadViews(
     workIds: readonly string[];
     liveCount: number;
     limit?: number;
+    hasOlder?: boolean;
   },
 ): InboxHeadsPage {
   const byId = new Map<string, InboxViewItem>();
@@ -411,15 +493,85 @@ export function splitInboxHeadViews(
       const item = byId.get(id);
       return item ? [item] : [];
     });
-  const live = take(input.liveIds);
+  const workSet = new Set(input.workIds);
+  const takenLive = take(input.liveIds);
+  const live = takenLive.filter(
+    (item) => !item.pinned && !workSet.has(item.thread_id ?? ""),
+  );
   return {
-    pinned: take(input.pinnedIds),
+    pinned: uniqueHeadViews([
+      ...take(input.pinnedIds),
+      ...takenLive.filter((item) => item.pinned),
+    ]),
     live,
-    active_work: take(input.workIds),
+    active_work: uniqueHeadViews([
+      ...take(input.workIds),
+      ...takenLive.filter(
+        (item) => !item.pinned && workSet.has(item.thread_id ?? ""),
+      ),
+    ]),
     next_before: headsNextBefore(live),
     has_older:
-      typeof input.limit === "number" && input.liveCount >= input.limit,
+      input.hasOlder ??
+      (typeof input.limit === "number" && input.liveCount >= input.limit),
   };
+}
+
+function takeRecentHeads<T extends { event: { occurred_at: string; id: string } }>(
+  items: T[],
+  limit?: number,
+): T[] {
+  const cap = normalizeInboxLimit(limit);
+  if (cap === undefined || items.length <= cap) {
+    return items;
+  }
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      if (left.item.event.occurred_at !== right.item.event.occurred_at) {
+        return left.item.event.occurred_at < right.item.event.occurred_at
+          ? -1
+          : 1;
+      }
+      if (left.item.event.id !== right.item.event.id) {
+        return left.item.event.id < right.item.event.id ? -1 : 1;
+      }
+      return left.index - right.index;
+    })
+    .slice(items.length - cap)
+    .map((row) => row.item);
+}
+
+function uniqueHeadViews<T extends { thread_id?: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const next: T[] = [];
+  for (const item of items) {
+    const id = item.thread_id?.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    next.push(item);
+  }
+  return next;
+}
+
+function headThreadId(item: {
+  thread_id?: string;
+  event: { id: string; source?: string; external_id?: string };
+}): string | undefined {
+  const id = item.thread_id?.trim();
+  if (id) {
+    return id;
+  }
+  if (item.event.source && item.event.external_id) {
+    return conversationId(
+      item.event.source,
+      item.event.external_id,
+      item.event.id,
+    );
+  }
+  return undefined;
 }
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
@@ -786,64 +938,149 @@ export class PersonalInboxService {
       preferThread(query.thread_id);
     }
     const thread = parseThreadQuery(query.thread_id);
-    const storeQuery = inboxStoreQuery(query, thread);
-    const [records, installations, prefs, jobSessions] = await Promise.all([
-      authority.listInbox(orgId, storeQuery),
-      authority.listInstallations(orgId),
-      thread
-        ? authority
-            .getConversationPref(orgId, query.thread_id ?? "")
-            .then((pref) => (pref ? [pref] : []))
-        : authority.listConversationPrefs(orgId),
+    const wantSplitLive =
+      shouldSplitInboxHeads(query) && !query.thread_ids?.length;
+    const loadWorkIds =
       query.heads === true &&
       !query.thread_id &&
       !query.thread_ids?.length &&
-      !query.before &&
-      normalizeInboxListView(query.list) !== "hidden"
-        ? this.work.activeSessionIds()
-        : Promise.resolve(new Set<string>()),
-    ]);
+      normalizeInboxListView(query.list) !== "hidden";
+    const installationsP = authority.listInstallations(orgId);
+    const prefsP = thread
+      ? authority
+          .getConversationPref(orgId, query.thread_id ?? "")
+          .then((pref) => (pref ? [pref] : []))
+      : authority.listConversationPrefs(orgId);
+    const jobSessionsP = loadWorkIds
+      ? this.work.activeSessionIds()
+      : Promise.resolve(new Set<string>());
+    let records: InboxItem[];
+    let installations: ConnectorInstallation[];
+    let prefs: ConversationPref[];
+    let jobSessions: Set<string>;
+    let liveFetchLimit = query.limit;
+    let liveHasOlder: boolean | undefined;
+    if (wantSplitLive) {
+      [installations, prefs, jobSessions] = await Promise.all([
+        installationsP,
+        prefsP,
+        jobSessionsP,
+      ]);
+      const exclude = splitHeadExcludeIds({
+        prefs,
+        workIds: [...jobSessions],
+        list: query.list,
+      });
+      liveFetchLimit = headsLiveFetchLimit(
+        query.limit,
+        exclude.pinnedIds.length + exclude.workIds.length,
+      );
+      records = await authority.listInbox(
+        orgId,
+        inboxStoreQuery({ ...query, limit: liveFetchLimit ?? query.limit }, thread),
+      );
+    } else {
+      [records, installations, prefs, jobSessions] = await Promise.all([
+        authority.listInbox(orgId, inboxStoreQuery(query, thread)),
+        installationsP,
+        prefsP,
+        jobSessionsP,
+      ]);
+    }
     const prefsByThread = new Map(
       prefs.map((pref) => [pref.thread_id, pref] as const),
     );
-    const liveSelected = selectInboxRecords(records, query);
-    const liveIds = liveSelected.map(inboxItemThreadId);
+    const scanned = selectInboxRecords(records, {
+      ...query,
+      limit: liveFetchLimit ?? query.limit,
+    });
+    let liveSelected = scanned;
     let pinnedSelected: InboxItem[] = [];
-    if (
-      query.heads === true &&
-      !query.thread_id &&
-      !query.before &&
-      query.limit
-    ) {
-      pinnedSelected = await pinnedInboxHeadExtras(
-        liveSelected,
-        prefs,
-        query,
-        orgId,
-        authority,
-      );
-    }
     let workSelected: InboxItem[] = [];
-    if (jobSessions.size > 0) {
-      const have = new Set([
-        ...liveIds,
-        ...pinnedSelected.map(inboxItemThreadId),
-      ]);
-      const hiddenPrefIds = new Set(
-        prefs.filter((pref) => pref.hidden).map((pref) => pref.thread_id),
-      );
-      const missing = [...jobSessions].filter(
-        (id) => !have.has(id) && !hiddenPrefIds.has(id),
-      );
-      if (missing.length > 0) {
-        const extras = await authority.listInbox(orgId, {
-          siblings: true,
-          thread_ids: missing,
-        });
-        workSelected = headsByThread(extras);
+    if (wantSplitLive) {
+      const exclude = splitHeadExcludeIds({
+        prefs,
+        workIds: [...jobSessions],
+        list: query.list,
+      });
+      const part = partitionLiveInboxHeads({
+        items: scanned,
+        pinnedIds: exclude.pinnedIds,
+        workIds: exclude.workIds,
+        limit: query.limit,
+        fetchedCount: scanned.length,
+        fetchLimit: liveFetchLimit,
+      });
+      liveSelected = part.live;
+      pinnedSelected = part.pinned;
+      workSelected = part.work;
+      liveHasOlder = part.hasOlder;
+      if (!query.before) {
+        pinnedSelected = [
+          ...pinnedSelected,
+          ...(await pinnedInboxHeadExtras(
+            pinnedSelected,
+            prefs,
+            query,
+            orgId,
+            authority,
+          )),
+        ];
+        const have = new Set([
+          ...pinnedSelected.map(inboxItemThreadId),
+          ...workSelected.map(inboxItemThreadId),
+        ]);
+        const hiddenPrefIds = new Set(
+          prefs.filter((pref) => pref.hidden).map((pref) => pref.thread_id),
+        );
+        const missing = [...jobSessions].filter(
+          (id) => !have.has(id) && !hiddenPrefIds.has(id),
+        );
+        if (missing.length > 0) {
+          const extras = await authority.listInbox(orgId, {
+            siblings: true,
+            thread_ids: missing,
+          });
+          workSelected = [...workSelected, ...headsByThread(extras)];
+        }
+      }
+    } else {
+      if (
+        query.heads === true &&
+        !query.thread_id &&
+        !query.before &&
+        query.limit
+      ) {
+        pinnedSelected = await pinnedInboxHeadExtras(
+          liveSelected,
+          prefs,
+          query,
+          orgId,
+          authority,
+        );
+      }
+      if (jobSessions.size > 0) {
+        const have = new Set([
+          ...liveSelected.map(inboxItemThreadId),
+          ...pinnedSelected.map(inboxItemThreadId),
+        ]);
+        const hiddenPrefIds = new Set(
+          prefs.filter((pref) => pref.hidden).map((pref) => pref.thread_id),
+        );
+        const missing = [...jobSessions].filter(
+          (id) => !have.has(id) && !hiddenPrefIds.has(id),
+        );
+        if (missing.length > 0) {
+          const extras = await authority.listInbox(orgId, {
+            siblings: true,
+            thread_ids: missing,
+          });
+          workSelected = headsByThread(extras);
+        }
       }
     }
     const selected = [...pinnedSelected, ...liveSelected, ...workSelected];
+    const liveIds = liveSelected.map(inboxItemThreadId);
     const pinnedIds = pinnedSelected.map(inboxItemThreadId);
     const workIds = workSelected.map(inboxItemThreadId);
     const attachments = query.heads ? "meta" : "preview";
@@ -1029,6 +1266,7 @@ export class PersonalInboxService {
         workIds,
         liveCount: liveSelected.length,
         limit: query.limit,
+        hasOlder: liveHasOlder,
       });
     }
     return projected;
