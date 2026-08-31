@@ -280,4 +280,35 @@ describe("SQLite connector runtime", () => {
     assert.equal(updated.status, "enabled");
     store.close();
   });
+
+  it("persists a directory census and stream phase across restart", async () => {
+    const root = await createRoot();
+    let store = await createStore(root);
+    const first = await store.applySyncCatalogPage({
+      installation_id: installation.id,
+      members: [{ stream_key: "chat:oc_1", thread_id: "feishu:oc_1", label: "Ada" }],
+      now: "2026-08-31T00:00:00.000Z",
+      next_cursor: "p2",
+      complete: false,
+    });
+    assert.equal(first.catalog.complete, false);
+    assert.equal(first.members[0].stream_key, "chat:oc_1");
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:oc_1",
+      phase: "unseeded",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-08-31T00:00:00.000Z",
+    });
+    store.close();
+
+    store = new SqliteAuthorityStore(join(root, "authority.db"));
+    const catalog = await store.getSyncCatalog(installation.id);
+    assert.equal(catalog.members.length, 1);
+    assert.equal(catalog.catalog.cursor, "p2");
+    const state = await store.getSyncState(installation.id, "chat:oc_1");
+    assert.equal(state.phase, "unseeded");
+    store.close();
+  });
 });

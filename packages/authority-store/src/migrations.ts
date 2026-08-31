@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 18;
+export const LATEST_SCHEMA_VERSION = 19;
 
 export const MIGRATIONS = [
   {
@@ -352,6 +352,49 @@ export const MIGRATIONS = [
       ALTER TABLE conversation_prefs ADD COLUMN hidden_reason TEXT;
       CREATE INDEX conversation_prefs_hidden_idx
         ON conversation_prefs (org_id, hidden);
+    `,
+  },
+  {
+    version: 19,
+    sql: `
+      CREATE TABLE connector_stream_members (
+        installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+        stream_key TEXT NOT NULL,
+        thread_id TEXT,
+        label TEXT,
+        kind TEXT,
+        generation INTEGER NOT NULL,
+        discovered_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        PRIMARY KEY (installation_id, stream_key)
+      );
+
+      CREATE INDEX connector_stream_members_generation_idx
+        ON connector_stream_members (installation_id, generation);
+
+      CREATE TABLE connector_catalog_cursors (
+        installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+        cursor_value TEXT,
+        complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
+        generation INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (installation_id)
+      );
+
+      CREATE TABLE connector_sync_state (
+        installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+        stream_key TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (
+          phase IN ('unseeded', 'live', 'history', 'steady')
+        ),
+        live_cursor TEXT,
+        history_cursor TEXT,
+        media_pending INTEGER NOT NULL DEFAULT 0 CHECK (media_pending IN (0, 1)),
+        idle_until TEXT,
+        generation INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (installation_id, stream_key)
+      );
     `,
   },
 ] as const;

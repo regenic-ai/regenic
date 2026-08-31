@@ -4,6 +4,7 @@ export * from "./feishu-chat-driver";
 export * from "./feishu-chat-egress";
 export * from "./feishu-chat-poll-connector";
 export * from "./feishu-cli-client";
+export * from "./feishu-sync-source";
 export * from "./feishu-message";
 export {
   callFeishuOpenApi,

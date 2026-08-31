@@ -12,6 +12,7 @@ import {
   type CopyRef,
   type DriverInstallCatalog,
   type IngestAttempt,
+  type SyncProgressView,
 } from "@regenic/domain";
 import {
   CONNECTOR_INSTALL_DOCS,
@@ -286,6 +287,7 @@ export interface EngineInstallationView {
   channel_label: string;
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
+  sync?: SyncProgressView;
 }
 
 export function toInstallationView(
@@ -293,6 +295,7 @@ export function toInstallationView(
   lastAttempt: IngestAttempt | null,
   drivers: { get(connectorType: string): ChannelDriver | undefined },
   locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  extras?: { sync?: SyncProgressView | null },
 ): EngineInstallationView {
   const driver = drivers.get(installation.connector_type);
   const { label, detail } = connectorPresentation(
@@ -327,6 +330,7 @@ export function toInstallationView(
       locale,
     ),
     last_attempt: lastAttempt,
+    ...(extras?.sync ? { sync: extras.sync } : {}),
   };
 }
 

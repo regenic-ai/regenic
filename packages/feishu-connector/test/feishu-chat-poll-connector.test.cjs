@@ -303,6 +303,7 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(attachment.external_locator, "feishu:image:img_shot");
     assert.equal(attachment.bytes, undefined);
     assert.equal(result.has_more, true);
+    assert.equal(result.media_pending, true);
     assert.match(result.next_cursor ?? "", /"recent_seeded":true/);
     assert.match(result.next_cursor ?? "", /"media_jobs"/);
   });
@@ -955,7 +956,9 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(calls[1].sort_type, "ByCreateTimeAsc");
     assert.equal(opened.batch.records[0].operation, "create");
     assert.equal(opened.batch.records[0].content.find((part) => part.role === "attachment").bytes, undefined);
+    assert.equal(opened.media_pending, true);
     assert.equal(filled.batch.records[0].operation, "revise");
+    assert.equal(filled.media_pending, false);
     assert.equal(
       filled.batch.records[0].content.find((part) => part.role === "attachment").bytes.byteLength,
       8,

@@ -17,6 +17,9 @@ export const AUTHORITY_READ_METHODS = [
   "latestAttempt",
   "listQuarantines",
   "getCursor",
+  "getSyncCatalog",
+  "listSyncStates",
+  "getSyncState",
   "summarizeStore",
   "listRecipes",
   "getRecipe",
@@ -65,6 +68,8 @@ export const AUTHORITY_WRITE_METHODS = [
   "resetCursor",
   "beginAttempt",
   "settleAttempt",
+  "applySyncCatalogPage",
+  "putSyncState",
   "pruneIngestAttempts",
   "checkpointWal",
 ] as const;

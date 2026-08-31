@@ -10,6 +10,12 @@ export {
   threadSyncTone,
 } from "./pull-copy.ts";
 
+export {
+  aggregateInstallationSync,
+  syncProgressSummary,
+  syncProgressTone,
+} from "./sync-copy.ts";
+
 export function previewText(text: string | undefined, fallback: string): string {
   return firstLine(text, 88) || fallback;
 }

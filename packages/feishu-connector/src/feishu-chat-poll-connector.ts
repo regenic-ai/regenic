@@ -157,6 +157,7 @@ export class FeishuChatPollConnector {
         },
         next_cursor: nextCursor,
         has_more: false,
+        media_pending: (state.media_jobs?.length ?? 0) > 0,
       };
     }
     const page = request
@@ -203,6 +204,7 @@ export class FeishuChatPollConnector {
       has_more:
         Boolean(request) &&
         feishuHistoryHasMore(state, page, request?.sort_type, nextState),
+      media_pending: drained.jobs.length > 0,
     };
   }
 

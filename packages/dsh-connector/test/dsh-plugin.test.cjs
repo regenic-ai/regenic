@@ -363,6 +363,69 @@ describe("dshSessionPlugin", () => {
     }
   });
 
+  it("lists web sessions through bindSyncSource without mounting streams", async () => {
+    const installation = {
+      id: "dsh-1",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:3080" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    };
+    let listed = 0;
+    const previous = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.method === "session.list") {
+        listed += 1;
+      }
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            type: "server-response",
+            rpcId: body.rpcId,
+            result: {
+              ok: true,
+              value: {
+                items: [{ sessionId: "sess-a" }, { sessionId: "sess-b" }],
+                hasMore: false,
+              },
+            },
+          };
+        },
+      };
+    };
+    const host = await createHost();
+    const connectors = new MemoryConnectorRegistry();
+    const egress = new MemoryEgressRegistry();
+    await host.plugin(definePlugin({
+      name: "registries",
+      apply(ctx) {
+        ctx.provide("connectors", connectors);
+        ctx.provide("egress", egress);
+      },
+    }));
+    try {
+      const source = await dshSessionDriver.bindSyncSource(installation, host, {});
+      const page = await source.listDirectory(null);
+      assert.deepEqual(
+        page.members.map((member) => member.thread_id),
+        ["dsh:sess-a", "dsh:sess-b"],
+      );
+      assert.equal(page.complete, true);
+      assert.equal(listed, 1);
+      const streams = await dshSessionDriver.resolveStreams(installation, host, {});
+      assert.deepEqual(streams, []);
+      assert.equal(listed, 1);
+      assert.equal(connectors.listStreams("dsh-1").length, 0);
+    } finally {
+      globalThis.fetch = previous;
+      await host.dispose();
+    }
+  });
+
   it("creates a DSH web session and rejects pinned or CLI installs", async () => {
     const web = {
       id: "dsh-1",

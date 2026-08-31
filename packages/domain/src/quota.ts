@@ -1,3 +1,6 @@
+import { currentSyncLane } from "./sync-budget";
+import type { SyncLane } from "./sync-contracts";
+
 export interface ConnectorQuota {
   tokens: number;
   window_ms: number;
@@ -60,6 +63,7 @@ export class InstallationQuotaBook {
   tryConsume(
     installationId: string,
     quota?: Partial<ConnectorQuota> | null,
+    lane: SyncLane = currentSyncLane(),
   ): boolean {
     const resolved = normalizeConnectorQuota(quota, this.fallback);
     if (resolved.tokens <= 0) {
@@ -74,7 +78,9 @@ export class InstallationQuotaBook {
     const refill = (elapsed / resolved.window_ms) * resolved.tokens;
     bucket.tokens = Math.min(resolved.tokens, bucket.tokens + refill);
     bucket.updated_at = now;
-    if (bucket.tokens < 1) {
+    const reserved =
+      lane === "interactive" ? 0 : reservedInteractiveTokens(resolved.tokens);
+    if (bucket.tokens < 1 + reserved) {
       this.buckets.set(installationId, bucket);
       return false;
     }
@@ -82,6 +88,14 @@ export class InstallationQuotaBook {
     this.buckets.set(installationId, bucket);
     return true;
   }
+}
+
+/** Leave a slice of the install bucket for Interactive so backfill cannot starve reading. */
+export function reservedInteractiveTokens(total: number): number {
+  if (total < 5) {
+    return 0;
+  }
+  return Math.min(Math.floor(total * 0.2), total - 1);
 }
 
 function clampQuotaNumber(

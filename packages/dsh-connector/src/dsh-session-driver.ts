@@ -14,6 +14,7 @@ import {
   type JsonValue,
   type NewConnectorInstallation,
   type PromptAnswer,
+  type SyncSource,
 } from "@regenic/domain";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
 import {
@@ -31,6 +32,10 @@ import {
 import { loopbackHttpUrl, resolveOperatorDshBaseUrl } from "./dsh-url";
 import { dshLocaleTables } from "./locales";
 import { probeDshCatalog } from "./probe";
+import {
+  createDshSessionSyncSource,
+  createDshWebSyncSource,
+} from "./dsh-sync-source";
 
 export const dshSessionDriver: ChannelDriver = {
   connector_type: "dsh-session",
@@ -139,6 +144,20 @@ export const dshSessionDriver: ChannelDriver = {
     }
     const listed = await dshWebRpcClient(installation, env).listAllSessionIds();
     return mountDshSessions(host, installation, env, listed);
+  },
+
+  async bindSyncSource(installation, _host, env): Promise<SyncSource> {
+    const transport = resolveEffectiveDshTransport(installation.config, env);
+    if (transport === "cli") {
+      return createDshSessionSyncSource(
+        dshSessionKey(installation.config, installation.id),
+      );
+    }
+    const pinned = configString(installation.config, "session_id");
+    if (pinned) {
+      return createDshSessionSyncSource(pinned);
+    }
+    return createDshWebSyncSource(dshWebRpcClient(installation, env));
   },
 
   async resolveThreadStream(installation, thread, host, env) {

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
+import { currentSyncLane, SyncSlotPool } from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
@@ -139,27 +140,17 @@ export interface LarkCliClientOptions {
 export const LARK_CLI_CONCURRENCY = 2;
 export const LARK_CLI_RETRIES = 2;
 
-let larkCliActive = 0;
-const larkCliWaiters: Array<() => void> = [];
+const larkCliSlots = new SyncSlotPool({
+  total: LARK_CLI_CONCURRENCY,
+  reserved: { interactive: 1 },
+});
 
 export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
-  if (larkCliActive >= LARK_CLI_CONCURRENCY) {
-    await new Promise<void>((resolve) => {
-      larkCliWaiters.push(resolve);
-    });
-  }
-  larkCliActive += 1;
-  try {
-    return await work();
-  } finally {
-    larkCliActive -= 1;
-    larkCliWaiters.shift()?.();
-  }
+  return larkCliSlots.withSlot(currentSyncLane(), work);
 }
 
 export function resetLarkCliSlot(): void {
-  larkCliActive = 0;
-  larkCliWaiters.length = 0;
+  larkCliSlots.reset();
 }
 
 export function isMissingLarkShortcutError(error: unknown): boolean {
@@ -263,6 +254,51 @@ export class LarkCliClient implements FeishuImClient {
     names?: boolean;
   }): Promise<FeishuChatPage> {
     const types = normalizeChatTypes(input.types);
+    const page = types.includes("p2p")
+      ? await this.listChatsViaShortcut(input, types)
+      : await this.listChatsViaOpenApi(input);
+    if (input.names !== false) {
+      await this.fillP2pNames(page.items);
+    }
+    return page;
+  }
+
+  /** Official /im/v1/chats is groups only. Used when the census does not need p2p. */
+  private async listChatsViaOpenApi(input: {
+    page_size: number;
+    page_token?: string;
+  }): Promise<FeishuChatPage> {
+    const params: Record<string, string | number> = {
+      page_size: Math.min(Math.max(1, input.page_size), 100),
+      sort_type: "ByActiveTimeDesc",
+      user_id_type: "open_id",
+    };
+    if (input.page_token) {
+      params.page_token = input.page_token;
+    }
+    const page = parseChatPage(
+      await this.request({
+        method: "GET",
+        path: "/open-apis/im/v1/chats",
+        params,
+      }),
+    );
+    return {
+      ...page,
+      items: page.items.map((chat) => ({
+        ...chat,
+        chat_mode: chat.chat_mode ?? "group",
+      })),
+    };
+  }
+
+  private async listChatsViaShortcut(
+    input: {
+      page_size: number;
+      page_token?: string;
+    },
+    types: FeishuChatMode[],
+  ): Promise<FeishuChatPage> {
     const argv = [
       this.command,
       "im",
@@ -284,11 +320,7 @@ export class LarkCliClient implements FeishuImClient {
       env: this.options.env,
       timeout_ms: this.timeoutMs,
     });
-    const page = parseChatPage(unwrapLarkCli(result));
-    if (input.names !== false) {
-      await this.fillP2pNames(page.items);
-    }
-    return page;
+    return parseChatPage(unwrapLarkCli(result));
   }
 
   async listRecentChats(

@@ -21,7 +21,10 @@ import {
   parseConversationThread,
   requireCreateThread,
   requireWebhookPorts,
+  runInSyncLane,
   settleIsolated,
+  SyncEngine,
+  loadSyncProgress,
   withDeadline,
   type ChannelDriver,
   type ConnectorInstallation,
@@ -30,6 +33,7 @@ import {
   type ConnectorStream,
   type ConnectorWebhookRunResult,
   type ConversationThread,
+  type SyncCatalogMember,
   type WebhookRequest,
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
@@ -61,12 +65,9 @@ import {
 } from "./personal-pull-status";
 import { isHumanIdle, noteHumanActivity } from "./personal-human-pace";
 import {
-  humanPaceLimits,
-  lastHistoryKey,
-  prependUnseenStreams,
-  selectHumanPacedStreams,
+  catalogRefreshPages,
   shouldKeepCatchingUp,
-  streamCursorUnseeded,
+  syncExecutionBudget,
 } from "./personal-stream-pace";
 import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
@@ -75,7 +76,6 @@ export { PersonalConnectorError } from "./personal-errors";
 
 const DEFAULT_MAX_PAGES = 1;
 const MAX_PAGES_CAP = 5;
-const STREAM_CONCURRENCY = 4;
 const HYDRATE_COOLDOWN_MS = 15_000;
 const HYDRATE_WAIT_MS = 12_000;
 const FOLLOW_TRIES = 6;
@@ -417,9 +417,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if ((this.hydrateCooldown.get(id) ?? 0) > Date.now()) {
       return;
     }
-    if (this.isThreadStreamBusy(id)) {
-      return;
-    }
     const job = this.runHydrateOpenedThread(id).finally(() => {
       this.hydrating.delete(id);
     });
@@ -498,14 +495,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
           installation.id,
           stream.stream_key,
           () =>
-            pollStream(
-              host,
-              store,
-              installation,
-              stream,
-              1,
-              { older: true },
-              this.quota,
+            runInSyncLane("interactive", () =>
+              pollStream(
+                host,
+                store,
+                installation,
+                stream,
+                1,
+                { older: true, media: false },
+                this.quota,
+              ),
             ),
         );
         if (pages === undefined) {
@@ -582,19 +581,21 @@ export class PersonalConnectorService implements OnModuleDestroy {
           installation.id,
           stream.stream_key,
           () =>
-            pollStream(
-              host,
-              store,
-              installation,
-              stream,
-              1,
-              {
-                older: false,
-                media: false,
-              },
-              this.quota,
+            runInSyncLane("interactive", () =>
+              pollStream(
+                host,
+                store,
+                installation,
+                stream,
+                1,
+                {
+                  older: false,
+                  media: false,
+                },
+                this.quota,
+              ),
             ),
-          { skipIfBusy: true },
+          { skipIfBusy: false },
         );
         if (pages === undefined) {
           return;
@@ -1153,108 +1154,102 @@ export class PersonalConnectorService implements OnModuleDestroy {
     beginPull();
     this.publishStreams();
     try {
-      const threads = await loadEligibleInstallationThreads(
-        store,
-        installation.org_id,
-        installation,
-        driver,
-        preferredThreadId(),
+      const engine = new SyncEngine(store);
+      const allowHistory = options?.allowHistory !== false;
+      const humanIdle = allowHistory && isHumanIdle();
+      if (driver.bindSyncSource) {
+        const source = await driver.bindSyncSource(
+          installation,
+          asConnectorHost(host),
+          process.env,
+        );
+        await engine.refreshCatalog({
+          installation_id: installation.id,
+          source,
+          pages: catalogRefreshPages({
+            discover: options?.discover,
+            humanIdle,
+          }),
+          force: options?.discover === true,
+        });
+      }
+      const catalog = await engine.catalog(installation.id);
+      const threads = mergeConversationThreads(
+        await loadEligibleInstallationThreads(
+          store,
+          installation.org_id,
+          installation,
+          driver,
+          preferredThreadId(),
+        ),
+        threadsFromCatalog(catalog.members, driver.source),
       );
       const streams = await driver.resolveStreams(
         installation,
         asConnectorHost(host),
         process.env,
-        { threads, discover: options?.discover === true },
+        {
+          threads,
+          discover: !driver.bindSyncSource && options?.discover === true,
+        },
       );
       await this.persistPickedChatNames(store, installation, streams);
       this.pruneStreamPace(installation.id, streams);
-      const now = Date.now();
-      const unseededKeys = new Set(
-        (
-          await Promise.all(
-            streams.map(async (stream) => {
-              const key = streamPaceKey(installation.id, stream.stream_key);
-              const cursor = await store.getCursor(
-                installation.id,
-                stream.stream_key,
-              );
-              return streamCursorUnseeded(cursor?.cursor) ? key : null;
-            }),
-          )
-        ).flatMap((key) => (key ? [key] : [])),
+      const cursorStates = new Map<string, string | undefined>();
+      await Promise.all(
+        streams.map(async (stream) => {
+          const cursor = await store.getCursor(
+            installation.id,
+            stream.stream_key,
+          );
+          cursorStates.set(stream.stream_key, cursor?.cursor);
+        }),
       );
-      const planned = streams.flatMap((stream) => {
-        const key = streamPaceKey(installation.id, stream.stream_key);
-        this.rememberStreamMeta(key, stream);
-        const idleMs = streamIdleMs(stream);
-        if (
-          options?.skipIdle &&
-          idleMs !== undefined &&
-          (this.streamIdleUntil.get(key) ?? 0) > now
-        ) {
+      const work = await engine.plan({
+        installation_id: installation.id,
+        preferredThreadId: preferredThreadId(),
+        humanIdle,
+        rotateFrom: this.lastCatchUpCursor,
+        pages: options?.capCatchUp ? DEFAULT_MAX_PAGES : maxPages,
+        fallbackMembers: catalogMembersFromStreams(installation.id, streams),
+        cursorStates,
+      });
+      const streamByKey = new Map(
+        streams.map((stream) => [stream.stream_key, stream] as const),
+      );
+      const selected = work.flatMap((item) => {
+        if (item.lane === "catalog") {
           return [];
         }
-        const unseen = unseededKeys.has(key) && !this.streamSeeded.has(key);
-        if (unseen) {
+        const stream = streamByKey.get(item.stream_key);
+        if (!stream) {
+          return [];
+        }
+        const key = streamPaceKey(installation.id, stream.stream_key);
+        this.rememberStreamMeta(key, stream);
+        if (item.older || item.lane === "history") {
           this.streamCatchingUp.add(key);
         }
-        const catchingUp = this.streamCatchingUp.has(key);
-        return [{ stream, key, idleMs, catchingUp, unseen }];
+        const budget = syncExecutionBudget({
+          humanIdle,
+          capCatchUp: options?.capCatchUp,
+          lane: item.lane,
+          pages: item.pages,
+          catchUpPages: streamCatchUpPages(stream, item.pages),
+        });
+        return [
+          {
+            stream,
+            key,
+            idleMs: streamIdleMs(stream),
+            older: item.older,
+            pages: budget.pages,
+            lane: item.lane,
+            media: item.media,
+          },
+        ];
       });
-      const allowHistory = options?.allowHistory !== false;
-      const selected = options?.capCatchUp
-        ? prependUnseenStreams(
-            planned
-              .filter((item) => item.unseen)
-              .map((item) => ({
-                ...item,
-                older: false,
-                pages: DEFAULT_MAX_PAGES,
-              })),
-            selectHumanPacedStreams(
-              planned.map((item) => ({
-                key: item.key,
-                catchingUp: item.catchingUp,
-                threadId: item.stream.thread_id,
-                item,
-              })),
-              {
-                ...humanPaceLimits(allowHistory && isHumanIdle()),
-                rotateFrom: this.lastCatchUpCursor,
-                preferredThreadId: preferredThreadId(),
-              },
-            ).map((entry) => ({
-              ...entry.item,
-              older: entry.older,
-              pages: DEFAULT_MAX_PAGES,
-            })),
-          )
-        : planned.flatMap((item) => {
-            const live = {
-              ...item,
-              older: false,
-              pages: maxPages,
-            };
-            const preferred = preferredThreadId();
-            if (
-              !item.catchingUp ||
-              !allowHistory ||
-              (preferred && item.stream.thread_id === preferred)
-            ) {
-              return [live];
-            }
-            return [
-              live,
-              {
-                ...item,
-                older: true,
-                pages: Math.max(maxPages, streamCatchUpPages(item.stream, maxPages)),
-              },
-            ];
-          });
-      const olderKey = lastHistoryKey(
-        selected.map((item) => ({ key: item.key, older: item.older })),
-      );
+      const olderKey = engine.lastHistoryKey(work);
       if (olderKey) {
         this.lastCatchUpCursor = olderKey;
       }
@@ -1265,23 +1260,30 @@ export class PersonalConnectorService implements OnModuleDestroy {
         }
       }
       this.publishStreams();
-      const concurrency = options?.capCatchUp ? 1 : STREAM_CONCURRENCY;
+      const concurrency = syncExecutionBudget({
+        humanIdle,
+        capCatchUp: options?.capCatchUp,
+        lane: "live",
+        pages: 1,
+      }).concurrency;
       const batches = await mapLimit(selected, concurrency, async (item) => {
         try {
           const pages = await this.exclusiveStream(
             installation.id,
             item.stream.stream_key,
             () =>
-              pollStream(
-                host,
-                store,
-                installation,
-                item.stream,
-                item.pages,
-                { older: item.older },
-                this.quota,
+              runInSyncLane(item.lane, () =>
+                pollStream(
+                  host,
+                  store,
+                  installation,
+                  item.stream,
+                  item.pages,
+                  { older: item.older, media: item.media },
+                  this.quota,
+                ),
               ),
-            { skipIfBusy: true },
+            { skipIfBusy: item.lane !== "interactive" },
           );
           const result = {
             key: item.key,
@@ -1295,6 +1297,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
             this.streamPullingHistory.delete(item.key);
           }
           this.rememberStreamPace(result);
+          await rememberEngineResult(engine, installation.id, item, result);
           this.publishStreams();
           return result;
         } catch (error) {
@@ -1310,6 +1313,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
             this.streamPullingHistory.delete(item.key);
           }
           this.rememberStreamPace(result);
+          await rememberEngineResult(engine, installation.id, item, result);
           this.publishStreams();
           return result;
         }
@@ -1649,12 +1653,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
     store: ConnectorRuntimeStore,
     installation: ConnectorInstallation,
   ): Promise<EngineInstallationView> {
-    const attempt = await store.latestAttempt(installation.id);
-    return toInstallationView(
-      installation,
-      attempt,
-      this.drivers,
-    );
+    const [attempt, sync] = await Promise.all([
+      store.latestAttempt(installation.id),
+      loadSyncProgress(store, installation.id),
+    ]);
+    return toInstallationView(installation, attempt, this.drivers, DEFAULT_COPY_LOCALE, {
+      sync,
+    });
   }
 }
 
@@ -1827,6 +1832,93 @@ function clampPages(value: number): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Connector pull failed";
+}
+
+function mergeConversationThreads(
+  ...lists: ConversationThread[][]
+): ConversationThread[] {
+  const byId = new Map<string, ConversationThread>();
+  for (const thread of lists.flat()) {
+    byId.set(`${thread.source}:${thread.target}`, thread);
+  }
+  return [...byId.values()];
+}
+
+function threadsFromCatalog(
+  members: readonly SyncCatalogMember[],
+  source: string,
+): ConversationThread[] {
+  return members.flatMap((member) => {
+    if (member.thread_id) {
+      try {
+        return [parseConversationThread(member.thread_id)];
+      } catch {
+        return [];
+      }
+    }
+    const prefix = `${source}:`;
+    for (const kind of ["chat:", "session:", "channel:", "agent:"]) {
+      if (member.stream_key.startsWith(kind)) {
+        return [{ source, target: member.stream_key.slice(kind.length) }];
+      }
+    }
+    if (member.stream_key.startsWith(prefix)) {
+      return [{ source, target: member.stream_key.slice(prefix.length) }];
+    }
+    return [];
+  });
+}
+
+function catalogMembersFromStreams(
+  installationId: string,
+  streams: readonly ConnectorStream[],
+): SyncCatalogMember[] {
+  const now = new Date().toISOString();
+  return streams.map((stream) => ({
+    installation_id: installationId,
+    stream_key: stream.stream_key,
+    thread_id: stream.thread_id,
+    label: stream.label,
+    generation: 1,
+    discovered_at: now,
+    last_seen_at: now,
+  }));
+}
+
+async function rememberEngineResult(
+  engine: SyncEngine,
+  installationId: string,
+  item: { stream: ConnectorStream; older: boolean; media: boolean; idleMs?: number },
+  result: { pages: ConnectorPollRunResult[]; error?: unknown },
+): Promise<void> {
+  const summary = summarizeRuns(result.pages);
+  const last = [...result.pages].reverse().find((page) => "next_cursor" in page);
+  const nextCursor =
+    last && "next_cursor" in last ? last.next_cursor : undefined;
+  const mediaPage = [...result.pages]
+    .reverse()
+    .find((page) => "media_pending" in page);
+  await engine.rememberResult({
+    installation_id: installationId,
+    stream_key: item.stream.stream_key,
+    thread_id: item.stream.thread_id,
+    older: item.older,
+    media: item.media,
+    accepted_count: summary.accepted_count,
+    quarantined_count: summary.quarantined_count,
+    has_more: result.pages.some(
+      (page) => "has_more" in page && page.has_more === true,
+    ),
+    next_live_cursor: nextCursor,
+    next_history_cursor: nextCursor,
+    media_pending:
+      mediaPage && "media_pending" in mediaPage
+        ? mediaPage.media_pending
+        : undefined,
+    idle_ms: item.idleMs,
+    error: result.error,
+    now: new Date().toISOString(),
+  });
 }
 
 function summarizeWebhook(run: Extract<

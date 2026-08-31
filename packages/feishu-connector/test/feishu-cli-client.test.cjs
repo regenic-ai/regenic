@@ -134,6 +134,62 @@ describe("LarkCliClient", () => {
     assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
   });
 
+  it("lists groups over HTTP when a user token is available", async () => {
+    const spawned = [];
+    const fetched = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn(input) {
+        spawned.push(input);
+        throw new Error("CLI should not run when HTTP works");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url, init) {
+        fetched.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: {
+                items: [{ chat_id: "oc_http", name: "Eng" }],
+                has_more: true,
+                page_token: "g2",
+              },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const page = await client.listChats({
+      page_size: 100,
+      types: ["group"],
+      names: false,
+    });
+    assert.equal(spawned.length, 0);
+    assert.equal(page.items[0].chat_id, "oc_http");
+    assert.equal(page.items[0].chat_mode, "group");
+    assert.equal(page.has_more, true);
+    assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/im\/v1\/chats/);
+    assert.match(fetched[0].url, /sort_type=ByActiveTimeDesc/);
+    assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
+  });
+
   it("falls back to HTTP when CLI download fails", async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const fetched = [];

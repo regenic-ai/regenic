@@ -37,6 +37,7 @@ import {
   type EventRecord,
   type InboxItem,
   type InboxQuery,
+  type IngestAttempt,
   type ListTitleMode,
   type MessageDirection,
   type MessageKind,
@@ -52,6 +53,8 @@ import {
   type ThreadPrompt,
   type ThreadReceiptQuery,
   type WorkFace,
+  loadSyncProgress,
+  type SyncStore,
 } from "@regenic/domain";
 import {
   resolveInboxBodies,
@@ -794,14 +797,19 @@ export class PersonalInboxService {
     ]);
     const views = await Promise.all(
       installations.map(async (installation) => {
-        const attempt = detailed
-          ? await authority.latestAttempt(installation.id)
-          : null;
+        const store = authority as SyncStore & {
+          latestAttempt(id: string): Promise<IngestAttempt | null>;
+        };
+        const [attempt, sync] = await Promise.all([
+          detailed ? store.latestAttempt(installation.id) : Promise.resolve(null),
+          loadSyncProgress(store, installation.id),
+        ]);
         return toInstallationView(
           installation,
           attempt,
           this.drivers,
           query.locale,
+          { sync },
         );
       }),
     );

@@ -14,6 +14,7 @@ const {
   feishuWriteBackLabels,
   resolveFeishuChatTargets,
 } = require("../dist/feishu-chat-driver");
+const { createFeishuSyncSource } = require("../dist/feishu-sync-source");
 const { feishuChatPlugin } = require("../dist/plugin");
 
 describe("feishuChatPlugin", () => {
@@ -406,6 +407,58 @@ describe("feishuChatDriver", () => {
     ]);
   });
 
+  it("censuses chats only when discover is full", async () => {
+    let recent = 0;
+    let all = 0;
+    const chats = await resolveFeishuChatTargets(
+      { selection: "all" },
+      {
+        async listRecentChats() {
+          recent += 1;
+          return [{ chat_id: "oc_hot", name: "Ada" }];
+        },
+        async listAllChats(maxPages) {
+          all += 1;
+          assert.equal(maxPages, require("../dist/probe").CATALOG_CHAT_PAGES);
+          return [
+            { chat_id: "oc_hot", name: "Ada" },
+            { chat_id: "oc_old", name: "Legacy" },
+          ];
+        },
+      },
+      { discover: "full" },
+    );
+    assert.equal(recent, 0);
+    assert.equal(all, 1);
+    assert.deepEqual(
+      chats.map((chat) => chat.chat_id),
+      ["oc_hot", "oc_old"],
+    );
+    const known = await resolveFeishuChatTargets(
+      { selection: "all" },
+      {
+        async listRecentChats() {
+          recent += 1;
+          return [];
+        },
+        async listAllChats() {
+          all += 1;
+          return [];
+        },
+      },
+      {
+        known: [{ chat_id: "oc_work", name: "Work" }],
+        discover: "known",
+      },
+    );
+    assert.equal(recent, 0);
+    assert.equal(all, 1);
+    assert.deepEqual(
+      known.map((chat) => chat.chat_id),
+      ["oc_work"],
+    );
+  });
+
   it("reuses known chats on a busy tick without listing", async () => {
     let listed = 0;
     const chats = await resolveFeishuChatTargets(
@@ -479,7 +532,7 @@ describe("feishuChatDriver", () => {
     await host.dispose();
   });
 
-  it("unmounts Feishu chats that left the eligible set", async () => {
+  it("keeps mounted Feishu chats that left this tick's eligible set", async () => {
     const host = await createHost();
     const connectors = new MemoryConnectorRegistry();
     const egress = new MemoryEgressRegistry();
@@ -515,9 +568,9 @@ describe("feishuChatDriver", () => {
       streams.map((stream) => stream.thread_id),
       ["feishu:oc_work"],
     );
-    assert.equal(connectors.listStreams("feishu-1").length, 1);
-    assert.equal(connectors.getStream("feishu-1", "chat:oc_old"), undefined);
-    assert.equal(egress.get("feishu-1", "chat:oc_old"), undefined);
+    assert.equal(connectors.listStreams("feishu-1").length, 2);
+    assert.ok(connectors.getStream("feishu-1", "chat:oc_old"));
+    assert.ok(egress.get("feishu-1", "chat:oc_old"));
     await host.dispose();
   });
 
@@ -588,5 +641,44 @@ describe("feishuChatDriver", () => {
     assert.ok(feishuWriteBackLabels("通过").includes("同意"));
     assert.ok(feishuWriteBackLabels("拒绝").includes("驳回"));
     assert.deepEqual(feishuChatDriver.writeBackLabels("同意"), feishuWriteBackLabels("同意"));
+  });
+});
+
+describe("createFeishuSyncSource", () => {
+  it("pages groups first then p2p so the group census can stay on HTTP", async () => {
+    const calls = [];
+    const source = createFeishuSyncSource(
+      {
+        async listChats(input) {
+          calls.push(input);
+          if (input.types?.length === 1 && input.types[0] === "group") {
+            return {
+              items: [{ chat_id: "oc_g", name: "Eng", chat_mode: "group" }],
+              has_more: false,
+            };
+          }
+          return {
+            items: [{ chat_id: "oc_dm", name: "Ada", chat_mode: "p2p" }],
+            has_more: false,
+          };
+        },
+      },
+      ["group", "p2p"],
+    );
+    const groups = await source.listDirectory(null);
+    assert.deepEqual(
+      groups.members.map((member) => member.thread_id),
+      ["feishu:oc_g"],
+    );
+    assert.equal(groups.complete, false);
+    assert.equal(calls[0].types[0], "group");
+    assert.equal(calls[0].page_size, 100);
+    const p2p = await source.listDirectory(groups.next_cursor);
+    assert.deepEqual(
+      p2p.members.map((member) => member.thread_id),
+      ["feishu:oc_dm"],
+    );
+    assert.equal(p2p.complete, true);
+    assert.deepEqual(calls[1].types, ["p2p"]);
   });
 });

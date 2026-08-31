@@ -442,6 +442,16 @@ export interface EngineInstallationView {
   channel_label?: string;
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
+  sync?: SyncProgressView;
+}
+
+export interface SyncProgressView {
+  discovered: number;
+  seeded: number;
+  unseeded: number;
+  backfilling: number;
+  media_pending: number;
+  catalog_complete: boolean;
 }
 
 export interface CreatedConversation {

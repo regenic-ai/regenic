@@ -113,11 +113,9 @@ export class PersonalController {
       if (
         Array.isArray(local) &&
         shouldPullOlderInbox(query) &&
-        query.thread_id &&
-        local.length === 0
+        query.thread_id
       ) {
-        await this.connectors.pullOlderForThread(query.thread_id);
-        return this.inbox.listInbox(query);
+        void this.connectors.pullOlderForThread(query.thread_id);
       }
       if (
         Array.isArray(local) &&

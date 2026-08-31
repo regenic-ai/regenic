@@ -1,4 +1,11 @@
+import type { SyncLane } from "@regenic/domain";
+
 export const CATCH_UP_STREAMS_PER_TICK = 3;
+export const LIVE_STREAM_CONCURRENCY = 4;
+export const IDLE_STREAM_CONCURRENCY = 6;
+export const BUSY_STREAM_CONCURRENCY = 2;
+export const IDLE_CATALOG_PAGES = 3;
+export const DISCOVER_CATALOG_PAGES = 10;
 export const HUMAN_LIVE_STREAMS_BUSY = 2;
 export const HUMAN_LIVE_STREAMS_IDLE = 1;
 export const HUMAN_HISTORY_STREAMS_IDLE = 1;
@@ -135,19 +142,39 @@ export function lastHistoryKey(
   return [...selected].reverse().find((item) => item.older)?.key;
 }
 
-export function streamCursorUnseeded(value?: string | null): boolean {
-  if (!value?.trim()) {
-    return true;
+export { streamCursorUnseeded } from "@regenic/domain";
+
+export function catalogRefreshPages(input: {
+  discover?: boolean;
+  humanIdle: boolean;
+}): number {
+  if (input.discover === true) {
+    return DISCOVER_CATALOG_PAGES;
   }
-  try {
-    const parsed = JSON.parse(value) as { recent_seeded?: unknown };
-    if (parsed && typeof parsed === "object" && "recent_seeded" in parsed) {
-      return parsed.recent_seeded !== true;
-    }
-  } catch {
-    // A non-JSON cursor still means this stream has been polled.
-  }
-  return false;
+  return input.humanIdle ? IDLE_CATALOG_PAGES : 1;
+}
+
+export function syncExecutionBudget(input: {
+  humanIdle: boolean;
+  capCatchUp?: boolean;
+  lane: SyncLane;
+  pages: number;
+  catchUpPages?: number;
+}): { pages: number; concurrency: number } {
+  const catchUp =
+    Number.isInteger(input.catchUpPages) && (input.catchUpPages ?? 0) > 0
+      ? Math.min(input.catchUpPages ?? input.pages, 5)
+      : input.pages;
+  const pages =
+    input.lane === "history" && input.humanIdle
+      ? Math.max(input.pages, catchUp)
+      : input.pages;
+  const concurrency = input.humanIdle
+    ? IDLE_STREAM_CONCURRENCY
+    : input.capCatchUp
+      ? BUSY_STREAM_CONCURRENCY
+      : LIVE_STREAM_CONCURRENCY;
+  return { pages, concurrency };
 }
 
 export function prependUnseenStreams<T extends { key: string }>(

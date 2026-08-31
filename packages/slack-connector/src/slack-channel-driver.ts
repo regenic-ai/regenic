@@ -11,6 +11,7 @@ import {
   type ConnectorStream,
   type JsonValue,
   type NewConnectorInstallation,
+  type SyncSource,
 } from "@regenic/domain";
 import { slackLocaleTables } from "./locales";
 import { slackChannelPlugin } from "./plugin";
@@ -64,6 +65,32 @@ export const slackChannelDriver: ChannelDriver = {
 
   async resolveStreams(installation, host, env) {
     return [await mountChannel(host, installation, env)];
+  },
+
+  async bindSyncSource(installation): Promise<SyncSource> {
+    const channelId = configString(installation.config, "channel_id");
+    if (!channelId) {
+      throw new ChannelDriverError(
+        "invalid_config",
+        "Slack installation is missing channel_id",
+      );
+    }
+    const channelName = configString(installation.config, "channel_name");
+    return {
+      async listDirectory() {
+        return {
+          members: [
+            {
+              stream_key: `channel:${channelId}`,
+              thread_id: `slack:${channelId}`,
+              label: channelName,
+              kind: "channel",
+            },
+          ],
+          complete: true,
+        };
+      },
+    };
   },
 
   async resolveThreadStream(installation, _thread, host, env) {

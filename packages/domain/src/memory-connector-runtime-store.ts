@@ -14,6 +14,12 @@ import type {
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
 } from "./ingestion";
+import { MemorySyncStore } from "./sync-engine";
+import type {
+  ApplySyncCatalogPageInput,
+  SyncCatalogView,
+  SyncStreamState,
+} from "./sync-contracts";
 
 interface StoredCursor extends ConnectorStreamCursor {
   lease_owner?: string;
@@ -29,6 +35,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   private readonly cursors = new Map<string, StoredCursor>();
   private readonly attempts = new Map<string, IngestAttempt>();
   private readonly quarantines: IngestQuarantine[] = [];
+  private readonly sync = new MemorySyncStore();
 
   async createInstallation(
     input: NewConnectorInstallation,
@@ -92,6 +99,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       return false;
     }
     this.installations.delete(id);
+    this.sync.clear(id);
     for (const key of [...this.cursors.keys()]) {
       const cursor = this.cursors.get(key);
       if (cursor?.installation_id === id) {
@@ -277,6 +285,29 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   ): Promise<ConnectorStreamCursor | null> {
     const cursor = this.cursors.get(cursorKey(installationId, streamKey));
     return cursor ? this.copyCursor(cursor) : null;
+  }
+
+  getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
+    return this.sync.getSyncCatalog(installationId);
+  }
+
+  applySyncCatalogPage(input: ApplySyncCatalogPageInput): Promise<SyncCatalogView> {
+    return this.sync.applySyncCatalogPage(input);
+  }
+
+  listSyncStates(installationId: string): Promise<SyncStreamState[]> {
+    return this.sync.listSyncStates(installationId);
+  }
+
+  getSyncState(
+    installationId: string,
+    streamKey: string,
+  ): Promise<SyncStreamState | null> {
+    return this.sync.getSyncState(installationId, streamKey);
+  }
+
+  putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
+    return this.sync.putSyncState(state);
   }
 
   private copyInstallation(

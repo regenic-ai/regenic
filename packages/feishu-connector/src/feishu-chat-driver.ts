@@ -55,6 +55,7 @@ import {
   listFeishuCatalogChats,
   probeLarkCli,
 } from "./probe";
+import { createFeishuSyncSource } from "./feishu-sync-source";
 
 export const feishuChatDriver: ChannelDriver = {
   connector_type: "feishu-chat",
@@ -214,9 +215,18 @@ export const feishuChatDriver: ChannelDriver = {
         installation,
         mounted,
       ),
-      discover: feishuSelection(installation.config) === "pick" ? "known" : "recent",
+      discover:
+        feishuSelection(installation.config) === "pick"
+          ? "known"
+          : options?.discover === true
+            ? "full"
+            : "known",
     });
-    return mountFeishuChats(host, installation, chats, env, client, true);
+    return mountFeishuChats(host, installation, chats, env, client, false);
+  },
+
+  async bindSyncSource(installation, _host, env) {
+    return createFeishuSyncSource(larkClient(env), feishuKinds(installation.config));
   },
 
   async resolveThreadStream(installation, thread, host, env) {
@@ -540,7 +550,7 @@ export async function resolveFeishuChatTargets(
   }
   if (discover === "full") {
     const listed = client.listAllChats
-      ? await client.listAllChats(10, kinds)
+      ? await client.listAllChats(CATALOG_CHAT_PAGES, kinds)
       : [];
     return mergeFeishuChats(known, listed);
   }

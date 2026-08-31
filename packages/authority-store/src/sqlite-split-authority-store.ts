@@ -20,6 +20,9 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  ApplySyncCatalogPageInput,
+  SyncCatalogView,
+  SyncStreamState,
   RepointContentInput,
   ResetConnectorCursor,
   ReleaseConnectorLease,
@@ -149,6 +152,31 @@ export class SqliteSplitAuthorityStore
     streamKey: string,
   ): Promise<ConnectorStreamCursor | null> {
     return this.reader.call("getCursor", [installationId, streamKey]);
+  }
+
+  async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
+    return this.reader.call("getSyncCatalog", [installationId]);
+  }
+
+  async applySyncCatalogPage(
+    input: ApplySyncCatalogPageInput,
+  ): Promise<SyncCatalogView> {
+    return this.writer.call("applySyncCatalogPage", [input]);
+  }
+
+  async listSyncStates(installationId: string): Promise<SyncStreamState[]> {
+    return this.reader.call("listSyncStates", [installationId]);
+  }
+
+  async getSyncState(
+    installationId: string,
+    streamKey: string,
+  ): Promise<SyncStreamState | null> {
+    return this.reader.call("getSyncState", [installationId, streamKey]);
+  }
+
+  async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
+    return this.writer.call("putSyncState", [state]);
   }
 
   async append(input: NewEvent): Promise<EventRecord> {

@@ -21,6 +21,9 @@ import {
   networkWatchHint,
   networkWatchLabel,
   pullStatusLabel,
+  aggregateInstallationSync,
+  syncProgressSummary,
+  syncProgressTone,
 } from "./format";
 import type { HostStats } from "../../shared/host-watch.ts";
 import { useLocale } from "./LocaleContext";
@@ -86,6 +89,7 @@ export function EnginePage({
   const unsignedPlugins = unsignedPluginCount(engine);
   const failedPlugins = failedPluginCount(engine);
   const syncable = engine.installations.filter((item) => item.syncable);
+  const coverage = aggregateInstallationSync(engine.installations);
   const pullCopy = [
     pullStatusLabel(engine.pull),
     engine.pull?.last_tick_at ? formatChatTime(engine.pull.last_tick_at) : "",
@@ -122,6 +126,11 @@ export function EnginePage({
             label={t("engine.currentWork")}
             value={String(engine.inbox_count)}
             tone="ok"
+          />
+          <EngineStat
+            label={t("engine.coverage")}
+            value={coverage ? syncProgressSummary(coverage) : "—"}
+            tone={syncProgressTone(coverage)}
           />
           <EngineStat
             label={t("engine.livePull")}

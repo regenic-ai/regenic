@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 18);
+    assert.equal(authorityStore.schemaVersion, 19);
     const inspect = new Database(join(root, "authority.db"));
     const index = inspect
       .prepare(
@@ -247,12 +247,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 19");
+    database.pragma("user_version = 20");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 19 is newer than supported 18/,
+      /schema 20 is newer than supported 19/,
     );
   });
 
@@ -524,7 +524,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 18);
+    assert.equal(store.schemaVersion, 19);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);

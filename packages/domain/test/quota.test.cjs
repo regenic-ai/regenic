@@ -6,6 +6,8 @@ const {
   InstallationQuotaBook,
   connectorQuotaFromEnv,
   normalizeConnectorQuota,
+  reservedInteractiveTokens,
+  runInSyncLane,
 } = require("../dist");
 
 describe("installation quota", () => {
@@ -51,5 +53,27 @@ describe("installation quota", () => {
     const book = new InstallationQuotaBook({ tokens: 0, window_ms: 60_000 });
     assert.equal(book.tryConsume("a"), true);
     assert.equal(book.tryConsume("a"), true);
+  });
+
+  it("reserves tokens so live backfill cannot starve interactive", () => {
+    const book = new InstallationQuotaBook({ tokens: 5, window_ms: 60_000 });
+    assert.equal(reservedInteractiveTokens(5), 1);
+    assert.equal(book.tryConsume("a", undefined, "live"), true);
+    assert.equal(book.tryConsume("a", undefined, "history"), true);
+    assert.equal(book.tryConsume("a", undefined, "live"), true);
+    assert.equal(book.tryConsume("a", undefined, "history"), true);
+    assert.equal(book.tryConsume("a", undefined, "live"), false);
+    assert.equal(book.tryConsume("a", undefined, "interactive"), true);
+  });
+
+  it("reads the current lane when the caller omits it", async () => {
+    const book = new InstallationQuotaBook({ tokens: 5, window_ms: 60_000 });
+    book.tryConsume("a", undefined, "live");
+    book.tryConsume("a", undefined, "live");
+    book.tryConsume("a", undefined, "live");
+    book.tryConsume("a", undefined, "live");
+    await runInSyncLane("interactive", () => {
+      assert.equal(book.tryConsume("a"), true);
+    });
   });
 });
