@@ -96,6 +96,9 @@ describe("local ingestion persistence", () => {
     assert.equal(replay.records[0].status, "duplicate");
     assert.equal(replay.records[0].event_id, eventId);
     assert.equal(current.id, eventId);
+    assert.equal(current.thread_id, "regenic:source-event-1");
+    assert.equal(current.actor_id, "local-owner");
+    assert.deepEqual(current.required_scope_ids, ["regenic:personal"]);
     assert.equal(await harness.blobStore.exists(current.content_hash), true);
     const blob = await harness.authorityStore.findBlob(current.content_hash);
     assert.equal(blob.media_type, "text/plain");

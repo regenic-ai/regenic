@@ -28,6 +28,9 @@ importers:
       '@regenic/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@regenic/context-engine':
+        specifier: workspace:*
+        version: link:../../packages/context-engine
       '@regenic/cursor-connector':
         specifier: workspace:*
         version: link:../../packages/cursor-connector
@@ -227,6 +230,12 @@ importers:
         specifier: workspace:*
         version: link:../plugin-host
     devDependencies:
+      '@regenic/authority-store':
+        specifier: workspace:*
+        version: link:../authority-store
+      '@regenic/blob-store':
+        specifier: workspace:*
+        version: link:../blob-store
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1

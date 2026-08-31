@@ -9,7 +9,7 @@ import { normalizeInboxListView } from "./list-surface";
 import { conversationId } from "./message-contract";
 
 export function eventThreadId(event: EventRecord): string {
-  return conversationId(event.source, event.external_id, event.id);
+  return event.thread_id ?? conversationId(event.source, event.external_id, event.id);
 }
 
 export function matchesEventQuery(

@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 20;
+export const LATEST_SCHEMA_VERSION = 21;
 
 export const MIGRATIONS = [
   {
@@ -448,6 +448,17 @@ export const MIGRATIONS = [
         payload_json TEXT NOT NULL,
         PRIMARY KEY (org_id, projector_id, generation)
       );
+    `,
+  },
+  {
+    version: 21,
+    sql: `
+      ALTER TABLE events ADD COLUMN actor_id TEXT;
+      ALTER TABLE events ADD COLUMN required_scope_ids_json TEXT
+        CHECK (
+          required_scope_ids_json IS NULL OR
+          json_valid(required_scope_ids_json)
+        );
     `,
   },
 ] as const;

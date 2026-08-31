@@ -270,6 +270,9 @@ export interface EventRecord extends SourceIdentity {
   operation: IngestOperation;
   content_hash?: string;
   parent_event_id?: string;
+  thread_id?: string;
+  actor_id?: string;
+  required_scope_ids?: string[];
   occurred_at: string;
   ingested_at: string;
 }
@@ -286,6 +289,9 @@ export interface NewEvent extends SourceIdentity {
   content_media_type: string;
   content_byte_size: number;
   extra_blobs?: BlobMetaInput[];
+  thread_id?: string;
+  actor_id?: string;
+  required_scope_ids?: string[];
   occurred_at: string;
   expected_head_id: string | null;
 }
@@ -309,6 +315,9 @@ export interface EventRevision extends NewEvent {
 }
 
 export interface TombstoneEvent extends SourceIdentity {
+  thread_id?: string;
+  actor_id?: string;
+  required_scope_ids?: string[];
   occurred_at: string;
   expected_head_id: string | null;
 }

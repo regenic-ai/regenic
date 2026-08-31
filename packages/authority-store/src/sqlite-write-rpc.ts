@@ -6,6 +6,7 @@ export const AUTHORITY_READ_METHODS = [
   "findBySourceIdentity",
   "getEvent",
   "listEvents",
+  "openContextRead",
   "getArtifact",
   "listArtifacts",
   "getSnapshot",

@@ -387,6 +387,15 @@ interface ContextPolicyEvaluator {
   canReplay(input: ContextReplayInput): Promise<boolean>;
 }
 
+interface ContextAuthorityReader {
+  openContextRead(orgId: string): Promise<{
+    read_epoch: string;
+    recorded_at: string;
+    events: Array<EventRecord & { content_media_type?: string }>;
+    lifecycle_heads: ContextLifecycleHead[];
+  }>;
+}
+
 interface ContextProjector {
   readonly id: string;
   readonly algorithm_version: string;
@@ -455,6 +464,14 @@ returned Event's `ingested_at`; a read cannot declare a complete head that lies
 in its own future. Together with the as-of coverage rule, these constraints
 define the read's closed recorded-time window. `lifecycle_complete` without a
 matching head manifest is not a sufficient boundary.
+
+Canonical ingestion persists each new Event's stable thread ID, actor ID, and
+source-scoped ACL requirement with the Event transaction. The SQLite reader
+returns those fields, Blob media metadata, lifecycle heads, and a content-bound
+read epoch from one read transaction. The evidence-source adapter reads bodies
+only through hashes from those committed Events. Legacy Events without persisted
+ACL metadata, and identities whose lifecycle cannot be closed from one create
+root, are excluded as a whole rather than treated as public.
 
 ## 7. Build Flow
 
@@ -542,6 +559,11 @@ idempotent; checkpoint advancement is monotonic within one projector generation.
 Clearing an organization's operational data deletes these context records in
 the same transaction as its Event-derived state, while connector, executor, and
 recipe configuration remains intact.
+
+The Personal API host mounts the authority-backed evidence source, deterministic
+Event retriever, personal-owner policy, and durable context engine as one plugin
+lifecycle. Replay reads the persisted snapshot and bundle without rerunning the
+source, retriever, or a model.
 
 ## 11. Graceful Degradation
 

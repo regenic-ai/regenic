@@ -5,6 +5,8 @@ import {
 } from "@regenic/domain";
 import { DeterministicContextEngine } from "./deterministic-context-engine";
 import { DeterministicEventRetriever } from "./deterministic-event-retriever";
+import { AuthorityContextEvidenceSource } from "./authority-context-source";
+import { PersonalContextPolicyEvaluator } from "./personal-context-policy";
 
 export const deterministicEventRetrieverPlugin = definePlugin({
   name: "context-retriever-event-deterministic",
@@ -26,6 +28,35 @@ export const deterministicContextEnginePlugin = definePlugin<DeterministicContex
     ctx.provide("context", new DeterministicContextEngine({
       source: config.source,
       policy: config.policy,
+      artifacts: ctx.get("context-artifacts"),
+      retrievers: ctx.get("context-retrievers"),
+    }));
+  },
+});
+
+export interface PersonalContextEnginePluginConfig {
+  org_id: string;
+  actor_id?: string;
+}
+
+export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePluginConfig>({
+  name: "context-engine-personal",
+  inject: ["blobs", "context-authority", "context-artifacts", "context-retrievers"],
+  apply(ctx, config) {
+    const source = new AuthorityContextEvidenceSource(
+      ctx.get("context-authority"),
+      ctx.get("blobs"),
+    );
+    const policy = new PersonalContextPolicyEvaluator({
+      org_id: config.org_id,
+      principal: {
+        actor_type: "human",
+        actor_id: config.actor_id ?? config.org_id,
+      },
+    });
+    ctx.provide("context", new DeterministicContextEngine({
+      source,
+      policy,
       artifacts: ctx.get("context-artifacts"),
       retrievers: ctx.get("context-retrievers"),
     }));

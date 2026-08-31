@@ -95,6 +95,39 @@ describe("sqlite read/write split", () => {
     await store.close();
   });
 
+  it("opens one complete context authority read with metadata and lifecycle heads", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const service = new IngestionService(
+      new FsBlobStore(join(root, "blobs")),
+      store,
+    );
+    await service.ingest(createBatch());
+    const revision = createBatch();
+    revision.delivery_id = "delivery-revision";
+    revision.records[0].operation = "revise";
+    revision.records[0].content[0].text = "Revised split body.";
+    await service.ingest(revision);
+
+    const read = await store.openContextRead("local-owner");
+    assert.match(read.read_epoch, /^authority:[a-f0-9]{64}$/);
+    assert.equal(read.events.length, 2);
+    assert.equal(read.events[0].thread_id, "regenic:source-event-1");
+    assert.equal(read.events[0].actor_id, "local-owner");
+    assert.deepEqual(read.events[0].required_scope_ids, ["regenic:personal"]);
+    assert.equal(read.events[0].content_media_type, "text/plain");
+    assert.equal(read.events[1].parent_event_id, read.events[0].id);
+    assert.deepEqual(read.lifecycle_heads, [{
+      source: "regenic",
+      external_id: "source-event-1",
+      head_event_id: read.events[1].id,
+    }]);
+    assert.ok(read.events.every(
+      (event) => Date.parse(event.ingested_at) <= Date.parse(read.recorded_at),
+    ));
+    await store.close();
+  });
+
   it("lets the reader see a full thread as soon as the writer commits", async () => {
     const root = await createRoot();
     const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
