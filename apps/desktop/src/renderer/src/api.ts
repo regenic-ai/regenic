@@ -185,6 +185,14 @@ export async function saveLocale(locale: Locale): Promise<Locale> {
   return next === "zh" ? "zh" : "en";
 }
 
+export type InboxHeadsPage = {
+  pinned: InboxViewItem[];
+  live: InboxViewItem[];
+  active_work: InboxViewItem[];
+  next_before: { before: string; before_id: string } | null;
+  has_older: boolean;
+};
+
 export async function fetchInbox(
   query: {
     since?: string;
@@ -198,6 +206,58 @@ export async function fetchInbox(
     list?: "shown" | "hidden";
   } = {},
 ): Promise<InboxViewItem[]> {
+  const response = await fetchInboxResponse(query);
+  const items = (await response.json()) as InboxViewItem[];
+  if (!Array.isArray(items)) {
+    throw new Error("inbox");
+  }
+  return items.map(normalizeInboxItem);
+}
+
+export async function fetchInboxHeads(
+  query: {
+    before?: string;
+    before_id?: string;
+    limit?: number;
+    list?: "shown" | "hidden";
+  } = {},
+): Promise<InboxHeadsPage> {
+  const response = await fetchInboxResponse({
+    ...query,
+    heads: true,
+    split: true,
+  });
+  const page = (await response.json()) as Partial<InboxHeadsPage>;
+  if (!page || !Array.isArray(page.live)) {
+    throw new Error("inbox heads");
+  }
+  const next = page.next_before;
+  return {
+    pinned: (page.pinned ?? []).map(normalizeInboxItem),
+    live: page.live.map(normalizeInboxItem),
+    active_work: (page.active_work ?? []).map(normalizeInboxItem),
+    next_before:
+      next?.before && next.before_id
+        ? { before: next.before, before_id: next.before_id }
+        : null,
+    has_older: page.has_older === true,
+  };
+}
+
+async function fetchInboxResponse(
+  query: {
+    since?: string;
+    since_id?: string;
+    before?: string;
+    before_id?: string;
+    heads?: boolean;
+    live?: boolean;
+    split?: boolean;
+    thread_id?: string;
+    limit?: number;
+    list?: "shown" | "hidden";
+  },
+): Promise<Response> {
   const params = new URLSearchParams();
   if (query.since) {
     params.set("since", query.since);
@@ -217,6 +277,9 @@ export async function fetchInbox(
   if (query.live) {
     params.set("live", "1");
   }
+  if (query.split) {
+    params.set("split", "1");
+  }
   if (query.thread_id) {
     params.set("thread_id", query.thread_id);
   }
@@ -233,8 +296,11 @@ export async function fetchInbox(
   if (!response.ok) {
     throw new Error(`inbox ${response.status}`);
   }
-  const items = (await response.json()) as InboxViewItem[];
-  return items.map((item) => ({
+  return response;
+}
+
+function normalizeInboxItem(item: InboxViewItem): InboxViewItem {
+  return {
     ...item,
     channel: item.channel ?? item.event.source,
     channel_label: item.channel_label ?? item.event.source.toUpperCase(),
@@ -269,7 +335,7 @@ export async function fetchInbox(
     thread_facet: item.thread_facet,
     attention: item.attention,
     work: item.work,
-  }));
+  };
 }
 
 function normalizeReceipt(value: InboxViewItem["receipt"]): MessageReceipt | undefined {

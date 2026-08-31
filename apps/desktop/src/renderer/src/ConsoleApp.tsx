@@ -5,6 +5,7 @@ import {
   currentApiOrigin,
   fetchEngine,
   fetchInbox,
+  fetchInboxHeads,
   fetchUiPrefs,
   dismissWorkItem,
   runWorkItem,
@@ -48,19 +49,18 @@ import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
 import {
-  appendHeadPages,
+  InboxListStore,
+  type InboxListSnapshot,
+} from "./inbox-list-store.ts";
+import {
   hasOlderPage,
   inboxCursor,
-  mergeHeadPages,
   mergeInboxDelta,
   mergeOlderInbox,
-  olderHeadsCursor,
   olderInboxCursor,
   mergeRecentInbox,
-  reuseInboxList,
   patchInboxWork,
   shouldFetchInboxDelta,
-  unpinnedHeadCount,
   LIST_HEADS_PAGE_SIZE,
   THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
@@ -140,6 +140,7 @@ export function ConsoleApp() {
   const hasOlderHeadsRef = useRef(hasOlderHeads);
   hasOlderHeadsRef.current = hasOlderHeads;
   const headsBusyRef = useRef(false);
+  const listStoreRef = useRef(new InboxListStore());
   const threadLoadSeq = useRef<Record<string, number>>({});
   const lastReceiptAt = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
@@ -149,26 +150,17 @@ export function ConsoleApp() {
   listViewRef.current = listView;
   const lastFetchedListRef = useRef<InboxListView>("shown");
 
-  const applyHeads = (
-    nextHeads: InboxViewItem[],
-    mode: "replace" | "merge" | "append" = "replace",
-  ) => {
-    const combined =
-      mode === "replace"
-        ? nextHeads
-        : mode === "append"
-          ? appendHeadPages(inboxRef.current, nextHeads)
-          : mergeHeadPages(inboxRef.current, nextHeads);
-    const reused = reuseInboxList(inboxRef.current, combined);
-    reuseHintRef.current = reused;
-    if (reused.same) {
+  const publishHeads = (snap: InboxListSnapshot) => {
+    reuseHintRef.current = snap.reuse;
+    inboxRef.current = snap.items;
+    setHasOlderHeads(snap.hasOlder);
+    if (snap.reuse.same) {
       return;
     }
-    inboxRef.current = reused.items;
-    setInbox(reused.items);
-    const synced = groupInboxThreads(reused.items, groupedRef.current, reused);
+    setInbox(snap.items);
+    const synced = groupInboxThreads(snap.items, groupedRef.current, snap.reuse);
     groupedRef.current = synced;
-    groupedInboxRef.current = reused.items;
+    groupedInboxRef.current = snap.items;
     setPrefOverlay((current) => prunePrefOverlay(current, synced));
     const nextDrafts = draftsRef.current.filter(
       (draft) => !synced.some((thread) => thread.id === draft.thread_id),
@@ -384,7 +376,7 @@ export function ConsoleApp() {
     if (headsBusyRef.current || hasOlderHeadsRef.current === false) {
       return;
     }
-    const cursor = olderHeadsCursor(inboxRef.current);
+    const cursor = listStoreRef.current.cursor;
     if (!cursor) {
       setHasOlderHeads(false);
       return;
@@ -392,23 +384,30 @@ export function ConsoleApp() {
     headsBusyRef.current = true;
     setLoadingOlderHeads(true);
     const epoch = workspaceEpoch.current;
+    const gen = listStoreRef.current.generation;
     const requested = listViewRef.current;
     try {
-      const page = await fetchInbox({
-        heads: true,
+      const page = await fetchInboxHeads({
         list: requested,
         before: cursor.before,
         before_id: cursor.before_id,
         limit: LIST_HEADS_PAGE_SIZE,
       });
-      if (workspaceEpoch.current !== epoch || listViewRef.current !== requested) {
+      if (
+        workspaceEpoch.current !== epoch ||
+        listViewRef.current !== requested ||
+        listStoreRef.current.generation !== gen
+      ) {
         return;
       }
-      setHasOlderHeads(hasOlderPage(page.length, LIST_HEADS_PAGE_SIZE));
-      if (page.length === 0) {
-        return;
-      }
-      applyHeads(page, "append");
+      publishHeads(
+        listStoreRef.current.reduce({
+          kind: "olderLoaded",
+          items: page.live,
+          nextBefore: page.next_before,
+          hasOlder: page.has_older,
+        }),
+      );
     } finally {
       headsBusyRef.current = false;
       setLoadingOlderHeads(false);
@@ -465,14 +464,14 @@ export function ConsoleApp() {
           requested === lastFetchedListRef.current &&
           digest.length > 0 &&
           digest === inboxDigestRef.current &&
-          inboxRef.current.length > 0 &&
+          listStoreRef.current.size > 0 &&
           now - lastFullRef.current < FULL_REFRESH_MS;
-        if (!skipHeads && !headsBusyRef.current) {
+        if (!skipHeads) {
           const replace =
-            inboxRef.current.length === 0 ||
+            listStoreRef.current.size === 0 ||
             lastFetchedListRef.current !== requested;
-          const heads = await fetchInbox({
-            heads: true,
+          const gen = listStoreRef.current.generation;
+          const page = await fetchInboxHeads({
             list: requested,
             limit: LIST_HEADS_PAGE_SIZE,
           });
@@ -482,12 +481,29 @@ export function ConsoleApp() {
           if (listViewRef.current !== requested) {
             continue;
           }
-          applyHeads(heads, replace ? "replace" : "merge");
-          if (replace) {
-            setHasOlderHeads(
-              hasOlderPage(unpinnedHeadCount(heads), LIST_HEADS_PAGE_SIZE),
-            );
+          if (listStoreRef.current.generation !== gen) {
+            continue;
           }
+          const fact = {
+            pinned: page.pinned,
+            live: page.live,
+            activeWork: page.active_work,
+            nextBefore: page.next_before,
+            hasOlder: page.has_older,
+            pageSize: LIST_HEADS_PAGE_SIZE,
+          };
+          publishHeads(
+            replace
+              ? listStoreRef.current.reduce({
+                  kind: "liveLoaded",
+                  list: requested,
+                  ...fact,
+                })
+              : listStoreRef.current.reduce({
+                  kind: "liveChanged",
+                  ...fact,
+                }),
+          );
           lastFetchedListRef.current = requested;
           inboxDigestRef.current = digest || inboxDigestRef.current;
           lastFullRef.current = Date.now();
@@ -562,6 +578,8 @@ export function ConsoleApp() {
     for (const id of openIds) {
       threadLoadSeq.current[id] = (threadLoadSeq.current[id] ?? 0) + 1;
     }
+    listStoreRef.current.bumpGeneration();
+    listStoreRef.current.reduce({ kind: "reset" });
     inboxRef.current = [];
     messagesRef.current = {};
     draftsRef.current = [];
@@ -626,8 +644,13 @@ export function ConsoleApp() {
     };
   }, []);
 
+  const listReady = useRef(false);
   useEffect(() => {
     inboxDigestRef.current = null;
+    if (listReady.current) {
+      listStoreRef.current.bumpGeneration();
+    }
+    listReady.current = true;
     setHasOlderHeads(false);
     void refresh();
   }, [listView, refresh]);
@@ -696,7 +719,12 @@ export function ConsoleApp() {
         last_read_at: latest?.event.occurred_at ?? new Date().toISOString(),
         last_read_external_id: latest?.event.external_id ?? null,
       });
-      setInbox((current) => markInboxThreadRead(current, threadId));
+      publishHeads(
+        listStoreRef.current.reduce({
+          kind: "headPatched",
+          items: markInboxThreadRead(listStoreRef.current.items, threadId),
+        }),
+      );
       setMessagesByThread((current) => {
         const opened = current[threadId];
         if (!opened) {

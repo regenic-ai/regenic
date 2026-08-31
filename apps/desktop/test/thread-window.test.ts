@@ -11,7 +11,6 @@ import {
   appendHeadPages,
   hasOlderPage,
   inboxCursor,
-  mergeHeadPages,
   mergeInboxDelta,
   mergeOlderInbox,
   mergeRecentInbox,
@@ -30,6 +29,7 @@ import {
   THREAD_PAGE_SIZE,
   THREAD_STICK_PX,
 } from "../src/renderer/src/thread-window.ts";
+import { mergeHeadPages } from "../src/renderer/src/inbox-list-store.ts";
 import { groupInboxThreads } from "../src/renderer/src/inbox.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
 

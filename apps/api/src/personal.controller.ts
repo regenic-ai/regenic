@@ -80,6 +80,7 @@ export class PersonalController {
     @Query("before_id") beforeId?: string,
     @Query("heads") heads?: string,
     @Query("live") live?: string,
+    @Query("split") split?: string,
     @Query("thread_id") threadId?: string,
     @Query("limit") limit?: string,
     @Query("list") list?: string,
@@ -94,6 +95,7 @@ export class PersonalController {
       before_id: beforeId?.trim() || undefined,
       heads: heads === "1" || heads === "true",
       live: live === "1" || live === "true",
+      split: split === "1" || split === "true",
       thread_id: threadId?.trim() || undefined,
       limit: limit?.trim() ? Number(limit) : undefined,
       list: list?.trim() || membership?.trim() || undefined,
@@ -105,6 +107,7 @@ export class PersonalController {
       }
       const local = await this.inbox.listInbox(query);
       if (
+        Array.isArray(local) &&
         shouldPullOlderInbox(query) &&
         query.thread_id &&
         local.length === 0
@@ -113,6 +116,7 @@ export class PersonalController {
         return this.inbox.listInbox(query);
       }
       if (
+        Array.isArray(local) &&
         shouldHydrateOpenedInbox(query) &&
         query.thread_id &&
         shouldWaitForOpenedHydrate(local.length)
