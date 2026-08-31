@@ -48,6 +48,7 @@ export const en = {
   "inbox.pin": "Pin",
   "inbox.unpin": "Unpin",
   "inbox.unreadAria": "Unread",
+  "inbox.loadingOlder": "Loading more conversations",
 
   "thread.startRun": "Handle now",
   "thread.retryDelivery": "Send again",
@@ -635,6 +636,7 @@ export const zh: Record<MessageKey, string> = {
   "inbox.pin": "置顶",
   "inbox.unpin": "取消置顶",
   "inbox.unreadAria": "未读",
+  "inbox.loadingOlder": "正在加载更多会话",
 
   "thread.startRun": "立即处理",
   "thread.retryDelivery": "重新发送",

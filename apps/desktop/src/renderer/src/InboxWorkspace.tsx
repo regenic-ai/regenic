@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { formatChatTime } from "./format";
 import {
   filterInboxThreads,
@@ -29,6 +29,10 @@ import {
 import { MenuSelect } from "./MenuSelect";
 import { ThreadPane } from "./ThreadPane";
 import { ThreadTitleField } from "./ThreadTitleField";
+import {
+  shouldLoadMoreHeads,
+  shouldRearmLoadMoreHeads,
+} from "./thread-window";
 import type { ComposerDraft } from "./Composer";
 import type {
   CreatedConversation,
@@ -48,6 +52,9 @@ export function InboxWorkspace({
   hasOlder,
   loadingOlder,
   onLoadOlder,
+  hasOlderHeads,
+  loadingOlderHeads,
+  onLoadOlderHeads,
   createTargets,
   creating,
   onCreate,
@@ -75,6 +82,9 @@ export function InboxWorkspace({
   hasOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
+  hasOlderHeads: boolean;
+  loadingOlderHeads: boolean;
+  onLoadOlderHeads: () => void;
   createTargets: CreateTarget[];
   creating: boolean;
   onCreate: (installationId: string) => Promise<CreatedConversation | undefined>;
@@ -212,7 +222,12 @@ export function InboxWorkspace({
             </div>
           ) : null}
         </div>
-        <div className="list-body">
+        <ListBody
+          hasOlder={hasOlderHeads && pinFilter !== "pinned"}
+          loadingOlder={loadingOlderHeads}
+          onLoadOlder={onLoadOlderHeads}
+          itemCount={threads.length}
+        >
           {error ? <div className="page-empty">{error}</div> : null}
           {!error && threads.length === 0 ? (
             <div className="page-empty">
@@ -261,7 +276,7 @@ export function InboxWorkspace({
               ))}
             </div>
           ))}
-        </div>
+        </ListBody>
       </aside>
       <section className="thread">
         {selected ? (
@@ -292,6 +307,71 @@ export function InboxWorkspace({
           <div className="thread-empty">{t("inbox.selectConversation")}</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function ListBody({
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
+  itemCount,
+  children,
+}: {
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder: () => void;
+  itemCount: number;
+  children: ReactNode;
+}) {
+  const { t } = useLocale();
+  const ref = useRef<HTMLDivElement>(null);
+  const armedRef = useRef(true);
+  const lastScrollRef = useRef(0);
+  const onLoadOlderRef = useRef(onLoadOlder);
+  onLoadOlderRef.current = onLoadOlder;
+
+  const check = useCallback(() => {
+    const node = ref.current;
+    if (!node) {
+      return;
+    }
+    const remaining = node.scrollHeight - node.scrollTop - node.clientHeight;
+    const scrolledDown = node.scrollTop >= lastScrollRef.current;
+    lastScrollRef.current = node.scrollTop;
+    if (
+      shouldLoadMoreHeads({
+        hasOlder,
+        loadingOlder,
+        scrollTop: node.scrollTop,
+        scrollHeight: node.scrollHeight,
+        clientHeight: node.clientHeight,
+        scrolledDown,
+        armed: armedRef.current,
+      })
+    ) {
+      armedRef.current = false;
+      onLoadOlderRef.current();
+      return;
+    }
+    if (shouldRearmLoadMoreHeads(remaining)) {
+      armedRef.current = true;
+    }
+  }, [hasOlder, loadingOlder]);
+
+  useEffect(() => {
+    check();
+  }, [check, itemCount]);
+
+  return (
+    <div className="list-body" ref={ref} onScroll={check}>
+      {children}
+      {loadingOlder ? (
+        <div className="list-more">
+          <span className="dot" />
+          {t("inbox.loadingOlder")}
+        </div>
+      ) : null}
     </div>
   );
 }

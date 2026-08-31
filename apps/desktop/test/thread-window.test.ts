@@ -8,18 +8,24 @@ import {
   isStuckToEnd,
   paddingYFromStyle,
   prefixOffsets,
+  appendHeadPages,
   hasOlderPage,
   inboxCursor,
+  mergeHeadPages,
   mergeInboxDelta,
   mergeOlderInbox,
   mergeRecentInbox,
+  olderHeadsCursor,
   olderInboxCursor,
   reuseInboxItems,
   reuseInboxList,
   patchInboxWork,
   shouldFetchInboxDelta,
+  shouldLoadMoreHeads,
   shouldLoadOlder,
+  shouldRearmLoadMoreHeads,
   shouldRearmLoadOlder,
+  LIST_LOAD_MORE_PX,
   THREAD_LOAD_OLDER_PX,
   THREAD_PAGE_SIZE,
   THREAD_STICK_PX,
@@ -392,5 +398,61 @@ describe("thread window", () => {
       }),
       false,
     );
+  });
+
+  it("pages list heads from the oldest unpinned face and keeps older rows", () => {
+    const recent = item("n2", "new", "crm:order-2");
+    recent.event.occurred_at = "2026-08-23T00:02:00.000Z";
+    const mid = item("n1", "mid", "crm:order-1");
+    mid.event.occurred_at = "2026-08-23T00:01:00.000Z";
+    const older = item("n0", "old", "crm:order-0");
+    older.event.occurred_at = "2026-08-23T00:00:00.000Z";
+    const pinned = item("pin", "pin", "crm:order-pin");
+    pinned.pinned = true;
+    pinned.event.occurred_at = "2026-08-22T00:00:00.000Z";
+    const cursor = olderHeadsCursor([pinned, recent, mid]);
+    assert.equal(cursor?.before_id, "n1");
+    const merged = mergeHeadPages([older, mid], [pinned, recent, mid]);
+    assert.deepEqual(
+      merged.map((row) => row.thread_id),
+      ["crm:order-0", "crm:order-pin", "crm:order-2", "crm:order-1"],
+    );
+    const appended = appendHeadPages([pinned, recent, mid], [older]);
+    assert.equal(appended[appended.length - 1], older);
+    assert.equal(appendHeadPages([mid], [mid]).length, 1);
+  });
+
+  it("loads more list heads when the scroller is at the bottom or still short", () => {
+    const tall = {
+      hasOlder: true,
+      loadingOlder: false,
+      scrollHeight: 8_000,
+      clientHeight: 640,
+      scrolledDown: true,
+      armed: true,
+    };
+    assert.equal(
+      shouldLoadMoreHeads({ ...tall, scrollTop: 8_000 - 640 - LIST_LOAD_MORE_PX }),
+      true,
+    );
+    assert.equal(shouldLoadMoreHeads({ ...tall, scrollTop: 100 }), false);
+    assert.equal(
+      shouldLoadMoreHeads({ ...tall, scrollTop: 7_000, scrolledDown: false }),
+      false,
+    );
+    assert.equal(
+      shouldLoadMoreHeads({
+        hasOlder: true,
+        loadingOlder: false,
+        scrollTop: 0,
+        scrollHeight: 400,
+        clientHeight: 640,
+        scrolledDown: false,
+        armed: false,
+      }),
+      true,
+    );
+    assert.equal(shouldRearmLoadMoreHeads(LIST_LOAD_MORE_PX), false);
+    assert.equal(shouldRearmLoadMoreHeads(400), true);
   });
 });

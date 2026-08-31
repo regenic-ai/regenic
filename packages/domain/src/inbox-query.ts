@@ -81,11 +81,8 @@ export function isBeforeEvent(
 
 export function takeRecentInboxItems<T extends { event: EventRecord }>(
   items: T[],
-  query?: Pick<InboxQuery, "before" | "before_id" | "limit" | "heads">,
+  query?: Pick<InboxQuery, "before" | "before_id" | "limit">,
 ): T[] {
-  if (query?.heads) {
-    return items;
-  }
   let selected = items;
   if (query?.before) {
     selected = selected.filter((item) =>
@@ -106,6 +103,21 @@ export function takeRecentInboxItems<T extends { event: EventRecord }>(
       return left.index - right.index;
     });
   return ranked.slice(ranked.length - limit).map((row) => row.item);
+}
+
+/** Drop page cursors so heads can rank the face, then page that face. */
+export function headsScanQuery(query?: InboxQuery): InboxQuery | undefined {
+  if (!query?.heads) {
+    return query;
+  }
+  return {
+    ...query,
+    before: undefined,
+    before_id: undefined,
+    since: undefined,
+    since_id: undefined,
+    limit: undefined,
+  };
 }
 
 function compareOccurredAt(

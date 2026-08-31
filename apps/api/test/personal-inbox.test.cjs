@@ -25,6 +25,9 @@ describe("inboxStoreQuery", () => {
     assert.deepEqual(inboxStoreQuery({ heads: true, thread_id: "feishu:oc_yiki" }, thread), {
       heads: true,
       list: "shown",
+      before: undefined,
+      before_id: undefined,
+      limit: undefined,
       thread_ids: ["feishu:oc_yiki"],
     });
     assert.deepEqual(
@@ -35,7 +38,29 @@ describe("inboxStoreQuery", () => {
       {
         heads: true,
         list: "hidden",
+        before: undefined,
+        before_id: undefined,
+        limit: undefined,
         thread_ids: ["feishu:oc_yiki"],
+      },
+    );
+    assert.deepEqual(
+      inboxStoreQuery(
+        {
+          heads: true,
+          list: "hidden",
+          limit: 40,
+          before: "2026-08-23T00:00:00.000Z",
+          before_id: "e1",
+        },
+        undefined,
+      ),
+      {
+        heads: true,
+        list: "hidden",
+        before: "2026-08-23T00:00:00.000Z",
+        before_id: "e1",
+        limit: 40,
       },
     );
   });

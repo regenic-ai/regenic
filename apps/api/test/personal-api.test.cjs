@@ -627,6 +627,17 @@ describe("personal /v1/me", () => {
       assert.equal(head[0].thread_id, "dsh:session-x");
       assert.equal(head[0].event.external_id, "session-x:2");
       assert.equal(head[0].body_text, "second");
+      const pagedHeads = await (
+        await fetch(`${origin}/v1/me/inbox?heads=1&limit=1`)
+      ).json();
+      assert.equal(pagedHeads.length, 1);
+      const olderHeads = await (
+        await fetch(
+          `${origin}/v1/me/inbox?heads=1&limit=1&before=${encodeURIComponent(pagedHeads[0].event.occurred_at)}&before_id=${encodeURIComponent(pagedHeads[0].event.id)}`,
+        )
+      ).json();
+      assert.equal(olderHeads.length, 1);
+      assert.notEqual(olderHeads[0].thread_id, pagedHeads[0].thread_id);
       const recent = await (
         await fetch(
           `${origin}/v1/me/inbox?thread_id=${encodeURIComponent("dsh:session-x")}&limit=1`,

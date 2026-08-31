@@ -131,27 +131,6 @@ async function loadSurface(
   await window.loadFile(rendererUrl(surface), { query: { surface } });
 }
 
-function countWorkThreads(
-  items: Array<{ event?: { id?: string; source?: string; external_id?: string } }>,
-): number {
-  const ids = new Set<string>();
-  for (const item of items) {
-    const event = item.event;
-    if (!event?.id || !event.source || !event.external_id) {
-      continue;
-    }
-    const cut = event.external_id.indexOf(":out:");
-    const withoutOut = cut >= 0 ? event.external_id.slice(0, cut) : event.external_id;
-    const colon = withoutOut.lastIndexOf(":");
-    ids.add(
-      colon > 0
-        ? `${event.source}:${withoutOut.slice(0, colon)}`
-        : `${event.source}:${withoutOut || event.id}`,
-    );
-  }
-  return ids.size;
-}
-
 function electronAppBytes(): number {
   return app.getAppMetrics().reduce((sum, metric) => {
     const kb = metric.memory?.workingSetSize ?? 0;
@@ -901,14 +880,12 @@ function createTray(): void {
 
 async function pollNotifications(): Promise<void> {
   try {
-    const response = await fetch(`${apiOrigin}/v1/me/inbox?heads=1`);
+    const response = await fetch(`${apiOrigin}/v1/me/engine?detail=0`);
     if (!response.ok) {
       return;
     }
-    const items = (await response.json()) as Array<{
-      event?: { id?: string; source?: string; external_id?: string };
-    }>;
-    const count = Array.isArray(items) ? countWorkThreads(items) : 0;
+    const engine = (await response.json()) as { inbox_count?: number };
+    const count = typeof engine.inbox_count === "number" ? engine.inbox_count : 0;
     if (lastInboxCount !== null && count > lastInboxCount && Notification.isSupported()) {
       const locale = loadDesktopPreference(settingsFile()).locale;
       new Notification({

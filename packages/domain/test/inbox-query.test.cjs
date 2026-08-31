@@ -276,4 +276,84 @@ describe("inbox query helpers", () => {
       ["e4"],
     );
   });
+
+  it("pages list heads by the face time, not every event", () => {
+    const items = [1, 2, 3].map((n) => ({
+      decision: { disposition: "current_work" },
+      event: {
+        id: `e${n}`,
+        org_id: "org",
+        source: "crm",
+        external_id: `order-${n}:1`,
+        occurred_at: `2026-08-23T00:0${n}:00.000Z`,
+        ingested_at: `2026-08-23T00:0${n}:00.000Z`,
+      },
+    }));
+    const recent = selectInboxItems(items, { heads: true, limit: 2 });
+    assert.deepEqual(
+      recent.map((item) => item.event.id),
+      ["e2", "e3"],
+    );
+    const older = selectInboxItems(items, {
+      heads: true,
+      before: recent[0].event.occurred_at,
+      before_id: recent[0].event.id,
+      limit: 2,
+    });
+    assert.deepEqual(
+      older.map((item) => item.event.id),
+      ["e1"],
+    );
+  });
+
+  it("does not keep a newer thread in an older heads page by using a stale sibling", () => {
+    const first = {
+      decision: { disposition: "current_work" },
+      event: {
+        id: "e1",
+        org_id: "org",
+        source: "crm",
+        external_id: "order-1:1",
+        occurred_at: "2026-08-23T00:01:00.000Z",
+        ingested_at: "2026-08-23T00:01:00.000Z",
+      },
+    };
+    const later = {
+      decision: { disposition: "current_work" },
+      event: {
+        id: "e2",
+        org_id: "org",
+        source: "crm",
+        external_id: "order-1:2",
+        occurred_at: "2026-08-23T00:03:00.000Z",
+        ingested_at: "2026-08-23T00:03:00.000Z",
+      },
+    };
+    const other = {
+      decision: { disposition: "current_work" },
+      event: {
+        id: "e3",
+        org_id: "org",
+        source: "crm",
+        external_id: "order-2:1",
+        occurred_at: "2026-08-23T00:02:00.000Z",
+        ingested_at: "2026-08-23T00:02:00.000Z",
+      },
+    };
+    const recent = selectInboxItems([first, later, other], { heads: true, limit: 1 });
+    assert.deepEqual(
+      recent.map((item) => item.event.id),
+      ["e2"],
+    );
+    const older = selectInboxItems([first, later, other], {
+      heads: true,
+      before: recent[0].event.occurred_at,
+      before_id: recent[0].event.id,
+      limit: 1,
+    });
+    assert.deepEqual(
+      older.map((item) => item.event.id),
+      ["e3"],
+    );
+  });
 });

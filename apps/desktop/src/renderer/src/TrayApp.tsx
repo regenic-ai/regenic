@@ -5,6 +5,7 @@ import { fetchEngine, fetchInbox } from "./api";
 import { chipLabel, engineChip, formatChatTime } from "./format";
 import { groupInboxThreads, latestMessage, sortInboxThreads } from "./inbox";
 import { threadTitle } from "./message-view";
+import { TRAY_HEADS_PAGE_SIZE } from "./thread-window";
 import type { InboxViewItem, PersonalEngineView } from "./types";
 
 const POLL_MS = 2000;
@@ -45,7 +46,7 @@ export function TrayApp() {
           return;
         }
         if (!skip) {
-          setInbox(await fetchInbox({ heads: true }));
+          setInbox(await fetchInbox({ heads: true, limit: TRAY_HEADS_PAGE_SIZE }));
           digestRef.current = digest || digestRef.current;
         }
         delayRef.current = skip ? IDLE_POLL_MS : POLL_MS;
@@ -88,7 +89,7 @@ export function TrayApp() {
           {t("chrome.kernel", { state: chipLabel(chip) })}
         </div>
         <p className="muted">
-          {t("tray.workCount", { count: threads.length })}
+          {t("tray.workCount", { count: engine?.inbox_count ?? threads.length })}
           {engine?.installations[0]?.last_attempt
             ? t("tray.lastSync", {
                 status: engine.installations[0].last_attempt.status,

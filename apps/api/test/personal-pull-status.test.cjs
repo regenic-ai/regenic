@@ -190,5 +190,20 @@ describe("opened inbox hydrate", () => {
       false,
     );
     assert.equal(shouldSkipLiveChannelOverlays({ heads: true }), false);
+    assert.equal(
+      shouldSkipLiveChannelOverlays({
+        heads: true,
+        before: "2026-08-24T00:00:00.000Z",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldSkipLiveChannelOverlays({
+        heads: true,
+        before: "2026-08-24T00:00:00.000Z",
+        live: true,
+      }),
+      false,
+    );
   });
 });

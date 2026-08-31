@@ -28,6 +28,7 @@ import {
 } from "./ingestion";
 import {
   eventThreadId,
+  headsScanQuery,
   matchesEventQuery,
   selectInboxItems,
   summarizeInboxItems,
@@ -166,7 +167,7 @@ export class MemoryAuthorityStore
       query?.heads ||
       normalizeInboxListView(query?.list) === "hidden";
     const items = useDecided
-      ? await this.decidedInbox(orgId, query)
+      ? await this.decidedInbox(orgId, headsScanQuery(query) ?? query)
       : this.currentWorkInbox(orgId);
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);

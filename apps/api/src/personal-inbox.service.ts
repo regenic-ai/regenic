@@ -185,11 +185,14 @@ export interface InboxListQuery {
 }
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
-  // Feishu read_users only on `live=1`. Heads still need read_status for list
-  // dots. Open, since, and older pages stay on SQLite so switching chats does
-  // not wait on lark-cli.
-  if (query.live || query.heads) {
+  // Feishu read_users only on `live=1`. The first heads page still needs
+  // read_status for list dots. Older list pages, open, and since stay on
+  // SQLite so scrolling the list or switching chats does not wait on lark-cli.
+  if (query.live) {
     return false;
+  }
+  if (query.heads) {
+    return Boolean(query.before);
   }
   return Boolean(query.thread_id);
 }
@@ -477,6 +480,20 @@ export class PersonalInboxService {
       prefs.map((pref) => [pref.thread_id, pref] as const),
     );
     let selected = selectInboxRecords(records, query);
+    if (
+      query.heads === true &&
+      !query.thread_id &&
+      !query.before &&
+      query.limit
+    ) {
+      selected = await mergePinnedInboxHeads(
+        selected,
+        prefs,
+        query,
+        orgId,
+        authority,
+      );
+    }
     if (jobSessions.size > 0) {
       const have = new Set(
         selected.map((item) =>
@@ -1280,6 +1297,41 @@ function parseThreadQuery(
   }
 }
 
+async function mergePinnedInboxHeads(
+  selected: InboxItem[],
+  prefs: ConversationPref[],
+  query: InboxListQuery,
+  orgId: string,
+  authority: AuthorityStore,
+): Promise<InboxItem[]> {
+  const hidden = normalizeInboxListView(query.list) === "hidden";
+  const have = new Set(
+    selected.map((item) =>
+      conversationId(item.event.source, item.event.external_id, item.event.id),
+    ),
+  );
+  const missing = prefs
+    .filter(
+      (pref) =>
+        pref.pinned &&
+        (hidden ? pref.hidden : !pref.hidden) &&
+        !have.has(pref.thread_id),
+    )
+    .map((pref) => pref.thread_id);
+  if (missing.length === 0) {
+    return selected;
+  }
+  const extras = await authority.listInbox(orgId, {
+    heads: true,
+    list: normalizeInboxListView(query.list),
+    thread_ids: missing,
+  });
+  if (extras.length === 0) {
+    return selected;
+  }
+  return [...headsByThread(extras), ...selected];
+}
+
 export function selectInboxRecords<T extends { event: EventRecord }>(
   items: T[],
   query: InboxListQuery,
@@ -1319,16 +1371,16 @@ export function inboxStoreQuery(
   thread?: ConversationThread,
 ): InboxQuery {
   if (query.heads) {
-    return thread
-      ? {
-          heads: true,
-          list: normalizeInboxListView(query.list),
-          thread_ids: [`${thread.source}:${thread.target}`],
-        }
-      : {
-          heads: true,
-          list: normalizeInboxListView(query.list),
-        };
+    return {
+      heads: true,
+      list: normalizeInboxListView(query.list),
+      before: query.before,
+      before_id: query.before_id,
+      limit: query.limit,
+      ...(thread
+        ? { thread_ids: [`${thread.source}:${thread.target}`] }
+        : {}),
+    };
   }
   if (query.thread_id && thread) {
     return {

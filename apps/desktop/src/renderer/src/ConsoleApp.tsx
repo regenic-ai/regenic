@@ -48,15 +48,20 @@ import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
 import {
+  appendHeadPages,
   hasOlderPage,
   inboxCursor,
+  mergeHeadPages,
   mergeInboxDelta,
   mergeOlderInbox,
+  olderHeadsCursor,
   olderInboxCursor,
   mergeRecentInbox,
   reuseInboxList,
   patchInboxWork,
   shouldFetchInboxDelta,
+  unpinnedHeadCount,
+  LIST_HEADS_PAGE_SIZE,
   THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
   type InboxReuse,
@@ -99,6 +104,8 @@ export function ConsoleApp() {
   const [hasOlderByThread, setHasOlderByThread] = useState<Record<string, boolean>>(
     {},
   );
+  const [hasOlderHeads, setHasOlderHeads] = useState(false);
+  const [loadingOlderHeads, setLoadingOlderHeads] = useState(false);
   const [prefOverlay, setPrefOverlay] = useState<Record<string, ConversationPrefOverlay>>(
     {},
   );
@@ -130,6 +137,9 @@ export function ConsoleApp() {
   const olderBusyRef = useRef(new Set<string>());
   const hasOlderRef = useRef(hasOlderByThread);
   hasOlderRef.current = hasOlderByThread;
+  const hasOlderHeadsRef = useRef(hasOlderHeads);
+  hasOlderHeadsRef.current = hasOlderHeads;
+  const headsBusyRef = useRef(false);
   const threadLoadSeq = useRef<Record<string, number>>({});
   const lastReceiptAt = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
@@ -139,8 +149,17 @@ export function ConsoleApp() {
   listViewRef.current = listView;
   const lastFetchedListRef = useRef<InboxListView>("shown");
 
-  const applyHeads = (nextHeads: InboxViewItem[]) => {
-    const reused = reuseInboxList(inboxRef.current, nextHeads);
+  const applyHeads = (
+    nextHeads: InboxViewItem[],
+    mode: "replace" | "merge" | "append" = "replace",
+  ) => {
+    const combined =
+      mode === "replace"
+        ? nextHeads
+        : mode === "append"
+          ? appendHeadPages(inboxRef.current, nextHeads)
+          : mergeHeadPages(inboxRef.current, nextHeads);
+    const reused = reuseInboxList(inboxRef.current, combined);
     reuseHintRef.current = reused;
     if (reused.same) {
       return;
@@ -360,6 +379,41 @@ export function ConsoleApp() {
     }
   };
 
+  const loadOlderHeads = async () => {
+    if (headsBusyRef.current || hasOlderHeadsRef.current === false) {
+      return;
+    }
+    const cursor = olderHeadsCursor(inboxRef.current);
+    if (!cursor) {
+      setHasOlderHeads(false);
+      return;
+    }
+    headsBusyRef.current = true;
+    setLoadingOlderHeads(true);
+    const epoch = workspaceEpoch.current;
+    const requested = listViewRef.current;
+    try {
+      const page = await fetchInbox({
+        heads: true,
+        list: requested,
+        before: cursor.before,
+        before_id: cursor.before_id,
+        limit: LIST_HEADS_PAGE_SIZE,
+      });
+      if (workspaceEpoch.current !== epoch || listViewRef.current !== requested) {
+        return;
+      }
+      setHasOlderHeads(hasOlderPage(page.length, LIST_HEADS_PAGE_SIZE));
+      if (page.length === 0) {
+        return;
+      }
+      applyHeads(page, "append");
+    } finally {
+      headsBusyRef.current = false;
+      setLoadingOlderHeads(false);
+    }
+  };
+
   const rememberThreadMessages = (
     prev: Record<string, InboxViewItem[]>,
     threadId: string,
@@ -413,9 +467,13 @@ export function ConsoleApp() {
           inboxRef.current.length > 0 &&
           now - lastFullRef.current < FULL_REFRESH_MS;
         if (!skipHeads) {
+          const replace =
+            inboxRef.current.length === 0 ||
+            lastFetchedListRef.current !== requested;
           const heads = await fetchInbox({
             heads: true,
             list: requested,
+            limit: LIST_HEADS_PAGE_SIZE,
           });
           if (workspaceEpoch.current !== epoch) {
             continue;
@@ -423,7 +481,12 @@ export function ConsoleApp() {
           if (listViewRef.current !== requested) {
             continue;
           }
-          applyHeads(heads);
+          applyHeads(heads, replace ? "replace" : "merge");
+          if (replace) {
+            setHasOlderHeads(
+              hasOlderPage(unpinnedHeadCount(heads), LIST_HEADS_PAGE_SIZE),
+            );
+          }
           lastFetchedListRef.current = requested;
           inboxDigestRef.current = digest || inboxDigestRef.current;
           lastFullRef.current = Date.now();
@@ -505,6 +568,7 @@ export function ConsoleApp() {
     prefOverlayRef.current = {};
     loadedThreadsRef.current.clear();
     olderBusyRef.current.clear();
+    headsBusyRef.current = false;
     inboxDigestRef.current = null;
     groupedRef.current = [];
     groupedInboxRef.current = null;
@@ -521,6 +585,8 @@ export function ConsoleApp() {
     setRecipeSeed(null);
     setPrefOverlay({});
     setHasOlderByThread({});
+    setHasOlderHeads(false);
+    setLoadingOlderHeads(false);
     setThreadError({});
     refreshAgain.current = true;
     await refresh();
@@ -561,6 +627,7 @@ export function ConsoleApp() {
 
   useEffect(() => {
     inboxDigestRef.current = null;
+    setHasOlderHeads(false);
     void refresh();
   }, [listView, refresh]);
 
@@ -965,6 +1032,11 @@ export function ConsoleApp() {
               if (selectedId) {
                 void loadOlder(selectedId);
               }
+            }}
+            hasOlderHeads={hasOlderHeads}
+            loadingOlderHeads={loadingOlderHeads}
+            onLoadOlderHeads={() => {
+              void loadOlderHeads();
             }}
             createTargets={createTargets}
             creating={creating}
