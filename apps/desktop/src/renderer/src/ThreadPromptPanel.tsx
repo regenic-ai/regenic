@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "./LocaleContext";
 import {
   decisionDisplayLabel,
+  foldPromptDetail,
   humanizePromptProse,
   optionPrimaryLabel,
   optionSecondaryLabel,
@@ -35,12 +36,9 @@ export function ThreadPromptPanel({
         ? t("prompt.plan")
         : t("prompt.answer");
   const title = prompt.title ? promptTitleDisplay(prompt.title, t) : null;
-  // Approval is decide-in-one-tap: agent "detail" is often operator notes
-  // ("only change X, don't complete Y"), not copy meant for the person clicking.
-  const detail =
-    prompt.presentation === "approval" || !prompt.detail
-      ? null
-      : humanizePromptProse(prompt.detail, locale);
+  const detail = prompt.detail?.trim()
+    ? humanizePromptProse(prompt.detail, locale)
+    : null;
   return (
     <form
       className={`prompt-panel presentation-${prompt.presentation}`}
@@ -51,7 +49,16 @@ export function ThreadPromptPanel({
       <div className="prompt-head">
         <p className="prompt-kicker">{heading}</p>
         {title ? <h2>{title}</h2> : null}
-        {detail ? <PromptDetail text={detail} /> : null}
+        {detail ? (
+          foldPromptDetail(prompt.presentation) ? (
+            <details className="prompt-detail-fold">
+              <summary>{t("prompt.moreDetail")}</summary>
+              <p className="prompt-detail-fold-body">{detail}</p>
+            </details>
+          ) : (
+            <PromptDetail text={detail} />
+          )
+        ) : null}
         {prompts.length > 1 ? (
           <p className="prompt-count">{t("prompt.of", { count: prompts.length })}</p>
         ) : null}

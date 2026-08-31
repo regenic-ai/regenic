@@ -709,6 +709,7 @@ describe("prompt answers", () => {
       decisionDisplayLabel,
       promptTitleDisplay,
       humanizePromptProse,
+      foldPromptDetail,
     } = await import("../src/renderer/src/thread-prompts.ts");
     assert.equal(
       optionPrimaryLabel({
@@ -742,6 +743,9 @@ describe("prompt answers", () => {
     assert.equal(decisionDisplayLabel("REJECTED", t), "驳回");
     assert.equal(decisionDisplayLabel("Allow", t), "通过");
     assert.equal(promptTitleDisplay("写回", t), "确认结果");
+    assert.equal(foldPromptDetail("approval"), true);
+    assert.equal(foldPromptDetail("choice"), false);
+    assert.equal(foldPromptDetail("plan_review"), false);
     assert.equal(
       humanizePromptProse(
         "只改本订单内审（APPROVED / REJECTED）。不得 complete 关联运营任务。",

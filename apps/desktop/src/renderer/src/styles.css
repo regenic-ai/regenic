@@ -2367,6 +2367,56 @@ button {
   font-size: 12px;
 }
 
+.prompt-detail-fold {
+  margin: 4px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+}
+
+.prompt-detail-fold summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+  user-select: none;
+}
+
+.prompt-detail-fold summary::-webkit-details-marker {
+  display: none;
+}
+
+.prompt-detail-fold summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: 6px;
+  border-left: 4px solid var(--muted);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  vertical-align: 1px;
+}
+
+.prompt-detail-fold[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.prompt-detail-fold-body {
+  margin: 0;
+  max-height: 9em;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  border-top: 1px solid var(--line);
+  white-space: pre-wrap;
+}
+
 .prompt-detail-wrap {
   margin: 4px 0 0;
 }

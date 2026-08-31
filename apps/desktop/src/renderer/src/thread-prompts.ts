@@ -95,7 +95,8 @@ export function promptTitleDisplay(title: string, t: DecisionCopy): string {
 
 /**
  * Soften English control words leaked into CJK prompt copy.
- * Does not rewrite domain nouns — only common decision/control tokens.
+ * Only touches decision/control tokens — never domain nouns.
+ * Prefer executor-authored human copy long-term.
  */
 export function humanizePromptProse(text: string, locale: string): string {
   if (locale !== "zh" || !/[\u4e00-\u9fff]/.test(text)) {
@@ -105,8 +106,12 @@ export function humanizePromptProse(text: string, locale: string): string {
     .replace(/\bAPPROVED\s*\/\s*REJECTED\b/g, "通过 / 驳回")
     .replace(/\bAPPROVED\b/g, "通过")
     .replace(/\bREJECTED\b/g, "驳回")
-    .replace(/不得\s*complete\s*/gi, "不要结束")
-    .replace(/\bcomplete\b/gi, "结束");
+    .replace(/不得\s*complete\s*/gi, "不要结束");
+}
+
+/** Approval detail stays available but folded — not dropped. */
+export function foldPromptDetail(presentation: ThreadPrompt["presentation"]): boolean {
+  return presentation === "approval";
 }
 
 export function optionPrimaryLabel(option: {
