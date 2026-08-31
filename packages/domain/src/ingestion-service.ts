@@ -30,6 +30,7 @@ import {
   type IngestValidationIssue,
 } from "./ingestion-schema";
 import { applyListSurfaceAfterIngest } from "./list-surface";
+import { threadIdOf } from "./thread-surface";
 import {
   incomingImprovesAttachments,
   incomingWorsensAttachments,
@@ -361,6 +362,7 @@ export class IngestionService {
     const appends: NewEvent[] = creates.map((item) => ({
       id: item.eventId,
       ...item.identity,
+      ...eventContextMetadata(item.record),
       content_hash: item.canonical.hash,
       content_media_type: item.canonical.media_type,
       content_byte_size: item.canonical.bytes.byteLength,
@@ -419,6 +421,7 @@ export class IngestionService {
       if (inspected.kind === "revise") {
         const event = await this.authorityStore.appendRevision({
           ...inspected.identity,
+          ...eventContextMetadata(inspected.record),
           content_hash: inspected.canonical.hash,
           content_media_type: inspected.canonical.media_type,
           content_byte_size: inspected.canonical.bytes.byteLength,
@@ -433,6 +436,7 @@ export class IngestionService {
 
       const event = await this.authorityStore.append({
         ...inspected.identity,
+        ...eventContextMetadata(inspected.record),
         content_hash: inspected.canonical.hash,
         content_media_type: inspected.canonical.media_type,
         content_byte_size: inspected.canonical.bytes.byteLength,
@@ -447,6 +451,7 @@ export class IngestionService {
       if (inspected.kind === "create_after_tombstone") {
         const tombstone = await this.authorityStore.markTombstone({
           ...inspected.identity,
+          ...eventContextMetadata(inspected.record),
           occurred_at: inspected.current.occurred_at,
           expected_head_id: event.id,
         });
@@ -474,6 +479,7 @@ export class IngestionService {
     try {
       const event = await this.authorityStore.markTombstone({
         ...identity,
+        ...eventContextMetadata(record),
         occurred_at: record.occurred_at,
         expected_head_id: current?.id ?? null,
       });
@@ -694,8 +700,23 @@ function previewCreate(
     external_id: identity.external_id,
     operation: "create",
     content_hash: canonical.hash,
+    ...eventContextMetadata(record),
     occurred_at: record.occurred_at,
     ingested_at: record.occurred_at,
+  };
+}
+
+function eventContextMetadata(
+  record: IngestRecord,
+): Pick<NewEvent, "thread_id" | "actor_id" | "required_scope_ids"> {
+  return {
+    thread_id: record.thread
+      ? threadIdOf({ source: record.source, target: record.thread.id })
+      : conversationId(record.source, record.external_id),
+    actor_id: record.actor.id,
+    required_scope_ids: [
+      threadIdOf({ source: record.source, target: record.scope.id }),
+    ],
   };
 }
 

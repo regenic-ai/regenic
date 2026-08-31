@@ -109,6 +109,18 @@ describe("IngestionService", () => {
     assert.equal(replay.records[0].status, "duplicate");
     assert.equal(replay.records[0].event_id, first.records[0].event_id);
     assert.equal(authorityStore.allEvents().length, 1);
+    assert.deepEqual(
+      {
+        thread_id: authorityStore.allEvents()[0].thread_id,
+        actor_id: authorityStore.allEvents()[0].actor_id,
+        required_scope_ids: authorityStore.allEvents()[0].required_scope_ids,
+      },
+      {
+        thread_id: "regenic:source-event-1",
+        actor_id: "local-owner",
+        required_scope_ids: ["regenic:personal"],
+      },
+    );
     assert.equal(blobStore.size, 1);
   });
 
@@ -242,6 +254,8 @@ describe("IngestionService", () => {
     assert.equal(events.length, 2);
     assert.equal(events[1].operation, "revise");
     assert.equal(events[1].parent_event_id, created.records[0].event_id);
+    assert.equal(events[1].thread_id, events[0].thread_id);
+    assert.deepEqual(events[1].required_scope_ids, events[0].required_scope_ids);
     assert.equal(blobStore.size, 2);
   });
 
@@ -258,7 +272,10 @@ describe("IngestionService", () => {
 
     assert.equal(tombstoned.records[0].status, "accepted");
     assert.equal(replay.records[0].status, "duplicate");
-    assert.equal(authorityStore.allEvents().length, 2);
+    const events = authorityStore.allEvents();
+    assert.equal(events.length, 2);
+    assert.equal(events[1].thread_id, events[0].thread_id);
+    assert.deepEqual(events[1].required_scope_ids, events[0].required_scope_ids);
     assert.equal(blobStore.size, 1);
   });
 

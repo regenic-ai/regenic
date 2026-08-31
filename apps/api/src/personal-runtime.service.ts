@@ -33,6 +33,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     this.options = {
       database: env.REGENIC_DATABASE,
       blobRoot: env.REGENIC_BLOB_ROOT,
+      orgId: env.REGENIC_ORG,
     };
     this.host = await createPersonalHost(this.options);
   }

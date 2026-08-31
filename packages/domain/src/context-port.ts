@@ -6,7 +6,7 @@ import type { ContextCandidate, ContextCandidateKind } from "./context-candidate
 import type { EvidenceReference } from "./context-consumer";
 import type { ContextRequest } from "./context-request";
 import type { ContextSnapshot } from "./context-snapshot";
-import type { JsonValue } from "./ingestion";
+import type { EventRecord, JsonValue } from "./ingestion";
 
 export interface ContextProjectionCapabilities {
   artifact_kinds: ContextArtifactKind[];
@@ -118,6 +118,17 @@ export interface AuthorizedContextSourceEvent extends ContextSourceEvent {
 
 export interface ContextEvidenceSource {
   openRead(request: ContextRequest): Promise<ContextSourceRead>;
+}
+
+export interface ContextAuthorityRead {
+  read_epoch: string;
+  recorded_at: string;
+  events: Array<EventRecord & { content_media_type?: string }>;
+  lifecycle_heads: ContextLifecycleHead[];
+}
+
+export interface ContextAuthorityReader {
+  openContextRead(orgId: string): Promise<ContextAuthorityRead>;
 }
 
 export interface ContextVisibilityInput {

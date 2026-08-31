@@ -9,6 +9,8 @@ import type {
   ContextArtifact,
   ContextArtifactQuery,
   ContextArtifactStore,
+  ContextAuthorityRead,
+  ContextAuthorityReader,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
@@ -54,7 +56,13 @@ export const INGEST_ATTEMPT_KEEP_PER_INSTALLATION = 64;
 export const INGEST_ATTEMPT_PRUNE_BATCH = 5_000;
 
 export class SqliteSplitAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore, ContextArtifactStore
+  implements
+    AuthorityStore,
+    ConnectorRuntimeStore,
+    WorkStore,
+    ExecutorStore,
+    ContextArtifactStore,
+    ContextAuthorityReader
 {
   private constructor(
     private readonly reader: SqliteWriteClient,
@@ -104,6 +112,10 @@ export class SqliteSplitAuthorityStore
     query?: EventListQuery,
   ): Promise<EventRecord[]> {
     return this.reader.call("listEvents", [orgId, query]);
+  }
+
+  async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
+    return this.reader.call("openContextRead", [orgId]);
   }
 
   async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {

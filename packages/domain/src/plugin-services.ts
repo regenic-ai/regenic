@@ -6,6 +6,7 @@ import type { AuthorityStore, BlobStore, ConnectorRuntimeStore } from "./ingesti
 import type { WorkStore } from "./work";
 import type { ExecutorStore } from "./executor-installation";
 import type {
+  ContextAuthorityReader,
   ContextArtifactStore,
   ContextEngine,
   ContextProjectorRegistry,
@@ -21,6 +22,7 @@ declare module "@regenic/plugin-host" {
     egress: EgressRegistry;
     executors: ExecutorRegistry;
     context: ContextEngine;
+    "context-authority": ContextAuthorityReader;
     "context-artifacts": ContextArtifactStore;
     "context-projectors": ContextProjectorRegistry;
     "context-retrievers": ContextRetrieverRegistry;

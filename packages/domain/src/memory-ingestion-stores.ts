@@ -131,14 +131,15 @@ export class MemoryAuthorityStore
   async findBySourceIdentity(
     identity: SourceIdentity,
   ): Promise<EventRecord | null> {
-    return this.currentBySource.get(sourceKey(identity)) ?? null;
+    const event = this.currentBySource.get(sourceKey(identity));
+    return event ? cloneEvent(event) : null;
   }
 
   async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {
     const event = this.events.find(
       (item) => item.org_id === orgId && item.id === eventId,
     );
-    return event ? { ...event } : null;
+    return event ? cloneEvent(event) : null;
   }
 
   async listEvents(
@@ -147,7 +148,7 @@ export class MemoryAuthorityStore
   ): Promise<EventRecord[]> {
     const matched = this.events
       .filter((event) => matchesEventQuery(event, orgId, query))
-      .map((event) => ({ ...event }));
+      .map(cloneEvent);
     const limit = query?.limit;
     if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
       return matched.slice(0, limit);
@@ -413,7 +414,7 @@ export class MemoryAuthorityStore
   }
 
   allEvents(): readonly EventRecord[] {
-    return this.events.map((event) => ({ ...event }));
+    return this.events.map(cloneEvent);
   }
 
   async repointContentHash(input: RepointContentInput): Promise<number> {
@@ -484,7 +485,17 @@ export class MemoryAuthorityStore
   private addEvent(
     input: SourceIdentity &
       Pick<EventRecord, "operation" | "occurred_at"> &
-      Partial<Pick<EventRecord, "id" | "content_hash" | "parent_event_id">>,
+      Partial<
+        Pick<
+          EventRecord,
+          | "id"
+          | "content_hash"
+          | "parent_event_id"
+          | "thread_id"
+          | "actor_id"
+          | "required_scope_ids"
+        >
+      >,
   ): EventRecord {
     const event: EventRecord = {
       id: input.id ?? `event-${this.nextId++}`,
@@ -494,6 +505,11 @@ export class MemoryAuthorityStore
       operation: input.operation,
       content_hash: input.content_hash,
       parent_event_id: input.parent_event_id,
+      thread_id: input.thread_id,
+      actor_id: input.actor_id,
+      required_scope_ids: input.required_scope_ids
+        ? [...input.required_scope_ids]
+        : undefined,
       occurred_at: input.occurred_at,
       ingested_at: new Date().toISOString(),
     };
@@ -510,4 +526,13 @@ export class MemoryAuthorityStore
       throw new AuthorityConflictError();
     }
   }
+}
+
+function cloneEvent(event: EventRecord): EventRecord {
+  return {
+    ...event,
+    ...(event.required_scope_ids
+      ? { required_scope_ids: [...event.required_scope_ids] }
+      : {}),
+  };
 }

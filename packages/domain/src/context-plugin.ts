@@ -6,6 +6,14 @@ import {
 } from "./context-registry";
 import "./plugin-services";
 
+export const contextRegistriesPlugin = definePlugin({
+  name: "context-registries",
+  apply(ctx) {
+    ctx.provide("context-projectors", new MemoryContextProjectorRegistry());
+    ctx.provide("context-retrievers", new MemoryContextRetrieverRegistry());
+  },
+});
+
 export const contextRuntimePlugin = definePlugin({
   name: "context-runtime",
   apply(ctx) {

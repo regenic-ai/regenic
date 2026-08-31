@@ -359,6 +359,15 @@ interface ContextPolicyEvaluator {
   canReplay(input: ContextReplayInput): Promise<boolean>;
 }
 
+interface ContextAuthorityReader {
+  openContextRead(orgId: string): Promise<{
+    read_epoch: string;
+    recorded_at: string;
+    events: Array<EventRecord & { content_media_type?: string }>;
+    lifecycle_heads: ContextLifecycleHead[];
+  }>;
+}
+
 interface ContextProjector {
   readonly id: string;
   readonly algorithm_version: string;
@@ -423,6 +432,12 @@ Authority adapter 必须返回验证每个 `(source, external_id)` 生命周期�
 任一返回 Event 的 `ingested_at`；一个 read 不能声明位于自身未来的完整 head。没有匹配
 head manifest 时，单独的 `lifecycle_complete` 不能构成充分边界。该约束与 as-of 覆盖规则
 共同定义 read 的闭合 recorded-time 窗口。
+
+Canonical ingestion 在 Event 事务中一并保存每个新 Event 的稳定 thread ID、actor ID 与
+source-scoped ACL 要求。SQLite reader 在同一个 read transaction 中返回这些字段、Blob media
+metadata、lifecycle head 与绑定内容的 read epoch。Evidence-source adapter 只通过已提交 Event
+给出的 hash 读取正文。缺少持久 ACL metadata 的旧 Event，以及无法从单一 create root 闭合
+生命周期的 identity，会整组排除，绝不能按公开数据处理。
 
 ## 7. 构建流程
 
@@ -497,6 +512,10 @@ PostgreSQL、pgvector、OpenSearch、Neo4j、Azure AI Search 和模型供应商�
 幂等；同一 projector generation 内的 checkpoint 只能单调前进。清理某个组织的 operational
 data 时，会在删除 Event 派生状态的同一事务中删除这些 Context 记录，同时保留 connector、
 executor 与 recipe 配置。
+
+Personal API host 在同一个 plugin 生命周期中挂载 authority-backed evidence source、确定性
+Event retriever、personal-owner policy 与 durable context engine。Replay 直接读取持久化的
+snapshot 和 bundle，不重新执行 source、retriever 或模型。
 
 ## 11. 优雅降级
 

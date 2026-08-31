@@ -8,6 +8,7 @@ import {
   canonicalContextJson,
   conversationId,
   formatInboxDigest,
+  hashCanonicalContext,
   headsScanQuery,
   isRecipeTriggerKind,
   isPullIntervalMs,
@@ -40,6 +41,8 @@ import type {
   ContextArtifact,
   ContextArtifactQuery,
   ContextArtifactStore,
+  ContextAuthorityRead,
+  ContextAuthorityReader,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
@@ -88,8 +91,15 @@ interface EventRow {
   operation: IngestOperation;
   content_hash: string | null;
   parent_event_id: string | null;
+  thread_id: string | null;
+  actor_id: string | null;
+  required_scope_ids_json: string | null;
   occurred_at: string;
   ingested_at: string;
+}
+
+interface ContextEventRow extends EventRow {
+  content_media_type: string | null;
 }
 
 interface DispositionRow {
@@ -219,7 +229,8 @@ const INBOX_COLUMNS = `
   d.event_id, d.org_id AS disposition_org_id, d.disposition, d.layer,
   d.reason_codes_json, d.score, d.decided_at,
   e.id, e.source, e.external_id, e.operation, e.content_hash,
-  e.parent_event_id, e.occurred_at, e.ingested_at
+  e.parent_event_id, e.thread_id, e.actor_id, e.required_scope_ids_json,
+  e.occurred_at, e.ingested_at
 `;
 
 interface InsertEventInput extends SourceIdentity {
@@ -231,6 +242,9 @@ interface InsertEventInput extends SourceIdentity {
   extra_blobs?: NewEvent["extra_blobs"];
   parent_event_id?: string;
   revision_id?: string;
+  thread_id?: string;
+  actor_id?: string;
+  required_scope_ids?: string[];
   occurred_at: string;
   expected_head_id: string | null;
 }
@@ -240,7 +254,13 @@ export interface SqliteOpenOptions {
 }
 
 export class SqliteAuthorityStore
-  implements AuthorityStore, ConnectorRuntimeStore, WorkStore, ExecutorStore, ContextArtifactStore
+  implements
+    AuthorityStore,
+    ConnectorRuntimeStore,
+    WorkStore,
+    ExecutorStore,
+    ContextArtifactStore,
+    ContextAuthorityReader
 {
   private readonly database: Database.Database;
   readonly readonly: boolean;
@@ -295,7 +315,8 @@ export class SqliteAuthorityStore
       .prepare(
         `
           SELECT id, org_id, source, external_id, operation, content_hash,
-                 parent_event_id, occurred_at, ingested_at
+               parent_event_id, thread_id, actor_id, required_scope_ids_json,
+               occurred_at, ingested_at
           FROM events WHERE org_id = ? AND id = ?
         `,
       )
@@ -337,13 +358,62 @@ export class SqliteAuthorityStore
       .prepare(
         `
           SELECT id, org_id, source, external_id, operation, content_hash,
-                 parent_event_id, occurred_at, ingested_at
+               parent_event_id, thread_id, actor_id, required_scope_ids_json,
+               occurred_at, ingested_at
           FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
           ${limit === undefined ? "" : "LIMIT ?"}
         `,
       )
       .all(...(limit === undefined ? params : [...params, limit])) as EventRow[];
     return rows.map((row) => this.toEvent(row));
+  }
+
+  async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
+    const read = this.database.transaction(() => {
+      const rows = this.database
+        .prepare(
+          `
+                 SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
+                   e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
+                   e.required_scope_ids_json, e.occurred_at, e.ingested_at,
+                   b.media_type AS content_media_type
+                 FROM events e
+                 LEFT JOIN blobs b ON b.content_hash = e.content_hash
+                 WHERE e.org_id = ?
+                 ORDER BY e.sequence ASC
+          `,
+        )
+             .all(orgId) as ContextEventRow[];
+      const lifecycleHeads = this.database
+        .prepare(
+          `
+            SELECT source, external_id, current_event_id AS head_event_id
+            FROM source_heads
+            WHERE org_id = ?
+            ORDER BY source ASC, external_id ASC
+          `,
+        )
+        .all(orgId) as ContextAuthorityRead["lifecycle_heads"];
+      const recordedAt = new Date().toISOString();
+      const events = rows.map((row) => ({
+        ...this.toEvent(row),
+        ...(row.content_media_type
+          ? { content_media_type: row.content_media_type }
+          : {}),
+      }));
+      return {
+        read_epoch: `authority:${hashCanonicalContext({
+          org_id: orgId,
+          recorded_at: recordedAt,
+          events,
+          lifecycle_heads: lifecycleHeads,
+        })}`,
+        recorded_at: recordedAt,
+        events,
+        lifecycle_heads: lifecycleHeads,
+      } satisfies ContextAuthorityRead;
+    });
+    return read.deferred();
   }
 
   async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
@@ -2210,7 +2280,8 @@ export class SqliteAuthorityStore
       .prepare(
         `
           SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
-                 e.content_hash, e.parent_event_id, e.occurred_at, e.ingested_at
+               e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
+               e.required_scope_ids_json, e.occurred_at, e.ingested_at
           FROM source_heads h
           JOIN events e ON e.id = h.current_event_id
           WHERE h.org_id = ? AND h.source = ? AND h.external_id = ?
@@ -2335,6 +2406,11 @@ export class SqliteAuthorityStore
       operation: input.operation,
       content_hash: input.content_hash,
       parent_event_id: input.parent_event_id,
+      thread_id: input.thread_id,
+      actor_id: input.actor_id,
+      required_scope_ids: input.required_scope_ids
+        ? [...input.required_scope_ids]
+        : undefined,
       occurred_at: input.occurred_at,
       ingested_at: new Date().toISOString(),
     };
@@ -2361,8 +2437,9 @@ export class SqliteAuthorityStore
         `
           INSERT INTO events (
             id, org_id, source, external_id, operation, content_hash,
-            parent_event_id, revision_id, occurred_at, ingested_at, thread_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            parent_event_id, revision_id, occurred_at, ingested_at, thread_id,
+            actor_id, required_scope_ids_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -2376,7 +2453,11 @@ export class SqliteAuthorityStore
         input.revision_id ?? null,
         event.occurred_at,
         event.ingested_at,
-        conversationId(event.source, event.external_id, event.id),
+        event.thread_id ?? conversationId(event.source, event.external_id, event.id),
+        event.actor_id ?? null,
+        event.required_scope_ids
+          ? JSON.stringify(event.required_scope_ids)
+          : null,
       );
     const headUpdate =
       input.expected_head_id === null
@@ -2625,6 +2706,9 @@ export class SqliteAuthorityStore
         operation: row.operation,
         content_hash: row.content_hash,
         parent_event_id: row.parent_event_id,
+        thread_id: row.thread_id,
+        actor_id: row.actor_id,
+        required_scope_ids_json: row.required_scope_ids_json,
         occurred_at: row.occurred_at,
         ingested_at: row.ingested_at,
       }),
@@ -2640,6 +2724,11 @@ export class SqliteAuthorityStore
       operation: row.operation,
       content_hash: row.content_hash ?? undefined,
       parent_event_id: row.parent_event_id ?? undefined,
+      thread_id: row.thread_id ?? undefined,
+      actor_id: row.actor_id ?? undefined,
+      required_scope_ids: row.required_scope_ids_json
+        ? (JSON.parse(row.required_scope_ids_json) as string[])
+        : undefined,
       occurred_at: row.occurred_at,
       ingested_at: row.ingested_at,
     };
