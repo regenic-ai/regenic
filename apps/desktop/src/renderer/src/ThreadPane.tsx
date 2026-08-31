@@ -19,7 +19,7 @@ import {
 } from "./forward-preview";
 import { nextMessageSelection, selectedInOrder } from "./message-selection";
 import type { CreateTarget } from "./inbox-drafts";
-import { MessageBody } from "./MessageBody";
+import { WorkResultCard } from "./WorkResultCard";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
 import { latestMessage, type InboxThread } from "./inbox";
@@ -327,10 +327,21 @@ export const ThreadPane = memo(function ThreadPane({
     }
   };
   const resultSummary = thread.work?.result_summary?.trim();
+  const conversationClosed = prompts.length === 0 && !thread.can_send;
   const needsDeliveryRetry = deliveryNeedsYou(thread.work?.delivery);
   const workHint =
     needsDeliveryRetry || !resultSummary ? workNextStepCopy(thread) : null;
   const heading = threadTitle(thread);
+  const workResult = resultSummary ? (
+    <WorkResultCard key={`${thread.id}:${resultSummary}`} text={resultSummary} />
+  ) : null;
+  const showComposerDock =
+    selectedIds.length > 0 ||
+    Boolean(forward) ||
+    Boolean(activityNote && prompts.length === 0) ||
+    prompts.length > 0 ||
+    canReply ||
+    Boolean(conversationClosed && resultSummary);
   const subLabel = thread.conversation_label || thread.label;
   const showSubLabel = Boolean(subLabel && subLabel !== heading);
   const canRun =
@@ -480,12 +491,7 @@ export const ThreadPane = memo(function ThreadPane({
             ) : null}
           </p>
           {workHint ? <p className="work-hint">{workHint}</p> : null}
-          {resultSummary ? (
-            <section className="work-result">
-              <p className="work-result-kicker">{t("work.result")}</p>
-              <MessageBody text={resultSummary} />
-            </section>
-          ) : null}
+          {!conversationClosed ? workResult : null}
         </div>
       </header>
       <ThreadMessageList
@@ -506,83 +512,82 @@ export const ThreadPane = memo(function ThreadPane({
         selecting={selectedIds.length > 0}
         onToggleSelect={toggleSelect}
       />
-      <div className="composer-dock">
-        {selectedIds.length > 0 && !forward ? (
-          <div className="selection-bar" role="toolbar" aria-label={t("thread.selectedCount", { count: selectedIds.length })}>
-            <span>{t("thread.selectedCount", { count: selectedIds.length })}</span>
-            <div className="selection-bar-actions">
-              <button type="button" className="ghost" onClick={copySelected}>
-                {t("thread.copySelected")}
-              </button>
-              <button
-                type="button"
-                className="primary"
-                disabled={selectedItems.length === 0}
-                onClick={() => openForwardItems(selectedItems, "messages")}
-              >
-                {t("thread.forwardSelected")}
-              </button>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => {
-                  selectedIdsRef.current = [];
-                  selectAnchorRef.current = null;
-                  setSelectedIds([]);
-                  setSelectAnchor(null);
-                }}
-              >
-                {t("thread.clearSelection")}
-              </button>
+      {showComposerDock ? (
+        <div className="composer-dock">
+          {selectedIds.length > 0 && !forward ? (
+            <div className="selection-bar" role="toolbar" aria-label={t("thread.selectedCount", { count: selectedIds.length })}>
+              <span>{t("thread.selectedCount", { count: selectedIds.length })}</span>
+              <div className="selection-bar-actions">
+                <button type="button" className="ghost" onClick={copySelected}>
+                  {t("thread.copySelected")}
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={selectedItems.length === 0}
+                  onClick={() => openForwardItems(selectedItems, "messages")}
+                >
+                  {t("thread.forwardSelected")}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    selectedIdsRef.current = [];
+                    selectAnchorRef.current = null;
+                    setSelectedIds([]);
+                    setSelectAnchor(null);
+                  }}
+                >
+                  {t("thread.clearSelection")}
+                </button>
+              </div>
             </div>
-          </div>
-        ) : null}
-        {forward ? (
-          <ForwardSheet
-            mode={forward.mode}
-            preview={forward.preview}
-            files={forward.files}
-            targets={pickerTargets}
-            sending={forwarding}
-            error={forwardError}
-            onPreviewChange={(text) =>
-              setForward((current) => (current ? { ...current, preview: text } : current))
-            }
-            onSend={submitForward}
-            onCancel={() => {
-              setForward(null);
-              setForwardError(null);
-            }}
-          />
-        ) : null}
-        {activityNote && prompts.length === 0 ? (
-          <p className="thread-activity">{activityNote}</p>
-        ) : null}
-        {prompts.length > 0 ? (
-          <ThreadPromptPanel
-            key={`${thread.id}:${prompts[0]?.prompt_id ?? "none"}`}
-            prompts={prompts}
-            submitting={sending}
-            error={sendError}
-            onAnswer={answerPrompt}
-          />
-        ) : (
-          <Composer
-            key={thread.id}
-            disabled={!canReply}
-            hint={
-              canReply
-                ? t("composer.sendTo", { name: heading })
-                : t("composer.unavailable")
-            }
-            quote={quote}
-            sending={sending}
-            error={sendError}
-            onCancelQuote={() => setQuote(null)}
-            onSend={send}
-          />
-        )}
-      </div>
+          ) : null}
+          {forward ? (
+            <ForwardSheet
+              mode={forward.mode}
+              preview={forward.preview}
+              files={forward.files}
+              targets={pickerTargets}
+              sending={forwarding}
+              error={forwardError}
+              onPreviewChange={(text) =>
+                setForward((current) => (current ? { ...current, preview: text } : current))
+              }
+              onSend={submitForward}
+              onCancel={() => {
+                setForward(null);
+                setForwardError(null);
+              }}
+            />
+          ) : null}
+          {activityNote && prompts.length === 0 ? (
+            <p className="thread-activity">{activityNote}</p>
+          ) : null}
+          {prompts.length > 0 ? (
+            <ThreadPromptPanel
+              key={`${thread.id}:${prompts[0]?.prompt_id ?? "none"}`}
+              prompts={prompts}
+              submitting={sending}
+              error={sendError}
+              onAnswer={answerPrompt}
+            />
+          ) : canReply ? (
+            <Composer
+              key={thread.id}
+              hint={t("composer.sendTo", { name: heading })}
+              quote={quote}
+              sending={sending}
+              error={sendError}
+              onCancelQuote={() => setQuote(null)}
+              onSend={send}
+            />
+          ) : conversationClosed && resultSummary && !forward ? (
+            workResult
+          ) : null}
+        </div>
+      ) : null}
     </article>
   );
 });

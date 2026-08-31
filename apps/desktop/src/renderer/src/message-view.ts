@@ -389,6 +389,58 @@ export function firstLine(text: string | undefined, max = 80): string {
   return `${clean.slice(0, Math.max(1, max - 1))}…`;
 }
 
+export type WorkResultTone = "ok" | "no" | "neutral";
+
+export function splitWorkResult(text: string): {
+  headline: string | null;
+  body: string;
+} {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { headline: null, body: "" };
+  }
+  const breakAt = trimmed.search(/\r?\n/);
+  if (breakAt === -1) {
+    return isWorkResultHeadline(trimmed)
+      ? { headline: trimmed, body: "" }
+      : { headline: null, body: trimmed };
+  }
+  const first = trimmed.slice(0, breakAt).trim();
+  const rest = trimmed.slice(breakAt + 1).trim();
+  if (isWorkResultHeadline(first)) {
+    return { headline: first, body: rest };
+  }
+  return { headline: null, body: trimmed };
+}
+
+export function workResultTone(headline: string | null | undefined): WorkResultTone {
+  if (!headline) {
+    return "neutral";
+  }
+  if (/reject|fail|denied|block|不通过|驳回|拒绝|未通过/i.test(headline)) {
+    return "no";
+  }
+  if (/approv|pass|accept|通过|核准|同意/i.test(headline)) {
+    return "ok";
+  }
+  return "neutral";
+}
+
+function isWorkResultHeadline(line: string): boolean {
+  if (!line || line.length > 32) {
+    return false;
+  }
+  if (
+    /^(approved|rejected|passed|failed|pass|fail|pending|skipped|blocked|denied)\b/i.test(
+      line,
+    ) ||
+    /^(通过|不通过|待定|驳回|核准|拒绝|未通过)\b/.test(line)
+  ) {
+    return true;
+  }
+  return line.length <= 24 && !/[.。;；!！?？]/.test(line);
+}
+
 export function threadTitle(thread: InboxThread): string {
   const custom = thread.title?.replace(/\s+/g, " ").trim();
   if (custom) {

@@ -28,6 +28,8 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "recipes.triggerPull"), "定时查看");
     assert.equal(translate("en", "recipes.triggerPush"), "On a new message");
     assert.equal(translate("en", "work.dead"), "Not sent");
+    assert.equal(translate("zh", "work.resultExpand"), "展开");
+    assert.equal(translate("en", "work.resultCollapse"), "Show less");
     assert.equal(translate("zh", "work.queued"), "发送中");
     assert.equal(translate("zh", "thread.retryDelivery"), "重新发送");
     assert.equal(translate("en", "thread.copy"), "Copy");

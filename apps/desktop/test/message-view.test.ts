@@ -18,7 +18,9 @@ import {
   threadTitle,
   parseRichBlocks,
   heldFollowUpCount,
+  splitWorkResult,
   workNextStepCopy,
+  workResultTone,
   workStatusLabel,
 } from "../src/renderer/src/message-view.ts";
 import type { InboxViewItem, ThreadActivity } from "../src/renderer/src/types.ts";
@@ -794,5 +796,30 @@ describe("rich message body", () => {
     assert.equal(table.type === "table" ? table.rows[0][1] : "", "2026年10月1日");
     assert.equal(list.type, "list");
     assert.equal(list.type === "list" ? list.items[0] : "", "职工医保参保仍是法定义务");
+  });
+});
+
+describe("work result card", () => {
+  it("lifts a short verdict line and colors approve/reject", () => {
+    assert.deepEqual(splitWorkResult("APPROVED\nH1 PASS: rider is outdoor"), {
+      headline: "APPROVED",
+      body: "H1 PASS: rider is outdoor",
+    });
+    assert.deepEqual(splitWorkResult("REJECTED\nH2 FAIL: stale videos"), {
+      headline: "REJECTED",
+      body: "H2 FAIL: stale videos",
+    });
+    assert.deepEqual(splitWorkResult("审核不通过：地区不符"), {
+      headline: "审核不通过：地区不符",
+      body: "",
+    });
+    assert.equal(
+      splitWorkResult("H1 PASS: a long first line without a verdict token").headline,
+      null,
+    );
+    assert.equal(workResultTone("APPROVED"), "ok");
+    assert.equal(workResultTone("REJECTED"), "no");
+    assert.equal(workResultTone("审核不通过：地区不符"), "no");
+    assert.equal(workResultTone("Pending"), "neutral");
   });
 });
