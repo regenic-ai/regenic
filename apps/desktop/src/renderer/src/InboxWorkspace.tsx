@@ -10,13 +10,11 @@ import {
 } from "./inbox";
 import type { CreateTarget } from "./inbox-drafts";
 import {
-  conversationKindLabel,
-  unitKindChip,
   listPreview,
-  threadFacetLabel,
+  threadFaceTags,
   threadTitle,
-  workStatusLabel,
 } from "./message-view";
+import { ThreadFaceTags } from "./ThreadFaceTags";
 import { useLocale } from "./LocaleContext";
 import {
   ChevronIcon,
@@ -402,11 +400,8 @@ function WorkRow({
   const latest = latestMessage(thread);
   const title = threadTitle(thread);
   const preview = listPreview(thread, title);
-  const facet = threadFacetLabel(thread.thread_facet);
+  const tags = threadFaceTags(thread);
   const { t } = useLocale();
-  const work = workStatusLabel(thread.work);
-  const kind = conversationKindLabel(thread.conversation_kind);
-  const unitKind = unitKindChip(thread);
   return (
     <div
       className={`item${selected ? " selected" : ""}${thread.pinned ? " pinned" : ""}${
@@ -482,17 +477,7 @@ function WorkRow({
           </div>
           <div className="item-meta">
             <span className="item-tags">
-              <span className={`channel-tag channel-${thread.channel}`}>
-                {thread.channel_label}
-              </span>
-              {unitKind ? <span className="kind-tag">{unitKind}</span> : null}
-              {kind ? <span className="kind-tag">{kind}</span> : null}
-              {facet ? <span className="kind-tag">{facet}</span> : null}
-              {work ? (
-                <span className={`kind-tag work-${thread.work?.status ?? ""}`}>
-                  {work}
-                </span>
-              ) : null}
+              <ThreadFaceTags tags={tags} />
             </span>
             {preview ? <div className="item-preview">{preview}</div> : null}
           </div>

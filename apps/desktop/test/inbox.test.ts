@@ -700,4 +700,86 @@ describe("prompt answers", () => {
     assert.deepEqual(both.mode.selected, ["A"]);
     assert.equal(both.mode.custom, "Also");
   });
+
+  it("prefers human description over machine option keys", async () => {
+    const {
+      optionPrimaryLabel,
+      optionSecondaryLabel,
+      shouldShowQuestionLegend,
+      decisionDisplayLabel,
+      promptTitleDisplay,
+      humanizePromptProse,
+      foldPromptDetail,
+    } = await import("../src/renderer/src/thread-prompts.ts");
+    assert.equal(
+      optionPrimaryLabel({
+        label: "SEND_AND_CLOSE",
+        description: "用 CRM scene 模板回邮后关单",
+      }),
+      "用 CRM scene 模板回邮后关单",
+    );
+    assert.equal(
+      optionSecondaryLabel({
+        label: "SEND_AND_CLOSE",
+        description: "用 CRM scene 模板回邮后关单",
+      }),
+      "SEND_AND_CLOSE",
+    );
+    assert.equal(
+      optionPrimaryLabel({
+        label: "leave_pending",
+        description: "不发信、不关单",
+      }),
+      "不发信、不关单",
+    );
+    assert.equal(optionPrimaryLabel({ label: "Allow" }), "Allow");
+    const t = (key: "prompt.approve" | "prompt.reject" | "prompt.confirmResult") =>
+      ({
+        "prompt.approve": "通过",
+        "prompt.reject": "驳回",
+        "prompt.confirmResult": "确认结果",
+      })[key];
+    assert.equal(decisionDisplayLabel("APPROVED", t), "通过");
+    assert.equal(decisionDisplayLabel("REJECTED", t), "驳回");
+    assert.equal(decisionDisplayLabel("Allow", t), "通过");
+    assert.equal(promptTitleDisplay("写回", t), "确认结果");
+    assert.equal(foldPromptDetail("approval"), true);
+    assert.equal(foldPromptDetail("choice"), false);
+    assert.equal(foldPromptDetail("plan_review"), false);
+    assert.equal(
+      humanizePromptProse(
+        "只改本订单内审（APPROVED / REJECTED）。不得 complete 关联运营任务。",
+        "zh",
+      ),
+      "只改本订单内审（通过 / 驳回）。不要结束关联运营任务。",
+    );
+    assert.equal(
+      humanizePromptProse("Do not complete related work.", "en"),
+      "Do not complete related work.",
+    );
+    assert.equal(
+      shouldShowQuestionLegend(
+        {
+          prompt_id: "p1",
+          presentation: "choice",
+          title: "邮件提报待审",
+          questions: [{ id: "q1", prompt: "根据工单正文判断…" }],
+        },
+        { id: "q1", prompt: "根据工单正文判断…" },
+      ),
+      true,
+    );
+    assert.equal(
+      shouldShowQuestionLegend(
+        {
+          prompt_id: "p1",
+          presentation: "choice",
+          title: "邮件提报待审",
+          questions: [{ id: "q1", prompt: "邮件提报待审" }],
+        },
+        { id: "q1", prompt: "邮件提报待审" },
+      ),
+      false,
+    );
+  });
 });

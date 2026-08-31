@@ -204,12 +204,7 @@ export function conversationKindLabel(kind: string | null | undefined): string |
   if (kind === "group") {
     return t("label.group");
   }
-  if (kind === "direct") {
-    return null;
-  }
-  if (kind && kind.trim()) {
-    return kind.trim();
-  }
+  // direct and raw kinds (e.g. "order") are not list faces — they only widen the row.
   return null;
 }
 
@@ -223,6 +218,65 @@ export function unitKindChip(thread: {
   }
   const id = thread.unit_kind?.trim();
   return id || null;
+}
+
+export type ThreadFaceTag =
+  | { key: "channel"; label: string; channel: string }
+  | { key: "unit"; label: string }
+  | { key: "conversation"; label: string }
+  | { key: "facet"; label: string }
+  | { key: "work"; label: string; status: string };
+
+/**
+ * Compact face chips for list + thread header.
+ * Drops raw conversation kinds and ticket-when-unit (e.g. order + 工单).
+ */
+export function threadFaceTags(thread: {
+  channel: string;
+  channel_label: string;
+  conversation_kind?: string | null;
+  thread_facet?: string | null;
+  unit_kind?: string | null;
+  unit_kind_label?: string | null;
+  work?:
+    | string
+    | {
+        status?: string;
+        delivery?: { status?: string; write_back?: string };
+      }
+    | null;
+}): ThreadFaceTag[] {
+  const tags: ThreadFaceTag[] = [
+    {
+      key: "channel",
+      label: thread.channel_label,
+      channel: thread.channel,
+    },
+  ];
+  const unit = unitKindChip(thread);
+  if (unit) {
+    tags.push({ key: "unit", label: unit });
+  }
+  const kind = conversationKindLabel(thread.conversation_kind);
+  if (kind) {
+    tags.push({ key: "conversation", label: kind });
+  }
+  const facet = thread.thread_facet;
+  if (facet === "agent") {
+    tags.push({ key: "facet", label: t("label.agent") });
+  } else if (facet === "ticket" && !unit) {
+    // Unit kind already says what kind of ticket this is.
+    tags.push({ key: "facet", label: t("label.ticket") });
+  }
+  const work = workStatusLabel(thread.work);
+  if (work) {
+    const status =
+      typeof thread.work === "string"
+        ? thread.work
+        : (thread.work?.status ?? "");
+    tags.push({ key: "work", label: work, status });
+  }
+  return tags;
 }
 
 const SENT_WAIT_MS = 30 * 60 * 1000;
