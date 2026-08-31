@@ -6,6 +6,7 @@ import {
   AuthorityConflictError,
   conversationId,
   formatInboxDigest,
+  headsScanQuery,
   isRecipeTriggerKind,
   isPullIntervalMs,
   isWorkDeliveryStatus,
@@ -275,15 +276,22 @@ export class SqliteAuthorityStore
       clauses.push("(ingested_at > ? OR (ingested_at = ? AND id > ?))");
       params.push(query.since, query.since, query.since_id ?? "");
     }
+    const limit =
+      typeof query?.limit === "number" &&
+      Number.isInteger(query.limit) &&
+      query.limit > 0
+        ? query.limit
+        : undefined;
     const rows = this.database
       .prepare(
         `
           SELECT id, org_id, source, external_id, operation, content_hash,
                  parent_event_id, occurred_at, ingested_at
           FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
+          ${limit === undefined ? "" : "LIMIT ?"}
         `,
       )
-      .all(...params) as EventRow[];
+      .all(...(limit === undefined ? params : [...params, limit])) as EventRow[];
     return rows.map((row) => this.toEvent(row));
   }
 
@@ -1847,11 +1855,12 @@ export class SqliteAuthorityStore
     const hiddenList = normalizeInboxListView(query?.list) === "hidden";
     const scoped = inboxScoped(query);
     if (query?.heads) {
+      const inner = headsScanQuery(query);
       if (hiddenList) {
-        return this.hiddenHeadsSql(orgId, query);
+        return this.hiddenHeadsSql(orgId, query, inner);
       }
-      const visible = this.inboxClauses(orgId, query, "any");
-      const current = this.inboxClauses(orgId, query, "current_work", {
+      const visible = this.inboxClauses(orgId, inner, "any");
+      const current = this.inboxClauses(orgId, inner, "current_work", {
         event: "e2",
         disposition: "d2",
       });
@@ -1861,6 +1870,7 @@ export class SqliteAuthorityStore
         current.clauses.push(notHiddenSql("e2"));
         current.params.push(orgId);
       }
+      const page = headsPageTail(query);
       return {
         sql: `
           SELECT * FROM (
@@ -1882,10 +1892,10 @@ export class SqliteAuthorityStore
                   AND ${isCurrentHeadSql("e2", "h2")}
               )
           ) ranked
-          WHERE rn = 1
-          ORDER BY occurred_at ASC, id ASC
+          ${page.whereSql}
+          ${page.orderSql}
         `,
-        params: [...visible.params, ...current.params],
+        params: [...visible.params, ...current.params, ...page.params],
       };
     }
     if (query?.siblings) {
@@ -1963,9 +1973,11 @@ export class SqliteAuthorityStore
   private hiddenHeadsSql(
     orgId: string,
     query?: InboxQuery,
+    inner: InboxQuery | undefined = headsScanQuery(query),
   ): { sql: string; params: unknown[] } {
-    const visible = this.inboxClauses(orgId, query, "any");
+    const visible = this.inboxClauses(orgId, inner, "any");
     const hidden = hiddenThreadIdSql(orgId);
+    const page = headsPageTail(query);
     return {
       sql: `
         SELECT * FROM (
@@ -1981,10 +1993,10 @@ export class SqliteAuthorityStore
             AND e.operation != 'tombstone'
             AND e.thread_id IN (${hidden.sql})
         ) ranked
-        WHERE rn = 1
-        ORDER BY occurred_at ASC, id ASC
+        ${page.whereSql}
+        ${page.orderSql}
       `,
-      params: [...visible.params, ...hidden.params],
+      params: [...visible.params, ...hidden.params, ...page.params],
     };
   }
 
@@ -2162,7 +2174,34 @@ export class SqliteAuthorityStore
 }
 
 function inboxUsesNewestFirst(query?: InboxQuery): boolean {
-  return Boolean(!query?.heads && normalizeInboxLimit(query?.limit));
+  return Boolean(normalizeInboxLimit(query?.limit));
+}
+
+function headsPageTail(query?: InboxQuery): {
+  whereSql: string;
+  orderSql: string;
+  params: unknown[];
+} {
+  const params: unknown[] = [];
+  let whereSql = "WHERE rn = 1";
+  if (query?.before) {
+    whereSql +=
+      " AND (occurred_at < ? OR (occurred_at = ? AND id < ?))";
+    params.push(query.before, query.before, query.before_id ?? "");
+  }
+  const limit = normalizeInboxLimit(query?.limit);
+  if (limit !== undefined) {
+    return {
+      whereSql,
+      orderSql: "ORDER BY occurred_at DESC, id DESC LIMIT ?",
+      params: [...params, limit],
+    };
+  }
+  return {
+    whereSql,
+    orderSql: "ORDER BY occurred_at ASC, id ASC",
+    params,
+  };
 }
 
 function isCurrentHeadSql(event = "e", heads = "h"): string {

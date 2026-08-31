@@ -7,6 +7,10 @@ export const THREAD_LOAD_OLDER_PX = 12;
 export const THREAD_LOAD_OLDER_REARM_PX = 80;
 export const THREAD_PAGE_SIZE = 50;
 export const THREAD_OPEN_PAGE_SIZE = 20;
+export const LIST_HEADS_PAGE_SIZE = 40;
+export const LIST_LOAD_MORE_PX = 80;
+export const LIST_LOAD_MORE_REARM_PX = 160;
+export const TRAY_HEADS_PAGE_SIZE = 8;
 
 export type InboxReuse = KeyedReuse<InboxViewItem>;
 
@@ -14,7 +18,7 @@ export function itemRevision(item: InboxViewItem): string {
   const body = item.event.content_hash ? "" : (item.body_text ?? "");
   return `${item.event.id}\t${item.event.content_hash ?? ""}\t${item.event.occurred_at}\t${
     item.title ?? ""
-  }\t${item.pinned ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
+  }\t${item.pinned ? "1" : "0"}\t${item.hidden ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
     item.conversation_label ?? ""
   }\t${item.channel_label ?? ""}\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}\t${
     item.unread ? "1" : "0"
@@ -152,6 +156,67 @@ export function olderInboxCursor(
     before: first.event.occurred_at,
     before_id: first.event.id,
   };
+}
+
+export function olderHeadsCursor(
+  items: InboxViewItem[],
+): { before: string; before_id: string } | null {
+  const oldest = oldestHead(items, false) ?? oldestHead(items, true);
+  if (!oldest) {
+    return null;
+  }
+  return {
+    before: oldest.event.occurred_at,
+    before_id: oldest.event.id,
+  };
+}
+
+function oldestHead(
+  items: InboxViewItem[],
+  allowPinned: boolean,
+): InboxViewItem | undefined {
+  let oldest: InboxViewItem | undefined;
+  for (const item of items) {
+    if (!allowPinned && item.pinned) {
+      continue;
+    }
+    if (
+      !oldest ||
+      isBeforeEvent(
+        item.event,
+        oldest.event.occurred_at,
+        oldest.event.id,
+      )
+    ) {
+      oldest = item;
+    }
+  }
+  return oldest;
+}
+
+export function appendHeadPages(
+  previous: InboxViewItem[],
+  older: InboxViewItem[],
+): InboxViewItem[] {
+  if (older.length === 0) {
+    return previous;
+  }
+  if (previous.length === 0) {
+    return older;
+  }
+  const have = new Set(previous.map((item) => item.thread_id));
+  const added = older.filter((item) => !have.has(item.thread_id));
+  return added.length === 0 ? previous : [...previous, ...added];
+}
+
+export function unpinnedHeadCount(items: InboxViewItem[]): number {
+  let count = 0;
+  for (const item of items) {
+    if (!item.pinned) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 export function hasOlderPage(
@@ -381,6 +446,34 @@ export function isStuckToEnd(node: {
 
 export function shouldRearmLoadOlder(scrollTop: number): boolean {
   return scrollTop > THREAD_LOAD_OLDER_REARM_PX;
+}
+
+export function shouldLoadMoreHeads(input: {
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  scrolledDown: boolean;
+  armed: boolean;
+}): boolean {
+  if (!input.hasOlder || input.loadingOlder) {
+    return false;
+  }
+  if (input.scrollHeight <= input.clientHeight + 1) {
+    return true;
+  }
+  const remaining =
+    input.scrollHeight - input.scrollTop - input.clientHeight;
+  return (
+    input.armed &&
+    input.scrolledDown &&
+    remaining <= LIST_LOAD_MORE_PX
+  );
+}
+
+export function shouldRearmLoadMoreHeads(remaining: number): boolean {
+  return remaining > LIST_LOAD_MORE_REARM_PX;
 }
 
 export function shouldLoadOlder(input: {

@@ -5,12 +5,77 @@ const {
   formatInboxDigest,
   headsByThread,
   inboxDigest,
+  inboxDigestEventOrPrefChanged,
+  parseInboxDigest,
   normalizeInboxLimit,
   selectInboxItems,
   summarizeInboxItems,
   takeRecentInboxItems,
   threadExternalIdLike,
 } = require("../dist");
+
+describe("inbox digest parse", () => {
+  it("round-trips ISO timestamps that contain colons", () => {
+    const digest = formatInboxDigest({
+      count: 3,
+      latest_at: "2026-08-23T00:00:01.000Z",
+      latest_id: "e2",
+      pref_count: 1,
+      pref_updated_at: "2026-08-23T00:01:00.000Z",
+      work_updated_at: "2026-08-23T00:02:00.000Z",
+      surface_generation: "dsh:inst-1:3",
+    });
+    assert.deepEqual(parseInboxDigest(digest), {
+      count: 3,
+      latest_at: "2026-08-23T00:00:01.000Z",
+      latest_id: "e2",
+      pref_count: 1,
+      pref_updated_at: "2026-08-23T00:01:00.000Z",
+      work_updated_at: "2026-08-23T00:02:00.000Z",
+      surface_generation: "dsh:inst-1:3",
+    });
+    assert.deepEqual(parseInboxDigest("0:::0:"), {
+      count: 0,
+      latest_at: "",
+      latest_id: "",
+      pref_count: 0,
+      pref_updated_at: "",
+      work_updated_at: "",
+      surface_generation: "",
+    });
+  });
+
+  it("treats a new ingest as an event change, not a surface-only bump", () => {
+    const previous = parseInboxDigest(
+      formatInboxDigest({
+        count: 1,
+        latest_at: "2026-08-23T00:00:00.000Z",
+        latest_id: "e1",
+        pref_count: 0,
+        pref_updated_at: "",
+      }),
+    );
+    const next = parseInboxDigest(
+      formatInboxDigest({
+        count: 1,
+        latest_at: "2026-08-23T00:00:01.000Z",
+        latest_id: "e2",
+        pref_count: 0,
+        pref_updated_at: "",
+        surface_generation: "dsh:1",
+      }),
+    );
+    assert.equal(inboxDigestEventOrPrefChanged(previous, next), true);
+    const surfaceOnly = parseInboxDigest(`${formatInboxDigest({
+      count: 1,
+      latest_at: "2026-08-23T00:00:00.000Z",
+      latest_id: "e1",
+      pref_count: 0,
+      pref_updated_at: "",
+    })}&s=dsh:2`);
+    assert.equal(inboxDigestEventOrPrefChanged(previous, surfaceOnly), false);
+  });
+});
 
 describe("inbox query helpers", () => {
   it("counts current work by conversation, not every event", () => {
@@ -274,6 +339,86 @@ describe("inbox query helpers", () => {
     assert.deepEqual(
       selectInboxItems(items, { heads: true, limit: 1 }).map((item) => item.event.id),
       ["e4"],
+    );
+  });
+
+  it("pages list heads by the face time, not every event", () => {
+    const items = [1, 2, 3].map((n) => ({
+      decision: { disposition: "current_work" },
+      event: {
+        id: `e${n}`,
+        org_id: "org",
+        source: "crm",
+        external_id: `order-${n}:1`,
+        occurred_at: `2026-08-23T00:0${n}:00.000Z`,
+        ingested_at: `2026-08-23T00:0${n}:00.000Z`,
+      },
+    }));
+    const recent = selectInboxItems(items, { heads: true, limit: 2 });
+    assert.deepEqual(
+      recent.map((item) => item.event.id),
+      ["e2", "e3"],
+    );
+    const older = selectInboxItems(items, {
+      heads: true,
+      before: recent[0].event.occurred_at,
+      before_id: recent[0].event.id,
+      limit: 2,
+    });
+    assert.deepEqual(
+      older.map((item) => item.event.id),
+      ["e1"],
+    );
+  });
+
+  it("does not keep a newer thread in an older heads page by using a stale sibling", () => {
+    const first = {
+      decision: { disposition: "current_work" },
+      event: {
+        id: "e1",
+        org_id: "org",
+        source: "crm",
+        external_id: "order-1:1",
+        occurred_at: "2026-08-23T00:01:00.000Z",
+        ingested_at: "2026-08-23T00:01:00.000Z",
+      },
+    };
+    const later = {
+      decision: { disposition: "current_work" },
+      event: {
+        id: "e2",
+        org_id: "org",
+        source: "crm",
+        external_id: "order-1:2",
+        occurred_at: "2026-08-23T00:03:00.000Z",
+        ingested_at: "2026-08-23T00:03:00.000Z",
+      },
+    };
+    const other = {
+      decision: { disposition: "current_work" },
+      event: {
+        id: "e3",
+        org_id: "org",
+        source: "crm",
+        external_id: "order-2:1",
+        occurred_at: "2026-08-23T00:02:00.000Z",
+        ingested_at: "2026-08-23T00:02:00.000Z",
+      },
+    };
+    const recent = selectInboxItems([first, later, other], { heads: true, limit: 1 });
+    assert.deepEqual(
+      recent.map((item) => item.event.id),
+      ["e2"],
+    );
+    const older = selectInboxItems([first, later, other], {
+      heads: true,
+      before: recent[0].event.occurred_at,
+      before_id: recent[0].event.id,
+      limit: 1,
+    });
+    assert.deepEqual(
+      older.map((item) => item.event.id),
+      ["e3"],
     );
   });
 });

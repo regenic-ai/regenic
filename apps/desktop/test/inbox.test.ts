@@ -4,6 +4,7 @@ import {
   groupInboxThreads,
   groupThreadsByAttention,
   evictThreadCache,
+  keepSelectedThreadId,
   latestInboundOf,
   markInboxThreadRead,
   messagesForAttentionAck,
@@ -11,6 +12,7 @@ import {
   openedThreadView,
   overlayThreadMessages,
   applyPrefOverlay,
+  resolveSelectedThread,
   resolveThreadAttention,
   sortInboxThreads,
   workThreadId,
@@ -136,6 +138,31 @@ function thread(input: {
     unread_count: 0,
   };
 }
+
+describe("opened conversation identity", () => {
+  it("keeps the current thread when the visible list no longer includes it", () => {
+    assert.equal(keepSelectedThreadId("feishu:open", "feishu:other"), "feishu:open");
+    assert.equal(keepSelectedThreadId(null, "feishu:first"), "feishu:first");
+    assert.equal(keepSelectedThreadId(null, null), null);
+  });
+
+  it("resolves an open thread from the catalog or the last held face", () => {
+    const open = thread({ id: "feishu:open" });
+    const other = thread({ id: "feishu:other" });
+    assert.equal(resolveSelectedThread("feishu:open", [other, open], null), open);
+    const held = { ...open, hidden: true };
+    assert.equal(
+      resolveSelectedThread("feishu:open", [other], held)?.id,
+      "feishu:open",
+    );
+    assert.equal(resolveSelectedThread("feishu:open", [other], null), null);
+    assert.equal(resolveSelectedThread(null, [open], open), null);
+    assert.equal(
+      resolveSelectedThread("feishu:open", [other], other),
+      null,
+    );
+  });
+});
 
 describe("workThreadId", () => {
   it("keeps a DSH session with colons on one thread for inbound and outbound", () => {

@@ -250,6 +250,15 @@ button {
   overflow: auto;
 }
 
+.list-more {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .list-section-label {
   position: sticky;
   top: 0;

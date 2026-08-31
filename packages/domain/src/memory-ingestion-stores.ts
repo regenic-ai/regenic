@@ -28,6 +28,7 @@ import {
 } from "./ingestion";
 import {
   eventThreadId,
+  headsScanQuery,
   matchesEventQuery,
   selectInboxItems,
   summarizeInboxItems,
@@ -144,9 +145,14 @@ export class MemoryAuthorityStore
     orgId: string,
     query?: EventListQuery,
   ): Promise<EventRecord[]> {
-    return this.events
+    const matched = this.events
       .filter((event) => matchesEventQuery(event, orgId, query))
       .map((event) => ({ ...event }));
+    const limit = query?.limit;
+    if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
+      return matched.slice(0, limit);
+    }
+    return matched;
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
@@ -166,7 +172,7 @@ export class MemoryAuthorityStore
       query?.heads ||
       normalizeInboxListView(query?.list) === "hidden";
     const items = useDecided
-      ? await this.decidedInbox(orgId, query)
+      ? await this.decidedInbox(orgId, headsScanQuery(query) ?? query)
       : this.currentWorkInbox(orgId);
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);

@@ -11,6 +11,7 @@ import {
   inboxDigest,
   isExecutorSysoutBody,
   headsByThread,
+  isBeforeEvent,
   isLocalOutboundId,
   isThreadStatusItem,
   parseConversationThread,
@@ -178,18 +179,258 @@ export interface InboxListQuery {
   before_id?: string;
   heads?: boolean;
   live?: boolean;
+  split?: boolean;
+  changed?: boolean;
+  since_digest?: string;
   thread_id?: string;
+  thread_ids?: string[];
   limit?: number;
   list?: string;
   locale?: CopyLocale;
 }
 
+export type InboxHeadsCursor = { before: string; before_id: string };
+
+export interface InboxHeadsPage {
+  pinned: InboxViewItem[];
+  live: InboxViewItem[];
+  active_work?: InboxViewItem[];
+  next_before: InboxHeadsCursor | null;
+  has_older: boolean;
+  patch?: boolean;
+  gone?: string[];
+}
+
+export const CHANGED_INBOX_EVENT_CAP = 200;
+export const CHANGED_INBOX_THREAD_CAP = 80;
+
+export function shouldSplitInboxHeads(query: InboxListQuery): boolean {
+  return query.heads === true && query.split === true && !query.thread_id;
+}
+
+export function shouldLoadChangedInboxHeads(query: InboxListQuery): boolean {
+  return (
+    query.heads === true &&
+    query.split === true &&
+    query.changed === true &&
+    Boolean(query.since_digest?.trim()) &&
+    !query.thread_id &&
+    !query.before
+  );
+}
+
+export function parseSinceInboxDigest(value: string): {
+  count: number;
+  latest_at: string;
+  latest_id: string;
+  pref_updated_at: string;
+} | null {
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const pref = peelInboxDigestTail(trimmed.split("&")[0] ?? "");
+  const prefCountSep = pref.head.lastIndexOf(":");
+  if (prefCountSep < 0) {
+    return null;
+  }
+  const prefCount = Number(pref.head.slice(prefCountSep + 1));
+  const left = pref.head.slice(0, prefCountSep);
+  const countSep = left.indexOf(":");
+  if (countSep < 0) {
+    return null;
+  }
+  const count = Number(left.slice(0, countSep));
+  const middle = left.slice(countSep + 1);
+  const idSep = middle.lastIndexOf(":");
+  if (idSep < 0) {
+    return null;
+  }
+  const latestAt = middle.slice(0, idSep);
+  if (!latestAt) {
+    return null;
+  }
+  if (!Number.isInteger(count) || count < 0) {
+    return null;
+  }
+  if (!Number.isInteger(prefCount) || prefCount < 0) {
+    return null;
+  }
+  return {
+    count,
+    latest_at: latestAt,
+    latest_id: middle.slice(idSep + 1),
+    pref_updated_at: pref.tail,
+  };
+}
+
+function peelInboxDigestTail(base: string): { head: string; tail: string } {
+  if (base.endsWith(":")) {
+    return { head: base.slice(0, -1), tail: "" };
+  }
+  const iso = base.match(
+    /^(.*):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/,
+  );
+  if (iso) {
+    return { head: iso[1] ?? "", tail: iso[2] ?? "" };
+  }
+  const last = base.lastIndexOf(":");
+  if (last < 0) {
+    return { head: "", tail: base };
+  }
+  return { head: base.slice(0, last), tail: base.slice(last + 1) };
+}
+
+export function shouldFallbackChangedInboxHeads(collected: {
+  ids: readonly string[];
+  tooMany: boolean;
+  countChanged?: boolean;
+}): boolean {
+  return (
+    collected.tooMany ||
+    (collected.ids.length === 0 && collected.countChanged === true)
+  );
+}
+
+export function collectChangedInboxThreadIds(input: {
+  events: Array<{ source: string; external_id: string; id: string }>;
+  prefs: Array<{ thread_id: string; updated_at: string }>;
+  prefSince: string;
+}): { ids: string[]; tooMany: boolean } {
+  if (input.events.length >= CHANGED_INBOX_EVENT_CAP) {
+    return { ids: [], tooMany: true };
+  }
+  const ids = new Set<string>();
+  for (const event of input.events) {
+    ids.add(conversationId(event.source, event.external_id, event.id));
+  }
+  for (const pref of input.prefs) {
+    if (!input.prefSince || pref.updated_at > input.prefSince) {
+      ids.add(pref.thread_id);
+    }
+  }
+  const list = [...ids];
+  return { ids: list, tooMany: list.length > CHANGED_INBOX_THREAD_CAP };
+}
+
+export function splitChangedInboxHeads<
+  T extends { thread_id?: string; pinned?: boolean; hidden?: boolean },
+>(input: {
+  views: T[];
+  collectedIds: readonly string[];
+  prefs: Array<{ thread_id: string; hidden?: boolean }>;
+  workIds: readonly string[];
+  list?: string;
+}): {
+  pinned: T[];
+  live: T[];
+  active_work: T[];
+  gone: string[];
+} {
+  const hiddenList = normalizeInboxListView(input.list) === "hidden";
+  const work = new Set(input.workIds);
+  const loaded = new Set<string>();
+  const kept: T[] = [];
+  for (const item of input.views) {
+    const id = item.thread_id?.trim();
+    if (!id) {
+      continue;
+    }
+    loaded.add(id);
+    if (item.hidden === hiddenList) {
+      kept.push(item);
+    }
+  }
+  const returned = new Set(
+    kept.flatMap((item) => (item.thread_id ? [item.thread_id] : [])),
+  );
+  const hiddenByPref = new Map(
+    input.prefs.map((pref) => [pref.thread_id, pref.hidden] as const),
+  );
+  return {
+    pinned: kept.filter((item) => item.pinned),
+    live: kept.filter(
+      (item) => !item.pinned && !work.has(item.thread_id ?? ""),
+    ),
+    active_work: hiddenList
+      ? []
+      : kept.filter(
+          (item) => !item.pinned && work.has(item.thread_id ?? ""),
+        ),
+    gone: input.collectedIds.filter((id) => {
+      if (returned.has(id)) {
+        return false;
+      }
+      if (loaded.has(id)) {
+        return true;
+      }
+      const prefHidden = hiddenByPref.get(id);
+      if (prefHidden === true && !hiddenList) {
+        return true;
+      }
+      if (prefHidden === false && hiddenList) {
+        return true;
+      }
+      return false;
+    }),
+  };
+}
+
+export function headsNextBefore(
+  live: Array<{ event: { occurred_at: string; id: string } }>,
+): InboxHeadsCursor | null {
+  let oldest: { occurred_at: string; id: string } | undefined;
+  for (const item of live) {
+    if (!oldest || isBeforeEvent(item.event, oldest.occurred_at, oldest.id)) {
+      oldest = item.event;
+    }
+  }
+  return oldest
+    ? { before: oldest.occurred_at, before_id: oldest.id }
+    : null;
+}
+
+export function splitInboxHeadViews(
+  views: InboxViewItem[],
+  input: {
+    liveIds: readonly string[];
+    pinnedIds: readonly string[];
+    workIds: readonly string[];
+    liveCount: number;
+    limit?: number;
+  },
+): InboxHeadsPage {
+  const byId = new Map<string, InboxViewItem>();
+  for (const view of views) {
+    if (view.thread_id) {
+      byId.set(view.thread_id, view);
+    }
+  }
+  const take = (ids: readonly string[]) =>
+    ids.flatMap((id) => {
+      const item = byId.get(id);
+      return item ? [item] : [];
+    });
+  const live = take(input.liveIds);
+  return {
+    pinned: take(input.pinnedIds),
+    live,
+    active_work: take(input.workIds),
+    next_before: headsNextBefore(live),
+    has_older:
+      typeof input.limit === "number" && input.liveCount >= input.limit,
+  };
+}
+
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
-  // Feishu read_users only on `live=1`. Heads still need read_status for list
-  // dots. Open, since, and older pages stay on SQLite so switching chats does
-  // not wait on lark-cli.
-  if (query.live || query.heads) {
+  // Feishu read_users only on `live=1`. The first heads page still needs
+  // read_status for list dots. Older list pages, open, and since stay on
+  // SQLite so scrolling the list or switching chats does not wait on lark-cli.
+  if (query.live) {
     return false;
+  }
+  if (query.heads) {
+    return Boolean(query.before);
   }
   return Boolean(query.thread_id);
 }
@@ -236,11 +477,21 @@ export class PersonalInboxService {
     private readonly executors: PersonalExecutorService,
   ) {}
 
-  async listInbox(query: InboxListQuery = {}): Promise<InboxViewItem[]> {
-    return this.loadThreadInbox({
+  async listInbox(
+    query: InboxListQuery & { split: true },
+  ): Promise<InboxHeadsPage>;
+  async listInbox(query?: InboxListQuery): Promise<InboxViewItem[]>;
+  async listInbox(
+    query: InboxListQuery = {},
+  ): Promise<InboxViewItem[] | InboxHeadsPage> {
+    const normalized = {
       ...query,
       limit: normalizeInboxLimit(query.limit),
-    });
+    };
+    if (shouldLoadChangedInboxHeads(normalized)) {
+      return this.loadChangedInboxHeads(normalized);
+    }
+    return this.loadThreadInbox(normalized);
   }
 
   async getInboxItem(
@@ -447,9 +698,86 @@ export class PersonalInboxService {
     return result;
   }
 
+  private async loadChangedInboxHeads(
+    query: InboxListQuery,
+  ): Promise<InboxHeadsPage> {
+    const previous = parseSinceInboxDigest(query.since_digest ?? "");
+    if (!previous?.latest_at) {
+      return this.loadThreadInbox({
+        ...query,
+        changed: false,
+        since_digest: undefined,
+      }) as Promise<InboxHeadsPage>;
+    }
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const events = await authority.listEvents(orgId, {
+      since: previous.latest_at,
+      since_id: previous.latest_id,
+      limit: CHANGED_INBOX_EVENT_CAP,
+    });
+    const prefs = await authority.listConversationPrefs(orgId);
+    const collected = collectChangedInboxThreadIds({
+      events,
+      prefs,
+      prefSince: previous.pref_updated_at,
+    });
+    const countChanged =
+      collected.ids.length === 0 && !collected.tooMany
+        ? (await authority.summarizeInbox(orgId)).count !== previous.count
+        : false;
+    if (shouldFallbackChangedInboxHeads({ ...collected, countChanged })) {
+      return this.loadThreadInbox({
+        ...query,
+        changed: false,
+        since_digest: undefined,
+      }) as Promise<InboxHeadsPage>;
+    }
+    if (collected.ids.length === 0) {
+      return {
+        pinned: [],
+        live: [],
+        next_before: null,
+        has_older: false,
+        patch: true,
+        gone: [],
+      };
+    }
+    const workIds =
+      normalizeInboxListView(query.list) === "hidden"
+        ? []
+        : [...(await this.work.activeSessionIds())];
+    const loadIds = [...new Set([...collected.ids, ...workIds])];
+    const views = (await this.loadThreadInbox({
+      ...query,
+      split: false,
+      changed: false,
+      since_digest: undefined,
+      thread_id: undefined,
+      thread_ids: loadIds,
+      before: undefined,
+      before_id: undefined,
+      limit: undefined,
+    })) as InboxViewItem[];
+    const split = splitChangedInboxHeads({
+      views,
+      collectedIds: collected.ids,
+      prefs,
+      workIds,
+      list: query.list,
+    });
+    return {
+      ...split,
+      next_before: headsNextBefore(split.live),
+      has_older: false,
+      patch: true,
+    };
+  }
+
   private async loadThreadInbox(
     query: InboxListQuery = {},
-  ): Promise<InboxViewItem[]> {
+  ): Promise<InboxViewItem[] | InboxHeadsPage> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const blobs = host.get("blobs");
@@ -469,6 +797,8 @@ export class PersonalInboxService {
         : authority.listConversationPrefs(orgId),
       query.heads === true &&
       !query.thread_id &&
+      !query.thread_ids?.length &&
+      !query.before &&
       normalizeInboxListView(query.list) !== "hidden"
         ? this.work.activeSessionIds()
         : Promise.resolve(new Set<string>()),
@@ -476,13 +806,29 @@ export class PersonalInboxService {
     const prefsByThread = new Map(
       prefs.map((pref) => [pref.thread_id, pref] as const),
     );
-    let selected = selectInboxRecords(records, query);
-    if (jobSessions.size > 0) {
-      const have = new Set(
-        selected.map((item) =>
-          conversationId(item.event.source, item.event.external_id, item.event.id),
-        ),
+    const liveSelected = selectInboxRecords(records, query);
+    const liveIds = liveSelected.map(inboxItemThreadId);
+    let pinnedSelected: InboxItem[] = [];
+    if (
+      query.heads === true &&
+      !query.thread_id &&
+      !query.before &&
+      query.limit
+    ) {
+      pinnedSelected = await pinnedInboxHeadExtras(
+        liveSelected,
+        prefs,
+        query,
+        orgId,
+        authority,
       );
+    }
+    let workSelected: InboxItem[] = [];
+    if (jobSessions.size > 0) {
+      const have = new Set([
+        ...liveIds,
+        ...pinnedSelected.map(inboxItemThreadId),
+      ]);
       const hiddenPrefIds = new Set(
         prefs.filter((pref) => pref.hidden).map((pref) => pref.thread_id),
       );
@@ -494,9 +840,12 @@ export class PersonalInboxService {
           siblings: true,
           thread_ids: missing,
         });
-        selected = [...selected, ...headsByThread(extras)];
+        workSelected = headsByThread(extras);
       }
     }
+    const selected = [...pinnedSelected, ...liveSelected, ...workSelected];
+    const pinnedIds = pinnedSelected.map(inboxItemThreadId);
+    const workIds = workSelected.map(inboxItemThreadId);
     const attachments = query.heads ? "meta" : "preview";
     const bodies = await resolveInboxBodies(
       authority,
@@ -669,9 +1018,20 @@ export class PersonalInboxService {
         return titled;
       },
     );
-    return query.heads === true
-      ? views
-      : projectForwardedTo(views, this.drivers, query.locale);
+    const projected =
+      query.heads === true
+        ? views
+        : projectForwardedTo(views, this.drivers, query.locale);
+    if (shouldSplitInboxHeads(query)) {
+      return splitInboxHeadViews(projected, {
+        liveIds,
+        pinnedIds,
+        workIds,
+        liveCount: liveSelected.length,
+        limit: query.limit,
+      });
+    }
+    return projected;
   }
 
   async updateConversationPrefs(
@@ -1280,6 +1640,38 @@ function parseThreadQuery(
   }
 }
 
+async function pinnedInboxHeadExtras(
+  selected: InboxItem[],
+  prefs: ConversationPref[],
+  query: InboxListQuery,
+  orgId: string,
+  authority: AuthorityStore,
+): Promise<InboxItem[]> {
+  const hidden = normalizeInboxListView(query.list) === "hidden";
+  const have = new Set(selected.map(inboxItemThreadId));
+  const missing = prefs
+    .filter(
+      (pref) =>
+        pref.pinned &&
+        (hidden ? pref.hidden : !pref.hidden) &&
+        !have.has(pref.thread_id),
+    )
+    .map((pref) => pref.thread_id);
+  if (missing.length === 0) {
+    return [];
+  }
+  const extras = await authority.listInbox(orgId, {
+    heads: true,
+    list: normalizeInboxListView(query.list),
+    thread_ids: missing,
+  });
+  return extras.length === 0 ? [] : headsByThread(extras);
+}
+
+function inboxItemThreadId(item: InboxItem): string {
+  return conversationId(item.event.source, item.event.external_id, item.event.id);
+}
+
 export function selectInboxRecords<T extends { event: EventRecord }>(
   items: T[],
   query: InboxListQuery,
@@ -1319,16 +1711,19 @@ export function inboxStoreQuery(
   thread?: ConversationThread,
 ): InboxQuery {
   if (query.heads) {
-    return thread
-      ? {
-          heads: true,
-          list: normalizeInboxListView(query.list),
-          thread_ids: [`${thread.source}:${thread.target}`],
-        }
-      : {
-          heads: true,
-          list: normalizeInboxListView(query.list),
-        };
+    const threadIds = query.thread_ids?.length
+      ? query.thread_ids
+      : thread
+        ? [`${thread.source}:${thread.target}`]
+        : undefined;
+    return {
+      heads: true,
+      list: normalizeInboxListView(query.list),
+      before: threadIds ? undefined : query.before,
+      before_id: threadIds ? undefined : query.before_id,
+      limit: threadIds ? undefined : query.limit,
+      ...(threadIds ? { thread_ids: threadIds } : {}),
+    };
   }
   if (query.thread_id && thread) {
     return {

@@ -5,6 +5,7 @@ import {
   currentApiOrigin,
   fetchEngine,
   fetchInbox,
+  fetchInboxHeads,
   fetchUiPrefs,
   dismissWorkItem,
   runWorkItem,
@@ -17,18 +18,16 @@ import { engineRevision } from "./console-refresh";
 import { EnginePage } from "./EnginePage";
 import { engineChip, memoryWatchCopy } from "./format";
 import {
-  applyPrefOverlay,
   evictThreadCache,
   groupInboxThreads,
+  keepSelectedThreadId,
   latestInboundOf,
   markInboxThreadRead,
   messagesForAttentionAck,
   openedThreadView,
   orderThreadMessages,
-  overlayThreadMessages,
-  prunePrefOverlay,
+  resolveSelectedThread,
   sortInboxThreads,
-  type ConversationPrefOverlay,
   type InboxThread,
 } from "./inbox";
 import {
@@ -48,15 +47,27 @@ import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
 import {
+  InboxListStore,
+  isActivePrefWrite,
+  type InboxListFact,
+  type InboxListSnapshot,
+} from "./inbox-list-store.ts";
+import {
+  decideInboxSync,
+  inboxHeadsFact,
+  inboxHeadsRequest,
+  nextInboxSyncClocks,
+} from "./inbox-list-sync.ts";
+import {
   hasOlderPage,
   inboxCursor,
   mergeInboxDelta,
   mergeOlderInbox,
   olderInboxCursor,
   mergeRecentInbox,
-  reuseInboxList,
   patchInboxWork,
   shouldFetchInboxDelta,
+  LIST_HEADS_PAGE_SIZE,
   THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
   type InboxReuse,
@@ -75,7 +86,6 @@ import type {
 
 const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
-const FULL_REFRESH_MS = 45_000;
 const HOST_POLL_MS = 5000;
 const OPEN_RETRY_MS = 350;
 const OPEN_RETRIES = 5;
@@ -99,17 +109,14 @@ export function ConsoleApp() {
   const [hasOlderByThread, setHasOlderByThread] = useState<Record<string, boolean>>(
     {},
   );
-  const [prefOverlay, setPrefOverlay] = useState<Record<string, ConversationPrefOverlay>>(
-    {},
-  );
+  const [hasOlderHeads, setHasOlderHeads] = useState(false);
+  const [loadingOlderHeads, setLoadingOlderHeads] = useState(false);
   const [host, setHost] = useState<HostStats | null>(null);
   const [sortMode, setSortMode] = useState<InboxSortMode>("normal");
   const [listView, setListView] = useState<InboxListView>("shown");
   const [recipeSeed, setRecipeSeed] = useState<RecipeSeed | null>(null);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
-  const prefOverlayRef = useRef(prefOverlay);
-  prefOverlayRef.current = prefOverlay;
   const inboxRef = useRef(inbox);
   inboxRef.current = inbox;
   const messagesRef = useRef(messagesByThread);
@@ -130,6 +137,10 @@ export function ConsoleApp() {
   const olderBusyRef = useRef(new Set<string>());
   const hasOlderRef = useRef(hasOlderByThread);
   hasOlderRef.current = hasOlderByThread;
+  const hasOlderHeadsRef = useRef(hasOlderHeads);
+  hasOlderHeadsRef.current = hasOlderHeads;
+  const headsBusyRef = useRef(false);
+  const listStoreRef = useRef(new InboxListStore());
   const threadLoadSeq = useRef<Record<string, number>>({});
   const lastReceiptAt = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
@@ -138,31 +149,36 @@ export function ConsoleApp() {
   const listViewRef = useRef(listView);
   listViewRef.current = listView;
   const lastFetchedListRef = useRef<InboxListView>("shown");
+  const prefWritesRef = useRef(new Map<string, Promise<void>>());
+  const selectedThreadRef = useRef<InboxThread | null>(null);
 
-  const applyHeads = (nextHeads: InboxViewItem[]) => {
-    const reused = reuseInboxList(inboxRef.current, nextHeads);
-    reuseHintRef.current = reused;
-    if (reused.same) {
+  const commitHeads = async (fact: InboxListFact) => {
+    publishHeads(await listStoreRef.current.enqueue(fact));
+  };
+
+  const publishHeads = (snap: InboxListSnapshot) => {
+    reuseHintRef.current = snap.reuse;
+    inboxRef.current = snap.items;
+    setHasOlderHeads(snap.hasOlder);
+    if (snap.reuse.same) {
       return;
     }
-    setInbox(reused.items);
-    const synced = groupInboxThreads(reused.items, groupedRef.current, reused);
+    setInbox(snap.items);
+    const synced = groupInboxThreads(snap.items, groupedRef.current, snap.reuse);
     groupedRef.current = synced;
-    groupedInboxRef.current = reused.items;
-    setPrefOverlay((current) => prunePrefOverlay(current, synced));
+    groupedInboxRef.current = snap.items;
     const nextDrafts = draftsRef.current.filter(
       (draft) => !synced.some((thread) => thread.id === draft.thread_id),
     );
     setDrafts((current) =>
       nextDrafts.length === current.length ? current : nextDrafts,
     );
-    setSelectedId((current) => {
-      const nextThreads = mergeDraftThreads(synced, nextDrafts);
-      if (current && nextThreads.some((thread) => thread.id === current)) {
-        return current;
-      }
-      return nextThreads[0]?.id ?? null;
-    });
+    setSelectedId((current) =>
+      keepSelectedThreadId(
+        current,
+        mergeDraftThreads(synced, nextDrafts)[0]?.id ?? null,
+      ),
+    );
   };
 
   const ensureThread = async (threadId: string, mode: "open" | "poll") => {
@@ -360,6 +376,46 @@ export function ConsoleApp() {
     }
   };
 
+  const loadOlderHeads = async () => {
+    if (headsBusyRef.current || hasOlderHeadsRef.current === false) {
+      return;
+    }
+    const cursor = listStoreRef.current.cursor;
+    if (!cursor) {
+      setHasOlderHeads(false);
+      return;
+    }
+    headsBusyRef.current = true;
+    setLoadingOlderHeads(true);
+    const epoch = workspaceEpoch.current;
+    const token = listStoreRef.current.token;
+    const requested = listViewRef.current;
+    try {
+      const page = await fetchInboxHeads({
+        list: requested,
+        before: cursor.before,
+        before_id: cursor.before_id,
+        limit: LIST_HEADS_PAGE_SIZE,
+      });
+      if (
+        workspaceEpoch.current !== epoch ||
+        listViewRef.current !== requested ||
+        !listStoreRef.current.acceptsPage(token)
+      ) {
+        return;
+      }
+      await commitHeads({
+        kind: "olderLoaded",
+        items: page.live,
+        nextBefore: page.next_before,
+        hasOlder: page.has_older,
+      });
+    } finally {
+      headsBusyRef.current = false;
+      setLoadingOlderHeads(false);
+    }
+  };
+
   const rememberThreadMessages = (
     prev: Record<string, InboxViewItem[]>,
     threadId: string,
@@ -404,29 +460,65 @@ export function ConsoleApp() {
           continue;
         }
         const digest = nextEngine.inbox_digest ?? "";
-        const now = Date.now();
         const requested = listViewRef.current;
-        const skipHeads =
-          requested === lastFetchedListRef.current &&
-          digest.length > 0 &&
-          digest === inboxDigestRef.current &&
-          inboxRef.current.length > 0 &&
-          now - lastFullRef.current < FULL_REFRESH_MS;
-        if (!skipHeads) {
-          const heads = await fetchInbox({
-            heads: true,
-            list: requested,
-          });
+        const decision = decideInboxSync({
+          requestedList: requested,
+          lastFetchedList: lastFetchedListRef.current,
+          digest,
+          previousDigest: inboxDigestRef.current,
+          storeSize: listStoreRef.current.size,
+          now: Date.now(),
+          lastFullAt: lastFullRef.current,
+        });
+        if (decision.mode !== "skip") {
+          const token = listStoreRef.current.token;
+          const page = await fetchInboxHeads(
+            inboxHeadsRequest({
+              decision,
+              list: requested,
+              pageSize: LIST_HEADS_PAGE_SIZE,
+              previousDigest: inboxDigestRef.current,
+            }),
+          );
           if (workspaceEpoch.current !== epoch) {
             continue;
           }
           if (listViewRef.current !== requested) {
             continue;
           }
-          applyHeads(heads);
-          lastFetchedListRef.current = requested;
-          inboxDigestRef.current = digest || inboxDigestRef.current;
-          lastFullRef.current = Date.now();
+          if (!listStoreRef.current.acceptsList(token)) {
+            continue;
+          }
+          const fact = inboxHeadsFact({
+            decision,
+            page,
+            list: requested,
+            pageSize: LIST_HEADS_PAGE_SIZE,
+          });
+          await commitHeads(fact);
+          if (
+            workspaceEpoch.current !== epoch ||
+            listViewRef.current !== requested ||
+            !listStoreRef.current.acceptsList(token)
+          ) {
+            continue;
+          }
+          const clocks = nextInboxSyncClocks(
+            {
+              digest: inboxDigestRef.current,
+              lastFullAt: lastFullRef.current,
+              lastFetchedList: lastFetchedListRef.current,
+            },
+            {
+              fact,
+              digest,
+              list: requested,
+              now: Date.now(),
+            },
+          );
+          inboxDigestRef.current = clocks.digest;
+          lastFullRef.current = clocks.lastFullAt;
+          lastFetchedListRef.current = clocks.lastFetchedList;
         }
         const openId = selectedIdRef.current;
         if (openId) {
@@ -445,7 +537,7 @@ export function ConsoleApp() {
         if (workspaceEpoch.current !== epoch) {
           continue;
         }
-        delayRef.current = skipHeads ? IDLE_POLL_MS : POLL_MS;
+        delayRef.current = decision.mode === "skip" ? IDLE_POLL_MS : POLL_MS;
         setEngine((current) => {
           const merged =
             current?.catalog?.length && !nextEngine.catalog?.length
@@ -472,6 +564,7 @@ export function ConsoleApp() {
     }
     inboxDigestRef.current = null;
     lastFullRef.current = 0;
+    listStoreRef.current.bumpList();
     loadedThreadsRef.current.clear();
     messagesRef.current = {};
     setMessagesByThread({});
@@ -498,13 +591,15 @@ export function ConsoleApp() {
     for (const id of openIds) {
       threadLoadSeq.current[id] = (threadLoadSeq.current[id] ?? 0) + 1;
     }
+    listStoreRef.current.reduce({ kind: "reset" });
     inboxRef.current = [];
     messagesRef.current = {};
     draftsRef.current = [];
     selectedIdRef.current = null;
-    prefOverlayRef.current = {};
+    selectedThreadRef.current = null;
     loadedThreadsRef.current.clear();
     olderBusyRef.current.clear();
+    headsBusyRef.current = false;
     inboxDigestRef.current = null;
     groupedRef.current = [];
     groupedInboxRef.current = null;
@@ -519,8 +614,9 @@ export function ConsoleApp() {
     setSelectedId(null);
     setOpeningId(null);
     setRecipeSeed(null);
-    setPrefOverlay({});
     setHasOlderByThread({});
+    setHasOlderHeads(false);
+    setLoadingOlderHeads(false);
     setThreadError({});
     refreshAgain.current = true;
     await refresh();
@@ -559,8 +655,14 @@ export function ConsoleApp() {
     };
   }, []);
 
+  const listReady = useRef(false);
   useEffect(() => {
     inboxDigestRef.current = null;
+    if (listReady.current) {
+      listStoreRef.current.bumpList();
+    }
+    listReady.current = true;
+    setHasOlderHeads(false);
     void refresh();
   }, [listView, refresh]);
 
@@ -628,7 +730,10 @@ export function ConsoleApp() {
         last_read_at: latest?.event.occurred_at ?? new Date().toISOString(),
         last_read_external_id: latest?.event.external_id ?? null,
       });
-      setInbox((current) => markInboxThreadRead(current, threadId));
+      await commitHeads({
+        kind: "headPatched",
+        items: markInboxThreadRead(listStoreRef.current.items, threadId),
+      });
       setMessagesByThread((current) => {
         const opened = current[threadId];
         if (!opened) {
@@ -642,7 +747,7 @@ export function ConsoleApp() {
     }
   };
 
-  const listThreads = useMemo(() => {
+  const catalogThreads = useMemo(() => {
     const grouped =
       groupedInboxRef.current === inbox
         ? groupedRef.current
@@ -650,31 +755,39 @@ export function ConsoleApp() {
     groupedRef.current = grouped;
     groupedInboxRef.current = inbox;
     return sortInboxThreads(
-      applyPrefOverlay(
-        applyOpenedAt(
-          mergeDraftThreads(grouped, listView === "shown" ? drafts : []),
-          openedAtRef.current,
-        ),
-        prefOverlay,
-      ).filter((thread) => (listView === "hidden" ? thread.hidden : !thread.hidden)),
+      applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
       sortMode,
     );
-  }, [inbox, drafts, prefOverlay, sortMode, listView]);
-  const threads = useMemo(
-    () => overlayThreadMessages(listThreads, messagesByThread),
-    [listThreads, messagesByThread],
+  }, [inbox, drafts, sortMode]);
+  const listThreads = useMemo(
+    () =>
+      catalogThreads.filter((thread) =>
+        listView === "hidden" ? thread.hidden : !thread.hidden,
+      ),
+    [catalogThreads, listView],
   );
   const selected = useMemo(() => {
-    const thread = threads.find((item) => item.id === selectedId) ?? null;
+    if (!selectedId) {
+      selectedThreadRef.current = null;
+      return null;
+    }
+    const hit = catalogThreads.find((thread) => thread.id === selectedId);
+    const thread = resolveSelectedThread(
+      selectedId,
+      hit ? [hit] : [],
+      selectedThreadRef.current,
+    );
     if (!thread) {
       return null;
     }
-    return openedThreadView(
+    const opened = openedThreadView(
       thread,
       messagesByThread[thread.id],
       openingId === thread.id,
     );
-  }, [threads, selectedId, messagesByThread, openingId]);
+    selectedThreadRef.current = opened;
+    return opened;
+  }, [catalogThreads, selectedId, messagesByThread, openingId]);
   const chip = engineChip(engine);
   const createTargets = createConversationTargets(engine);
 
@@ -776,42 +889,76 @@ export function ConsoleApp() {
     thread: InboxThread,
     patch: { title?: string | null; pinned?: boolean; hidden?: boolean },
   ) => {
-    const previous = prefOverlayRef.current[thread.id];
-    const optimistic: ConversationPrefOverlay = {
-      title: patch.title !== undefined ? patch.title : thread.title,
-      pinned: patch.pinned !== undefined ? patch.pinned : thread.pinned,
-      hidden: patch.hidden !== undefined ? patch.hidden : thread.hidden,
-      updated_at: new Date().toISOString(),
-    };
-    setPrefOverlay((current) => ({ ...current, [thread.id]: optimistic }));
-    try {
-      const saved = await updateConversationPrefs({
-        thread_id: thread.id,
-        ...patch,
+    const write = async () => {
+      const currentItem = listStoreRef.current.items.find(
+        (item) => item.thread_id === thread.id,
+      );
+      const previous = listStoreRef.current.prefOverlay(thread.id);
+      const base = currentItem ?? thread;
+      const optimistic = {
+        title: patch.title !== undefined ? patch.title : base.title,
+        pinned: patch.pinned !== undefined ? patch.pinned : Boolean(base.pinned),
+        hidden: patch.hidden !== undefined ? patch.hidden : Boolean(base.hidden),
+        updated_at: new Date().toISOString(),
+      };
+      await commitHeads({
+        kind: "prefPatched",
+        threadId: thread.id,
+        pref: optimistic,
       });
-      setPrefOverlay((current) => ({
-        ...current,
-        [thread.id]: {
-          title: saved.title,
-          pinned: saved.pinned,
-          hidden: saved.hidden,
-          updated_at: saved.updated_at,
-        },
-      }));
-      setError(null);
-    } catch (caught) {
-      setPrefOverlay((current) => {
-        const next = { ...current };
-        if (previous) {
-          next[thread.id] = previous;
-        } else {
-          delete next[thread.id];
+      try {
+        const saved = await updateConversationPrefs({
+          thread_id: thread.id,
+          ...patch,
+        });
+        if (
+          isActivePrefWrite(
+            listStoreRef.current.prefOverlay(thread.id),
+            optimistic.updated_at,
+          )
+        ) {
+          await commitHeads({
+            kind: "prefPatched",
+            threadId: thread.id,
+            pref: {
+              title: saved.title,
+              pinned: saved.pinned,
+              hidden: saved.hidden,
+              updated_at: saved.updated_at,
+            },
+          });
         }
-        return next;
-      });
-      setError(caught instanceof Error ? caught.message : "Cannot update conversation");
-      throw caught;
-    }
+        setError(null);
+      } catch (caught) {
+        if (
+          isActivePrefWrite(
+            listStoreRef.current.prefOverlay(thread.id),
+            optimistic.updated_at,
+          )
+        ) {
+          await commitHeads({
+            kind: "prefReverted",
+            threadId: thread.id,
+            previous,
+          });
+        }
+        setError(
+          caught instanceof Error ? caught.message : "Cannot update conversation",
+        );
+        throw caught;
+      }
+    };
+    const run = (prefWritesRef.current.get(thread.id) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(write);
+    prefWritesRef.current.set(
+      thread.id,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
   }, []);
   const renameThread = useCallback(
     (thread: InboxThread, title: string | null) => persistPrefs(thread, { title }),
@@ -965,6 +1112,11 @@ export function ConsoleApp() {
               if (selectedId) {
                 void loadOlder(selectedId);
               }
+            }}
+            hasOlderHeads={hasOlderHeads}
+            loadingOlderHeads={loadingOlderHeads}
+            onLoadOlderHeads={() => {
+              void loadOlderHeads();
             }}
             createTargets={createTargets}
             creating={creating}
