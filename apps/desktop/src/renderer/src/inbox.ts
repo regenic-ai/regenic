@@ -290,6 +290,27 @@ export function openedThreadView(
   return thread;
 }
 
+export function keepSelectedThreadId(
+  current: string | null,
+  firstVisibleId: string | null,
+): string | null {
+  return current ?? firstVisibleId;
+}
+
+export function resolveSelectedThread(
+  selectedId: string | null,
+  catalog: readonly InboxThread[],
+  held: InboxThread | null,
+): InboxThread | null {
+  if (!selectedId) {
+    return null;
+  }
+  return (
+    catalog.find((thread) => thread.id === selectedId) ??
+    (held?.id === selectedId ? held : null)
+  );
+}
+
 export function latestMessage(thread: InboxThread): InboxViewItem | undefined {
   return thread.messages[thread.messages.length - 1];
 }

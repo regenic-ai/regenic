@@ -20,12 +20,14 @@ import { engineChip, memoryWatchCopy } from "./format";
 import {
   evictThreadCache,
   groupInboxThreads,
+  keepSelectedThreadId,
   latestInboundOf,
   markInboxThreadRead,
   messagesForAttentionAck,
   openedThreadView,
   orderThreadMessages,
   overlayThreadMessages,
+  resolveSelectedThread,
   sortInboxThreads,
   type InboxThread,
 } from "./inbox";
@@ -149,6 +151,7 @@ export function ConsoleApp() {
   listViewRef.current = listView;
   const lastFetchedListRef = useRef<InboxListView>("shown");
   const prefWritesRef = useRef(new Map<string, Promise<void>>());
+  const selectedThreadRef = useRef<InboxThread | null>(null);
 
   const commitHeads = async (fact: InboxListFact) => {
     publishHeads(await listStoreRef.current.enqueue(fact));
@@ -171,13 +174,12 @@ export function ConsoleApp() {
     setDrafts((current) =>
       nextDrafts.length === current.length ? current : nextDrafts,
     );
-    setSelectedId((current) => {
-      const nextThreads = mergeDraftThreads(synced, nextDrafts);
-      if (current && nextThreads.some((thread) => thread.id === current)) {
-        return current;
-      }
-      return nextThreads[0]?.id ?? null;
-    });
+    setSelectedId((current) =>
+      keepSelectedThreadId(
+        current,
+        mergeDraftThreads(synced, nextDrafts)[0]?.id ?? null,
+      ),
+    );
   };
 
   const ensureThread = async (threadId: string, mode: "open" | "poll") => {
@@ -588,6 +590,7 @@ export function ConsoleApp() {
     messagesRef.current = {};
     draftsRef.current = [];
     selectedIdRef.current = null;
+    selectedThreadRef.current = null;
     loadedThreadsRef.current.clear();
     olderBusyRef.current.clear();
     headsBusyRef.current = false;
@@ -738,7 +741,7 @@ export function ConsoleApp() {
     }
   };
 
-  const listThreads = useMemo(() => {
+  const catalogThreads = useMemo(() => {
     const grouped =
       groupedInboxRef.current === inbox
         ? groupedRef.current
@@ -746,28 +749,38 @@ export function ConsoleApp() {
     groupedRef.current = grouped;
     groupedInboxRef.current = inbox;
     return sortInboxThreads(
-      applyOpenedAt(
-        mergeDraftThreads(grouped, listView === "shown" ? drafts : []),
-        openedAtRef.current,
-      ).filter((thread) => (listView === "hidden" ? thread.hidden : !thread.hidden)),
+      applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
       sortMode,
     );
-  }, [inbox, drafts, sortMode, listView]);
-  const threads = useMemo(
-    () => overlayThreadMessages(listThreads, messagesByThread),
-    [listThreads, messagesByThread],
+  }, [inbox, drafts, sortMode]);
+  const listThreads = useMemo(
+    () =>
+      catalogThreads.filter((thread) =>
+        listView === "hidden" ? thread.hidden : !thread.hidden,
+      ),
+    [catalogThreads, listView],
   );
   const selected = useMemo(() => {
-    const thread = threads.find((item) => item.id === selectedId) ?? null;
+    if (!selectedId) {
+      selectedThreadRef.current = null;
+      return null;
+    }
+    const thread = resolveSelectedThread(
+      selectedId,
+      overlayThreadMessages(catalogThreads, messagesByThread),
+      selectedThreadRef.current,
+    );
     if (!thread) {
       return null;
     }
-    return openedThreadView(
+    const opened = openedThreadView(
       thread,
       messagesByThread[thread.id],
       openingId === thread.id,
     );
-  }, [threads, selectedId, messagesByThread, openingId]);
+    selectedThreadRef.current = opened;
+    return opened;
+  }, [catalogThreads, selectedId, messagesByThread, openingId]);
   const chip = engineChip(engine);
   const createTargets = createConversationTargets(engine);
 
