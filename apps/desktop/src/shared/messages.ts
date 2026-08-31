@@ -126,6 +126,7 @@ export const en = {
   "work.result": "Result",
   "work.resultExpand": "Show more",
   "work.resultCollapse": "Show less",
+  "work.context": "More context",
 
   "label.ticket": "Ticket",
   "label.agent": "Agent",
@@ -716,6 +717,7 @@ export const zh: Record<MessageKey, string> = {
   "work.result": "处理结果",
   "work.resultExpand": "展开",
   "work.resultCollapse": "收起",
+  "work.context": "补充说明",
 
   "label.ticket": "工单",
   "label.agent": "Agent",

@@ -19,24 +19,23 @@ import {
 } from "./forward-preview";
 import { nextMessageSelection, selectedInOrder } from "./message-selection";
 import type { CreateTarget } from "./inbox-drafts";
+import { WorkContextStrip } from "./WorkContextStrip";
 import { WorkResultCard } from "./WorkResultCard";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
 import { latestMessage, type InboxThread } from "./inbox";
 import {
-  conversationKindLabel,
-  unitKindChip,
   messageRole,
   readingMessages,
   sameUtterance,
   threadActivityNote,
-  threadFacetLabel,
+  threadFaceTags,
   threadLoadedCountCopy,
   threadTitle,
   deliveryNeedsYou,
   workNextStepCopy,
-  workStatusLabel,
 } from "./message-view";
+import { ThreadFaceTags } from "./ThreadFaceTags";
 import { useLocale } from "./LocaleContext";
 import { HideIcon, PinIcon, ShowIcon } from "./Icons";
 import {
@@ -327,10 +326,16 @@ export const ThreadPane = memo(function ThreadPane({
     }
   };
   const resultSummary = thread.work?.result_summary?.trim();
-  const conversationClosed = prompts.length === 0 && !thread.can_send;
+  const awaitingPrompt = prompts.length > 0;
+  const conversationClosed = !awaitingPrompt && !thread.can_send;
   const needsDeliveryRetry = deliveryNeedsYou(thread.work?.delivery);
+  // While a prompt is up, skip generic next-step hints — but keep delivery failures.
   const workHint =
-    needsDeliveryRetry || !resultSummary ? workNextStepCopy(thread) : null;
+    awaitingPrompt && !needsDeliveryRetry
+      ? null
+      : needsDeliveryRetry || !resultSummary
+        ? workNextStepCopy(thread)
+        : null;
   const heading = threadTitle(thread);
   const workResult = resultSummary ? (
     <WorkResultCard key={`${thread.id}:${resultSummary}`} text={resultSummary} />
@@ -359,10 +364,7 @@ export const ThreadPane = memo(function ThreadPane({
       thread.work?.status === "waiting_human");
   const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
   const canForwardConversation = merged.some(canForwardItem);
-  const kind = conversationKindLabel(thread.conversation_kind);
-  const unitKind = unitKindChip(thread);
-  const facet = threadFacetLabel(thread.thread_facet);
-  const work = workStatusLabel(thread.work);
+  const tags = threadFaceTags(thread);
 
   return (
     <article className="thread-pane">
@@ -403,17 +405,7 @@ export const ThreadPane = memo(function ThreadPane({
           </div>
           <div className="thread-meta-row">
             <div className="thread-tags">
-              <span className={`channel-tag channel-${thread.channel}`}>
-                {thread.channel_label}
-              </span>
-              {unitKind ? <span className="kind-tag">{unitKind}</span> : null}
-              {kind ? <span className="kind-tag">{kind}</span> : null}
-              {facet ? <span className="kind-tag">{facet}</span> : null}
-              {work ? (
-                <span className={`kind-tag work-${thread.work?.status ?? ""}`}>
-                  {work}
-                </span>
-              ) : null}
+              <ThreadFaceTags tags={tags} />
             </div>
             {canForwardConversation || canRun || canDismiss || canBind ? (
               <div className="thread-actions">
@@ -491,7 +483,8 @@ export const ThreadPane = memo(function ThreadPane({
             ) : null}
           </p>
           {workHint ? <p className="work-hint">{workHint}</p> : null}
-          {!conversationClosed ? workResult : null}
+          {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
+          {!conversationClosed && !awaitingPrompt ? workResult : null}
         </div>
       </header>
       <ThreadMessageList
@@ -565,14 +558,22 @@ export const ThreadPane = memo(function ThreadPane({
           {activityNote && prompts.length === 0 ? (
             <p className="thread-activity">{activityNote}</p>
           ) : null}
-          {prompts.length > 0 ? (
-            <ThreadPromptPanel
-              key={`${thread.id}:${prompts[0]?.prompt_id ?? "none"}`}
-              prompts={prompts}
-              submitting={sending}
-              error={sendError}
-              onAnswer={answerPrompt}
-            />
+          {awaitingPrompt ? (
+            <div className="handoff-dock">
+              {resultSummary ? (
+                <WorkContextStrip
+                  key={`${thread.id}:context`}
+                  text={resultSummary}
+                />
+              ) : null}
+              <ThreadPromptPanel
+                key={`${thread.id}:${prompts[0]?.prompt_id ?? "none"}`}
+                prompts={prompts}
+                submitting={sending}
+                error={sendError}
+                onAnswer={answerPrompt}
+              />
+            </div>
           ) : canReply ? (
             <Composer
               key={thread.id}

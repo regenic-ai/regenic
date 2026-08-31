@@ -13,6 +13,7 @@ import {
   conversationKindLabel,
   unitKindChip,
   listPreview,
+  threadFaceTags,
   threadFacetLabel,
   threadPreview,
   threadTitle,
@@ -522,6 +523,7 @@ describe("thread activity", () => {
     assert.equal(threadFacetLabel("agent"), "Agent");
     assert.equal(conversationKindLabel("direct"), null);
     assert.equal(conversationKindLabel("group"), "Group");
+    assert.equal(conversationKindLabel("order"), null);
     assert.equal(
       unitKindChip({
         unit_kind: "crm.order_review",
@@ -534,6 +536,30 @@ describe("thread activity", () => {
       "crm.order_review",
     );
     assert.equal(unitKindChip({ unit_kind: null, unit_kind_label: null }), null);
+    assert.deepEqual(
+      threadFaceTags({
+        channel: "crm",
+        channel_label: "CRM",
+        conversation_kind: "order",
+        thread_facet: "ticket",
+        unit_kind: "crm.order_review",
+        unit_kind_label: "订单 AI 内审",
+        work: { status: "running" },
+      }).map((tag) => tag.label),
+      ["CRM", "订单 AI 内审", "Running"],
+    );
+    assert.deepEqual(
+      threadFaceTags({
+        channel: "feishu",
+        channel_label: "飞书",
+        conversation_kind: "group",
+        thread_facet: "ticket",
+        unit_kind: null,
+        unit_kind_label: null,
+        work: { status: "waiting_human" },
+      }).map((tag) => tag.label),
+      ["飞书", "Group", "Ticket", "Waiting"],
+    );
     assert.equal(workStatusLabel("open"), null);
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
     assert.equal(workStatusLabel("done"), "Done");

@@ -1,6 +1,12 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocale } from "./LocaleContext";
-import { togglePromptOption, typePromptCustom } from "./thread-prompts";
+import {
+  optionPrimaryLabel,
+  optionSecondaryLabel,
+  shouldShowQuestionLegend,
+  togglePromptOption,
+  typePromptCustom,
+} from "./thread-prompts";
 import type { PromptAnswerItem, PromptQuestion, ThreadPrompt } from "./types";
 
 export function ThreadPromptPanel({
@@ -35,7 +41,7 @@ export function ThreadPromptPanel({
       <div className="prompt-head">
         <p className="prompt-kicker">{heading}</p>
         {prompt.title ? <h2>{prompt.title}</h2> : null}
-        {prompt.detail ? <p className="prompt-detail">{prompt.detail}</p> : null}
+        {prompt.detail ? <PromptDetail text={prompt.detail} /> : null}
         {prompts.length > 1 ? (
           <p className="prompt-count">{t("prompt.of", { count: prompts.length })}</p>
         ) : null}
@@ -55,6 +61,55 @@ export function ThreadPromptPanel({
       )}
       {error ? <p className="action-error">{error}</p> : null}
     </form>
+  );
+}
+
+function PromptDetail({ text }: { text: string }) {
+  const { t } = useLocale();
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const clipRef = useRef<HTMLParagraphElement>(null);
+
+  useLayoutEffect(() => {
+    const node = clipRef.current;
+    if (!node) {
+      setOverflows(false);
+      return;
+    }
+    if (expanded) {
+      return;
+    }
+    const measure = () => {
+      setOverflows(node.scrollHeight > node.clientHeight + 2);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [expanded, text]);
+
+  return (
+    <div className="prompt-detail-wrap">
+      <p
+        ref={clipRef}
+        className={`prompt-detail${expanded ? " is-expanded" : ""}`}
+      >
+        {text}
+      </p>
+      {overflows || expanded ? (
+        <button
+          type="button"
+          className="prompt-detail-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? t("work.resultCollapse") : t("work.resultExpand")}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -111,53 +166,62 @@ function ChoicePrompt({
   });
   return (
     <>
-      {prompt.questions.map((question) => (
-        <fieldset key={question.id} className="prompt-question">
-          <legend>{question.prompt}</legend>
-          {question.options?.length ? (
-            <div className="prompt-options">
-              {question.options.map((option) => {
-                const selected = answers[question.id]?.selected.includes(option.label);
-                const emphasized =
-                  prompt.presentation === "plan_review" && option.emphasized === true;
-                return (
-                  <button
-                    key={option.label}
-                    type="button"
-                    className={`prompt-option${selected ? " is-on" : ""}${
-                      emphasized ? " is-emphasized" : ""
-                    }`}
-                    aria-pressed={selected}
-                    disabled={submitting}
-                    onClick={() =>
-                      setAnswers((current) =>
-                        togglePromptOption(current, question, option.label),
-                      )
-                    }
-                  >
-                    <span>{option.label}</span>
-                    {emphasized ? <small>{t("prompt.suggested")}</small> : null}
-                    {option.description ? <small>{option.description}</small> : null}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-          {question.allow_custom || !question.options?.length ? (
-            <input
-              className="prompt-custom"
-              value={answers[question.id]?.custom ?? ""}
-              placeholder={t("prompt.yourAnswer")}
-              disabled={submitting}
-              onChange={(event) =>
-                setAnswers((current) =>
-                  typePromptCustom(current, question, event.target.value),
-                )
-              }
-            />
-          ) : null}
-        </fieldset>
-      ))}
+      {prompt.questions.map((question) => {
+        const showLegend = shouldShowQuestionLegend(prompt, question);
+        const legendText =
+          question.prompt.replace(/\s+/g, " ").trim() ||
+          prompt.title?.replace(/\s+/g, " ").trim() ||
+          t("prompt.answer");
+        return (
+          <fieldset key={question.id} className="prompt-question">
+            <legend className={showLegend ? undefined : "sr-only"}>{legendText}</legend>
+            {question.options?.length ? (
+              <div className="prompt-options">
+                {question.options.map((option) => {
+                  const selected = answers[question.id]?.selected.includes(option.label);
+                  const emphasized =
+                    prompt.presentation === "plan_review" && option.emphasized === true;
+                  const primary = optionPrimaryLabel(option);
+                  const secondary = optionSecondaryLabel(option);
+                  return (
+                    <button
+                      key={option.label}
+                      type="button"
+                      className={`prompt-option${selected ? " is-on" : ""}${
+                        emphasized ? " is-emphasized" : ""
+                      }`}
+                      aria-pressed={selected}
+                      disabled={submitting}
+                      onClick={() =>
+                        setAnswers((current) =>
+                          togglePromptOption(current, question, option.label),
+                        )
+                      }
+                    >
+                      <span>{primary}</span>
+                      {emphasized ? <small>{t("prompt.suggested")}</small> : null}
+                      {secondary ? <small>{secondary}</small> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {question.allow_custom || !question.options?.length ? (
+              <input
+                className="prompt-custom"
+                value={answers[question.id]?.custom ?? ""}
+                placeholder={t("prompt.yourAnswer")}
+                disabled={submitting}
+                onChange={(event) =>
+                  setAnswers((current) =>
+                    typePromptCustom(current, question, event.target.value),
+                  )
+                }
+              />
+            ) : null}
+          </fieldset>
+        );
+      })}
       <div className="prompt-actions">
         <button
           type="button"
@@ -190,4 +254,3 @@ function emptyAnswers(
     questions.map((question) => [question.id, { id: question.id, selected: [] }]),
   );
 }
-

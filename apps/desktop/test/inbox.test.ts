@@ -700,4 +700,58 @@ describe("prompt answers", () => {
     assert.deepEqual(both.mode.selected, ["A"]);
     assert.equal(both.mode.custom, "Also");
   });
+
+  it("prefers human description over machine option keys", async () => {
+    const {
+      optionPrimaryLabel,
+      optionSecondaryLabel,
+      shouldShowQuestionLegend,
+    } = await import("../src/renderer/src/thread-prompts.ts");
+    assert.equal(
+      optionPrimaryLabel({
+        label: "SEND_AND_CLOSE",
+        description: "用 CRM scene 模板回邮后关单",
+      }),
+      "用 CRM scene 模板回邮后关单",
+    );
+    assert.equal(
+      optionSecondaryLabel({
+        label: "SEND_AND_CLOSE",
+        description: "用 CRM scene 模板回邮后关单",
+      }),
+      "SEND_AND_CLOSE",
+    );
+    assert.equal(
+      optionPrimaryLabel({
+        label: "leave_pending",
+        description: "不发信、不关单",
+      }),
+      "不发信、不关单",
+    );
+    assert.equal(optionPrimaryLabel({ label: "Allow" }), "Allow");
+    assert.equal(
+      shouldShowQuestionLegend(
+        {
+          prompt_id: "p1",
+          presentation: "choice",
+          title: "邮件提报待审",
+          questions: [{ id: "q1", prompt: "根据工单正文判断…" }],
+        },
+        { id: "q1", prompt: "根据工单正文判断…" },
+      ),
+      true,
+    );
+    assert.equal(
+      shouldShowQuestionLegend(
+        {
+          prompt_id: "p1",
+          presentation: "choice",
+          title: "邮件提报待审",
+          questions: [{ id: "q1", prompt: "邮件提报待审" }],
+        },
+        { id: "q1", prompt: "邮件提报待审" },
+      ),
+      false,
+    );
+  });
 });
