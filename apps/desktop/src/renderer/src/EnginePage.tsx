@@ -126,6 +126,7 @@ export function EnginePage({
             label={t("engine.currentWork")}
             value={String(engine.inbox_count)}
             tone="ok"
+            emphasis
           />
           <EngineStat
             label={t("engine.coverage")}
@@ -168,13 +169,17 @@ export function EnginePage({
           <div>
             <dt>{t("engine.database")}</dt>
             <dd>
-              <code>{engine.database_path ?? "—"}</code>
+              <code title={engine.database_path ?? undefined}>
+                {engine.database_path ?? "—"}
+              </code>
             </dd>
           </div>
           <div>
             <dt>{t("engine.pluginDir")}</dt>
             <dd>
-              <code>{engine.plugin_dir ?? "—"}</code>
+              <code title={engine.plugin_dir ?? undefined}>
+                {engine.plugin_dir ?? "—"}
+              </code>
             </dd>
           </div>
         </dl>
@@ -414,13 +419,19 @@ function EngineStat({
   label,
   value,
   tone,
+  emphasis = false,
 }: {
   label: string;
   value: string;
   tone?: "ok" | "warn" | "risk";
+  emphasis?: boolean;
 }) {
   return (
-    <div className={`engine-stat${tone ? ` is-${tone}` : ""}`}>
+    <div
+      className={`engine-stat${tone ? ` is-${tone}` : ""}${
+        emphasis ? " is-emphasis" : ""
+      }`}
+    >
       <span className="engine-stat-label">{label}</span>
       <strong className="engine-stat-value">{value}</strong>
     </div>

@@ -190,6 +190,30 @@ describe("shouldKeepCatchingUp", () => {
       false,
     );
   });
+
+  it("stops when a full budget page explicitly reports no more", () => {
+    assert.equal(
+      shouldKeepCatchingUp({
+        pages: [{ status: "completed", has_more: false }],
+        pagesBudget: 1,
+        acceptedCount: 20,
+        quarantinedCount: 0,
+      }),
+      false,
+    );
+  });
+
+  it("keeps going when has_more is omitted and the budget filled", () => {
+    assert.equal(
+      shouldKeepCatchingUp({
+        pages: [{ status: "completed" }],
+        pagesBudget: 1,
+        acceptedCount: 20,
+        quarantinedCount: 0,
+      }),
+      true,
+    );
+  });
 });
 
 describe("syncExecutionBudget", () => {

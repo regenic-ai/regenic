@@ -216,6 +216,11 @@ export function shouldKeepCatchingUp(input: {
   if (input.pages.some((page) => page.has_more === true)) {
     return true;
   }
+  // Explicit tip: do not keep the sticky catch-up chip after a finished page.
+  if (input.pages.every((page) => page.has_more === false)) {
+    return false;
+  }
+  // Connectors that omit has_more: keep going when this tick filled the budget.
   const progressed = input.acceptedCount > 0 || input.quarantinedCount > 0;
   return progressed && input.pages.length >= input.pagesBudget;
 }

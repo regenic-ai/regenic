@@ -120,6 +120,70 @@ describe("sync phase", () => {
       "unseeded",
     );
   });
+
+  it("treats a DSH bounded-history resume cursor as still unseeded", () => {
+    assert.equal(streamCursorUnseeded("-1:2"), true);
+    assert.equal(streamCursorUnseeded("3:10"), true);
+    assert.equal(streamCursorUnseeded("6441"), false);
+    assert.equal(deriveSyncPhase({ live_cursor: "-1:2" }), "unseeded");
+  });
+});
+
+describe("sync engine heal", () => {
+  it("reopens falsely live streams after operational clear wiped cursors", async () => {
+    const store = new MemorySyncStore();
+    await store.putSyncState({
+      installation_id: "dsh-1",
+      stream_key: "session:a",
+      phase: "live",
+      live_cursor: "10",
+      history_cursor: "10",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-08-31T00:00:00.000Z",
+    });
+    await store.putSyncState({
+      installation_id: "dsh-1",
+      stream_key: "session:b",
+      phase: "live",
+      live_cursor: "-1:4",
+      history_cursor: "-1:4",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-08-31T00:00:00.000Z",
+    });
+    const engine = new SyncEngine(store, {
+      now: () => "2026-08-31T00:01:00.000Z",
+    });
+    const work = await engine.plan({
+      installation_id: "dsh-1",
+      humanIdle: false,
+      cursorStates: new Map([
+        ["session:a", undefined],
+        ["session:b", "-1:4"],
+      ]),
+      fallbackMembers: [
+        member("session:a", "dsh:a"),
+        member("session:b", "dsh:b"),
+      ].map((item) => ({ ...item, installation_id: "dsh-1" })),
+    });
+    assert.deepEqual(
+      (await store.listSyncStates("dsh-1"))
+        .map((state) => [state.stream_key, state.phase])
+        .sort(),
+      [
+        ["session:a", "unseeded"],
+        ["session:b", "unseeded"],
+      ],
+    );
+    assert.deepEqual(
+      work
+        .filter((item) => item.lane === "live")
+        .map((item) => item.stream_key)
+        .sort(),
+      ["session:a", "session:b"],
+    );
+  });
 });
 
 describe("sync scheduler", () => {
@@ -187,6 +251,45 @@ describe("sync scheduler", () => {
     assert.equal(selected[0].stream_key, "chat:new");
     assert.equal(selected[0].older, false);
     assert.equal(selected[0].media, false);
+  });
+
+  it("rotates sticky unseeded streams so empty sessions cannot monopolize", () => {
+    const states = stateMap([
+      ["chat:a", "unseeded"],
+      ["chat:b", "unseeded"],
+      ["chat:c", "unseeded"],
+    ]);
+    const first = planSyncWork({
+      members: [
+        member("chat:a", "feishu:a"),
+        member("chat:b", "feishu:b"),
+        member("chat:c", "feishu:c"),
+      ],
+      states,
+      humanIdle: false,
+      catalogIncomplete: false,
+      now: "2026-08-31T00:00:00.000Z",
+    });
+    assert.deepEqual(
+      first.filter((item) => item.lane === "live").map((item) => item.stream_key),
+      ["chat:a", "chat:b"],
+    );
+    const second = planSyncWork({
+      members: [
+        member("chat:a", "feishu:a"),
+        member("chat:b", "feishu:b"),
+        member("chat:c", "feishu:c"),
+      ],
+      states,
+      humanIdle: false,
+      catalogIncomplete: false,
+      rotateFrom: "chat:b",
+      now: "2026-08-31T00:00:01.000Z",
+    });
+    assert.deepEqual(
+      second.filter((item) => item.lane === "live").map((item) => item.stream_key),
+      ["chat:c", "chat:a"],
+    );
   });
 
   it("schedules media on its own lane after text pages", () => {

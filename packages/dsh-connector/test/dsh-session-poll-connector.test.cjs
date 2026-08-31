@@ -258,6 +258,7 @@ describe("DshSessionPollConnector", () => {
 
     const result = await connector.poll(null);
     assert.deepEqual(result.batch.records, []);
+    assert.equal(result.next_cursor, "-1");
   });
 
   it("marks invisible labor as a working thread status", async () => {
@@ -688,6 +689,7 @@ describe("DshSessionPollConnector", () => {
     const first = await connector.poll(null);
     assert.deepEqual(first.batch.records, []);
     assert.equal(first.next_cursor, "-1:2");
+    assert.equal(first.has_more, true);
     assert.deepEqual(client.calls, [
       { sessionId: "dsh-main", maxMessages: 2, beforeSeq: undefined },
       { sessionId: "dsh-main", maxMessages: 2, beforeSeq: 4 },
@@ -699,6 +701,7 @@ describe("DshSessionPollConnector", () => {
       "dsh-main:1",
     ]);
     assert.equal(second.next_cursor, "1");
+    assert.notEqual(second.has_more, true);
     assert.deepEqual(client.calls.slice(2), [
       { sessionId: "dsh-main", maxMessages: 2, beforeSeq: 2 },
     ]);

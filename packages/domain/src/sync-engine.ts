@@ -9,7 +9,7 @@ import type {
   SyncWorkItem,
 } from "./sync-contracts";
 import { CATALOG_RESCAN_MS } from "./sync-contracts";
-import { lastHistoryWorkKey, planSyncWork, syncLaneLimits } from "./sync-scheduler";
+import { lastHistoryWorkKey, lastSeedWorkKey, planSyncWork, syncLaneLimits } from "./sync-scheduler";
 import { advanceSyncState, syncStateFromCursor } from "./sync-phase";
 
 export interface SyncEngineOptions {
@@ -87,6 +87,28 @@ export class SyncEngine {
         ? view.members
         : [...(input.fallbackMembers ?? [])];
     const now = this.now();
+    if (input.cursorStates) {
+      for (const [streamKey, state] of states) {
+        if (state.phase !== "live" && state.phase !== "steady") {
+          continue;
+        }
+        const runtimeCursor = input.cursorStates.get(streamKey);
+        const derived = syncStateFromCursor({
+          installation_id: input.installation_id,
+          stream_key: streamKey,
+          cursor: runtimeCursor,
+          now,
+          generation: state.generation,
+        });
+        // Store clear resets poll cursors but used to leave sync_state at
+        // "live". Resume cursors can also look "seeded" while still catching up.
+        if (derived.phase !== "unseeded" && derived.phase !== "history") {
+          continue;
+        }
+        states.set(streamKey, derived);
+        await this.store.putSyncState(derived);
+      }
+    }
     for (const member of members) {
       if (states.has(member.stream_key)) {
         continue;
@@ -125,7 +147,7 @@ export class SyncEngine {
   }
 
   lastHistoryKey(items: readonly SyncWorkItem[]): string | undefined {
-    return lastHistoryWorkKey(items);
+    return lastHistoryWorkKey(items) ?? lastSeedWorkKey(items);
   }
 
   catalogFresh(view: SyncCatalogView, now = this.now()): boolean {

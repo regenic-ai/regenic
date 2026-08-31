@@ -71,7 +71,10 @@ export function planSyncWork(input: SyncScheduleInput): SyncWorkItem[] {
     const state = input.states.get(member.stream_key);
     return !state || state.phase === "unseeded";
   });
-  const seeds = unseen.slice(0, UNSEEN_SEED_PER_TICK);
+  const seeds = rotateFromKey(unseen, input.rotateFrom).slice(
+    0,
+    UNSEEN_SEED_PER_TICK,
+  );
   const liveRest = [
     ...seeds,
     ...livePool.filter(
@@ -157,6 +160,15 @@ export function lastHistoryWorkKey(
   return [...items].reverse().find((item) => item.lane === "history")?.stream_key;
 }
 
+export function lastSeedWorkKey(
+  items: readonly SyncWorkItem[],
+): string | undefined {
+  return [...items]
+    .reverse()
+    .find((item) => item.lane === "live" || item.lane === "interactive")
+    ?.stream_key;
+}
+
 export function rotateFromKey<T extends { stream_key?: string; key?: string }>(
   items: readonly T[],
   from?: string,
@@ -182,11 +194,11 @@ function rankLiveMembers(
   const rest = members.filter((member) => member.thread_id !== preferredId);
   const catchingUp = rest.filter((member) => {
     const phase = states.get(member.stream_key)?.phase;
-    return phase === "unseeded" || phase === "history";
+    return !phase || phase === "unseeded" || phase === "history";
   });
   const live = rest.filter((member) => {
     const phase = states.get(member.stream_key)?.phase;
-    return phase !== "unseeded" && phase !== "history";
+    return phase === "live" || phase === "steady";
   });
   return [...catchingUp, ...live];
 }

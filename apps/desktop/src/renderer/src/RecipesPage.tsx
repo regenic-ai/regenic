@@ -521,7 +521,7 @@ export function RecipesPage({
   );
 
   return (
-    <div className="page page-wide">
+    <div className="page page-wide page-recipes">
       <header className="page-hero">
         <p className="page-eyebrow">{t("recipes.eyebrow")}</p>
         <h1>{t("recipes.title")}</h1>

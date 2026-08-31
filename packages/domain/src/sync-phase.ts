@@ -8,6 +8,11 @@ export function streamCursorUnseeded(value?: string | null): boolean {
   if (!value?.trim()) {
     return true;
   }
+  // DSH bounded-history resume (`afterSeq:beforeSeq`) has not produced a
+  // first ingest page yet — treat it as still unseeded.
+  if (/^(-1|\d+):(\d+)$/.test(value.trim())) {
+    return true;
+  }
   try {
     const parsed = JSON.parse(value) as { recent_seeded?: unknown };
     if (parsed && typeof parsed === "object" && "recent_seeded" in parsed) {
@@ -22,6 +27,9 @@ export function streamCursorUnseeded(value?: string | null): boolean {
 export function historyCursorPending(value?: string | null): boolean {
   if (!value?.trim()) {
     return false;
+  }
+  if (/^(-1|\d+):(\d+)$/.test(value.trim())) {
+    return true;
   }
   try {
     const parsed = JSON.parse(value) as {

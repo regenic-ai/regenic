@@ -130,14 +130,14 @@ describe("sync coverage copy", () => {
     };
     assert.equal(
       syncProgressSummary(sync),
-      "Found 120+ · seeded 34 · backfilling 8",
+      "Listed 120+ · recent synced 34 · catching up 8",
     );
     assert.equal(syncProgressTone(sync), "warn");
     setActiveLocale("zh");
     try {
       assert.equal(
         syncProgressSummary(sync),
-        "已发现 120+ · 已播种 34 · 回填中 8",
+        "已列出 120+ · 最近已同步 34 · 补历史中 8",
       );
     } finally {
       setActiveLocale("en");

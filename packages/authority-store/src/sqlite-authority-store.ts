@@ -624,6 +624,36 @@ export class SqliteAuthorityStore
           `,
         )
         .run(now, orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_sync_state
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_stream_members
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_catalog_cursors
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
       const after = this.storeFootprint(orgId);
       return {
         cleared: {

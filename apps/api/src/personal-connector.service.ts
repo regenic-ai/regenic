@@ -1336,6 +1336,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       if (runs.length === 0 && firstError) {
         throw firstError;
       }
+      await this.reconcileCatchingUp(store, installation.id, streams);
       const last = runs.at(-1);
       const summary = summarizeRuns(runs);
       finishPull({
@@ -1360,6 +1361,39 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
       this.publishStreams();
       throw wrapDriverError(error, "sync_failed");
+    }
+  }
+
+  private async reconcileCatchingUp(
+    store: ConnectorRuntimeStore,
+    installationId: string,
+    streams: readonly ConnectorStream[],
+  ): Promise<void> {
+    const states = await store.listSyncStates(installationId);
+    const byKey = new Map(
+      states.map((state) => [state.stream_key, state] as const),
+    );
+    const mounted = new Set(streams.map((stream) => stream.stream_key));
+    const prefix = `${installationId}:`;
+    for (const key of [...this.streamCatchingUp]) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      if (this.streamPulling.has(key) || this.streamPullingHistory.has(key)) {
+        continue;
+      }
+      const streamKey = key.slice(prefix.length);
+      if (!mounted.has(streamKey)) {
+        this.streamCatchingUp.delete(key);
+        continue;
+      }
+      const state = byKey.get(streamKey);
+      if (!state || state.phase === "unseeded" || state.phase === "history") {
+        continue;
+      }
+      // Coverage already moved this stream to live/steady; drop the sticky
+      // "还剩 N" chip instead of waiting for another empty tip poll.
+      this.streamCatchingUp.delete(key);
     }
   }
 

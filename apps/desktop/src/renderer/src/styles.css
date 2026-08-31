@@ -916,7 +916,8 @@ button {
 .recipe-form {
   display: grid;
   gap: 0;
-  max-width: 560px;
+  width: 100%;
+  max-width: none;
 }
 
 .recipe-stack {
@@ -2655,21 +2656,29 @@ button {
 }
 
 .page {
+  width: 100%;
+  box-sizing: border-box;
   overflow: auto;
   padding: 28px 32px 56px;
 }
 
-.page-wide .card {
-  max-width: 760px;
+.page-wide {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
 }
 
+.page-wide > .card,
 .page-wide .recipe-editor,
 .page-wide .recipe-saved {
-  max-width: 640px;
+  width: 100%;
+  max-width: none;
 }
 
 .page-hero {
-  max-width: 640px;
+  width: 100%;
+  max-width: none;
   margin-bottom: 8px;
 }
 
@@ -2684,7 +2693,7 @@ button {
 
 .page-lead {
   margin: 0;
-  max-width: 40em;
+  max-width: 48em;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
@@ -2694,7 +2703,8 @@ button {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  max-width: 640px;
+  width: 100%;
+  max-width: none;
   margin: 16px 0 4px;
   padding: 0;
   list-style: none;
@@ -2736,12 +2746,45 @@ button {
   grid-template-columns: 1fr 1fr;
 }
 
+@media (min-width: 900px) {
+  .page-wide .choice-list {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .page-recipes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    column-gap: 16px;
+    align-items: start;
+  }
+
+  .page-recipes > .page-hero {
+    grid-column: 1 / -1;
+  }
+
+  .page-recipes > .card:only-of-type {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1100px) {
+  .engine-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 860px) {
   .step-grid,
   .language-choices,
+  .page-wide .choice-list,
   .seg,
-  .engine-stats,
   .recipe-commit {
+    grid-template-columns: 1fr;
+  }
+
+  .engine-stats {
     grid-template-columns: 1fr;
   }
 
@@ -2803,7 +2846,9 @@ button {
   border-radius: 10px;
   padding: 16px;
   margin-top: 14px;
-  max-width: 720px;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
 }
 
 .card h2 {
@@ -2814,15 +2859,18 @@ button {
 
 .engine-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  width: 100%;
 }
 
 .engine-stat {
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  align-content: start;
   min-width: 0;
-  padding: 12px;
+  min-height: 78px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg) 42%, var(--surface));
@@ -2840,8 +2888,16 @@ button {
   color: var(--text);
   font-size: 13px;
   font-weight: 550;
-  line-height: 1.4;
+  line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.engine-stat.is-emphasis .engine-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
 .engine-stat.is-ok {
@@ -2866,16 +2922,25 @@ button {
 
 .engine-meta {
   display: grid;
-  gap: 8px;
-  margin: 14px 0 0;
-  padding: 0;
+  gap: 0;
+  margin: 16px 0 0;
+  padding: 4px 0 0;
+  border-top: 1px solid var(--line);
 }
 
 .engine-meta div {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 12px;
   align-items: baseline;
+  min-width: 0;
+  padding: 9px 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.engine-meta div:last-child {
+  border-bottom: 0;
+  padding-bottom: 2px;
 }
 
 .engine-meta dt {
@@ -2888,7 +2953,23 @@ button {
   margin: 0;
   color: var(--text);
   font-size: 12px;
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.engine-meta dd code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.engine-meta dd code:hover {
+  white-space: normal;
+  overflow: visible;
+  color: var(--text);
 }
 
 .engine-kernel .action-error,
