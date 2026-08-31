@@ -121,6 +121,13 @@ interface ContextRequest {
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
   }>;
+  filters?: {
+    sources?: string[];
+    thread_ids?: string[];
+    actor_ids?: string[];
+    occurred_after?: string;
+    occurred_before?: string;
+  };
   temporal: ContextTemporalSelection;
   budget: ContextBudget;
   requested_kinds?: ContextCandidateKind[];
@@ -211,9 +218,12 @@ interface ContextCandidate {
 }
 ```
 
-Retriever-specific scores remain named values. The planner applies a versioned
-retrieval profile; it does not assume that BM25, cosine, graph distance, and
-model scores share a numeric scale.
+Retriever-specific scores remain named values. During fusion, core namespaces
+each contribution by the canonical tuple `[retriever_id, score_name]`. A
+versioned retrieval profile may weight that exact tuple or explicitly fall back
+to a generic score-name weight; scores from different retrievers never collide
+through a same-name maximum. The profile does not assume that BM25, cosine,
+graph distance, and model scores share a numeric scale.
 
 ### 4.4 `ContextSnapshot`
 
@@ -227,6 +237,7 @@ interface ContextSnapshot {
   read_epoch: string;
   retrieval_profile_version: string;
   assembly_profile_version: string;
+  bundle_payload_hash: string;
   selected: ContextSelectedReference[];
   budget_ledger: ContextBudgetLedger;
   degradation_flags: string[];
@@ -250,7 +261,8 @@ type ContextSelectedReference =
     };
 ```
 
-Each selected Event requires `content_hash`. Every projection-derived selection
+`bundle_payload_hash` pins the complete canonical bundle payload except for its
+snapshot ID and bundle hash. Each selected Event requires `content_hash`. Every projection-derived selection
 requires `projection_generation` and may also pin `content_hash`. The snapshot
 therefore pins identifiers, hashes or generations, and policy versions. It does
 not expose a bare Blob capability.
@@ -259,9 +271,11 @@ Canonical hashes use UTF-8 JSON with object keys sorted by JavaScript code-unit
 order. Array order is preserved because selected and rendered order is semantic.
 Undefined object properties are omitted; `-0` is normalized to `0`; non-finite
 numbers and non-plain objects are rejected. Request hashes exclude the generated
-request ID. Snapshot hashes exclude snapshot ID, `created_at`, and the hash field
-itself. Bundle hashes exclude only their hash field. Fixed fixtures lock these
-rules; changing their semantics requires a contract version change.
+request ID. Snapshot hashes exclude only snapshot ID and the hash field itself;
+`created_at` is semantic. A valid snapshot ID is exactly
+`context-snapshot:${content_hash}`, which roots replay integrity in the ID used
+for storage lookup. Bundle hashes exclude only their hash field. Fixed fixtures
+lock these rules; changing their semantics requires a contract version change.
 
 ### 4.5 `ContextBundle`
 
@@ -273,6 +287,7 @@ interface ContextBundle {
   principal: ActorRef;
   consumer_id: string;
   purpose: string;
+  allowed_uses: Array<"display" | "reason" | "draft" | "execute">;
   sections: Array<{
     kind: "policy" | "memory" | "working" | "facts" | "summaries" | "evidence";
     items: ContextBundleItem[];
@@ -320,6 +335,15 @@ artifacts use the valid/recorded vocabulary above. `current`, `history`, and
 `as_of` queries compile into explicit predicates; callers do not infer time by
 sorting text matches.
 
+For `as_of`, maximum-age filtering and recency scoring use the request's
+`temporal.recorded_at`; `current` and `history` use the authority read time.
+The requested as-of recorded time must not exceed the authority read's
+`recorded_at`; an older read cannot prove a future knowledge state.
+Request timestamps are UTC-normalized before request hashing. By contrast, an
+`EvidenceReference.occurred_at` is an authoritative recorded representation and
+participates in evidence, snapshot-payload, and bundle hashes literally. Source
+adapters must preserve it rather than rewrite an equivalent offset spelling.
+
 Superseded context is not silently discarded. When relevant to the request, the
 bundle labels both current and superseded statements with their validity ranges.
 
@@ -340,6 +364,29 @@ The core owns:
 ### 6.2 Plugin ports
 
 ```ts
+interface ContextEvidenceSource {
+  openRead(request: ContextRequest): Promise<ContextSourceRead>;
+}
+
+interface ContextSourceRead {
+  read_epoch: string;
+  recorded_at: string;
+  lifecycle_complete: true;
+  lifecycle_heads: Array<{
+    source: string;
+    external_id: string;
+    head_event_id: string;
+  }>;
+  events: ContextSourceEvent[];
+}
+
+interface ContextPolicyEvaluator {
+  policyHash(request: ContextRequest): Promise<string>;
+  visible(input: ContextVisibilityInput): Promise<boolean>;
+  protectedEventIds(plan: AuthorizedRetrievalPlan): Promise<string[]>;
+  canReplay(input: ContextReplayInput): Promise<boolean>;
+}
+
 interface ContextProjector {
   readonly id: string;
   readonly algorithm_version: string;
@@ -385,15 +432,34 @@ Proposed plugin-host service keys:
 | `context-retrievers` | `ContextRetrieverRegistry` |
 
 Projectors and retrievers may return proposals or candidates. They cannot widen
-ACLs, accept claims, mutate Events, or publish bundles independently.
+ACLs, accept claims, mutate Events, or publish bundles independently. An
+Event-only retriever publishes evidence candidates only. The privileged policy
+evaluator explicitly returns protected Event IDs from the authorized lifecycle
+view; core validates those IDs and alone promotes their sections to `policy`.
+
+The authority adapter returns every Event needed to verify each
+`(source, external_id)` lifecycle and exactly one declared head for each
+identity. Core rejects missing parents, invalid create/revise/tombstone shapes,
+cycles, forks, scope or thread drift, non-monotonic parent-to-child
+`occurred_at` or `ingested_at`, and declared heads that do not match the returned
+chain. Every temporal slice must remain parent-closed; an orphaned revision or
+tombstone fails the request. The read's `recorded_at` must be at or after every
+returned Event's `ingested_at`; a read cannot declare a complete head that lies
+in its own future. Together with the as-of coverage rule, these constraints
+define the read's closed recorded-time window. `lifecycle_complete` without a
+matching head manifest is not a sufficient boundary.
 
 ## 7. Build Flow
 
 1. Validate `ContextRequest`, principal status, purpose, and allowed use.
-2. Fix an authority `read_epoch` and projection generations.
-3. Compile ACL and temporal constraints into an authorized retrieval plan.
-4. Run available retrievers in parallel over only the authorized universe.
-5. Normalize candidates by stable resource identity and evidence lineage.
+2. Fix an authority `read_epoch`, verify lifecycle head manifests, and fix
+  projection generations.
+3. Authorize complete lifecycle chains before resolving status, then compile
+  temporal constraints into an authorized retrieval plan.
+4. Ask the privileged policy evaluator to declare protected Event IDs from that
+  plan, then run available retrievers over only the authorized universe.
+5. Normalize candidates by stable resource identity and evidence lineage; core
+  promotes only validated protected IDs to the `policy` section.
 6. Fuse ranks according to a versioned profile; then apply deterministic
    authority, temporal, and conflict rules.
 7. Diversify and allocate candidates against a named budget profile.
@@ -426,6 +492,9 @@ The coordinator rejects dependency cycles.
 
 - `visible(principal, resource, purpose)` is applied before every retrieval
   channel and again before bundle projection.
+- Lifecycle authorization is all-or-nothing. If any revision or tombstone in an
+  identity chain is not visible, no member or derived status from that chain is
+  exposed to retrievers.
 - An artifact derives `required_scope_ids` from all evidence. A projector cannot
   choose a wider scope.
 - Blob reads require an authorized `via_event_id`, `via_artifact_id`, or
@@ -486,8 +555,11 @@ section. Citations remain mandatory provenance and carry no raw body by
 themselves.
 
 The assembler emits a ledger containing requested, selected, truncated, and
-reserved capacity per section. Its default reduction order is profile-specific,
-but policy and mandatory safety context cannot be displaced by retrieval output.
+reserved capacity per section. Its default reduction order is profile-specific.
+Protected Event IDs are an explicit privileged policy decision, including the
+empty set; retrievers cannot self-promote candidates. Every declared protected
+Event must be retrieved and fit the hard budget before ordinary evidence, or
+assembly fails rather than silently omitting mandatory safety context.
 
 The first implementation uses deterministic token estimates. Model-specific
 tokenizers may be optional adapters; they cannot change which resources are
@@ -536,8 +608,11 @@ Deliverables:
 Acceptance criteria:
 
 - identical request and read epoch produce the same snapshot content hash;
+- each authority read has a verified lifecycle head manifest, and hidden
+  successors expose neither stale content nor lifecycle status;
 - a new revision or tombstone creates a new snapshot while the old snapshot
   remains replayable within retention policy;
+- only the policy evaluator can declare protected Events, all of which must fit;
 - every selected item has an evidence path;
 - unauthorized evidence affects neither rank nor diagnostics;
 - hard budgets are never exceeded;

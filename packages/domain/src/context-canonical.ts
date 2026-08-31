@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ContextArtifact } from "./context-artifact";
-import type { ContextBundle, ContextRedaction } from "./context-bundle";
+import type { ContextBundle, ContextBundlePayload, ContextRedaction } from "./context-bundle";
 import type { ContextBudgetLedger } from "./context-budget";
 import type { EvidenceReference } from "./context-consumer";
 import type { ContextRequest } from "./context-request";
@@ -72,11 +72,13 @@ export function hashContextRequest(request: ContextRequest): string {
     id: _id,
     allowed_uses: allowedUses,
     anchors,
+    filters,
     requested_kinds: requestedKinds,
     ...semantic
   } = request;
   return hashCanonicalContext({
     ...semantic,
+    temporal: normalizeTemporal(semantic.temporal),
     allowed_uses: sortedStrings(allowedUses),
     ...(anchors
       ? {
@@ -88,6 +90,18 @@ export function hashContextRequest(request: ContextRequest): string {
     ...(requestedKinds
       ? { requested_kinds: sortedStrings(requestedKinds) }
       : {}),
+    ...(filters
+      ? {
+          filters: {
+            ...filters,
+            ...(filters.sources ? { sources: sortedStrings(filters.sources) } : {}),
+            ...(filters.thread_ids ? { thread_ids: sortedStrings(filters.thread_ids) } : {}),
+            ...(filters.actor_ids ? { actor_ids: sortedStrings(filters.actor_ids) } : {}),
+            ...(filters.occurred_after ? { occurred_after: normalizeTimestamp(filters.occurred_after) } : {}),
+            ...(filters.occurred_before ? { occurred_before: normalizeTimestamp(filters.occurred_before) } : {}),
+          },
+        }
+      : {}),
   });
 }
 
@@ -96,7 +110,7 @@ export function hashContextArtifactInputs(artifact: Pick<ContextArtifact, "input
 }
 
 export function hashContextSnapshot(snapshot: ContextSnapshot): string {
-  const { id: _id, content_hash: _contentHash, created_at: _createdAt, ...semantic } = snapshot;
+  const { id: _id, content_hash: _contentHash, ...semantic } = snapshot;
   return hashCanonicalContext({
     ...semantic,
     budget_ledger: normalizedLedger(semantic.budget_ledger),
@@ -119,4 +133,34 @@ export function hashContextBundle(bundle: ContextBundle): string {
     budget_ledger: normalizedLedger(semantic.budget_ledger),
     degradation_flags: sortedStrings(semantic.degradation_flags),
   });
+}
+
+export function hashContextBundlePayload(payload: ContextBundlePayload): string {
+  return hashCanonicalContext({
+    ...payload,
+    citations: sortedEvidence(payload.citations),
+    redactions: sortedRedactions(payload.redactions),
+    budget_ledger: normalizedLedger(payload.budget_ledger),
+    degradation_flags: sortedStrings(payload.degradation_flags),
+  });
+}
+
+function normalizeTemporal(temporal: ContextRequest["temporal"]): ContextRequest["temporal"] {
+  if (temporal.mode === "current") {
+    return temporal;
+  }
+  if (temporal.mode === "history") {
+    return temporal.valid_at
+      ? { mode: "history", valid_at: normalizeTimestamp(temporal.valid_at) }
+      : temporal;
+  }
+  return {
+    mode: "as_of",
+    recorded_at: normalizeTimestamp(temporal.recorded_at),
+    ...(temporal.valid_at ? { valid_at: normalizeTimestamp(temporal.valid_at) } : {}),
+  };
+}
+
+function normalizeTimestamp(value: string): string {
+  return new Date(value).toISOString();
 }

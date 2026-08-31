@@ -5,6 +5,12 @@ import type { ExecutorRegistry } from "./executor";
 import type { AuthorityStore, BlobStore, ConnectorRuntimeStore } from "./ingestion";
 import type { WorkStore } from "./work";
 import type { ExecutorStore } from "./executor-installation";
+import type {
+  ContextArtifactStore,
+  ContextEngine,
+  ContextProjectorRegistry,
+  ContextRetrieverRegistry,
+} from "./context-port";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -14,5 +20,9 @@ declare module "@regenic/plugin-host" {
     connectors: ConnectorRegistry;
     egress: EgressRegistry;
     executors: ExecutorRegistry;
+    context: ContextEngine;
+    "context-artifacts": ContextArtifactStore;
+    "context-projectors": ContextProjectorRegistry;
+    "context-retrievers": ContextRetrieverRegistry;
   }
 }
