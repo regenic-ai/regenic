@@ -35,9 +35,12 @@ export function ThreadPromptPanel({
         ? t("prompt.plan")
         : t("prompt.answer");
   const title = prompt.title ? promptTitleDisplay(prompt.title, t) : null;
-  const detail = prompt.detail
-    ? humanizePromptProse(prompt.detail, locale)
-    : null;
+  // Approval is decide-in-one-tap: agent "detail" is often operator notes
+  // ("only change X, don't complete Y"), not copy meant for the person clicking.
+  const detail =
+    prompt.presentation === "approval" || !prompt.detail
+      ? null
+      : humanizePromptProse(prompt.detail, locale);
   return (
     <form
       className={`prompt-panel presentation-${prompt.presentation}`}
