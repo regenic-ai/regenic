@@ -378,7 +378,14 @@ interface ContextArtifactStore {
   listArtifacts(query: ArtifactQuery): Promise<ContextArtifact[]>;
   putSnapshot(input: ContextSnapshot): Promise<void>;
   getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null>;
+  putBundle(input: ContextBundle): Promise<void>;
+  getBundle(query: ContextBundleLookup): Promise<ContextBundle | null>;
   putCheckpoint(input: ProjectionCheckpoint): Promise<void>;
+  getCheckpoint(
+    orgId: string,
+    projectorId: string,
+    generation: string,
+  ): Promise<ProjectionCheckpoint | null>;
 }
 ```
 
@@ -483,6 +490,13 @@ Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 
 PostgreSQL、pgvector、OpenSearch、Neo4j、Azure AI Search 和模型供应商都是驱动选择，
 不属于领域模型的硬依赖。
+
+个人版 SQLite authority plugin 也通过现有 split reader/writer 实例提供
+`context-artifacts`。Artifact manifest、snapshot、bundle 与 projection checkpoint 以经过
+校验的 canonical JSON 保存，并配有查询索引列。Artifact、snapshot 与 bundle 写入不可变且
+幂等；同一 projector generation 内的 checkpoint 只能单调前进。清理某个组织的 operational
+data 时，会在删除 Event 派生状态的同一事务中删除这些 Context 记录，同时保留 connector、
+executor 与 recipe 配置。
 
 ## 11. 优雅降级
 

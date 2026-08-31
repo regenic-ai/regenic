@@ -348,6 +348,10 @@ export class MemoryAuthorityStore
         conversations: before.conversations,
         work_items: before.work_items,
         blobs: before.blobs,
+        context_artifacts: before.context_artifacts,
+        context_snapshots: before.context_snapshots,
+        context_bundles: before.context_bundles,
+        context_checkpoints: before.context_checkpoints,
       },
       kept: {
         recipes: after.recipes,
@@ -366,6 +370,10 @@ export class MemoryAuthorityStore
       blobs: new Set(
         events.flatMap((event) => (event.content_hash ? [event.content_hash] : [])),
       ).size,
+      context_artifacts: 0,
+      context_snapshots: 0,
+      context_bundles: 0,
+      context_checkpoints: 0,
       recipes: this.recipeCount(orgId),
       connectors: 0,
       executors: this.executorCount(orgId),
