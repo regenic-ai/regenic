@@ -78,4 +78,62 @@ describe("engineRevision", () => {
     );
     assert.notEqual(english, chinese);
   });
+
+  it("changes when sync coverage counts change", () => {
+    const before = engineRevision(
+      {
+        ...engineWithCatalog("Feishu", "Install lark-cli"),
+        installations: [
+          {
+            id: "feishu-1",
+            connector_type: "feishu-chat",
+            status: "enabled",
+            label: "All conversations",
+            detail: null,
+            syncable: true,
+            can_reply: true,
+            can_create: false,
+            last_attempt: null,
+            sync: {
+              discovered: 34,
+              seeded: 12,
+              unseeded: 22,
+              backfilling: 4,
+              media_pending: 0,
+              catalog_complete: false,
+            },
+          },
+        ],
+      },
+      false,
+    );
+    const after = engineRevision(
+      {
+        ...engineWithCatalog("Feishu", "Install lark-cli"),
+        installations: [
+          {
+            id: "feishu-1",
+            connector_type: "feishu-chat",
+            status: "enabled",
+            label: "All conversations",
+            detail: null,
+            syncable: true,
+            can_reply: true,
+            can_create: false,
+            last_attempt: null,
+            sync: {
+              discovered: 120,
+              seeded: 34,
+              unseeded: 86,
+              backfilling: 8,
+              media_pending: 0,
+              catalog_complete: false,
+            },
+          },
+        ],
+      },
+      false,
+    );
+    assert.notEqual(before, after);
+  });
 });

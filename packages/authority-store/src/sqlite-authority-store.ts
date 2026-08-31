@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import {
   AuthorityConflictError,
+  applySyncCatalogMembers,
   conversationId,
   formatInboxDigest,
   headsScanQuery,
@@ -57,6 +58,12 @@ import type {
   WorkStore,
   ExecutorInstallation,
   ExecutorStore,
+  ApplySyncCatalogPageInput,
+  SyncCatalogMember,
+  SyncCatalogSnapshot,
+  SyncCatalogView,
+  SyncPhase,
+  SyncStreamState,
 } from "@regenic/domain";
 import { LATEST_SCHEMA_VERSION, MIGRATIONS } from "./migrations";
 
@@ -117,6 +124,37 @@ interface CursorRow {
   cursor_version: number;
   lease_owner: string | null;
   lease_expires_at: string | null;
+  updated_at: string;
+}
+
+interface StreamMemberRow {
+  installation_id: string;
+  stream_key: string;
+  thread_id: string | null;
+  label: string | null;
+  kind: string | null;
+  generation: number;
+  discovered_at: string;
+  last_seen_at: string;
+}
+
+interface CatalogCursorRow {
+  installation_id: string;
+  cursor_value: string | null;
+  complete: number;
+  generation: number;
+  updated_at: string;
+}
+
+interface SyncStateRow {
+  installation_id: string;
+  stream_key: string;
+  phase: SyncPhase;
+  live_cursor: string | null;
+  history_cursor: string | null;
+  media_pending: number;
+  idle_until: string | null;
+  generation: number;
   updated_at: string;
 }
 
@@ -586,6 +624,36 @@ export class SqliteAuthorityStore
           `,
         )
         .run(now, orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_sync_state
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_stream_members
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_catalog_cursors
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
       const after = this.storeFootprint(orgId);
       return {
         cleared: {
@@ -1272,6 +1340,15 @@ export class SqliteAuthorityStore
         .prepare(`DELETE FROM connector_cursors WHERE installation_id = ?`)
         .run(id);
       this.database
+        .prepare(`DELETE FROM connector_stream_members WHERE installation_id = ?`)
+        .run(id);
+      this.database
+        .prepare(`DELETE FROM connector_catalog_cursors WHERE installation_id = ?`)
+        .run(id);
+      this.database
+        .prepare(`DELETE FROM connector_sync_state WHERE installation_id = ?`)
+        .run(id);
+      this.database
         .prepare(`DELETE FROM connector_installations WHERE id = ? AND org_id = ?`)
         .run(id, orgId);
       return true;
@@ -1664,6 +1741,132 @@ export class SqliteAuthorityStore
     return row ? this.toCursor(row) : null;
   }
 
+  async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
+    return this.loadSyncCatalog(installationId);
+  }
+
+  async applySyncCatalogPage(
+    input: ApplySyncCatalogPageInput,
+  ): Promise<SyncCatalogView> {
+    this.assertWritable();
+    const apply = this.database.transaction(() => {
+      const current = this.loadSyncCatalog(input.installation_id);
+      const next = applySyncCatalogMembers(current, input);
+      this.database
+        .prepare(`DELETE FROM connector_stream_members WHERE installation_id = ?`)
+        .run(input.installation_id);
+      const insert = this.database.prepare(
+        `
+          INSERT INTO connector_stream_members (
+            installation_id, stream_key, thread_id, label, kind,
+            generation, discovered_at, last_seen_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      );
+      for (const member of next.members) {
+        insert.run(
+          member.installation_id,
+          member.stream_key,
+          member.thread_id ?? null,
+          member.label ?? null,
+          member.kind ?? null,
+          member.generation,
+          member.discovered_at,
+          member.last_seen_at,
+        );
+      }
+      if (next.catalog) {
+        this.database
+          .prepare(
+            `
+              INSERT INTO connector_catalog_cursors (
+                installation_id, cursor_value, complete, generation, updated_at
+              ) VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(installation_id) DO UPDATE SET
+                cursor_value = excluded.cursor_value,
+                complete = excluded.complete,
+                generation = excluded.generation,
+                updated_at = excluded.updated_at
+            `,
+          )
+          .run(
+            next.catalog.installation_id,
+            next.catalog.cursor ?? null,
+            next.catalog.complete ? 1 : 0,
+            next.catalog.generation,
+            next.catalog.updated_at,
+          );
+      }
+      return next;
+    });
+    return apply.immediate();
+  }
+
+  async listSyncStates(installationId: string): Promise<SyncStreamState[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT installation_id, stream_key, phase, live_cursor, history_cursor,
+                 media_pending, idle_until, generation, updated_at
+          FROM connector_sync_state
+          WHERE installation_id = ?
+          ORDER BY updated_at DESC, stream_key ASC
+        `,
+      )
+      .all(installationId) as SyncStateRow[];
+    return rows.map((row) => this.toSyncState(row));
+  }
+
+  async getSyncState(
+    installationId: string,
+    streamKey: string,
+  ): Promise<SyncStreamState | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT installation_id, stream_key, phase, live_cursor, history_cursor,
+                 media_pending, idle_until, generation, updated_at
+          FROM connector_sync_state
+          WHERE installation_id = ? AND stream_key = ?
+        `,
+      )
+      .get(installationId, streamKey) as SyncStateRow | undefined;
+    return row ? this.toSyncState(row) : null;
+  }
+
+  async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
+    this.assertWritable();
+    this.database
+      .prepare(
+        `
+          INSERT INTO connector_sync_state (
+            installation_id, stream_key, phase, live_cursor, history_cursor,
+            media_pending, idle_until, generation, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(installation_id, stream_key) DO UPDATE SET
+            phase = excluded.phase,
+            live_cursor = excluded.live_cursor,
+            history_cursor = excluded.history_cursor,
+            media_pending = excluded.media_pending,
+            idle_until = excluded.idle_until,
+            generation = excluded.generation,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        state.installation_id,
+        state.stream_key,
+        state.phase,
+        state.live_cursor ?? null,
+        state.history_cursor ?? null,
+        state.media_pending ? 1 : 0,
+        state.idle_until ?? null,
+        state.generation,
+        state.updated_at,
+      );
+    return { ...state };
+  }
+
   close(): void {
     this.database.close();
   }
@@ -1724,6 +1927,72 @@ export class SqliteAuthorityStore
       | EventRow
       | undefined;
     return row ? this.toEvent(row) : null;
+  }
+
+  private loadSyncCatalog(installationId: string): SyncCatalogView {
+    const members = (
+      this.database
+        .prepare(
+          `
+            SELECT installation_id, stream_key, thread_id, label, kind,
+                   generation, discovered_at, last_seen_at
+            FROM connector_stream_members
+            WHERE installation_id = ?
+            ORDER BY last_seen_at DESC, stream_key ASC
+          `,
+        )
+        .all(installationId) as StreamMemberRow[]
+    ).map((row) => this.toStreamMember(row));
+    const snapshot = this.database
+      .prepare(
+        `
+          SELECT installation_id, cursor_value, complete, generation, updated_at
+          FROM connector_catalog_cursors
+          WHERE installation_id = ?
+        `,
+      )
+      .get(installationId) as CatalogCursorRow | undefined;
+    return {
+      members,
+      catalog: snapshot ? this.toCatalogSnapshot(snapshot) : null,
+    };
+  }
+
+  private toStreamMember(row: StreamMemberRow): SyncCatalogMember {
+    return {
+      installation_id: row.installation_id,
+      stream_key: row.stream_key,
+      ...(row.thread_id ? { thread_id: row.thread_id } : {}),
+      ...(row.label ? { label: row.label } : {}),
+      ...(row.kind ? { kind: row.kind } : {}),
+      generation: row.generation,
+      discovered_at: row.discovered_at,
+      last_seen_at: row.last_seen_at,
+    };
+  }
+
+  private toCatalogSnapshot(row: CatalogCursorRow): SyncCatalogSnapshot {
+    return {
+      installation_id: row.installation_id,
+      ...(row.cursor_value ? { cursor: row.cursor_value } : {}),
+      complete: row.complete === 1,
+      generation: row.generation,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private toSyncState(row: SyncStateRow): SyncStreamState {
+    return {
+      installation_id: row.installation_id,
+      stream_key: row.stream_key,
+      phase: row.phase,
+      ...(row.live_cursor ? { live_cursor: row.live_cursor } : {}),
+      ...(row.history_cursor ? { history_cursor: row.history_cursor } : {}),
+      media_pending: row.media_pending === 1,
+      ...(row.idle_until ? { idle_until: row.idle_until } : {}),
+      generation: row.generation,
+      updated_at: row.updated_at,
+    };
   }
 
   private findCursorRow(

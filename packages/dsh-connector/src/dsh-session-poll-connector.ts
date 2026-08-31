@@ -101,13 +101,20 @@ export class DshSessionPollConnector {
     if (!collected.reached) {
       const nextCursor = formatResumeCursor(afterSeq, collected.resumeBefore);
       this.lastSurfacePage = { events: [], hasMore: true };
-      return this.toPollResult(cursor?.value, nextCursor, []);
+      return {
+        ...this.toPollResult(cursor?.value, nextCursor, []),
+        has_more: true,
+      };
     }
     const surface = toSurfaceEvents(collected.events).filter((event) => event.seq > afterSeq);
     const window = surface.slice(0, this.pageSize);
+    // An empty tip still needs a concrete cursor so SyncEngine can leave
+    // "unseeded" and free the seed slots for other sessions.
     const nextCursor = window.length > 0
       ? String(window[window.length - 1].seq)
-      : afterSeq >= 0 ? String(afterSeq) : undefined;
+      : afterSeq >= 0
+        ? String(afterSeq)
+        : "-1";
     this.lastSurfacePage = {
       events: window,
       hasMore: surface.length > window.length,

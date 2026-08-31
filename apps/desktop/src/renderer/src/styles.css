@@ -222,7 +222,7 @@ button {
 
 .columns {
   display: grid;
-  grid-template-columns: minmax(292px, 332px) minmax(0, 1fr);
+  grid-template-columns: clamp(300px, 34vw, 420px) minmax(0, 1fr);
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -492,13 +492,11 @@ button {
 }
 
 .item {
+  position: relative;
   width: 100%;
   text-align: left;
-  padding: 13px 16px 13px 20px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: start;
+  padding: 11px 12px 11px 16px;
+  display: block;
   cursor: pointer;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
 }
@@ -516,27 +514,30 @@ button {
 }
 
 .item.selected:not(.work-waiting_human):not(.work-failed):not(.work-running):not(.work-done) {
-  box-shadow: inset 2px 0 0 var(--g500);
+  box-shadow: inset 3px 0 0 var(--g500);
 }
 
 .item-main {
   min-width: 0;
-  min-height: 100%;
   text-align: left;
 }
 
 .item-copy {
   min-width: 0;
   display: grid;
-  gap: 5px;
+  gap: 4px;
 }
 
 .item-tools {
   display: flex;
-  flex-direction: row;
-  gap: 2px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 1px;
+  max-width: 0;
   opacity: 0;
+  overflow: hidden;
   pointer-events: none;
+  transition: opacity 0.12s ease;
 }
 
 .item:hover .item-tools,
@@ -549,6 +550,7 @@ button {
 .item:hover .item-tools,
 .item.selected .item-tools,
 .item.pinned .item-tools {
+  max-width: 84px;
   pointer-events: auto;
 }
 
@@ -559,10 +561,11 @@ button {
   color: var(--muted);
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
 }
 
 .item-tool:hover {
-  background: var(--hover);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
   color: var(--text);
 }
 
@@ -583,17 +586,25 @@ button {
   min-width: 0;
 }
 
+.item-aside {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
 .item-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
 .item-tags {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
@@ -601,8 +612,9 @@ button {
 
 .item-time {
   flex: 0 0 auto;
-  color: color-mix(in srgb, var(--text) 62%, var(--muted));
+  color: color-mix(in srgb, var(--text) 55%, var(--muted));
   font-size: 11px;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   display: inline-flex;
   align-items: center;
@@ -614,11 +626,11 @@ button {
 }
 
 .item-unread {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--g500);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 25%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 22%, transparent);
 }
 
 .item-title {
@@ -636,7 +648,7 @@ button {
 }
 
 .item-preview {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
@@ -652,15 +664,15 @@ button {
 
 .item.work-waiting_human,
 .item.work-failed {
-  box-shadow: inset 2px 0 0 var(--risk);
+  box-shadow: inset 3px 0 0 var(--risk);
 }
 
 .item.work-running {
-  box-shadow: inset 2px 0 0 var(--ai);
+  box-shadow: inset 3px 0 0 var(--ai);
 }
 
 .item.work-done {
-  box-shadow: inset 2px 0 0 var(--result);
+  box-shadow: inset 3px 0 0 var(--result);
 }
 
 .item-top:has(.item-title.is-editing) {
@@ -687,25 +699,25 @@ button {
 .channel-tag {
   flex: 0 0 auto;
   height: 16px;
-  padding: 0 6px;
+  padding: 0 5px;
   border-radius: 4px;
-  background: #1b1730;
-  color: var(--data);
+  background: color-mix(in srgb, var(--data) 14%, var(--bg));
+  color: color-mix(in srgb, var(--data) 82%, var(--muted));
   font-size: 9px;
-  font-weight: 750;
-  letter-spacing: 0.06em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   line-height: 16px;
   text-transform: uppercase;
 }
 
 .channel-tag.channel-dsh {
-  background: #1b1730;
-  color: var(--data);
+  background: color-mix(in srgb, var(--data) 14%, var(--bg));
+  color: color-mix(in srgb, var(--data) 82%, var(--muted));
 }
 
 .channel-tag.channel-slack {
-  background: #102428;
-  color: var(--ai);
+  background: color-mix(in srgb, var(--ai) 14%, var(--bg));
+  color: color-mix(in srgb, var(--ai) 82%, var(--muted));
 }
 
 .channel-tag.channel-lg {
@@ -916,7 +928,8 @@ button {
 .recipe-form {
   display: grid;
   gap: 0;
-  max-width: 560px;
+  width: 100%;
+  max-width: none;
 }
 
 .recipe-stack {
@@ -2655,21 +2668,29 @@ button {
 }
 
 .page {
+  width: 100%;
+  box-sizing: border-box;
   overflow: auto;
   padding: 28px 32px 56px;
 }
 
-.page-wide .card {
-  max-width: 760px;
+.page-wide {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
 }
 
+.page-wide > .card,
 .page-wide .recipe-editor,
 .page-wide .recipe-saved {
-  max-width: 640px;
+  width: 100%;
+  max-width: none;
 }
 
 .page-hero {
-  max-width: 640px;
+  width: 100%;
+  max-width: none;
   margin-bottom: 8px;
 }
 
@@ -2684,7 +2705,7 @@ button {
 
 .page-lead {
   margin: 0;
-  max-width: 40em;
+  max-width: 48em;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
@@ -2694,7 +2715,8 @@ button {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  max-width: 640px;
+  width: 100%;
+  max-width: none;
   margin: 16px 0 4px;
   padding: 0;
   list-style: none;
@@ -2736,12 +2758,45 @@ button {
   grid-template-columns: 1fr 1fr;
 }
 
+@media (min-width: 900px) {
+  .page-wide .choice-list {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .page-recipes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    column-gap: 16px;
+    align-items: start;
+  }
+
+  .page-recipes > .page-hero {
+    grid-column: 1 / -1;
+  }
+
+  .page-recipes > .card:only-of-type {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1100px) {
+  .engine-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 860px) {
   .step-grid,
   .language-choices,
+  .page-wide .choice-list,
   .seg,
-  .engine-stats,
   .recipe-commit {
+    grid-template-columns: 1fr;
+  }
+
+  .engine-stats {
     grid-template-columns: 1fr;
   }
 
@@ -2803,7 +2858,9 @@ button {
   border-radius: 10px;
   padding: 16px;
   margin-top: 14px;
-  max-width: 720px;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
 }
 
 .card h2 {
@@ -2814,15 +2871,18 @@ button {
 
 .engine-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  width: 100%;
 }
 
 .engine-stat {
   display: grid;
-  gap: 6px;
+  gap: 8px;
+  align-content: start;
   min-width: 0;
-  padding: 12px;
+  min-height: 78px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg) 42%, var(--surface));
@@ -2840,8 +2900,16 @@ button {
   color: var(--text);
   font-size: 13px;
   font-weight: 550;
-  line-height: 1.4;
+  line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.engine-stat.is-emphasis .engine-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
 .engine-stat.is-ok {
@@ -2866,16 +2934,25 @@ button {
 
 .engine-meta {
   display: grid;
-  gap: 8px;
-  margin: 14px 0 0;
-  padding: 0;
+  gap: 0;
+  margin: 16px 0 0;
+  padding: 4px 0 0;
+  border-top: 1px solid var(--line);
 }
 
 .engine-meta div {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 12px;
   align-items: baseline;
+  min-width: 0;
+  padding: 9px 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.engine-meta div:last-child {
+  border-bottom: 0;
+  padding-bottom: 2px;
 }
 
 .engine-meta dt {
@@ -2888,7 +2965,23 @@ button {
   margin: 0;
   color: var(--text);
   font-size: 12px;
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.engine-meta dd code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.engine-meta dd code:hover {
+  white-space: normal;
+  overflow: visible;
+  color: var(--text);
 }
 
 .engine-kernel .action-error,

@@ -62,6 +62,29 @@ describe("slackChannelPlugin", () => {
     await host.dispose();
   });
 
+  it("exposes the configured channel as a complete sync directory", async () => {
+    const source = await slackChannelDriver.bindSyncSource({
+      id: "slack-1",
+      org_id: "local-owner",
+      connector_type: "slack-channel",
+      status: "enabled",
+      config: { channel_id: "C123", channel_name: "eng" },
+      created_at: "2026-08-21T00:00:00.000Z",
+    });
+    const page = await source.listDirectory(null);
+    assert.deepEqual(page, {
+      members: [
+        {
+          stream_key: "channel:C123",
+          thread_id: "slack:C123",
+          label: "eng",
+          kind: "channel",
+        },
+      ],
+      complete: true,
+    });
+  });
+
   it("is sync-only and cannot create a conversation", async () => {
     const installation = {
       id: "slack-1",

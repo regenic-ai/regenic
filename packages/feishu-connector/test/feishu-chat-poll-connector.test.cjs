@@ -303,6 +303,7 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(attachment.external_locator, "feishu:image:img_shot");
     assert.equal(attachment.bytes, undefined);
     assert.equal(result.has_more, true);
+    assert.equal(result.media_pending, true);
     assert.match(result.next_cursor ?? "", /"recent_seeded":true/);
     assert.match(result.next_cursor ?? "", /"media_jobs"/);
   });
@@ -921,21 +922,18 @@ describe("FeishuChatPollConnector", () => {
     const connector = createConnector({
       async listMessages(input) {
         calls.push(input);
-        if (calls.length === 1) {
-          return {
-            items: [
-              {
-                message_id: "om_img",
-                msg_type: "image",
-                create_time: "1723600000000",
-                sender: { id: "ou_1", sender_type: "user", name: "Ada" },
-                body: { content: JSON.stringify({ image_key: "img_shot" }) },
-              },
-            ],
-            has_more: false,
-          };
-        }
-        return { items: [], has_more: false };
+        return {
+          items: [
+            {
+              message_id: "om_img",
+              msg_type: "image",
+              create_time: "1723600000000",
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: { content: JSON.stringify({ image_key: "img_shot" }) },
+            },
+          ],
+          has_more: false,
+        };
       },
       async downloadResource() {
         return { bytes: png, media_type: "image/png", filename: "shot.png" };
@@ -950,16 +948,60 @@ describe("FeishuChatPollConnector", () => {
       },
       { media: false },
     );
-    const filled = await connector.poll({ value: opened.next_cursor });
+    const filled = await connector.poll({ value: opened.next_cursor }, { media: true });
+    assert.equal(calls.length, 1);
     assert.equal(calls[0].sort_type, "ByCreateTimeAsc");
-    assert.equal(calls[1].sort_type, "ByCreateTimeAsc");
     assert.equal(opened.batch.records[0].operation, "create");
     assert.equal(opened.batch.records[0].content.find((part) => part.role === "attachment").bytes, undefined);
+    assert.equal(opened.media_pending, true);
     assert.equal(filled.batch.records[0].operation, "revise");
+    assert.equal(filled.media_pending, false);
     assert.equal(
       filled.batch.records[0].content.find((part) => part.role === "attachment").bytes.byteLength,
       8,
     );
+    assert.match(filled.next_cursor ?? "", /"start_time":"1723600000"/);
+    assert.equal(/"media_jobs"/.test(filled.next_cursor ?? ""), false);
+  });
+
+  it("media-only poll never calls listMessages", async () => {
+    let listed = 0;
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const connector = createConnector({
+      async listMessages() {
+        listed += 1;
+        return { items: [], has_more: false };
+      },
+      async downloadResource() {
+        return { bytes: png, media_type: "image/png", filename: "shot.png" };
+      },
+    });
+    const result = await connector.poll(
+      {
+        value: JSON.stringify({
+          start_time: "1723420800",
+          recent_seeded: true,
+          media_jobs: [
+            {
+              message_id: "om_img",
+              key: "img_shot",
+              kind: "image",
+              attempts: 0,
+              occurred_at: "2026-08-31T00:00:00.000Z",
+              actor_id: "ou_1",
+              sender_kind: "user",
+              direction: "inbound",
+              refs: [{ key: "img_shot", kind: "image" }],
+            },
+          ],
+        }),
+      },
+      { media: true },
+    );
+    assert.equal(listed, 0);
+    assert.equal(result.batch.records[0].operation, "revise");
+    assert.equal(result.media_pending, false);
+    assert.equal(result.has_more, false);
   });
 
   it("rejects a JSON error body instead of treating it as image bytes", async () => {

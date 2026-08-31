@@ -13,6 +13,7 @@ import {
   attemptSummary,
   connectorActionError,
   installationStatusLabel,
+  syncProgressSummary,
 } from "./format";
 import { openExternal } from "./CatalogDocs";
 import { useLocale } from "./LocaleContext";
@@ -705,6 +706,9 @@ function ConnectorRow({
             ) : null}
           </div>
           <div className="muted">{attemptSummary(installation.last_attempt)}</div>
+          {installation.sync ? (
+            <div className="muted">{syncProgressSummary(installation.sync)}</div>
+          ) : null}
           {kind.connector_type === "whatsapp-web-live" ? (
             <PairingCodeCard
               installationId={installation.id}

@@ -38,11 +38,30 @@ export function isFeishuTokenError(error: unknown): boolean {
   return /token invalid|invalid.*token|user unauthorized|access token/i.test(text);
 }
 
+export type FeishuOpenApiParamValue = string | number | readonly string[];
+
+export type FeishuOpenApiParams = Record<string, FeishuOpenApiParamValue>;
+
+export function appendFeishuOpenApiParams(
+  url: URL,
+  params?: FeishuOpenApiParams,
+): void {
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        url.searchParams.append(key, String(item));
+      }
+      continue;
+    }
+    url.searchParams.set(key, String(value));
+  }
+}
+
 export async function callFeishuOpenApi(input: {
   method: "GET" | "POST";
   path: string;
   token: string;
-  params?: Record<string, string | number>;
+  params?: FeishuOpenApiParams;
   data?: unknown;
   form?: FormData;
   base_url?: string;
@@ -51,9 +70,7 @@ export async function callFeishuOpenApi(input: {
 }): Promise<unknown> {
   const fetchFn = input.fetch ?? fetch;
   const url = new URL(input.path, input.base_url ?? FEISHU_OPEN_API_CN);
-  for (const [key, value] of Object.entries(input.params ?? {})) {
-    url.searchParams.set(key, String(value));
-  }
+  appendFeishuOpenApiParams(url, input.params);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${input.token}`,
   };
@@ -104,16 +121,14 @@ export async function callFeishuOpenApiBytes(input: {
   method: "GET" | "POST";
   path: string;
   token: string;
-  params?: Record<string, string | number>;
+  params?: FeishuOpenApiParams;
   base_url?: string;
   fetch?: typeof fetch;
   timeout_ms?: number;
 }): Promise<{ bytes: Uint8Array; media_type: string; filename?: string }> {
   const fetchFn = input.fetch ?? fetch;
   const url = new URL(input.path, input.base_url ?? FEISHU_OPEN_API_CN);
-  for (const [key, value] of Object.entries(input.params ?? {})) {
-    url.searchParams.set(key, String(value));
-  }
+  appendFeishuOpenApiParams(url, input.params);
   const timeoutMs = input.timeout_ms ?? 20_000;
   const signal =
     timeoutMs > 0 && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal

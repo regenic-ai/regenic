@@ -45,6 +45,7 @@ export type ConnectorPollRunResult =
       result: IngestBatchResult;
       next_cursor?: string;
       has_more?: boolean;
+      media_pending?: boolean;
     };
 
 export interface RunConnectorWebhookInput {
@@ -172,6 +173,7 @@ export class ConnectorRunner {
         },
         next_cursor: nextCursor,
         has_more: pollResult.has_more,
+        media_pending: pollResult.media_pending,
       };
     }
 
@@ -227,6 +229,7 @@ export class ConnectorRunner {
       result,
       next_cursor: nextCursor,
       has_more: pollResult.has_more,
+      media_pending: pollResult.media_pending,
     };
   }
 

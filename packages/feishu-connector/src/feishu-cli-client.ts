@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
+import { currentSyncLane, SyncSlotPool } from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
@@ -11,6 +12,7 @@ import {
   callFeishuOpenApiBytes,
   feishuOpenApiBaseUrl,
   isFeishuTokenError,
+  type FeishuOpenApiParams,
   type FeishuSortType,
 } from "./feishu-openapi";
 import type { FeishuUserTokenSource } from "./feishu-user-token";
@@ -112,6 +114,7 @@ export interface FeishuImClient {
     types?: FeishuChatMode[];
     names?: boolean;
   }): Promise<FeishuChatPage>;
+  getChat?(chatId: string): Promise<FeishuChat | null>;
   sendText(input: {
     chat_id: string;
     text: string;
@@ -139,27 +142,17 @@ export interface LarkCliClientOptions {
 export const LARK_CLI_CONCURRENCY = 2;
 export const LARK_CLI_RETRIES = 2;
 
-let larkCliActive = 0;
-const larkCliWaiters: Array<() => void> = [];
+const larkCliSlots = new SyncSlotPool({
+  total: LARK_CLI_CONCURRENCY,
+  reserved: { interactive: 1 },
+});
 
 export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
-  if (larkCliActive >= LARK_CLI_CONCURRENCY) {
-    await new Promise<void>((resolve) => {
-      larkCliWaiters.push(resolve);
-    });
-  }
-  larkCliActive += 1;
-  try {
-    return await work();
-  } finally {
-    larkCliActive -= 1;
-    larkCliWaiters.shift()?.();
-  }
+  return larkCliSlots.withSlot(currentSyncLane(), work);
 }
 
 export function resetLarkCliSlot(): void {
-  larkCliActive = 0;
-  larkCliWaiters.length = 0;
+  larkCliSlots.reset();
 }
 
 export function isMissingLarkShortcutError(error: unknown): boolean {
@@ -263,6 +256,79 @@ export class LarkCliClient implements FeishuImClient {
     names?: boolean;
   }): Promise<FeishuChatPage> {
     const types = normalizeChatTypes(input.types);
+    const page = types.includes("p2p")
+      ? await this.listChatsViaShortcut(input, types)
+      : await this.listChatsViaOpenApi(input);
+    if (input.names !== false) {
+      await this.fillP2pNames(page.items);
+    }
+    return page;
+  }
+
+  /** Official /im/v1/chats is groups only. Used when the census does not need p2p. */
+  private async listChatsViaOpenApi(input: {
+    page_size: number;
+    page_token?: string;
+  }): Promise<FeishuChatPage> {
+    const params: Record<string, string | number> = {
+      page_size: Math.min(Math.max(1, input.page_size), 100),
+      sort_type: "ByActiveTimeDesc",
+      user_id_type: "open_id",
+    };
+    if (input.page_token) {
+      params.page_token = input.page_token;
+    }
+    const page = parseChatPage(
+      await this.request({
+        method: "GET",
+        path: "/open-apis/im/v1/chats",
+        params,
+      }),
+    );
+    return {
+      ...page,
+      items: page.items.map((chat) => ({
+        ...chat,
+        chat_mode: chat.chat_mode ?? "group",
+      })),
+    };
+  }
+
+  async getChat(chatId: string): Promise<FeishuChat | null> {
+    const id = chatId.trim();
+    if (!id) {
+      return null;
+    }
+    const cached = chatInfoCache.get(id);
+    const now = Date.now();
+    if (cached && now - cached.at < CHAT_INFO_TTL_MS) {
+      return cached.chat ? { ...cached.chat } : null;
+    }
+    try {
+      const payload = await this.request({
+        method: "GET",
+        path: `/open-apis/im/v1/chats/${encodeURIComponent(id)}`,
+        params: { user_id_type: "open_id" },
+      });
+      const chat = parseChat(payload)[0] ?? null;
+      if (chat && !chat.name && chat.p2p_target_id) {
+        await this.fillP2pNames([chat]);
+      }
+      chatInfoCache.set(id, { chat, at: now });
+      return chat ? { ...chat } : null;
+    } catch {
+      chatInfoCache.set(id, { chat: null, at: now });
+      return null;
+    }
+  }
+
+  private async listChatsViaShortcut(
+    input: {
+      page_size: number;
+      page_token?: string;
+    },
+    types: FeishuChatMode[],
+  ): Promise<FeishuChatPage> {
     const argv = [
       this.command,
       "im",
@@ -284,11 +350,7 @@ export class LarkCliClient implements FeishuImClient {
       env: this.options.env,
       timeout_ms: this.timeoutMs,
     });
-    const page = parseChatPage(unwrapLarkCli(result));
-    if (input.names !== false) {
-      await this.fillP2pNames(page.items);
-    }
-    return page;
+    return parseChatPage(unwrapLarkCli(result));
   }
 
   async listRecentChats(
@@ -549,7 +611,7 @@ export class LarkCliClient implements FeishuImClient {
     }
     for (let index = 0; index < missing.length; index += 50) {
       const batch = missing.slice(index, index + 50);
-      const lookedUp = await this.lookupUserNames(batch);
+      const lookedUp = await this.lookupUserNamesCached(batch);
       for (const [id, name] of lookedUp) {
         userNameCache.set(id, { name, at: now });
         names.set(id, name);
@@ -606,7 +668,7 @@ export class LarkCliClient implements FeishuImClient {
   private async request(input: {
     method: "GET" | "POST";
     path: string;
-    params?: Record<string, string | number>;
+    params?: FeishuOpenApiParams;
     data?: Record<string, unknown>;
   }): Promise<unknown> {
     const viaHttp = await this.requestViaHttp(input);
@@ -620,7 +682,7 @@ export class LarkCliClient implements FeishuImClient {
   private async requestViaCli(input: {
     method: "GET" | "POST";
     path: string;
-    params?: Record<string, string | number>;
+    params?: FeishuOpenApiParams;
     data?: Record<string, unknown>;
   }): Promise<unknown> {
     const argv = [
@@ -712,7 +774,7 @@ export class LarkCliClient implements FeishuImClient {
   private async requestHttp(input: {
     method: "GET" | "POST";
     path: string;
-    params?: Record<string, string | number>;
+    params?: FeishuOpenApiParams;
     data?: Record<string, unknown>;
     form?: FormData;
     token: string;
@@ -735,7 +797,7 @@ export class LarkCliClient implements FeishuImClient {
   private async requestHttpBytes(input: {
     method: "GET";
     path: string;
-    params?: Record<string, string | number>;
+    params?: FeishuOpenApiParams;
     token: string;
     timeout_ms?: number;
   }): Promise<FeishuDownloadedFile> {
@@ -754,7 +816,7 @@ export class LarkCliClient implements FeishuImClient {
   private async requestViaHttpBytes(input: {
     method: "GET";
     path: string;
-    params?: Record<string, string | number>;
+    params?: FeishuOpenApiParams;
     timeout_ms?: number;
   }): Promise<FeishuDownloadedFile | undefined> {
     const source = this.options.userToken;
@@ -790,7 +852,7 @@ export class LarkCliClient implements FeishuImClient {
   private async requestViaHttp(input: {
     method: "GET" | "POST";
     path: string;
-    params?: Record<string, string | number>;
+    params?: FeishuOpenApiParams;
     data?: Record<string, unknown>;
     form?: FormData;
     timeout_ms?: number;
@@ -825,7 +887,67 @@ export class LarkCliClient implements FeishuImClient {
     }
   }
 
-  private async lookupUserNames(ids: string[]): Promise<Map<string, string>> {
+  private async lookupUserNamesCached(ids: string[]): Promise<Map<string, string>> {
+    const key = ids.slice().sort().join(",");
+    const existing = userNameInflight.get(key);
+    if (existing) {
+      return existing;
+    }
+    const pending = this.lookupUserNamesFresh(ids).finally(() => {
+      if (userNameInflight.get(key) === pending) {
+        userNameInflight.delete(key);
+      }
+    });
+    userNameInflight.set(key, pending);
+    return pending;
+  }
+
+  /**
+   * Prefer official contact batch over HTTP (user token). Fall back to
+   * `contact +search-user` for missing ids or when no token is available.
+   */
+  private async lookupUserNamesFresh(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) {
+      return new Map();
+    }
+    const viaHttp = await this.lookupUserNamesViaOpenApi(ids);
+    if (!viaHttp) {
+      return this.lookupUserNamesViaCli(ids);
+    }
+    const missing = ids.filter((id) => !viaHttp.has(id));
+    if (missing.length === 0) {
+      return viaHttp;
+    }
+    const viaCli = await this.lookupUserNamesViaCli(missing);
+    for (const [id, name] of viaCli) {
+      viaHttp.set(id, name);
+    }
+    return viaHttp;
+  }
+
+  private async lookupUserNamesViaOpenApi(
+    ids: string[],
+  ): Promise<Map<string, string> | undefined> {
+    try {
+      const payload = await this.requestViaHttp({
+        method: "GET",
+        path: "/open-apis/contact/v3/users/batch",
+        params: {
+          user_id_type: "open_id",
+          user_ids: ids,
+        },
+        timeout_ms: Math.min(this.timeoutMs, 15_000),
+      });
+      if (payload === undefined) {
+        return undefined;
+      }
+      return parseUserNamePage(payload);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async lookupUserNamesViaCli(ids: string[]): Promise<Map<string, string>> {
     if (ids.length === 0) {
       return new Map();
     }
@@ -937,14 +1059,22 @@ function parseChat(value: unknown): FeishuChat[] {
 }
 
 const USER_NAME_TTL_MS = 10 * 60 * 1000;
+const CHAT_INFO_TTL_MS = 10 * 60 * 1000;
 const CHAT_LIST_TTL_MS = 5 * 60_000;
 const RECENT_CHAT_LIST_TTL_MS = 2 * 60_000;
 const userNameCache = new Map<string, { name: string; at: number }>();
+const userNameInflight = new Map<string, Promise<Map<string, string>>>();
+const chatInfoCache = new Map<string, { chat: FeishuChat | null; at: number }>();
 const chatListCache = new Map<string, { at: number; chats: FeishuChat[] }>();
 const chatListInflight = new Map<string, Promise<FeishuChat[]>>();
 
 export function resetFeishuUserNameCache(): void {
   userNameCache.clear();
+  userNameInflight.clear();
+}
+
+export function resetFeishuChatInfoCache(): void {
+  chatInfoCache.clear();
 }
 
 export function resetFeishuChatListCache(): void {
@@ -974,6 +1104,8 @@ export function parseUserNamePage(value: unknown): Map<string, string> {
     const name =
       stringValue(item.name) ??
       stringValue(item.user_name) ??
+      stringValue(item.nickname) ??
+      stringValue(item.en_name) ??
       localizedName(item.localized_name);
     if (id && name) {
       names.set(id, name);

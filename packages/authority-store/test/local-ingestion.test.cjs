@@ -65,7 +65,7 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
 
-    assert.equal(authorityStore.schemaVersion, 18);
+    assert.equal(authorityStore.schemaVersion, 19);
     const inspect = new Database(join(root, "authority.db"));
     const index = inspect
       .prepare(
@@ -247,12 +247,12 @@ describe("local ingestion persistence", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const database = new Database(path);
-    database.pragma("user_version = 19");
+    database.pragma("user_version = 20");
     database.close();
 
     assert.throws(
       () => new SqliteAuthorityStore(path),
-      /schema 19 is newer than supported 18/,
+      /schema 20 is newer than supported 19/,
     );
   });
 
@@ -524,7 +524,7 @@ describe("local ingestion persistence", () => {
       .prepare("SELECT thread_id FROM events WHERE id = ?")
       .get("evt-1");
     inspect.close();
-    assert.equal(store.schemaVersion, 18);
+    assert.equal(store.schemaVersion, 19);
     assert.equal(row.thread_id, conversationId("feishu", "oc_chat:om_1", "evt-1"));
     const heads = await store.listInbox("local-owner", { heads: true });
     assert.equal(heads.length, 1);
@@ -893,6 +893,28 @@ describe("local ingestion persistence", () => {
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
     });
+    await authorityStore.applySyncCatalogPage({
+      installation_id: "keep-connector",
+      members: [
+        {
+          stream_key: "personal",
+          thread_id: "dsh:personal",
+          label: "Personal",
+        },
+      ],
+      now: "2026-08-26T00:00:00.000Z",
+      complete: true,
+    });
+    await authorityStore.putSyncState({
+      installation_id: "keep-connector",
+      stream_key: "personal",
+      phase: "live",
+      live_cursor: "10",
+      history_cursor: "10",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-08-26T00:00:00.000Z",
+    });
     const before = await authorityStore.summarizeStore("local-owner");
     assert.ok(before.events >= 1);
     assert.ok(before.conversations >= 1);
@@ -910,6 +932,11 @@ describe("local ingestion persistence", () => {
     const recipes = await authorityStore.listRecipes("local-owner");
     const installations = await authorityStore.listInstallations("local-owner");
     const attempts = await authorityStore.listAttempts("keep-connector");
+    const syncCatalog = await authorityStore.getSyncCatalog("keep-connector");
+    const syncState = await authorityStore.getSyncState(
+      "keep-connector",
+      "personal",
+    );
 
     assert.equal(cleared.cleared.events, before.events);
     assert.equal(cleared.cleared.work_items, 1);
@@ -928,6 +955,9 @@ describe("local ingestion persistence", () => {
     assert.equal(attempts.length, 0);
     assert.equal(cursor.cursor, undefined);
     assert.ok(cursor.cursor_version > 1);
+    assert.equal(syncCatalog.members.length, 0);
+    assert.equal(syncCatalog.catalog, null);
+    assert.equal(syncState, null);
     authorityStore.close();
   });
 });

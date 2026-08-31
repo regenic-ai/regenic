@@ -12,6 +12,7 @@ import {
   type DeliveryReceipt,
   type JsonValue,
   type NewConnectorInstallation,
+  type SyncSource,
 } from "@regenic/domain";
 import {
   CURSOR_API_KEY_ENV,
@@ -135,6 +136,20 @@ export const cursorAgentDriver: ChannelDriver = {
       : [];
     const agentIds = [...new Set([...fromInbox, ...discovered])];
     return mountCursorAgents(host, installation, env, agentIds);
+  },
+
+  async bindSyncSource(installation): Promise<SyncSource> {
+    return {
+      async listDirectory() {
+        return {
+          members: discoverLocalAgents(installation.config).map((agentId) => ({
+            stream_key: cursorStreamKey(agentId),
+            thread_id: `${CURSOR_SOURCE}:${agentId}`,
+          })),
+          complete: true,
+        };
+      },
+    };
   },
 
   async resolveThreadStream(installation, thread, host, env) {

@@ -267,6 +267,42 @@ describe("connector catalog hints", () => {
     assert.equal(view.channel, "feishu");
     assert.equal(view.channel_label, "Feishu");
     assert.equal(view.settings.kinds, "group,p2p");
+    assert.equal(view.sync, undefined);
+  });
+
+  it("attaches sync coverage when the store has started a catalog", () => {
+    const view = toInstallationView(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all", kinds: ["group", "p2p"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+        updated_at: "2026-08-22T00:00:00.000Z",
+      },
+      null,
+      {
+        get() {
+          return feishuChatDriver;
+        },
+      },
+      "en",
+      {
+        sync: {
+          discovered: 120,
+          seeded: 34,
+          unseeded: 86,
+          backfilling: 8,
+          media_pending: 0,
+          catalog_complete: false,
+        },
+      },
+    );
+    assert.equal(view.sync.discovered, 120);
+    assert.equal(view.sync.seeded, 34);
+    assert.equal(view.sync.backfilling, 8);
+    assert.equal(view.sync.catalog_complete, false);
   });
 
   it("projects file import only when the driver can parseImport", () => {

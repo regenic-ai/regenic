@@ -433,10 +433,52 @@ function WorkRow({
               onEditingChange={onEditingChange}
               onSave={onRename}
             />
-            <span className="item-time">
-              {thread.unread ? <span className="item-unread" aria-label={t("inbox.unreadAria")} /> : null}
-              {latest ? formatChatTime(latest.event.occurred_at) : ""}
-            </span>
+            <div className="item-aside">
+              <div className="item-tools">
+                <button
+                  type="button"
+                  className="item-tool"
+                  aria-label={folded ? t("inbox.show") : t("inbox.hide")}
+                  title={folded ? t("inbox.showTitle") : t("inbox.hideTitle")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onHide(!folded);
+                  }}
+                >
+                  {folded ? <ShowIcon /> : <HideIcon />}
+                </button>
+                <button
+                  type="button"
+                  className={`item-tool${thread.pinned ? " is-on" : ""}`}
+                  aria-label={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
+                  title={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onPin(!thread.pinned);
+                  }}
+                >
+                  <PinIcon filled={thread.pinned} />
+                </button>
+                <button
+                  type="button"
+                  className="item-tool"
+                  aria-label={t("inbox.rename")}
+                  title={t("inbox.rename")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onStartRename();
+                  }}
+                >
+                  <PencilIcon />
+                </button>
+              </div>
+              <span className="item-time">
+                {thread.unread ? (
+                  <span className="item-unread" aria-label={t("inbox.unreadAria")} />
+                ) : null}
+                {latest ? formatChatTime(latest.event.occurred_at) : ""}
+              </span>
+            </div>
           </div>
           <div className="item-meta">
             <span className="item-tags">
@@ -455,44 +497,6 @@ function WorkRow({
             {preview ? <div className="item-preview">{preview}</div> : null}
           </div>
         </div>
-      </div>
-      <div className="item-tools">
-        <button
-          type="button"
-          className="item-tool"
-          aria-label={folded ? t("inbox.show") : t("inbox.hide")}
-          title={folded ? t("inbox.showTitle") : t("inbox.hideTitle")}
-          onClick={(event) => {
-            event.stopPropagation();
-            void onHide(!folded);
-          }}
-        >
-          {folded ? <ShowIcon /> : <HideIcon />}
-        </button>
-        <button
-          type="button"
-          className={`item-tool${thread.pinned ? " is-on" : ""}`}
-          aria-label={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
-          title={thread.pinned ? t("inbox.unpin") : t("inbox.pin")}
-          onClick={(event) => {
-            event.stopPropagation();
-            void onPin(!thread.pinned);
-          }}
-        >
-          <PinIcon filled={thread.pinned} />
-        </button>
-        <button
-          type="button"
-          className="item-tool"
-          aria-label={t("inbox.rename")}
-          title={t("inbox.rename")}
-          onClick={(event) => {
-            event.stopPropagation();
-            onStartRename();
-          }}
-        >
-          <PencilIcon />
-        </button>
       </div>
     </div>
   );

@@ -11,7 +11,17 @@ import {
   threadSyncLabel,
   threadSyncTone,
 } from "../src/renderer/src/pull-copy.ts";
-import type { PersonalEngineView, PullStatusView } from "../src/renderer/src/types.ts";
+import {
+  aggregateInstallationSync,
+  syncProgressSummary,
+  syncProgressTone,
+} from "../src/renderer/src/sync-copy.ts";
+import type {
+  EngineInstallationView,
+  PersonalEngineView,
+  PullStatusView,
+  SyncProgressView,
+} from "../src/renderer/src/types.ts";
 
 function pull(overrides: Partial<PullStatusView> = {}): PullStatusView {
   return {
@@ -105,6 +115,61 @@ describe("engine chip and pull copy", () => {
     assert.equal(threadSyncLabel("feishu:oc_1", status), "Sync interrupted · retrying");
     assert.equal(threadSyncTone("feishu:oc_1", status), "error");
     assert.equal(pullStatusLabel(status), "Retrying after a drop");
+  });
+});
+
+describe("sync coverage copy", () => {
+  it("keeps discovered, seeded, and backfilling visible together", () => {
+    const sync: SyncProgressView = {
+      discovered: 120,
+      seeded: 34,
+      unseeded: 86,
+      backfilling: 8,
+      media_pending: 0,
+      catalog_complete: false,
+    };
+    assert.equal(
+      syncProgressSummary(sync),
+      "Listed 120+ · recent synced 34 · catching up 8",
+    );
+    assert.equal(syncProgressTone(sync), "warn");
+    setActiveLocale("zh");
+    try {
+      assert.equal(
+        syncProgressSummary(sync),
+        "已列出 120+ · 最近已同步 34 · 补历史中 8",
+      );
+    } finally {
+      setActiveLocale("en");
+    }
+  });
+
+  it("does not treat current-work count as the discovered set", () => {
+    const installs: EngineInstallationView[] = [
+      {
+        id: "feishu-1",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        label: "All conversations",
+        detail: null,
+        syncable: true,
+        can_reply: true,
+        can_create: false,
+        last_attempt: null,
+        sync: {
+          discovered: 120,
+          seeded: 34,
+          unseeded: 86,
+          backfilling: 8,
+          media_pending: 0,
+          catalog_complete: false,
+        },
+      },
+    ];
+    const coverage = aggregateInstallationSync(installs);
+    assert.equal(coverage?.discovered, 120);
+    assert.equal(coverage?.seeded, 34);
+    assert.notEqual(coverage?.discovered, 34);
   });
 });
 

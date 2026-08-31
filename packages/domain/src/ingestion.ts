@@ -1,4 +1,5 @@
 import type { ArrangementDecision, InboxItem } from "./arrangement";
+import type { SyncStore } from "./sync-contracts";
 
 export const INGEST_SCHEMA_VERSION = "1.0" as const;
 
@@ -135,7 +136,12 @@ export interface ConnectorCursor {
 export interface ConnectorPollOptions {
   /** One older/history page instead of the live/recent page. */
   older?: boolean;
-  /** Download attachments. Default true. Open/seed can skip this. */
+  /**
+   * Download attachments.
+   * - `false`: text/history only; enqueue media jobs but do not download.
+   * - `true`: media lane only; drain queued downloads without fetching text.
+   * - omitted: text page and drain (legacy connectors / tests).
+   */
   media?: boolean;
 }
 
@@ -143,6 +149,8 @@ export interface PollResult {
   batch: IngestBatch;
   next_cursor?: string;
   has_more?: boolean;
+  /** Remaining attachment jobs after this page. Opaque to the kernel. */
+  media_pending?: boolean;
 }
 
 export interface BackfillRange {
@@ -535,7 +543,7 @@ export interface SettleIngestAttempt {
   quarantines: NewIngestQuarantine[];
 }
 
-export interface ConnectorRuntimeStore {
+export interface ConnectorRuntimeStore extends SyncStore {
   createInstallation(input: NewConnectorInstallation): Promise<ConnectorInstallation>;
   findInstallation(id: string): Promise<ConnectorInstallation | null>;
   listInstallations(orgId: string): Promise<ConnectorInstallation[]>;

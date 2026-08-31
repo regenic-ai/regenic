@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
+  catalogRefreshPages,
   lastCatchUpKey,
   lastHistoryKey,
   prependUnseenStreams,
@@ -9,6 +10,7 @@ const {
   selectHumanPacedStreams,
   selectStreamsForTick,
   shouldKeepCatchingUp,
+  syncExecutionBudget,
 } = require("../dist/personal-stream-pace");
 
 function planned(key, catchingUp, threadId) {
@@ -187,5 +189,82 @@ describe("shouldKeepCatchingUp", () => {
       }),
       false,
     );
+  });
+
+  it("stops when a full budget page explicitly reports no more", () => {
+    assert.equal(
+      shouldKeepCatchingUp({
+        pages: [{ status: "completed", has_more: false }],
+        pagesBudget: 1,
+        acceptedCount: 20,
+        quarantinedCount: 0,
+      }),
+      false,
+    );
+  });
+
+  it("keeps going when has_more is omitted and the budget filled", () => {
+    assert.equal(
+      shouldKeepCatchingUp({
+        pages: [{ status: "completed" }],
+        pagesBudget: 1,
+        acceptedCount: 20,
+        quarantinedCount: 0,
+      }),
+      true,
+    );
+  });
+});
+
+describe("syncExecutionBudget", () => {
+  it("uses catch_up_pages and higher concurrency only when idle", () => {
+    assert.deepEqual(
+      syncExecutionBudget({
+        humanIdle: true,
+        capCatchUp: true,
+        lane: "history",
+        pages: 1,
+        catchUpPages: 5,
+      }),
+      { pages: 5, concurrency: 6 },
+    );
+    assert.deepEqual(
+      syncExecutionBudget({
+        humanIdle: false,
+        capCatchUp: true,
+        lane: "history",
+        pages: 1,
+        catchUpPages: 5,
+      }),
+      { pages: 1, concurrency: 2 },
+    );
+  });
+
+  it("keeps media on a small dedicated concurrency budget", () => {
+    assert.deepEqual(
+      syncExecutionBudget({
+        humanIdle: true,
+        lane: "media",
+        pages: 3,
+      }),
+      { pages: 1, concurrency: 2 },
+    );
+    assert.deepEqual(
+      syncExecutionBudget({
+        humanIdle: false,
+        capCatchUp: true,
+        lane: "media",
+        pages: 3,
+      }),
+      { pages: 1, concurrency: 1 },
+    );
+  });
+});
+
+describe("catalogRefreshPages", () => {
+  it("turns a page while the human is present and bursts when idle or discovering", () => {
+    assert.equal(catalogRefreshPages({ humanIdle: false }), 1);
+    assert.equal(catalogRefreshPages({ humanIdle: true }), 3);
+    assert.equal(catalogRefreshPages({ discover: true, humanIdle: false }), 10);
   });
 });
