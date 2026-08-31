@@ -389,51 +389,6 @@ export function firstLine(text: string | undefined, max = 80): string {
   return `${clean.slice(0, Math.max(1, max - 1))}…`;
 }
 
-export type WorkResultTone = "ok" | "no" | "neutral";
-
-const WORK_RESULT_OK = /^(approved|passed|pass|通过)(?:$|\b)/i;
-const WORK_RESULT_NO = /^(rejected|failed|fail|denied|blocked|不通过)(?:$|\b)/i;
-const WORK_RESULT_OTHER = /^(pending|skipped)(?:$|\b)/i;
-
-export function splitWorkResult(text: string): {
-  headline: string | null;
-  body: string;
-} {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return { headline: null, body: "" };
-  }
-  const breakAt = trimmed.search(/\r?\n/);
-  if (breakAt === -1) {
-    return isWorkResultHeadline(trimmed)
-      ? { headline: trimmed, body: "" }
-      : { headline: null, body: trimmed };
-  }
-  const first = trimmed.slice(0, breakAt).trim();
-  const rest = trimmed.slice(breakAt + 1).trim();
-  if (isWorkResultHeadline(first)) {
-    return { headline: first, body: rest };
-  }
-  return { headline: null, body: trimmed };
-}
-
-export function workResultTone(headline: string | null | undefined): WorkResultTone {
-  if (!headline) {
-    return "neutral";
-  }
-  if (WORK_RESULT_NO.test(headline)) {
-    return "no";
-  }
-  if (WORK_RESULT_OK.test(headline)) {
-    return "ok";
-  }
-  return "neutral";
-}
-
-function isWorkResultHeadline(line: string): boolean {
-  return WORK_RESULT_OK.test(line) || WORK_RESULT_NO.test(line) || WORK_RESULT_OTHER.test(line);
-}
-
 export function threadTitle(thread: InboxThread): string {
   const custom = thread.title?.replace(/\s+/g, " ").trim();
   if (custom) {

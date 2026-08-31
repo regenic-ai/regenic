@@ -1332,11 +1332,6 @@ button {
   background: var(--work-result-fill);
 }
 
-.work-result.is-no {
-  --work-result-fill: color-mix(in srgb, var(--risk) 10%, var(--surface));
-  border-color: color-mix(in srgb, var(--risk) 32%, var(--line));
-}
-
 .composer-dock .work-result {
   margin: 0;
   max-width: none;
@@ -1361,10 +1356,6 @@ button {
   letter-spacing: 0.04em;
 }
 
-.work-result.is-no .work-result-kicker {
-  color: var(--risk);
-}
-
 .work-result-copy {
   flex-shrink: 0;
   color: var(--muted);
@@ -1373,24 +1364,6 @@ button {
 
 .work-result-copy:hover {
   color: var(--text);
-}
-
-.work-result-verdict {
-  margin: 8px 0 0;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  line-height: 1.3;
-  user-select: text;
-}
-
-.work-result.is-ok .work-result-verdict {
-  color: var(--result);
-}
-
-.work-result.is-no .work-result-verdict {
-  color: var(--risk);
 }
 
 .work-result-body {
@@ -1435,16 +1408,8 @@ button {
   font-weight: 600;
 }
 
-.work-result.is-no .work-result-toggle {
-  color: var(--risk);
-}
-
 .work-result-toggle:hover {
   color: var(--g300);
-}
-
-.work-result.is-no .work-result-toggle:hover {
-  color: color-mix(in srgb, var(--risk) 80%, var(--text));
 }
 
 .work-result-caret {

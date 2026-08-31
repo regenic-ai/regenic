@@ -3,15 +3,12 @@ import { writeClipboard } from "./copy-message";
 import { ChevronIcon } from "./Icons";
 import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
-import { splitWorkResult, workResultTone } from "./message-view";
 
 export function WorkResultCard({ text }: { text: string }) {
   const { t } = useLocale();
   const clipId = useId();
-  const { headline, body } = splitWorkResult(text);
-  const tone = workResultTone(headline);
   const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(body.length > 140);
+  const [overflows, setOverflows] = useState(text.length > 140);
   const [copied, setCopied] = useState(false);
   const clipRef = useRef<HTMLDivElement>(null);
 
@@ -25,7 +22,7 @@ export function WorkResultCard({ text }: { text: string }) {
 
   useLayoutEffect(() => {
     const node = clipRef.current;
-    if (!node || !body) {
+    if (!node) {
       setOverflows(false);
       return;
     }
@@ -42,10 +39,10 @@ export function WorkResultCard({ text }: { text: string }) {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [body, expanded]);
+  }, [expanded, text]);
 
   return (
-    <section className={`work-result is-${tone}`}>
+    <section className="work-result">
       <div className="work-result-head">
         <p className="work-result-kicker">{t("work.result")}</p>
         <button
@@ -62,36 +59,31 @@ export function WorkResultCard({ text }: { text: string }) {
           {copied ? t("thread.copied") : t("thread.copy")}
         </button>
       </div>
-      {headline ? <p className="work-result-verdict">{headline}</p> : null}
-      {body ? (
-        <>
-          <div className="work-result-body">
-            <div
-              id={clipId}
-              ref={clipRef}
-              className={`work-result-clip${expanded ? " is-expanded" : " is-collapsed"}`}
-            >
-              <MessageBody text={body} />
-            </div>
-            {overflows && !expanded ? (
-              <span className="work-result-fade" aria-hidden="true" />
-            ) : null}
-          </div>
-          {overflows || expanded ? (
-            <button
-              type="button"
-              className={`work-result-toggle${expanded ? " is-open" : ""}`}
-              aria-expanded={expanded}
-              aria-controls={clipId}
-              onClick={() => setExpanded((current) => !current)}
-            >
-              {expanded ? t("work.resultCollapse") : t("work.resultExpand")}
-              <span className="work-result-caret">
-                <ChevronIcon />
-              </span>
-            </button>
-          ) : null}
-        </>
+      <div className="work-result-body">
+        <div
+          id={clipId}
+          ref={clipRef}
+          className={`work-result-clip${expanded ? " is-expanded" : " is-collapsed"}`}
+        >
+          <MessageBody text={text} />
+        </div>
+        {overflows && !expanded ? (
+          <span className="work-result-fade" aria-hidden="true" />
+        ) : null}
+      </div>
+      {overflows || expanded ? (
+        <button
+          type="button"
+          className={`work-result-toggle${expanded ? " is-open" : ""}`}
+          aria-expanded={expanded}
+          aria-controls={clipId}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? t("work.resultCollapse") : t("work.resultExpand")}
+          <span className="work-result-caret">
+            <ChevronIcon />
+          </span>
+        </button>
       ) : null}
     </section>
   );
