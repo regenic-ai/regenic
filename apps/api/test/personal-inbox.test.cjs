@@ -183,6 +183,10 @@ describe("changed inbox heads", () => {
     );
     assert.equal(
       shouldFallbackChangedInboxHeads({ ids: [], tooMany: false }),
+      false,
+    );
+    assert.equal(
+      shouldFallbackChangedInboxHeads({ ids: [], tooMany: true }),
       true,
     );
     assert.equal(

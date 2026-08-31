@@ -282,7 +282,10 @@ export class InboxListStore {
       const liveWindow = new Set(
         idsOf(
           rankUnpinnedNewest(
-            [...this.catalog.values()].filter((item) => this.onCurrentList(item)),
+            [...this.catalog.values()].filter((item) => {
+              const face = this.viewItem(item);
+              return this.onCurrentList(item) && !face.pinned;
+            }),
             new Set(this.workIds),
           ).slice(0, this.pageSize),
         ),
@@ -390,7 +393,7 @@ export class InboxListStore {
       if (face.pinned) {
         pinnedSet.add(id);
       } else {
-        unpinned.push(item);
+        unpinned.push(face);
       }
     }
     this.pinnedIds = [
@@ -597,7 +600,7 @@ function rankUnpinnedNewest(
   return items
     .filter((item) => {
       const id = threadKey(item);
-      return Boolean(id) && !item.pinned && !exclude.has(id as string);
+      return Boolean(id) && !exclude.has(id as string);
     })
     .map((item, index) => ({ item, index }))
     .sort((left, right) => {

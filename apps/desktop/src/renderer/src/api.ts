@@ -188,7 +188,7 @@ export async function saveLocale(locale: Locale): Promise<Locale> {
 export type InboxHeadsPage = {
   pinned: InboxViewItem[];
   live: InboxViewItem[];
-  active_work: InboxViewItem[];
+  active_work?: InboxViewItem[];
   next_before: { before: string; before_id: string } | null;
   has_older: boolean;
   patch?: boolean;
@@ -239,7 +239,11 @@ export async function fetchInboxHeads(
   return {
     pinned: (page.pinned ?? []).map(normalizeInboxItem),
     live: page.live.map(normalizeInboxItem),
-    active_work: (page.active_work ?? []).map(normalizeInboxItem),
+    active_work: Array.isArray(page.active_work)
+      ? page.active_work.map(normalizeInboxItem)
+      : page.patch === true
+        ? undefined
+        : [],
     next_before:
       next?.before && next.before_id
         ? { before: next.before, before_id: next.before_id }

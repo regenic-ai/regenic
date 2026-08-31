@@ -194,7 +194,7 @@ export type InboxHeadsCursor = { before: string; before_id: string };
 export interface InboxHeadsPage {
   pinned: InboxViewItem[];
   live: InboxViewItem[];
-  active_work: InboxViewItem[];
+  active_work?: InboxViewItem[];
   next_before: InboxHeadsCursor | null;
   has_older: boolean;
   patch?: boolean;
@@ -283,7 +283,7 @@ export function shouldFallbackChangedInboxHeads(collected: {
   ids: readonly string[];
   tooMany: boolean;
 }): boolean {
-  return collected.tooMany || collected.ids.length === 0;
+  return collected.tooMany;
 }
 
 export function collectChangedInboxThreadIds(input: {
@@ -723,6 +723,16 @@ export class PersonalInboxService {
         changed: false,
         since_digest: undefined,
       }) as Promise<InboxHeadsPage>;
+    }
+    if (collected.ids.length === 0) {
+      return {
+        pinned: [],
+        live: [],
+        next_before: null,
+        has_older: false,
+        patch: true,
+        gone: [],
+      };
     }
     const workIds =
       normalizeInboxListView(query.list) === "hidden"

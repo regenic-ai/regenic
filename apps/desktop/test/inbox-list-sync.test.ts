@@ -143,6 +143,37 @@ describe("inbox heads sync mapping", () => {
     }
   });
 
+  it("omits activeWork on an empty patch so extras stay", () => {
+    const touched = inboxHeadsFact({
+      decision: { mode: "patch", replace: false },
+      page: {
+        pinned: [],
+        live: [],
+        next_before: null,
+        has_older: false,
+        patch: true,
+        gone: [],
+      },
+      list: "shown",
+      pageSize: 40,
+    });
+    assert.equal(touched.kind, "headsTouched");
+    if (touched.kind === "headsTouched") {
+      assert.equal(touched.activeWork, undefined);
+      assert.deepEqual(touched.items, []);
+    }
+    const cleared = inboxHeadsFact({
+      decision: { mode: "patch", replace: false },
+      page: page({ patch: true, active_work: [] }),
+      list: "shown",
+      pageSize: 40,
+    });
+    assert.equal(cleared.kind, "headsTouched");
+    if (cleared.kind === "headsTouched") {
+      assert.deepEqual(cleared.activeWork, []);
+    }
+  });
+
   it("advances the full-page clock only after a live page, not a patch", () => {
     const clocks: InboxSyncClocks = {
       digest: FRESH,

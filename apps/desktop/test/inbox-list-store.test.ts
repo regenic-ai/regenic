@@ -506,6 +506,41 @@ describe("InboxListStore", () => {
     assert.equal(snap.items[0]?.pinned, true);
   });
 
+  it("keeps an optimistic unpin in the live window", () => {
+    const pinned = at(item("pin", "pin", "crm:order-pin"), "2026-08-23T00:02:00.000Z");
+    pinned.pinned = true;
+    const live = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:01:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [pinned],
+      live: [live],
+      activeWork: [],
+      nextBefore: { before: live.event.occurred_at, before_id: live.event.id },
+      hasOlder: false,
+      pageSize: 2,
+    });
+    const snap = store.reduce({
+      kind: "prefPatched",
+      threadId: "crm:order-pin",
+      pref: {
+        title: null,
+        pinned: false,
+        hidden: false,
+        updated_at: "2026-08-23T00:03:00.000Z",
+      },
+    });
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-pin", "crm:order-2"],
+    );
+    assert.equal(
+      snap.items.find((row) => row.thread_id === "crm:order-pin")?.pinned,
+      false,
+    );
+  });
+
   it("reverts a pref write only while that write is still the active overlay", () => {
     const first = {
       title: null,

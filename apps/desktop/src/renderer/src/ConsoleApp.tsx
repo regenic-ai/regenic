@@ -26,7 +26,6 @@ import {
   messagesForAttentionAck,
   openedThreadView,
   orderThreadMessages,
-  overlayThreadMessages,
   resolveSelectedThread,
   sortInboxThreads,
   type InboxThread,
@@ -765,9 +764,10 @@ export function ConsoleApp() {
       selectedThreadRef.current = null;
       return null;
     }
+    const hit = catalogThreads.find((thread) => thread.id === selectedId);
     const thread = resolveSelectedThread(
       selectedId,
-      overlayThreadMessages(catalogThreads, messagesByThread),
+      hit ? [hit] : [],
       selectedThreadRef.current,
     );
     if (!thread) {

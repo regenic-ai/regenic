@@ -21,7 +21,7 @@ export type InboxSyncClocks = {
 export type InboxHeadsPageView = {
   pinned: InboxViewItem[];
   live: InboxViewItem[];
-  active_work: InboxViewItem[];
+  active_work?: InboxViewItem[];
   next_before: HeadsCursor | null;
   has_older: boolean;
   patch?: boolean;
@@ -99,16 +99,20 @@ export function inboxHeadsFact(input: {
   if (input.decision.mode === "patch" && input.page.patch) {
     return {
       kind: "headsTouched",
-      items: [...input.page.pinned, ...input.page.live, ...input.page.active_work],
+      items: [
+        ...input.page.pinned,
+        ...input.page.live,
+        ...(input.page.active_work ?? []),
+      ],
       gone: input.page.gone,
-      activeWork: input.page.active_work ?? [],
+      activeWork: input.page.active_work,
       pageSize,
     };
   }
   const page = {
     pinned: input.page.pinned,
     live: input.page.live,
-    activeWork: input.page.active_work,
+    activeWork: input.page.active_work ?? [],
     nextBefore: input.page.next_before,
     hasOlder: input.page.has_older,
     pageSize,
