@@ -13,6 +13,9 @@ const {
   shouldSplitInboxHeads,
   splitInboxHeadViews,
   splitChangedInboxHeads,
+  splitHeadExcludeIds,
+  headsLiveFetchLimit,
+  partitionLiveInboxHeads,
 } = require("../dist/personal-inbox.service");
 
 describe("inboxStoreQuery", () => {
@@ -288,5 +291,112 @@ describe("split inbox heads", () => {
     });
     assert.deepEqual(headsNextBefore([live]), page.next_before);
     assert.equal(headsNextBefore([work, live])?.before_id, "job");
+  });
+
+  it("moves a pinned or work face that landed in live back to extras", () => {
+    const live = {
+      thread_id: "crm:a",
+      pinned: false,
+      event: { id: "n2", occurred_at: "2026-08-23T00:02:00.000Z" },
+    };
+    const pinned = {
+      thread_id: "crm:pin",
+      pinned: true,
+      event: { id: "pin", occurred_at: "2026-08-23T00:03:00.000Z" },
+    };
+    const work = {
+      thread_id: "dsh:job",
+      pinned: false,
+      event: { id: "job", occurred_at: "2026-08-23T00:01:00.000Z" },
+    };
+    const page = splitInboxHeadViews([pinned, live, work], {
+      liveIds: ["crm:pin", "crm:a", "dsh:job"],
+      pinnedIds: [],
+      workIds: ["dsh:job"],
+      liveCount: 3,
+      limit: 3,
+    });
+    assert.deepEqual(
+      page.live.map((item) => item.thread_id),
+      ["crm:a"],
+    );
+    assert.deepEqual(
+      page.pinned.map((item) => item.thread_id),
+      ["crm:pin"],
+    );
+    assert.deepEqual(
+      page.active_work.map((item) => item.thread_id),
+      ["dsh:job"],
+    );
+    assert.deepEqual(page.next_before, {
+      before: "2026-08-23T00:02:00.000Z",
+      before_id: "n2",
+    });
+  });
+
+  it("keeps pinned and work off the live page and fill", () => {
+    assert.deepEqual(
+      splitHeadExcludeIds({
+        prefs: [
+          { thread_id: "crm:pin", pinned: true, hidden: false },
+          { thread_id: "crm:hid", pinned: true, hidden: true },
+          { thread_id: "crm:a", pinned: false, hidden: false },
+        ],
+        workIds: ["dsh:job", "crm:pin"],
+        list: "shown",
+      }),
+      { pinnedIds: ["crm:pin"], workIds: ["dsh:job"] },
+    );
+    assert.equal(headsLiveFetchLimit(40, 5), 45);
+    const older = {
+      thread_id: "crm:b",
+      event: { id: "n1", occurred_at: "2026-08-23T00:01:00.000Z" },
+    };
+    const live = {
+      thread_id: "crm:a",
+      event: { id: "n2", occurred_at: "2026-08-23T00:02:00.000Z" },
+    };
+    const work = {
+      thread_id: "dsh:job",
+      event: { id: "job", occurred_at: "2026-08-23T00:02:30.000Z" },
+    };
+    const pinned = {
+      thread_id: "crm:pin",
+      event: { id: "pin", occurred_at: "2026-08-23T00:03:00.000Z" },
+    };
+    const part = partitionLiveInboxHeads({
+      items: [older, live, work, pinned],
+      pinnedIds: ["crm:pin"],
+      workIds: ["dsh:job"],
+      limit: 1,
+      fetchedCount: 4,
+      fetchLimit: 3,
+    });
+    assert.deepEqual(
+      part.live.map((item) => item.thread_id),
+      ["crm:a"],
+    );
+    assert.deepEqual(
+      part.pinned.map((item) => item.thread_id),
+      ["crm:pin"],
+    );
+    assert.deepEqual(
+      part.work.map((item) => item.thread_id),
+      ["dsh:job"],
+    );
+    assert.equal(part.hasOlder, true);
+    const ended = partitionLiveInboxHeads({
+      items: [live, pinned],
+      pinnedIds: ["crm:pin"],
+      workIds: ["dsh:job"],
+      limit: 2,
+      fetchedCount: 2,
+      fetchLimit: 4,
+    });
+    assert.deepEqual(
+      ended.live.map((item) => item.thread_id),
+      ["crm:a"],
+    );
+    assert.equal(ended.hasOlder, false);
   });
 });
