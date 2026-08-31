@@ -123,6 +123,8 @@ export const en = {
   "work.acked": "Sent",
   "work.dead": "Not sent",
   "work.result": "Result",
+  "work.resultExpand": "Show more",
+  "work.resultCollapse": "Show less",
 
   "label.ticket": "Ticket",
   "label.agent": "Agent",
@@ -706,6 +708,8 @@ export const zh: Record<MessageKey, string> = {
   "work.acked": "已发送",
   "work.dead": "发送失败",
   "work.result": "处理结果",
+  "work.resultExpand": "展开",
+  "work.resultCollapse": "收起",
 
   "label.ticket": "工单",
   "label.agent": "Agent",
