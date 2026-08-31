@@ -18,7 +18,7 @@ export function itemRevision(item: InboxViewItem): string {
   const body = item.event.content_hash ? "" : (item.body_text ?? "");
   return `${item.event.id}\t${item.event.content_hash ?? ""}\t${item.event.occurred_at}\t${
     item.title ?? ""
-  }\t${item.pinned ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
+  }\t${item.pinned ? "1" : "0"}\t${item.hidden ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
     item.conversation_label ?? ""
   }\t${item.channel_label ?? ""}\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}\t${
     item.unread ? "1" : "0"

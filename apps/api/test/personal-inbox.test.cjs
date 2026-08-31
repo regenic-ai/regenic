@@ -5,12 +5,14 @@ const {
   CHANGED_INBOX_EVENT_CAP,
   CHANGED_INBOX_THREAD_CAP,
   collectChangedInboxThreadIds,
+  shouldFallbackChangedInboxHeads,
   inboxStoreQuery,
   headsNextBefore,
   parseSinceInboxDigest,
   shouldLoadChangedInboxHeads,
   shouldSplitInboxHeads,
   splitInboxHeadViews,
+  splitChangedInboxHeads,
 } = require("../dist/personal-inbox.service");
 
 describe("inboxStoreQuery", () => {
@@ -179,6 +181,48 @@ describe("changed inbox heads", () => {
       }).tooMany,
       true,
     );
+    assert.equal(
+      shouldFallbackChangedInboxHeads({ ids: [], tooMany: false }),
+      true,
+    );
+    assert.equal(
+      shouldFallbackChangedInboxHeads({ ids: ["crm:order-2"], tooMany: false }),
+      false,
+    );
+  });
+
+  it("keeps a missing projection off gone and splits active work extras", () => {
+    const live = {
+      thread_id: "crm:order-2",
+      pinned: false,
+      hidden: false,
+    };
+    const hidden = {
+      thread_id: "crm:order-hid",
+      pinned: false,
+      hidden: true,
+    };
+    const work = {
+      thread_id: "dsh:job",
+      pinned: false,
+      hidden: false,
+    };
+    const page = splitChangedInboxHeads({
+      views: [live, hidden, work],
+      collectedIds: ["crm:order-2", "crm:order-hid", "crm:miss"],
+      prefs: [{ thread_id: "crm:order-hid", hidden: true }],
+      workIds: ["dsh:job"],
+      list: "shown",
+    });
+    assert.deepEqual(
+      page.live.map((item) => item.thread_id),
+      ["crm:order-2"],
+    );
+    assert.deepEqual(
+      page.active_work.map((item) => item.thread_id),
+      ["dsh:job"],
+    );
+    assert.deepEqual(page.gone.sort(), ["crm:order-hid"]);
   });
 });
 

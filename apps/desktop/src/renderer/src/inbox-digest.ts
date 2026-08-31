@@ -1,3 +1,6 @@
+// Keep this parser aligned with packages/domain `parseInboxDigest`.
+// The desktop bundle does not depend on @regenic/domain.
+
 export type InboxDigestParts = {
   count: number;
   latest_at: string;
@@ -113,8 +116,9 @@ export function shouldFetchChangedHeads(input: {
   replace: boolean;
   previousDigest: string | null;
   nextDigest: string;
+  fullRefreshDue?: boolean;
 }): boolean {
-  if (input.replace || !input.previousDigest) {
+  if (input.fullRefreshDue || input.replace || !input.previousDigest) {
     return false;
   }
   if (input.previousDigest === input.nextDigest) {

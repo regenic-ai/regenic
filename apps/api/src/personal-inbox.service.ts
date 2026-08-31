@@ -279,6 +279,13 @@ function peelInboxDigestTail(base: string): { head: string; tail: string } {
   return { head: base.slice(0, last), tail: base.slice(last + 1) };
 }
 
+export function shouldFallbackChangedInboxHeads(collected: {
+  ids: readonly string[];
+  tooMany: boolean;
+}): boolean {
+  return collected.tooMany || collected.ids.length === 0;
+}
+
 export function collectChangedInboxThreadIds(input: {
   events: Array<{ source: string; external_id: string; id: string }>;
   prefs: Array<{ thread_id: string; updated_at: string }>;
@@ -298,6 +305,69 @@ export function collectChangedInboxThreadIds(input: {
   }
   const list = [...ids];
   return { ids: list, tooMany: list.length > CHANGED_INBOX_THREAD_CAP };
+}
+
+export function splitChangedInboxHeads<
+  T extends { thread_id?: string; pinned?: boolean; hidden?: boolean },
+>(input: {
+  views: T[];
+  collectedIds: readonly string[];
+  prefs: Array<{ thread_id: string; hidden?: boolean }>;
+  workIds: readonly string[];
+  list?: string;
+}): {
+  pinned: T[];
+  live: T[];
+  active_work: T[];
+  gone: string[];
+} {
+  const hiddenList = normalizeInboxListView(input.list) === "hidden";
+  const work = new Set(input.workIds);
+  const loaded = new Set<string>();
+  const kept: T[] = [];
+  for (const item of input.views) {
+    const id = item.thread_id?.trim();
+    if (!id) {
+      continue;
+    }
+    loaded.add(id);
+    if (item.hidden === hiddenList) {
+      kept.push(item);
+    }
+  }
+  const returned = new Set(
+    kept.flatMap((item) => (item.thread_id ? [item.thread_id] : [])),
+  );
+  const hiddenByPref = new Map(
+    input.prefs.map((pref) => [pref.thread_id, pref.hidden] as const),
+  );
+  return {
+    pinned: kept.filter((item) => item.pinned),
+    live: kept.filter(
+      (item) => !item.pinned && !work.has(item.thread_id ?? ""),
+    ),
+    active_work: hiddenList
+      ? []
+      : kept.filter(
+          (item) => !item.pinned && work.has(item.thread_id ?? ""),
+        ),
+    gone: input.collectedIds.filter((id) => {
+      if (returned.has(id)) {
+        return false;
+      }
+      if (loaded.has(id)) {
+        return true;
+      }
+      const prefHidden = hiddenByPref.get(id);
+      if (prefHidden === true && !hiddenList) {
+        return true;
+      }
+      if (prefHidden === false && hiddenList) {
+        return true;
+      }
+      return false;
+    }),
+  };
 }
 
 export function headsNextBefore(
@@ -647,50 +717,41 @@ export class PersonalInboxService {
       prefs,
       prefSince: previous.pref_updated_at,
     });
-    if (collected.tooMany) {
+    if (shouldFallbackChangedInboxHeads(collected)) {
       return this.loadThreadInbox({
         ...query,
         changed: false,
         since_digest: undefined,
       }) as Promise<InboxHeadsPage>;
     }
-    if (collected.ids.length === 0) {
-      return {
-        pinned: [],
-        live: [],
-        active_work: [],
-        next_before: null,
-        has_older: false,
-        patch: true,
-        gone: [],
-      };
-    }
+    const workIds =
+      normalizeInboxListView(query.list) === "hidden"
+        ? []
+        : [...(await this.work.activeSessionIds())];
+    const loadIds = [...new Set([...collected.ids, ...workIds])];
     const views = (await this.loadThreadInbox({
       ...query,
       split: false,
       changed: false,
       since_digest: undefined,
       thread_id: undefined,
-      thread_ids: collected.ids,
+      thread_ids: loadIds,
       before: undefined,
       before_id: undefined,
       limit: undefined,
     })) as InboxViewItem[];
-    const hiddenList = normalizeInboxListView(query.list) === "hidden";
-    const kept = views.filter((item) => item.hidden === hiddenList);
-    const returned = new Set(
-      kept.flatMap((item) => (item.thread_id ? [item.thread_id] : [])),
-    );
-    const pinned = kept.filter((item) => item.pinned);
-    const unpinned = kept.filter((item) => !item.pinned);
+    const split = splitChangedInboxHeads({
+      views,
+      collectedIds: collected.ids,
+      prefs,
+      workIds,
+      list: query.list,
+    });
     return {
-      pinned,
-      live: unpinned,
-      active_work: [],
-      next_before: headsNextBefore(unpinned),
+      ...split,
+      next_before: headsNextBefore(split.live),
       has_older: false,
       patch: true,
-      gone: collected.ids.filter((id) => !returned.has(id)),
     };
   }
 

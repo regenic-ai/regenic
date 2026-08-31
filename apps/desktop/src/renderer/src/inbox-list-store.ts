@@ -7,6 +7,26 @@ import type { InboxListView, InboxViewItem } from "./types.ts";
 
 export type HeadsCursor = { before: string; before_id: string };
 
+export type InboxListToken = {
+  workspace: number;
+  list: number;
+  page: number;
+};
+
+export type InboxPrefPatch = {
+  title: string | null;
+  pinned: boolean;
+  hidden: boolean;
+  updated_at: string;
+};
+
+export function isActivePrefWrite(
+  current: InboxPrefPatch | undefined,
+  requestAt: string,
+): boolean {
+  return current?.updated_at === requestAt;
+}
+
 export type InboxListFact =
   | { kind: "reset" }
   | {
@@ -17,6 +37,7 @@ export type InboxListFact =
       activeWork: InboxViewItem[];
       nextBefore: HeadsCursor | null;
       hasOlder: boolean;
+      pageSize?: number;
     }
   | {
       kind: "liveChanged";
@@ -43,6 +64,16 @@ export type InboxListFact =
       gone?: string[];
       activeWork?: InboxViewItem[];
       pageSize?: number;
+    }
+  | {
+      kind: "prefPatched";
+      threadId: string;
+      pref: InboxPrefPatch;
+    }
+  | {
+      kind: "prefReverted";
+      threadId: string;
+      previous?: InboxPrefPatch;
     };
 
 export type InboxListSnapshot = {
@@ -63,11 +94,14 @@ export class InboxListStore {
   private nextBefore: HeadsCursor | null = null;
   private listView: InboxListView | null = null;
   private previousItems: InboxViewItem[] = [];
-  private gen = 0;
+  private prefs = new Map<string, InboxPrefPatch>();
+  private tokenState: InboxListToken = { workspace: 0, list: 0, page: 0 };
+  private pageSize = LIST_HEADS_PAGE_SIZE;
   private tail: Promise<void> = Promise.resolve();
 
-  get generation(): number {
-    return this.gen;
+  get token(): InboxListToken {
+    const { workspace, list, page } = this.tokenState;
+    return { workspace, list, page };
   }
 
   get size(): number {
@@ -82,9 +116,36 @@ export class InboxListStore {
     return this.previousItems;
   }
 
-  bumpGeneration(): number {
-    this.gen += 1;
-    return this.gen;
+  acceptsList(token: InboxListToken): boolean {
+    return (
+      token.workspace === this.tokenState.workspace &&
+      token.list === this.tokenState.list
+    );
+  }
+
+  acceptsPage(token: InboxListToken): boolean {
+    return this.acceptsList(token) && token.page === this.tokenState.page;
+  }
+
+  bumpWorkspace(): InboxListToken {
+    this.tokenState.workspace += 1;
+    this.tokenState.list += 1;
+    this.tokenState.page += 1;
+    return this.token;
+  }
+
+  bumpList(): InboxListToken {
+    this.tokenState.list += 1;
+    this.tokenState.page += 1;
+    return this.token;
+  }
+
+  prefOverlay(threadId: string): InboxPrefPatch | undefined {
+    return this.prefs.get(threadId);
+  }
+
+  private bumpPage() {
+    this.tokenState.page += 1;
   }
 
   enqueue(fact: InboxListFact): Promise<InboxListSnapshot> {
@@ -99,7 +160,9 @@ export class InboxListStore {
   reduce(fact: InboxListFact): InboxListSnapshot {
     switch (fact.kind) {
       case "reset":
+        this.bumpWorkspace();
         this.catalog.clear();
+        this.prefs.clear();
         this.pinnedIds = [];
         this.liveIds = [];
         this.historyIds = [];
@@ -118,10 +181,22 @@ export class InboxListStore {
         this.applyOlder(fact);
         break;
       case "headPatched":
-        upsertHeads(this.catalog, fact.items);
+        this.applyHeadPatch(fact.items);
         break;
       case "headsTouched":
         this.applyTouched(fact);
+        break;
+      case "prefPatched":
+        this.prefs.set(fact.threadId, fact.pref);
+        this.relayout();
+        break;
+      case "prefReverted":
+        if (fact.previous) {
+          this.prefs.set(fact.threadId, fact.previous);
+        } else {
+          this.prefs.delete(fact.threadId);
+        }
+        this.relayout();
         break;
     }
     return this.commit();
@@ -150,6 +225,7 @@ export class InboxListStore {
       activeWork: [],
       nextBefore: headsCursorOf(live),
       hasOlder: history.length > 0,
+      pageSize,
     });
     if (history.length > 0) {
       store.reduce({
@@ -177,6 +253,10 @@ export class InboxListStore {
     if (fact.list) {
       this.listView = fact.list;
     }
+    if (fact.pageSize !== undefined) {
+      this.pageSize = fact.pageSize;
+    }
+    this.bumpPage();
     if (replace) {
       this.catalog.clear();
       this.historyIds = [];
@@ -186,9 +266,9 @@ export class InboxListStore {
     upsertHeads(this.catalog, fact.pinned);
     upsertHeads(this.catalog, fact.live);
     upsertHeads(this.catalog, fact.activeWork);
-    this.pinnedIds = idsOf(fact.pinned);
-    this.liveIds = idsOf(fact.live);
-    this.workIds = idsOf(fact.activeWork);
+    this.pinnedIds = this.visibleIds(idsOf(fact.pinned));
+    this.liveIds = this.visibleIds(idsOf(fact.live));
+    this.workIds = this.visibleIds(idsOf(fact.activeWork));
     this.nextBefore = fact.nextBefore;
     this.hasOlder = fact.hasOlder;
     const occupied = new Set([
@@ -199,14 +279,13 @@ export class InboxListStore {
     if (replace || !fact.hasOlder) {
       this.historyIds = [];
     } else {
-      const pageSize = fact.pageSize ?? LIST_HEADS_PAGE_SIZE;
       const liveWindow = new Set(
-        rankUnpinnedNewest([...this.catalog.values()], new Set(this.workIds))
-          .slice(0, pageSize)
-          .flatMap((item) => {
-            const id = threadKey(item);
-            return id ? [id] : [];
-          }),
+        idsOf(
+          rankUnpinnedNewest(
+            [...this.catalog.values()].filter((item) => this.onCurrentList(item)),
+            new Set(this.workIds),
+          ).slice(0, this.pageSize),
+        ),
       );
       const keep: string[] = [];
       const seen = new Set<string>();
@@ -215,7 +294,11 @@ export class InboxListStore {
           continue;
         }
         const item = this.catalog.get(id);
-        if (!item || item.pinned || liveWindow.has(id)) {
+        if (!item) {
+          continue;
+        }
+        const face = this.viewItem(item);
+        if (!this.onCurrentList(face) || face.pinned || liveWindow.has(id)) {
           continue;
         }
         seen.add(id);
@@ -223,7 +306,6 @@ export class InboxListStore {
       }
       this.historyIds = keep;
     }
-    this.prune();
   }
 
   private applyOlder(fact: {
@@ -249,7 +331,25 @@ export class InboxListStore {
     this.historyIds = [...this.historyIds, ...added];
     this.nextBefore = fact.nextBefore ?? this.nextBefore;
     this.hasOlder = fact.hasOlder;
-    this.prune();
+  }
+
+  private applyHeadPatch(items: InboxViewItem[]) {
+    for (const item of items) {
+      const id = threadKey(item);
+      if (!id) {
+        continue;
+      }
+      const current = this.catalog.get(id);
+      if (!current) {
+        continue;
+      }
+      this.catalog.set(id, {
+        ...current,
+        unread: item.unread,
+        unread_count: item.unread_count,
+        attention: item.attention,
+      });
+    }
   }
 
   private applyTouched(fact: {
@@ -259,33 +359,108 @@ export class InboxListStore {
     pageSize?: number;
   }) {
     const gone = new Set(fact.gone ?? []);
+    if (gone.size > 0) {
+      this.bumpPage();
+    }
     for (const id of gone) {
       this.catalog.delete(id);
+      this.prefs.delete(id);
     }
     upsertHeads(this.catalog, fact.items);
     upsertHeads(this.catalog, fact.activeWork ?? []);
-    const pageSize = fact.pageSize ?? LIST_HEADS_PAGE_SIZE;
-    const nextWork = [
-      ...this.workIds.filter((id) => !gone.has(id) && this.catalog.has(id)),
-      ...idsOf(fact.activeWork ?? []),
-    ].filter((id, index, all) => all.indexOf(id) === index);
-    const pinned: string[] = [];
+    if (fact.pageSize !== undefined) {
+      this.pageSize = fact.pageSize;
+    }
+    const nextWork =
+      fact.activeWork !== undefined
+        ? idsOf(fact.activeWork)
+        : this.workIds.filter((id) => !gone.has(id) && this.catalog.has(id));
+    this.relayout(nextWork);
+  }
+
+  private relayout(nextWork?: string[]) {
+    const work = new Set(nextWork ?? this.workIds);
+    const pinnedSet = new Set<string>();
     const unpinned: InboxViewItem[] = [];
     for (const [id, item] of this.catalog) {
-      if (item.pinned) {
-        pinned.push(id);
+      const face = this.viewItem(item);
+      if (!this.onCurrentList(face)) {
+        continue;
+      }
+      if (face.pinned) {
+        pinnedSet.add(id);
       } else {
         unpinned.push(item);
       }
     }
-    const ranked = rankUnpinnedNewest(unpinned, new Set(nextWork));
-    this.pinnedIds = pinned;
-    this.liveIds = idsOf(ranked.slice(0, pageSize));
-    this.historyIds = idsOf(ranked.slice(pageSize));
+    this.pinnedIds = [
+      ...this.pinnedIds.filter((id) => pinnedSet.has(id)),
+      ...[...pinnedSet].filter((id) => !this.pinnedIds.includes(id)),
+    ];
+    const ranked = rankUnpinnedNewest(unpinned, work);
+    this.liveIds = idsOf(ranked.slice(0, this.pageSize));
+    this.historyIds = idsOf(ranked.slice(this.pageSize));
     const occupied = new Set([...this.pinnedIds, ...this.liveIds]);
-    this.workIds = nextWork.filter((id) => !occupied.has(id) && !gone.has(id));
-    this.nextBefore = headsCursorOf(takeHeads(this.catalog, this.liveIds));
-    this.prune();
+    this.workIds = [...work].filter((id) => {
+      if (occupied.has(id)) {
+        return false;
+      }
+      const item = this.catalog.get(id);
+      return Boolean(item && this.onCurrentList(this.viewItem(item)));
+    });
+    this.nextBefore =
+      this.historyIds.length > 0
+        ? headsCursorOf(takeHeads(this.catalog, this.historyIds))
+        : headsCursorOf(takeHeads(this.catalog, this.liveIds));
+  }
+
+  private onCurrentList(face: InboxViewItem): boolean {
+    return this.listView === "hidden" ? face.hidden === true : face.hidden !== true;
+  }
+
+  private visibleIds(ids: string[]): string[] {
+    return ids.filter((id) => {
+      const item = this.catalog.get(id);
+      return Boolean(item && this.onCurrentList(this.viewItem(item)));
+    });
+  }
+
+  private viewItem(item: InboxViewItem): InboxViewItem {
+    const id = threadKey(item);
+    if (!id) {
+      return item;
+    }
+    const pref = this.prefs.get(id);
+    if (!pref) {
+      return item;
+    }
+    if (item.pref_updated_at && item.pref_updated_at > pref.updated_at) {
+      return item;
+    }
+    if (
+      item.title === pref.title &&
+      item.pinned === pref.pinned &&
+      item.hidden === pref.hidden &&
+      item.pref_updated_at === pref.updated_at
+    ) {
+      return item;
+    }
+    return {
+      ...item,
+      title: pref.title,
+      pinned: pref.pinned,
+      hidden: pref.hidden,
+      pref_updated_at: pref.updated_at,
+    };
+  }
+
+  private prunePrefs() {
+    for (const [id, pref] of this.prefs) {
+      const item = this.catalog.get(id);
+      if (item?.pref_updated_at && item.pref_updated_at >= pref.updated_at) {
+        this.prefs.delete(id);
+      }
+    }
   }
 
   private prune() {
@@ -294,6 +469,7 @@ export class InboxListStore {
       ...this.liveIds,
       ...this.workIds,
       ...this.historyIds,
+      ...this.prefs.keys(),
     ]);
     for (const id of this.catalog.keys()) {
       if (!keep.has(id)) {
@@ -303,6 +479,8 @@ export class InboxListStore {
   }
 
   private commit(): InboxListSnapshot {
+    this.prunePrefs();
+    this.prune();
     const workExtra = this.workIds.filter(
       (id) => !this.pinnedIds.includes(id) && !this.liveIds.includes(id),
     );
@@ -311,7 +489,9 @@ export class InboxListStore {
       ...takeHeads(this.catalog, this.pinnedIds),
       ...takeHeads(this.catalog, this.liveIds),
       ...takeHeads(this.catalog, workExtra),
-    ];
+    ]
+      .map((item) => this.viewItem(item))
+      .filter((item) => this.onCurrentList(item));
     const reuse = reuseInboxList(this.previousItems, next);
     this.previousItems = reuse.items;
     return {
