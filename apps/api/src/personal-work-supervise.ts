@@ -125,7 +125,9 @@ export class PersonalWorkSupervise {
         updated_at: now,
       });
       if (!isActiveWorkStatus(status)) {
-        await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
+        if (!recipeWantsWriteBack(recipe)) {
+          await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
+        }
       }
     }
   }
