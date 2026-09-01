@@ -179,6 +179,116 @@ export function filterInboxThreads(
   });
 }
 
+export function mergeInboxThreadLists(
+  ...lists: Array<readonly InboxThread[]>
+): InboxThread[] {
+  const seen = new Set<string>();
+  const next: InboxThread[] = [];
+  for (const list of lists) {
+    for (const thread of list) {
+      if (seen.has(thread.id)) {
+        continue;
+      }
+      seen.add(thread.id);
+      next.push(thread);
+    }
+  }
+  return next;
+}
+
+export function filterInboxThreadsByTitle(
+  threads: readonly InboxThread[],
+  query: string,
+  titleOf: (thread: InboxThread) => string,
+): InboxThread[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return [...threads];
+  }
+  return threads.filter((thread) => {
+    const displayed = titleOf(thread);
+    const fields = [
+      displayed,
+      thread.title,
+      thread.conversation_label,
+      thread.label,
+    ];
+    return fields.some((field) => field?.toLowerCase().includes(needle));
+  });
+}
+
+export function adjacentInboxThreadId(
+  ids: readonly string[],
+  current: string | null,
+  delta: -1 | 1,
+): string | null {
+  if (ids.length === 0) {
+    return current;
+  }
+  if (!current) {
+    return ids[0] ?? null;
+  }
+  const index = ids.indexOf(current);
+  if (index < 0) {
+    return ids[0] ?? current;
+  }
+  const next = index + delta;
+  if (next < 0 || next >= ids.length) {
+    return current;
+  }
+  return ids[next] ?? current;
+}
+
+export function canMoveInboxThread(
+  ids: readonly string[],
+  current: string | null,
+  delta: -1 | 1,
+): boolean {
+  if (!current) {
+    return false;
+  }
+  return adjacentInboxThreadId(ids, current, delta) !== current;
+}
+
+export function inboxListNavDelta(event: {
+  key: string;
+  altKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  defaultPrevented: boolean;
+}): -1 | 1 | null {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey) {
+    return null;
+  }
+  if (!event.altKey && (event.key === "j" || event.key === "J")) {
+    return 1;
+  }
+  if (!event.altKey && (event.key === "k" || event.key === "K")) {
+    return -1;
+  }
+  if (event.altKey && event.key === "ArrowDown") {
+    return 1;
+  }
+  if (event.altKey && event.key === "ArrowUp") {
+    return -1;
+  }
+  return null;
+}
+
+export function isTypingShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tag = target.tagName;
+  return (
+    target.isContentEditable ||
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    Boolean(target.closest(".forward-sheet, [role='listbox'], [role='menu']"))
+  );
+}
+
 export function threadChannels(
   threads: InboxThread[],
 ): Array<{ id: string; label: string }> {
@@ -288,6 +398,23 @@ export function openedThreadView(
     return { ...thread, messages: [] };
   }
   return thread;
+}
+
+export function holdOpenedThread(
+  previous: InboxThread | null,
+  next: InboxThread,
+  opened: InboxViewItem[] | undefined,
+): InboxThread {
+  const view = openedThreadView(next, opened);
+  if (
+    opened === undefined &&
+    view.messages.length === 0 &&
+    previous?.id === next.id &&
+    previous.messages.length > 0
+  ) {
+    return { ...view, messages: previous.messages };
+  }
+  return view;
 }
 
 export function keepSelectedThreadId(

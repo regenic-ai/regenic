@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   answerConversationPrompt,
   currentApiOrigin,
@@ -23,7 +23,7 @@ import { WorkContextStrip } from "./WorkContextStrip";
 import { WorkResultCard } from "./WorkResultCard";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
-import { latestMessage, type InboxThread } from "./inbox";
+import { inboxListNavDelta, isTypingShortcutTarget, latestMessage, type InboxThread } from "./inbox";
 import {
   messageRole,
   readingMessages,
@@ -37,7 +37,7 @@ import {
 } from "./message-view";
 import { ThreadFaceTags } from "./ThreadFaceTags";
 import { useLocale } from "./LocaleContext";
-import { HideIcon, PinIcon, ShowIcon } from "./Icons";
+import { HideIcon, PinIcon, ShowIcon, ChevronIcon } from "./Icons";
 import {
   ThreadMessageList,
   type ThreadMessageListHandle,
@@ -66,6 +66,11 @@ export const ThreadPane = memo(function ThreadPane({
   onRename,
   onPin,
   onHide,
+  hasPrevious = false,
+  hasNext = false,
+  onSelectPrevious,
+  onSelectNext,
+  paneRef,
   onRunWork,
   onDismissWork,
   onBindRecipe,
@@ -90,6 +95,11 @@ export const ThreadPane = memo(function ThreadPane({
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
   onHide?: (hidden: boolean) => Promise<void>;
+  hasPrevious?: boolean;
+  hasNext?: boolean;
+  onSelectPrevious?: () => void;
+  onSelectNext?: () => void;
+  paneRef?: { current: HTMLElement | null };
   onRunWork?: () => Promise<void>;
   onDismissWork?: () => Promise<void>;
   onBindRecipe?: () => void;
@@ -365,9 +375,34 @@ export const ThreadPane = memo(function ThreadPane({
   const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
   const canForwardConversation = merged.some(canForwardItem);
   const tags = threadFaceTags(thread);
+  const setPaneNode = (node: HTMLElement | null) => {
+    if (paneRef) {
+      paneRef.current = node;
+    }
+  };
+  const onPaneKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (isTypingShortcutTarget(event.target)) {
+      return;
+    }
+    const delta = inboxListNavDelta(event);
+    if (!delta) {
+      return;
+    }
+    event.preventDefault();
+    if (delta === 1) {
+      onSelectNext?.();
+    } else {
+      onSelectPrevious?.();
+    }
+  };
 
   return (
-    <article className="thread-pane">
+    <article
+      ref={setPaneNode}
+      className="thread-pane"
+      tabIndex={-1}
+      onKeyDown={onPaneKeyDown}
+    >
       <header className="thread-head">
         <div className="thread-head-main">
           <div className="thread-identity">
@@ -402,6 +437,34 @@ export const ThreadPane = memo(function ThreadPane({
                 {thread.hidden ? <ShowIcon /> : <HideIcon />}
               </button>
             ) : null}
+            <div className="thread-nav">
+              <button
+                type="button"
+                className="item-tool"
+                aria-label={t("inbox.previous")}
+                title={`${t("inbox.previous")} (K)`}
+                aria-keyshortcuts="K Alt+ArrowUp"
+                disabled={!hasPrevious}
+                onClick={() => onSelectPrevious?.()}
+              >
+                <span className="thread-nav-icon is-prev">
+                  <ChevronIcon />
+                </span>
+              </button>
+              <button
+                type="button"
+                className="item-tool"
+                aria-label={t("inbox.next")}
+                title={`${t("inbox.next")} (J)`}
+                aria-keyshortcuts="J Alt+ArrowDown"
+                disabled={!hasNext}
+                onClick={() => onSelectNext?.()}
+              >
+                <span className="thread-nav-icon">
+                  <ChevronIcon />
+                </span>
+              </button>
+            </div>
           </div>
           <div className="thread-meta-row">
             <div className="thread-tags">

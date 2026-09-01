@@ -11,6 +11,12 @@ import {
   orderThreadMessages,
   openedThreadView,
   overlayThreadMessages,
+  holdOpenedThread,
+  filterInboxThreadsByTitle,
+  mergeInboxThreadLists,
+  adjacentInboxThreadId,
+  canMoveInboxThread,
+  inboxListNavDelta,
   applyPrefOverlay,
   resolveSelectedThread,
   resolveThreadAttention,
@@ -159,6 +165,67 @@ describe("opened conversation identity", () => {
     assert.equal(resolveSelectedThread(null, [open], open), null);
     assert.equal(
       resolveSelectedThread("feishu:open", [other], other),
+      null,
+    );
+  });
+});
+
+describe("inbox title search", () => {
+  it("matches custom and automatic titles without regard to case", () => {
+    const named = { ...thread({ id: "dsh:named" }), title: "Weekly Sync" };
+    const labeled = {
+      ...thread({ id: "dsh:label" }),
+      title: null,
+      conversation_label: "Order 42",
+      list_title: "conversation" as const,
+    };
+    const hidden = { ...named, id: "dsh:hidden", hidden: true, title: "Old Weekly" };
+    const renamed = {
+      ...thread({ id: "dsh:renamed" }),
+      title: "Project X",
+      conversation_label: "Weekly Sync",
+    };
+    const hits = filterInboxThreadsByTitle(
+      mergeInboxThreadLists([named], [hidden, labeled, renamed]),
+      "  weekly ",
+      (item) => item.title ?? item.conversation_label ?? item.label,
+    );
+    assert.deepEqual(
+      hits.map((item) => item.id),
+      ["dsh:named", "dsh:hidden", "dsh:renamed"],
+    );
+    assert.deepEqual(
+      filterInboxThreadsByTitle([named, labeled], "   ", (item) => item.title ?? item.label).map(
+        (item) => item.id,
+      ),
+      ["dsh:named", "dsh:label"],
+    );
+  });
+
+  it("stays on the current thread at the ends of the visible list", () => {
+    const ids = ["a", "b", "c"];
+    assert.equal(adjacentInboxThreadId(ids, "b", 1), "c");
+    assert.equal(adjacentInboxThreadId(ids, "b", -1), "a");
+    assert.equal(adjacentInboxThreadId(ids, "c", 1), "c");
+    assert.equal(adjacentInboxThreadId(ids, "a", -1), "a");
+    assert.equal(adjacentInboxThreadId([], "a", 1), "a");
+    assert.equal(canMoveInboxThread(ids, "a", -1), false);
+    assert.equal(canMoveInboxThread(ids, "a", 1), true);
+  });
+
+  it("maps Gmail J/K and Alt arrows, and ignores modified keys", () => {
+    assert.equal(inboxListNavDelta({ key: "j", altKey: false, metaKey: false, ctrlKey: false, defaultPrevented: false }), 1);
+    assert.equal(inboxListNavDelta({ key: "K", altKey: false, metaKey: false, ctrlKey: false, defaultPrevented: false }), -1);
+    assert.equal(
+      inboxListNavDelta({ key: "ArrowDown", altKey: true, metaKey: false, ctrlKey: false, defaultPrevented: false }),
+      1,
+    );
+    assert.equal(
+      inboxListNavDelta({ key: "j", altKey: true, metaKey: false, ctrlKey: false, defaultPrevented: false }),
+      null,
+    );
+    assert.equal(
+      inboxListNavDelta({ key: "j", altKey: false, metaKey: true, ctrlKey: false, defaultPrevented: false }),
       null,
     );
   });
@@ -468,6 +535,20 @@ describe("inbox sort", () => {
     const loaded = openedThreadView(row, [head, extra], false);
     assert.equal(loaded.messages.length, 2);
     assert.equal(loaded.messages[1], extra);
+  });
+
+  it("keeps an already-opened transcript when the cache is briefly missing", () => {
+    const head = message("a", "2026-08-23T10:00:00.000Z", "feishu:oc_yiki");
+    const extra = message("b", "2026-08-23T10:01:00.000Z", "feishu:oc_yiki");
+    const [row] = groupInboxThreads([head]);
+    const previous = openedThreadView(row, [head, extra], false);
+    const held = holdOpenedThread(previous, row, undefined);
+    assert.equal(held.messages.length, 2);
+    assert.equal(held.messages[1], extra);
+    const cold = holdOpenedThread(previous, row, []);
+    assert.deepEqual(cold.messages, []);
+    const firstOpen = holdOpenedThread(null, row, undefined);
+    assert.deepEqual(firstOpen.messages, []);
   });
 
   it("evicts older thread caches and keeps the open one", () => {

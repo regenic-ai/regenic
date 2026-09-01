@@ -28,11 +28,11 @@ import { engineChip, memoryWatchCopy } from "./format";
 import {
   evictThreadCache,
   groupInboxThreads,
+  holdOpenedThread,
   keepSelectedThreadId,
   latestInboundOf,
   markInboxThreadRead,
   messagesForAttentionAck,
-  openedThreadView,
   orderThreadMessages,
   resolveSelectedThread,
   sortInboxThreads,
@@ -63,9 +63,14 @@ import {
 } from "./inbox-list-store.ts";
 import {
   decideInboxSync,
+  headsPageCacheEntry,
   inboxHeadsFact,
   inboxHeadsRequest,
+  inboxListCacheEntry,
+  inboxListRestoreFact,
   nextInboxSyncClocks,
+  rememberInboxListHeads,
+  type InboxListHeadsCache,
 } from "./inbox-list-sync.ts";
 import {
   hasOlderPage,
@@ -127,6 +132,8 @@ export function ConsoleApp() {
   );
   const [hasOlderHeads, setHasOlderHeads] = useState(false);
   const [loadingOlderHeads, setLoadingOlderHeads] = useState(false);
+  const [listPending, setListPending] = useState(false);
+  const [otherListItems, setOtherListItems] = useState<InboxViewItem[]>([]);
   const [host, setHost] = useState<HostStats | null>(null);
   const [sortMode, setSortMode] = useState<InboxSortMode>("normal");
   const [listView, setListView] = useState<InboxListView>("shown");
@@ -182,15 +189,28 @@ export function ConsoleApp() {
   const lastFetchedListRef = useRef<InboxListView>("shown");
   const prefWritesRef = useRef(new Map<string, Promise<void>>());
   const selectedThreadRef = useRef<InboxThread | null>(null);
+  const listHeadsCacheRef = useRef<InboxListHeadsCache>({});
+  const otherListLoading = useRef(false);
+  const listSwitchRef = useRef(false);
 
   const commitHeads = async (fact: InboxListFact) => {
     publishHeads(await listStoreRef.current.enqueue(fact));
   };
 
-  const publishHeads = (snap: InboxListSnapshot) => {
+  const publishHeads = (snap: InboxListSnapshot, remember = true) => {
+    if (remember && snap.listView) {
+      listHeadsCacheRef.current = rememberInboxListHeads(
+        listHeadsCacheRef.current,
+        snap.listView,
+        inboxListCacheEntry(snap),
+      );
+    }
     reuseHintRef.current = snap.reuse;
     inboxRef.current = snap.items;
     setHasOlderHeads(snap.hasOlder);
+    if (remember) {
+      setListPending(false);
+    }
     if (snap.reuse.same) {
       return;
     }
@@ -210,6 +230,29 @@ export function ConsoleApp() {
         mergeDraftThreads(synced, nextDrafts)[0]?.id ?? null,
       ),
     );
+  };
+
+  const applyListView = (next: InboxListView) => {
+    if (listViewRef.current === next) {
+      return false;
+    }
+    setOtherListItems(inboxRef.current);
+    listViewRef.current = next;
+    const cached = listHeadsCacheRef.current[next];
+    if (cached) {
+      lastFetchedListRef.current = next;
+    } else {
+      inboxDigestRef.current = null;
+    }
+    listStoreRef.current.bumpList();
+    listSwitchRef.current = true;
+    publishHeads(
+      listStoreRef.current.reduce(inboxListRestoreFact(next, cached)),
+      Boolean(cached),
+    );
+    setListPending(!cached);
+    setListView(next);
+    return true;
   };
 
   const scheduleMediaDrainIfNeeded = (
@@ -634,9 +677,25 @@ export function ConsoleApp() {
             continue;
           }
           if (listViewRef.current !== requested) {
+            listHeadsCacheRef.current = rememberInboxListHeads(
+              listHeadsCacheRef.current,
+              requested,
+              headsPageCacheEntry(page),
+              false,
+            );
+            const cached = listHeadsCacheRef.current[requested];
+            if (cached) {
+              setOtherListItems(cached.items);
+            }
             continue;
           }
           if (!listStoreRef.current.acceptsList(token)) {
+            listHeadsCacheRef.current = rememberInboxListHeads(
+              listHeadsCacheRef.current,
+              requested,
+              headsPageCacheEntry(page),
+              false,
+            );
             continue;
           }
           const fact = inboxHeadsFact({
@@ -678,9 +737,11 @@ export function ConsoleApp() {
             loadedThreadsRef.current.has(openId) &&
             !threadHasPendingImagePreviews(openMessages);
           if (!skipOpenPoll) {
+            const knownOpen =
+              loadedThreadsRef.current.has(openId) || openMessages.length > 0;
             const loaded = await ensureThread(
               openId,
-              loadedThreadsRef.current.has(openId) ? "poll" : "open",
+              knownOpen ? "poll" : "open",
             );
             if (workspaceEpoch.current !== epoch) {
               continue;
@@ -772,6 +833,7 @@ export function ConsoleApp() {
     lastFullRef.current = 0;
     lastReceiptAt.current = {};
     reuseHintRef.current = undefined;
+    listHeadsCacheRef.current = {};
     setInbox([]);
     setMessagesByThread({});
     setDrafts([]);
@@ -782,6 +844,8 @@ export function ConsoleApp() {
     setHasOlderByThread({});
     setHasOlderHeads(false);
     setLoadingOlderHeads(false);
+    setListPending(true);
+    setOtherListItems([]);
     setThreadError({});
     refreshAgain.current = true;
     await refresh();
@@ -839,7 +903,7 @@ export function ConsoleApp() {
       .then((prefs) => {
         if (!cancelled) {
           setSortMode(prefs.inbox_sort);
-          setListView(prefs.inbox_list);
+          applyListView(prefs.inbox_list);
         }
       })
       .catch(() => undefined);
@@ -850,12 +914,15 @@ export function ConsoleApp() {
 
   const listReady = useRef(false);
   useEffect(() => {
-    inboxDigestRef.current = null;
-    if (listReady.current) {
-      listStoreRef.current.bumpList();
+    const switched = listSwitchRef.current;
+    listSwitchRef.current = false;
+    if (!switched) {
+      inboxDigestRef.current = null;
+      if (listReady.current) {
+        listStoreRef.current.bumpList();
+      }
     }
     listReady.current = true;
-    setHasOlderHeads(false);
     void refresh();
   }, [listView, refresh]);
 
@@ -963,6 +1030,10 @@ export function ConsoleApp() {
       ),
     [catalogThreads, listView],
   );
+  const otherThreads = useMemo(
+    () => groupInboxThreads(otherListItems),
+    [otherListItems],
+  );
   const selected = useMemo(() => {
     if (!selectedId) {
       selectedThreadRef.current = null;
@@ -977,14 +1048,14 @@ export function ConsoleApp() {
     if (!thread) {
       return null;
     }
-    const opened = openedThreadView(
+    const opened = holdOpenedThread(
+      selectedThreadRef.current,
       thread,
       messagesByThread[thread.id],
-      openingId === thread.id,
     );
     selectedThreadRef.current = opened;
     return opened;
-  }, [catalogThreads, selectedId, messagesByThread, openingId]);
+  }, [catalogThreads, selectedId, messagesByThread]);
   const chip = engineChip(engine);
   const createTargets = createConversationTargets(engine);
 
@@ -993,7 +1064,7 @@ export function ConsoleApp() {
       return;
     }
     if (listViewRef.current !== "shown") {
-      setListView("shown");
+      applyListView("shown");
       void saveUiPrefs({ inbox_list: "shown" }).catch(() => undefined);
     }
     const target = createTargets.find((item) => item.id === installationId);
@@ -1174,9 +1245,42 @@ export function ConsoleApp() {
     void saveUiPrefs({ inbox_sort: mode }).catch(() => undefined);
   }, []);
   const changeListView = useCallback((next: InboxListView) => {
-    setListView(next);
-    inboxDigestRef.current = null;
+    applyListView(next);
     void saveUiPrefs({ inbox_list: next }).catch(() => undefined);
+  }, []);
+  const ensureOtherListHeads = useCallback(async () => {
+    const other: InboxListView =
+      listViewRef.current === "hidden" ? "shown" : "hidden";
+    const cached = listHeadsCacheRef.current[other];
+    if (cached) {
+      setOtherListItems(cached.items);
+      return;
+    }
+    if (otherListLoading.current) {
+      return;
+    }
+    otherListLoading.current = true;
+    try {
+      const page = await fetchInboxHeads({
+        list: other,
+        limit: LIST_HEADS_PAGE_SIZE,
+        live: true,
+      });
+      if (listViewRef.current === other) {
+        return;
+      }
+      const entry = headsPageCacheEntry(page);
+      listHeadsCacheRef.current = rememberInboxListHeads(
+        listHeadsCacheRef.current,
+        other,
+        entry,
+      );
+      setOtherListItems(entry.items);
+    } catch {
+      // Search still matches the already-loaded tab.
+    } finally {
+      otherListLoading.current = false;
+    }
   }, []);
   const runSelectedWork = useCallback(
     async (thread: InboxThread) => {
@@ -1333,6 +1437,11 @@ export function ConsoleApp() {
             onSortMode={changeSortMode}
             listView={listView}
             onListView={changeListView}
+            listPending={listPending}
+            otherThreads={otherThreads}
+            onNeedSearchCatalog={() => {
+              void ensureOtherListHeads();
+            }}
             onRunWork={runSelectedWork}
             onDismissWork={dismissSelectedWork}
             onBindRecipe={bindSelectedRecipe}
