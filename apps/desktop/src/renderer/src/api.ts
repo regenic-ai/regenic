@@ -766,6 +766,7 @@ export async function focusConversation(input: {
   pull_older?: boolean;
   before?: string;
   before_id?: string;
+  media?: boolean;
   present?: boolean;
 }): Promise<{ accepted: true; thread_id: string }> {
   const response = await fetch(`${origin()}/v1/me/conversations/focus`, {

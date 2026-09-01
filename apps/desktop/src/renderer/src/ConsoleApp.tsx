@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   liveReceiptFocusRequest,
+  mediaDrainFocusRequest,
   openThreadFocusRequest,
   pullOlderFocusRequest,
 } from "../../shared/conversation-focus.ts";
@@ -211,6 +212,16 @@ export function ConsoleApp() {
     );
   };
 
+  const scheduleMediaDrainIfNeeded = (
+    threadId: string,
+    items: InboxViewItem[] | undefined,
+  ) => {
+    if (!items || !threadHasPendingImagePreviews(items)) {
+      return;
+    }
+    void focusConversation(mediaDrainFocusRequest(threadId)).catch(() => undefined);
+  };
+
   const ensureThread = async (threadId: string, mode: "open" | "poll") => {
     const seq = (threadLoadSeq.current[threadId] ?? 0) + 1;
     threadLoadSeq.current[threadId] = seq;
@@ -287,6 +298,7 @@ export function ConsoleApp() {
           if (loaded) {
             maybeRefreshOpenedReceipts(threadId);
           }
+          scheduleMediaDrainIfNeeded(threadId, patched);
           return patched;
         }
         const next = orderThreadMessages(
@@ -300,6 +312,7 @@ export function ConsoleApp() {
         if (loaded) {
           maybeRefreshOpenedReceipts(threadId);
         }
+        scheduleMediaDrainIfNeeded(threadId, next);
         return next;
       }
       if (olderBusyRef.current.has(threadId)) {
@@ -362,6 +375,12 @@ export function ConsoleApp() {
                 ),
               ),
             );
+            scheduleMediaDrainIfNeeded(
+              threadId,
+              orderThreadMessages(
+                mergeRecentInbox(messagesRef.current[threadId] ?? [], seeded),
+              ),
+            );
             setHasOlderByThread((prev) => ({
               ...prev,
               [threadId]: hasOlderPage(seeded.length, THREAD_OPEN_PAGE_SIZE),
@@ -371,6 +390,7 @@ export function ConsoleApp() {
       } else {
         finishSeed();
       }
+      scheduleMediaDrainIfNeeded(threadId, merged);
       return merged;
     } catch (caught) {
       if (isInboxAbortError(caught) || threadLoadSeq.current[threadId] !== seq) {
@@ -652,8 +672,11 @@ export function ConsoleApp() {
         }
         const openId = selectedIdRef.current;
         if (openId) {
+          const openMessages = messagesRef.current[openId] ?? [];
           const skipOpenPoll =
-            sseConnectedRef.current && loadedThreadsRef.current.has(openId);
+            sseConnectedRef.current &&
+            loadedThreadsRef.current.has(openId) &&
+            !threadHasPendingImagePreviews(openMessages);
           if (!skipOpenPoll) {
             const loaded = await ensureThread(
               openId,
@@ -794,6 +817,10 @@ export function ConsoleApp() {
         if (digest && digest !== inboxDigestRef.current) {
           refreshAgain.current = true;
           void refresh();
+          const openId = selectedIdRef.current;
+          if (openId && loadedThreadsRef.current.has(openId)) {
+            void ensureThread(openId, "poll");
+          }
         }
       },
       onThreadUpdated: (threadId) => {

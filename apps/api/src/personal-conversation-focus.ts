@@ -9,6 +9,8 @@ export type ConversationFocusInput = {
   pull_older?: boolean;
   before?: string;
   before_id?: string;
+  /** Drain queued attachment downloads for this thread. */
+  media?: boolean;
   /** Marks human presence for connector pacing (default true). */
   present?: boolean;
 };
@@ -28,4 +30,8 @@ export function shouldPullOlderFocus(body: ConversationFocusInput): boolean {
   return Boolean(
     body.pull_older && conversationFocusThreadId(body) && body.before?.trim(),
   );
+}
+
+export function shouldDrainMediaFocus(body: ConversationFocusInput): boolean {
+  return Boolean(body.media && conversationFocusThreadId(body));
 }

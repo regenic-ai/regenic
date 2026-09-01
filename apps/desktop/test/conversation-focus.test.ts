@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   liveReceiptFocusRequest,
+  mediaDrainFocusRequest,
   openThreadFocusRequest,
   pullOlderFocusRequest,
 } from "../src/shared/conversation-focus.ts";
@@ -33,5 +34,10 @@ describe("conversation focus requests", () => {
         present: true,
       },
     );
+    assert.deepEqual(mediaDrainFocusRequest("feishu:oc_1"), {
+      thread_id: "feishu:oc_1",
+      media: true,
+      present: true,
+    });
   });
 });

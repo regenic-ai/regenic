@@ -147,7 +147,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private focusSlot: {
     threadId: string;
     generation: number;
-    kind: "hydrate" | "older" | "receipt";
+    kind: "hydrate" | "older" | "media" | "receipt";
     abort: AbortController;
     promise: Promise<void>;
   } | null = null;
@@ -459,6 +459,25 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
+  async drainMediaForThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
+    const id = threadId.trim();
+    if (!id) {
+      return;
+    }
+    noteHumanActivity();
+    preferThread(id);
+    try {
+      await this.takeFocus(id, "media", (signal, generation) =>
+        this.runDrainMediaThread(id, signal, generation),
+      );
+    } catch {
+      return;
+    }
+  }
+
   async pullOlderForThread(threadId: string): Promise<void> {
     if (this.maintenanceHold) {
       return;
@@ -491,7 +510,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   private takeFocus(
     threadId: string,
-    kind: "hydrate" | "older" | "receipt",
+    kind: "hydrate" | "older" | "media" | "receipt",
     work: (signal: AbortSignal, generation: number) => Promise<void>,
   ): Promise<void> {
     if (
@@ -590,7 +609,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
                 installation,
                 stream,
                 1,
-                { older: true, media: false },
+                { older: true },
                 this.quota,
               ),
             );
@@ -690,10 +709,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
                 installation,
                 stream,
                 1,
-                {
-                  older: false,
-                  media: false,
-                },
+                { older: false },
                 this.quota,
               ),
             );
@@ -717,6 +733,97 @@ export class PersonalConnectorService implements OnModuleDestroy {
           key,
           pages: [],
           pagesBudget: 1,
+          idleMs: streamIdleMs(stream),
+          error,
+        });
+        throw error;
+      } finally {
+        this.streamPulling.delete(key);
+        this.publishStreams();
+      }
+      return;
+    }
+  }
+
+  private async runDrainMediaThread(
+    threadId: string,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<void> {
+    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
+      return;
+    }
+    let thread: ConversationThread;
+    try {
+      thread = parseConversationThread(threadId);
+    } catch {
+      return;
+    }
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installations = await store.listInstallations(this.runtime.orgId());
+    if (!this.focusAlive(generation, signal)) {
+      return;
+    }
+    for (const installation of installations) {
+      if (installation.status !== "enabled") {
+        continue;
+      }
+      const driver = this.drivers.get(installation.connector_type);
+      if (!driver?.matchesThread(installation, thread)) {
+        continue;
+      }
+      let stream: ConnectorStream;
+      try {
+        stream = await driver.resolveThreadStream(
+          installation,
+          thread,
+          asConnectorHost(host),
+          process.env,
+        );
+      } catch {
+        continue;
+      }
+      if (!this.focusAlive(generation, signal)) {
+        return;
+      }
+      const key = streamPaceKey(installation.id, stream.stream_key);
+      this.rememberStreamMeta(key, stream);
+      this.streamPulling.add(key);
+      this.publishStreams();
+      try {
+        const pages = await this.exclusiveStream(
+          installation.id,
+          stream.stream_key,
+          () => {
+            if (!this.focusAlive(generation, signal)) {
+              return Promise.resolve([]);
+            }
+            return runInSyncLane("interactive", () =>
+              pollStream(host, store, installation, stream, 3, { media: true }, this.quota),
+            );
+          },
+          { skipIfBusy: false },
+        );
+        if (pages === undefined || !this.focusAlive(generation, signal)) {
+          return;
+        }
+        const accepted = summarizeRuns(pages).accepted_count;
+        this.rememberStreamPace({
+          key,
+          pages,
+          pagesBudget: 3,
+          idleMs: streamIdleMs(stream),
+        });
+        if (accepted > 0) {
+          this.inbox.publishThreadUpdated(threadId);
+          void this.inbox.publishInboxDigest();
+        }
+      } catch (error) {
+        this.rememberStreamPace({
+          key,
+          pages: [],
+          pagesBudget: 3,
           idleMs: streamIdleMs(stream),
           error,
         });
@@ -1461,18 +1568,25 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
       if (summary.accepted_count > 0) {
         void this.inbox.publishInboxDigest();
-        for (let index = 0; index < mediaItems.length; index += 1) {
-          const item = mediaItems[index];
-          const batch = mediaBatches[index];
-          if (
-            !item.stream.thread_id ||
-            !batch ||
-            summarizeRuns(batch.pages).accepted_count === 0
-          ) {
-            continue;
+        const notifyAccepted = (
+          items: Array<{ stream: ConnectorStream }>,
+          batches: Array<{ pages: ConnectorPollRunResult[] }>,
+        ) => {
+          for (let index = 0; index < items.length; index += 1) {
+            const threadId = items[index]?.stream.thread_id;
+            const batch = batches[index];
+            if (
+              !threadId ||
+              !batch ||
+              summarizeRuns(batch.pages).accepted_count === 0
+            ) {
+              continue;
+            }
+            this.inbox.publishThreadUpdated(threadId);
           }
-          this.inbox.publishThreadUpdated(item.stream.thread_id);
-        }
+        };
+        notifyAccepted(textItems, textBatches);
+        notifyAccepted(mediaItems, mediaBatches);
       }
       this.publishStreams();
       return {

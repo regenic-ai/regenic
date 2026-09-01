@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   conversationFocusThreadId,
+  shouldDrainMediaFocus,
   shouldMarkHumanPresent,
   shouldPullOlderFocus,
 } = require("../dist/personal-conversation-focus");
@@ -30,5 +31,10 @@ describe("conversation focus", () => {
       shouldPullOlderFocus({ thread_id: "feishu:oc_1", before: "2026-01-01" }),
       false,
     );
+  });
+
+  it("drains media only when explicitly requested", () => {
+    assert.equal(shouldDrainMediaFocus({ thread_id: "feishu:oc_1", media: true }), true);
+    assert.equal(shouldDrainMediaFocus({ thread_id: "feishu:oc_1" }), false);
   });
 });

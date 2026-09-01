@@ -6,6 +6,7 @@ export type ThreadFocusRequest = {
   pull_older?: boolean;
   before?: string;
   before_id?: string;
+  media?: boolean;
   present?: boolean;
 };
 
@@ -38,6 +39,14 @@ export function pullOlderFocusRequest(
     pull_older: true,
     before,
     ...(beforeId ? { before_id: beforeId } : {}),
+    present: true,
+  };
+}
+
+export function mediaDrainFocusRequest(threadId: string): ThreadFocusRequest {
+  return {
+    thread_id: threadId,
+    media: true,
     present: true,
   };
 }

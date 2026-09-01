@@ -24,6 +24,7 @@ import { requestLocale } from "./request-locale";
 import { PersonalConnectorError, PersonalConnectorService } from "./personal-connector.service";
 import {
   conversationFocusThreadId,
+  shouldDrainMediaFocus,
   shouldMarkHumanPresent,
   shouldPullOlderFocus,
 } from "./personal-conversation-focus";
@@ -141,6 +142,7 @@ export class PersonalController {
           pull_older?: boolean;
           before?: string;
           before_id?: string;
+          media?: boolean;
           present?: boolean;
         }
       | undefined,
@@ -165,6 +167,9 @@ export class PersonalController {
       }
       if (shouldPullOlderFocus(input)) {
         void this.connectors.pullOlderForThread(threadId);
+      }
+      if (shouldDrainMediaFocus(input)) {
+        void this.connectors.drainMediaForThread(threadId);
       }
       return { accepted: true as const, thread_id: threadId };
     });
