@@ -6,7 +6,6 @@ import {
   parseLocale,
   type Locale,
 } from "../shared/locale.ts";
-import { isNumericLoopbackOrigin } from "./personal-api-key.ts";
 
 export const LOCAL_KERNEL_ORIGIN = "http://127.0.0.1:4370";
 
@@ -33,10 +32,9 @@ export function parseKernelOrigin(raw: string): string {
   if (
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
     parsed.username ||
-    parsed.password ||
-    !isNumericLoopbackOrigin(parsed.origin)
+    parsed.password
   ) {
-    throw new Error("Kernel address must use a numeric loopback URL without credentials");
+    throw new Error("Kernel address must be an http(s) URL without credentials");
   }
   return parsed.origin;
 }

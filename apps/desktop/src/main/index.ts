@@ -464,7 +464,7 @@ async function assertPersonalKernel(origin: string): Promise<void> {
   }
   if (mode !== "personal") {
     throw new Error(
-      `Kernel at ${origin} is not personal. Remote Personal API access is disabled until authenticated remote identity is available.`,
+      `Kernel at ${origin} is not personal. On that server set REGENIC_PERSONAL_API=1; /v1/me stays off when LISTEN_HOST is not loopback.`,
     );
   }
 }
@@ -473,13 +473,9 @@ async function connectSavedKernel(): Promise<void> {
   const preference = loadKernelPreference(settingsFile());
   if (preference.mode === "custom" && preference.origin) {
     try {
-      const key = configuredPersonalApiKey();
-      if (!key) {
-        throw new Error("A custom Personal API requires REGENIC_PERSONAL_API_KEY");
-      }
       await assertPersonalKernel(preference.origin);
       apiOrigin = preference.origin;
-      personalApiKey = key;
+      personalApiKey = configuredPersonalApiKey();
       return;
     } catch (error) {
       process.stderr.write(
@@ -493,16 +489,12 @@ async function connectSavedKernel(): Promise<void> {
 async function applyKernelPreference(preference: KernelPreference): Promise<void> {
   resetHostStatCache();
   if (preference.mode === "custom" && preference.origin) {
-    const key = configuredPersonalApiKey();
-    if (!key) {
-      throw new Error("A custom Personal API requires REGENIC_PERSONAL_API_KEY");
-    }
     await assertPersonalKernel(preference.origin);
     saveKernelPreference(settingsFile(), preference);
     await stopOwnedSidecarAndWait();
     releaseOwnedStoreLock();
     apiOrigin = preference.origin;
-    personalApiKey = key;
+    personalApiKey = configuredPersonalApiKey();
     broadcastOrigin();
     return;
   }

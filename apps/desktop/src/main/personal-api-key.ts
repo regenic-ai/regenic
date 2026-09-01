@@ -37,7 +37,9 @@ function isPersonalApiRequest(requestUrl: string, apiOrigin: string): boolean {
   } catch {
     return false;
   }
-  return isNumericLoopbackOrigin(api.origin) &&
+  return (api.protocol === "http:" || api.protocol === "https:") &&
+    !api.username &&
+    !api.password &&
     request.origin === api.origin &&
     (request.pathname === "/v1/me" || request.pathname.startsWith("/v1/me/"));
 }

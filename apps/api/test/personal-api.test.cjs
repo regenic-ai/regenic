@@ -2622,7 +2622,7 @@ describe("personal /v1/me", () => {
     }
   });
 
-  it("keeps /v1/me hidden on a public bind even when REGENIC_PERSONAL_API=1", async () => {
+  it("exposes /v1/me on a public bind when REGENIC_PERSONAL_API=1", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
@@ -2630,14 +2630,19 @@ describe("personal /v1/me", () => {
     const { app, origin } = await startPersonalApi(database, blobRoot, {
       LISTEN_HOST: "0.0.0.0",
       REGENIC_PERSONAL_API: "1",
+      REGENIC_PERSONAL_API_KEY: undefined,
     });
     try {
       const inbox = await fetch(`${origin}/v1/me/inbox`);
       const engine = await fetch(`${origin}/v1/me/engine`);
+      const desktop = await fetch(`${origin}/v1/me/inbox`, {
+        headers: { origin: "null" },
+      });
       const health = await (await fetch(`${origin}/health`)).json();
-      assert.equal(inbox.status, 404);
-      assert.equal(engine.status, 404);
-      assert.equal(health.mode, "service");
+      assert.equal(inbox.status, 200);
+      assert.equal(engine.status, 200);
+      assert.equal(desktop.status, 200);
+      assert.equal(health.mode, "personal");
       assert.equal(health.sqlite, "up");
     } finally {
       await app.close();
@@ -3394,5 +3399,10 @@ describe("personal CORS origins", () => {
     assert.equal(isPersonalApiEnabled({ LISTEN_HOST: "127.0.0.1" }), true);
     assert.equal(isPersonalApiEnabled({ LISTEN_HOST: "::1" }), true);
     assert.equal(isPersonalApiEnabled({ LISTEN_HOST: "localhost" }), false);
+    assert.equal(isPersonalApiEnabled({ LISTEN_HOST: "0.0.0.0" }), false);
+    assert.equal(
+      isPersonalApiEnabled({ LISTEN_HOST: "0.0.0.0", REGENIC_PERSONAL_API: "1" }),
+      true,
+    );
   });
 });
