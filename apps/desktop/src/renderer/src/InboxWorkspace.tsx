@@ -156,6 +156,7 @@ export function InboxWorkspace({
     (hidden: boolean) => (selected ? onHide(selected, hidden) : Promise.resolve()),
     [selected, onHide],
   );
+  const paneRef = useRef<HTMLElement | null>(null);
   const visibleIds = visible.map((thread) => thread.id);
   const selectAdjacent = useCallback(
     (delta: -1 | 1) => {
@@ -171,38 +172,17 @@ export function InboxWorkspace({
     },
     [visible, visibleIds, selected, listView, onListView, onSelect],
   );
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.metaKey || event.ctrlKey) {
-        return;
-      }
-      if (event.target instanceof HTMLElement) {
-        const tag = event.target.tagName;
-        if (
-          event.target.isContentEditable ||
-          tag === "INPUT" ||
-          tag === "TEXTAREA" ||
-          tag === "SELECT" ||
-          event.target.closest(".forward-sheet, [role='listbox'], [role='menu']")
-        ) {
-          return;
-        }
-      }
-      const goNext =
-        (!event.altKey && (event.key === "j" || event.key === "J")) ||
-        (event.altKey && event.key === "ArrowDown");
-      const goPrev =
-        (!event.altKey && (event.key === "k" || event.key === "K")) ||
-        (event.altKey && event.key === "ArrowUp");
-      if (!goNext && !goPrev) {
-        return;
-      }
-      event.preventDefault();
-      selectAdjacent(goNext ? 1 : -1);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectAdjacent]);
+  const openThread = (thread: InboxThread, focus = true) => {
+    if (thread.hidden !== (listView === "hidden")) {
+      onListView(thread.hidden ? "hidden" : "shown");
+    }
+    onSelect(thread.id);
+    if (focus) {
+      requestAnimationFrame(() => {
+        paneRef.current?.focus({ preventScroll: true });
+      });
+    }
+  };
 
   return (
     <div className="columns">
@@ -359,10 +339,7 @@ export function InboxWorkspace({
                   renaming={renamingId === thread.id}
                   folded={thread.hidden}
                   onSelect={() => {
-                    if (thread.hidden !== (listView === "hidden")) {
-                      onListView(thread.hidden ? "hidden" : "shown");
-                    }
-                    onSelect(thread.id);
+                    openThread(thread);
                     if (renamingId && renamingId !== thread.id) {
                       setRenamingId(null);
                     }
@@ -408,6 +385,7 @@ export function InboxWorkspace({
             hasNext={canMoveInboxThread(visibleIds, selected.id, 1)}
             onSelectPrevious={() => selectAdjacent(-1)}
             onSelectNext={() => selectAdjacent(1)}
+            paneRef={paneRef}
             onRunWork={() => onRunWork(selected)}
             onDismissWork={() => onDismissWork(selected)}
             onBindRecipe={() => onBindRecipe(selected)}

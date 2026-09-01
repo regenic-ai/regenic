@@ -1594,6 +1594,10 @@ button {
   max-width: none;
 }
 
+.thread-pane:focus {
+  outline: none;
+}
+
 .thread-head {
   flex-shrink: 0;
   margin: 0;

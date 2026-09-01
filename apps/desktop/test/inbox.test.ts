@@ -16,6 +16,7 @@ import {
   mergeInboxThreadLists,
   adjacentInboxThreadId,
   canMoveInboxThread,
+  inboxListNavDelta,
   applyPrefOverlay,
   resolveSelectedThread,
   resolveThreadAttention,
@@ -210,6 +211,23 @@ describe("inbox title search", () => {
     assert.equal(adjacentInboxThreadId([], "a", 1), "a");
     assert.equal(canMoveInboxThread(ids, "a", -1), false);
     assert.equal(canMoveInboxThread(ids, "a", 1), true);
+  });
+
+  it("maps Gmail J/K and Alt arrows, and ignores modified keys", () => {
+    assert.equal(inboxListNavDelta({ key: "j", altKey: false, metaKey: false, ctrlKey: false, defaultPrevented: false }), 1);
+    assert.equal(inboxListNavDelta({ key: "K", altKey: false, metaKey: false, ctrlKey: false, defaultPrevented: false }), -1);
+    assert.equal(
+      inboxListNavDelta({ key: "ArrowDown", altKey: true, metaKey: false, ctrlKey: false, defaultPrevented: false }),
+      1,
+    );
+    assert.equal(
+      inboxListNavDelta({ key: "j", altKey: true, metaKey: false, ctrlKey: false, defaultPrevented: false }),
+      null,
+    );
+    assert.equal(
+      inboxListNavDelta({ key: "j", altKey: false, metaKey: true, ctrlKey: false, defaultPrevented: false }),
+      null,
+    );
   });
 });
 

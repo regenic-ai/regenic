@@ -250,6 +250,45 @@ export function canMoveInboxThread(
   return adjacentInboxThreadId(ids, current, delta) !== current;
 }
 
+export function inboxListNavDelta(event: {
+  key: string;
+  altKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  defaultPrevented: boolean;
+}): -1 | 1 | null {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey) {
+    return null;
+  }
+  if (!event.altKey && (event.key === "j" || event.key === "J")) {
+    return 1;
+  }
+  if (!event.altKey && (event.key === "k" || event.key === "K")) {
+    return -1;
+  }
+  if (event.altKey && event.key === "ArrowDown") {
+    return 1;
+  }
+  if (event.altKey && event.key === "ArrowUp") {
+    return -1;
+  }
+  return null;
+}
+
+export function isTypingShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tag = target.tagName;
+  return (
+    target.isContentEditable ||
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    Boolean(target.closest(".forward-sheet, [role='listbox'], [role='menu']"))
+  );
+}
+
 export function threadChannels(
   threads: InboxThread[],
 ): Array<{ id: string; label: string }> {
