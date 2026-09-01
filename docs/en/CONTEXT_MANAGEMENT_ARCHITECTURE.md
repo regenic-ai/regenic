@@ -506,6 +506,25 @@ evaluation set. They are not domain constants.
 Evidence ingestion and projection scheduling use a transactional outbox. The
 authority transaction writes the Event and an outbox record together.
 
+### 8.1 Personal SQLite baseline
+
+The Personal implementation persists one idempotent outbox job for every
+created, revised, or tombstoned Event in the same SQLite transaction as the
+Event and source-head update. A post-listen worker claims due jobs with a
+bounded lease, groups a batch by organization, and runs the projection
+coordinator once per organization. A crash after projection but before job
+completion causes safe replay: immutable Artifact writes and monotonic
+checkpoints make the projection idempotent. Failed jobs store only a stable
+error code and retry with bounded exponential backoff.
+
+The D0 `thread-summary-deterministic` projector requires no model. At a fixed
+authority read epoch it groups evidence by thread, resolves each source
+lifecycle to its declared head, uses revised text, excludes tombstoned text,
+and emits a structured `thread_summary`. Its ID, input hash, body hash,
+Evidence references, and scope union are deterministic. The canonical summary
+body is content-addressed in Blob storage; the Artifact remains a replaceable,
+evidence-bound proposal rather than authority.
+
 Projectors follow these rules:
 
 - idempotency key: `(projector_id, algorithm_version, event_id)`;
@@ -672,7 +691,7 @@ Acceptance criteria:
 2. Deterministic Event-only planner and assembler.
 3. SQLite snapshot/artifact store and replay.
 4. API/CLI integration and `EvidenceBundle` v1 compatibility.
-5. Projection outbox and D0 structured summaries.
+5. Projection outbox and D0 structured summaries. **Implemented for Personal SQLite.**
 6. Lexical index adapter and evaluation harness.
 7. Optional model, vector, graph, and rerank plugins.
 8. Bitemporal Claim promotion after its query semantics are accepted.

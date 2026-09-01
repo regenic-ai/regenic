@@ -46,6 +46,11 @@ import type {
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
+  ContextProjectionJob,
+  ContextProjectionOutboxStore,
+  ClaimContextProjectionJobs,
+  CompleteContextProjectionJob,
+  FailContextProjectionJob,
   ContextSnapshot,
   EventListQuery,
   EventRecord,
@@ -208,6 +213,20 @@ interface QuarantineRow {
   created_at: string;
 }
 
+interface ContextProjectionJobRow {
+  id: string;
+  org_id: string;
+  event_id: string;
+  status: ContextProjectionJob["status"];
+  attempts: number;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  next_retry_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface PrefRow {
   org_id: string;
   thread_id: string;
@@ -260,7 +279,8 @@ export class SqliteAuthorityStore
     WorkStore,
     ExecutorStore,
     ContextArtifactStore,
-    ContextAuthorityReader
+    ContextAuthorityReader,
+    ContextProjectionOutboxStore
 {
   private readonly database: Database.Database;
   readonly readonly: boolean;
@@ -635,6 +655,90 @@ export class SqliteAuthorityStore
     );
   }
 
+  async claimContextProjectionJobs(
+    input: ClaimContextProjectionJobs,
+  ): Promise<ContextProjectionJob[]> {
+    this.assertWritable();
+    assertProjectionClaim(input);
+    return this.database.transaction(() => {
+      const rows = this.database.prepare(
+        `
+          SELECT id FROM context_projection_outbox
+          WHERE status = 'pending'
+             OR (status = 'failed' AND (next_retry_at IS NULL OR next_retry_at <= ?))
+             OR (status = 'running' AND lease_expires_at <= ?)
+          ORDER BY created_at, id
+          LIMIT ?
+        `,
+      ).all(input.now, input.now, input.limit) as Array<{ id: string }>;
+      const leaseExpiresAt = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
+      for (const row of rows) {
+        this.database.prepare(
+          `
+            UPDATE context_projection_outbox
+            SET status = 'running', attempts = attempts + 1,
+                lease_owner = ?, lease_expires_at = ?, next_retry_at = NULL,
+                last_error = NULL, updated_at = ?
+            WHERE id = ?
+          `,
+        ).run(input.owner, leaseExpiresAt, input.now, row.id);
+      }
+      return rows.map((row) => this.getContextProjectionJob(row.id)!);
+    }).immediate();
+  }
+
+  async completeContextProjectionJob(
+    input: CompleteContextProjectionJob,
+  ): Promise<boolean> {
+    this.assertWritable();
+    assertProjectionSettle(input.id, input.owner, input.completed_at);
+    return this.database.prepare(
+      `
+        UPDATE context_projection_outbox
+        SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
+            next_retry_at = NULL, last_error = NULL, updated_at = ?
+        WHERE id = ? AND status = 'running' AND lease_owner = ?
+      `,
+    ).run(input.completed_at, input.id, input.owner).changes === 1;
+  }
+
+  async failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean> {
+    this.assertWritable();
+    assertProjectionSettle(input.id, input.owner, input.failed_at);
+    if (Number.isNaN(Date.parse(input.next_retry_at)) || !input.error_code.trim()) {
+      throw new Error("Invalid Context projection failure");
+    }
+    return this.database.prepare(
+      `
+        UPDATE context_projection_outbox
+        SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+            next_retry_at = ?, last_error = ?, updated_at = ?
+        WHERE id = ? AND status = 'running' AND lease_owner = ?
+      `,
+    ).run(input.next_retry_at, input.error_code.slice(0, 120), input.failed_at, input.id, input.owner).changes === 1;
+  }
+
+  async listContextProjectionJobs(orgId: string): Promise<ContextProjectionJob[]> {
+    return (this.database.prepare(
+      `
+        SELECT id, org_id, event_id, status, attempts, lease_owner,
+               lease_expires_at, next_retry_at, last_error, created_at, updated_at
+        FROM context_projection_outbox WHERE org_id = ? ORDER BY created_at, id
+      `,
+    ).all(orgId) as ContextProjectionJobRow[]).map(toContextProjectionJob);
+  }
+
+  private getContextProjectionJob(id: string): ContextProjectionJob | null {
+    const row = this.database.prepare(
+      `
+        SELECT id, org_id, event_id, status, attempts, lease_owner,
+               lease_expires_at, next_retry_at, last_error, created_at, updated_at
+        FROM context_projection_outbox WHERE id = ?
+      `,
+    ).get(id) as ContextProjectionJobRow | undefined;
+    return row ? toContextProjectionJob(row) : null;
+  }
+
   async putDisposition(decision: ArrangementDecision): Promise<void> {
     this.assertWritable();
     this.putDispositionWithinTransaction(decision);
@@ -885,6 +989,9 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM context_artifacts WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(`DELETE FROM context_projection_checkpoints WHERE org_id = ?`)
+        .run(orgId);
+      this.database
+        .prepare(`DELETE FROM context_projection_outbox WHERE org_id = ?`)
         .run(orgId);
       this.database
         .prepare(`DELETE FROM message_dispositions WHERE org_id = ?`)
@@ -2488,6 +2595,15 @@ export class SqliteAuthorityStore
     if (headUpdate.changes !== 1) {
       throw new AuthorityConflictError();
     }
+    this.database
+      .prepare(
+        `
+          INSERT INTO context_projection_outbox (
+            id, org_id, event_id, status, attempts, created_at, updated_at
+          ) VALUES (?, ?, ?, 'pending', 0, ?, ?)
+        `,
+      )
+      .run(`context-projection:${event.id}`, event.org_id, event.id, event.ingested_at, event.ingested_at);
     return event;
   }
 
@@ -2826,6 +2942,42 @@ export class SqliteAuthorityStore
 
 function inboxUsesNewestFirst(query?: InboxQuery): boolean {
   return Boolean(normalizeInboxLimit(query?.limit));
+}
+
+function toContextProjectionJob(row: ContextProjectionJobRow): ContextProjectionJob {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    event_id: row.event_id,
+    status: row.status,
+    attempts: row.attempts,
+    ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
+    ...(row.lease_expires_at ? { lease_expires_at: row.lease_expires_at } : {}),
+    ...(row.next_retry_at ? { next_retry_at: row.next_retry_at } : {}),
+    ...(row.last_error ? { last_error: row.last_error } : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function assertProjectionClaim(input: ClaimContextProjectionJobs): void {
+  if (
+    !input?.owner?.trim()
+    || Number.isNaN(Date.parse(input.now))
+    || !Number.isSafeInteger(input.lease_ms)
+    || input.lease_ms < 1
+    || !Number.isSafeInteger(input.limit)
+    || input.limit < 1
+    || input.limit > 100
+  ) {
+    throw new Error("Invalid Context projection claim");
+  }
+}
+
+function assertProjectionSettle(id: string, owner: string, at: string): void {
+  if (!id?.trim() || !owner?.trim() || Number.isNaN(Date.parse(at))) {
+    throw new Error("Invalid Context projection settlement");
+  }
 }
 
 function headsPageTail(query?: InboxQuery): {

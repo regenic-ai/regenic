@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 21;
+export const LATEST_SCHEMA_VERSION = 22;
 
 export const MIGRATIONS = [
   {
@@ -459,6 +459,29 @@ export const MIGRATIONS = [
           required_scope_ids_json IS NULL OR
           json_valid(required_scope_ids_json)
         );
+    `,
+  },
+  {
+    version: 22,
+    sql: `
+      CREATE TABLE context_projection_outbox (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        event_id TEXT NOT NULL UNIQUE REFERENCES events(id),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        next_retry_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX context_projection_outbox_due_idx
+        ON context_projection_outbox (status, next_retry_at, lease_expires_at, created_at);
+      CREATE INDEX context_projection_outbox_org_idx
+        ON context_projection_outbox (org_id, created_at, id);
     `,
   },
 ] as const;

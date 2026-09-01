@@ -466,6 +466,20 @@ metadata、lifecycle head 与绑定内容的 read epoch。Evidence-source adapte
 
 证据入库与投影调度使用 transactional outbox。权威事务同时写 Event 和 outbox 记录。
 
+### 8.1 个人版 SQLite 基线
+
+个人版实现在创建、修订或 tombstone Event 时，为每个 Event 写入一个幂等 outbox job；
+该写入与 Event、source head 更新处于同一个 SQLite 事务。HTTP 开始监听后，后台 worker
+通过有界 lease 领取到期任务，按组织合并批次，并对每个组织运行一次 projection
+coordinator。若进程在投影成功后、任务完成前崩溃，任务会安全重放：不可变 Artifact 写入
+与单调 checkpoint 保证投影幂等。失败任务只记录稳定错误码，并使用有上限的指数退避重试。
+
+D0 `thread-summary-deterministic` projector 不依赖模型。它在固定 authority read epoch 下
+按 thread 聚合证据，把每条来源生命周期解析到声明的 head，采用 revision 后的正文，排除
+tombstone 正文，并输出结构化 `thread_summary`。Artifact ID、input hash、body hash、
+Evidence 引用及 scope 并集均为确定性结果。Canonical summary body 按内容寻址写入 Blob；
+Artifact 仍是可替换、绑定证据的 proposal，而不是权威记录。
+
 Projector 遵守：
 
 - 幂等键：`(projector_id, algorithm_version, event_id)`；
@@ -608,7 +622,7 @@ Context Request/Snapshot/Bundle v2、重放保证、read-epoch 语义与 canonic
 2. 确定性 Event-only planner 与 assembler。
 3. SQLite snapshot/artifact store 与 replay。
 4. API/CLI 集成和 `EvidenceBundle` v1 兼容。
-5. Projection outbox 与 D0 结构化摘要。
+5. Projection outbox 与 D0 结构化摘要。**个人版 SQLite 已实现。**
 6. Lexical index adapter 与评测框架。
 7. 可选 model、vector、graph 和 rerank 插件。
 8. 双时态 query 语义获批后再晋升 Claim。

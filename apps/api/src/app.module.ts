@@ -17,6 +17,7 @@ import { PersonalApiGuard } from "./personal-api.guard";
 import { PersonalPairingService } from "./personal-pairing.service";
 import { PersonalContextController } from "./personal-context.controller";
 import { PersonalContextService } from "./personal-context.service";
+import { PersonalContextProjectionService } from "./personal-context-projection.service";
 import { PersonalController } from "./personal.controller";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalForwardService } from "./personal-forward.service";
@@ -42,6 +43,7 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalPairingService,
     PersonalRuntimeService,
     PersonalContextService,
+    PersonalContextProjectionService,
     PersonalInboxService,
     PersonalReplyService,
     PersonalForwardService,

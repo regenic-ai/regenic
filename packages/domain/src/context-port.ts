@@ -73,7 +73,11 @@ export interface ContextArtifactProposal
 export interface ContextProjectionInput {
   org_id: string;
   generation: string;
+  read_epoch: string;
+  recorded_at: string;
   evidence: EvidenceReference[];
+  source_events: ContextSourceEvent[];
+  lifecycle_heads: ContextLifecycleHead[];
   previous_checkpoint?: ContextProjectionCheckpoint;
 }
 

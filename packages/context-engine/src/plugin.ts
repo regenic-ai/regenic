@@ -7,6 +7,7 @@ import { DeterministicContextEngine } from "./deterministic-context-engine";
 import { DeterministicEventRetriever } from "./deterministic-event-retriever";
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
 import { ContextProjectionCoordinator } from "./context-projection-coordinator";
+import { DeterministicThreadSummaryProjector } from "./deterministic-thread-summary-projector";
 import { PersonalContextPolicyEvaluator } from "./personal-context-policy";
 
 export const deterministicEventRetrieverPlugin = definePlugin({
@@ -66,12 +67,21 @@ export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePlu
 
 export const contextProjectionCoordinatorPlugin = definePlugin({
   name: "context-projection-coordinator",
-  inject: ["context-authority", "context-artifacts", "context-projectors"],
+  inject: ["blobs", "context-authority", "context-artifacts", "context-projectors"],
   apply(ctx) {
     ctx.provide("context-projections", new ContextProjectionCoordinator(
       ctx.get("context-authority"),
       ctx.get("context-artifacts"),
       ctx.get("context-projectors"),
+      ctx.get("blobs"),
     ));
+  },
+});
+
+export const deterministicThreadSummaryProjectorPlugin = definePlugin({
+  name: "context-projector-thread-summary-deterministic",
+  inject: ["context-projectors"],
+  apply(ctx) {
+    return ctx.get("context-projectors").register(new DeterministicThreadSummaryProjector());
   },
 });

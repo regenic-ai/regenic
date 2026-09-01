@@ -14,6 +14,11 @@ import type {
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
+  ContextProjectionJob,
+  ContextProjectionOutboxStore,
+  ClaimContextProjectionJobs,
+  CompleteContextProjectionJob,
+  FailContextProjectionJob,
   ContextSnapshot,
   ConversationPref,
   ConversationPrefPatch,
@@ -62,7 +67,8 @@ export class SqliteSplitAuthorityStore
     WorkStore,
     ExecutorStore,
     ContextArtifactStore,
-    ContextAuthorityReader
+    ContextAuthorityReader,
+    ContextProjectionOutboxStore
 {
   private constructor(
     private readonly reader: SqliteWriteClient,
@@ -156,6 +162,26 @@ export class SqliteSplitAuthorityStore
     generation: string,
   ): Promise<ContextProjectionCheckpoint | null> {
     return this.reader.call("getCheckpoint", [orgId, projectorId, generation]);
+  }
+
+  async claimContextProjectionJobs(
+    input: ClaimContextProjectionJobs,
+  ): Promise<ContextProjectionJob[]> {
+    return this.writer.call("claimContextProjectionJobs", [input]);
+  }
+
+  async completeContextProjectionJob(
+    input: CompleteContextProjectionJob,
+  ): Promise<boolean> {
+    return this.writer.call("completeContextProjectionJob", [input]);
+  }
+
+  async failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean> {
+    return this.writer.call("failContextProjectionJob", [input]);
+  }
+
+  async listContextProjectionJobs(orgId: string): Promise<ContextProjectionJob[]> {
+    return this.reader.call("listContextProjectionJobs", [orgId]);
   }
 
   async getDisposition(
