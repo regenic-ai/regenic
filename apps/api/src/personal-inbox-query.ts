@@ -20,22 +20,11 @@ export function shouldHydrateOpenedInbox(
   );
 }
 
-export function shouldWaitForOpenedHydrate(localCount: number): boolean {
-  return localCount === 0;
-}
-
 /** Scroll-up is the only inbox query that asks the connector for older pages. */
 export function shouldPullOlderInbox(
   query: PersonalInboxHttpQuery,
 ): boolean {
   return Boolean(
     query.thread_id && query.before && !query.since && !query.heads,
-  );
-}
-
-/** Marks human presence on an open thread (non-incremental, non-heads read). */
-export function shouldNoteHumanInbox(query: PersonalInboxHttpQuery): boolean {
-  return Boolean(
-    query.thread_id && !query.since && !query.heads && !query.live,
   );
 }

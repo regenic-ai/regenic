@@ -2,9 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   shouldHydrateOpenedInbox,
-  shouldNoteHumanInbox,
   shouldPullOlderInbox,
-  shouldWaitForOpenedHydrate,
 } = require("../dist/personal-inbox-query");
 
 describe("personal inbox HTTP query", () => {
@@ -24,8 +22,6 @@ describe("personal inbox HTTP query", () => {
       shouldHydrateOpenedInbox({ thread_id: "feishu:oc_1", live: true }),
       false,
     );
-    assert.equal(shouldWaitForOpenedHydrate(0), true);
-    assert.equal(shouldWaitForOpenedHydrate(3), false);
   });
 
   it("pulls older pages only on scroll-up", () => {
@@ -34,13 +30,5 @@ describe("personal inbox HTTP query", () => {
       true,
     );
     assert.equal(shouldPullOlderInbox({ thread_id: "feishu:oc_1" }), false);
-  });
-
-  it("notes human activity on a plain open read", () => {
-    assert.equal(shouldNoteHumanInbox({ thread_id: "feishu:oc_1" }), true);
-    assert.equal(
-      shouldNoteHumanInbox({ thread_id: "feishu:oc_1", live: true }),
-      false,
-    );
   });
 });

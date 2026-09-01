@@ -759,6 +759,30 @@ export async function createConversation(input: {
   return body as CreatedConversation;
 }
 
+export async function focusConversation(input: {
+  thread_id: string;
+  hydrate?: boolean;
+  live?: boolean;
+  present?: boolean;
+}): Promise<{ accepted: true; thread_id: string }> {
+  const response = await fetch(`${origin()}/v1/me/conversations/focus`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as
+    | { accepted: true; thread_id: string }
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `conversation focus ${response.status}`,
+    );
+  }
+  return body as { accepted: true; thread_id: string };
+}
+
 export async function updateConversationPrefs(input: {
   thread_id: string;
   title?: string | null;

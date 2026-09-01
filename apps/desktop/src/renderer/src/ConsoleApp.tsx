@@ -7,6 +7,7 @@ import {
   fetchInbox,
   fetchInboxHeads,
   fetchUiPrefs,
+  focusConversation,
   dismissWorkItem,
   isInboxAbortError,
   runWorkItem,
@@ -212,6 +213,11 @@ export function ConsoleApp() {
     const cursor = inboxCursor(current);
     const signal = focusSignal();
     const coldOpen = mode === "open" && !loaded;
+    void focusConversation({
+      thread_id: threadId,
+      hydrate: coldOpen,
+      present: true,
+    }).catch(() => undefined);
     if (coldOpen) {
       setOpeningId(threadId);
       setSeedingId(threadId);
@@ -385,6 +391,11 @@ export function ConsoleApp() {
     const epoch = workspaceEpoch.current;
     const signal = focusSignal();
     try {
+      await focusConversation({
+        thread_id: threadId,
+        live: true,
+        present: true,
+      });
       const items = await fetchInbox(
         {
           thread_id: threadId,
@@ -637,17 +648,23 @@ export function ConsoleApp() {
         }
         const openId = selectedIdRef.current;
         if (openId) {
-          const loaded = await ensureThread(
-            openId,
-            loadedThreadsRef.current.has(openId) ? "poll" : "open",
-          );
-          if (workspaceEpoch.current !== epoch) {
-            continue;
+          const skipOpenPoll =
+            sseConnectedRef.current && loadedThreadsRef.current.has(openId);
+          if (!skipOpenPoll) {
+            const loaded = await ensureThread(
+              openId,
+              loadedThreadsRef.current.has(openId) ? "poll" : "open",
+            );
+            if (workspaceEpoch.current !== epoch) {
+              continue;
+            }
+            if (loadedThreadsRef.current.has(openId)) {
+              maybeRefreshOpenedReceipts(openId);
+            }
+            await ackOpenThread(openId, loaded);
+          } else {
+            await ackOpenThread(openId, messagesRef.current[openId]);
           }
-          if (loadedThreadsRef.current.has(openId)) {
-            maybeRefreshOpenedReceipts(openId);
-          }
-          await ackOpenThread(openId, loaded);
         }
         if (workspaceEpoch.current !== epoch) {
           continue;

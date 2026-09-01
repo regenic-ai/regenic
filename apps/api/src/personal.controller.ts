@@ -23,11 +23,10 @@ import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
 import { PersonalConnectorError, PersonalConnectorService } from "./personal-connector.service";
 import {
-  shouldHydrateOpenedInbox,
-  shouldNoteHumanInbox,
-  shouldPullOlderInbox,
-  shouldWaitForOpenedHydrate,
-} from "./personal-inbox-query";
+  conversationFocusThreadId,
+  shouldMarkHumanPresent,
+} from "./personal-conversation-focus";
+import { shouldPullOlderInbox } from "./personal-inbox-query";
 import { noteHumanActivity } from "./personal-human-pace";
 import {
   PersonalInboxService,
@@ -129,12 +128,6 @@ export class PersonalController {
       locale: requestLocale(locale, acceptLanguage),
     };
     return this.guard(async () => {
-      if (shouldNoteHumanInbox(query)) {
-        noteHumanActivity();
-      }
-      if (query.live && query.thread_id) {
-        this.connectors.noteInteractiveFocus(query.thread_id);
-      }
       const local = await this.inbox.listInbox(query);
       if (
         Array.isArray(local) &&
@@ -143,15 +136,41 @@ export class PersonalController {
       ) {
         void this.connectors.pullOlderForThread(query.thread_id);
       }
-      if (
-        Array.isArray(local) &&
-        shouldHydrateOpenedInbox(query) &&
-        query.thread_id &&
-        shouldWaitForOpenedHydrate(local.length)
-      ) {
-        void this.connectors.hydrateOpenedThread(query.thread_id);
-      }
       return local;
+    });
+  }
+
+  @Post("conversations/focus")
+  focusConversation(
+    @Body()
+    body:
+      | {
+          thread_id?: string;
+          hydrate?: boolean;
+          live?: boolean;
+          present?: boolean;
+        }
+      | undefined,
+  ) {
+    const input = body ?? {};
+    if (shouldMarkHumanPresent(input)) {
+      noteHumanActivity();
+    }
+    const threadId = conversationFocusThreadId(input);
+    if (!threadId) {
+      throw new HttpException(
+        { error: { code: "invalid_request", message: "thread_id is required" } },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    return this.guard(async () => {
+      if (input.live) {
+        this.connectors.noteInteractiveFocus(threadId);
+      }
+      if (input.hydrate) {
+        void this.connectors.hydrateOpenedThread(threadId);
+      }
+      return { accepted: true as const, thread_id: threadId };
     });
   }
 
