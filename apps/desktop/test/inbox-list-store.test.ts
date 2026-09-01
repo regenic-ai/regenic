@@ -5,6 +5,7 @@ import {
   InboxListStore,
   isActivePrefWrite,
 } from "../src/renderer/src/inbox-list-store.ts";
+import { inboxListRestoreFact } from "../src/renderer/src/inbox-list-sync.ts";
 import { markInboxThreadRead } from "../src/renderer/src/inbox.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
 
@@ -813,5 +814,34 @@ describe("InboxListStore", () => {
       snap.items.map((row) => row.thread_id),
       ["crm:order-2"],
     );
+  });
+
+  it("restores a cached hidden list instead of filtering shown heads to empty", () => {
+    const shown = at(item("n2", "shown", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const hiddenRow = at(item("h1", "hidden", "crm:hidden"), "2026-08-23T00:01:00.000Z");
+    hiddenRow.hidden = true;
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [shown],
+      activeWork: [],
+      nextBefore: { before: shown.event.occurred_at, before_id: shown.event.id },
+      hasOlder: false,
+    });
+    store.bumpList();
+    const snap = store.reduce(
+      inboxListRestoreFact("hidden", {
+        items: [hiddenRow],
+        hasOlder: false,
+        nextBefore: null,
+      }),
+    );
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:hidden"],
+    );
+    assert.equal(snap.listView, "hidden");
   });
 });

@@ -53,6 +53,10 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "inbox.shown"), "显示");
     assert.equal(translate("zh", "inbox.hidden"), "不显示");
     assert.equal(translate("en", "inbox.shown"), "Showing");
+    assert.equal(translate("en", "inbox.loadingList"), "Loading conversations…");
+    assert.equal(translate("zh", "inbox.loadingList"), "正在加载会话…");
+    assert.equal(translate("en", "inbox.searchPlaceholder"), "Search conversations");
+    assert.equal(translate("zh", "inbox.previous"), "上一条会话");
     assert.equal(translate("en", "inbox.hide"), "Hide");
     assert.equal(translate("en", "settings.store"), "Local data");
     assert.equal(translate("zh", "settings.store"), "本机数据");

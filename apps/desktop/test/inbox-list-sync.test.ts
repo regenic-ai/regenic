@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   decideInboxSync,
+  headsPageCacheEntry,
   inboxHeadsFact,
   inboxHeadsRequest,
+  inboxListRestoreFact,
+  rememberInboxListHeads,
   INBOX_FULL_REFRESH_MS,
   nextInboxSyncClocks,
   type InboxHeadsPageView,
@@ -260,5 +263,99 @@ describe("inbox heads sync mapping", () => {
       }),
       { digest: NEWER, lastFullAt: 10, lastFetchedList: "shown" },
     );
+  });
+});
+
+describe("inbox list head cache", () => {
+  it("restores cached hidden heads instead of an empty placeholder", () => {
+    const hidden = {
+      decision: {
+        event_id: "h1",
+        org_id: "org",
+        disposition: "current_work" as const,
+        layer: "L1_event",
+        reason_codes: [],
+        score: 1,
+        decided_at: "2026-08-23T00:00:00.000Z",
+      },
+      event: {
+        id: "h1",
+        org_id: "org",
+        source: "feishu",
+        external_id: "feishu:oc_hidden:h1",
+        operation: "create",
+        occurred_at: "2026-08-23T00:00:00.000Z",
+        ingested_at: "2026-08-23T00:00:00.000Z",
+      },
+      body_text: "hidden",
+      channel: "feishu",
+      channel_label: "Feishu",
+      kind: "user" as const,
+      direction: "inbound" as const,
+      can_send: true,
+      thread_id: "feishu:oc_hidden",
+      hidden: true,
+    };
+    const cached = {
+      items: [hidden],
+      hasOlder: false,
+      nextBefore: null,
+    };
+    const fact = inboxListRestoreFact("hidden", cached);
+    assert.equal(fact.kind, "liveLoaded");
+    if (fact.kind === "liveLoaded") {
+      assert.equal(fact.list, "hidden");
+      assert.equal(fact.live[0]?.thread_id, "feishu:oc_hidden");
+      assert.equal(fact.hasOlder, false);
+    }
+    const empty = inboxListRestoreFact("hidden");
+    assert.equal(empty.kind, "liveLoaded");
+    if (empty.kind === "liveLoaded") {
+      assert.deepEqual(empty.live, []);
+      assert.deepEqual(empty.pinned, []);
+    }
+  });
+
+  it("keeps an existing cache when a discarded fetch is stale", () => {
+    const first = headsPageCacheEntry(
+      page({
+        live: [
+          {
+            decision: {
+              event_id: "a",
+              org_id: "org",
+              disposition: "current_work",
+              layer: "L1_event",
+              reason_codes: [],
+              score: 1,
+              decided_at: "2026-08-23T00:00:00.000Z",
+            },
+            event: {
+              id: "a",
+              org_id: "org",
+              source: "feishu",
+              external_id: "feishu:oc_a:a",
+              operation: "create",
+              occurred_at: "2026-08-23T00:00:00.000Z",
+              ingested_at: "2026-08-23T00:00:00.000Z",
+            },
+            body_text: "a",
+            channel: "feishu",
+            channel_label: "Feishu",
+            kind: "user",
+            direction: "inbound",
+            can_send: true,
+            thread_id: "feishu:oc_a",
+          },
+        ],
+        has_older: true,
+      }),
+    );
+    const cache = rememberInboxListHeads({}, "shown", first);
+    const discarded = headsPageCacheEntry(page({ live: [], has_older: false }));
+    const kept = rememberInboxListHeads(cache, "shown", discarded, false);
+    assert.equal(kept.shown, first);
+    const replaced = rememberInboxListHeads(cache, "shown", discarded, true);
+    assert.equal(replaced.shown, discarded);
   });
 });

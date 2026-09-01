@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { formatChatTime } from "./format";
 import {
   filterInboxThreads,
+  filterInboxThreadsByTitle,
   groupThreadsByAttention,
   latestMessage,
+  mergeInboxThreadLists,
+  adjacentInboxThreadId,
+  canMoveInboxThread,
   threadChannels,
   type InboxThread,
   type PinFilter,
@@ -66,6 +70,9 @@ export function InboxWorkspace({
   onSortMode,
   listView,
   onListView,
+  listPending = false,
+  otherThreads = [],
+  onNeedSearchCatalog,
   onRunWork,
   onDismissWork,
   onBindRecipe,
@@ -100,6 +107,9 @@ export function InboxWorkspace({
   onSortMode: (mode: InboxSortMode) => void;
   listView: InboxListView;
   onListView: (list: InboxListView) => void;
+  listPending?: boolean;
+  otherThreads?: InboxThread[];
+  onNeedSearchCatalog?: () => void;
   onRunWork: (thread: InboxThread) => Promise<void>;
   onDismissWork: (thread: InboxThread) => Promise<void>;
   onBindRecipe: (thread: InboxThread) => void;
@@ -108,10 +118,32 @@ export function InboxWorkspace({
   const { t } = useLocale();
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
   const [channelFilter, setChannelFilter] = useState("all");
+  const [titleQuery, setTitleQuery] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
-  const channels = threadChannels(threads);
-  const visible = filterInboxThreads(threads, pinFilter, channelFilter);
+  const searching = titleQuery.trim().length > 0;
+  const pool = searching ? mergeInboxThreadLists(threads, otherThreads) : threads;
+  const channels = threadChannels(pool);
+  const visible = filterInboxThreadsByTitle(
+    filterInboxThreads(pool, pinFilter, channelFilter),
+    titleQuery,
+    threadTitle,
+  );
   const canCreate = createTargets.length > 0;
+  const selectedMatches = Boolean(
+    selected && visible.some((thread) => thread.id === selected.id),
+  );
+  const firstVisibleId = visible[0]?.id ?? null;
+  useEffect(() => {
+    if (searching) {
+      onNeedSearchCatalog?.();
+    }
+  }, [searching, onNeedSearchCatalog]);
+  useEffect(() => {
+    if (!searching || selectedMatches || !firstVisibleId) {
+      return;
+    }
+    onSelect(firstVisibleId);
+  }, [searching, selectedMatches, firstVisibleId, onSelect]);
   const renameSelected = useCallback(
     (title: string | null) => (selected ? onRename(selected, title) : Promise.resolve()),
     [selected, onRename],
@@ -124,6 +156,52 @@ export function InboxWorkspace({
     (hidden: boolean) => (selected ? onHide(selected, hidden) : Promise.resolve()),
     [selected, onHide],
   );
+  const visibleIds = visible.map((thread) => thread.id);
+  const selectAdjacent = useCallback(
+    (delta: -1 | 1) => {
+      const nextId = adjacentInboxThreadId(visibleIds, selected?.id ?? null, delta);
+      if (!nextId || nextId === selected?.id) {
+        return;
+      }
+      const next = visible.find((thread) => thread.id === nextId);
+      if (next && next.hidden !== (listView === "hidden")) {
+        onListView(next.hidden ? "hidden" : "shown");
+      }
+      onSelect(nextId);
+    },
+    [visible, visibleIds, selected, listView, onListView, onSelect],
+  );
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey) {
+        return;
+      }
+      if (event.target instanceof HTMLElement) {
+        const tag = event.target.tagName;
+        if (
+          event.target.isContentEditable ||
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT"
+        ) {
+          return;
+        }
+      }
+      const goNext =
+        (!event.altKey && (event.key === "j" || event.key === "J")) ||
+        (event.altKey && event.key === "ArrowDown");
+      const goPrev =
+        (!event.altKey && (event.key === "k" || event.key === "K")) ||
+        (event.altKey && event.key === "ArrowUp");
+      if (!goNext && !goPrev) {
+        return;
+      }
+      event.preventDefault();
+      selectAdjacent(goNext ? 1 : -1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectAdjacent]);
 
   return (
     <div className="columns">
@@ -178,7 +256,17 @@ export function InboxWorkspace({
               }}
             />
           </div>
-          {threads.length > 0 ? (
+          <div className="list-chrome-search">
+            <input
+              type="search"
+              className="list-search"
+              value={titleQuery}
+              onChange={(event) => setTitleQuery(event.target.value)}
+              placeholder={t("inbox.searchPlaceholder")}
+              aria-label={t("inbox.search")}
+            />
+          </div>
+          {pool.length > 0 ? (
             <div className="list-chrome-refine">
               <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
                 <button
@@ -221,27 +309,42 @@ export function InboxWorkspace({
           ) : null}
         </div>
         <ListBody
-          hasOlder={hasOlderHeads && pinFilter !== "pinned"}
+          hasOlder={hasOlderHeads && pinFilter !== "pinned" && !searching}
           loadingOlder={loadingOlderHeads}
           onLoadOlder={onLoadOlderHeads}
-          itemCount={threads.length}
+          itemCount={searching ? visible.length : threads.length}
         >
           {error ? <div className="page-empty">{error}</div> : null}
-          {!error && threads.length === 0 ? (
+          {!error && !searching && threads.length === 0 ? (
             <div className="page-empty">
-              {listView === "hidden"
-                ? t("inbox.emptyHidden")
-                : canCreate
-                  ? t("inbox.emptyCreate")
-                  : t("inbox.emptyInstall")}
+              {listPending
+                ? t("inbox.loadingList")
+                : listView === "hidden"
+                  ? t("inbox.emptyHidden")
+                  : canCreate
+                    ? t("inbox.emptyCreate")
+                    : t("inbox.emptyInstall")}
             </div>
           ) : null}
-          {!error && threads.length > 0 && visible.length === 0 ? (
+          {!error && (searching || threads.length > 0) && visible.length === 0 ? (
             <div className="page-empty">{t("inbox.noMatch")}</div>
           ) : null}
-          {(sortMode === "attention"
-            ? groupThreadsByAttention(visible)
-            : [{ key: "all", label: null, items: visible }]
+          {(searching
+            ? [
+                {
+                  key: "shown",
+                  label: t("inbox.shown"),
+                  items: visible.filter((thread) => !thread.hidden),
+                },
+                {
+                  key: "hidden",
+                  label: t("inbox.hidden"),
+                  items: visible.filter((thread) => thread.hidden),
+                },
+              ].filter((section) => section.items.length > 0)
+            : sortMode === "attention"
+              ? groupThreadsByAttention(visible)
+              : [{ key: "all", label: null, items: visible }]
           ).map((section) => (
             <div key={section.key} className="list-section">
               {section.label ? (
@@ -253,8 +356,11 @@ export function InboxWorkspace({
                   thread={thread}
                   selected={selected?.id === thread.id}
                   renaming={renamingId === thread.id}
-                  folded={listView === "hidden"}
+                  folded={thread.hidden}
                   onSelect={() => {
+                    if (thread.hidden !== (listView === "hidden")) {
+                      onListView(thread.hidden ? "hidden" : "shown");
+                    }
                     onSelect(thread.id);
                     if (renamingId && renamingId !== thread.id) {
                       setRenamingId(null);
@@ -264,6 +370,9 @@ export function InboxWorkspace({
                   onPin={(pinned) => onPin(thread, pinned)}
                   onHide={(hidden) => onHide(thread, hidden)}
                   onStartRename={() => {
+                    if (thread.hidden !== (listView === "hidden")) {
+                      onListView(thread.hidden ? "hidden" : "shown");
+                    }
                     onSelect(thread.id);
                     setRenamingId(thread.id);
                   }}
@@ -294,6 +403,10 @@ export function InboxWorkspace({
             onRename={renameSelected}
             onPin={pinSelected}
             onHide={hideSelected}
+            hasPrevious={canMoveInboxThread(visibleIds, selected.id, -1)}
+            hasNext={canMoveInboxThread(visibleIds, selected.id, 1)}
+            onSelectPrevious={() => selectAdjacent(-1)}
+            onSelectNext={() => selectAdjacent(1)}
             onRunWork={() => onRunWork(selected)}
             onDismissWork={() => onDismissWork(selected)}
             onBindRecipe={() => onBindRecipe(selected)}

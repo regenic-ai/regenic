@@ -151,3 +151,63 @@ export function nextInboxSyncClocks(
     lastFetchedList: input.list,
   };
 }
+
+export type InboxListCacheEntry = {
+  items: InboxViewItem[];
+  hasOlder: boolean;
+  nextBefore: HeadsCursor | null;
+};
+
+export type InboxListHeadsCache = Partial<
+  Record<InboxListView, InboxListCacheEntry>
+>;
+
+export function inboxListCacheEntry(input: {
+  items: InboxViewItem[];
+  hasOlder: boolean;
+  nextBefore: HeadsCursor | null;
+}): InboxListCacheEntry {
+  return {
+    items: input.items,
+    hasOlder: input.hasOlder,
+    nextBefore: input.nextBefore,
+  };
+}
+
+export function headsPageCacheEntry(
+  page: InboxHeadsPageView,
+): InboxListCacheEntry {
+  return inboxListCacheEntry({
+    items: [...page.pinned, ...page.live, ...(page.active_work ?? [])],
+    hasOlder: page.has_older,
+    nextBefore: page.next_before,
+  });
+}
+
+export function rememberInboxListHeads(
+  cache: InboxListHeadsCache,
+  list: InboxListView,
+  entry: InboxListCacheEntry,
+  overwrite = true,
+): InboxListHeadsCache {
+  if (!overwrite && cache[list]) {
+    return cache;
+  }
+  return { ...cache, [list]: entry };
+}
+
+export function inboxListRestoreFact(
+  list: InboxListView,
+  cached?: InboxListCacheEntry,
+): InboxListFact {
+  const items = cached?.items ?? [];
+  return {
+    kind: "liveLoaded",
+    list,
+    pinned: items.filter((item) => item.pinned === true),
+    live: items.filter((item) => item.pinned !== true),
+    activeWork: [],
+    nextBefore: cached?.nextBefore ?? null,
+    hasOlder: cached?.hasOlder ?? false,
+  };
+}

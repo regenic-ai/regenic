@@ -37,7 +37,7 @@ import {
 } from "./message-view";
 import { ThreadFaceTags } from "./ThreadFaceTags";
 import { useLocale } from "./LocaleContext";
-import { HideIcon, PinIcon, ShowIcon } from "./Icons";
+import { HideIcon, PinIcon, ShowIcon, ChevronIcon } from "./Icons";
 import {
   ThreadMessageList,
   type ThreadMessageListHandle,
@@ -66,6 +66,10 @@ export const ThreadPane = memo(function ThreadPane({
   onRename,
   onPin,
   onHide,
+  hasPrevious = false,
+  hasNext = false,
+  onSelectPrevious,
+  onSelectNext,
   onRunWork,
   onDismissWork,
   onBindRecipe,
@@ -90,6 +94,10 @@ export const ThreadPane = memo(function ThreadPane({
   onRename: (title: string | null) => Promise<void>;
   onPin: (pinned: boolean) => Promise<void>;
   onHide?: (hidden: boolean) => Promise<void>;
+  hasPrevious?: boolean;
+  hasNext?: boolean;
+  onSelectPrevious?: () => void;
+  onSelectNext?: () => void;
   onRunWork?: () => Promise<void>;
   onDismissWork?: () => Promise<void>;
   onBindRecipe?: () => void;
@@ -402,6 +410,34 @@ export const ThreadPane = memo(function ThreadPane({
                 {thread.hidden ? <ShowIcon /> : <HideIcon />}
               </button>
             ) : null}
+            <div className="thread-nav">
+              <button
+                type="button"
+                className="item-tool"
+                aria-label={t("inbox.previous")}
+                title={`${t("inbox.previous")} (K)`}
+                aria-keyshortcuts="K Alt+ArrowUp"
+                disabled={!hasPrevious}
+                onClick={() => onSelectPrevious?.()}
+              >
+                <span className="thread-nav-icon is-prev">
+                  <ChevronIcon />
+                </span>
+              </button>
+              <button
+                type="button"
+                className="item-tool"
+                aria-label={t("inbox.next")}
+                title={`${t("inbox.next")} (J)`}
+                aria-keyshortcuts="J Alt+ArrowDown"
+                disabled={!hasNext}
+                onClick={() => onSelectNext?.()}
+              >
+                <span className="thread-nav-icon">
+                  <ChevronIcon />
+                </span>
+              </button>
+            </div>
           </div>
           <div className="thread-meta-row">
             <div className="thread-tags">
