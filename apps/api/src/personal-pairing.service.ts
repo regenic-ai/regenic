@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { PersonalApiKeyService } from "./personal-api-key.service";
 
 const PAIRING_TTL_MS = 5 * 60 * 1000;
@@ -15,7 +15,10 @@ export class PersonalPairingService {
   private current: PairingWindow | null = null;
   private attempts = new Map<string, { count: number; resetAt: number }>();
 
-  constructor(private readonly keys: PersonalApiKeyService) {}
+  constructor(
+    @Inject(PersonalApiKeyService)
+    private readonly keys: PersonalApiKeyService,
+  ) {}
 
   snapshot(env: NodeJS.ProcessEnv = process.env): {
     open: boolean;
