@@ -191,6 +191,7 @@ export function ConsoleApp() {
   const selectedThreadRef = useRef<InboxThread | null>(null);
   const listHeadsCacheRef = useRef<InboxListHeadsCache>({});
   const otherListLoading = useRef(false);
+  const listSwitchRef = useRef(false);
 
   const commitHeads = async (fact: InboxListFact) => {
     publishHeads(await listStoreRef.current.enqueue(fact));
@@ -237,9 +238,14 @@ export function ConsoleApp() {
     }
     setOtherListItems(inboxRef.current);
     listViewRef.current = next;
-    inboxDigestRef.current = null;
     const cached = listHeadsCacheRef.current[next];
+    if (cached) {
+      lastFetchedListRef.current = next;
+    } else {
+      inboxDigestRef.current = null;
+    }
     listStoreRef.current.bumpList();
+    listSwitchRef.current = true;
     publishHeads(
       listStoreRef.current.reduce(inboxListRestoreFact(next, cached)),
       Boolean(cached),
@@ -908,9 +914,13 @@ export function ConsoleApp() {
 
   const listReady = useRef(false);
   useEffect(() => {
-    inboxDigestRef.current = null;
-    if (listReady.current) {
-      listStoreRef.current.bumpList();
+    const switched = listSwitchRef.current;
+    listSwitchRef.current = false;
+    if (!switched) {
+      inboxDigestRef.current = null;
+      if (listReady.current) {
+        listStoreRef.current.bumpList();
+      }
     }
     listReady.current = true;
     void refresh();

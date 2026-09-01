@@ -179,14 +179,19 @@ describe("inbox title search", () => {
       list_title: "conversation" as const,
     };
     const hidden = { ...named, id: "dsh:hidden", hidden: true, title: "Old Weekly" };
+    const renamed = {
+      ...thread({ id: "dsh:renamed" }),
+      title: "Project X",
+      conversation_label: "Weekly Sync",
+    };
     const hits = filterInboxThreadsByTitle(
-      mergeInboxThreadLists([named], [hidden, labeled]),
+      mergeInboxThreadLists([named], [hidden, labeled, renamed]),
       "  weekly ",
       (item) => item.title ?? item.conversation_label ?? item.label,
     );
     assert.deepEqual(
       hits.map((item) => item.id),
-      ["dsh:named", "dsh:hidden"],
+      ["dsh:named", "dsh:hidden", "dsh:renamed"],
     );
     assert.deepEqual(
       filterInboxThreadsByTitle([named, labeled], "   ", (item) => item.title ?? item.label).map(

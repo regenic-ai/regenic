@@ -182,7 +182,8 @@ export function InboxWorkspace({
           event.target.isContentEditable ||
           tag === "INPUT" ||
           tag === "TEXTAREA" ||
-          tag === "SELECT"
+          tag === "SELECT" ||
+          event.target.closest(".forward-sheet, [role='listbox'], [role='menu']")
         ) {
           return;
         }

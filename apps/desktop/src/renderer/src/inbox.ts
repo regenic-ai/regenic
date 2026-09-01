@@ -205,9 +205,16 @@ export function filterInboxThreadsByTitle(
   if (!needle) {
     return [...threads];
   }
-  return threads.filter((thread) =>
-    titleOf(thread).toLowerCase().includes(needle),
-  );
+  return threads.filter((thread) => {
+    const displayed = titleOf(thread);
+    const fields = [
+      displayed,
+      thread.title,
+      thread.conversation_label,
+      thread.label,
+    ];
+    return fields.some((field) => field?.toLowerCase().includes(needle));
+  });
 }
 
 export function adjacentInboxThreadId(
