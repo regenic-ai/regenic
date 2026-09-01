@@ -102,6 +102,7 @@ function validateProposal(
     proposal.org_id !== orgId ||
     proposal.generation !== generation ||
     proposal.algorithm_version !== projector.algorithm_version ||
+    !projector.capabilities().artifact_kinds.includes(proposal.kind) ||
     proposal.status !== "proposed" && proposal.status !== "needs_clarify" ||
     proposal.recorded_at !== recordedAt ||
     proposal.input_hash !== hashContextArtifactInputs(proposal)
