@@ -16,6 +16,9 @@ export function rememberFeishuInbound(
   }
   const at = feishuCreateTimeMs(createTime) ?? 0;
   const current = lastInbound.get(chatId);
+  if (current && current.id === id && current.at === at) {
+    return;
+  }
   if (current && current.at > at) {
     return;
   }

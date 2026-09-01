@@ -1403,20 +1403,52 @@ export class PersonalInboxService {
     return toPrefView(pref);
   }
 
+  private async latestInboundCursor(
+    threadId: string,
+  ): Promise<ThreadInboundCursor | undefined> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const siblings = await authority.listInbox(orgId, {
+      siblings: true,
+      thread_ids: [threadId],
+    });
+    if (siblings.length === 0) {
+      return undefined;
+    }
+    const inbound = await latestInboundByThread(
+      [],
+      siblings,
+      new Map(),
+      authority,
+      host.get("blobs"),
+    );
+    return inbound.get(threadId);
+  }
+
   async ackConversationAttention(
     input: ConversationAttentionInput,
   ): Promise<ConversationPrefView> {
     const host = this.runtime.requireHost();
     const threadId = input.thread_id?.trim() ?? "";
     const thread = requireThreadId(threadId);
-    const lastReadAt =
+    let lastReadAt =
       input.last_read_at !== undefined
         ? normalizeStamp(input.last_read_at)
         : new Date().toISOString();
-    const lastReadId =
+    let lastReadId =
       input.last_read_external_id !== undefined
         ? normalizeCursor(input.last_read_external_id)
         : null;
+    if (!lastReadId) {
+      const inbound = await this.latestInboundCursor(threadId);
+      if (inbound) {
+        lastReadId = inbound.external_id;
+        if (input.last_read_at === undefined) {
+          lastReadAt = inbound.occurred_at;
+        }
+      }
+    }
     const pref = await host.get("authority").putConversationPref({
       org_id: this.runtime.orgId(),
       thread_id: threadId,

@@ -23,4 +23,37 @@ describe("CatalogProbeCache", () => {
     });
     assert.equal(cache.peek().services["lark-cli"].ready, true);
   });
+
+  it("merges probe keys instead of replacing prior readiness", async () => {
+    let clock = 0;
+    const cache = new CatalogProbeCache();
+    cache.schedule(
+      {
+        probeCatalog: async () => ({
+          services: { "lark-cli": { ready: true } },
+          field_options: {},
+        }),
+      },
+      process.env,
+      () => clock,
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    clock = 25_000;
+    cache.schedule(
+      {
+        probeCatalog: async () => ({
+          services: {},
+          field_options: {},
+        }),
+      },
+      process.env,
+      () => clock,
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    assert.equal(cache.peek().services["lark-cli"].ready, true);
+  });
 });

@@ -447,13 +447,16 @@ export function messagesForAttentionAck(
   opened: InboxViewItem[],
   heads: InboxViewItem[],
 ): InboxViewItem[] {
-  if (loaded && loaded.length > 0) {
-    return loaded;
+  const merged: InboxViewItem[] = [];
+  const seen = new Set<string>();
+  for (const item of [...(loaded ?? []), ...opened, ...heads]) {
+    if (seen.has(item.event.id)) {
+      continue;
+    }
+    seen.add(item.event.id);
+    merged.push(item);
   }
-  if (opened.length > 0) {
-    return opened;
-  }
-  return heads;
+  return merged;
 }
 
 export function latestInboundOf(items: InboxViewItem[]): InboxViewItem | undefined {

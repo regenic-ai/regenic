@@ -57,6 +57,16 @@ describe("Feishu attention", () => {
     assert.equal(feishuAttentionOf("oc_1", true), undefined);
   });
 
+  it("does not undo a local read ack when poll revisits the same inbound", () => {
+    rememberFeishuInbound("oc_1", "om_new", "1723420860000");
+    markFeishuChatRead("oc_1");
+    rememberFeishuInbound("oc_1", "om_new", "1723420860000");
+    assert.deepEqual(feishuAttentionOf("oc_1", false), {
+      unread: false,
+      unread_count: 0,
+    });
+  });
+
   it("acks locally without pretending the official chat list has a count", () => {
     rememberFeishuInbound("oc_1", "om_new");
     markFeishuChatRead("oc_1");

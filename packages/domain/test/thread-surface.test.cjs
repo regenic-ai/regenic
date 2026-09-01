@@ -73,6 +73,14 @@ describe("thread surface", () => {
     });
     assert.equal(sourceOnly.unread, true);
     assert.equal(sourceOnly.unread_count, 2);
+    const ackedWithoutInbound = computeThreadUnread({
+      source: { unread: true, unread_count: 1 },
+      pref: {
+        last_read_at: "2026-08-24T12:00:00.000Z",
+        last_read_external_id: null,
+      },
+    });
+    assert.equal(ackedWithoutInbound.unread, false);
     const officialReadWithoutInbound = computeThreadUnread({
       source: { unread: false, unread_count: 0 },
     });

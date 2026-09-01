@@ -3,7 +3,12 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
-import { currentSyncLane, SyncSlotPool, withDeadline } from "@regenic/domain";
+import {
+  currentSyncLane,
+  DeadlineExceededError,
+  SyncSlotPool,
+  withDeadline,
+} from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
@@ -474,8 +479,11 @@ export class LarkCliClient implements FeishuImClient {
           break;
         }
         pageToken = result.page_token;
-      } catch {
-        break;
+      } catch (error) {
+        if (deadline && error instanceof DeadlineExceededError) {
+          break;
+        }
+        throw error;
       }
     }
     return chats;

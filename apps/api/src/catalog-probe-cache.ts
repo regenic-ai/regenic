@@ -47,8 +47,11 @@ export class CatalogProbeCache {
       .then(() => drivers.probeCatalog(env))
       .then((probed) => {
         this.snapshot = {
-          services: probed.services ?? {},
-          field_options: probed.field_options ?? {},
+          services: { ...this.snapshot.services, ...(probed.services ?? {}) },
+          field_options: {
+            ...this.snapshot.field_options,
+            ...(probed.field_options ?? {}),
+          },
           at: now(),
         };
       })
