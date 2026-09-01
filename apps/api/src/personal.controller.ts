@@ -7,15 +7,18 @@ import {
   HttpException,
   HttpStatus,
   Inject,
+  MessageEvent,
   NotFoundException,
   Param,
   Post,
   Query,
   Req,
+  Sse,
   UseGuards,
   forwardRef,
 } from "@nestjs/common";
 import type { Request } from "express";
+import { Observable } from "rxjs";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
 import {
@@ -49,6 +52,9 @@ import {
   PersonalWorkService,
   type RecipeInput,
 } from "./personal-work.service";
+import { PersonalEventsService } from "./personal-events.service";
+
+const EVENTS_HEARTBEAT_MS = 30_000;
 
 @Controller("v1/me")
 @UseGuards(PersonalApiGuard)
@@ -70,7 +76,25 @@ export class PersonalController {
     private readonly whatsapp: PersonalWhatsAppImportService,
     @Inject(PersonalPluginService)
     private readonly plugins: PersonalPluginService,
+    @Inject(PersonalEventsService)
+    private readonly events: PersonalEventsService,
   ) {}
+
+  @Sse("events")
+  streamEvents(): Observable<MessageEvent> {
+    return new Observable((subscriber) => {
+      const heartbeat = setInterval(() => {
+        subscriber.next({ data: "heartbeat" });
+      }, EVENTS_HEARTBEAT_MS);
+      const off = this.events.subscribe((type, payload) => {
+        subscriber.next({ type, data: payload });
+      });
+      return () => {
+        clearInterval(heartbeat);
+        off();
+      };
+    });
+  }
 
   @Get("inbox")
   listInbox(
@@ -108,6 +132,9 @@ export class PersonalController {
     return this.guard(async () => {
       if (shouldNoteHumanInbox(query)) {
         noteHumanActivity();
+      }
+      if (query.live && query.thread_id) {
+        this.connectors.noteInteractiveFocus(query.thread_id);
       }
       const local = await this.inbox.listInbox(query);
       if (

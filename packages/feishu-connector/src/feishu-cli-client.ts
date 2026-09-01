@@ -147,12 +147,15 @@ const larkCliSlots = new SyncSlotPool({
   reserved: { interactive: 1 },
 });
 
+const readStatusInflight = new Map<string, Promise<Map<string, boolean>>>();
+
 export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
   return larkCliSlots.withSlot(currentSyncLane(), work);
 }
 
 export function resetLarkCliSlot(): void {
   larkCliSlots.reset();
+  readStatusInflight.clear();
 }
 
 export function isMissingLarkShortcutError(error: unknown): boolean {
@@ -256,9 +259,10 @@ export class LarkCliClient implements FeishuImClient {
     names?: boolean;
   }): Promise<FeishuChatPage> {
     const types = normalizeChatTypes(input.types);
-    const page = types.includes("p2p")
-      ? await this.listChatsViaShortcut(input, types)
-      : await this.listChatsViaOpenApi(input);
+    const page =
+      types.length === 1 && types[0] === "group"
+        ? await this.listChatsViaOpenApi(input)
+        : await this.listChatsViaShortcut(input, types);
     if (input.names !== false) {
       await this.fillP2pNames(page.items);
     }
@@ -360,6 +364,22 @@ export class LarkCliClient implements FeishuImClient {
     const named = options?.names !== false;
     const key = `recent:${normalizeChatTypes(types).join(",")}:${named ? "named" : "id"}`;
     return this.cachedChatList(key, RECENT_CHAT_LIST_TTL_MS, async () => {
+      const normalized = normalizeChatTypes(types);
+      if (normalized.includes("group") && normalized.includes("p2p")) {
+        const [groupPage, p2pPage] = await Promise.all([
+          this.listChats({
+            page_size: 50,
+            types: ["group"],
+            names: named,
+          }),
+          this.listChats({
+            page_size: 50,
+            types: ["p2p"],
+            names: named,
+          }),
+        ]);
+        return [...groupPage.items, ...p2pPage.items];
+      }
       const page = await this.listChats({
         page_size: 50,
         types,
@@ -410,6 +430,21 @@ export class LarkCliClient implements FeishuImClient {
     maxPages: number,
     types?: FeishuChatMode[],
   ): Promise<FeishuChat[]> {
+    const normalized = normalizeChatTypes(types);
+    const chats: FeishuChat[] = [];
+    if (normalized.includes("group")) {
+      chats.push(...(await this.fetchChatPages(maxPages, ["group"])));
+    }
+    if (normalized.includes("p2p")) {
+      chats.push(...(await this.fetchChatPages(maxPages, ["p2p"])));
+    }
+    return chats;
+  }
+
+  private async fetchChatPages(
+    maxPages: number,
+    types: FeishuChatMode[],
+  ): Promise<FeishuChat[]> {
     const chats: FeishuChat[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < maxPages; page += 1) {
@@ -417,6 +452,7 @@ export class LarkCliClient implements FeishuImClient {
         page_size: 50,
         page_token: pageToken,
         types,
+        names: types.includes("p2p"),
       });
       chats.push(...result.items);
       if (!result.has_more || !result.page_token) {
@@ -625,6 +661,16 @@ export class LarkCliClient implements FeishuImClient {
     if (!id.startsWith("om_")) {
       return { items: [] };
     }
+    // Hot path: UAT HTTP first. CLI shortcut/api only when no usable token.
+    const viaHttp = await this.requestViaHttp({
+      method: "GET",
+      path: `/open-apis/im/v1/messages/${encodeURIComponent(id)}/read_users`,
+      params: { user_id_type: "open_id", page_size: 50 },
+      timeout_ms: Math.min(this.timeoutMs, 8_000),
+    });
+    if (viaHttp !== undefined) {
+      return viaHttp;
+    }
     try {
       return await this.readMessageUsersViaShortcut(id);
     } catch (error) {
@@ -644,6 +690,23 @@ export class LarkCliClient implements FeishuImClient {
     if (ids.length === 0) {
       return new Map();
     }
+    const key = ids.slice().sort().join(",");
+    const existing = readStatusInflight.get(key);
+    if (existing) {
+      return existing;
+    }
+    const job = this.fetchMessageStatus(ids).finally(() => {
+      if (readStatusInflight.get(key) === job) {
+        readStatusInflight.delete(key);
+      }
+    });
+    readStatusInflight.set(key, job);
+    return job;
+  }
+
+  private async fetchMessageStatus(
+    ids: string[],
+  ): Promise<Map<string, boolean>> {
     try {
       const payload = await this.request({
         method: "POST",
@@ -675,10 +738,12 @@ export class LarkCliClient implements FeishuImClient {
     if (viaHttp !== undefined) {
       return viaHttp;
     }
+    // CLI only when there is no usable user token (or auth refresh failed).
+    // Transient HTTP failures must not silently occupy the CLI process pool.
     return this.requestViaCli(input);
   }
 
-  /** User read_users is UAT-only. Official docs mark the raw HTTP path as bot/TAT. */
+  /** User read_users is UAT-capable over HTTP; CLI remains auth/setup fallback. */
   private async requestViaCli(input: {
     method: "GET" | "POST";
     path: string;
@@ -874,15 +939,18 @@ export class LarkCliClient implements FeishuImClient {
         if (next) {
           try {
             return await this.requestHttp({ ...input, token: next });
-          } catch {
-            return undefined;
+          } catch (retryError) {
+            // Still an auth problem after refresh — allow CLI fallback.
+            if (isFeishuTokenError(retryError)) {
+              return undefined;
+            }
+            throw retryError;
           }
         }
         return undefined;
       }
-      if (isTransientLarkError(error)) {
-        return undefined;
-      }
+      // Transient (timeout / rate limit): surface to caller. Do not spend a
+      // lark-cli slot just because HTTP was briefly unhealthy.
       throw error;
     }
   }

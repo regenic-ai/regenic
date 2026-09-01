@@ -119,7 +119,34 @@ describe("inbox heads sync mapping", () => {
         pageSize: 40,
         previousDigest: FRESH,
       }),
-      { list: "hidden", limit: 40 },
+      { list: "hidden", limit: 40, live: true },
+    );
+  });
+
+  it("requests source live overlays only on full heads refresh", () => {
+    assert.equal(
+      inboxHeadsRequest({
+        decision: { mode: "full", replace: false },
+        list: "shown",
+        previousDigest: FRESH,
+      }).live,
+      true,
+    );
+    assert.equal(
+      inboxHeadsRequest({
+        decision: { mode: "patch", replace: false },
+        list: "shown",
+        previousDigest: FRESH,
+      }).live,
+      undefined,
+    );
+    assert.equal(
+      inboxHeadsRequest({
+        decision: { mode: "skip", replace: false },
+        list: "shown",
+        previousDigest: FRESH,
+      }).live,
+      undefined,
     );
   });
 

@@ -138,7 +138,14 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly streamErrors = new Map<string, string>();
   private readonly streamPulling = new Set<string>();
   private readonly streamPullingHistory = new Set<string>();
-  private readonly hydrating = new Map<string, Promise<void>>();
+  private focusSlot: {
+    threadId: string;
+    generation: number;
+    kind: "hydrate" | "older" | "receipt";
+    abort: AbortController;
+    promise: Promise<void>;
+  } | null = null;
+  private focusGeneration = 0;
   private readonly hydrateCooldown = new Map<string, number>();
   private lastCatchUpCursor: string | undefined;
   private lastSeedCursor: string | undefined;
@@ -405,11 +412,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (!id || !shouldHydrateOpenedInbox({ thread_id: id })) {
       return;
     }
-    preferThread(id);
-    const existing = this.hydrating.get(id);
-    if (existing) {
+    if (
+      this.focusSlot?.threadId === id &&
+      this.focusSlot.kind === "hydrate" &&
+      !this.focusSlot.abort.signal.aborted
+    ) {
       try {
-        await Promise.race([existing, delay(HYDRATE_WAIT_MS)]);
+        await Promise.race([this.focusSlot.promise, delay(HYDRATE_WAIT_MS)]);
       } catch {
         return;
       }
@@ -418,14 +427,29 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if ((this.hydrateCooldown.get(id) ?? 0) > Date.now()) {
       return;
     }
-    const job = this.runHydrateOpenedThread(id).finally(() => {
-      this.hydrating.delete(id);
-    });
-    this.hydrating.set(id, job);
+    const job = this.takeFocus(id, "hydrate", (signal, generation) =>
+      this.runHydrateOpenedThread(id, signal, generation),
+    );
     try {
       await Promise.race([job, delay(HYDRATE_WAIT_MS)]);
     } catch {
       return;
+    }
+  }
+
+  /**
+   * Mark the interactive thread without starting work.
+   * Cancels hydrate/older jobs for any other thread so live receipts can proceed.
+   */
+  noteInteractiveFocus(threadId: string): void {
+    const id = threadId.trim();
+    if (!id) {
+      return;
+    }
+    preferThread(id);
+    if (this.focusSlot && this.focusSlot.threadId !== id) {
+      this.focusSlot.abort.abort();
+      this.focusSlot = null;
     }
   }
 
@@ -439,23 +463,71 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
     noteHumanActivity();
     preferThread(id);
-    const existing = this.hydrating.get(id);
-    if (existing) {
+    if (
+      this.focusSlot?.threadId === id &&
+      this.focusSlot.kind === "hydrate" &&
+      !this.focusSlot.abort.signal.aborted
+    ) {
       try {
-        await Promise.race([existing, delay(HYDRATE_WAIT_MS)]);
+        await Promise.race([this.focusSlot.promise, delay(HYDRATE_WAIT_MS)]);
       } catch {
         return;
       }
     }
     try {
-      await this.runPullOlderThread(id);
+      await this.takeFocus(id, "older", (signal, generation) =>
+        this.runPullOlderThread(id, signal, generation),
+      );
     } catch {
       return;
     }
   }
 
-  private async runPullOlderThread(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
+  private takeFocus(
+    threadId: string,
+    kind: "hydrate" | "older" | "receipt",
+    work: (signal: AbortSignal, generation: number) => Promise<void>,
+  ): Promise<void> {
+    if (
+      this.focusSlot &&
+      this.focusSlot.threadId === threadId &&
+      this.focusSlot.kind === kind &&
+      !this.focusSlot.abort.signal.aborted
+    ) {
+      return this.focusSlot.promise;
+    }
+    if (this.focusSlot) {
+      this.focusSlot.abort.abort();
+      this.focusSlot = null;
+    }
+    preferThread(threadId);
+    const generation = ++this.focusGeneration;
+    const abort = new AbortController();
+    const promise = work(abort.signal, generation).finally(() => {
+      if (this.focusSlot?.generation === generation) {
+        this.focusSlot = null;
+      }
+    });
+    this.focusSlot = {
+      threadId,
+      generation,
+      kind,
+      abort,
+      promise,
+    };
+    return promise;
+  }
+
+  private focusAlive(generation: number, signal: AbortSignal): boolean {
+    return !signal.aborted && this.focusSlot?.generation === generation;
+  }
+
+  private async runPullOlderThread(
+    threadId: string,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<void> {
+    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
       return;
     }
     let thread: ConversationThread;
@@ -467,6 +539,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installations = await store.listInstallations(this.runtime.orgId());
+    if (!this.focusAlive(generation, signal)) {
+      return;
+    }
     for (const installation of installations) {
       if (installation.status !== "enabled") {
         continue;
@@ -486,6 +561,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       } catch {
         continue;
       }
+      if (!this.focusAlive(generation, signal)) {
+        return;
+      }
       const key = streamPaceKey(installation.id, stream.stream_key);
       this.rememberStreamMeta(key, stream);
       this.streamPulling.add(key);
@@ -495,8 +573,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
         const pages = await this.exclusiveStream(
           installation.id,
           stream.stream_key,
-          () =>
-            runInSyncLane("interactive", () =>
+          () => {
+            if (!this.focusAlive(generation, signal)) {
+              return Promise.resolve([]);
+            }
+            return runInSyncLane("interactive", () =>
               pollStream(
                 host,
                 store,
@@ -506,9 +587,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
                 { older: true, media: false },
                 this.quota,
               ),
-            ),
+            );
+          },
         );
-        if (pages === undefined) {
+        if (pages === undefined || !this.focusAlive(generation, signal)) {
           return;
         }
         this.rememberStreamPace({
@@ -535,8 +617,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
-  private async runHydrateOpenedThread(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
+  private async runHydrateOpenedThread(
+    threadId: string,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<void> {
+    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
       return;
     }
     let thread: ConversationThread;
@@ -548,6 +634,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installations = await store.listInstallations(this.runtime.orgId());
+    if (!this.focusAlive(generation, signal)) {
+      return;
+    }
     if (!this.drivers.hydrateOnOpen(installations, thread)) {
       return;
     }
@@ -573,6 +662,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       } catch {
         continue;
       }
+      if (!this.focusAlive(generation, signal)) {
+        return;
+      }
       const key = streamPaceKey(installation.id, stream.stream_key);
       this.rememberStreamMeta(key, stream);
       this.streamPulling.add(key);
@@ -581,8 +673,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
         const pages = await this.exclusiveStream(
           installation.id,
           stream.stream_key,
-          () =>
-            runInSyncLane("interactive", () =>
+          () => {
+            if (!this.focusAlive(generation, signal)) {
+              return Promise.resolve([]);
+            }
+            return runInSyncLane("interactive", () =>
               pollStream(
                 host,
                 store,
@@ -595,10 +690,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
                 },
                 this.quota,
               ),
-            ),
+            );
+          },
           { skipIfBusy: false },
         );
-        if (pages === undefined) {
+        if (pages === undefined || !this.focusAlive(generation, signal)) {
           return;
         }
         this.rememberStreamPace({
@@ -608,6 +704,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
           idleMs: streamIdleMs(stream),
         });
         this.hydrateCooldown.set(threadId, Date.now() + HYDRATE_COOLDOWN_MS);
+        this.inbox.publishThreadUpdated(threadId);
+        void this.inbox.publishInboxDigest();
       } catch (error) {
         this.rememberStreamPace({
           key,
@@ -1024,7 +1122,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       this.ticking ||
       this.inflight.size > 0 ||
       this.streamLocks.size > 0 ||
-      this.hydrating.size > 0
+      this.focusSlot != null
     ) {
       if (Date.now() - started > timeoutMs) {
         throw storeBusyError();
@@ -1035,6 +1133,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   private resetLivePullState(): void {
     const interval = pullStatus.interval_ms;
+    if (this.focusSlot) {
+      this.focusSlot.abort.abort();
+      this.focusSlot = null;
+    }
     this.streamIdleUntil.clear();
     this.streamCatchingUp.clear();
     this.streamSeeded.clear();
@@ -1351,6 +1453,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
         pages: runs.length,
         catchingUp: this.streamCatchingUp.size,
       });
+      if (summary.accepted_count > 0) {
+        void this.inbox.publishInboxDigest();
+      }
       this.publishStreams();
       return {
         installation_id: installation.id,

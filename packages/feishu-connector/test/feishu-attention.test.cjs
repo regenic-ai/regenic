@@ -94,4 +94,51 @@ describe("Feishu attention", () => {
     assert.equal(calls[0].command.includes("--as"), true);
     assert.equal(calls[0].command[calls[0].command.indexOf("--as") + 1], "user");
   });
+
+  it("reads message status over HTTP when a user token is available", async () => {
+    const spawned = [];
+    const fetched = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn(input) {
+        spawned.push(input);
+        throw new Error("CLI should not run when HTTP works");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url, init) {
+        fetched.push({ url: String(url), init });
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: {
+                items: [{ message_id: "om_1", is_read: true }],
+              },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const statuses = await client.readMessageStatus(["om_1", "bad"]);
+    assert.equal(spawned.length, 0);
+    assert.equal(statuses.get("om_1"), true);
+    assert.match(fetched[0].url, /\/open-apis\/im\/v1\/messages\/read_status/);
+    assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
+  });
 });

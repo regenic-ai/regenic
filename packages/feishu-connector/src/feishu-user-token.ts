@@ -131,12 +131,120 @@ export async function readDarwinKeychainSecret(
   if (process.platform !== "darwin") {
     return undefined;
   }
+  return readKeychainSecretViaSpawn("security", [
+    "find-generic-password",
+    "-s",
+    service,
+    "-a",
+    account,
+    "-w",
+  ]);
+}
+
+/** Reads lark-cli UAT JSON from the platform credential store. */
+export async function readPlatformKeychainSecret(
+  service: string,
+  account: string,
+): Promise<string | undefined> {
+  if (process.platform === "darwin") {
+    return readDarwinKeychainSecret(service, account);
+  }
+  if (process.platform === "linux") {
+    return readLinuxLibsecret(service, account);
+  }
+  if (process.platform === "win32") {
+    return readWindowsCredential(service, account);
+  }
+  return undefined;
+}
+
+export function windowsCredentialTargets(
+  service: string,
+  account: string,
+): string[] {
+  const trimmedService = service.trim();
+  const trimmedAccount = account.trim();
+  if (!trimmedService || !trimmedAccount) {
+    return [];
+  }
+  return [`${trimmedService}:${trimmedAccount}`, trimmedAccount];
+}
+
+async function readLinuxLibsecret(
+  service: string,
+  account: string,
+): Promise<string | undefined> {
+  return readKeychainSecretViaSpawn("secret-tool", [
+    "lookup",
+    "service",
+    service,
+    "account",
+    account,
+  ]);
+}
+
+async function readWindowsCredential(
+  service: string,
+  account: string,
+): Promise<string | undefined> {
+  for (const target of windowsCredentialTargets(service, account)) {
+    const secret = await readWindowsCredTarget(target);
+    if (secret) {
+      return secret;
+    }
+  }
+  return undefined;
+}
+
+function readWindowsCredTarget(target: string): Promise<string | undefined> {
+  const escaped = target.replace(/'/g, "''");
+  const script = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeCred {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  public struct CREDENTIAL {
+    public int Flags, Type;
+    public string TargetName, Comment;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+    public int CredentialBlobSize;
+    public IntPtr CredentialBlob;
+    public int Persist, AttributeCount;
+    public IntPtr Attributes;
+    public string TargetAlias, UserName;
+  }
+  [DllImport("advapi32", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool CredRead(string t, int type, int f, out IntPtr c);
+  [DllImport("advapi32", SetLastError=true)]
+  public static extern void CredFree(IntPtr c);
+  public static string Read(string t) {
+    IntPtr p;
+    if (!CredRead(t, 1, 0, out p)) return null;
+    try {
+      var cred = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
+      if (cred.CredentialBlobSize <= 0) return null;
+      return Marshal.PtrToStringUni(cred.CredentialBlob, cred.CredentialBlobSize / 2);
+    } finally { CredFree(p); }
+  }
+}
+'@
+[NativeCred]::Read('${escaped}')
+`.trim();
+  return readKeychainSecretViaSpawn("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    script,
+  ]);
+}
+
+function readKeychainSecretViaSpawn(
+  command: string,
+  args: string[],
+): Promise<string | undefined> {
   return new Promise((resolve) => {
-    const child = spawn(
-      "security",
-      ["find-generic-password", "-s", service, "-a", account, "-w"],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout.push(chunk);
@@ -167,7 +275,7 @@ export function createLarkUserTokenSource(
   const env = options.env ?? process.env;
   const now = options.now ?? Date.now;
   const readIdentity = options.readIdentity ?? readLarkCliIdentity;
-  const readSecret = options.readSecret ?? readDarwinKeychainSecret;
+  const readSecret = options.readSecret ?? readPlatformKeychainSecret;
 
   async function identity(): Promise<LarkCliIdentity | undefined> {
     if (cached?.identity) {

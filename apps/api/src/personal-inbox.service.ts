@@ -76,6 +76,7 @@ import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
 } from "./personal-runtime.service";
+import { PersonalEventsService } from "./personal-events.service";
 import {
   PersonalExecutorService,
   type EngineExecutorView,
@@ -578,14 +579,13 @@ function headThreadId(item: {
 }
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
-  // Feishu read_users only on `live=1`. The first heads page still needs
-  // read_status for list dots. Older list pages, open, and since stay on
-  // SQLite so scrolling the list or switching chats does not wait on lark-cli.
+  // live=1 is the slow path (CLI read_status / receipts). Everything else
+  // stays on SQLite so list refresh and chat switching do not wait on lark-cli.
   if (query.live) {
     return false;
   }
   if (query.heads) {
-    return Boolean(query.before);
+    return true;
   }
   return Boolean(query.thread_id);
 }
@@ -638,7 +638,32 @@ export class PersonalInboxService {
     private readonly work: PersonalWorkService,
     @Inject(forwardRef(() => PersonalExecutorService))
     private readonly executors: PersonalExecutorService,
+    @Inject(PersonalEventsService)
+    private readonly events: PersonalEventsService,
   ) {}
+
+  async publishInboxDigest(): Promise<void> {
+    if (!this.runtime.isReady()) {
+      return;
+    }
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const authority = host.get("authority");
+    const [inbox, installations] = await Promise.all([
+      authority.summarizeInbox(orgId),
+      authority.listInstallations(orgId),
+    ]);
+    this.events.inboxDigest(
+      withSurfaceGeneration(
+        inbox.digest,
+        this.drivers.surfaceGeneration(installations, host),
+      ),
+    );
+  }
+
+  publishThreadUpdated(threadId: string): void {
+    this.events.threadUpdated(threadId);
+  }
 
   async listInbox(
     query: InboxListQuery & { split: true },
@@ -1331,6 +1356,7 @@ export class PersonalInboxService {
         : {}),
       updated_at: new Date().toISOString(),
     });
+    void this.publishInboxDigest();
     return toPrefView(pref);
   }
 
@@ -1368,6 +1394,7 @@ export class PersonalInboxService {
       host,
     );
     await this.work.ackDoneThread(threadId);
+    void this.publishInboxDigest();
     return toPrefView(pref);
   }
 

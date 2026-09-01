@@ -189,13 +189,20 @@ describe("opened inbox hydrate", () => {
       shouldSkipLiveChannelOverlays({ thread_id: "feishu:oc_1", live: true }),
       false,
     );
-    assert.equal(shouldSkipLiveChannelOverlays({ heads: true }), false);
+    assert.equal(shouldSkipLiveChannelOverlays({ heads: true }), true);
     assert.equal(
       shouldSkipLiveChannelOverlays({
         heads: true,
         before: "2026-08-24T00:00:00.000Z",
       }),
       true,
+    );
+    assert.equal(
+      shouldSkipLiveChannelOverlays({
+        heads: true,
+        live: true,
+      }),
+      false,
     );
     assert.equal(
       shouldSkipLiveChannelOverlays({
