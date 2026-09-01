@@ -25,8 +25,8 @@ import { PersonalConnectorError, PersonalConnectorService } from "./personal-con
 import {
   conversationFocusThreadId,
   shouldMarkHumanPresent,
+  shouldPullOlderFocus,
 } from "./personal-conversation-focus";
-import { shouldPullOlderInbox } from "./personal-inbox-query";
 import { noteHumanActivity } from "./personal-human-pace";
 import {
   PersonalInboxService,
@@ -127,17 +127,7 @@ export class PersonalController {
       list: list?.trim() || membership?.trim() || undefined,
       locale: requestLocale(locale, acceptLanguage),
     };
-    return this.guard(async () => {
-      const local = await this.inbox.listInbox(query);
-      if (
-        Array.isArray(local) &&
-        shouldPullOlderInbox(query) &&
-        query.thread_id
-      ) {
-        void this.connectors.pullOlderForThread(query.thread_id);
-      }
-      return local;
-    });
+    return this.guard(async () => this.inbox.listInbox(query));
   }
 
   @Post("conversations/focus")
@@ -148,6 +138,9 @@ export class PersonalController {
           thread_id?: string;
           hydrate?: boolean;
           live?: boolean;
+          pull_older?: boolean;
+          before?: string;
+          before_id?: string;
           present?: boolean;
         }
       | undefined,
@@ -169,6 +162,9 @@ export class PersonalController {
       }
       if (input.hydrate) {
         void this.connectors.hydrateOpenedThread(threadId);
+      }
+      if (shouldPullOlderFocus(input)) {
+        void this.connectors.pullOlderForThread(threadId);
       }
       return { accepted: true as const, thread_id: threadId };
     });

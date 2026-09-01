@@ -5,6 +5,10 @@ export type ConversationFocusInput = {
   hydrate?: boolean;
   /** Interactive focus for live receipt/read_status overlays. */
   live?: boolean;
+  /** Scroll-up: ask the connector for an older history page. */
+  pull_older?: boolean;
+  before?: string;
+  before_id?: string;
   /** Marks human presence for connector pacing (default true). */
   present?: boolean;
 };
@@ -18,4 +22,10 @@ export function conversationFocusThreadId(
 
 export function shouldMarkHumanPresent(body: ConversationFocusInput): boolean {
   return body.present !== false;
+}
+
+export function shouldPullOlderFocus(body: ConversationFocusInput): boolean {
+  return Boolean(
+    body.pull_older && conversationFocusThreadId(body) && body.before?.trim(),
+  );
 }

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  liveReceiptFocusRequest,
+  openThreadFocusRequest,
+  pullOlderFocusRequest,
+} from "../../shared/conversation-focus.ts";
+import {
   ackConversationAttention,
   createConversation,
   currentApiOrigin,
@@ -213,11 +218,9 @@ export function ConsoleApp() {
     const cursor = inboxCursor(current);
     const signal = focusSignal();
     const coldOpen = mode === "open" && !loaded;
-    void focusConversation({
-      thread_id: threadId,
-      hydrate: coldOpen,
-      present: true,
-    }).catch(() => undefined);
+    void focusConversation(openThreadFocusRequest(threadId, coldOpen)).catch(
+      () => undefined,
+    );
     if (coldOpen) {
       setOpeningId(threadId);
       setSeedingId(threadId);
@@ -391,11 +394,7 @@ export function ConsoleApp() {
     const epoch = workspaceEpoch.current;
     const signal = focusSignal();
     try {
-      await focusConversation({
-        thread_id: threadId,
-        live: true,
-        present: true,
-      });
+      await focusConversation(liveReceiptFocusRequest(threadId));
       const items = await fetchInbox(
         {
           thread_id: threadId,
@@ -463,6 +462,9 @@ export function ConsoleApp() {
     const epoch = workspaceEpoch.current;
     const signal = focusSignal();
     try {
+      await focusConversation(
+        pullOlderFocusRequest(threadId, cursor.before, cursor.before_id),
+      );
       const page = await fetchInbox(
         {
           thread_id: threadId,

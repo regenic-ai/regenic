@@ -14,10 +14,11 @@ const {
 } = require("../dist/personal-pull-status");
 const {
   shouldHydrateOpenedInbox,
-  shouldNoteHumanInbox,
-  shouldPullOlderInbox,
-  shouldWaitForOpenedHydrate,
-} = require("../dist/personal-connector.service");
+} = require("../dist/personal-inbox-query");
+const {
+  shouldMarkHumanPresent,
+  shouldPullOlderFocus,
+} = require("../dist/personal-conversation-focus");
 const { shouldSkipLiveChannelOverlays } = require("../dist/personal-inbox.service");
 
 afterEach(() => {
@@ -135,43 +136,28 @@ describe("opened inbox hydrate", () => {
     assert.equal(shouldHydrateOpenedInbox({ thread_id: "dsh:session-x" }), true);
   });
 
-  it("does not wait for hydrate when the local thread already has a page", () => {
-    assert.equal(shouldWaitForOpenedHydrate(0), true);
-    assert.equal(shouldWaitForOpenedHydrate(1), false);
-    assert.equal(shouldWaitForOpenedHydrate(23), false);
-  });
-
-  it("asks the connector for older pages only on an empty scroll-up", () => {
+  it("pulls older only via explicit focus, not inbox query shape alone", () => {
     assert.equal(
-      shouldPullOlderInbox({
+      shouldPullOlderFocus({
         thread_id: "feishu:oc_1",
+        pull_older: true,
         before: "2026-08-24T00:00:00.000Z",
       }),
       true,
     );
-    assert.equal(shouldPullOlderInbox({ thread_id: "feishu:oc_1" }), false);
     assert.equal(
-      shouldPullOlderInbox({
+      shouldPullOlderFocus({
         thread_id: "feishu:oc_1",
         before: "2026-08-24T00:00:00.000Z",
-        since: "2026-08-23T00:00:00.000Z",
       }),
       false,
     );
     assert.equal(
-      shouldNoteHumanInbox({ thread_id: "feishu:oc_1" }),
+      shouldMarkHumanPresent({ thread_id: "feishu:oc_1" }),
       true,
     );
     assert.equal(
-      shouldNoteHumanInbox({
-        thread_id: "feishu:oc_1",
-        since: "2026-08-24T00:00:00.000Z",
-      }),
-      false,
-    );
-    assert.equal(shouldNoteHumanInbox({ heads: true }), false);
-    assert.equal(
-      shouldNoteHumanInbox({ thread_id: "feishu:oc_1", live: true }),
+      shouldMarkHumanPresent({ thread_id: "feishu:oc_1", present: false }),
       false,
     );
     assert.equal(

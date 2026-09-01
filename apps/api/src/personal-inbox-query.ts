@@ -19,12 +19,3 @@ export function shouldHydrateOpenedInbox(
       !query.live,
   );
 }
-
-/** Scroll-up is the only inbox query that asks the connector for older pages. */
-export function shouldPullOlderInbox(
-  query: PersonalInboxHttpQuery,
-): boolean {
-  return Boolean(
-    query.thread_id && query.before && !query.since && !query.heads,
-  );
-}

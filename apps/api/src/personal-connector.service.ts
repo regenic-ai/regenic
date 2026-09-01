@@ -73,8 +73,10 @@ import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import {
   shouldHydrateOpenedInbox,
-  shouldPullOlderInbox,
 } from "./personal-inbox-query";
+import {
+  shouldPullOlderFocus,
+} from "./personal-conversation-focus";
 
 export { PersonalConnectorError } from "./personal-errors";
 
@@ -462,7 +464,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return;
     }
     const id = threadId.trim();
-    if (!id || !shouldPullOlderInbox({ thread_id: id, before: "1" })) {
+    if (!id || !shouldPullOlderFocus({ thread_id: id, pull_older: true, before: "1" })) {
       return;
     }
     noteHumanActivity();

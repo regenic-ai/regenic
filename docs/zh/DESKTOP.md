@@ -72,7 +72,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | POST | `/v1/me/conversations` | 让连接器开一条新会话。省略 `installation_id` 时取第一条 `can_create` 的安装。驱动 `create: false` 时 501 |
 | POST | `/v1/me/conversations/prefs` | 维护会话标题、置顶和不显示。`thread_id` 必填；`title` 空字符串清除自定义标题，回到自动标题；`pinned` / `hidden` 可单独改。人点「不显示」写 `hidden=true`（reason=`human`）。inbox 项带回 `thread_id` / `title` / `pinned` / `hidden` / `pref_updated_at` |
 | POST | `/v1/me/conversations/attention` | 写本地已读游标；驱动声明了 `attention` 再 ack 来源 |
-| POST | `/v1/me/conversations/focus` | **调度 connector 副作用**（不读 SQLite）：`hydrate` 冷开 hydrate、`live` 交互 focus（回执 overlay）、默认 `present` 记人在看。见下节 |
+| POST | `/v1/me/conversations/focus` | **调度 connector 副作用**（不读 SQLite）：`hydrate` 冷开 hydrate、`live` 交互 focus（回执 overlay）、`pull_older`+`before` 上滚补历史、默认 `present` 记人在看。见下节 |
 | POST | `/v1/me/conversations/prompts` | 回答未决 Prompt。禁止再走 egress。`not-pending` 视为已解决 |
 | GET/POST | `/v1/me/recipes` | 列出 / 创建 Recipe |
 | POST | `/v1/me/recipes/:id` | 更新 Recipe |
@@ -100,15 +100,15 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 
 ### inbox 读请求的副作用
 
-`GET /v1/me/inbox` **只读 SQLite**（及 `live=1` 时的 overlay），不再隐式 hydrate 或记 focus。
+`GET /v1/me/inbox` **只读 SQLite**（及 `live=1` 时的 overlay），无任何 connector 调度。
 
 | 操作 | 路径 |
 | --- | --- |
 | 打开 / 轮询线程正文 | `GET /v1/me/inbox?thread_id=` |
-| 上滚更早消息 | `GET /v1/me/inbox?thread_id=&before=`（仍异步触发 connector older pull） |
-| 已读回执 overlay | `POST /v1/me/conversations/focus` `{ live: true }` 后 `GET …&live=1` |
-| 冷开 hydrate | `POST /v1/me/conversations/focus` `{ hydrate: true }` |
-| 人在看（connector pacing） | `POST /v1/me/conversations/focus`（默认 `present: true`） |
+| 上滚更早消息 | `POST /v1/me/conversations/focus` `{ pull_older: true, before, before_id? }`，再 `GET …&before=` |
+| 已读回执 overlay | `POST …/focus` `{ live: true }` 后 `GET …&live=1` |
+| 冷开 hydrate | `POST …/focus` `{ hydrate: true }` |
+| 人在看（connector pacing） | `POST …/focus`（默认 `present: true`） |
 | 列表 heads / patch | `GET …&heads=1` 或 `changed=1` — 无 connector 副作用；默认不调渠道 `read_status` |
 
 渠道入站仍是 **poll**（约 3s tick），不是 Feishu/Slack webhook。SSE 只在内核与桌面之间推送 digest / thread 变更；桌面连上 SSE 后跳过对已打开线程的重复 poll，改由 `thread.updated` 驱动增量。
