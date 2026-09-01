@@ -25,6 +25,9 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
   ) {}
 
   async project(orgId: string, generation: string): Promise<ContextProjectionRun[]> {
+    if (!orgId.trim() || !generation.trim()) {
+      throw new Error("Context projection organization and generation are required");
+    }
     const read = structuredClone(await this.authority.openContextRead(orgId));
     if (
       typeof read.read_epoch !== "string" ||
