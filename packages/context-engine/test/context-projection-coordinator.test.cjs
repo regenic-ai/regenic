@@ -95,4 +95,27 @@ describe("ContextProjectionCoordinator", () => {
     );
     assert.equal(await artifacts.getCheckpoint("example-org", "test-projector", "generation-1"), null);
   });
+
+  it("rejects a cross-organization Event before calling a projector", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const registry = new MemoryContextProjectorRegistry();
+    let called = false;
+    registry.register({
+      ...projector(),
+      async project() {
+        called = true;
+        return [];
+      },
+    });
+    await assert.rejects(
+      new ContextProjectionCoordinator({
+        async openContextRead() {
+          return { ...await authority().openContextRead(), events: [{ ...event, org_id: "other-org" }] };
+        },
+      }, artifacts, registry).project("example-org", "generation-1"),
+      /another organization/,
+    );
+    assert.equal(called, false);
+    assert.equal(await artifacts.getCheckpoint("example-org", "test-projector", "generation-1"), null);
+  });
 });
