@@ -311,6 +311,16 @@ pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
 ```
 
+当已有使用方只需要 citation 时，可将 replay 后的 Context bundle 投射为现有的
+EvidenceBundle v1 JSONL 格式。`--consumer` 与 `--purpose` 必须匹配 snapshot 中保存的
+授权。输出不含证据正文或 Blob body。
+
+```bash
+pnpm local context-publish-evidence-bundle --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --snapshot <snapshot-id> --consumer local-cli \
+	--purpose "inspect authorized local context" --output ./evidence-bundles.jsonl
+```
+
 模型回答是可选能力。第一版 driver 接受 numeric loopback 上的 OpenAI-compatible API，例如
 本机 Ollama；本版本不接受远程模型 URL。API key 配置只保存环境变量引用，不保存 key 本身。
 
