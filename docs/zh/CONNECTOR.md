@@ -62,7 +62,7 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` 且 `source_mode` 为 poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` 为 webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / 可选 `createThread` / 可选通用 egress 队列 | `reply`；`create` 另需 `createThread` |
-| Catalog | `locales` / `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / 可选 `parseImport` | 要出现在引擎页；自带 UI 文案；有工单类型时再声明词表；声明 `import_files` 时提供文件导入 |
+| Catalog | `locales` / `installCatalog` / `presentInstall` / `probeCatalog` / `listCatalogFieldOptions` / `subjectCatalog` / 可选 `parseImport` | 要出现在引擎页；自带 UI 文案；表单下拉在打开安装弹层时加载；有工单类型时再声明词表；声明 `import_files` 时提供文件导入 |
 | Surface | `prompts` / `attention` / `receipts` | 对应能力旗标为 true |
 | `EgressAdapter` | 把 `ContentPart[]` 写回同一来源 | 实现了 `bindEgress` |
 
@@ -237,6 +237,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   writeBackLabels?(label): string[];
   subjectCatalog?(): { kinds: Array<{ id: string; label: CopyRef }> };
   probeCatalog?(input): Promise<ConnectorCatalogProbe>;
+  listCatalogFieldOptions?(input): Promise<ConnectorCatalogProbe["field_options"]>;
 }
 ```
 
@@ -261,7 +262,8 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `presentInstall` | 可选。已装行的标题和细节（`CopyRef`）。 |
 | `writeBackLabels` | 可选。某个待办选项的精确别名。内核只对结果第一行做匹配。 |
 | `subjectCatalog` | 可选。工单类型词表。规则页按 `id` / `label` 渲染；内核只做相等匹配。不写则该来源没有类型维。 |
-| `probeCatalog` | 可选。本机服务 / 环境是否就绪，以及表单选项。 |
+| `probeCatalog` | 可选。本机服务 / 环境是否就绪。不得在这里枚举来源资源（会话列表、agent 列表）。 |
+| `listCatalogFieldOptions` | 可选。安装/编辑弹层的下拉选项。内核只在用户打开表单时调用，不在 `GET /v1/me/engine` 上调用。 |
 
 `ChannelDriverError` 错误码：`invalid_config`、`missing_credentials`、
 `sync_failed`、`send_failed`、`unsupported_channel`、`no_sender`、
@@ -352,8 +354,7 @@ token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起
 或装了但未登录。DSH 同样由连接器探测：`dsh web` 是否可达，以及 PATH 上
 有没有 `dsh`。
 
-监测写在驱动的 `probeCatalog()` 里。API 只合并各驱动的 `ready` / `hint` /
-表单选项，桌面只渲染 catalog。加来源不用改 API 或桌面。
+监测写在驱动的 `probeCatalog()` 里。API 把上次探测结果缓存后立刻返回引擎快照，不在这条请求上等待 CLI / 远端。表单选项走 `GET /v1/me/engine/catalog-options`。加来源不用改 API 或桌面。
 
 内置 Slack / DSH / 飞书的能力表、kind 映射和安装前置见[内置驱动](CONNECTOR_DRIVERS.md)。
 

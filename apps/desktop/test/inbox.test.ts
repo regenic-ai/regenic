@@ -708,6 +708,15 @@ describe("inbox sort", () => {
     assert.equal(latestInboundOf(items)?.event.id, "new");
   });
 
+  it("finds inbound for ack from heads when the loaded page is outbound-only", () => {
+    const outbound = message("out", "2026-08-24T12:01:00.000Z", "feishu:oc_1");
+    outbound.direction = "outbound";
+    const headInbound = message("in", "2026-08-24T10:00:00.000Z", "feishu:oc_1");
+    headInbound.direction = "inbound";
+    const items = messagesForAttentionAck([outbound], [], [headInbound]);
+    assert.equal(latestInboundOf(items)?.event.id, "in");
+  });
+
   it("clears unread on a thread without changing other rows", () => {
     const unread = message("in", "2026-08-24T10:00:00.000Z", "feishu:oc_1");
     unread.unread = true;

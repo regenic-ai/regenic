@@ -3,6 +3,8 @@ import {
   ChannelDriverError,
   ChannelDriverRegistry,
   DEFAULT_COPY_LOCALE,
+  DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
+  resolveCopy,
   type CopyLocale,
   attentionOf,
   collectLatestInbound,
@@ -55,6 +57,7 @@ import {
   type WorkFace,
   loadSyncProgress,
   type SyncStore,
+  withDeadline,
 } from "@regenic/domain";
 import {
   resolveInboxBodies,
@@ -63,6 +66,7 @@ import {
   type InboxBody,
 } from "./inbox-body";
 import { catalogMembersFromStreams } from "./connector-sync-members";
+import { CatalogProbeCache } from "./catalog-probe-cache";
 import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
@@ -592,6 +596,7 @@ export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
 }
 
 export interface EngineQuery {
+  /** When false, skip last_attempt on installations. Catalog probes are cached either way. */
   detailed?: boolean;
   locale?: CopyLocale;
 }
@@ -630,6 +635,8 @@ export interface StoreClearView {
 
 @Injectable()
 export class PersonalInboxService {
+  private readonly catalogProbes = new CatalogProbeCache();
+
   constructor(
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
@@ -642,6 +649,43 @@ export class PersonalInboxService {
     @Inject(PersonalEventsService)
     private readonly events: PersonalEventsService,
   ) {}
+
+  startAfterListen(): void {
+    this.catalogProbes.schedule(this.drivers);
+  }
+
+  async listCatalogFieldOptions(
+    connectorType: string,
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  ): Promise<Record<string, { value: string; label: string }[]>> {
+    const type = connectorType.trim();
+    if (!type) {
+      return {};
+    }
+    const driver = this.drivers.get(type);
+    if (!driver?.listCatalogFieldOptions) {
+      return {};
+    }
+    const tables = driver.locales?.() ?? [];
+    try {
+      const raw = await withDeadline(
+        driver.listCatalogFieldOptions({ env: process.env }),
+        DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
+        `catalog options ${type}`,
+      );
+      const resolved: Record<string, { value: string; label: string }[]> = {};
+      for (const [key, options] of Object.entries(raw ?? {})) {
+        resolved[key] = (options ?? []).map((option) => ({
+          value: option.value,
+          label:
+            resolveCopy(tables, locale, option.label) ?? String(option.label),
+        }));
+      }
+      return resolved;
+    } catch {
+      return {};
+    }
+  }
 
   async publishInboxDigest(): Promise<void> {
     if (!this.runtime.isReady()) {
@@ -784,19 +828,12 @@ export class PersonalInboxService {
     const detailed = query.detailed !== false;
     const options = this.runtime.getOptions();
     const orgId = this.runtime.orgId();
-    const catalogReady = async (
+    const catalogReady = (
       installations: EngineInstallationView[],
     ) => {
       const extras = catalogFromDrivers(this.drivers, process.env, query.locale);
-      if (!detailed) {
-        return connectorCatalog(installations, {
-          env: process.env,
-          locale: query.locale,
-          drivers: this.drivers,
-          extras,
-        });
-      }
-      const probed = await this.drivers.probeCatalog(process.env);
+      this.catalogProbes.schedule(this.drivers);
+      const probed = this.catalogProbes.peek();
       return connectorCatalog(installations, {
         env: process.env,
         locale: query.locale,
@@ -817,7 +854,7 @@ export class PersonalInboxService {
         memory: processMemoryView(),
         pull: { ...pullStatus },
         installations: [],
-        catalog: await catalogReady([]),
+        catalog: catalogReady([]),
         executor_installations: [],
         executor_catalog: executorCatalog,
         plugins: listPluginInventory(),
@@ -869,7 +906,7 @@ export class PersonalInboxService {
       memory: processMemoryView(),
       pull: { ...pullStatus },
       installations: views,
-      catalog: await catalogReady(views),
+      catalog: catalogReady(views),
       executor_installations: executorInstallations,
       executor_catalog: this.executors.kindCatalog(
         executorInstallations,
@@ -1366,20 +1403,52 @@ export class PersonalInboxService {
     return toPrefView(pref);
   }
 
+  private async latestInboundCursor(
+    threadId: string,
+  ): Promise<ThreadInboundCursor | undefined> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const siblings = await authority.listInbox(orgId, {
+      siblings: true,
+      thread_ids: [threadId],
+    });
+    if (siblings.length === 0) {
+      return undefined;
+    }
+    const inbound = await latestInboundByThread(
+      [],
+      siblings,
+      new Map(),
+      authority,
+      host.get("blobs"),
+    );
+    return inbound.get(threadId);
+  }
+
   async ackConversationAttention(
     input: ConversationAttentionInput,
   ): Promise<ConversationPrefView> {
     const host = this.runtime.requireHost();
     const threadId = input.thread_id?.trim() ?? "";
     const thread = requireThreadId(threadId);
-    const lastReadAt =
+    let lastReadAt =
       input.last_read_at !== undefined
         ? normalizeStamp(input.last_read_at)
         : new Date().toISOString();
-    const lastReadId =
+    let lastReadId =
       input.last_read_external_id !== undefined
         ? normalizeCursor(input.last_read_external_id)
         : null;
+    if (!lastReadId) {
+      const inbound = await this.latestInboundCursor(threadId);
+      if (inbound) {
+        lastReadId = inbound.external_id;
+        if (input.last_read_at === undefined) {
+          lastReadAt = inbound.occurred_at;
+        }
+      }
+    }
     const pref = await host.get("authority").putConversationPref({
       org_id: this.runtime.orgId(),
       thread_id: threadId,

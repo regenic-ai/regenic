@@ -1,4 +1,7 @@
-import type { CopyRef } from "@regenic/domain";
+import {
+  DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
+  type CopyRef,
+} from "@regenic/domain";
 import {
   FeishuApiError,
   LarkCliClient,
@@ -74,19 +77,28 @@ export async function listFeishuCatalogChats(options: {
   env?: NodeJS.ProcessEnv;
   spawn?: FeishuSpawn;
   now?: () => number;
+  budget_ms?: number;
 } = {}): Promise<FeishuChat[]> {
   const probe = await probeLarkCli(options);
   if (!larkCliReady(probe)) {
     return [];
   }
+  const budget =
+    options.budget_ms ?? DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS - 250;
+  const deadline = budget > 0 ? Date.now() + budget : undefined;
   try {
+    const remaining = deadline
+      ? Math.max(500, deadline - Date.now())
+      : 30_000;
     const client = new LarkCliClient({
       command: options.command ?? options.env?.REGENIC_LARK_CLI,
       env: options.env,
       spawn: options.spawn,
-      timeout_ms: 30_000,
+      timeout_ms: Math.min(30_000, remaining),
     });
-    return await client.listAllChats(CATALOG_CHAT_PAGES);
+    return await client.listAllChats(CATALOG_CHAT_PAGES, undefined, {
+      deadline,
+    });
   } catch {
     return [];
   }

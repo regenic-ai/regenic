@@ -1193,6 +1193,58 @@ describe("LarkCliClient", () => {
     resetFeishuChatListCache();
   });
 
+  it("returns the pages gathered before a catalog budget runs out", async () => {
+    resetLarkCliProbeCache();
+    resetFeishuChatListCache();
+    const chats = await listFeishuCatalogChats({
+      now: () => 1,
+      budget_ms: 80,
+      async spawn(input) {
+        if (input.command.includes("auth")) {
+          return {
+            stdout: JSON.stringify({ ok: true, identity: "user" }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
+        const paramsIdx = input.command.indexOf("--params");
+        let pageToken;
+        if (paramsIdx >= 0) {
+          const params = JSON.parse(input.command[paramsIdx + 1]);
+          pageToken = params.page_token;
+        }
+        if (pageToken === "p2") {
+          await new Promise(() => {});
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              items: [
+                {
+                  chat_id: "oc_recent",
+                  name: "最近的群",
+                  chat_mode: "group",
+                  chat_status: "normal",
+                },
+              ],
+              has_more: true,
+              page_token: "p2",
+            },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    assert.deepEqual(
+      chats.map((chat) => chat.chat_id),
+      ["oc_recent"],
+    );
+    resetLarkCliProbeCache();
+    resetFeishuChatListCache();
+  });
+
   it("distinguishes a missing CLI from a signed-out CLI", async () => {
     resetLarkCliProbeCache();
     const missing = await probeLarkCli({

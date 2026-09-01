@@ -36,6 +36,11 @@ import {
   readSubjectCatalog,
   type SubjectCatalog,
 } from "./unit-kind";
+import {
+  DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
+  DEFAULT_CATALOG_PROBE_TIMEOUT_MS,
+  withDeadline,
+} from "./deadline";
 
 export interface ConversationThread {
   source: string;
@@ -414,9 +419,21 @@ export interface ChannelDriver
     installation: ConnectorInstallation,
     input?: { env?: NodeJS.ProcessEnv },
   ): DriverInstallPresentation;
+  /**
+   * Local service / env readiness for Engine prerequisites.
+   * Must not enumerate source resources (chat lists, agents).
+   * Those belong on `listCatalogFieldOptions`.
+   */
   probeCatalog?(input: {
     env: NodeJS.ProcessEnv;
   }): Promise<ConnectorCatalogProbe>;
+  /**
+   * Form dropdowns. The kernel calls this when the user opens install/edit,
+   * never on `GET /v1/me/engine`.
+   */
+  listCatalogFieldOptions?(input: {
+    env: NodeJS.ProcessEnv;
+  }): Promise<NonNullable<ConnectorCatalogProbe["field_options"]>>;
   resolveConversationLabels?(
     installation: ConnectorInstallation,
     threads: ConversationThread[],
@@ -614,7 +631,11 @@ export class ChannelDriverRegistry {
           return;
         }
         try {
-          const probe = await driver.probeCatalog({ env });
+          const probe = await withDeadline(
+            driver.probeCatalog({ env }),
+            DEFAULT_CATALOG_PROBE_TIMEOUT_MS,
+            `probeCatalog ${driver.connector_type}`,
+          );
           Object.assign(services, probe.services ?? {});
           if (probe.field_options) {
             field_options[driver.connector_type] = probe.field_options;
@@ -625,6 +646,25 @@ export class ChannelDriverRegistry {
       }),
     );
     return { services, field_options };
+  }
+
+  async listCatalogFieldOptions(
+    connectorType: string,
+    env: NodeJS.ProcessEnv = process.env,
+  ): Promise<NonNullable<ConnectorCatalogProbe["field_options"]>> {
+    const driver = this.get(connectorType);
+    if (!driver?.listCatalogFieldOptions) {
+      return {};
+    }
+    try {
+      return await withDeadline(
+        driver.listCatalogFieldOptions({ env }),
+        DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
+        `catalog options ${connectorType}`,
+      );
+    } catch {
+      return {};
+    }
   }
 
   has(connectorType: string): boolean {

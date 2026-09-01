@@ -3,6 +3,7 @@ import {
   ChannelDriverError,
   keychainCredentialsRef,
   requireConnectorStream,
+  runInSyncLane,
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
@@ -440,22 +441,29 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   async probeCatalog({ env }) {
-    const lark = await probeLarkCli({ env });
-    const chats = await listFeishuCatalogChats({ env });
-    return {
-      services: {
-        "lark-cli": {
-          ready: larkCliReady(lark),
-          hint: larkCliCatalogHint(lark),
+    return runInSyncLane("interactive", async () => {
+      const lark = await probeLarkCli({ env });
+      return {
+        services: {
+          "lark-cli": {
+            ready: larkCliReady(lark),
+            hint: larkCliCatalogHint(lark),
+          },
         },
-      },
-      field_options: {
+      };
+    });
+  },
+
+  async listCatalogFieldOptions({ env }) {
+    return runInSyncLane("interactive", async () => {
+      const chats = await listFeishuCatalogChats({ env });
+      return {
         chat_ids: chats.map((chat) => ({
           value: chat.chat_id,
           label: feishuChatOptionLabel(chat),
         })),
-      },
-    };
+      };
+    });
   },
 };
 
@@ -557,6 +565,7 @@ export interface FeishuChatDirectory {
   listAllChats?(
     maxPages?: number,
     types?: FeishuChatMode[],
+    options?: { deadline?: number },
   ): Promise<FeishuChat[]>;
 }
 

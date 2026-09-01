@@ -77,7 +77,7 @@ exist; the kernel returns 501. Drivers must not stub them.
 | `ChannelSourcePort` | `resolveStreams` / `resolveThreadStream` + `poll` | `sync` when `source_mode` is poll / hybrid |
 | Webhook | `bindWebhook` + `verifyWebhook` / `handleWebhook` | `source_mode` is webhook / hybrid |
 | `ChannelSinkPort` | `bindEgress` / `outboundId` / optional `createThread` / optional generic egress queue | `reply`; `create` also needs `createThread` |
-| Catalog | `locales` / `installCatalog` / `presentInstall` / `probeCatalog` / `subjectCatalog` / optional `parseImport` | To appear on Engine; own UI copy; declare a vocabulary when the source has task types; file import when `import_files` is set |
+| Catalog | `locales` / `installCatalog` / `presentInstall` / `probeCatalog` / `listCatalogFieldOptions` / `subjectCatalog` / optional `parseImport` | To appear on Engine; own UI copy; load form dropdowns when the install dialog opens; declare a vocabulary when the source has task types; file import when `import_files` is set |
 | Surface | `prompts` / `attention` / `receipts` | Matching capability flags |
 | `EgressAdapter` | Write `ContentPart[]` back to the same source | After `bindEgress` |
 
@@ -318,6 +318,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   writeBackLabels?(label): string[];
   subjectCatalog?(): { kinds: Array<{ id: string; label: CopyRef }> };
   probeCatalog?(input): Promise<ConnectorCatalogProbe>;
+  listCatalogFieldOptions?(input): Promise<ConnectorCatalogProbe["field_options"]>;
 }
 ```
 
@@ -342,7 +343,8 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `presentInstall` | Optional. Label and detail for an installed row (`CopyRef`). |
 | `writeBackLabels` | Optional. Exact aliases for a prompt option. The kernel matches the first result line. |
 | `subjectCatalog` | Optional. Work-unit type vocabulary. The Recipes page renders `id` / `label`. The kernel only equality-matches. Omit it when the source has no type dimension. |
-| `probeCatalog` | Optional. Local service / env readiness and field options. |
+| `probeCatalog` | Optional. Local service / env readiness. Must not enumerate source resources (chat lists, agents). |
+| `listCatalogFieldOptions` | Optional. Dropdown options for the install/edit dialog. The kernel calls this when the user opens the form, never on `GET /v1/me/engine`. |
 
 `ChannelDriverError` codes: `invalid_config`, `missing_credentials`,
 `sync_failed`, `send_failed`, `unsupported_channel`, `no_sender`,
@@ -466,9 +468,11 @@ CLI or start a local server. `hint` says what the user should run when
 CLI. DSH probes the same way: whether `dsh web` is reachable, and whether
 `dsh` is on PATH.
 
-The driver owns that check (`probeCatalog()`). The API only merges each
-driver's `ready` / `hint` / field options. The desktop only renders the
-catalog. Adding a source does not change the API or the desktop.
+The driver owns that check (`probeCatalog()`). The API returns the last
+cached `ready` / `hint` on `GET /v1/me/engine` and does not wait on CLI
+or network. Form dropdowns load from `GET /v1/me/engine/catalog-options`.
+The desktop only renders the catalog. Adding a source does not change
+the API or the desktop.
 
 Capability tables, kind maps, and setup for Slack / DSH / Feishu are in
 [Built-in drivers](CONNECTOR_DRIVERS.md).
