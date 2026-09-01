@@ -124,6 +124,19 @@ describe("IngestionService", () => {
     assert.equal(blobStore.size, 1);
   });
 
+  it("keeps Feishu thread replies on the parent chat identity", async () => {
+    const { authorityStore, service } = createHarness();
+    const batch = createBatch({
+      source: "feishu",
+      external_id: "oc_1:om_reply",
+      thread: { id: "oc_1:om_root" },
+      scope: { id: "oc_1", name: "engineering" },
+    });
+    const result = await service.ingest(batch);
+    assert.equal(result.records[0].status, "accepted");
+    assert.equal(authorityStore.allEvents()[0].thread_id, "feishu:oc_1");
+  });
+
   it("normalizes text newlines before hashing", async () => {
     const { authorityStore, blobStore, service } = createHarness();
     const first = createBatch();

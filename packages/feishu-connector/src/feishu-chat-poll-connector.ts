@@ -333,7 +333,6 @@ export class FeishuChatPollConnector {
       (rootId && rootId !== item.message_id) ||
         (parentId && parentId !== item.message_id),
     );
-    const threadRoot = rootId && rootId !== item.message_id ? rootId : parentId;
     return {
       message_id: item.message_id,
       occurred_at: feishuCreateTimeToIso(item.create_time, this.now()),
@@ -343,7 +342,6 @@ export class FeishuChatPollConnector {
       direction: isFeishuSelfSender(actorId, selfId) ? "outbound" : "inbound",
       text,
       type: isThreadReply ? "thread_reply" : "message",
-      thread_id: isThreadReply && threadRoot ? `${chatId}:${threadRoot}` : undefined,
       parent_external_id:
         isThreadReply && (parentId || rootId)
           ? `${chatId}:${parentId ?? rootId}`
@@ -382,7 +380,6 @@ export class FeishuChatPollConnector {
         scope_name: this.chatName,
         conversation_kind: feishuConversationKind(this.chatMode),
         type: snapshot.type,
-        thread_id: snapshot.thread_id,
         parent_external_id: snapshot.parent_external_id,
         text: snapshot.text,
         content: attachments,

@@ -293,6 +293,44 @@ describe("split inbox heads", () => {
     assert.equal(headsNextBefore([work, live])?.before_id, "job");
   });
 
+  it("drops a live Feishu reply alias once the parent chat is pinned", () => {
+    const pinned = {
+      thread_id: "feishu:oc_1",
+      pinned: true,
+      event: {
+        id: "om_a",
+        source: "feishu",
+        external_id: "oc_1:om_a",
+        occurred_at: "2026-08-27T15:21:00.000Z",
+      },
+    };
+    const alias = {
+      thread_id: "feishu:oc_1:om_root",
+      pinned: false,
+      event: {
+        id: "om_b",
+        source: "feishu",
+        external_id: "oc_1:om_b",
+        occurred_at: "2026-08-27T15:21:00.000Z",
+      },
+    };
+    const page = splitInboxHeadViews([pinned, alias], {
+      liveIds: ["feishu:oc_1:om_root", "feishu:oc_1"],
+      pinnedIds: ["feishu:oc_1"],
+      workIds: [],
+      liveCount: 2,
+      limit: 2,
+    });
+    assert.deepEqual(
+      page.pinned.map((item) => item.thread_id),
+      ["feishu:oc_1"],
+    );
+    assert.deepEqual(
+      page.live.map((item) => item.thread_id),
+      [],
+    );
+  });
+
   it("moves a pinned or work face that landed in live back to extras", () => {
     const live = {
       thread_id: "crm:a",
