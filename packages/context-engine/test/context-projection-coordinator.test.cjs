@@ -141,4 +141,20 @@ describe("ContextProjectionCoordinator", () => {
     assert.equal(called, false);
     assert.equal(await artifacts.getCheckpoint("example-org", "test-projector", "generation-1"), null);
   });
+
+  it("rejects blank projection namespaces before reading authority", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const registry = new MemoryContextProjectorRegistry();
+    let readCalls = 0;
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead() {
+        readCalls += 1;
+        return authority().openContextRead();
+      },
+    }, artifacts, registry);
+
+    await assert.rejects(coordinator.project(" ", "generation-1"), /organization and generation/);
+    await assert.rejects(coordinator.project("example-org", " "), /organization and generation/);
+    assert.equal(readCalls, 0);
+  });
 });
