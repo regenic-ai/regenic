@@ -60,7 +60,8 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | GET | `/v1/me/inbox` | 默认显示列表（桌上的活且未 hidden）；`list=hidden` 为不显示的会话。可选 `body_text`。`heads=1` 每个会话最后一条可见消息的短脸，不含附件；可加 `limit` / `before` / `before_id` 按会话脸分页（不传 `limit` 仍一次返回全部，兼容旧客户端）。`split=1` 时 heads 回 `{ pinned, live, active_work, next_before, has_older }`：置顶和进行中工单不进 `live`，翻页游标只从 `live` 出。`changed=1&since_digest=` 只回 digest 之后碰到的脸，并带 `patch` / `gone`。`thread_id` 只返回该会话全文；`since` / `since_id` 做增量。`live=1` 才走渠道 overlay（已读回执等慢路径）；heads 与打开线程的默认读法只查 SQLite。每项带 `prompts`、`unread`、`unread_count`、`record_class`、`thread_facet`、`attention`、`work`、`hidden`；打开的线程另带 `can_receipt` / `receipt`。见下节 **inbox 读请求的副作用** |
 | GET | `/v1/me/events` | **应用内 SSE**（不是渠道 webhook）。事件：`inbox.digest`（`{ digest }`，与 `/v1/me/engine` 的 `inbox_digest` 同形）、`thread.updated`（`{ thread_id }`，connector hydrate 或 ingest 后）。30s heartbeat。桌面连上后列表轮询退到 60s；断线指数退避重连 |
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
-| GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录、已安装执行器与执行器种类目录。目录项带 `docs`（`href` / `href_zh` 指向 GitHub 规范页）。`inbox_count` 是显示列表里的会话数。`detail=0` 跳过 catalog 探测和 attempt 列表，仍带 `inbox_digest`（含最新 Event、conversation prefs；有 live surface 时追加 `&s=`）以及执行器安装 |
+| GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录、已安装执行器与执行器种类目录。目录项带 `docs`。`inbox_count` 是显示列表里的会话数。本接口只读本机快照 + 上次 catalog 探测缓存，不候 CLI / 远端。`detail=0` 跳过 attempt 列表，仍带 `inbox_digest`（含最新 Event、conversation prefs；有 live surface 时追加 `&s=`）以及执行器安装 |
+| GET | `/v1/me/engine/catalog-options` | 安装/编辑弹层的下拉选项（如飞书 `chat_ids`）。`connector_type` + `locale`。有硬超时，超时返回已拿到的页 |
 | GET | `/v1/me/store` | 当前内核本机数据盘点：会话 / 消息 / 工单 / 附件 / 规则 / 连接器 / 执行器数量 |
 | POST | `/v1/me/store/clear` | 清空当前工作、导入历史、附件和工单，重置连接器游标。保留已安装连接器、执行器和 Recipes。已启用的连接器会从头再拉。设置页二次确认后调用 |
 | POST | `/v1/me/connectors` | 从目录安装（Slack / DSH / 飞书），不接收 token；安装后立刻种最近一批，响应不等待历史拉完 |
@@ -115,7 +116,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 
 ## 连接器：同步范围与前置步骤
 
-安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每个驱动用 `installCatalog()` 声明标题、`fields`（含默认值、是否必填、`visible_when`）、`prerequisites` 和可选的 `import_files`。Slack、DSH、飞书和额外插件同一套。`ready` / `hint` 由该驱动的 `probeCatalog()` 探测，已装行的文案由 `presentInstall` 提供，API 只合并，引擎页只渲染，不按连接器类型写死 UI。规范链接（`docs`）挂在分区标题旁，点开用系统浏览器打开 GitHub 页。额外包由 `REGENIC_PLUGIN_DIR` 或 `REGENIC_CHANNEL_PLUGIN` 加载；新类型可热发现，已加载的驱动不会被替换。
+安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每个驱动用 `installCatalog()` 声明标题、`fields`（含默认值、是否必填、`visible_when`）、`prerequisites` 和可选的 `import_files`。Slack、DSH、飞书和额外插件同一套。`ready` / `hint` 来自后台缓存的 `probeCatalog()`；会话下拉等表单选项在打开弹层时走 `/v1/me/engine/catalog-options`。已装行的文案由 `presentInstall` 提供，API 只合并，引擎页只渲染，不按连接器类型写死 UI。
 
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |

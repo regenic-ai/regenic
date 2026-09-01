@@ -685,8 +685,19 @@ describe("personal /v1/me", () => {
       assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
 
+      const fullStarted = Date.now();
       const full = await (await fetch(`${origin}/v1/me/engine`)).json();
+      assert.ok(Date.now() - fullStarted < 3_000);
       assert.ok(full.catalog.length >= 1);
+      const feishu = full.catalog.find((item) => item.connector_type === "feishu-chat");
+      const chatIds = feishu.fields.find((field) => field.key === "chat_ids");
+      assert.equal((chatIds.options ?? []).length, 0);
+      const optionRes = await fetch(
+        `${origin}/v1/me/engine/catalog-options?connector_type=feishu-chat`,
+      );
+      assert.equal(optionRes.status, 200);
+      const optionBody = await optionRes.json();
+      assert.equal(typeof optionBody.field_options, "object");
     } finally {
       await app.close();
     }

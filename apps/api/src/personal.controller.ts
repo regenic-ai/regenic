@@ -206,6 +206,20 @@ export class PersonalController {
     );
   }
 
+  @Get("engine/catalog-options")
+  listCatalogFieldOptions(
+    @Query("connector_type") connectorType?: string,
+    @Query("locale") locale?: string,
+    @Headers("accept-language") acceptLanguage?: string,
+  ) {
+    return this.guard(async () => ({
+      field_options: await this.inbox.listCatalogFieldOptions(
+        connectorType ?? "",
+        requestLocale(locale, acceptLanguage),
+      ),
+    }));
+  }
+
   @Get("store")
   getStore() {
     return this.guard(() => this.inbox.getStore());

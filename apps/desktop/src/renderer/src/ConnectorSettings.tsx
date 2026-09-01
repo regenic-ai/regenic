@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchConnectorPairingCode, importConnectorFile } from "./api";
+import { fetchConnectorPairingCode, fetchCatalogFieldOptions, importConnectorFile } from "./api";
 import {
   importWhatsAppFiles,
   whatsAppImportSummary,
@@ -323,9 +323,40 @@ function ConnectorSettingsForm({
     ...defaultFieldValues(kind),
     ...initialValues,
   }));
-  const fields = kind.fields.filter((field) =>
-    matchesWhen(field.visible_when, values),
-  );
+  const [remoteOptions, setRemoteOptions] = useState<
+    Record<string, { value: string; label: string }[]>
+  >({});
+  const [loadingOptions, setLoadingOptions] = useState(false);
+  const needsRemote = kind.fields
+    .filter((field) => matchesWhen(field.visible_when, values))
+    .some(fieldNeedsRemoteOptions);
+  useEffect(() => {
+    if (!needsRemote) {
+      return;
+    }
+    let cancelled = false;
+    setLoadingOptions(true);
+    void fetchCatalogFieldOptions(kind.connector_type)
+      .then((options) => {
+        if (!cancelled) {
+          setRemoteOptions(options);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingOptions(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [kind.connector_type, needsRemote]);
+  const fields = kind.fields
+    .map((field) => ({
+      ...field,
+      options: remoteOptions[field.key] ?? field.options,
+    }))
+    .filter((field) => matchesWhen(field.visible_when, values));
   const prerequisites = visiblePrerequisites(kind, values);
   const blocked = prerequisites.some((item) => item.required && !item.ready);
   const missingRequired = fields.some(
@@ -339,7 +370,7 @@ function ConnectorSettingsForm({
         if (busy) {
           return;
         }
-        onSubmit(configWithOptionNames(values, kind.fields));
+        onSubmit(configWithOptionNames(values, fields));
       }}
     >
       {showSetup ? (
@@ -355,6 +386,7 @@ function ConnectorSettingsForm({
           <CheckOptionList
             field={field}
             selected={splitValues(values[field.key])}
+            loading={loadingOptions && fieldNeedsRemoteOptions(field)}
             onToggle={(value) =>
               setValues((current) => ({
                 ...current,
@@ -428,13 +460,21 @@ function ConnectorSettingsForm({
   );
 }
 
+function fieldNeedsRemoteOptions(
+  field: ConnectorCatalogItem["fields"][number],
+): boolean {
+  return field.multiple === true && (field.options?.length ?? 0) === 0;
+}
+
 function CheckOptionList({
   field,
   selected,
+  loading = false,
   onToggle,
 }: {
   field: ConnectorCatalogItem["fields"][number];
   selected: string[];
+  loading?: boolean;
   onToggle: (value: string) => void;
 }) {
   const { t } = useLocale();
@@ -442,7 +482,11 @@ function CheckOptionList({
   const options = field.options ?? [];
   if (options.length === 0) {
     return (
-      <p className="field-empty">{field.placeholder ?? t("connector.noOptions")}</p>
+      <p className="field-empty">
+        {loading
+          ? t("connector.loadingOptions")
+          : (field.placeholder ?? t("connector.noOptions"))}
+      </p>
     );
   }
   const searchable = options.length > 4;

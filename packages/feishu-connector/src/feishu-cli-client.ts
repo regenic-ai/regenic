@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
-import { currentSyncLane, SyncSlotPool } from "@regenic/domain";
+import { currentSyncLane, SyncSlotPool, withDeadline } from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
@@ -392,8 +392,12 @@ export class LarkCliClient implements FeishuImClient {
   async listAllChats(
     maxPages = 10,
     types?: FeishuChatMode[],
+    options?: { deadline?: number },
   ): Promise<FeishuChat[]> {
     const key = `all:${normalizeChatTypes(types).join(",")}`;
+    if (options?.deadline) {
+      return this.fetchAllChats(maxPages, types, options.deadline);
+    }
     return this.cachedChatList(key, CHAT_LIST_TTL_MS, () =>
       this.fetchAllChats(maxPages, types),
     );
@@ -429,14 +433,15 @@ export class LarkCliClient implements FeishuImClient {
   private async fetchAllChats(
     maxPages: number,
     types?: FeishuChatMode[],
+    deadline?: number,
   ): Promise<FeishuChat[]> {
     const normalized = normalizeChatTypes(types);
     const chats: FeishuChat[] = [];
     if (normalized.includes("group")) {
-      chats.push(...(await this.fetchChatPages(maxPages, ["group"])));
+      chats.push(...(await this.fetchChatPages(maxPages, ["group"], deadline)));
     }
     if (normalized.includes("p2p")) {
-      chats.push(...(await this.fetchChatPages(maxPages, ["p2p"])));
+      chats.push(...(await this.fetchChatPages(maxPages, ["p2p"], deadline)));
     }
     return chats;
   }
@@ -444,21 +449,34 @@ export class LarkCliClient implements FeishuImClient {
   private async fetchChatPages(
     maxPages: number,
     types: FeishuChatMode[],
+    deadline?: number,
   ): Promise<FeishuChat[]> {
     const chats: FeishuChat[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < maxPages; page += 1) {
-      const result = await this.listChats({
-        page_size: 50,
-        page_token: pageToken,
-        types,
-        names: types.includes("p2p"),
-      });
-      chats.push(...result.items);
-      if (!result.has_more || !result.page_token) {
+      const remaining = deadline ? deadline - Date.now() : 0;
+      if (deadline && remaining <= 0) {
         break;
       }
-      pageToken = result.page_token;
+      try {
+        const result = await withDeadline(
+          this.listChats({
+            page_size: 50,
+            page_token: pageToken,
+            types,
+            names: types.includes("p2p"),
+          }),
+          deadline ? remaining : 0,
+          "catalog chat page",
+        );
+        chats.push(...result.items);
+        if (!result.has_more || !result.page_token) {
+          break;
+        }
+        pageToken = result.page_token;
+      } catch {
+        break;
+      }
     }
     return chats;
   }

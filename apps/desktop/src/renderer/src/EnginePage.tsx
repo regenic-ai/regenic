@@ -74,7 +74,7 @@ export function EnginePage({
     }
   };
 
-  if (error || !engine) {
+  if (!engine) {
     return (
       <div className="page page-wide">
         <header className="page-hero">

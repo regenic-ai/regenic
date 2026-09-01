@@ -447,6 +447,71 @@ describe("channel driver registry", () => {
     assert.deepEqual(probed.field_options, {});
   });
 
+  it("does not let a hung catalog probe block other drivers", async () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(
+        stubDriver({
+          connector_type: "dsh-session",
+          source: "dsh",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          async probeCatalog() {
+            return {
+              services: {
+                "dsh-web": { ready: true, hint: "dsh web is reachable." },
+              },
+            };
+          },
+        }),
+      )
+      .register(
+        stubDriver({
+          connector_type: "feishu-chat",
+          source: "feishu",
+          matchesThread: () => false,
+          ownsThread: () => false,
+          canReply: () => false,
+          async probeCatalog() {
+            await new Promise(() => {});
+            return { services: {} };
+          },
+        }),
+      );
+    const started = Date.now();
+    const probed = await drivers.probeCatalog({});
+    assert.ok(Date.now() - started < 4_000);
+    assert.deepEqual(probed.services, {
+      "dsh-web": { ready: true, hint: "dsh web is reachable." },
+    });
+  });
+
+  it("loads field options on demand, not during probeCatalog", async () => {
+    let optionCalls = 0;
+    const drivers = new ChannelDriverRegistry().register(
+      stubDriver({
+        connector_type: "feishu-chat",
+        source: "feishu",
+        matchesThread: () => false,
+        ownsThread: () => false,
+        canReply: () => false,
+        async probeCatalog() {
+          return { services: { "lark-cli": { ready: true } } };
+        },
+        async listCatalogFieldOptions() {
+          optionCalls += 1;
+          return { chat_ids: [{ value: "oc_1", label: "Group" }] };
+        },
+      }),
+    );
+    const probed = await drivers.probeCatalog({});
+    assert.equal(optionCalls, 0);
+    assert.deepEqual(probed.field_options, {});
+    const options = await drivers.listCatalogFieldOptions("feishu-chat", {});
+    assert.equal(optionCalls, 1);
+    assert.equal(options.chat_ids[0].value, "oc_1");
+  });
+
   it("keeps the first registered driver when a later one reuses the type", () => {
     const first = stubDriver({
       connector_type: "slack-channel",

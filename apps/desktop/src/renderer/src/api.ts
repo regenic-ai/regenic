@@ -50,6 +50,8 @@ function origin(): string {
 const KERNEL_FETCH_MS = 120_000;
 /** Hard ceiling so inbox fetches cannot pin a localhost connection forever. */
 const INBOX_FETCH_MS = 30_000;
+/** Engine snapshot is local + cached probes. Do not wait on catalog listing. */
+const ENGINE_FETCH_MS = 8_000;
 
 export type InboxFetchInit = {
   signal?: AbortSignal;
@@ -444,7 +446,9 @@ export async function fetchEngine(
   }
   params.set("locale", activeLocale());
   const suffix = `?${params.toString()}`;
-  const response = await fetch(`${origin()}/v1/me/engine${suffix}`);
+  const response = await kernelFetch(`/v1/me/engine${suffix}`, {
+    signal: AbortSignal.timeout(ENGINE_FETCH_MS),
+  });
   if (!response.ok) {
     throw new Error(`engine ${response.status}`);
   }
@@ -501,6 +505,36 @@ export async function fetchEngine(
     plugins: catalogPlugins(engine.plugins),
     plugin_dir: typeof engine.plugin_dir === "string" ? engine.plugin_dir : null,
   };
+}
+
+export async function fetchCatalogFieldOptions(
+  connectorType: string,
+): Promise<Record<string, { value: string; label: string }[]>> {
+  const type = connectorType.trim();
+  if (!type) {
+    return {};
+  }
+  const params = new URLSearchParams({
+    connector_type: type,
+    locale: activeLocale(),
+  });
+  try {
+    const response = await kernelFetch(
+      `/v1/me/engine/catalog-options?${params.toString()}`,
+      { signal: AbortSignal.timeout(ENGINE_FETCH_MS + 2_000) },
+    );
+    if (!response.ok) {
+      return {};
+    }
+    const body = (await response.json()) as {
+      field_options?: Record<string, { value: string; label: string }[]>;
+    };
+    return body.field_options && typeof body.field_options === "object"
+      ? body.field_options
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function catalogPlugins(
