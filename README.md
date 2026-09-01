@@ -6,16 +6,31 @@
 
 [简体中文](README.zh-CN.md) | [English](README.md)
 
-Puts messages from Feishu, Slack, and your local agent into one window. Only what needs you now is listed. Replies go back to the original app. Accounts and rules stay on this computer.
+**Everything is Context. Unified Context.**
 
-What you can use now is **one person, data on this machine**. Shared use across a team comes later. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
+Regenic is an open-source message orchestration layer for people and agents.
+
+It does not replace Feishu, Slack, WhatsApp, or your local agent. Those tools keep writing messages where they already live. Regenic sits underneath them: it turns channel traffic into one shared context — evidence with provenance, a console that lists only what needs you now, and replies that go back to the original app.
+
+If an agent harness says *everything is a plugin*, Regenic says *everything is context*. Chat, agent turns, files, and digests become the same kind of record. Versioned judgment standards decide what enters the workbench. Humans and automation share one `/v1`. Accounts, tokens, and rules stay on this computer.
+
+What ships today is **one person, data on this machine**. Shared records across a team come later. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
 
 [Install](#installation--quick-start) · [Add Feishu, Slack, or DSH](#add-feishu-slack-or-dsh) · [Login and tokens](#login-and-tokens) · [Local CLI](#local-cli) · [Status](#status) · [Security](#security) · [Docs](#documentation) · [Contributing](#contributing)
 
+## Why context
+
+Agents need tools. People need channels. Both already exist.
+
+What is missing is a place where Feishu, Slack, a local agent session, and a file export mean the **same thing** — one message shape, one evidence trail, one inbox of work that actually needs a human or an agent right now. That place is Regenic.
+
+Context is not a dump of every chat. It is the curated, attributable record that judgment standards and personal habits use to decide what enters the console and what stays outside the current work.
+
 ## What it does
 
-- **The original apps stay** — Feishu stays Feishu, Slack stays Slack. This reads messages and sends replies back. It does not replace them.
-- **The window only lists what needs you now** — not every group chat dumped in one place.
+- **Channels stay channels** — Feishu stays Feishu, Slack stays Slack. Regenic reads, ranks, and writes back. It does not replace them.
+- **One context, many sources** — connectors normalize traffic into Event / Blob; digests and claims keep provenance.
+- **The console lists what needs you now** — not every group chat dumped in one place.
 - **People and automation share one API** — the desktop app and scripts both use `/v1`.
 - **Tokens stay out of the database** — environment variables or the OS keychain. The install form does not take them.
 - **One person first, then a team** — this computer is the source of truth. Shared records across people come later.
