@@ -71,6 +71,10 @@ import {
 } from "./personal-stream-pace";
 import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import {
+  shouldHydrateOpenedInbox,
+  shouldPullOlderInbox,
+} from "./personal-inbox-query";
 
 export { PersonalConnectorError } from "./personal-errors";
 
@@ -2172,39 +2176,3 @@ function summarizeRuns(runs: ConnectorPollRunResult[]): {
   );
 }
 
-export function shouldHydrateOpenedInbox(query: {
-  thread_id?: string;
-  since?: string;
-  before?: string;
-  heads?: boolean;
-  live?: boolean;
-}): boolean {
-  return Boolean(
-    query.thread_id && !query.since && !query.before && !query.heads && !query.live,
-  );
-}
-
-export function shouldWaitForOpenedHydrate(localCount: number): boolean {
-  return localCount === 0;
-}
-
-/** Scroll-up is the only inbox query that asks the connector for older pages. */
-export function shouldPullOlderInbox(query: {
-  thread_id?: string;
-  since?: string;
-  before?: string;
-  heads?: boolean;
-}): boolean {
-  return Boolean(
-    query.thread_id && query.before && !query.since && !query.heads,
-  );
-}
-
-export function shouldNoteHumanInbox(query: {
-  thread_id?: string;
-  since?: string;
-  heads?: boolean;
-  live?: boolean;
-}): boolean {
-  return Boolean(query.thread_id && !query.since && !query.heads && !query.live);
-}

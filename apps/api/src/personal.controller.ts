@@ -21,14 +21,13 @@ import type { Request } from "express";
 import { Observable } from "rxjs";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
+import { PersonalConnectorError, PersonalConnectorService } from "./personal-connector.service";
 import {
-  PersonalConnectorError,
-  PersonalConnectorService,
   shouldHydrateOpenedInbox,
   shouldNoteHumanInbox,
   shouldPullOlderInbox,
   shouldWaitForOpenedHydrate,
-} from "./personal-connector.service";
+} from "./personal-inbox-query";
 import { noteHumanActivity } from "./personal-human-pace";
 import {
   PersonalInboxService,

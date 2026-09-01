@@ -1,3 +1,8 @@
+import {
+  PERSONAL_SSE_INBOX_DIGEST,
+  PERSONAL_SSE_THREAD_UPDATED,
+} from "../../shared/personal-events.ts";
+
 export type PersonalEventHandlers = {
   onInboxDigest?: (digest: string) => void;
   onThreadUpdated?: (threadId: string) => void;
@@ -32,7 +37,7 @@ export function connectPersonalEventsWithDeps(
     }
     source?.close();
     source = new deps.EventSource(personalEventsUrl(deps.origin()));
-    source.addEventListener("inbox.digest", (event) => {
+    source.addEventListener(PERSONAL_SSE_INBOX_DIGEST, (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
           digest?: string;
@@ -44,7 +49,7 @@ export function connectPersonalEventsWithDeps(
         // Ignore malformed push payloads.
       }
     });
-    source.addEventListener("thread.updated", (event) => {
+    source.addEventListener(PERSONAL_SSE_THREAD_UPDATED, (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
           thread_id?: string;

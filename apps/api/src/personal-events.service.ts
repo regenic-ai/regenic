@@ -1,12 +1,14 @@
 import { Injectable } from "@nestjs/common";
 import { EventEmitter } from "node:events";
+import {
+  PERSONAL_SSE_INBOX_DIGEST,
+  PERSONAL_SSE_THREAD_UPDATED,
+  type PersonalSseEventType,
+  type PersonalSsePayload,
+} from "@regenic/domain";
 
-export type PersonalEventType = "inbox.digest" | "thread.updated";
-
-export type PersonalEventPayload = {
-  "inbox.digest": { digest: string };
-  "thread.updated": { thread_id: string };
-};
+export type PersonalEventType = PersonalSseEventType;
+export type PersonalEventPayload = PersonalSsePayload;
 
 type PersonalEventListener = <T extends PersonalEventType>(
   type: T,
@@ -21,7 +23,7 @@ export class PersonalEventsService {
     if (!digest.trim()) {
       return;
     }
-    this.bus.emit("inbox.digest", { digest });
+    this.bus.emit(PERSONAL_SSE_INBOX_DIGEST, { digest });
   }
 
   threadUpdated(thread_id: string): void {
@@ -29,19 +31,19 @@ export class PersonalEventsService {
     if (!id) {
       return;
     }
-    this.bus.emit("thread.updated", { thread_id: id });
+    this.bus.emit(PERSONAL_SSE_THREAD_UPDATED, { thread_id: id });
   }
 
   subscribe(listener: PersonalEventListener): () => void {
     const onDigest = (payload: PersonalEventPayload["inbox.digest"]) =>
-      listener("inbox.digest", payload);
+      listener(PERSONAL_SSE_INBOX_DIGEST, payload);
     const onThread = (payload: PersonalEventPayload["thread.updated"]) =>
-      listener("thread.updated", payload);
-    this.bus.on("inbox.digest", onDigest);
-    this.bus.on("thread.updated", onThread);
+      listener(PERSONAL_SSE_THREAD_UPDATED, payload);
+    this.bus.on(PERSONAL_SSE_INBOX_DIGEST, onDigest);
+    this.bus.on(PERSONAL_SSE_THREAD_UPDATED, onThread);
     return () => {
-      this.bus.off("inbox.digest", onDigest);
-      this.bus.off("thread.updated", onThread);
+      this.bus.off(PERSONAL_SSE_INBOX_DIGEST, onDigest);
+      this.bus.off(PERSONAL_SSE_THREAD_UPDATED, onThread);
     };
   }
 }
