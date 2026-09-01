@@ -114,14 +114,12 @@ export class PersonalApiKeyService implements OnModuleInit {
     return { open: true, reason: "bootstrap" };
   }
 
-  pairingExpiresAt(): string | null {
-    if (!this.pairingEnabled()) {
+  pairingExpiresAt(env: NodeJS.ProcessEnv = process.env): string | null {
+    const state = this.pairingState(env);
+    if (!state.open || state.reason !== "bootstrap") {
       return null;
     }
-    if (this.record?.pairing_until && !this.record.first_paired_at) {
-      return this.record.pairing_until;
-    }
-    return null;
+    return this.record?.pairing_until ?? null;
   }
 
   async notePaired(): Promise<void> {

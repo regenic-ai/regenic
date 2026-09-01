@@ -1,8 +1,8 @@
 const assert = require("node:assert/strict");
 const { createServer } = require("node:http");
-const { mkdtemp, rm } = require("node:fs/promises");
+const { mkdtemp, rm, writeFile, mkdir } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
-const { join } = require("node:path");
+const { join, dirname } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const {
   createHttpApp,
@@ -2672,6 +2672,52 @@ describe("personal /v1/me", () => {
         body: JSON.stringify({ code: "FAKE-CODE" }),
       });
       assert.equal(secondPair.status, 401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reopens admin pairing after bootstrap expires when REGENIC_PERSONAL_PAIRING=1", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await mkdir(dirname(database), { recursive: true });
+    const storedKey = "expired-bootstrap-admin-key";
+    await writeFile(
+      join(dirname(database), ".regenic-personal-api-key"),
+      `${JSON.stringify({
+        key: storedKey,
+        created_at: "2020-01-01T00:00:00.000Z",
+        pairing_until: "2020-01-01T00:30:00.000Z",
+      })}\n`,
+    );
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      LISTEN_HOST: "0.0.0.0",
+      REGENIC_PERSONAL_API: "1",
+      REGENIC_PERSONAL_API_KEY: undefined,
+      REGENIC_PERSONAL_PAIRING: "1",
+    });
+    try {
+      const health = await (await fetch(`${origin}/health`)).json();
+      assert.equal(health.connect.pairing.open, true);
+      assert.equal(health.connect.pairing.reason, "admin");
+      assert.ok(typeof health.connect.pairing.code === "string");
+      const paired = await fetch(`${origin}/v1/me/connect/pair`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "null",
+        },
+        body: JSON.stringify({ code: health.connect.pairing.code }),
+      }).then((response) => response.json());
+      assert.equal(paired.personal_api_key, storedKey);
+      const authorized = await fetch(`${origin}/v1/me/inbox`, {
+        headers: {
+          origin: "null",
+          "x-regenic-personal-key": storedKey,
+        },
+      });
+      assert.equal(authorized.status, 200);
     } finally {
       await app.close();
     }
