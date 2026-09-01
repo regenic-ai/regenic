@@ -16,6 +16,7 @@ import {
   type GenericImportMapping,
   type JsonValue,
   type ContextRequest,
+  projectEvidenceBundleV1,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -128,11 +129,14 @@ export async function runLocalCli(
     case "context-replay":
       await replayContext(commandOptions, stdout);
       return;
+    case "context-publish-evidence-bundle":
+      await publishContextEvidenceBundle(commandOptions, stdout, now);
+      return;
     case "context-ask":
       await askContext(commandOptions, env, stdout, createId);
       return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-ask");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask");
   }
 }
 
@@ -722,6 +726,36 @@ async function replayContext(
       purpose: optionString(options, "purpose") ?? "inspect authorized local context",
       allowed_uses: ["display"],
     }));
+  });
+}
+
+async function publishContextEvidenceBundle(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    const bundle = await host.get("context").replay({
+      org_id: orgId,
+      snapshot_id: requireOption(options, "snapshot"),
+      principal: { actor_type: "human", actor_id: orgId },
+      consumer_id: requireOption(options, "consumer"),
+      purpose: requireOption(options, "purpose"),
+      allowed_uses: ["display"],
+    });
+    const projected = projectEvidenceBundleV1(bundle, now());
+    await new JsonlContextConsumer(requirePath(options, "output")).publish(projected);
+    writeJson(stdout, {
+      bundle_id: projected.id,
+      snapshot_id: bundle.snapshot_id,
+      published_event_count: projected.evidence.length,
+    });
   });
 }
 

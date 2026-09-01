@@ -11,6 +11,7 @@ const {
   hashContextBundle,
   hashContextRequest,
   hashContextSnapshot,
+  projectEvidenceBundleV1,
   validateContextArtifact,
   validateContextBundle,
   validateContextCandidate,
@@ -161,6 +162,33 @@ describe("context contracts", () => {
   it("keeps EvidenceBundle v1 separate from ContextBundle v2", () => {
     assert.equal(EVIDENCE_BUNDLE_SCHEMA_VERSION, "1.0");
     assert.equal(CONTEXT_BUNDLE_SCHEMA_VERSION, "2.0");
+  });
+
+  it("projects a deterministic body-free EvidenceBundle v1 from ContextBundle citations", () => {
+    const value = bundle({
+      content_hash: HASH_A,
+      citations: [
+        evidence({ event_id: "event-b", content_hash: HASH_B }),
+        evidence({ event_id: "event-a", content_hash: HASH_A }),
+        evidence({ event_id: "event-a", content_hash: HASH_A }),
+      ],
+    });
+    const projected = projectEvidenceBundleV1(value, "2026-09-01T01:02:03+01:00");
+
+    assert.deepEqual(projected, {
+      schema_version: "1.0",
+      id: `evidence-bundle:${value.content_hash}`,
+      org_id: value.org_id,
+      consumer_id: value.consumer_id,
+      purpose: value.purpose,
+      created_at: "2026-09-01T00:02:03.000Z",
+      evidence: [
+        evidence({ event_id: "event-a", content_hash: HASH_A }),
+        evidence({ event_id: "event-b", content_hash: HASH_B }),
+      ],
+    });
+    assert.equal(JSON.stringify(projected).includes("A synthetic fact."), false);
+    assert.throws(() => projectEvidenceBundleV1(value, "not-a-date"), /created_at/);
   });
 
   it("canonicalizes object keys and hashes a fixed fixture", () => {

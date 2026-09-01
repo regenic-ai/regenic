@@ -313,6 +313,17 @@ pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
 ```
 
+Project a replayed Context bundle into the existing EvidenceBundle v1 JSONL
+format when another consumer needs citations only. `--consumer` and `--purpose`
+must match the grant stored in the snapshot. The output contains no evidence
+text or Blob bodies.
+
+```bash
+pnpm local context-publish-evidence-bundle --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --snapshot <snapshot-id> --consumer local-cli \
+	--purpose "inspect authorized local context" --output ./evidence-bundles.jsonl
+```
+
 Model answers are optional. The first driver accepts an OpenAI-compatible API
 on numeric loopback, such as a local Ollama server. Remote model URLs are not
 accepted in this version. The API key setting is a reference to an environment

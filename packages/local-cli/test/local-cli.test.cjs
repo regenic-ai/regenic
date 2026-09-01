@@ -39,6 +39,7 @@ describe("regenic-local", () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
+    const evidenceOutput = join(root, "context-evidence.jsonl");
     const authority = new SqliteAuthorityStore(database);
     const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
     await ingestion.ingest({
@@ -92,6 +93,20 @@ describe("regenic-local", () => {
       "--snapshot", assembled.snapshot.id,
     ], { env: { REGENIC_MODEL_DRIVER: "none" } });
     assert.equal(replayed.content_hash, assembled.bundle.content_hash);
+
+    const published = await run([
+      "context-publish-evidence-bundle",
+      ...common,
+      "--snapshot", assembled.snapshot.id,
+      "--consumer", "local-cli",
+      "--purpose", "inspect authorized local context",
+      "--output", evidenceOutput,
+    ], { env: { REGENIC_MODEL_DRIVER: "none" } });
+    const evidenceBundle = JSON.parse((await readFile(evidenceOutput, "utf8")).trim());
+    assert.equal(published.snapshot_id, assembled.snapshot.id);
+    assert.equal(published.published_event_count, 1);
+    assert.equal(evidenceBundle.evidence[0].event_id, assembled.bundle.citations[0].event_id);
+    assert.equal(JSON.stringify(evidenceBundle).includes("The release is approved"), false);
 
     let modelRequest;
     const modelServer = createServer(async (request, response) => {

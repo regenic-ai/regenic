@@ -48,6 +48,7 @@ export * from "./context-artifact";
 export * from "./context-snapshot";
 export * from "./context-bundle";
 export * from "./context-canonical";
+export * from "./context-compatibility";
 export * from "./context-schema";
 export * from "./context-port";
 export * from "./context-registry";
