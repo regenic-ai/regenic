@@ -1461,6 +1461,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
       if (summary.accepted_count > 0) {
         void this.inbox.publishInboxDigest();
+        for (let index = 0; index < mediaItems.length; index += 1) {
+          const item = mediaItems[index];
+          const batch = mediaBatches[index];
+          if (
+            !item.stream.thread_id ||
+            !batch ||
+            summarizeRuns(batch.pages).accepted_count === 0
+          ) {
+            continue;
+          }
+          this.inbox.publishThreadUpdated(item.stream.thread_id);
+        }
       }
       this.publishStreams();
       return {

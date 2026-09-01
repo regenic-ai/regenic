@@ -1,6 +1,6 @@
 import { t } from "../../shared/i18n.ts";
 import { deliveryNeedsYou } from "./message-view.ts";
-import type { InboxReuse } from "./thread-window";
+import { collapseSourceRevisions, type InboxReuse } from "./thread-window.ts";
 import type {
   AttentionClass,
   InboxSortMode,
@@ -228,7 +228,7 @@ export function evictThreadCache<T>(
 export function orderThreadMessages(
   messages: InboxViewItem[],
 ): InboxViewItem[] {
-  return orderMessages(messages);
+  return orderMessages(collapseSourceRevisions(messages));
 }
 
 export function overlayThreadMessages(

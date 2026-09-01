@@ -75,6 +75,7 @@ import {
   mergeRecentInbox,
   patchInboxWork,
   shouldFetchInboxDelta,
+  threadHasPendingImagePreviews,
   LIST_HEADS_PAGE_SIZE,
   THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
@@ -259,7 +260,8 @@ export function ConsoleApp() {
           loaded,
           loadedCount: current.length,
           hasCursor: true,
-        })
+        }) &&
+        !threadHasPendingImagePreviews(current)
       ) {
         const delta = await fetchInbox(
           {
