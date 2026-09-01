@@ -3,6 +3,8 @@ import { Client } from "pg";
 import { isPersonalApiEnabled, loadEnv } from "@regenic/config";
 import type { StandardPlaceholder } from "@regenic/domain";
 import { processMemoryView } from "./process-memory";
+import { PersonalApiKeyService } from "./personal-api-key.service";
+import { PersonalPairingService } from "./personal-pairing.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 @Controller()
@@ -10,6 +12,10 @@ export class HealthController {
   constructor(
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(PersonalApiKeyService)
+    private readonly keys: PersonalApiKeyService,
+    @Inject(PersonalPairingService)
+    private readonly pairing: PersonalPairingService,
   ) {}
 
   @Get("health")
@@ -20,13 +26,27 @@ export class HealthController {
 
     if (env.REGENIC_DATABASE) {
       const sqlite = this.runtime.isReady() ? "up" : "down";
+      const personal = isPersonalApiEnabled(env);
+      const expectedKey = this.keys.expectedKey();
       return {
         status: sqlite === "up" ? "ok" : "degraded",
         service: "api",
-        mode: isPersonalApiEnabled(env) ? "personal" : "service",
+        mode: personal ? "personal" : "service",
         sqlite,
         memory: processMemoryView(),
         domain: "@regenic/domain",
+        ...(personal
+          ? {
+              connect: {
+                auth: expectedKey ? "shared-secret" : "none",
+                key_source: this.keys.keySource(),
+                pairing: {
+                  ...this.pairing.snapshot(process.env),
+                  reason: this.keys.pairingState(process.env).reason,
+                },
+              },
+            }
+          : {}),
       };
     }
 

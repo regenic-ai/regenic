@@ -42,6 +42,7 @@ export interface KernelSettingsView {
   mode: KernelMode;
   customOrigin: string;
   activeOrigin: string;
+  hasSavedPersonalApiKey?: boolean;
   locale: Locale;
   dataDirectory: DataDirectoryView;
   sourceRetention?: SourceRetentionView;

@@ -58,6 +58,7 @@ import {
   LOCAL_KERNEL_ORIGIN,
   loadDesktopPreference,
   loadKernelPreference,
+  loadSavedPersonalApiKey,
   parseKernelOrigin,
   saveDataRootPreference,
   saveKernelPreference,
@@ -65,6 +66,7 @@ import {
   savePreviousDataRootPreference,
   type KernelPreference,
 } from "./kernel-settings";
+import { connectCustomKernel } from "./kernel-connect";
 import { personalApiRequestHeaders } from "./personal-api-key";
 
 const TRAY_SIZE = { width: 360, height: 480 };
@@ -189,18 +191,19 @@ function isUsingCustomKernel(): boolean {
   );
 }
 
-function configuredPersonalApiKey(): string | null {
-  return process.env.REGENIC_PERSONAL_API_KEY?.trim() || null;
-}
-
 function kernelView() {
   const preference = loadDesktopPreference(settingsFile());
   const paths = currentDataPaths();
   const sourceRetention = currentSourceRetention(preference.previousDataRoot, paths);
+  const customOrigin = preference.origin ?? LOCAL_KERNEL_ORIGIN;
   return {
     mode: preference.mode,
-    customOrigin: preference.origin ?? LOCAL_KERNEL_ORIGIN,
+    customOrigin,
     activeOrigin: apiOrigin,
+    hasSavedPersonalApiKey: Boolean(
+      preference.mode === "custom" &&
+        loadSavedPersonalApiKey(settingsFile(), customOrigin),
+    ),
     locale: preference.locale,
     dataDirectory: {
       path: paths.dataRoot,
@@ -457,29 +460,15 @@ async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<voi
   }
 }
 
-async function assertPersonalKernel(origin: string): Promise<void> {
-  const mode = await probeKernelMode(origin, 4000);
-  if (mode === "none") {
-    throw new Error(`Cannot reach the kernel at ${origin}`);
-  }
-  if (mode !== "personal") {
-    throw new Error(
-      `Kernel at ${origin} is not personal. Remote Personal API access is disabled until authenticated remote identity is available.`,
-    );
-  }
-}
-
 async function connectSavedKernel(): Promise<void> {
   const preference = loadKernelPreference(settingsFile());
   if (preference.mode === "custom" && preference.origin) {
     try {
-      const key = configuredPersonalApiKey();
-      if (!key) {
-        throw new Error("A custom Personal API requires REGENIC_PERSONAL_API_KEY");
-      }
-      await assertPersonalKernel(preference.origin);
-      apiOrigin = preference.origin;
-      personalApiKey = key;
+      const connected = await connectCustomKernel(preference.origin, {
+        settingsFile: settingsFile(),
+      });
+      apiOrigin = connected.origin;
+      personalApiKey = connected.key;
       return;
     } catch (error) {
       process.stderr.write(
@@ -490,19 +479,21 @@ async function connectSavedKernel(): Promise<void> {
   await startLocalKernel();
 }
 
-async function applyKernelPreference(preference: KernelPreference): Promise<void> {
+async function applyKernelPreference(
+  preference: KernelPreference,
+  pendingKey?: string | null,
+): Promise<void> {
   resetHostStatCache();
   if (preference.mode === "custom" && preference.origin) {
-    const key = configuredPersonalApiKey();
-    if (!key) {
-      throw new Error("A custom Personal API requires REGENIC_PERSONAL_API_KEY");
-    }
-    await assertPersonalKernel(preference.origin);
+    const connected = await connectCustomKernel(preference.origin, {
+      settingsFile: settingsFile(),
+      pendingKey,
+    });
     saveKernelPreference(settingsFile(), preference);
     await stopOwnedSidecarAndWait();
     releaseOwnedStoreLock();
-    apiOrigin = preference.origin;
-    personalApiKey = key;
+    apiOrigin = connected.origin;
+    personalApiKey = connected.key;
     broadcastOrigin();
     return;
   }
@@ -985,12 +976,18 @@ app.whenReady().then(async () => {
   );
   ipcMain.handle(
     "regenic:set-kernel-settings",
-    async (_event, input: { mode?: string; origin?: string }) => {
+    async (
+      _event,
+      input: { mode?: string; origin?: string; personalApiKey?: string },
+    ) => {
       if (input?.mode === "custom") {
-        await applyKernelPreference({
-          mode: "custom",
-          origin: parseKernelOrigin(input.origin ?? ""),
-        });
+        await applyKernelPreference(
+          {
+            mode: "custom",
+            origin: parseKernelOrigin(input.origin ?? ""),
+          },
+          input.personalApiKey,
+        );
       } else {
         await applyKernelPreference({ mode: "local" });
       }

@@ -363,10 +363,11 @@ POST /v1/me/context/ask
 citation 都指向授权 bundle 中已有的 candidate 与 Event 时，回答才会返回。模型输出不会
 写回 Event、Artifact、Claim，也不会直接成为已接受事实。
 
-带浏览器 Origin 的 `/v1/me` 请求还必须携带临时 Personal API key。桌面端为自己拥有的
-loopback sidecar 每次生成并自动注入该 key，不向 renderer 代码暴露，也不持久化。手工启动的
-loopback 浏览器客户端必须共享 `REGENIC_PERSONAL_API_KEY`；无 Origin 的本机 CLI 调用保持
-可用。Personal API 不允许公网监听。
+带浏览器 Origin 的 `/v1/me` 请求还必须携带 Personal API key。桌面端为自己拥有的
+loopback sidecar 每次生成并自动注入临时 key。远程内核若未设 `REGENIC_PERSONAL_API_KEY`，首次启动会
+生成 key，并在 **30 分钟 bootstrap 窗口** 内允许**一次**自动配对；配对成功后窗口立即关闭。之后桌面需
+在设置里粘贴 key，或使用相同的 `REGENIC_PERSONAL_API_KEY` env。公网部署需设
+`REGENIC_PERSONAL_API=1`。
 
 ## 状态
 

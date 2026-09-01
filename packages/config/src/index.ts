@@ -36,6 +36,7 @@ const envSchema = z.object({
   REGENIC_DSH_BASE_URL: z.string().optional(),
   REGENIC_PERSONAL_API: z.string().optional(),
   REGENIC_PERSONAL_API_KEY: z.string().optional(),
+  REGENIC_PERSONAL_PAIRING: z.string().optional(),
   REGENIC_PERSONAL_LIVE_KEY: z.string().optional(),
 });
 
@@ -87,14 +88,18 @@ export function isAllowedPersonalCorsOrigin(origin: string): boolean {
 }
 
 /**
- * /v1/me is loopback-only. REGENIC_PERSONAL_API=0 disables it even there.
- * Public binds stay off until an authenticated remote-identity protocol exists.
+ * /v1/me is loopback-only by default.
+ * REGENIC_PERSONAL_API=0 disables it even on loopback.
+ * REGENIC_PERSONAL_API=1 enables it on a public bind so a desktop can point at that kernel.
  */
 export function isPersonalApiEnabled(env: AppEnv | NodeJS.ProcessEnv = process.env): boolean {
   const parsed = isLoadedEnv(env) ? env : loadEnv(env);
   const flag = parsed.REGENIC_PERSONAL_API?.trim().toLowerCase();
   if (flag === "0" || flag === "false") {
     return false;
+  }
+  if (flag === "1" || flag === "true") {
+    return true;
   }
   return isLoopbackListenHost(parsed.LISTEN_HOST);
 }

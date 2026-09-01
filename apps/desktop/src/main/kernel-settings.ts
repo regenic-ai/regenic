@@ -6,7 +6,6 @@ import {
   parseLocale,
   type Locale,
 } from "../shared/locale.ts";
-import { isNumericLoopbackOrigin } from "./personal-api-key.ts";
 
 export const LOCAL_KERNEL_ORIGIN = "http://127.0.0.1:4370";
 
@@ -21,6 +20,7 @@ export interface DesktopPreference extends KernelPreference {
   locale: Locale;
   dataRoot?: string;
   previousDataRoot?: string;
+  personalApiKeys?: Record<string, string>;
 }
 
 export function parseKernelOrigin(raw: string): string {
@@ -33,10 +33,9 @@ export function parseKernelOrigin(raw: string): string {
   if (
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
     parsed.username ||
-    parsed.password ||
-    !isNumericLoopbackOrigin(parsed.origin)
+    parsed.password
   ) {
-    throw new Error("Kernel address must use a numeric loopback URL without credentials");
+    throw new Error("Kernel address must be an http(s) URL without credentials");
   }
   return parsed.origin;
 }
@@ -49,10 +48,12 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       locale?: unknown;
       dataRoot?: unknown;
       previousDataRoot?: unknown;
+      personalApiKeys?: unknown;
     };
     const locale = parseLocale(raw.locale ?? DEFAULT_LOCALE);
     const dataRoot = tryParseDataRoot(raw.dataRoot);
     const previousDataRoot = tryParseDataRoot(raw.previousDataRoot);
+    const personalApiKeys = parsePersonalApiKeys(raw.personalApiKeys);
     if (raw.mode === "custom" && typeof raw.origin === "string") {
       return {
         mode: "custom",
@@ -60,6 +61,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
         locale,
         ...(dataRoot ? { dataRoot } : {}),
         ...(previousDataRoot ? { previousDataRoot } : {}),
+        ...(personalApiKeys ? { personalApiKeys } : {}),
       };
     }
     return {
@@ -67,6 +69,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       locale,
       ...(dataRoot ? { dataRoot } : {}),
       ...(previousDataRoot ? { previousDataRoot } : {}),
+      ...(personalApiKeys ? { personalApiKeys } : {}),
     };
   } catch {
     return { mode: "local", locale: DEFAULT_LOCALE };
@@ -96,6 +99,9 @@ export function saveDesktopPreference(
   }
   if (preference.previousDataRoot) {
     body.previousDataRoot = preference.previousDataRoot;
+  }
+  if (preference.personalApiKeys && Object.keys(preference.personalApiKeys).length > 0) {
+    body.personalApiKeys = preference.personalApiKeys;
   }
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
@@ -154,4 +160,54 @@ export function savePreviousDataRootPreference(
   }
   saveDesktopPreference(file, { ...current, previousDataRoot: parsed });
   return parsed;
+}
+
+export function loadSavedPersonalApiKey(
+  file: string,
+  origin: string,
+): string | null {
+  const keys = loadDesktopPreference(file).personalApiKeys;
+  const key = keys?.[origin]?.trim();
+  return key || null;
+}
+
+export function savePersonalApiKey(
+  file: string,
+  origin: string,
+  key: string,
+): void {
+  const current = loadDesktopPreference(file);
+  const trimmed = key.trim();
+  if (!trimmed) {
+    return;
+  }
+  saveDesktopPreference(file, {
+    ...current,
+    personalApiKeys: {
+      ...(current.personalApiKeys ?? {}),
+      [origin]: trimmed,
+    },
+  });
+}
+
+function parsePersonalApiKeys(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const entries = Object.entries(raw).flatMap(([origin, key]) => {
+    if (typeof key !== "string") {
+      return [];
+    }
+    const trimmedOrigin = origin.trim();
+    const trimmedKey = key.trim();
+    if (!trimmedOrigin || !trimmedKey) {
+      return [];
+    }
+    try {
+      return [[parseKernelOrigin(trimmedOrigin), trimmedKey] as const];
+    } catch {
+      return [];
+    }
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }

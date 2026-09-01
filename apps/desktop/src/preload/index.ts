@@ -9,8 +9,11 @@ contextBridge.exposeInMainWorld("regenic", {
   apiOrigin: readApiOrigin(),
   getApiOrigin: () => ipcRenderer.invoke("regenic:get-api-origin"),
   getKernelSettings: () => ipcRenderer.invoke("regenic:get-kernel-settings"),
-  setKernelSettings: (input: { mode: "local" | "custom"; origin?: string }) =>
-    ipcRenderer.invoke("regenic:set-kernel-settings", input),
+  setKernelSettings: (input: {
+    mode: "local" | "custom";
+    origin?: string;
+    personalApiKey?: string;
+  }) => ipcRenderer.invoke("regenic:set-kernel-settings", input),
   pickDataDirectory: () => ipcRenderer.invoke("regenic:pick-data-directory"),
   setDataDirectory: (input: {
     path: string;

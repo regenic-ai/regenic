@@ -193,6 +193,7 @@ export async function fetchKernelSettings(): Promise<KernelSettingsView> {
 export async function applyKernelSettings(input: {
   mode: "local" | "custom";
   origin?: string;
+  personalApiKey?: string;
 }): Promise<KernelSettingsView> {
   if (!window.regenic?.setKernelSettings) {
     throw new Error("Desktop settings are not available");
