@@ -62,6 +62,7 @@ import {
   type InboxAttachment,
   type InboxBody,
 } from "./inbox-body";
+import { catalogMembersFromStreams } from "./connector-sync-members";
 import { PersonalConnectorError } from "./personal-errors";
 import {
   connectorCatalog,
@@ -834,9 +835,14 @@ export class PersonalInboxService {
         const store = authority as SyncStore & {
           latestAttempt(id: string): Promise<IngestAttempt | null>;
         };
+        const streams = host.get("connectors").listStreams(installation.id);
+        const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
         const [attempt, sync] = await Promise.all([
           detailed ? store.latestAttempt(installation.id) : Promise.resolve(null),
-          loadSyncProgress(store, installation.id),
+          loadSyncProgress(store, installation.id, {
+            mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
+            fallbackMembers,
+          }),
         ]);
         return toInstallationView(
           installation,

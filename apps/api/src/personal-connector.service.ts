@@ -25,6 +25,7 @@ import {
   settleIsolated,
   SyncEngine,
   loadSyncProgress,
+  scopeSyncCatalogMembers,
   withDeadline,
   type ChannelDriver,
   type ConnectorInstallation,
@@ -77,6 +78,7 @@ import {
 import {
   shouldPullOlderFocus,
 } from "./personal-conversation-focus";
+import { catalogMembersFromStreams } from "./connector-sync-members";
 
 export { PersonalConnectorError } from "./personal-errors";
 
@@ -1423,6 +1425,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
           cursorStates.set(stream.stream_key, cursor?.cursor);
         }),
       );
+      const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
+      const mountedStreamKeys = new Set(streams.map((stream) => stream.stream_key));
+      const planMembers = scopeSyncCatalogMembers(
+        catalog.members,
+        mountedStreamKeys,
+        fallbackMembers,
+      );
       const work = await engine.plan({
         installation_id: installation.id,
         preferredThreadId: preferredThreadId(),
@@ -1430,7 +1439,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         rotateFrom: this.lastCatchUpCursor,
         rotateSeedFrom: this.lastSeedCursor,
         pages: options?.capCatchUp ? DEFAULT_MAX_PAGES : maxPages,
-        fallbackMembers: catalogMembersFromStreams(installation.id, streams),
+        members: planMembers,
+        fallbackMembers,
         cursorStates,
       });
       const streamByKey = new Map(
@@ -1984,9 +1994,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
     store: ConnectorRuntimeStore,
     installation: ConnectorInstallation,
   ): Promise<EngineInstallationView> {
+    const host = this.runtime.requireHost();
+    const streams = host.get("connectors").listStreams(installation.id);
+    const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
     const [attempt, sync] = await Promise.all([
       store.latestAttempt(installation.id),
-      loadSyncProgress(store, installation.id),
+      loadSyncProgress(store, installation.id, {
+        mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
+        fallbackMembers,
+      }),
     ]);
     return toInstallationView(installation, attempt, this.drivers, DEFAULT_COPY_LOCALE, {
       sync,
@@ -2198,22 +2214,6 @@ function threadsFromCatalog(
     }
     return [];
   });
-}
-
-function catalogMembersFromStreams(
-  installationId: string,
-  streams: readonly ConnectorStream[],
-): SyncCatalogMember[] {
-  const now = new Date().toISOString();
-  return streams.map((stream) => ({
-    installation_id: installationId,
-    stream_key: stream.stream_key,
-    thread_id: stream.thread_id,
-    label: stream.label,
-    generation: 1,
-    discovered_at: now,
-    last_seen_at: now,
-  }));
 }
 
 async function rememberEngineResult(

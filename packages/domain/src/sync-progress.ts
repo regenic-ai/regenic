@@ -1,4 +1,5 @@
 import type {
+  SyncCatalogMember,
   SyncCatalogView,
   SyncStore,
   SyncStreamState,
@@ -22,6 +23,20 @@ export function emptySyncProgress(): SyncProgressView {
     media_pending: 0,
     catalog_complete: false,
   };
+}
+
+export function scopeSyncCatalogMembers(
+  catalogMembers: readonly SyncCatalogMember[],
+  mountedStreamKeys: ReadonlySet<string>,
+  fallbackMembers: readonly SyncCatalogMember[],
+): SyncCatalogMember[] {
+  if (mountedStreamKeys.size === 0) {
+    return [...fallbackMembers];
+  }
+  const scoped = catalogMembers.filter((member) =>
+    mountedStreamKeys.has(member.stream_key),
+  );
+  return scoped.length > 0 ? scoped : [...fallbackMembers];
 }
 
 export function summarizeSyncProgress(
@@ -89,10 +104,22 @@ export function aggregateSyncProgress(
 export async function loadSyncProgress(
   store: Pick<SyncStore, "getSyncCatalog" | "listSyncStates">,
   installationId: string,
+  options?: {
+    mountedStreamKeys?: ReadonlySet<string>;
+    fallbackMembers?: readonly SyncCatalogMember[];
+  },
 ): Promise<SyncProgressView | null> {
   const [catalog, states] = await Promise.all([
     store.getSyncCatalog(installationId),
     store.listSyncStates(installationId),
   ]);
-  return publishedSyncProgress(catalog, states);
+  if (!options?.mountedStreamKeys) {
+    return publishedSyncProgress(catalog, states);
+  }
+  const members = scopeSyncCatalogMembers(
+    catalog.members,
+    options.mountedStreamKeys,
+    options.fallbackMembers ?? [],
+  );
+  return publishedSyncProgress({ ...catalog, members }, states);
 }
