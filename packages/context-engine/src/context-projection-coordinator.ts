@@ -26,6 +26,14 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
 
   async project(orgId: string, generation: string): Promise<ContextProjectionRun[]> {
     const read = structuredClone(await this.authority.openContextRead(orgId));
+    if (
+      typeof read.read_epoch !== "string" ||
+      !read.read_epoch.trim() ||
+      typeof read.recorded_at !== "string" ||
+      Number.isNaN(Date.parse(read.recorded_at))
+    ) {
+      throw new Error("Context projection authority returned an invalid read boundary");
+    }
     if (read.events.some((event) => event.org_id !== orgId)) {
       throw new Error("Context projection authority read contains an Event from another organization");
     }

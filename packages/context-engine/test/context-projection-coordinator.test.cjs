@@ -118,4 +118,27 @@ describe("ContextProjectionCoordinator", () => {
     assert.equal(called, false);
     assert.equal(await artifacts.getCheckpoint("example-org", "test-projector", "generation-1"), null);
   });
+
+  it("rejects an invalid authority read boundary before calling a projector", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const registry = new MemoryContextProjectorRegistry();
+    let called = false;
+    registry.register({
+      ...projector(),
+      async project() {
+        called = true;
+        return [];
+      },
+    });
+    await assert.rejects(
+      new ContextProjectionCoordinator({
+        async openContextRead() {
+          return { ...await authority().openContextRead(), read_epoch: "", recorded_at: "not-a-time" };
+        },
+      }, artifacts, registry).project("example-org", "generation-1"),
+      /invalid read boundary/,
+    );
+    assert.equal(called, false);
+    assert.equal(await artifacts.getCheckpoint("example-org", "test-projector", "generation-1"), null);
+  });
 });
