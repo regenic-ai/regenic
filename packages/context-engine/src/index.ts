@@ -3,4 +3,5 @@ export * from "./deterministic-context-engine";
 export * from "./authority-context-source";
 export * from "./personal-context-policy";
 export * from "./context-question-answerer";
+export * from "./context-projection-coordinator";
 export * from "./plugin";

@@ -182,6 +182,15 @@ export interface ContextProjectorRegistry {
   list(): ContextProjector[];
 }
 
+export interface ContextProjectionRunner {
+  project(orgId: string, generation: string): Promise<Array<{
+    projector_id: string;
+    projected_events: number;
+    stored_artifacts: number;
+    checkpoint_sequence: number;
+  }>>;
+}
+
 export interface ContextRetrieverRegistry {
   register(retriever: ContextRetriever): () => void;
   get(id: string): ContextRetriever | undefined;
