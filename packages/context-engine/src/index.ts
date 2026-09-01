@@ -4,4 +4,5 @@ export * from "./authority-context-source";
 export * from "./personal-context-policy";
 export * from "./context-question-answerer";
 export * from "./context-projection-coordinator";
+export * from "./deterministic-thread-summary-projector";
 export * from "./plugin";

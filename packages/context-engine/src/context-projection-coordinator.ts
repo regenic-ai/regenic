@@ -1,6 +1,9 @@
 import {
   canonicalContextJson,
+  bodyTextFromStored,
+  hashCanonicalContext,
   hashContextArtifactInputs,
+  type BlobStore,
   type ContextArtifact,
   type ContextArtifactStore,
   type ContextAuthorityReader,
@@ -8,6 +11,7 @@ import {
   type ContextProjectorRegistry,
   type ContextProjectionRunner,
   type EvidenceReference,
+  type ContextSourceEvent,
 } from "@regenic/domain";
 
 export interface ContextProjectionRun {
@@ -22,6 +26,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     private readonly authority: ContextAuthorityReader,
     private readonly artifacts: ContextArtifactStore,
     private readonly projectors: ContextProjectorRegistry,
+    private readonly blobs?: BlobStore,
   ) {}
 
   async project(orgId: string, generation: string): Promise<ContextProjectionRun[]> {
@@ -41,6 +46,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
       throw new Error("Context projection authority read contains an Event from another organization");
     }
     const evidence = read.events.map(toEvidence);
+    const sourceEvents = await toSourceEvents(read.events, this.blobs);
     const eventsByEvidence = new Map(
       read.events.map((event) => [canonicalContextJson(toEvidence(event)), event]),
     );
@@ -64,12 +70,23 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
       const proposals = await projector.project({
         org_id: orgId,
         generation,
+        read_epoch: read.read_epoch,
+        recorded_at: read.recorded_at,
         evidence: structuredClone(evidence),
+        source_events: structuredClone(sourceEvents),
+        lifecycle_heads: structuredClone(read.lifecycle_heads),
         ...(previous ? { previous_checkpoint: structuredClone(previous) } : {}),
       });
       let storedArtifacts = 0;
       for (const proposal of proposals) {
         const artifact = validateProposal(proposal, projector, orgId, generation, read.recorded_at, eventsByEvidence);
+        if (artifact.attrs !== undefined && artifact.body_hash) {
+          await this.blobs?.put(
+            artifact.body_hash,
+            Buffer.from(canonicalContextJson(artifact.attrs), "utf8"),
+            "application/vnd.regenic.context-artifact+json",
+          );
+        }
         await this.artifacts.putArtifact(artifact);
         storedArtifacts += 1;
       }
@@ -120,7 +137,8 @@ function validateProposal(
     proposal.status !== "proposed" && proposal.status !== "needs_clarify" ||
     proposal.input_refs.length === 0 ||
     proposal.recorded_at !== recordedAt ||
-    proposal.input_hash !== hashContextArtifactInputs(proposal)
+    proposal.input_hash !== hashContextArtifactInputs(proposal) ||
+    proposal.attrs !== undefined && proposal.body_hash !== hashCanonicalContext(proposal.attrs)
   ) {
     throw new Error("Projector returned an invalid context artifact proposal");
   }
@@ -139,4 +157,35 @@ function validateProposal(
     throw new Error("Projector proposal cannot widen or narrow evidence scopes");
   }
   return structuredClone(proposal);
+}
+
+async function toSourceEvents(
+  events: Awaited<ReturnType<ContextAuthorityReader["openContextRead"]>>["events"],
+  blobs?: BlobStore,
+): Promise<ContextSourceEvent[]> {
+  const hashes = [...new Set(events.flatMap((event) =>
+    event.operation !== "tombstone" && event.content_hash ? [event.content_hash] : [],
+  ))];
+  const bodies = blobs ? await blobs.getMany(hashes) : new Map<string, Uint8Array>();
+  if (blobs && hashes.some((hash) => !bodies.has(hash))) {
+    throw new Error("Context projection authority Event references a missing Blob");
+  }
+  return events.map((event) => {
+    const bytes = event.content_hash ? bodies.get(event.content_hash) : undefined;
+    const text = bytes && event.content_media_type
+      ? bodyTextFromStored(bytes, event.content_media_type)
+      : undefined;
+    return {
+      event: {
+        ...toEvidence(event),
+        org_id: event.org_id,
+        ingested_at: event.ingested_at,
+        ...(event.parent_event_id ? { parent_event_id: event.parent_event_id } : {}),
+      },
+      ...(event.thread_id ? { thread_id: event.thread_id } : {}),
+      ...(event.actor_id ? { actor_id: event.actor_id } : {}),
+      required_scope_ids: [...(event.required_scope_ids ?? [])],
+      ...(text === undefined ? {} : { text }),
+    };
+  });
 }

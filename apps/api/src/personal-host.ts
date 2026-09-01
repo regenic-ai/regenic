@@ -3,6 +3,7 @@ import { fsBlobPlugin } from "@regenic/blob-store";
 import {
   contextProjectionCoordinatorPlugin,
   deterministicEventRetrieverPlugin,
+  deterministicThreadSummaryProjectorPlugin,
   personalContextEnginePlugin,
 } from "@regenic/context-engine";
 import { contextRegistriesPlugin, ingestPlugin } from "@regenic/domain";
@@ -29,6 +30,7 @@ export async function createPersonalHost(
     await host.plugin(ingestPlugin);
     await host.plugin(contextRegistriesPlugin);
     await host.plugin(deterministicEventRetrieverPlugin);
+    await host.plugin(deterministicThreadSummaryProjectorPlugin);
     await host.plugin(contextProjectionCoordinatorPlugin);
     await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });
     await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });

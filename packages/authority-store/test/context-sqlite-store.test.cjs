@@ -149,6 +149,126 @@ function bundle(snapshotValue, overrides = {}) {
 }
 
 describe("SQLite context artifact store", () => {
+  it("enqueues committed events atomically and not rolled-back events", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    const first = await store.append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "outbox-1",
+      content_hash: HASH_A,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    await assert.rejects(store.append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "outbox-1",
+      content_hash: HASH_B,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      occurred_at: "2026-08-30T00:01:00.000Z",
+      expected_head_id: null,
+    }));
+
+    const jobs = await store.listContextProjectionJobs("example-org");
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].event_id, first.id);
+    assert.equal(jobs[0].status, "pending");
+    assert.equal(jobs[0].attempts, 0);
+    store.close();
+  });
+
+  it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let store = new SqliteAuthorityStore(path);
+    await store.append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "lease-1",
+      content_hash: HASH_A,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    const [claimed] = await store.claimContextProjectionJobs({
+      owner: "worker-1",
+      now: "2026-08-30T00:01:00.000Z",
+      lease_ms: 60_000,
+      limit: 10,
+    });
+    assert.equal(claimed.attempts, 1);
+    assert.equal((await store.claimContextProjectionJobs({
+      owner: "worker-2",
+      now: "2026-08-30T00:01:30.000Z",
+      lease_ms: 60_000,
+      limit: 10,
+    })).length, 0);
+    assert.equal(await store.completeContextProjectionJob({
+      id: claimed.id,
+      owner: "worker-2",
+      completed_at: "2026-08-30T00:01:30.000Z",
+    }), false);
+    assert.equal(await store.failContextProjectionJob({
+      id: claimed.id,
+      owner: "worker-1",
+      failed_at: "2026-08-30T00:01:40.000Z",
+      next_retry_at: "2026-08-30T00:02:00.000Z",
+      error_code: "projection_failed",
+    }), true);
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    assert.equal((await store.claimContextProjectionJobs({
+      owner: "worker-2",
+      now: "2026-08-30T00:01:59.000Z",
+      lease_ms: 60_000,
+      limit: 10,
+    })).length, 0);
+    const [retried] = await store.claimContextProjectionJobs({
+      owner: "worker-2",
+      now: "2026-08-30T00:02:00.000Z",
+      lease_ms: 60_000,
+      limit: 10,
+    });
+    assert.equal(retried.attempts, 2);
+    assert.equal(await store.completeContextProjectionJob({
+      id: retried.id,
+      owner: "worker-2",
+      completed_at: "2026-08-30T00:02:01.000Z",
+    }), true);
+    assert.equal((await store.listContextProjectionJobs("example-org"))[0].status, "succeeded");
+    store.close();
+  });
+
+  it("serves projection outbox claims through split RPC", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    await store.append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "split-outbox-1",
+      content_hash: HASH_A,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    const jobs = await store.claimContextProjectionJobs({
+      owner: "split-worker",
+      now: "2026-08-30T00:01:00.000Z",
+      lease_ms: 60_000,
+      limit: 1,
+    });
+    assert.equal(jobs.length, 1);
+    assert.equal((await store.listContextProjectionJobs("example-org"))[0].lease_owner, "split-worker");
+    await store.close();
+  });
+
   it("persists immutable artifacts, snapshots, and bundles across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

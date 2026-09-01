@@ -13,6 +13,7 @@ export const sqliteAuthorityPlugin = definePlugin<SqliteAuthorityPluginConfig>({
     ctx.provide("authority", store);
     ctx.provide("context-authority", store);
     ctx.provide("context-artifacts", store);
+    ctx.provide("context-projection-outbox", store);
     ctx.effect(() => () => store.close());
   },
 });
