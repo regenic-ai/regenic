@@ -500,23 +500,14 @@ export function splitInboxHeadViews(
     });
   const workSet = new Set(input.workIds);
   const takenLive = take(input.liveIds);
-  const pinned = uniqueHeadViews([
-    ...take(input.pinnedIds),
-    ...takenLive.filter((item) => item.pinned),
-  ]);
-  const pinnedKeys = new Set(pinned.map(headConversationKey).filter(Boolean));
-  const live = uniqueHeadViews(
-    takenLive.filter((item) => {
-      const key = headConversationKey(item);
-      return (
-        !item.pinned &&
-        !workSet.has(item.thread_id ?? "") &&
-        !(key && pinnedKeys.has(key))
-      );
-    }),
+  const live = takenLive.filter(
+    (item) => !item.pinned && !workSet.has(item.thread_id ?? ""),
   );
   return {
-    pinned,
+    pinned: uniqueHeadViews([
+      ...take(input.pinnedIds),
+      ...takenLive.filter((item) => item.pinned),
+    ]),
     live,
     active_work: uniqueHeadViews([
       ...take(input.workIds),
@@ -556,14 +547,11 @@ function takeRecentHeads<T extends { event: { occurred_at: string; id: string } 
     .map((row) => row.item);
 }
 
-function uniqueHeadViews<T extends {
-  thread_id?: string;
-  event?: { source?: string; external_id?: string; id?: string };
-}>(items: T[]): T[] {
+function uniqueHeadViews<T extends { thread_id?: string }>(items: T[]): T[] {
   const seen = new Set<string>();
   const next: T[] = [];
   for (const item of items) {
-    const id = headConversationKey(item);
+    const id = item.thread_id?.trim();
     if (!id || seen.has(id)) {
       continue;
     }
@@ -571,21 +559,6 @@ function uniqueHeadViews<T extends {
     next.push(item);
   }
   return next;
-}
-
-function headConversationKey(item: {
-  thread_id?: string;
-  event?: { source?: string; external_id?: string; id?: string };
-}): string | undefined {
-  if (item.event?.source && item.event.external_id) {
-    return conversationId(
-      item.event.source,
-      item.event.external_id,
-      item.event.id,
-    );
-  }
-  const id = item.thread_id?.trim();
-  return id ? id : undefined;
 }
 
 function headThreadId(item: {
@@ -2007,7 +1980,7 @@ async function pinnedInboxHeadExtras(
   authority: AuthorityStore,
 ): Promise<InboxItem[]> {
   const hidden = normalizeInboxListView(query.list) === "hidden";
-  const have = new Set(selected.flatMap(inboxItemIdentities));
+  const have = new Set(selected.map(inboxItemThreadId));
   const missing = prefs
     .filter(
       (pref) =>
@@ -2029,15 +2002,6 @@ async function pinnedInboxHeadExtras(
 
 function inboxItemThreadId(item: InboxItem): string {
   return conversationId(item.event.source, item.event.external_id, item.event.id);
-}
-
-function inboxItemIdentities(item: InboxItem): string[] {
-  const ids = [inboxItemThreadId(item)];
-  const stored = item.event.thread_id?.trim();
-  if (stored && !ids.includes(stored)) {
-    ids.push(stored);
-  }
-  return ids;
 }
 
 export function selectInboxRecords<T extends { event: EventRecord }>(

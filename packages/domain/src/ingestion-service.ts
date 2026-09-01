@@ -710,7 +710,9 @@ function eventContextMetadata(
   record: IngestRecord,
 ): Pick<NewEvent, "thread_id" | "actor_id" | "required_scope_ids"> {
   return {
-    thread_id: conversationId(record.source, record.external_id),
+    thread_id: record.thread
+      ? threadIdOf({ source: record.source, target: record.thread.id })
+      : conversationId(record.source, record.external_id),
     actor_id: record.actor.id,
     required_scope_ids: [
       threadIdOf({ source: record.source, target: record.scope.id }),

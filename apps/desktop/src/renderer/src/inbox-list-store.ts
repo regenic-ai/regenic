@@ -1,4 +1,3 @@
-import { inboxThreadKey } from "./inbox.ts";
 import {
   LIST_HEADS_PAGE_SIZE,
   reuseInboxList,
@@ -289,15 +288,8 @@ export class InboxListStore {
     upsertHeads(this.catalog, fact.live);
     upsertHeads(this.catalog, fact.activeWork);
     this.pinnedIds = this.visibleIds(idsOf(fact.pinned));
-    const pinnedSet = new Set(this.pinnedIds);
-    this.liveIds = this.visibleIds(
-      idsOf(fact.live).filter((id) => !pinnedSet.has(id)),
-    );
-    this.workIds = this.visibleIds(
-      idsOf(fact.activeWork).filter(
-        (id) => !pinnedSet.has(id) && !this.liveIds.includes(id),
-      ),
-    );
+    this.liveIds = this.visibleIds(idsOf(fact.live));
+    this.workIds = this.visibleIds(idsOf(fact.activeWork));
     this.nextBefore = fact.nextBefore;
     this.hasOlder = fact.hasOlder;
     const occupied = new Set([
@@ -459,31 +451,31 @@ export class InboxListStore {
 
   private viewItem(item: InboxViewItem): InboxViewItem {
     const id = threadKey(item);
-    const labeled = item.thread_id?.trim();
-    const pref =
-      (id ? this.prefs.get(id) : undefined) ??
-      (labeled && labeled !== id ? this.prefs.get(labeled) : undefined);
-    let face = item;
+    if (!id) {
+      return item;
+    }
+    const pref = this.prefs.get(id);
+    if (!pref) {
+      return item;
+    }
+    if (item.pref_updated_at && item.pref_updated_at > pref.updated_at) {
+      return item;
+    }
     if (
-      pref &&
-      !(item.pref_updated_at && item.pref_updated_at > pref.updated_at) &&
-      (item.title !== pref.title ||
-        item.pinned !== pref.pinned ||
-        item.hidden !== pref.hidden ||
-        item.pref_updated_at !== pref.updated_at)
+      item.title === pref.title &&
+      item.pinned === pref.pinned &&
+      item.hidden === pref.hidden &&
+      item.pref_updated_at === pref.updated_at
     ) {
-      face = {
-        ...item,
-        title: pref.title,
-        pinned: pref.pinned,
-        hidden: pref.hidden,
-        pref_updated_at: pref.updated_at,
-      };
+      return item;
     }
-    if (!id || face.thread_id === id) {
-      return face;
-    }
-    return { ...face, thread_id: id };
+    return {
+      ...item,
+      title: pref.title,
+      pinned: pref.pinned,
+      hidden: pref.hidden,
+      pref_updated_at: pref.updated_at,
+    };
   }
 
   private prunePrefs() {
@@ -516,16 +508,14 @@ export class InboxListStore {
     const workExtra = this.workIds.filter(
       (id) => !this.pinnedIds.includes(id) && !this.liveIds.includes(id),
     );
-    const next = uniqueHeads(
-      [
-        ...takeHeads(this.catalog, this.historyIds),
-        ...takeHeads(this.catalog, this.pinnedIds),
-        ...takeHeads(this.catalog, this.liveIds),
-        ...takeHeads(this.catalog, workExtra),
-      ]
-        .map((item) => this.viewItem(item))
-        .filter((item) => this.onCurrentList(item)),
-    );
+    const next = [
+      ...takeHeads(this.catalog, this.historyIds),
+      ...takeHeads(this.catalog, this.pinnedIds),
+      ...takeHeads(this.catalog, this.liveIds),
+      ...takeHeads(this.catalog, workExtra),
+    ]
+      .map((item) => this.viewItem(item))
+      .filter((item) => this.onCurrentList(item));
     const reuse = reuseInboxList(this.previousItems, next);
     this.previousItems = reuse.items;
     return {
@@ -561,28 +551,8 @@ export function mergeHeadPages(
 }
 
 function threadKey(item: InboxViewItem): string | undefined {
-  return inboxThreadKey(item);
-}
-
-function uniqueHeads(items: InboxViewItem[]): InboxViewItem[] {
-  const byId = new Map<string, InboxViewItem>();
-  const order: string[] = [];
-  for (const item of items) {
-    const id = threadKey(item);
-    if (!id) {
-      continue;
-    }
-    const current = byId.get(id);
-    if (!current) {
-      byId.set(id, item);
-      order.push(id);
-      continue;
-    }
-    if (item.pinned === true && current.pinned !== true) {
-      byId.set(id, item);
-    }
-  }
-  return order.map((id) => byId.get(id) as InboxViewItem);
+  const id = item.thread_id?.trim();
+  return id ? id : undefined;
 }
 
 function idsOf(items: InboxViewItem[]): string[] {
@@ -605,14 +575,9 @@ function upsertHeads(
 ) {
   for (const item of items) {
     const id = threadKey(item);
-    if (!id) {
-      continue;
+    if (id) {
+      catalog.set(id, item);
     }
-    const current = catalog.get(id);
-    if (current?.pinned === true && item.pinned !== true) {
-      continue;
-    }
-    catalog.set(id, item);
   }
 }
 

@@ -150,6 +150,9 @@ export class SlackChannelPollConnector {
       scope_id: this.options.channel_id,
       scope_name: this.options.channel_name,
       type: isThreadReply ? "thread_reply" : "message",
+      thread_id: isThreadReply
+        ? `${this.options.channel_id}:${message.thread_ts}`
+        : undefined,
       parent_external_id: isThreadReply
         ? `${this.options.channel_id}:${message.thread_ts}`
         : undefined,
