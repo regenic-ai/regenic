@@ -70,6 +70,7 @@ export * from "./specification";
 export * from "./recipe-trigger";
 export * from "./job-control";
 export * from "./attention";
+export * from "./personal-events";
 export * from "./executor-copy";
 export * from "./executor";
 export * from "./executor-installation";

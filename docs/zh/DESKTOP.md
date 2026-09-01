@@ -57,7 +57,8 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/v1/me/inbox` | 默认显示列表（桌上的活且未 hidden）；`list=hidden` 为不显示的会话。可选 `body_text`。`heads=1` 每个会话最后一条可见消息的短脸，不含附件；可加 `limit` / `before` / `before_id` 按会话脸分页（不传 `limit` 仍一次返回全部，兼容旧客户端）。`split=1` 时 heads 回 `{ pinned, live, active_work, next_before, has_older }`：置顶和进行中工单不进 `live`，翻页游标只从 `live` 出。`changed=1&since_digest=` 只回 digest 之后碰到的脸，并带 `patch` / `gone`。`thread_id` 只返回该会话全文；`since` / `since_id` 做增量。每项带 `prompts`、`unread`、`unread_count`、`record_class`、`thread_facet`、`attention`、`work`、`hidden`；打开的线程另带 `can_receipt` / `receipt` |
+| GET | `/v1/me/inbox` | 默认显示列表（桌上的活且未 hidden）；`list=hidden` 为不显示的会话。可选 `body_text`。`heads=1` 每个会话最后一条可见消息的短脸，不含附件；可加 `limit` / `before` / `before_id` 按会话脸分页（不传 `limit` 仍一次返回全部，兼容旧客户端）。`split=1` 时 heads 回 `{ pinned, live, active_work, next_before, has_older }`：置顶和进行中工单不进 `live`，翻页游标只从 `live` 出。`changed=1&since_digest=` 只回 digest 之后碰到的脸，并带 `patch` / `gone`。`thread_id` 只返回该会话全文；`since` / `since_id` 做增量。`live=1` 才走渠道 overlay（已读回执等慢路径）；heads 与打开线程的默认读法只查 SQLite。每项带 `prompts`、`unread`、`unread_count`、`record_class`、`thread_facet`、`attention`、`work`、`hidden`；打开的线程另带 `can_receipt` / `receipt`。见下节 **inbox 读请求的副作用** |
+| GET | `/v1/me/events` | **应用内 SSE**（不是渠道 webhook）。事件：`inbox.digest`（`{ digest }`，与 `/v1/me/engine` 的 `inbox_digest` 同形）、`thread.updated`（`{ thread_id }`，connector hydrate 或 ingest 后）。30s heartbeat。桌面连上后列表轮询退到 60s；断线指数退避重连 |
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
 | GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录、已安装执行器与执行器种类目录。目录项带 `docs`（`href` / `href_zh` 指向 GitHub 规范页）。`inbox_count` 是显示列表里的会话数。`detail=0` 跳过 catalog 探测和 attempt 列表，仍带 `inbox_digest`（含最新 Event、conversation prefs；有 live surface 时追加 `&s=`）以及执行器安装 |
 | GET | `/v1/me/store` | 当前内核本机数据盘点：会话 / 消息 / 工单 / 附件 / 规则 / 连接器 / 执行器数量 |
@@ -71,6 +72,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | POST | `/v1/me/conversations` | 让连接器开一条新会话。省略 `installation_id` 时取第一条 `can_create` 的安装。驱动 `create: false` 时 501 |
 | POST | `/v1/me/conversations/prefs` | 维护会话标题、置顶和不显示。`thread_id` 必填；`title` 空字符串清除自定义标题，回到自动标题；`pinned` / `hidden` 可单独改。人点「不显示」写 `hidden=true`（reason=`human`）。inbox 项带回 `thread_id` / `title` / `pinned` / `hidden` / `pref_updated_at` |
 | POST | `/v1/me/conversations/attention` | 写本地已读游标；驱动声明了 `attention` 再 ack 来源 |
+| POST | `/v1/me/conversations/focus` | **调度 connector 副作用**（不读 SQLite）：`hydrate` 冷开 hydrate、`live` 交互 focus（回执 overlay）、`pull_older`+`before` 上滚补历史、默认 `present` 记人在看。见下节 |
 | POST | `/v1/me/conversations/prompts` | 回答未决 Prompt。禁止再走 egress。`not-pending` 视为已解决 |
 | GET/POST | `/v1/me/recipes` | 列出 / 创建 Recipe |
 | POST | `/v1/me/recipes/:id` | 更新 Recipe |
@@ -95,6 +97,21 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |
 
 不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 3 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。人在操作时同 tick 串行、只跟少量会话的新消息；空闲时再补一页历史。流上的 `pace` 由连接器声明：飞书追上后约 15 秒再扫，DSH 不写 `pace`，仍每 tick 跟。对话窗发送后会更快跟当前 DSH session。引擎 Sync 只是漏了再追平。凭证只读环境变量。
+
+### inbox 读请求的副作用
+
+`GET /v1/me/inbox` **只读 SQLite**（及 `live=1` 时的 overlay），无任何 connector 调度。
+
+| 操作 | 路径 |
+| --- | --- |
+| 打开 / 轮询线程正文 | `GET /v1/me/inbox?thread_id=` |
+| 上滚更早消息 | `POST /v1/me/conversations/focus` `{ pull_older: true, before, before_id? }`，再 `GET …&before=` |
+| 已读回执 overlay | `POST …/focus` `{ live: true }` 后 `GET …&live=1` |
+| 冷开 hydrate | `POST …/focus` `{ hydrate: true }` |
+| 人在看（connector pacing） | `POST …/focus`（默认 `present: true`） |
+| 列表 heads / patch | `GET …&heads=1` 或 `changed=1` — 无 connector 副作用；默认不调渠道 `read_status` |
+
+渠道入站仍是 **poll**（约 3s tick），不是 Feishu/Slack webhook。SSE 只在内核与桌面之间推送 digest / thread 变更；桌面连上 SSE 后跳过对已打开线程的重复 poll，改由 `thread.updated` 驱动增量。
 
 ## 连接器：同步范围与前置步骤
 
@@ -131,4 +148,4 @@ pnpm dev:desktop
 
 ## 本版不做
 
-Slack 回写、OAuth 授权流、标准编辑、渠道 webhook/push、Windows/Linux 打包。渠道目前是 pull 轮询，不是事件推送。
+Slack 回写、OAuth 授权流、标准编辑、**渠道 webhook/push**、Windows/Linux 打包。渠道入站目前是 **pull 轮询**，不是事件推送；桌面与内核之间另有 **SSE**（`/v1/me/events`）做应用内实时，见上表。

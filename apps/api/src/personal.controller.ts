@@ -7,25 +7,27 @@ import {
   HttpException,
   HttpStatus,
   Inject,
+  MessageEvent,
   NotFoundException,
   Param,
   Post,
   Query,
   Req,
+  Sse,
   UseGuards,
   forwardRef,
 } from "@nestjs/common";
 import type { Request } from "express";
+import { Observable } from "rxjs";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
+import { PersonalConnectorError, PersonalConnectorService } from "./personal-connector.service";
 import {
-  PersonalConnectorError,
-  PersonalConnectorService,
-  shouldHydrateOpenedInbox,
-  shouldNoteHumanInbox,
-  shouldPullOlderInbox,
-  shouldWaitForOpenedHydrate,
-} from "./personal-connector.service";
+  conversationFocusThreadId,
+  shouldDrainMediaFocus,
+  shouldMarkHumanPresent,
+  shouldPullOlderFocus,
+} from "./personal-conversation-focus";
 import { noteHumanActivity } from "./personal-human-pace";
 import {
   PersonalInboxService,
@@ -49,6 +51,9 @@ import {
   PersonalWorkService,
   type RecipeInput,
 } from "./personal-work.service";
+import { PersonalEventsService } from "./personal-events.service";
+
+const EVENTS_HEARTBEAT_MS = 30_000;
 
 @Controller("v1/me")
 @UseGuards(PersonalApiGuard)
@@ -70,7 +75,25 @@ export class PersonalController {
     private readonly whatsapp: PersonalWhatsAppImportService,
     @Inject(PersonalPluginService)
     private readonly plugins: PersonalPluginService,
+    @Inject(PersonalEventsService)
+    private readonly events: PersonalEventsService,
   ) {}
+
+  @Sse("events")
+  streamEvents(): Observable<MessageEvent> {
+    return new Observable((subscriber) => {
+      const heartbeat = setInterval(() => {
+        subscriber.next({ data: "heartbeat" });
+      }, EVENTS_HEARTBEAT_MS);
+      const off = this.events.subscribe((type, payload) => {
+        subscriber.next({ type, data: payload });
+      });
+      return () => {
+        clearInterval(heartbeat);
+        off();
+      };
+    });
+  }
 
   @Get("inbox")
   listInbox(
@@ -105,27 +128,50 @@ export class PersonalController {
       list: list?.trim() || membership?.trim() || undefined,
       locale: requestLocale(locale, acceptLanguage),
     };
+    return this.guard(async () => this.inbox.listInbox(query));
+  }
+
+  @Post("conversations/focus")
+  focusConversation(
+    @Body()
+    body:
+      | {
+          thread_id?: string;
+          hydrate?: boolean;
+          live?: boolean;
+          pull_older?: boolean;
+          before?: string;
+          before_id?: string;
+          media?: boolean;
+          present?: boolean;
+        }
+      | undefined,
+  ) {
+    const input = body ?? {};
+    if (shouldMarkHumanPresent(input)) {
+      noteHumanActivity();
+    }
+    const threadId = conversationFocusThreadId(input);
+    if (!threadId) {
+      throw new HttpException(
+        { error: { code: "invalid_request", message: "thread_id is required" } },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
     return this.guard(async () => {
-      if (shouldNoteHumanInbox(query)) {
-        noteHumanActivity();
+      if (input.live) {
+        this.connectors.noteInteractiveFocus(threadId);
       }
-      const local = await this.inbox.listInbox(query);
-      if (
-        Array.isArray(local) &&
-        shouldPullOlderInbox(query) &&
-        query.thread_id
-      ) {
-        void this.connectors.pullOlderForThread(query.thread_id);
+      if (input.hydrate) {
+        void this.connectors.hydrateOpenedThread(threadId);
       }
-      if (
-        Array.isArray(local) &&
-        shouldHydrateOpenedInbox(query) &&
-        query.thread_id &&
-        shouldWaitForOpenedHydrate(local.length)
-      ) {
-        void this.connectors.hydrateOpenedThread(query.thread_id);
+      if (shouldPullOlderFocus(input)) {
+        void this.connectors.pullOlderForThread(threadId);
       }
-      return local;
+      if (shouldDrainMediaFocus(input)) {
+        void this.connectors.drainMediaForThread(threadId);
+      }
+      return { accepted: true as const, thread_id: threadId };
     });
   }
 

@@ -25,6 +25,7 @@ import {
   settleIsolated,
   SyncEngine,
   loadSyncProgress,
+  scopeSyncCatalogMembers,
   withDeadline,
   type ChannelDriver,
   type ConnectorInstallation,
@@ -71,6 +72,13 @@ import {
 } from "./personal-stream-pace";
 import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import {
+  shouldHydrateOpenedInbox,
+} from "./personal-inbox-query";
+import {
+  shouldPullOlderFocus,
+} from "./personal-conversation-focus";
+import { catalogMembersFromStreams } from "./connector-sync-members";
 
 export { PersonalConnectorError } from "./personal-errors";
 
@@ -138,7 +146,14 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly streamErrors = new Map<string, string>();
   private readonly streamPulling = new Set<string>();
   private readonly streamPullingHistory = new Set<string>();
-  private readonly hydrating = new Map<string, Promise<void>>();
+  private focusSlot: {
+    threadId: string;
+    generation: number;
+    kind: "hydrate" | "older" | "media" | "receipt";
+    abort: AbortController;
+    promise: Promise<void>;
+  } | null = null;
+  private focusGeneration = 0;
   private readonly hydrateCooldown = new Map<string, number>();
   private lastCatchUpCursor: string | undefined;
   private lastSeedCursor: string | undefined;
@@ -405,11 +420,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (!id || !shouldHydrateOpenedInbox({ thread_id: id })) {
       return;
     }
-    preferThread(id);
-    const existing = this.hydrating.get(id);
-    if (existing) {
+    if (
+      this.focusSlot?.threadId === id &&
+      this.focusSlot.kind === "hydrate" &&
+      !this.focusSlot.abort.signal.aborted
+    ) {
       try {
-        await Promise.race([existing, delay(HYDRATE_WAIT_MS)]);
+        await Promise.race([this.focusSlot.promise, delay(HYDRATE_WAIT_MS)]);
       } catch {
         return;
       }
@@ -418,12 +435,46 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if ((this.hydrateCooldown.get(id) ?? 0) > Date.now()) {
       return;
     }
-    const job = this.runHydrateOpenedThread(id).finally(() => {
-      this.hydrating.delete(id);
-    });
-    this.hydrating.set(id, job);
+    const job = this.takeFocus(id, "hydrate", (signal, generation) =>
+      this.runHydrateOpenedThread(id, signal, generation),
+    );
     try {
       await Promise.race([job, delay(HYDRATE_WAIT_MS)]);
+    } catch {
+      return;
+    }
+  }
+
+  /**
+   * Mark the interactive thread without starting work.
+   * Cancels hydrate/older jobs for any other thread so live receipts can proceed.
+   */
+  noteInteractiveFocus(threadId: string): void {
+    const id = threadId.trim();
+    if (!id) {
+      return;
+    }
+    preferThread(id);
+    if (this.focusSlot && this.focusSlot.threadId !== id) {
+      this.focusSlot.abort.abort();
+      this.focusSlot = null;
+    }
+  }
+
+  async drainMediaForThread(threadId: string): Promise<void> {
+    if (this.maintenanceHold) {
+      return;
+    }
+    const id = threadId.trim();
+    if (!id) {
+      return;
+    }
+    noteHumanActivity();
+    preferThread(id);
+    try {
+      await this.takeFocus(id, "media", (signal, generation) =>
+        this.runDrainMediaThread(id, signal, generation),
+      );
     } catch {
       return;
     }
@@ -434,28 +485,76 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return;
     }
     const id = threadId.trim();
-    if (!id || !shouldPullOlderInbox({ thread_id: id, before: "1" })) {
+    if (!id || !shouldPullOlderFocus({ thread_id: id, pull_older: true, before: "1" })) {
       return;
     }
     noteHumanActivity();
     preferThread(id);
-    const existing = this.hydrating.get(id);
-    if (existing) {
+    if (
+      this.focusSlot?.threadId === id &&
+      this.focusSlot.kind === "hydrate" &&
+      !this.focusSlot.abort.signal.aborted
+    ) {
       try {
-        await Promise.race([existing, delay(HYDRATE_WAIT_MS)]);
+        await Promise.race([this.focusSlot.promise, delay(HYDRATE_WAIT_MS)]);
       } catch {
         return;
       }
     }
     try {
-      await this.runPullOlderThread(id);
+      await this.takeFocus(id, "older", (signal, generation) =>
+        this.runPullOlderThread(id, signal, generation),
+      );
     } catch {
       return;
     }
   }
 
-  private async runPullOlderThread(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
+  private takeFocus(
+    threadId: string,
+    kind: "hydrate" | "older" | "media" | "receipt",
+    work: (signal: AbortSignal, generation: number) => Promise<void>,
+  ): Promise<void> {
+    if (
+      this.focusSlot &&
+      this.focusSlot.threadId === threadId &&
+      this.focusSlot.kind === kind &&
+      !this.focusSlot.abort.signal.aborted
+    ) {
+      return this.focusSlot.promise;
+    }
+    if (this.focusSlot) {
+      this.focusSlot.abort.abort();
+      this.focusSlot = null;
+    }
+    preferThread(threadId);
+    const generation = ++this.focusGeneration;
+    const abort = new AbortController();
+    const promise = work(abort.signal, generation).finally(() => {
+      if (this.focusSlot?.generation === generation) {
+        this.focusSlot = null;
+      }
+    });
+    this.focusSlot = {
+      threadId,
+      generation,
+      kind,
+      abort,
+      promise,
+    };
+    return promise;
+  }
+
+  private focusAlive(generation: number, signal: AbortSignal): boolean {
+    return !signal.aborted && this.focusSlot?.generation === generation;
+  }
+
+  private async runPullOlderThread(
+    threadId: string,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<void> {
+    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
       return;
     }
     let thread: ConversationThread;
@@ -467,6 +566,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installations = await store.listInstallations(this.runtime.orgId());
+    if (!this.focusAlive(generation, signal)) {
+      return;
+    }
     for (const installation of installations) {
       if (installation.status !== "enabled") {
         continue;
@@ -486,6 +588,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       } catch {
         continue;
       }
+      if (!this.focusAlive(generation, signal)) {
+        return;
+      }
       const key = streamPaceKey(installation.id, stream.stream_key);
       this.rememberStreamMeta(key, stream);
       this.streamPulling.add(key);
@@ -495,20 +600,24 @@ export class PersonalConnectorService implements OnModuleDestroy {
         const pages = await this.exclusiveStream(
           installation.id,
           stream.stream_key,
-          () =>
-            runInSyncLane("interactive", () =>
+          () => {
+            if (!this.focusAlive(generation, signal)) {
+              return Promise.resolve([]);
+            }
+            return runInSyncLane("interactive", () =>
               pollStream(
                 host,
                 store,
                 installation,
                 stream,
                 1,
-                { older: true, media: false },
+                { older: true },
                 this.quota,
               ),
-            ),
+            );
+          },
         );
-        if (pages === undefined) {
+        if (pages === undefined || !this.focusAlive(generation, signal)) {
           return;
         }
         this.rememberStreamPace({
@@ -535,8 +644,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
-  private async runHydrateOpenedThread(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
+  private async runHydrateOpenedThread(
+    threadId: string,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<void> {
+    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
       return;
     }
     let thread: ConversationThread;
@@ -548,6 +661,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installations = await store.listInstallations(this.runtime.orgId());
+    if (!this.focusAlive(generation, signal)) {
+      return;
+    }
     if (!this.drivers.hydrateOnOpen(installations, thread)) {
       return;
     }
@@ -573,6 +689,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       } catch {
         continue;
       }
+      if (!this.focusAlive(generation, signal)) {
+        return;
+      }
       const key = streamPaceKey(installation.id, stream.stream_key);
       this.rememberStreamMeta(key, stream);
       this.streamPulling.add(key);
@@ -581,24 +700,25 @@ export class PersonalConnectorService implements OnModuleDestroy {
         const pages = await this.exclusiveStream(
           installation.id,
           stream.stream_key,
-          () =>
-            runInSyncLane("interactive", () =>
+          () => {
+            if (!this.focusAlive(generation, signal)) {
+              return Promise.resolve([]);
+            }
+            return runInSyncLane("interactive", () =>
               pollStream(
                 host,
                 store,
                 installation,
                 stream,
                 1,
-                {
-                  older: false,
-                  media: false,
-                },
+                { older: false },
                 this.quota,
               ),
-            ),
+            );
+          },
           { skipIfBusy: false },
         );
-        if (pages === undefined) {
+        if (pages === undefined || !this.focusAlive(generation, signal)) {
           return;
         }
         this.rememberStreamPace({
@@ -608,11 +728,104 @@ export class PersonalConnectorService implements OnModuleDestroy {
           idleMs: streamIdleMs(stream),
         });
         this.hydrateCooldown.set(threadId, Date.now() + HYDRATE_COOLDOWN_MS);
+        this.inbox.publishThreadUpdated(threadId);
+        void this.inbox.publishInboxDigest();
       } catch (error) {
         this.rememberStreamPace({
           key,
           pages: [],
           pagesBudget: 1,
+          idleMs: streamIdleMs(stream),
+          error,
+        });
+        throw error;
+      } finally {
+        this.streamPulling.delete(key);
+        this.publishStreams();
+      }
+      return;
+    }
+  }
+
+  private async runDrainMediaThread(
+    threadId: string,
+    signal: AbortSignal,
+    generation: number,
+  ): Promise<void> {
+    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
+      return;
+    }
+    let thread: ConversationThread;
+    try {
+      thread = parseConversationThread(threadId);
+    } catch {
+      return;
+    }
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installations = await store.listInstallations(this.runtime.orgId());
+    if (!this.focusAlive(generation, signal)) {
+      return;
+    }
+    for (const installation of installations) {
+      if (installation.status !== "enabled") {
+        continue;
+      }
+      const driver = this.drivers.get(installation.connector_type);
+      if (!driver?.matchesThread(installation, thread)) {
+        continue;
+      }
+      let stream: ConnectorStream;
+      try {
+        stream = await driver.resolveThreadStream(
+          installation,
+          thread,
+          asConnectorHost(host),
+          process.env,
+        );
+      } catch {
+        continue;
+      }
+      if (!this.focusAlive(generation, signal)) {
+        return;
+      }
+      const key = streamPaceKey(installation.id, stream.stream_key);
+      this.rememberStreamMeta(key, stream);
+      this.streamPulling.add(key);
+      this.publishStreams();
+      try {
+        const pages = await this.exclusiveStream(
+          installation.id,
+          stream.stream_key,
+          () => {
+            if (!this.focusAlive(generation, signal)) {
+              return Promise.resolve([]);
+            }
+            return runInSyncLane("interactive", () =>
+              pollStream(host, store, installation, stream, 3, { media: true }, this.quota),
+            );
+          },
+          { skipIfBusy: false },
+        );
+        if (pages === undefined || !this.focusAlive(generation, signal)) {
+          return;
+        }
+        const accepted = summarizeRuns(pages).accepted_count;
+        this.rememberStreamPace({
+          key,
+          pages,
+          pagesBudget: 3,
+          idleMs: streamIdleMs(stream),
+        });
+        if (accepted > 0) {
+          this.inbox.publishThreadUpdated(threadId);
+          void this.inbox.publishInboxDigest();
+        }
+      } catch (error) {
+        this.rememberStreamPace({
+          key,
+          pages: [],
+          pagesBudget: 3,
           idleMs: streamIdleMs(stream),
           error,
         });
@@ -1024,7 +1237,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       this.ticking ||
       this.inflight.size > 0 ||
       this.streamLocks.size > 0 ||
-      this.hydrating.size > 0
+      this.focusSlot != null
     ) {
       if (Date.now() - started > timeoutMs) {
         throw storeBusyError();
@@ -1035,6 +1248,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   private resetLivePullState(): void {
     const interval = pullStatus.interval_ms;
+    if (this.focusSlot) {
+      this.focusSlot.abort.abort();
+      this.focusSlot = null;
+    }
     this.streamIdleUntil.clear();
     this.streamCatchingUp.clear();
     this.streamSeeded.clear();
@@ -1208,6 +1425,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
           cursorStates.set(stream.stream_key, cursor?.cursor);
         }),
       );
+      const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
+      const mountedStreamKeys = new Set(streams.map((stream) => stream.stream_key));
+      const planMembers = scopeSyncCatalogMembers(
+        catalog.members,
+        mountedStreamKeys,
+        fallbackMembers,
+      );
       const work = await engine.plan({
         installation_id: installation.id,
         preferredThreadId: preferredThreadId(),
@@ -1215,7 +1439,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         rotateFrom: this.lastCatchUpCursor,
         rotateSeedFrom: this.lastSeedCursor,
         pages: options?.capCatchUp ? DEFAULT_MAX_PAGES : maxPages,
-        fallbackMembers: catalogMembersFromStreams(installation.id, streams),
+        members: planMembers,
+        fallbackMembers,
         cursorStates,
       });
       const streamByKey = new Map(
@@ -1351,6 +1576,28 @@ export class PersonalConnectorService implements OnModuleDestroy {
         pages: runs.length,
         catchingUp: this.streamCatchingUp.size,
       });
+      if (summary.accepted_count > 0) {
+        void this.inbox.publishInboxDigest();
+        const notifyAccepted = (
+          items: Array<{ stream: ConnectorStream }>,
+          batches: Array<{ pages: ConnectorPollRunResult[] }>,
+        ) => {
+          for (let index = 0; index < items.length; index += 1) {
+            const threadId = items[index]?.stream.thread_id;
+            const batch = batches[index];
+            if (
+              !threadId ||
+              !batch ||
+              summarizeRuns(batch.pages).accepted_count === 0
+            ) {
+              continue;
+            }
+            this.inbox.publishThreadUpdated(threadId);
+          }
+        };
+        notifyAccepted(textItems, textBatches);
+        notifyAccepted(mediaItems, mediaBatches);
+      }
       this.publishStreams();
       return {
         installation_id: installation.id,
@@ -1747,9 +1994,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
     store: ConnectorRuntimeStore,
     installation: ConnectorInstallation,
   ): Promise<EngineInstallationView> {
+    const host = this.runtime.requireHost();
+    const streams = host.get("connectors").listStreams(installation.id);
+    const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
     const [attempt, sync] = await Promise.all([
       store.latestAttempt(installation.id),
-      loadSyncProgress(store, installation.id),
+      loadSyncProgress(store, installation.id, {
+        mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
+        fallbackMembers,
+      }),
     ]);
     return toInstallationView(installation, attempt, this.drivers, DEFAULT_COPY_LOCALE, {
       sync,
@@ -1963,22 +2216,6 @@ function threadsFromCatalog(
   });
 }
 
-function catalogMembersFromStreams(
-  installationId: string,
-  streams: readonly ConnectorStream[],
-): SyncCatalogMember[] {
-  const now = new Date().toISOString();
-  return streams.map((stream) => ({
-    installation_id: installationId,
-    stream_key: stream.stream_key,
-    thread_id: stream.thread_id,
-    label: stream.label,
-    generation: 1,
-    discovered_at: now,
-    last_seen_at: now,
-  }));
-}
-
 async function rememberEngineResult(
   engine: SyncEngine,
   installationId: string,
@@ -2067,39 +2304,3 @@ function summarizeRuns(runs: ConnectorPollRunResult[]): {
   );
 }
 
-export function shouldHydrateOpenedInbox(query: {
-  thread_id?: string;
-  since?: string;
-  before?: string;
-  heads?: boolean;
-  live?: boolean;
-}): boolean {
-  return Boolean(
-    query.thread_id && !query.since && !query.before && !query.heads && !query.live,
-  );
-}
-
-export function shouldWaitForOpenedHydrate(localCount: number): boolean {
-  return localCount === 0;
-}
-
-/** Scroll-up is the only inbox query that asks the connector for older pages. */
-export function shouldPullOlderInbox(query: {
-  thread_id?: string;
-  since?: string;
-  before?: string;
-  heads?: boolean;
-}): boolean {
-  return Boolean(
-    query.thread_id && query.before && !query.since && !query.heads,
-  );
-}
-
-export function shouldNoteHumanInbox(query: {
-  thread_id?: string;
-  since?: string;
-  heads?: boolean;
-  live?: boolean;
-}): boolean {
-  return Boolean(query.thread_id && !query.since && !query.heads && !query.live);
-}

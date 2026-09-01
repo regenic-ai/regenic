@@ -31,9 +31,15 @@ import { normalizeListTitle } from "./types";
 
 let currentOrigin = window.regenic?.apiOrigin ?? "http://127.0.0.1:4370";
 
+type ApiOriginListener = (origin: string) => void;
+const apiOriginListeners = new Set<ApiOriginListener>();
+
 if (window.regenic?.onApiOriginChanged) {
   window.regenic.onApiOriginChanged((origin) => {
     currentOrigin = origin;
+    for (const listener of apiOriginListeners) {
+      listener(origin);
+    }
   });
 }
 
@@ -42,6 +48,33 @@ function origin(): string {
 }
 
 const KERNEL_FETCH_MS = 120_000;
+/** Hard ceiling so inbox fetches cannot pin a localhost connection forever. */
+const INBOX_FETCH_MS = 30_000;
+
+export type InboxFetchInit = {
+  signal?: AbortSignal;
+  /** Overrides the default inbox ceiling when set. */
+  timeoutMs?: number;
+};
+
+export function isInboxAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.name === "TimeoutError")
+  );
+}
+
+function inboxRequestSignal(init?: InboxFetchInit): AbortSignal {
+  const timeoutMs = init?.timeoutMs ?? INBOX_FETCH_MS;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!init?.signal) {
+    return timeout;
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any([init.signal, timeout]);
+  }
+  return init.signal.aborted ? init.signal : timeout;
+}
 
 export function isKernelTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -95,6 +128,15 @@ async function kernelFetch(path: string, init?: RequestInit): Promise<Response> 
 
 export function currentApiOrigin(): string {
   return currentOrigin;
+}
+
+export function subscribeApiOriginChanged(
+  listener: ApiOriginListener,
+): () => void {
+  apiOriginListeners.add(listener);
+  return () => {
+    apiOriginListeners.delete(listener);
+  };
 }
 
 const emptyDataDirectory: KernelSettingsView["dataDirectory"] = {
@@ -207,8 +249,9 @@ export async function fetchInbox(
     limit?: number;
     list?: "shown" | "hidden";
   } = {},
+  init?: InboxFetchInit,
 ): Promise<InboxViewItem[]> {
-  const response = await fetchInboxResponse(query);
+  const response = await fetchInboxResponse(query, init);
   const items = (await response.json()) as InboxViewItem[];
   if (!Array.isArray(items)) {
     throw new Error("inbox");
@@ -224,13 +267,18 @@ export async function fetchInboxHeads(
     list?: "shown" | "hidden";
     changed?: boolean;
     since_digest?: string;
+    live?: boolean;
   } = {},
+  init?: InboxFetchInit,
 ): Promise<InboxHeadsPage> {
-  const response = await fetchInboxResponse({
-    ...query,
-    heads: true,
-    split: true,
-  });
+  const response = await fetchInboxResponse(
+    {
+      ...query,
+      heads: true,
+      split: true,
+    },
+    init,
+  );
   const page = (await response.json()) as Partial<InboxHeadsPage>;
   if (!page || !Array.isArray(page.live)) {
     throw new Error("inbox heads");
@@ -269,6 +317,7 @@ async function fetchInboxResponse(
     limit?: number;
     list?: "shown" | "hidden";
   },
+  init?: InboxFetchInit,
 ): Promise<Response> {
   const params = new URLSearchParams();
   if (query.since) {
@@ -310,7 +359,9 @@ async function fetchInboxResponse(
   params.set("locale", activeLocale());
   const encoded = params.toString();
   const suffix = encoded ? `?${encoded}` : "";
-  const response = await fetch(`${origin()}/v1/me/inbox${suffix}`);
+  const response = await fetch(`${origin()}/v1/me/inbox${suffix}`, {
+    signal: inboxRequestSignal(init),
+  });
   if (!response.ok) {
     throw new Error(`inbox ${response.status}`);
   }
@@ -706,6 +757,34 @@ export async function createConversation(input: {
     );
   }
   return body as CreatedConversation;
+}
+
+export async function focusConversation(input: {
+  thread_id: string;
+  hydrate?: boolean;
+  live?: boolean;
+  pull_older?: boolean;
+  before?: string;
+  before_id?: string;
+  media?: boolean;
+  present?: boolean;
+}): Promise<{ accepted: true; thread_id: string }> {
+  const response = await fetch(`${origin()}/v1/me/conversations/focus`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await response.json()) as
+    | { accepted: true; thread_id: string }
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `conversation focus ${response.status}`,
+    );
+  }
+  return body as { accepted: true; thread_id: string };
 }
 
 export async function updateConversationPrefs(input: {

@@ -180,8 +180,8 @@ describe("reading messages", () => {
 });
 
 describe("thread pane empty copy", () => {
-  it("says opening while the kernel is still reading the thread", () => {
-    assert.equal(threadPaneEmptyCopy(true), "Opening conversation…");
+  it("says syncing while the local page is still settling", () => {
+    assert.equal(threadPaneEmptyCopy(true), "Syncing messages…");
     assert.equal(
       threadPaneEmptyCopy(false),
       "This conversation has no displayable messages.",
@@ -195,7 +195,7 @@ describe("thread pane empty copy", () => {
   it("names a recent window instead of the whole history", () => {
     assert.equal(
       threadLoadedCountCopy({ opening: true, loaded: 0, hasOlder: false }),
-      "Opening…",
+      "Syncing…",
     );
     assert.equal(
       threadLoadedCountCopy({ opening: true, loaded: 1, hasOlder: false }),

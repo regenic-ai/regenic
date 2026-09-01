@@ -86,6 +86,53 @@ describe("Feishu receipts", () => {
     assert.equal(calls[0].command[calls[0].command.indexOf("--as") + 1], "user");
   });
 
+  it("reads message users over HTTP when a user token is available", async () => {
+    const spawned = [];
+    const fetched = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn(input) {
+        spawned.push(input);
+        throw new Error("CLI should not run when HTTP works");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url, init) {
+        fetched.push({ url: String(url), init });
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: {
+                items: [{ user_id: "ou_http", timestamp: "2026-08-24T12:00:00.000Z" }],
+              },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const users = await client.readMessageUsers("om_1");
+    assert.equal(spawned.length, 0);
+    assert.equal(users.items[0].user_id, "ou_http");
+    assert.match(fetched[0].url, /\/open-apis\/im\/v1\/messages\/om_1\/read_users/);
+    assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
+  });
+
   it("falls back to user CLI read_users when the shortcut is missing", async () => {
     const calls = [];
     const client = new LarkCliClient({

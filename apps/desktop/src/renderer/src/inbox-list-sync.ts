@@ -33,6 +33,8 @@ export type InboxHeadsRequest = {
   limit: number;
   changed?: boolean;
   since_digest?: string;
+  /** Source read_status overlay; only full refreshes should ask for it. */
+  live?: boolean;
 };
 
 export function decideInboxSync(input: {
@@ -85,6 +87,9 @@ export function inboxHeadsRequest(input: {
   if (input.decision.mode === "patch" && input.previousDigest) {
     request.changed = true;
     request.since_digest = input.previousDigest;
+  }
+  if (input.decision.mode === "full") {
+    request.live = true;
   }
   return request;
 }

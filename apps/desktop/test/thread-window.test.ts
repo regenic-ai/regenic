@@ -16,6 +16,7 @@ import {
   mergeRecentInbox,
   olderHeadsCursor,
   olderInboxCursor,
+  collapseSourceRevisions,
   reuseInboxItems,
   reuseInboxList,
   patchInboxWork,
@@ -242,6 +243,56 @@ describe("thread window", () => {
     const next = groupInboxThreads(appended, previous, appendedList);
     assert.equal(next.find((thread) => thread.id === "feishu:oc_1"), previous[0]);
     assert.equal(next.find((thread) => thread.id === "feishu:oc_1")?.messages[0], first[0]);
+  });
+
+  it("refreshes image previews when blob data arrives on the same event", () => {
+    const first = [
+      {
+        ...item("a", "photo"),
+        attachments: [{ filename: "image.png", media_type: "image/png" }],
+      },
+    ];
+    const filled = [
+      {
+        ...first[0],
+        event: { ...first[0].event },
+        attachments: [
+          {
+            filename: "image.png",
+            media_type: "image/png",
+            data_base64: "abc",
+          },
+        ],
+      },
+    ];
+    const reused = reuseInboxItems(first, filled);
+    assert.equal(reused[0], filled[0]);
+  });
+
+  it("drops older revise rows that share a source external id", () => {
+    const placeholder = item("a", "photo");
+    const revised = {
+      ...placeholder,
+      event: {
+        ...placeholder.event,
+        id: "a-revise",
+        operation: "revise" as const,
+        content_hash: "hash-a-revise",
+        ingested_at: "2026-08-24T00:00:00.000Z",
+      },
+      attachments: [
+        {
+          filename: "image.png",
+          media_type: "image/png",
+          data_base64: "abc",
+        },
+      ],
+    };
+    const collapsed = collapseSourceRevisions([placeholder, revised]);
+    assert.deepEqual(
+      collapsed.map((entry) => entry.event.id),
+      ["a-revise"],
+    );
   });
 
   it("merges a delta by replacing matching ids and appending the rest", () => {

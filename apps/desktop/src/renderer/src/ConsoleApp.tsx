@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  liveReceiptFocusRequest,
+  mediaDrainFocusRequest,
+  openThreadFocusRequest,
+  pullOlderFocusRequest,
+} from "../../shared/conversation-focus.ts";
+import {
   ackConversationAttention,
   createConversation,
   currentApiOrigin,
@@ -7,7 +13,9 @@ import {
   fetchInbox,
   fetchInboxHeads,
   fetchUiPrefs,
+  focusConversation,
   dismissWorkItem,
+  isInboxAbortError,
   runWorkItem,
   saveUiPrefs,
   updateConversationPrefs,
@@ -42,6 +50,7 @@ import type { ComposerDraft } from "./Composer";
 import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
+import { connectPersonalEvents } from "./personal-events";
 import { EngineIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
 import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
@@ -67,6 +76,7 @@ import {
   mergeRecentInbox,
   patchInboxWork,
   shouldFetchInboxDelta,
+  threadHasPendingImagePreviews,
   LIST_HEADS_PAGE_SIZE,
   THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
@@ -86,9 +96,14 @@ import type {
 
 const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
+const SSE_FALLBACK_POLL_MS = 60_000;
 const HOST_POLL_MS = 5000;
 const OPEN_RETRY_MS = 350;
 const OPEN_RETRIES = 5;
+const OPEN_FETCH_MS = 5_000;
+const LIVE_FETCH_MS = 12_000;
+/** Skip live receipt fetches when the user leaves before this dwell. */
+const RECEIPT_DWELL_MS = 400;
 const RECEIPT_REFRESH_MS = 15_000;
 
 export function ConsoleApp() {
@@ -104,6 +119,7 @@ export function ConsoleApp() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const [seedingId, setSeedingId] = useState<string | null>(null);
   const [threadError, setThreadError] = useState<Record<string, string>>({});
   const [loadingOlderId, setLoadingOlderId] = useState<string | null>(null);
   const [hasOlderByThread, setHasOlderByThread] = useState<Record<string, boolean>>(
@@ -145,9 +161,24 @@ export function ConsoleApp() {
   const lastReceiptAt = useRef<Record<string, number>>({});
   const lastFullRef = useRef(0);
   const delayRef = useRef(POLL_MS);
+  const sseConnectedRef = useRef(false);
   const ackStampRef = useRef<Record<string, string>>({});
+  const focusAbortRef = useRef(new AbortController());
+  const receiptDwellTimer = useRef(0);
   const listViewRef = useRef(listView);
   listViewRef.current = listView;
+
+  const replaceFocusAbort = () => {
+    focusAbortRef.current.abort();
+    focusAbortRef.current = new AbortController();
+    if (receiptDwellTimer.current) {
+      window.clearTimeout(receiptDwellTimer.current);
+      receiptDwellTimer.current = 0;
+    }
+    return focusAbortRef.current.signal;
+  };
+
+  const focusSignal = () => focusAbortRef.current.signal;
   const lastFetchedListRef = useRef<InboxListView>("shown");
   const prefWritesRef = useRef(new Map<string, Promise<void>>());
   const selectedThreadRef = useRef<InboxThread | null>(null);
@@ -181,14 +212,30 @@ export function ConsoleApp() {
     );
   };
 
+  const scheduleMediaDrainIfNeeded = (
+    threadId: string,
+    items: InboxViewItem[] | undefined,
+  ) => {
+    if (!items || !threadHasPendingImagePreviews(items)) {
+      return;
+    }
+    void focusConversation(mediaDrainFocusRequest(threadId)).catch(() => undefined);
+  };
+
   const ensureThread = async (threadId: string, mode: "open" | "poll") => {
     const seq = (threadLoadSeq.current[threadId] ?? 0) + 1;
     threadLoadSeq.current[threadId] = seq;
     const current = messagesRef.current[threadId] ?? [];
     const loaded = loadedThreadsRef.current.has(threadId);
     const cursor = inboxCursor(current);
-    if (mode === "open" && !loaded) {
+    const signal = focusSignal();
+    const coldOpen = mode === "open" && !loaded;
+    void focusConversation(openThreadFocusRequest(threadId, coldOpen)).catch(
+      () => undefined,
+    );
+    if (coldOpen) {
       setOpeningId(threadId);
+      setSeedingId(threadId);
       setThreadError((prev) => {
         if (!prev[threadId]) {
           return prev;
@@ -197,10 +244,24 @@ export function ConsoleApp() {
         delete next[threadId];
         return next;
       });
+      // Local-first: paint an empty opened thread immediately so the pane /
+      // composer are not gated on hydrate or a second round-trip.
+      if (messagesRef.current[threadId] === undefined) {
+        setMessagesByThread((prev) =>
+          prev[threadId] !== undefined
+            ? prev
+            : rememberThreadMessages(prev, threadId, []),
+        );
+      }
     }
     const finishOpen = () => {
       if (mode === "open" && threadLoadSeq.current[threadId] === seq) {
         setOpeningId((currentId) => (currentId === threadId ? null : currentId));
+      }
+    };
+    const finishSeed = () => {
+      if (threadLoadSeq.current[threadId] === seq) {
+        setSeedingId((currentId) => (currentId === threadId ? null : currentId));
       }
     };
     try {
@@ -210,18 +271,23 @@ export function ConsoleApp() {
           loaded,
           loadedCount: current.length,
           hasCursor: true,
-        })
+        }) &&
+        !threadHasPendingImagePreviews(current)
       ) {
-        const delta = await fetchInbox({
-          thread_id: threadId,
-          since: cursor.since,
-          since_id: cursor.since_id,
-        });
+        const delta = await fetchInbox(
+          {
+            thread_id: threadId,
+            since: cursor.since,
+            since_id: cursor.since_id,
+          },
+          { signal, timeoutMs: OPEN_FETCH_MS },
+        );
         if (threadLoadSeq.current[threadId] !== seq) {
           return undefined;
         }
         if (delta.length === 0) {
           finishOpen();
+          finishSeed();
           const heads = inboxRef.current.filter((item) => item.thread_id === threadId);
           const patched = patchInboxWork(current, heads);
           if (patched !== current) {
@@ -232,6 +298,7 @@ export function ConsoleApp() {
           if (loaded) {
             maybeRefreshOpenedReceipts(threadId);
           }
+          scheduleMediaDrainIfNeeded(threadId, patched);
           return patched;
         }
         const next = orderThreadMessages(
@@ -241,24 +308,25 @@ export function ConsoleApp() {
           rememberThreadMessages(prev, threadId, next),
         );
         finishOpen();
+        finishSeed();
         if (loaded) {
           maybeRefreshOpenedReceipts(threadId);
         }
+        scheduleMediaDrainIfNeeded(threadId, next);
         return next;
       }
       if (olderBusyRef.current.has(threadId)) {
+        finishOpen();
+        finishSeed();
         return current;
       }
-      let items = await fetchInbox({
-        thread_id: threadId,
-        limit: THREAD_OPEN_PAGE_SIZE,
-      });
-      if (mode === "open" && items.length === 0) {
-        items = await waitForOpenedInbox(
-          threadId,
-          () => threadLoadSeq.current[threadId] === seq,
-        );
-      }
+      let items = await fetchInbox(
+        {
+          thread_id: threadId,
+          limit: THREAD_OPEN_PAGE_SIZE,
+        },
+        { signal, timeoutMs: OPEN_FETCH_MS },
+      );
       if (threadLoadSeq.current[threadId] !== seq) {
         return undefined;
       }
@@ -276,15 +344,58 @@ export function ConsoleApp() {
       setMessagesByThread((prev) =>
         rememberThreadMessages(prev, threadId, merged),
       );
+      // Open is done after the local SQLite page — empty is a valid opened state.
       finishOpen();
-      if (mode === "open" && !loaded) {
-        void refreshOpenedReceipts(threadId);
+      if (coldOpen) {
+        scheduleReceiptRefresh(threadId);
       } else if (loaded) {
         maybeRefreshOpenedReceipts(threadId);
       }
+      // Hydrate may still be filling an empty thread; wait off the opening latch.
+      if (coldOpen && items.length === 0) {
+        void seedOpenedInbox(
+          threadId,
+          () => threadLoadSeq.current[threadId] === seq,
+          signal,
+        )
+          .then((seeded) => {
+            if (
+              seeded.length === 0 ||
+              threadLoadSeq.current[threadId] !== seq ||
+              signal.aborted
+            ) {
+              return;
+            }
+            setMessagesByThread((prev) =>
+              rememberThreadMessages(
+                prev,
+                threadId,
+                orderThreadMessages(
+                  mergeRecentInbox(prev[threadId] ?? [], seeded),
+                ),
+              ),
+            );
+            scheduleMediaDrainIfNeeded(
+              threadId,
+              orderThreadMessages(
+                mergeRecentInbox(messagesRef.current[threadId] ?? [], seeded),
+              ),
+            );
+            setHasOlderByThread((prev) => ({
+              ...prev,
+              [threadId]: hasOlderPage(seeded.length, THREAD_OPEN_PAGE_SIZE),
+            }));
+          })
+          .finally(finishSeed);
+      } else {
+        finishSeed();
+      }
+      scheduleMediaDrainIfNeeded(threadId, merged);
       return merged;
     } catch (caught) {
-      if (threadLoadSeq.current[threadId] !== seq) {
+      if (isInboxAbortError(caught) || threadLoadSeq.current[threadId] !== seq) {
+        finishOpen();
+        finishSeed();
         return undefined;
       }
       if (!loadedThreadsRef.current.has(threadId)) {
@@ -295,6 +406,7 @@ export function ConsoleApp() {
         }));
       }
       finishOpen();
+      finishSeed();
       return current;
     }
   };
@@ -302,13 +414,21 @@ export function ConsoleApp() {
   const refreshOpenedReceipts = async (threadId: string) => {
     lastReceiptAt.current[threadId] = Date.now();
     const epoch = workspaceEpoch.current;
+    const signal = focusSignal();
     try {
-      const items = await fetchInbox({
-        thread_id: threadId,
-        limit: THREAD_OPEN_PAGE_SIZE,
-        live: true,
-      });
+      await focusConversation(liveReceiptFocusRequest(threadId));
+      const items = await fetchInbox(
+        {
+          thread_id: threadId,
+          limit: THREAD_OPEN_PAGE_SIZE,
+          live: true,
+        },
+        { signal, timeoutMs: LIVE_FETCH_MS },
+      );
       if (workspaceEpoch.current !== epoch) {
+        return;
+      }
+      if (selectedIdRef.current !== threadId) {
         return;
       }
       if (!loadedThreadsRef.current.has(threadId)) {
@@ -321,9 +441,25 @@ export function ConsoleApp() {
           orderThreadMessages(mergeInboxDelta(prev[threadId] ?? [], items)),
         ),
       );
-    } catch {
+    } catch (caught) {
+      if (isInboxAbortError(caught)) {
+        return;
+      }
       // Receipts stay optional; the thread is already on screen.
     }
+  };
+
+  const scheduleReceiptRefresh = (threadId: string) => {
+    if (receiptDwellTimer.current) {
+      window.clearTimeout(receiptDwellTimer.current);
+    }
+    receiptDwellTimer.current = window.setTimeout(() => {
+      receiptDwellTimer.current = 0;
+      if (selectedIdRef.current !== threadId) {
+        return;
+      }
+      void refreshOpenedReceipts(threadId);
+    }, RECEIPT_DWELL_MS);
   };
 
   const maybeRefreshOpenedReceipts = (threadId: string) => {
@@ -346,14 +482,24 @@ export function ConsoleApp() {
     olderBusyRef.current.add(threadId);
     setLoadingOlderId(threadId);
     const epoch = workspaceEpoch.current;
+    const signal = focusSignal();
     try {
-      const page = await fetchInbox({
-        thread_id: threadId,
-        before: cursor.before,
-        before_id: cursor.before_id,
-        limit: THREAD_PAGE_SIZE,
-      });
+      await focusConversation(
+        pullOlderFocusRequest(threadId, cursor.before, cursor.before_id),
+      );
+      const page = await fetchInbox(
+        {
+          thread_id: threadId,
+          before: cursor.before,
+          before_id: cursor.before_id,
+          limit: THREAD_PAGE_SIZE,
+        },
+        { signal, timeoutMs: OPEN_FETCH_MS },
+      );
       if (workspaceEpoch.current !== epoch) {
+        return;
+      }
+      if (selectedIdRef.current !== threadId) {
         return;
       }
       setHasOlderByThread((prev) => ({
@@ -370,6 +516,10 @@ export function ConsoleApp() {
           mergeOlderInbox(prev[threadId] ?? current, page),
         ),
       );
+    } catch (caught) {
+      if (isInboxAbortError(caught)) {
+        return;
+      }
     } finally {
       olderBusyRef.current.delete(threadId);
       setLoadingOlderId((currentId) => (currentId === threadId ? null : currentId));
@@ -522,22 +672,35 @@ export function ConsoleApp() {
         }
         const openId = selectedIdRef.current;
         if (openId) {
-          const loaded = await ensureThread(
-            openId,
-            loadedThreadsRef.current.has(openId) ? "poll" : "open",
-          );
-          if (workspaceEpoch.current !== epoch) {
-            continue;
+          const openMessages = messagesRef.current[openId] ?? [];
+          const skipOpenPoll =
+            sseConnectedRef.current &&
+            loadedThreadsRef.current.has(openId) &&
+            !threadHasPendingImagePreviews(openMessages);
+          if (!skipOpenPoll) {
+            const loaded = await ensureThread(
+              openId,
+              loadedThreadsRef.current.has(openId) ? "poll" : "open",
+            );
+            if (workspaceEpoch.current !== epoch) {
+              continue;
+            }
+            if (loadedThreadsRef.current.has(openId)) {
+              maybeRefreshOpenedReceipts(openId);
+            }
+            await ackOpenThread(openId, loaded);
+          } else {
+            await ackOpenThread(openId, messagesRef.current[openId]);
           }
-          if (loadedThreadsRef.current.has(openId)) {
-            maybeRefreshOpenedReceipts(openId);
-          }
-          await ackOpenThread(openId, loaded);
         }
         if (workspaceEpoch.current !== epoch) {
           continue;
         }
-        delayRef.current = decision.mode === "skip" ? IDLE_POLL_MS : POLL_MS;
+        delayRef.current = sseConnectedRef.current
+          ? SSE_FALLBACK_POLL_MS
+          : decision.mode === "skip"
+            ? IDLE_POLL_MS
+            : POLL_MS;
         setEngine((current) => {
           const merged =
             current?.catalog?.length && !nextEngine.catalog?.length
@@ -600,6 +763,7 @@ export function ConsoleApp() {
     loadedThreadsRef.current.clear();
     olderBusyRef.current.clear();
     headsBusyRef.current = false;
+    replaceFocusAbort();
     inboxDigestRef.current = null;
     groupedRef.current = [];
     groupedInboxRef.current = null;
@@ -613,6 +777,7 @@ export function ConsoleApp() {
     setDrafts([]);
     setSelectedId(null);
     setOpeningId(null);
+    setSeedingId(null);
     setRecipeSeed(null);
     setHasOlderByThread({});
     setHasOlderHeads(false);
@@ -638,6 +803,34 @@ export function ConsoleApp() {
       cancelled = true;
       window.clearTimeout(timer);
     };
+  }, [refresh]);
+
+  useEffect(() => {
+    const disconnect = connectPersonalEvents({
+      onConnected: () => {
+        sseConnectedRef.current = true;
+      },
+      onDisconnected: () => {
+        sseConnectedRef.current = false;
+      },
+      onInboxDigest: (digest) => {
+        if (digest && digest !== inboxDigestRef.current) {
+          refreshAgain.current = true;
+          void refresh();
+          const openId = selectedIdRef.current;
+          if (openId && loadedThreadsRef.current.has(openId)) {
+            void ensureThread(openId, "poll");
+          }
+        }
+      },
+      onThreadUpdated: (threadId) => {
+        if (threadId !== selectedIdRef.current) {
+          return;
+        }
+        void ensureThread(threadId, "poll");
+      },
+    });
+    return disconnect;
   }, [refresh]);
 
   useEffect(() => {
@@ -700,11 +893,15 @@ export function ConsoleApp() {
   }, []);
 
   useEffect(() => {
-    if (selectedId) {
-      void ensureThread(selectedId, "open").then((loaded) =>
-        ackOpenThread(selectedId, loaded),
-      );
+    replaceFocusAbort();
+    if (!selectedId) {
+      setOpeningId(null);
+      setSeedingId(null);
+      return;
     }
+    void ensureThread(selectedId, "open").then((loaded) =>
+      ackOpenThread(selectedId, loaded),
+    );
   }, [selectedId]);
 
   const ackOpenThread = async (
@@ -1104,7 +1301,12 @@ export function ConsoleApp() {
             selected={selected}
             error={error}
             pull={engine?.pull}
-            openingId={openingId}
+            openingId={
+              selected &&
+              (openingId === selected.id || seedingId === selected.id)
+                ? selected.id
+                : null
+            }
             openError={selected ? threadError[selected.id] ?? null : null}
             hasOlder={selected ? hasOlderByThread[selected.id] === true : false}
             loadingOlder={loadingOlderId === selectedId}
@@ -1167,21 +1369,58 @@ export function ConsoleApp() {
   );
 }
 
+async function seedOpenedInbox(
+  threadId: string,
+  stillCurrent: () => boolean,
+  signal?: AbortSignal,
+): Promise<InboxViewItem[]> {
+  try {
+    return await waitForOpenedInbox(threadId, stillCurrent, signal);
+  } catch (caught) {
+    if (isInboxAbortError(caught)) {
+      return [];
+    }
+    throw caught;
+  }
+}
+
 async function waitForOpenedInbox(
   threadId: string,
   stillCurrent: () => boolean,
+  signal?: AbortSignal,
 ): Promise<InboxViewItem[]> {
   for (let attempt = 0; attempt < OPEN_RETRIES; attempt += 1) {
-    await new Promise((resolve) => {
-      window.setTimeout(resolve, OPEN_RETRY_MS);
+    if (signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        window.clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      const timer = window.setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, OPEN_RETRY_MS);
+      if (!signal) {
+        return;
+      }
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort);
     });
     if (!stillCurrent()) {
       return [];
     }
-    const items = await fetchInbox({
-      thread_id: threadId,
-      limit: THREAD_OPEN_PAGE_SIZE,
-    });
+    const items = await fetchInbox(
+      {
+        thread_id: threadId,
+        limit: THREAD_OPEN_PAGE_SIZE,
+      },
+      { signal, timeoutMs: OPEN_FETCH_MS },
+    );
     if (items.length > 0) {
       return items;
     }

@@ -351,7 +351,9 @@ Every `*_ref` in connector / blob / model config resolves here.
 
 ## 15. Realtime (in-app)
 
-WebSocket or SSE on Nest. Anything that should hit the OS tray / lock screen
+WebSocket or SSE on Nest. Personal ships `GET /v1/me/events` (SSE) with
+`inbox.digest` and `thread.updated`; the desktop falls back to HTTP polling when
+disconnected. Channel ingress remains poll-based. Anything that should hit the OS tray / lock screen
 goes through `Notifier`.
 
 ## 16. Ports at a glance

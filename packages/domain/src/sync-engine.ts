@@ -24,6 +24,8 @@ export interface SyncPlanInput {
   rotateFrom?: string;
   rotateSeedFrom?: string;
   pages?: number;
+  /** When set, limits scheduling to mounted/selected streams. */
+  members?: readonly SyncCatalogMember[];
   fallbackMembers?: readonly SyncCatalogMember[];
   cursorStates?: ReadonlyMap<string, string | undefined>;
 }
@@ -84,9 +86,11 @@ export class SyncEngine {
       storedStates.map((state) => [state.stream_key, state] as const),
     );
     const members =
-      view.members.length > 0
-        ? view.members
-        : [...(input.fallbackMembers ?? [])];
+      input.members && input.members.length > 0
+        ? [...input.members]
+        : view.members.length > 0
+          ? view.members
+          : [...(input.fallbackMembers ?? [])];
     const now = this.now();
     if (input.cursorStates) {
       for (const [streamKey, state] of states) {

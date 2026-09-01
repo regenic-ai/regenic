@@ -15,6 +15,7 @@ const {
   streamCursorUnseeded,
   summarizeSyncProgress,
   aggregateSyncProgress,
+  scopeSyncCatalogMembers,
   syncLaneLimits,
   syncStateFromCursor,
 } = require("../dist");
@@ -469,9 +470,64 @@ describe("sync engine", () => {
     assert.equal(planned[0].lane, "interactive");
     assert.equal(planned[0].stream_key, "chat:2");
   });
+
+  it("plans only mounted members when an explicit scope is provided", async () => {
+    const store = new MemorySyncStore();
+    const engine = new SyncEngine(store);
+    await store.applySyncCatalogPage({
+      installation_id: "feishu-1",
+      members: [
+        member("chat:1", "feishu:1"),
+        member("chat:2", "feishu:2"),
+        member("chat:3", "feishu:3"),
+      ],
+      now: "2026-08-31T00:00:00.000Z",
+      complete: true,
+    });
+    const scoped = [
+      member("chat:1", "feishu:1"),
+      member("chat:2", "feishu:2"),
+    ];
+    const planned = await engine.plan({
+      installation_id: "feishu-1",
+      humanIdle: false,
+      members: scoped,
+    });
+    const liveKeys = planned
+      .filter((item) => item.lane === "live" || item.lane === "interactive")
+      .map((item) => item.stream_key);
+    assert.ok(liveKeys.every((key) => key === "chat:1" || key === "chat:2"));
+    assert.equal(liveKeys.includes("chat:3"), false);
+  });
 });
 
 describe("sync progress", () => {
+  it("scopes catalog members to mounted streams", () => {
+    const catalog = [
+      member("chat:1", "feishu:1"),
+      member("chat:2", "feishu:2"),
+      member("chat:3", "feishu:3"),
+    ];
+    const scoped = scopeSyncCatalogMembers(
+      catalog,
+      new Set(["chat:1", "chat:2"]),
+      [member("chat:9", "feishu:9")],
+    );
+    assert.deepEqual(
+      scoped.map((item) => item.stream_key),
+      ["chat:1", "chat:2"],
+    );
+    const fallback = scopeSyncCatalogMembers(
+      catalog,
+      new Set(["chat:missing"]),
+      [member("chat:9", "feishu:9")],
+    );
+    assert.deepEqual(
+      fallback.map((item) => item.stream_key),
+      ["chat:9"],
+    );
+  });
+
   it("counts catalog members and does not treat missing state as seeded", () => {
     const progress = summarizeSyncProgress(
       {

@@ -82,4 +82,13 @@ describe("lark user token", () => {
     assert.equal(isFeishuTokenError(new FeishuApiError("token invalid", "99991663")), true);
     assert.equal(isFeishuTokenError(new FeishuApiError("not in chat", "230002")), false);
   });
+
+  it("builds Windows credential targets for keytar-compatible storage", () => {
+    const { windowsCredentialTargets } = require("../dist");
+    assert.deepEqual(windowsCredentialTargets("lark-cli", "cli_1:ou_1"), [
+      "lark-cli:cli_1:ou_1",
+      "cli_1:ou_1",
+    ]);
+    assert.deepEqual(windowsCredentialTargets("  ", "cli_1:ou_1"), []);
+  });
 });

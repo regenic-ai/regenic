@@ -20,7 +20,7 @@ export function itemRevision(item: InboxViewItem): string {
     item.title ?? ""
   }\t${item.pinned ? "1" : "0"}\t${item.hidden ? "1" : "0"}\t${item.pref_updated_at ?? ""}\t${item.actor_label ?? ""}\t${
     item.conversation_label ?? ""
-  }\t${item.channel_label ?? ""}\t${item.list_title ?? ""}\t${body}\t${item.attachments?.length ?? 0}\t${
+  }\t${item.channel_label ?? ""}\t${item.list_title ?? ""}\t${body}\t${attachmentPreviewRevision(item.attachments)}\t${
     item.unread ? "1" : "0"
   }\t${item.can_receipt ? "1" : "0"}\t${item.receipt?.state ?? ""}\t${(
     item.prompts ?? []
@@ -316,7 +316,88 @@ export function sameInboxProps(
   if ((previous.attachments?.length ?? 0) !== (next.attachments?.length ?? 0)) {
     return false;
   }
+  if (
+    attachmentPreviewRevision(previous.attachments) !==
+    attachmentPreviewRevision(next.attachments)
+  ) {
+    return false;
+  }
   return Boolean(left.content_hash) || previous.body_text === next.body_text;
+}
+
+export function threadHasPendingImagePreviews(items: InboxViewItem[]): boolean {
+  for (const item of items) {
+    for (const file of item.attachments ?? []) {
+      if (file.media_type.startsWith("image/") && !file.data_base64) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Keep the newest ingest per source identity so media revise rows replace placeholders. */
+export function collapseSourceRevisions(items: InboxViewItem[]): InboxViewItem[] {
+  if (items.length < 2) {
+    return items;
+  }
+  const winners = new Map<string, InboxViewItem>();
+  for (const item of items) {
+    const key = sourceIdentityKey(item);
+    if (!key) {
+      continue;
+    }
+    const current = winners.get(key);
+    if (!current || isNewerIngest(item.event, current.event)) {
+      winners.set(key, item);
+    }
+  }
+  if (winners.size === 0) {
+    return items;
+  }
+  const dropped = new Set<string>();
+  for (const item of items) {
+    const key = sourceIdentityKey(item);
+    if (!key) {
+      continue;
+    }
+    const winner = winners.get(key);
+    if (winner && winner.event.id !== item.event.id) {
+      dropped.add(item.event.id);
+    }
+  }
+  if (dropped.size === 0) {
+    return items;
+  }
+  return items.filter((item) => !dropped.has(item.event.id));
+}
+
+function attachmentPreviewRevision(
+  attachments: InboxViewItem["attachments"],
+): string {
+  return (attachments ?? [])
+    .map(
+      (file) =>
+        `${file.filename}\t${file.media_type}\t${file.data_base64 ? file.data_base64.length : 0}`,
+    )
+    .join("|");
+}
+
+function sourceIdentityKey(item: InboxViewItem): string | undefined {
+  if (!item.event.source || !item.event.external_id) {
+    return undefined;
+  }
+  return `${item.event.source}\0${item.event.external_id}`;
+}
+
+function isNewerIngest(
+  left: { ingested_at: string; id: string },
+  right: { ingested_at: string; id: string },
+): boolean {
+  if (left.ingested_at !== right.ingested_at) {
+    return left.ingested_at > right.ingested_at;
+  }
+  return left.id > right.id;
 }
 
 function promptRevision(item: InboxViewItem): string {
