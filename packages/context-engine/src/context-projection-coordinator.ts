@@ -26,6 +26,9 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
 
   async project(orgId: string, generation: string): Promise<ContextProjectionRun[]> {
     const read = structuredClone(await this.authority.openContextRead(orgId));
+    if (read.events.some((event) => event.org_id !== orgId)) {
+      throw new Error("Context projection authority read contains an Event from another organization");
+    }
     const evidence = read.events.map(toEvidence);
     const eventsByEvidence = new Map(
       read.events.map((event) => [canonicalContextJson(toEvidence(event)), event]),
