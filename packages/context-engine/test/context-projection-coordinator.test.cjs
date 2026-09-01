@@ -79,4 +79,20 @@ describe("ContextProjectionCoordinator", () => {
     );
     assert.equal(await artifacts.getCheckpoint("example-org", "test-projector", "generation-1"), null);
   });
+
+  it("rejects an artifact proposal without authority evidence", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const registry = new MemoryContextProjectorRegistry();
+    registry.register(projector((artifact) => ({
+      ...artifact,
+      input_refs: [],
+      input_hash: hashContextArtifactInputs({ input_refs: [] }),
+      required_scope_ids: [],
+    })));
+    await assert.rejects(
+      new ContextProjectionCoordinator(authority(), artifacts, registry).project("example-org", "generation-1"),
+      /invalid context artifact proposal/,
+    );
+    assert.equal(await artifacts.getCheckpoint("example-org", "test-projector", "generation-1"), null);
+  });
 });
