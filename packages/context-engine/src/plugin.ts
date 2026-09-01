@@ -6,6 +6,7 @@ import {
 import { DeterministicContextEngine } from "./deterministic-context-engine";
 import { DeterministicEventRetriever } from "./deterministic-event-retriever";
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
+import { ContextProjectionCoordinator } from "./context-projection-coordinator";
 import { PersonalContextPolicyEvaluator } from "./personal-context-policy";
 
 export const deterministicEventRetrieverPlugin = definePlugin({
@@ -60,5 +61,17 @@ export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePlu
       artifacts: ctx.get("context-artifacts"),
       retrievers: ctx.get("context-retrievers"),
     }));
+  },
+});
+
+export const contextProjectionCoordinatorPlugin = definePlugin({
+  name: "context-projection-coordinator",
+  inject: ["context-authority", "context-artifacts", "context-projectors"],
+  apply(ctx) {
+    ctx.provide("context-projections", new ContextProjectionCoordinator(
+      ctx.get("context-authority"),
+      ctx.get("context-artifacts"),
+      ctx.get("context-projectors"),
+    ));
   },
 });

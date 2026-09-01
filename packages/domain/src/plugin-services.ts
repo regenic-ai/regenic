@@ -9,6 +9,7 @@ import type {
   ContextAuthorityReader,
   ContextArtifactStore,
   ContextEngine,
+  ContextProjectionRunner,
   ContextProjectorRegistry,
   ContextRetrieverRegistry,
 } from "./context-port";
@@ -25,6 +26,7 @@ declare module "@regenic/plugin-host" {
     context: ContextEngine;
     "context-authority": ContextAuthorityReader;
     "context-artifacts": ContextArtifactStore;
+    "context-projections": ContextProjectionRunner;
     "context-projectors": ContextProjectorRegistry;
     "context-retrievers": ContextRetrieverRegistry;
     model: ModelProvider;

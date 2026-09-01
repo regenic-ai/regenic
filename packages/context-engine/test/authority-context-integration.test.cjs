@@ -18,6 +18,7 @@ const {
   DeterministicContextEngine,
   DeterministicEventRetriever,
   PersonalContextPolicyEvaluator,
+  contextProjectionCoordinatorPlugin,
   deterministicEventRetrieverPlugin,
   personalContextEnginePlugin,
 } = require("../dist");
@@ -202,10 +203,12 @@ describe("authority-backed context integration", () => {
     await host.plugin(authorityPlugin);
     await host.plugin(contextRegistriesPlugin);
     await host.plugin(deterministicEventRetrieverPlugin);
+    await host.plugin(contextProjectionCoordinatorPlugin);
     const handle = await host.plugin(personalContextEnginePlugin, {
       org_id: "local-owner",
     });
     assert.ok(host.get("context"));
+    assert.ok(host.get("context-projections"));
     await handle.dispose();
     assert.throws(() => host.get("context"), /Service is not available/);
     await host.dispose();
