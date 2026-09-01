@@ -359,6 +359,33 @@ describe("inbox sort", () => {
     assert.equal(sorted[1].id, "dsh:new");
   });
 
+  it("folds a Feishu thread-reply alias into the parent chat so pin is one row", () => {
+    const parent = {
+      ...feishuHead(
+        "om_face",
+        "2026-08-27T17:21:00.000Z",
+        "feishu:oc_abc",
+        "内部达人审核AgentSkill",
+      ),
+      pinned: true,
+      pref_updated_at: "2026-08-27T17:22:00.000Z",
+    };
+    const alias = {
+      ...feishuHead(
+        "om_reply",
+        "2026-08-27T17:21:00.000Z",
+        "feishu:oc_abc",
+        "内部达人审核AgentSkill",
+      ),
+      thread_id: "feishu:oc_abc:om_root",
+      pinned: false,
+    };
+    const threads = groupInboxThreads([parent, alias]);
+    assert.equal(threads.length, 1);
+    assert.equal(threads[0]?.id, "feishu:oc_abc");
+    assert.equal(threads[0]?.pinned, true);
+  });
+
   it("keeps the conversation title when a new head has no name", () => {
     const named = feishuHead(
       "in-1",

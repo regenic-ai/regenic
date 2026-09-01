@@ -313,8 +313,12 @@ export const en = {
     "Start or reuse the sidecar on this computer (127.0.0.1, default port 4370).",
   "settings.custom": "Custom",
   "settings.customHint":
-    "Point at another personal kernel. Apply probes /health first. A remote server needs REGENIC_PERSONAL_API=1; if it sets REGENIC_PERSONAL_API_KEY, the desktop must use the same value.",
+    "Point at another personal kernel and click Apply. During the first 30 minutes after server boot, Apply can pair automatically once. After that, paste the Personal API key from your deployment. Remote servers need REGENIC_PERSONAL_API=1.",
   "settings.url": "URL",
+  "settings.personalApiKey": "Personal API key",
+  "settings.personalApiKeyPlaceholder":
+    "Optional during bootstrap; required after pairing closes",
+  "settings.personalApiKeySaved": "Leave blank to reuse the saved key",
   "settings.customUnused":
     "Saved custom kernel is unused. Console is on {origin} until Apply succeeds.",
   "settings.apply": "Apply",
@@ -903,8 +907,11 @@ export const zh: Record<MessageKey, string> = {
   "settings.localHint": "启动或复用这台电脑上的本地服务（127.0.0.1，默认端口 4370）。",
   "settings.custom": "自定义",
   "settings.customHint":
-    "连到另一台个人内核。点「应用」会先检查 /health；远程服务需要 REGENIC_PERSONAL_API=1。若服务端设置了 REGENIC_PERSONAL_API_KEY，桌面必须使用同一个值。",
+    "连到另一台个人内核后点「应用」。服务端首次启动后 30 分钟内可自动配对一次；之后请粘贴部署里的 Personal API key。远程服务需要 REGENIC_PERSONAL_API=1。",
   "settings.url": "地址",
+  "settings.personalApiKey": "Personal API key",
+  "settings.personalApiKeyPlaceholder": "首次启动窗口内可留空；配对关闭后必填",
+  "settings.personalApiKeySaved": "留空则使用已保存的 key",
   "settings.customUnused": "已保存的自定义地址还没生效。点「应用」成功前，仍连着 {origin}。",
   "settings.apply": "应用",
   "settings.applying": "应用中…",

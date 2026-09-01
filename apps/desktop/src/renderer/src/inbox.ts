@@ -557,11 +557,30 @@ function appendInboxThreads(
   return sortInboxThreads(next);
 }
 
+export function inboxThreadKey(item: InboxViewItem): string | undefined {
+  const id = threadIdOf(item).trim();
+  return id ? id : undefined;
+}
+
 function threadIdOf(item: InboxViewItem): string {
-  return (
-    item.thread_id ??
-    workThreadId(item.event.source, item.event.external_id, item.event.id)
-  );
+  const labeled = item.thread_id?.trim() ?? "";
+  const derived =
+    item.event?.source
+      ? workThreadId(
+          item.event.source,
+          item.event.external_id,
+          item.event.id,
+        )
+      : "";
+  if (
+    derived &&
+    labeled &&
+    labeled !== derived &&
+    labeled.startsWith(`${derived}:`)
+  ) {
+    return derived;
+  }
+  return labeled || derived;
 }
 
 function buildThread(

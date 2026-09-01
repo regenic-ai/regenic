@@ -78,6 +78,8 @@ export function SettingsPage({
   const { locale, setLocale, t } = useLocale();
   const [mode, setMode] = useState<KernelMode>("local");
   const [customOrigin, setCustomOrigin] = useState("http://127.0.0.1:4370");
+  const [customApiKey, setCustomApiKey] = useState("");
+  const [hasSavedPersonalApiKey, setHasSavedPersonalApiKey] = useState(false);
   const [activeOrigin, setActiveOrigin] = useState(currentApiOrigin());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +103,7 @@ export function SettingsPage({
       .then((settings) => {
         setMode(settings.mode);
         setCustomOrigin(settings.customOrigin);
+        setHasSavedPersonalApiKey(settings.hasSavedPersonalApiKey === true);
         setActiveOrigin(settings.activeOrigin);
         setDataDir(settings.dataDirectory);
         setSourceRetention(settings.sourceRetention ?? null);
@@ -150,9 +153,13 @@ export function SettingsPage({
       const settings = await applyKernelSettings({
         mode,
         origin: mode === "custom" ? customOrigin : undefined,
+        personalApiKey:
+          mode === "custom" && customApiKey.trim() ? customApiKey.trim() : undefined,
       });
       setMode(settings.mode);
       setCustomOrigin(settings.customOrigin);
+      setHasSavedPersonalApiKey(settings.hasSavedPersonalApiKey === true);
+      setCustomApiKey("");
       setActiveOrigin(settings.activeOrigin);
       setDataDir(settings.dataDirectory);
       setSourceRetention(settings.sourceRetention ?? null);
@@ -380,14 +387,30 @@ export function SettingsPage({
           </button>
         </div>
         {mode === "custom" ? (
-          <label className="field">
-            <span>{t("settings.url")}</span>
-            <input
-              value={customOrigin}
-              placeholder="http://127.0.0.1:4370"
-              onChange={(event) => setCustomOrigin(event.target.value)}
-            />
-          </label>
+          <>
+            <label className="field">
+              <span>{t("settings.url")}</span>
+              <input
+                value={customOrigin}
+                placeholder="https://your-kernel.example"
+                onChange={(event) => setCustomOrigin(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>{t("settings.personalApiKey")}</span>
+              <input
+                type="password"
+                value={customApiKey}
+                placeholder={
+                  hasSavedPersonalApiKey
+                    ? t("settings.personalApiKeySaved")
+                    : t("settings.personalApiKeyPlaceholder")
+                }
+                autoComplete="off"
+                onChange={(event) => setCustomApiKey(event.target.value)}
+              />
+            </label>
+          </>
         ) : null}
         {mode === "custom" && activeOrigin !== customOrigin ? (
           <p className="muted">

@@ -371,11 +371,11 @@ back as an Event, Artifact, Claim, or accepted fact.
 
 Browser-origin requests to `/v1/me` also require a Personal API key. The desktop
 creates and injects an ephemeral key for its owned loopback sidecar without
-exposing it to renderer code or storing it. A custom or remote kernel, and a
-manually started loopback browser client, must share `REGENIC_PERSONAL_API_KEY`.
-Requests without an `Origin` remain available to local CLI tools. Public binds
-stay off by default; set `REGENIC_PERSONAL_API=1` on that server so a desktop
-can point at it.
+exposing it to renderer code or storing it. Remote kernels auto-generate a key on
+first boot unless `REGENIC_PERSONAL_API_KEY` is set. Bootstrap pairing stays open
+for 30 minutes and closes after the first successful desktop pair; later connections
+need the shared key (paste in Settings or via env). Public binds stay off by default;
+set `REGENIC_PERSONAL_API=1` on that server so a desktop can point at it.
 
 ## Status
 

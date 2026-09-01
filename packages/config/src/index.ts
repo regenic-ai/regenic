@@ -36,6 +36,7 @@ const envSchema = z.object({
   REGENIC_DSH_BASE_URL: z.string().optional(),
   REGENIC_PERSONAL_API: z.string().optional(),
   REGENIC_PERSONAL_API_KEY: z.string().optional(),
+  REGENIC_PERSONAL_PAIRING: z.string().optional(),
   REGENIC_PERSONAL_LIVE_KEY: z.string().optional(),
 });
 

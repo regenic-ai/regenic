@@ -10,8 +10,11 @@ import {
 import { DshApiController } from "./dsh-api.controller";
 import { DshApiService } from "./dsh-api.service";
 import { HealthController } from "./health.controller";
+import { PersonalApiKeyService } from "./personal-api-key.service";
+import { PersonalConnectController } from "./personal-connect.controller";
 import { PersonalConnectorService } from "./personal-connector.service";
 import { PersonalApiGuard } from "./personal-api.guard";
+import { PersonalPairingService } from "./personal-pairing.service";
 import { PersonalContextController } from "./personal-context.controller";
 import { PersonalContextService } from "./personal-context.service";
 import { PersonalController } from "./personal.controller";
@@ -28,12 +31,15 @@ import { PersonalWorkService } from "./personal-work.service";
 @Module({
   controllers: [
     HealthController,
+    PersonalConnectController,
     DshApiController,
     PersonalController,
     PersonalContextController,
   ],
   providers: [
     DshApiService,
+    PersonalApiKeyService,
+    PersonalPairingService,
     PersonalRuntimeService,
     PersonalContextService,
     PersonalInboxService,

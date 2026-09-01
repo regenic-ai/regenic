@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import {
   PERSONAL_API_KEY_HEADER,
   isNumericLoopbackOrigin,
   personalApiRequestHeaders,
 } from "../src/main/personal-api-key.ts";
-import { parseKernelOrigin } from "../src/main/kernel-settings.ts";
+import { parseKernelOrigin, savePersonalApiKey, loadSavedPersonalApiKey } from "../src/main/kernel-settings.ts";
 
 describe("personal API key injection", () => {
   it("adds the ephemeral key only to the current Personal API", () => {
@@ -89,5 +92,20 @@ describe("personal API key injection", () => {
       key: null,
       headers: { accept: "application/json" },
     }), { accept: "application/json" });
+  });
+
+  it("remembers a personal API key per custom origin", () => {
+    const dir = mkdtempSync(join(tmpdir(), "regenic-settings-"));
+    const file = join(dir, "desktop-settings.json");
+    try {
+      savePersonalApiKey(file, "https://example.com", "paired-key");
+      assert.equal(
+        loadSavedPersonalApiKey(file, "https://example.com"),
+        "paired-key",
+      );
+      assert.equal(loadSavedPersonalApiKey(file, "https://other.example"), null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

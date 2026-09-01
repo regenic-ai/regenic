@@ -6,7 +6,7 @@ import {
   isActivePrefWrite,
 } from "../src/renderer/src/inbox-list-store.ts";
 import { inboxListRestoreFact } from "../src/renderer/src/inbox-list-sync.ts";
-import { markInboxThreadRead } from "../src/renderer/src/inbox.ts";
+import { inboxThreadKey, markInboxThreadRead } from "../src/renderer/src/inbox.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
 
 function item(id: string, text: string, threadId = "feishu:oc_1"): InboxViewItem {
@@ -44,6 +44,21 @@ function at(row: InboxViewItem, stamp: string): InboxViewItem {
   return {
     ...row,
     event: { ...row.event, occurred_at: stamp, ingested_at: stamp },
+  };
+}
+
+function feishuChat(id: string, text: string, chatId: string): InboxViewItem {
+  const row = item(id, text, `feishu:${chatId}`);
+  return {
+    ...row,
+    event: {
+      ...row.event,
+      source: "feishu",
+      external_id: `${chatId}:${id}`,
+      occurred_at: "2026-08-27T15:21:00.000Z",
+      ingested_at: "2026-08-27T15:21:00.000Z",
+    },
+    conversation_label: "内部达人审核AgentSkill",
   };
 }
 
@@ -505,6 +520,59 @@ describe("InboxListStore", () => {
       ["crm:order-0", "crm:order-2"],
     );
     assert.equal(snap.items[0]?.pinned, true);
+  });
+
+  it("does not keep a live Feishu reply alias after pinning the parent chat", () => {
+    const parent = feishuChat("om_a", "我修下", "oc_chat");
+    const alias = {
+      ...feishuChat("om_b", "我修下", "oc_chat"),
+      thread_id: "feishu:oc_chat:om_root",
+    };
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [parent, alias],
+      activeWork: [],
+      nextBefore: { before: parent.event.occurred_at, before_id: parent.event.id },
+      hasOlder: false,
+      pageSize: 8,
+    });
+    const pinned = store.reduce({
+      kind: "prefPatched",
+      threadId: "feishu:oc_chat",
+      pref: {
+        title: null,
+        pinned: true,
+        hidden: false,
+        updated_at: "2026-08-27T15:22:00.000Z",
+      },
+    });
+    assert.equal(pinned.items.length, 1);
+    assert.equal(pinned.items[0]?.thread_id, "feishu:oc_chat");
+    assert.equal(pinned.items[0]?.pinned, true);
+    const refreshed = store.reduce({
+      kind: "liveChanged",
+      pinned: [
+        {
+          ...parent,
+          pinned: true,
+          pref_updated_at: "2026-08-27T15:22:00.000Z",
+        },
+      ],
+      live: [alias],
+      activeWork: [],
+      nextBefore: { before: alias.event.occurred_at, before_id: alias.event.id },
+      hasOlder: false,
+      pageSize: 8,
+    });
+    assert.equal(refreshed.items.length, 1);
+    assert.equal(refreshed.items[0]?.pinned, true);
+    assert.equal(
+      inboxThreadKey(refreshed.items[0] as InboxViewItem),
+      "feishu:oc_chat",
+    );
   });
 
   it("keeps an optimistic unpin in the live window", () => {
