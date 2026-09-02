@@ -279,7 +279,7 @@ export const feishuChatDriver: ChannelDriver = {
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt) {
     const sent = receipt.rpc_id?.trim();
     if (sent) {
-      return `${thread.target}:${sent}`;
+      return `${thread.target}:out:${sent}`;
     }
     return `${thread.target}:out:local`;
   },
