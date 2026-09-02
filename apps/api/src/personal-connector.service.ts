@@ -22,13 +22,11 @@ import {
   requireCreateThread,
   requireWebhookPorts,
   runInSyncLane,
-  settleIsolated,
   SyncEngine,
   applyKernelPressureToSyncBudget,
   buildSyncProgressSnapshot,
   loadSyncProgress,
   scopeSyncCatalogMembers,
-  shouldDeferBackgroundSync,
   withDeadline,
   yieldToEventLoop,
   type ChannelDriver,
@@ -1281,7 +1279,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
       return;
     }
-    if (shouldDeferBackgroundSync(this.kernelRuntime.pressureSample())) {
+    if (this.kernelRuntime.shouldDeferBackgroundSync()) {
       return;
     }
     this.ticking = true;
@@ -1301,21 +1299,26 @@ export class PersonalConnectorService implements OnModuleDestroy {
           !this.inflight.has(installation.id)
         );
       });
-      const errors = await settleIsolated(
-        eligible.map(
-          (installation) => () =>
+      const errors: unknown[] = [];
+      for (const installation of eligible) {
+        if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+          break;
+        }
+        try {
+          await withDeadline(
             this.sync(installation.id, DEFAULT_MAX_PAGES, {
               skipIdle: true,
               capCatchUp: true,
               allowHistory: isHumanIdle(),
             }),
-        ),
-        {
-          timeoutMs: connectorSyncTimeoutMs(),
-          label: (index) =>
-            `sync ${eligible[index]?.connector_type ?? "install"}`,
-        },
-      );
+            connectorSyncTimeoutMs(),
+            `sync ${installation.connector_type}`,
+          );
+        } catch (error) {
+          errors.push(error);
+        }
+        await yieldToEventLoop();
+      }
       pullStatus.last_tick_at = new Date().toISOString();
       await applyPullOutcome(errors);
     } catch (error) {

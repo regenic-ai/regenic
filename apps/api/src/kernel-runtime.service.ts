@@ -3,6 +3,8 @@ import {
   SyncProgressSnapshotStore,
   InboxSummarySnapshotStore,
   kernelPressureView,
+  kernelPressureThresholdsFromEnv,
+  shouldDeferBackgroundSync,
   type IngestAttempt,
   type KernelPressureSample,
   type KernelPressureView,
@@ -17,6 +19,7 @@ const LAG_SAMPLE_MS = 1_000;
 export class KernelRuntimeService implements OnModuleDestroy {
   readonly syncSnapshots = new SyncProgressSnapshotStore();
   readonly inboxSummary = new InboxSummarySnapshotStore();
+  private readonly pressureThresholds = kernelPressureThresholdsFromEnv();
   private readonly installAttempts = new Map<string, IngestAttempt>();
   private lagTimer: ReturnType<typeof setInterval> | undefined;
   private eventLoopLagMs = 0;
@@ -83,6 +86,13 @@ export class KernelRuntimeService implements OnModuleDestroy {
   }
 
   pressureView(): KernelPressureView {
-    return kernelPressureView(this.pressureSample());
+    return kernelPressureView(this.pressureSample(), this.pressureThresholds);
+  }
+
+  shouldDeferBackgroundSync(): boolean {
+    return shouldDeferBackgroundSync(
+      this.pressureSample(),
+      this.pressureThresholds,
+    );
   }
 }

@@ -4,6 +4,7 @@ const {
   applyKernelPressureToSyncBudget,
   classifyKernelPressure,
   kernelPressureView,
+  kernelPressureThresholdsFromEnv,
   shouldDeferBackgroundSync,
 } = require("../dist/kernel-pressure.js");
 const { yieldToEventLoop } = require("../dist/sync-budget.js");
@@ -100,6 +101,36 @@ describe("kernel pressure", () => {
       }),
       true,
     );
+  });
+
+  it("defers background sync under critical pressure even without waiters", () => {
+    assert.equal(
+      shouldDeferBackgroundSync({
+        rss_bytes: 900_000_000,
+        heap_used_bytes: 850_000_000,
+        interactive_waiters: 0,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldDeferBackgroundSync({
+        rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+        event_loop_lag_ms: 600,
+        interactive_waiters: 0,
+      }),
+      true,
+    );
+  });
+
+  it("reads pressure thresholds from env overrides", () => {
+    const thresholds = kernelPressureThresholdsFromEnv({
+      REGENIC_KERNEL_ELEVATED_HEAP_BYTES: "536870912",
+      REGENIC_KERNEL_CRITICAL_LAG_MS: "750",
+    });
+    assert.equal(thresholds.elevated_heap_bytes, 536_870_912);
+    assert.equal(thresholds.critical_lag_ms, 750);
+    assert.equal(thresholds.critical_heap_bytes, 768 * 1024 * 1024);
   });
 });
 

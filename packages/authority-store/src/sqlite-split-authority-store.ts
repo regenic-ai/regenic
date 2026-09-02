@@ -55,6 +55,7 @@ import type {
   ExecutorInstallation,
   ExecutorStore,
 } from "@regenic/domain";
+import { resolve } from "node:path";
 import { SqliteWriteClient } from "./sqlite-write-client";
 
 export const INGEST_ATTEMPT_KEEP_PER_INSTALLATION = 64;
@@ -76,9 +77,10 @@ export class SqliteSplitAuthorityStore
   ) {}
 
   static async open(path: string): Promise<SqliteSplitAuthorityStore> {
-    const writer = await SqliteWriteClient.open(path);
+    const resolved = resolve(path);
+    const writer = await SqliteWriteClient.open(resolved);
     try {
-      const reader = await SqliteWriteClient.open(path, { readonly: true });
+      const reader = await SqliteWriteClient.open(resolved, { readonly: true });
       return new SqliteSplitAuthorityStore(reader, writer);
     } catch (error) {
       await writer.close();

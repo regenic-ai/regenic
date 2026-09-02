@@ -287,9 +287,7 @@ export class SqliteAuthorityStore
 
   constructor(path: string, options: SqliteOpenOptions = {}) {
     this.readonly = options.readonly === true;
-    if (!this.readonly) {
-      mkdirSync(dirname(path), { recursive: true });
-    }
+    mkdirSync(dirname(path), { recursive: true });
     this.database = new Database(
       path,
       this.readonly ? { fileMustExist: true } : undefined,

@@ -25,6 +25,37 @@ export const DEFAULT_KERNEL_PRESSURE_THRESHOLDS: KernelPressureThresholds = {
   critical_lag_ms: 500,
 };
 
+export function kernelPressureThresholdsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): KernelPressureThresholds {
+  return {
+    elevated_heap_bytes: readPositiveIntEnv(
+      env.REGENIC_KERNEL_ELEVATED_HEAP_BYTES,
+      DEFAULT_KERNEL_PRESSURE_THRESHOLDS.elevated_heap_bytes,
+    ),
+    critical_heap_bytes: readPositiveIntEnv(
+      env.REGENIC_KERNEL_CRITICAL_HEAP_BYTES,
+      DEFAULT_KERNEL_PRESSURE_THRESHOLDS.critical_heap_bytes,
+    ),
+    elevated_lag_ms: readPositiveIntEnv(
+      env.REGENIC_KERNEL_ELEVATED_LAG_MS,
+      DEFAULT_KERNEL_PRESSURE_THRESHOLDS.elevated_lag_ms,
+    ),
+    critical_lag_ms: readPositiveIntEnv(
+      env.REGENIC_KERNEL_CRITICAL_LAG_MS,
+      DEFAULT_KERNEL_PRESSURE_THRESHOLDS.critical_lag_ms,
+    ),
+  };
+}
+
+function readPositiveIntEnv(raw: unknown, fallback: number): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
+}
+
 export interface KernelPressureView {
   level: KernelPressureLevel;
   interactive_ready: boolean;
@@ -76,8 +107,12 @@ export function kernelPressureView(
 /** Background connector ticks should wait while inbox/engine reads are in flight. */
 export function shouldDeferBackgroundSync(
   sample: KernelPressureSample,
+  thresholds: KernelPressureThresholds = DEFAULT_KERNEL_PRESSURE_THRESHOLDS,
 ): boolean {
-  return (sample.interactive_waiters ?? 0) > 0;
+  if ((sample.interactive_waiters ?? 0) > 0) {
+    return true;
+  }
+  return classifyKernelPressure(sample, thresholds) === "critical";
 }
 
 /** Adjust a planned sync budget under load. History and media yield first. */

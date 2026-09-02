@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { loadEnv } from "@regenic/config";
 import { compactEmbeddedContent } from "@regenic/domain";
@@ -30,10 +31,13 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (!env.REGENIC_DATABASE || !env.REGENIC_BLOB_ROOT) {
       return;
     }
-    await mkdir(env.REGENIC_BLOB_ROOT, { recursive: true });
+    const database = resolve(env.REGENIC_DATABASE);
+    const blobRoot = resolve(env.REGENIC_BLOB_ROOT);
+    await mkdir(dirname(database), { recursive: true });
+    await mkdir(blobRoot, { recursive: true });
     this.options = {
-      database: env.REGENIC_DATABASE,
-      blobRoot: env.REGENIC_BLOB_ROOT,
+      database,
+      blobRoot,
       orgId: env.REGENIC_ORG,
       model: modelProviderConfigFromEnv(process.env),
     };
@@ -152,6 +156,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       this.host,
       this.orgId(),
       this.compactAbort.signal,
+      this.options?.database,
     );
     const outcome = await this.compacting;
     this.compacting = null;
@@ -202,6 +207,7 @@ async function compactLocalContent(
   host: Host,
   orgId: string,
   signal: AbortSignal,
+  databasePath?: string,
 ): Promise<ContentCompactOutcome> {
   try {
     const result = await compactEmbeddedContent(
@@ -240,7 +246,8 @@ async function compactLocalContent(
   } catch (error) {
     const outcome = contentCompactFailureOutcome(error, signal.aborted);
     if (outcome === "failed") {
-      console.warn("content compact failed", error);
+      const target = databasePath ? ` (${databasePath})` : "";
+      console.warn(`content compact failed${target}`, error);
     }
     return outcome;
   }
