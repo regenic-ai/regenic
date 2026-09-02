@@ -193,7 +193,7 @@ When `include_context` is true or `trigger.kind=pull`, start packs only a recent
 ```ts
 interface TaskExecutor {
   readonly executor_type: string;
-  capabilities(): { start: boolean; resume: boolean; status: boolean; prompts?: boolean };
+  capabilities(): { start: boolean; resume: boolean; status: boolean; prompts?: boolean; wait?: boolean };
   catalog(): ExecutorCatalogEntry;
   start(input, ctx): Promise<ExecutorRunHandle>;
   resume(input, ctx): Promise<ExecutorRunHandle>;
@@ -203,7 +203,7 @@ interface TaskExecutor {
 
 The kernel looks up `ctx.executors`. The executor reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `listPrompts` / `readTranscript`). It does not import a private HTTP client.
 
-Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is durable `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. The kernel reaps the job on `exited`. Write-back happens only on that real exit. The kernel matches the first result line exactly to a live prompt option. Aliases come from `ChannelDriver.writeBackLabels`, not a host list. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back. The abandoned inferior is `cancelled`, not `failed`. A later status tick must not resurrect that run or write back.
+Completion is `WaitStatus` (wait / notify). The words in a bubble are not exit. Public DSH absentee notify is mux `session/event` `turn/end` (unclosed `turn/start` or `working` stays running), or a gone session. When `capabilities().wait` is set, the kernel subscribes to `ChannelDriver.waitThread` after `start()`, follow/polls that sysout in the same callback, then reaps. `session.history` poll is catch-up and CLI. The kernel reaps the job on `exited`. Write-back happens only on that real exit. The kernel matches the first result line exactly to a live prompt option. Aliases come from `ChannelDriver.writeBackLabels`, not a host list. Humans answer prompts; they may `POST /v1/me/work-items/:id/dismiss` to drop a job from current work. Dismiss is not `exited` and does not write back. The abandoned inferior is `cancelled`, not `failed`. A later status tick must not resurrect that run or write back.
 
 Public default: a managed local `dsh` binding (seeded id `dsh`, so existing recipes keep working). Local L6 plugins register by `catalog.source`; the mount path does not write `if (source === "dsh")`. Cursor and a private Agent OS (for example bioby-agent) come later under the same catalog contract. A private runtime is an internal plugin package, or it is called through the generic HTTP executor. The default open-source tree does not import private HTTP.
 

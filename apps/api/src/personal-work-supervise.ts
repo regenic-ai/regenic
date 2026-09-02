@@ -16,13 +16,20 @@ import {
 } from "@regenic/domain";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import type { PersonalWorkWait } from "./personal-work-wait";
 
 export class PersonalWorkSupervise {
+  private waits?: PersonalWorkWait;
+
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly channel: PersonalWorkChannel,
     private readonly touchInboxDigest?: () => void,
   ) {}
+
+  bindWaits(waits: PersonalWorkWait): void {
+    this.waits = waits;
+  }
 
   async refreshRuns(): Promise<void> {
     const host = this.runtime.requireHost();
@@ -126,6 +133,7 @@ export class PersonalWorkSupervise {
         updated_at: now,
       });
       if (!isActiveWorkStatus(status)) {
+        this.waits?.drop(run.id);
         if (!recipeWantsWriteBack(recipe)) {
           await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
           this.touchInboxDigest?.();
@@ -148,6 +156,7 @@ export class PersonalWorkSupervise {
         .get("authority")
         .putWorkRun(cancelWorkRun(run, new Date().toISOString()));
     }
+    this.waits?.drop(run.id);
     return true;
   }
 }

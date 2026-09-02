@@ -78,6 +78,7 @@ export const dshTaskExecutor: TaskExecutor = {
       status: true,
       prompts: true,
       local_workspace: true,
+      wait: true,
     };
   },
 

@@ -13,6 +13,7 @@ import {
   type ThreadActivity,
 } from "@regenic/domain";
 import { DshApiError, type DshHistoryEvent, type DshHistoryPage } from "./dsh-cli-client";
+import type { DshSessionLiveHub } from "./dsh-session-live";
 
 export const DSH_SOURCE = "dsh";
 export const DSH_MAX_HISTORY_PAGES = 100;
@@ -41,6 +42,7 @@ export interface DshSessionPollConnectorOptions {
   page_size?: number;
   max_history_pages?: number;
   now?: () => string;
+  live?: DshSessionLiveHub;
 }
 
 export interface DshSessionHistoryClient {
@@ -97,6 +99,10 @@ export class DshSessionPollConnector {
   }
 
   async poll(cursor: ConnectorCursor | null): Promise<PollResult> {
+    const live = this.pollLive(cursor);
+    if (live) {
+      return live;
+    }
     const { afterSeq, resumeBefore } = parseCursor(cursor);
     const collected = await this.collectHistoryAfter(afterSeq, resumeBefore);
     if (!collected.reached) {
@@ -174,16 +180,37 @@ export class DshSessionPollConnector {
     return { reached: false, resumeBefore: beforeSeq };
   }
 
+  private pollLive(cursor: ConnectorCursor | null): PollResult | undefined {
+    const events = this.options.live?.drain(this.options.session_id) ?? [];
+    if (events.length === 0) {
+      return undefined;
+    }
+    const { afterSeq } = parseCursor(cursor);
+    const surface = toSurfaceEvents(events).filter((event) => event.seq > afterSeq);
+    if (surface.length === 0) {
+      return undefined;
+    }
+    this.lastSurfacePage = { events: surface, hasMore: false };
+    const keepCursor = cursor?.value;
+    return {
+      ...this.toPollResult(keepCursor, keepCursor, surface, true),
+      poll_hint: dshPollHint(keepCursor, false),
+    };
+  }
+
   private toPollResult(
     cursor: string | undefined,
     nextCursor: string | undefined,
     window: DshSurfaceEvent[],
+    live = false,
   ): PollResult {
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: this.options.connector_id,
       org_id: this.options.org_id,
-      delivery_id: this.deliveryId(cursor, nextCursor),
+      delivery_id: live
+        ? this.liveDeliveryId(window)
+        : this.deliveryId(cursor, nextCursor),
       received_at: this.now(),
       next_cursor: nextCursor,
       records: window.map((event) => this.toRecord(event)),
@@ -221,6 +248,12 @@ export class DshSessionPollConnector {
     ].join("\u0000");
     const hash = createHash("sha256").update(pageIdentity).digest("hex");
     return `dsh-history:${this.options.session_id}:${hash}`;
+  }
+
+  private liveDeliveryId(window: DshSurfaceEvent[]): string {
+    const identity = window.map((event) => String(event.seq)).join(",");
+    const hash = createHash("sha256").update(identity).digest("hex").slice(0, 16);
+    return `dsh-live:${this.options.session_id}:${hash}`;
   }
 }
 

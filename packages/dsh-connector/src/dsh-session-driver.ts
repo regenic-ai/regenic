@@ -23,12 +23,14 @@ import {
   parseDshPromptId,
 } from "./dsh-prompt-store";
 import {
+  dshMuxIsActive,
   dshSessionKey,
   dshSessionPlugin,
   dshSessionPluginConfigFromInstallation,
   dshStreamKey,
   resolveEffectiveDshTransport,
 } from "./plugin";
+import { dshLiveHubFor } from "./dsh-session-live";
 import { loopbackHttpUrl, resolveOperatorDshBaseUrl } from "./dsh-url";
 import { dshLocaleTables } from "./locales";
 import { probeDshCatalog } from "./probe";
@@ -187,6 +189,16 @@ export const dshSessionDriver: ChannelDriver = {
 
   outboundId(thread: ConversationThread, receipt: DeliveryReceipt) {
     return `${thread.target}:out:${receipt.rpc_id ?? randomUUID()}`;
+  },
+
+  waitThread(installation, thread, _host, env, onNotify) {
+    if (resolveEffectiveDshTransport(installation.config, env) !== "web") {
+      return undefined;
+    }
+    if (!dshMuxIsActive(installation.id)) {
+      return undefined;
+    }
+    return dshLiveHubFor(installation.id).wait(thread.target, onNotify);
   },
 
   locales() {

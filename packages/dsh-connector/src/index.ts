@@ -4,6 +4,7 @@ export * from "./dsh-prompt-part";
 export * from "./dsh-rpc-client";
 export * from "./dsh-prompt-store";
 export * from "./dsh-mux-client";
+export * from "./dsh-session-live";
 export * from "./dsh-rpc-handler";
 export * from "./dsh-host-services";
 export * from "./dsh-run-log";

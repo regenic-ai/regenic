@@ -29,6 +29,7 @@ import {
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalExecutorService } from "./personal-executor.service";
+import { PersonalConnectorService } from "./personal-connector.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkDispatch } from "./personal-work-dispatch";
@@ -40,6 +41,7 @@ import {
   forceDisposition,
   isWorkTickShutdown,
 } from "./personal-work-support";
+import { PersonalWorkWait } from "./personal-work-wait";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 
 export type { RecipeInput } from "./personal-work-recipe";
@@ -79,6 +81,7 @@ export class PersonalWorkService implements OnModuleDestroy {
   private readonly dispatch: PersonalWorkDispatch;
   private readonly supervise: PersonalWorkSupervise;
   private readonly flush: PersonalWorkFlush;
+  private readonly waits: PersonalWorkWait;
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -89,12 +92,16 @@ export class PersonalWorkService implements OnModuleDestroy {
     private readonly executors: PersonalExecutorService,
     @Inject(forwardRef(() => PersonalInboxService))
     private readonly inbox: PersonalInboxService,
+    @Inject(forwardRef(() => PersonalConnectorService))
+    connectors: PersonalConnectorService,
   ) {
     this.channel = new PersonalWorkChannel(runtime, drivers);
     this.supervise = new PersonalWorkSupervise(runtime, this.channel, () => {
       this.inbox.touchInboxDigest();
     });
-    this.dispatch = new PersonalWorkDispatch(runtime, this.channel, this.supervise);
+    this.waits = new PersonalWorkWait(runtime, drivers, connectors, this.supervise);
+    this.supervise.bindWaits(this.waits);
+    this.dispatch = new PersonalWorkDispatch(runtime, this.channel, this.supervise, this.waits);
     this.flush = new PersonalWorkFlush(runtime, this.channel);
   }
 
@@ -111,6 +118,11 @@ export class PersonalWorkService implements OnModuleDestroy {
     this.timer = setInterval(() => {
       void this.afterConnectorTick();
     }, WORK_TICK_MS);
+    void this.waits.attachActive().catch((error) => {
+      if (!isWorkTickShutdown(error)) {
+        console.error("personal work wait attach failed", error);
+      }
+    });
     void this.afterConnectorTick();
   }
 
@@ -119,6 +131,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    this.waits.dropAll();
   }
 
   async pauseForMaintenance(): Promise<void> {
@@ -438,6 +451,15 @@ export class PersonalWorkService implements OnModuleDestroy {
       this.channel.contextFor(executor),
     );
     await this.supervise.applyHandle(item, recipe, run, handle);
+    const latestItem = await host.get("authority").getWorkItem(orgId, item.id);
+    const latestRun = await host.get("authority").getActiveWorkRun(orgId, item.id);
+    if (
+      latestItem &&
+      latestRun &&
+      isActiveWorkStatus(latestItem.status)
+    ) {
+      this.waits.attach(latestItem, latestRun, executor);
+    }
   }
 
   async ackDoneThread(threadId: string): Promise<void> {

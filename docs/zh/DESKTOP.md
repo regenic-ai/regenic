@@ -41,7 +41,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 - 会话名下可出最后一条预览；标题和正文相同时不重复。
 - 排序：`normal` 为置顶 + 最近活动；`attention` 为等人 / 运行中 / 未读优先，并在档位不同时分组（只排已经加载进列表的这一窗，与 Slack 侧栏相同）。选择写入 `ui_prefs.inbox_sort`。过滤栏「显示 / 不显示」写入 `ui_prefs.inbox_list`。折叠写入 `conversation_prefs.hidden`（`human` 或 `policy`），与 `current_work`、tombstone、WorkItem 状态解耦。
 - 显示/不显示与新建钉在列表顶第一行；排序、渠道滤、置顶针在第二行。只有会话列表滚动。
-- Recipes 单独一页：用白话说明「这类工作出现时用哪个执行器」。调用参数只渲染 `GET /v1/me/executors` 的 `catalog().fields`，不按执行器名特判。DSH 用 `skill` / `prompt` 拼进新会话，再带上工单原文；Cursor / bioby-agent 后接同一协议。默认看所有 task，或某一来源的 task，或一条会话。`include_context` 打开则把该会话最近一页可见历史交给执行器（长会话截断），默认只带最近这条工单。匹配到的会话在 Current work 里 **Start run**；DSH 日志出现 `turn/end` 后内核 reap。聊天回复不是退出。人不想跟的 Job 从当前工作 **拿掉**，不冒充执行器结束。没有 `can_write_back` 不得 egress；写回只发生在真 `exited`。
+- Recipes 单独一页：用白话说明「这类工作出现时用哪个执行器」。调用参数只渲染 `GET /v1/me/executors` 的 `catalog().fields`，不按执行器名特判。DSH 用 `skill` / `prompt` 拼进新会话，再带上工单原文；Cursor / bioby-agent 后接同一协议。默认看所有 task，或某一来源的 task，或一条会话。`include_context` 打开则把该会话最近一页可见历史交给执行器（长会话截断），默认只带最近这条工单。匹配到的会话在 Current work 里 **Start run**；DSH mux 出现 `turn/end` 后内核 reap，history poll 只做兜底。聊天回复不是退出。人不想跟的 Job 从当前工作 **拿掉**，不冒充执行器结束。没有 `can_write_back` 不得 egress；写回只发生在真 `exited`。
 
 ## 进程
 

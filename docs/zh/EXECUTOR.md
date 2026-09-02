@@ -37,7 +37,7 @@
 ```ts
 interface TaskExecutor {
   readonly executor_type: string;
-  capabilities(): { start: boolean; resume: boolean; status: boolean; prompts?: boolean };
+  capabilities(): { start: boolean; resume: boolean; status: boolean; prompts?: boolean; wait?: boolean };
   catalog(): ExecutorCatalogEntry;
   start(input, ctx): Promise<ExecutorRunHandle>;
   resume(input, ctx): Promise<ExecutorRunHandle>;
@@ -134,8 +134,11 @@ token 是前置条件，不是表单字段。
 
 ## 完成与写回
 
-公开 DSH 的 absentee notify 是日志里的 `turn/end`（未闭合的
-`turn/start` 或 `working` 仍是 running），或 session 已不在。内核在
+公开 DSH 的 absentee notify 是 mux `session/event` 里的 `turn/end`（未闭合的
+`turn/start` 或 `working` 仍是 running），或 session 已不在。声明
+`capabilities().wait` 的执行器在 `start()` 后由内核订阅
+`ChannelDriver.waitThread`；同一回调 follow 该 sysout 入库再 reap。
+`session.history` poll 只做漏帧、冷启动和 CLI。内核在
 `exited` 上 reap Job。写回只发生在这次真退出，且 Recipe
 `can_write_back` 为真。内核把结果第一行与活的待办选项做精确匹配。
 别名来自 `ChannelDriver.writeBackLabels`，不写在宿主名单里。

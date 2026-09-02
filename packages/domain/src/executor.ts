@@ -21,6 +21,11 @@ export interface ExecutorCapabilities {
    * stuffing the whole thread into stdin.
    */
   local_workspace?: boolean;
+  /**
+   * The inferior can notify instead of the kernel polling status.
+   * After start, the kernel subscribes via ChannelDriver.waitThread.
+   */
+  wait?: boolean;
 }
 
 /**

@@ -308,6 +308,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   resolveConversationLabels?(installation, threads, env): Promise<Map<string, string>>;
   listPrompts?(installation, thread, host, env): Promise<ThreadPrompt[]>;
   answerPrompt?(installation, thread, answer, host, env): Promise<{ accepted: boolean }>;
+  waitThread?(installation, thread, host, env, onNotify): (() => void) | undefined;
   readAttention?(installation, threads, host, env): Promise<Map<string, ThreadAttention>>;
   ackAttention?(installation, thread, ack, host, env): Promise<void>;
   readReceipts?(installation, threads, host, env): Promise<Map<string, MessageReceipt>>;
@@ -330,6 +331,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, `receipts`, `create_with_task`, and `hold_while_working`. `await_reply`: DSH / Cursor set it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH / Cursor set `prompt` (first user message). `hydrate_on_open`: pull a recent page when opening a thread; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Slack / Cursor omit it. `create_with_task` / `hold_while_working`: Cursor sets them; DSH omits them. |
 | `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Local names only: Feishu uses install `chat_names`, Slack uses `channel_name`. Must not call `listAllChats` or block opening a thread. |
 | `listPrompts` / `answerPrompt` | Optional. Live pending decisions. DSH web mounts mux, maps `question/requested` / `approval/requested` to a channel-agnostic Prompt, and answers on `/api/respond`. `not-pending` is treated as settled. |
+| `waitThread` | Optional. Wait fd for one inferior. DSH web subscribes to mux `session/event` (`turn/start` / `turn/end`) and prompt frames. The kernel follow/polls that stream so live pages ingest, then `status()` reaps. Drivers must not write Events. Channels without wait still catch up on history poll. |
 | `readAttention` / `ackAttention` | Optional. Source overlay for *my* unread of their inbound. Feishu calls user-identity `read_status` on the latest inbound `om_`. Failure or an official “read” must not hide a thread the PC has never opened. Ack writes the local cursor first. |
 | `readReceipts` | Optional. Peer read of my outbound. Feishu calls user-identity `read_users` on `:out:om_`. Empty items stay Sent. Do not reuse this as conversation unread. |
 | `surfaceGeneration` | Optional. Live surface generation, appended to `inbox_digest` as `&s=` so a new approval is visible to desktop polling. |

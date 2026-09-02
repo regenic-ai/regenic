@@ -6,6 +6,7 @@ import { FileDshRunLog, MemoryDshRunLog, type DshRunLog } from "./dsh-run-log";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
 import { DshMuxSubscriber, type DshMuxOpen } from "./dsh-mux-client";
 import { dropDshPromptStore, dshPromptStoreFor } from "./dsh-prompt-store";
+import { dropDshLiveHub, dshLiveHubFor } from "./dsh-session-live";
 import { DshSessionEgress } from "./dsh-session-egress";
 import { DshSessionPollConnector } from "./dsh-session-poll-connector";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
@@ -136,9 +137,11 @@ export const dshSessionPlugin = definePlugin<DshSessionPluginConfig>({
     const client =
       transport === "web" ? createWebClient(config) : createCliClient(config);
     ctx.effect(() => {
+      const live =
+        transport === "web" ? dshLiveHubFor(config.installation_id) : undefined;
       const mux =
         transport === "web" && client instanceof DshWebRpcClient
-          ? retainDshMux(config.installation_id, client, config.mux_open)
+          ? retainDshMux(config.installation_id, client, config.mux_open, live)
           : undefined;
       const disposers = sessionIds.flatMap((sessionId) => {
         const connector = new DshSessionPollConnector(client, {
@@ -147,6 +150,7 @@ export const dshSessionPlugin = definePlugin<DshSessionPluginConfig>({
           session_id: sessionId,
           page_size: config.page_size,
           now: config.now,
+          live,
         });
         const egress = new DshSessionEgress(client, {
           installation_id: config.installation_id,
@@ -179,10 +183,15 @@ const muxRefs = new Map<
   { mux: DshMuxSubscriber; refs: number }
 >();
 
+export function dshMuxIsActive(installationId: string): boolean {
+  return muxRefs.has(installationId);
+}
+
 function retainDshMux(
   installationId: string,
   client: DshWebRpcClient,
   open?: DshMuxOpen,
+  live?: ReturnType<typeof dshLiveHubFor>,
 ): () => void {
   let entry = muxRefs.get(installationId);
   if (!entry) {
@@ -190,6 +199,7 @@ function retainDshMux(
       client,
       dshPromptStoreFor(installationId),
       open,
+      live,
     );
     mux.start();
     entry = { mux, refs: 0 };
@@ -208,6 +218,7 @@ function retainDshMux(
     current.mux.stop();
     muxRefs.delete(installationId);
     dropDshPromptStore(installationId);
+    dropDshLiveHub(installationId);
   };
 }
 

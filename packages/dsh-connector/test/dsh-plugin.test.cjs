@@ -246,6 +246,16 @@ describe("dshSessionPlugin", () => {
         await_reply: true,
         list_title: "prompt",
       });
+      assert.equal(
+        dshSessionDriver.waitThread(
+          cli,
+          { source: "dsh", target: "dsh-main" },
+          {},
+          {},
+          () => undefined,
+        ),
+        undefined,
+      );
       verifyChannelDriverConformance({
         driver: dshSessionDriver,
         enabled: web,
