@@ -2,8 +2,13 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   ChannelDriverError,
+  INGEST_SCHEMA_VERSION,
+  IngestionService,
+  MemoryAuthorityStore,
+  MemoryBlobStore,
   MemoryConnectorRegistry,
   MemoryEgressRegistry,
+  channelRecord,
   verifyChannelDriverConformance,
 } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
@@ -251,8 +256,89 @@ describe("feishuChatDriver", () => {
         { source: "feishu", target: "oc_1" },
         { accepted: true, rpc_id: "om_out" },
       ),
-      "oc_1:om_out",
+      "oc_1:out:om_out",
     );
+  });
+
+  it("dedupes a split Feishu image echo against reply outbound ids", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const service = new IngestionService(blobs, authority);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const outboundId = feishuChatDriver.outboundId(
+      { source: "feishu", target: "oc_1" },
+      { accepted: true, rpc_id: "om_text" },
+    );
+    const outbound = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "feishu-out-reply",
+      received_at: "2026-09-02T00:15:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: outboundId,
+          occurred_at: "2026-09-02T00:15:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "oc_1",
+          text: "记得我这个小技巧会更符合写代码逻辑",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "tasks.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+    const echoed = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "feishu-sync-reply",
+      received_at: "2026-09-02T00:15:02.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_text",
+          occurred_at: "2026-09-02T00:15:00.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          text: "记得我这个小技巧会更符合写代码逻辑",
+        }),
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_image",
+          occurred_at: "2026-09-02T00:15:01.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "image.png",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.equal(outbound.records[0].status, "accepted");
+    assert.equal(echoed.records[0].status, "duplicate");
+    assert.equal(echoed.records[1].status, "duplicate");
+    assert.equal(echoed.records[0].event_id, outbound.records[0].event_id);
+    assert.equal(echoed.records[1].event_id, outbound.records[0].event_id);
+    assert.equal(authority.allEvents().length, 1);
   });
 
   it("installs all direct messages only", () => {
