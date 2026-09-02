@@ -564,7 +564,13 @@ function feishuAllLabel(config: Record<string, unknown>): string {
 export function feishuInstallConfig(
   input: Record<string, unknown>,
 ): Record<string, JsonValue> {
-  const selection = feishuSelection(input);
+  const rawSelection = configString(input, "selection") ?? "";
+  const selection =
+    rawSelection.length > 0
+      ? feishuSelection(input)
+      : feishuPickedChatIds(input).length > 0
+        ? "pick"
+        : "recent";
   if (selection === "recent") {
     const kinds = feishuKinds(input);
     if (kinds.length === 0) {

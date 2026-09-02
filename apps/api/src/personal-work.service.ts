@@ -27,6 +27,7 @@ import {
   type WorkRunStatus,
 } from "@regenic/domain";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
+import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWorkChannel } from "./personal-work-channel";
@@ -86,9 +87,13 @@ export class PersonalWorkService implements OnModuleDestroy {
     drivers: ChannelDriverRegistry,
     @Inject(forwardRef(() => PersonalExecutorService))
     private readonly executors: PersonalExecutorService,
+    @Inject(forwardRef(() => PersonalInboxService))
+    private readonly inbox: PersonalInboxService,
   ) {
     this.channel = new PersonalWorkChannel(runtime, drivers);
-    this.supervise = new PersonalWorkSupervise(runtime, this.channel);
+    this.supervise = new PersonalWorkSupervise(runtime, this.channel, () => {
+      this.inbox.touchInboxDigest();
+    });
     this.dispatch = new PersonalWorkDispatch(runtime, this.channel, this.supervise);
     this.flush = new PersonalWorkFlush(runtime, this.channel);
   }
@@ -461,6 +466,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       threadId,
       now,
     );
+    this.inbox.touchInboxDigest();
   }
 
   async runWorkItem(id: string): Promise<WorkRunView> {
@@ -561,6 +567,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       await host.get("authority").putWorkDelivery(deliveryAbandoned(delivery, now));
     }
     await foldThreadByPolicy(host.get("authority"), orgId, next.thread_id, now);
+    this.inbox.touchInboxDigest();
     return {
       work_item: next,
       run: cancelled,

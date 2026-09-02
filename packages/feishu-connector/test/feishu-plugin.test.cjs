@@ -750,6 +750,16 @@ describe("feishuChatDriver", () => {
       selection: "recent",
       kinds: ["group", "p2p"],
     });
+    const bare = feishuChatDriver.install({
+      id: "feishu-default",
+      org_id: "local-owner",
+      config: { kinds: ["group"] },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    assert.deepEqual(bare.config, {
+      selection: "recent",
+      kinds: ["group"],
+    });
     assert.throws(
       () =>
         feishuChatDriver.install({

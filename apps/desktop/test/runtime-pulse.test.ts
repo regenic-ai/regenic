@@ -64,6 +64,19 @@ const heartbeat: PersonalHeartbeatView = {
     last_tick_at: "2026-01-01T00:00:00.000Z",
     last_accepted_count: 7,
   },
+  installations: [
+    {
+      id: "feishu-1",
+      sync: {
+        discovered: 40,
+        seeded: 10,
+        unseeded: 30,
+        backfilling: 12,
+        media_pending: 2,
+        catalog_complete: false,
+      },
+    },
+  ],
 };
 
 describe("runtime pulse", () => {
@@ -75,5 +88,7 @@ describe("runtime pulse", () => {
     assert.equal(next.pull?.phase, "pulling");
     assert.equal(next.pull?.catching_up_count, 218);
     assert.equal(next.database_path, "/tmp/regenic.db");
+    assert.equal(next.pressure?.level, "elevated");
+    assert.equal(next.installations[0]?.sync?.backfilling, 12);
   });
 });

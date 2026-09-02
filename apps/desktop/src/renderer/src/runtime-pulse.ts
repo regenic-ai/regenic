@@ -28,6 +28,18 @@ export function applyHeartbeatToEngine(
     last_tick_at: heartbeat.pull.last_tick_at,
     last_accepted_count: heartbeat.pull.last_accepted_count,
   };
+  const syncById = new Map(
+    (heartbeat.installations ?? []).map((item) => [item.id, item.sync] as const),
+  );
+  const installations =
+    syncById.size === 0
+      ? current.installations
+      : current.installations.map((installation) => {
+          const sync = syncById.get(installation.id);
+          return sync === undefined
+            ? installation
+            : { ...installation, sync: sync ?? undefined };
+        });
   return {
     ...current,
     kernel: heartbeat.kernel,
@@ -35,6 +47,8 @@ export function applyHeartbeatToEngine(
     inbox_count: heartbeat.inbox_count,
     inbox_digest: heartbeat.inbox_digest,
     memory: heartbeat.memory,
+    pressure: heartbeat.pressure,
     pull,
+    installations,
   };
 }

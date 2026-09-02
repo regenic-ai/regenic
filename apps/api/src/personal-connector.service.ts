@@ -329,6 +329,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
         { status: "completed" | "retryable_failure" }
       >;
       const summary = summarizeWebhook(accepted);
+      if (summary.accepted_count > 0) {
+        this.inbox.touchInboxDigest();
+      }
       return {
         installation_id: installation.id,
         ...summary,
@@ -736,7 +739,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         });
         this.hydrateCooldown.set(threadId, Date.now() + HYDRATE_COOLDOWN_MS);
         this.inbox.publishThreadUpdated(threadId);
-        void this.inbox.publishInboxDigest();
+        this.inbox.touchInboxDigest();
       } catch (error) {
         this.rememberStreamPace({
           key,
@@ -826,7 +829,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         });
         if (accepted > 0) {
           this.inbox.publishThreadUpdated(threadId);
-          void this.inbox.publishInboxDigest();
+          this.inbox.touchInboxDigest();
         }
       } catch (error) {
         this.rememberStreamPace({
@@ -1606,7 +1609,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         catchingUp: this.streamCatchingUp.size,
       });
       if (summary.accepted_count > 0) {
-        void this.inbox.publishInboxDigest();
+        await this.inbox.publishInboxDigest();
         const notifyAccepted = (
           items: Array<{ stream: ConnectorStream }>,
           batches: Array<{ pages: ConnectorPollRunResult[] }>,

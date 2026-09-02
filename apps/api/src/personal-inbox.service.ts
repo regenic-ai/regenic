@@ -180,6 +180,7 @@ export interface PersonalEngineView {
   inbox_count: number;
   inbox_digest: string;
   memory: { rss_bytes: number; heap_used_bytes: number };
+  pressure: KernelPressureView;
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
@@ -187,6 +188,11 @@ export interface PersonalEngineView {
   executor_catalog: ExecutorKindCatalogItem[];
   plugins: PluginInventoryItem[];
   plugin_dir: string | null;
+}
+
+export interface PersonalHeartbeatInstallationPulse {
+  id: string;
+  sync: import("@regenic/domain").SyncProgressView | null;
 }
 
 export interface PersonalHeartbeatView {
@@ -201,6 +207,7 @@ export interface PersonalHeartbeatView {
     PullStatusView,
     "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
   >;
+  installations: PersonalHeartbeatInstallationPulse[];
 }
 
 export interface InboxListQuery {
@@ -748,6 +755,12 @@ export class PersonalInboxService {
     return inbox;
   }
 
+  /** Drop cached digest and republish from the store after inbox-affecting writes. */
+  touchInboxDigest(): void {
+    this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
+    void this.publishInboxDigest();
+  }
+
   async publishInboxDigest(): Promise<void> {
     if (!this.runtime.isReady()) {
       return;
@@ -917,6 +930,7 @@ export class PersonalInboxService {
             last_tick_at: pullStatus.last_tick_at,
             last_accepted_count: pullStatus.last_accepted_count,
           },
+          installations: [],
         };
       }
       const host = this.runtime.requireHost();
@@ -948,6 +962,10 @@ export class PersonalInboxService {
           last_tick_at: pullStatus.last_tick_at,
           last_accepted_count: pullStatus.last_accepted_count,
         },
+        installations: installations.map((installation) => ({
+          id: installation.id,
+          sync: this.kernelRuntime.syncSnapshots.peekProgress(installation.id),
+        })),
       };
     } finally {
       this.kernelRuntime.noteInteractiveWaiter(-1);
@@ -989,6 +1007,7 @@ export class PersonalInboxService {
         inbox_count: 0,
         inbox_digest: withSurfaceGeneration(inboxDigest([]), ""),
         memory: processMemoryView(),
+        pressure: this.kernelRuntime.pressureView(),
         pull: { ...pullStatus },
         installations: [],
         catalog: catalogReady([]),
@@ -1049,6 +1068,7 @@ export class PersonalInboxService {
         this.drivers.surfaceGeneration(installations, host),
       ),
       memory: processMemoryView(),
+      pressure: this.kernelRuntime.pressureView(),
       pull: { ...pullStatus },
       installations: views,
       catalog: catalogReady(views),
@@ -1082,6 +1102,9 @@ export class PersonalInboxService {
     } catch (error) {
       console.error("blob store clear leftover files", error);
     }
+    this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
+    this.kernelRuntime.syncSnapshots.clear();
+    this.touchInboxDigest();
     return result;
   }
 
@@ -1552,7 +1575,7 @@ export class PersonalInboxService {
         : {}),
       updated_at: new Date().toISOString(),
     });
-    void this.publishInboxDigest();
+    this.touchInboxDigest();
     return toPrefView(pref);
   }
 
@@ -1622,7 +1645,7 @@ export class PersonalInboxService {
       host,
     );
     await this.work.ackDoneThread(threadId);
-    void this.publishInboxDigest();
+    this.touchInboxDigest();
     return toPrefView(pref);
   }
 

@@ -12,6 +12,7 @@ function reachabilityFromEngineFetch(
     health_ok: true,
     personal_ok: engine.kernel === "running",
     latency_ms: Date.now() - started,
+    pressure_level: engine.pressure?.level,
   });
 }
 

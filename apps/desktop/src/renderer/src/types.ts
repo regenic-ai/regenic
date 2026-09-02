@@ -551,6 +551,11 @@ export interface PluginInventoryItem {
   error: string | null;
 }
 
+export interface PersonalHeartbeatInstallationPulse {
+  id: string;
+  sync: SyncProgressView | null;
+}
+
 export interface PersonalHeartbeatView {
   kernel: "running" | "stopped";
   org_id: string;
@@ -568,6 +573,7 @@ export interface PersonalHeartbeatView {
     PullStatusView,
     "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
   >;
+  installations: PersonalHeartbeatInstallationPulse[];
 }
 
 export interface PersonalEngineView {
@@ -577,6 +583,7 @@ export interface PersonalEngineView {
   inbox_count: number;
   inbox_digest?: string;
   memory?: ProcessMemoryView;
+  pressure?: PersonalHeartbeatView["pressure"];
   pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
