@@ -81,6 +81,7 @@ describe("DSH mux wait", () => {
     const result = await connector.poll({ value: "10" });
     assert.equal(historyCalls.length, 0);
     assert.equal(result.next_cursor, "10");
+    assert.deepEqual(result.poll_hint, { live_seeded: true, history_pending: false });
     assert.equal(result.batch.delivery_id.startsWith("dsh-live:sess-1:"), true);
     assert.equal(result.batch.records[0].external_id, "sess-1:11");
     assert.equal(result.batch.records[1].external_id, "sess-1:12");
