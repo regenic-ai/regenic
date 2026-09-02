@@ -50,6 +50,29 @@ export function filterCatalogChatOptions(
   });
 }
 
+/**
+ * Free-text catalog fields omit `options`. Do not coalesce to `[]` — an empty
+ * array is truthy and the install form would render a dead `<select>`.
+ */
+export function resolveCatalogFieldOptions(
+  fieldKey: string,
+  fieldOptions: Array<{ value: string; label: string }> | undefined,
+  remoteOptions: Array<{ value: string; label: string }> | undefined,
+  values: Record<string, string>,
+): Array<{ value: string; label: string }> | undefined {
+  const source = remoteOptions ?? fieldOptions;
+  if (!source) {
+    return undefined;
+  }
+  return filterCatalogChatOptions(fieldKey, source, values);
+}
+
+export function catalogFieldUsesSelect(
+  options: Array<{ value: string; label: string }> | undefined,
+): boolean {
+  return (options?.length ?? 0) > 0;
+}
+
 export function configWithOptionNames(
   values: Record<string, string>,
   fields: Array<{

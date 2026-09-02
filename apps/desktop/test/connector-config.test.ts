@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  catalogFieldUsesSelect,
   configWithOptionNames,
   conversationNameFromOptionLabel,
   filterCatalogChatOptions,
+  resolveCatalogFieldOptions,
 } from "../src/renderer/src/connector-config.ts";
 
 describe("configWithOptionNames", () => {
@@ -83,5 +85,33 @@ describe("filterCatalogChatOptions", () => {
       }),
       options,
     );
+  });
+});
+
+describe("resolveCatalogFieldOptions", () => {
+  it("leaves free-text fields without options so the form stays an input", () => {
+    assert.equal(
+      resolveCatalogFieldOptions("base_url", undefined, undefined, {}),
+      undefined,
+    );
+    assert.equal(catalogFieldUsesSelect(undefined), false);
+    assert.equal(catalogFieldUsesSelect([]), false);
+  });
+
+  it("keeps declared or remote option lists for selects", () => {
+    const options = [{ value: "oc_1", label: "Group · Eng" }];
+    assert.deepEqual(
+      resolveCatalogFieldOptions("chat_ids", options, undefined, {
+        selection: "all",
+      }),
+      options,
+    );
+    assert.deepEqual(
+      resolveCatalogFieldOptions("chat_ids", undefined, options, {
+        selection: "all",
+      }),
+      options,
+    );
+    assert.equal(catalogFieldUsesSelect(options), true);
   });
 });

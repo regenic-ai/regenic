@@ -5,8 +5,9 @@ import {
   whatsAppImportSummary,
 } from "./whatsapp-import";
 import {
+  catalogFieldUsesSelect,
   configWithOptionNames,
-  filterCatalogChatOptions,
+  resolveCatalogFieldOptions,
   splitValues,
   toggleCsvValue,
 } from "./connector-config";
@@ -370,9 +371,10 @@ function ConnectorSettingsForm({
   const fields = kind.fields
     .map((field) => ({
       ...field,
-      options: filterCatalogChatOptions(
+      options: resolveCatalogFieldOptions(
         field.key,
-        remoteOptions[field.key] ?? field.options ?? [],
+        field.options,
+        remoteOptions[field.key],
         values,
       ),
     }))
@@ -414,7 +416,7 @@ function ConnectorSettingsForm({
               }))
             }
           />
-        ) : field.options ? (
+        ) : catalogFieldUsesSelect(field.options) ? (
           <select
             value={values[field.key] ?? field.default ?? ""}
             onChange={(event) =>
