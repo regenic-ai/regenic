@@ -28,7 +28,9 @@ import {
   buildSyncProgressSnapshot,
   loadSyncProgress,
   scopeSyncCatalogMembers,
+  shouldDeferBackgroundSync,
   withDeadline,
+  yieldToEventLoop,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -1275,6 +1277,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
       return;
     }
+    if (shouldDeferBackgroundSync(this.kernelRuntime.pressureSample())) {
+      return;
+    }
     this.ticking = true;
     if (this.maintenanceHold) {
       this.ticking = false;
@@ -1584,6 +1589,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       };
       // Text first so the open thread's lease is free before its media drain.
       const textBatches = await mapLimit(textItems, textConcurrency, runSelected);
+      await yieldToEventLoop();
       const mediaBatches = await mapLimit(mediaItems, mediaConcurrency, runSelected);
       const batches = [...textBatches, ...mediaBatches];
       const runs = batches.flatMap((batch) => batch.pages);
@@ -2157,6 +2163,7 @@ async function pollStream(
       break;
     }
     seenCursors.add(run.next_cursor);
+    await yieldToEventLoop();
   }
   return runs;
 }

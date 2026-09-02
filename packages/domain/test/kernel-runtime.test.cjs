@@ -4,7 +4,9 @@ const {
   applyKernelPressureToSyncBudget,
   classifyKernelPressure,
   kernelPressureView,
+  shouldDeferBackgroundSync,
 } = require("../dist/kernel-pressure.js");
+const { yieldToEventLoop } = require("../dist/sync-budget.js");
 const { classifyKernelReachability } = require("../dist/kernel-reachability.js");
 const {
   buildSyncProgressSnapshot,
@@ -79,6 +81,37 @@ describe("kernel pressure", () => {
       }).interactive_ready,
       false,
     );
+  });
+
+  it("defers background sync while interactive reads are waiting", () => {
+    assert.equal(
+      shouldDeferBackgroundSync({
+        rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+        interactive_waiters: 0,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldDeferBackgroundSync({
+        rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+        interactive_waiters: 2,
+      }),
+      true,
+    );
+  });
+});
+
+describe("sync budget", () => {
+  it("yields the event loop", async () => {
+    let yielded = false;
+    const pending = yieldToEventLoop().then(() => {
+      yielded = true;
+    });
+    assert.equal(yielded, false);
+    await pending;
+    assert.equal(yielded, true);
   });
 });
 

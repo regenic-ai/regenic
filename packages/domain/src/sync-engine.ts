@@ -9,6 +9,7 @@ import type {
   SyncWorkItem,
 } from "./sync-contracts";
 import { CATALOG_RESCAN_MS } from "./sync-contracts";
+import { yieldToEventLoop } from "./sync-budget";
 import { lastHistoryWorkKey, lastSeedWorkKey, planSyncWork, syncLaneLimits } from "./sync-scheduler";
 import { advanceSyncState, syncStateFromCursor } from "./sync-phase";
 
@@ -75,6 +76,7 @@ export class SyncEngine {
       if (listed.complete || !listed.next_cursor) {
         break;
       }
+      await yieldToEventLoop();
     }
     return view;
   }

@@ -12,6 +12,13 @@ export function currentSyncLane(): SyncLane {
   return laneContext.getStore() ?? "live";
 }
 
+/** Yield the Node event loop so interactive HTTP handlers can run. */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 export interface SyncSlotPoolOptions {
   total: number;
   reserved?: Partial<Record<SyncLane, number>>;

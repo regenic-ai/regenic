@@ -73,6 +73,13 @@ export function kernelPressureView(
   };
 }
 
+/** Background connector ticks should wait while inbox/engine reads are in flight. */
+export function shouldDeferBackgroundSync(
+  sample: KernelPressureSample,
+): boolean {
+  return (sample.interactive_waiters ?? 0) > 0;
+}
+
 /** Adjust a planned sync budget under load. History and media yield first. */
 export function applyKernelPressureToSyncBudget(
   budget: SyncBudgetInput,

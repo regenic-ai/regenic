@@ -1,5 +1,5 @@
 /** After listen(), treat the human as present until this much quiet time. */
-export const HUMAN_IDLE_MS = 20_000;
+export const HUMAN_IDLE_MS = 60_000;
 
 let bootAt = 0;
 let lastHumanAt = 0;
