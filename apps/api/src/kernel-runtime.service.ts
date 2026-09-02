@@ -3,6 +3,7 @@ import {
   SyncProgressSnapshotStore,
   InboxSummarySnapshotStore,
   kernelPressureView,
+  type IngestAttempt,
   type KernelPressureSample,
   type KernelPressureView,
   type SyncProgressSnapshot,
@@ -16,6 +17,7 @@ const LAG_SAMPLE_MS = 1_000;
 export class KernelRuntimeService implements OnModuleDestroy {
   readonly syncSnapshots = new SyncProgressSnapshotStore();
   readonly inboxSummary = new InboxSummarySnapshotStore();
+  private readonly installAttempts = new Map<string, IngestAttempt>();
   private lagTimer: ReturnType<typeof setInterval> | undefined;
   private eventLoopLagMs = 0;
   private interactiveWaiters = 0;
@@ -45,6 +47,28 @@ export class KernelRuntimeService implements OnModuleDestroy {
 
   publishSyncSnapshot(snapshot: SyncProgressSnapshot): SyncProgressSnapshot {
     return this.syncSnapshots.publish(snapshot);
+  }
+
+  publishInstallAttempt(
+    installationId: string,
+    attempt: IngestAttempt,
+  ): IngestAttempt {
+    this.installAttempts.set(installationId, attempt);
+    return attempt;
+  }
+
+  peekInstallAttempt(installationId: string): IngestAttempt | null {
+    return this.installAttempts.get(installationId) ?? null;
+  }
+
+  clearInstallationSnapshots(installationId?: string): void {
+    if (installationId) {
+      this.syncSnapshots.clear(installationId);
+      this.installAttempts.delete(installationId);
+      return;
+    }
+    this.syncSnapshots.clear();
+    this.installAttempts.clear();
   }
 
   pressureSample(): KernelPressureSample {

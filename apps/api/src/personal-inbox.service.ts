@@ -193,6 +193,7 @@ export interface PersonalEngineView {
 export interface PersonalHeartbeatInstallationPulse {
   id: string;
   sync: import("@regenic/domain").SyncProgressView | null;
+  last_attempt?: import("@regenic/domain").IngestAttempt | null;
 }
 
 export interface PersonalHeartbeatView {
@@ -962,10 +963,17 @@ export class PersonalInboxService {
           last_tick_at: pullStatus.last_tick_at,
           last_accepted_count: pullStatus.last_accepted_count,
         },
-        installations: installations.map((installation) => ({
-          id: installation.id,
-          sync: this.kernelRuntime.syncSnapshots.peekProgress(installation.id),
-        })),
+        installations: installations.map((installation) => {
+          const pulse: PersonalHeartbeatInstallationPulse = {
+            id: installation.id,
+            sync: this.kernelRuntime.syncSnapshots.peekProgress(installation.id),
+          };
+          const attempt = this.kernelRuntime.peekInstallAttempt(installation.id);
+          if (attempt) {
+            pulse.last_attempt = attempt;
+          }
+          return pulse;
+        }),
       };
     } finally {
       this.kernelRuntime.noteInteractiveWaiter(-1);
@@ -1043,6 +1051,9 @@ export class PersonalInboxService {
           tier.include_install_attempts
             ? await store.latestAttempt(installation.id)
             : null;
+        if (attempt) {
+          this.kernelRuntime.publishInstallAttempt(installation.id, attempt);
+        }
         return toInstallationView(
           installation,
           attempt,
@@ -1103,7 +1114,7 @@ export class PersonalInboxService {
       console.error("blob store clear leftover files", error);
     }
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
-    this.kernelRuntime.syncSnapshots.clear();
+    this.kernelRuntime.clearInstallationSnapshots();
     this.touchInboxDigest();
     return result;
   }

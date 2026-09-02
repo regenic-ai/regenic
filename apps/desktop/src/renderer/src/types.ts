@@ -554,6 +554,7 @@ export interface PluginInventoryItem {
 export interface PersonalHeartbeatInstallationPulse {
   id: string;
   sync: SyncProgressView | null;
+  last_attempt?: IngestAttempt | null;
 }
 
 export interface PersonalHeartbeatView {

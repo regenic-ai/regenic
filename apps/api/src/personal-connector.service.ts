@@ -1213,6 +1213,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return { id: installationId, removed: true };
     }
     await store.deleteInstallation(current.id, this.runtime.orgId());
+    this.kernelRuntime.clearInstallationSnapshots(current.id);
     return { id: current.id, removed: true };
   }
 
@@ -1657,9 +1658,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
   ): Promise<void> {
     try {
       const store = this.runtime.requireHost().get("authority");
-      const [catalog, states] = await Promise.all([
+      const [catalog, states, attempt] = await Promise.all([
         store.getSyncCatalog(installationId),
         store.listSyncStates(installationId),
+        store.latestAttempt(installationId),
       ]);
       const fallbackMembers = catalogMembersFromStreams(installationId, streams);
       const snapshot = buildSyncProgressSnapshot({
@@ -1672,6 +1674,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
       if (snapshot) {
         this.kernelRuntime.publishSyncSnapshot(snapshot);
+      }
+      if (attempt) {
+        this.kernelRuntime.publishInstallAttempt(installationId, attempt);
       }
     } catch (error) {
       console.warn("sync progress snapshot refresh failed", error);
