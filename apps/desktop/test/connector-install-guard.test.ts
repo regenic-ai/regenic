@@ -44,4 +44,21 @@ describe("connector-install-guard", () => {
       false,
     );
   });
+
+  it("matches pipe-separated visible_when values", () => {
+    assert.equal(
+      matchesCatalogFieldWhen(
+        { field: "selection", value: "all|recent" },
+        { selection: "recent" },
+      ),
+      true,
+    );
+    assert.equal(
+      matchesCatalogFieldWhen(
+        { field: "selection", value: "all|recent|pick" },
+        { selection: "pick" },
+      ),
+      true,
+    );
+  });
 });

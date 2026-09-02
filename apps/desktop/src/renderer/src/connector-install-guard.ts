@@ -19,6 +19,9 @@ export function matchesCatalogFieldWhen(
     return when.values.includes(current);
   }
   if (when.value !== undefined) {
+    if (when.value.includes("|")) {
+      return when.value.split("|").includes(current);
+    }
     return current === when.value;
   }
   return true;

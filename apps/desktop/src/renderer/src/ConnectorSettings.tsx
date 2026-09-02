@@ -6,6 +6,7 @@ import {
 } from "./whatsapp-import";
 import {
   configWithOptionNames,
+  filterCatalogChatOptions,
   splitValues,
   toggleCsvValue,
 } from "./connector-config";
@@ -333,6 +334,10 @@ function ConnectorSettingsForm({
     Record<string, { value: string; label: string }[]>
   >({});
   const [loadingOptions, setLoadingOptions] = useState(false);
+  const prerequisites = visiblePrerequisites(kind, values);
+  const prerequisitesReady = prerequisites.every(
+    (item) => !item.required || item.ready,
+  );
   const needsRemote = kind.fields
     .filter((field) => matchesCatalogFieldWhen(field.visible_when, values))
     .some(fieldNeedsRemoteOptions);
@@ -342,7 +347,7 @@ function ConnectorSettingsForm({
     }
   }, [installConfirm, installConfirmed]);
   useEffect(() => {
-    if (!needsRemote) {
+    if (!needsRemote || !prerequisitesReady) {
       return;
     }
     let cancelled = false;
@@ -361,14 +366,17 @@ function ConnectorSettingsForm({
     return () => {
       cancelled = true;
     };
-  }, [kind.connector_type, needsRemote]);
+  }, [kind.connector_type, needsRemote, prerequisitesReady]);
   const fields = kind.fields
     .map((field) => ({
       ...field,
-      options: remoteOptions[field.key] ?? field.options,
+      options: filterCatalogChatOptions(
+        field.key,
+        remoteOptions[field.key] ?? field.options ?? [],
+        values,
+      ),
     }))
     .filter((field) => matchesCatalogFieldWhen(field.visible_when, values));
-  const prerequisites = visiblePrerequisites(kind, values);
   const blocked = prerequisites.some((item) => item.required && !item.ready);
   const missingRequired = fields.some(
     (field) => field.required && !(values[field.key] ?? "").trim(),

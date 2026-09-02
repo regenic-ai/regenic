@@ -790,6 +790,11 @@ describe("feishuChatDriver", () => {
   it("advertises Feishu setup steps on the Engine catalog", () => {
     const catalog = feishuChatDriver.installCatalog();
     assert.equal(catalog.fields[0].default, "recent");
+    const kinds = catalog.fields.find((field) => field.key === "kinds");
+    assert.deepEqual(kinds?.visible_when, {
+      field: "selection",
+      values: ["all", "recent", "pick"],
+    });
     assert.equal(
       catalog.setup_steps[0].command,
       "npx @larksuite/cli@latest install",

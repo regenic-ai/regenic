@@ -156,6 +156,12 @@ describe("catalog field when", () => {
       }),
       false,
     );
+    assert.equal(
+      matchesCatalogFieldWhen({ field: "selection", value: "all|recent|pick" }, {
+        selection: "pick",
+      }),
+      true,
+    );
   });
 });
 

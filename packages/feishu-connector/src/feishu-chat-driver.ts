@@ -118,7 +118,7 @@ export const feishuChatDriver: ChannelDriver = {
             { value: "group", label: "option.kinds.group" },
             { value: "p2p", label: "option.kinds.p2p" },
           ],
-          visible_when: { field: "selection", values: ["all", "recent"] },
+          visible_when: { field: "selection", values: ["all", "recent", "pick"] },
         },
         {
           key: "chat_ids",
