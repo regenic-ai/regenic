@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { BrandLockup } from "./Brand";
 import { useLocale } from "./LocaleContext";
-import { fetchEngine, fetchInbox } from "./api";
+import { fetchInbox } from "./api";
+import { fetchRuntimePulse } from "./runtime-pulse-fetch.ts";
 import { chipLabel, engineChip, formatChatTime } from "./format";
 import { groupInboxThreads, latestMessage, sortInboxThreads } from "./inbox";
 import { threadTitle } from "./message-view";
 import { TRAY_HEADS_PAGE_SIZE } from "./thread-window";
 import type { InboxViewItem, PersonalEngineView } from "./types";
+import type { KernelReachability } from "../../shared/connection-state.ts";
 
 const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
@@ -15,6 +17,8 @@ export function TrayApp() {
   const { t, locale } = useLocale();
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [engine, setEngine] = useState<PersonalEngineView | null>(null);
+  const [reachability, setReachability] = useState<KernelReachability>("live");
+  const engineRef = useRef<PersonalEngineView | null>(null);
   const digestRef = useRef<string | null>(null);
   const delayRef = useRef(POLL_MS);
   const inFlight = useRef(false);
@@ -29,11 +33,17 @@ export function TrayApp() {
       }
       inFlight.current = true;
       try {
-        const nextEngine = await fetchEngine({ detailed: false });
+        const pulse = await fetchRuntimePulse({
+          detailed: false,
+          current: engineRef.current,
+        });
+        const nextEngine = pulse.engine;
+        engineRef.current = nextEngine;
         if (cancelled) {
           return;
         }
         setEngine(nextEngine);
+        setReachability(pulse.reachability);
         const digest = nextEngine.inbox_digest ?? "";
         const skip =
           nextEngine.kernel === "running" &&
@@ -74,7 +84,7 @@ export function TrayApp() {
     };
   }, [locale]);
 
-  const chip = engineChip(engine);
+  const chip = engineChip(engine, reachability);
   const threads = sortInboxThreads(groupInboxThreads(inbox));
   const recent = threads.slice(0, 3);
 

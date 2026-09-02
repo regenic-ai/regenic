@@ -1,9 +1,16 @@
 import { t } from "../../shared/i18n.ts";
+import type { KernelReachability } from "../../shared/connection-state.ts";
 import type { EngineChipState, PersonalEngineView, PullStatusView } from "./types.ts";
 
-export function engineChip(engine: PersonalEngineView | null): EngineChipState {
+export function engineChip(
+  engine: PersonalEngineView | null,
+  reachability: KernelReachability = "live",
+): EngineChipState {
   if (!engine || engine.kernel === "stopped") {
     return "stopped";
+  }
+  if (reachability === "degraded") {
+    return "degraded";
   }
   if (engine.installations.some((item) => item.last_attempt?.status === "running")) {
     return "syncing";

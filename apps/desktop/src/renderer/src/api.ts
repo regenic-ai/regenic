@@ -15,6 +15,7 @@ import type {
   Locale,
   MessageReceipt,
   PersonalEngineView,
+  PersonalHeartbeatView,
   PluginInventoryItem,
   PromptAnswerItem,
   RecipeView,
@@ -52,6 +53,7 @@ const KERNEL_FETCH_MS = 120_000;
 const INBOX_FETCH_MS = 30_000;
 /** Engine snapshot is local + cached probes. Do not wait on catalog listing. */
 const ENGINE_FETCH_MS = 8_000;
+const HEARTBEAT_FETCH_MS = 3_000;
 
 export type InboxFetchInit = {
   signal?: AbortSignal;
@@ -505,6 +507,30 @@ export async function fetchEngine(
     })),
     plugins: catalogPlugins(engine.plugins),
     plugin_dir: typeof engine.plugin_dir === "string" ? engine.plugin_dir : null,
+  };
+}
+
+export async function fetchHeartbeat(): Promise<PersonalHeartbeatView> {
+  const response = await kernelFetch("/v1/me/heartbeat", {
+    signal: AbortSignal.timeout(HEARTBEAT_FETCH_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`heartbeat ${response.status}`);
+  }
+  const heartbeat = (await response.json()) as PersonalHeartbeatView;
+  const reachability = heartbeat.reachability;
+  return {
+    ...heartbeat,
+    reachability:
+      reachability === "degraded" || reachability === "offline"
+        ? reachability
+        : "live",
+    pull: {
+      phase: heartbeat.pull?.phase === "pulling" ? "pulling" : "idle",
+      catching_up_count: heartbeat.pull?.catching_up_count ?? 0,
+      last_tick_at: heartbeat.pull?.last_tick_at ?? null,
+      last_accepted_count: heartbeat.pull?.last_accepted_count ?? 0,
+    },
   };
 }
 

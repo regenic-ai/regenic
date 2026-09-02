@@ -740,6 +740,16 @@ describe("feishuChatDriver", () => {
   });
 
   it("requires a picked conversation and cannot create a conversation", async () => {
+    const recent = feishuChatDriver.install({
+      id: "feishu-recent",
+      org_id: "local-owner",
+      config: { selection: "recent", kinds: ["group", "p2p"] },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    assert.deepEqual(recent.config, {
+      selection: "recent",
+      kinds: ["group", "p2p"],
+    });
     assert.throws(
       () =>
         feishuChatDriver.install({
@@ -769,6 +779,7 @@ describe("feishuChatDriver", () => {
 
   it("advertises Feishu setup steps on the Engine catalog", () => {
     const catalog = feishuChatDriver.installCatalog();
+    assert.equal(catalog.fields[0].default, "recent");
     assert.equal(
       catalog.setup_steps[0].command,
       "npx @larksuite/cli@latest install",
@@ -781,6 +792,34 @@ describe("feishuChatDriver", () => {
     assert.ok(feishuWriteBackLabels("通过").includes("同意"));
     assert.ok(feishuWriteBackLabels("拒绝").includes("驳回"));
     assert.deepEqual(feishuChatDriver.writeBackLabels("同意"), feishuWriteBackLabels("同意"));
+  });
+});
+
+describe("createFeishuRecentSyncSource", () => {
+  it("lists only the recent directory page and marks the catalog complete", async () => {
+    let all = 0;
+    const { createFeishuRecentSyncSource } = require("../dist/feishu-sync-source");
+    const source = createFeishuRecentSyncSource(
+      {
+        async listRecentChats(types, options) {
+          assert.deepEqual(types, ["group"]);
+          assert.equal(options?.names, true);
+          return [{ chat_id: "oc_hot", name: "Ada", chat_mode: "group" }];
+        },
+        async listChats() {
+          all += 1;
+          return { items: [] };
+        },
+      },
+      ["group"],
+    );
+    const page = await source.listDirectory(null);
+    assert.equal(all, 0);
+    assert.equal(page.complete, true);
+    assert.deepEqual(
+      page.members.map((member) => member.thread_id),
+      ["feishu:oc_hot"],
+    );
   });
 });
 

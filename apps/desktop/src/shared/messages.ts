@@ -10,6 +10,8 @@ export const en = {
   "chrome.currentWorkCount": "{count} open",
   "chrome.kernel": "Kernel {state}",
   "chrome.cannotReach": "Cannot reach the kernel at {origin}",
+  "chrome.degradedReach":
+    "Local service is catching up at {origin}. Your list may lag a few seconds.",
   "chrome.sendTimedOut":
     "The local service is still sending this. Wait a bit, then check the thread — it may already be there.",
 
@@ -488,6 +490,7 @@ export const en = {
 
   "chip.running": "Running",
   "chip.syncing": "Syncing",
+  "chip.degraded": "Syncing (slow)",
   "chip.stopped": "Stopped",
   "status.enabled": "Enabled",
   "status.disabled": "Disabled",
@@ -552,6 +555,11 @@ export const en = {
     "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not a WhatsApp password.",
   "connector.showPairing": "Show pairing code",
   "connector.hidePairing": "Hide",
+  "connector.feishuAllSyncWarning":
+    "Syncing every group and direct message can pull hundreds of conversations into the background. Memory use and list lag may increase.",
+  "connector.feishuAllSyncConfirm":
+    "I understand this may sync hundreds of conversations and slow the app",
+  "connector.feishuAllSyncConfirmRequired": "Confirm full sync first",
 
   "docs.connector": "Connector spec",
   "docs.executor": "Executor spec",
@@ -621,6 +629,8 @@ export const zh: Record<MessageKey, string> = {
   "chrome.currentWorkCount": "{count} 条进行中",
   "chrome.kernel": "本机服务 {state}",
   "chrome.cannotReach": "连不上 {origin} 上的本机服务",
+  "chrome.degradedReach":
+    "{origin} 上的本机服务正在后台同步，列表可能会慢几秒。",
   "chrome.sendTimedOut": "本机服务还在发这条。先等一会儿再看会话，可能已经发出去了。",
 
   "inbox.title": "工作",
@@ -1068,6 +1078,7 @@ export const zh: Record<MessageKey, string> = {
 
   "chip.running": "运行中",
   "chip.syncing": "同步中",
+  "chip.degraded": "同步中（响应慢）",
   "chip.stopped": "已停止",
   "status.enabled": "已启用",
   "status.disabled": "已停用",
@@ -1130,6 +1141,11 @@ export const zh: Record<MessageKey, string> = {
     "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是 WhatsApp 密码。",
   "connector.showPairing": "显示配对码",
   "connector.hidePairing": "隐藏",
+  "connector.feishuAllSyncWarning":
+    "同步全部群和单聊可能会把数百个会话拉进后台，内存占用和列表延迟都可能上升。",
+  "connector.feishuAllSyncConfirm":
+    "我知道这可能会同步数百个会话，并让界面变慢",
+  "connector.feishuAllSyncConfirmRequired": "请先确认全量同步",
 
   "docs.connector": "连接器规范",
   "docs.executor": "执行器规范",

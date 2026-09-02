@@ -543,6 +543,25 @@ export interface PluginInventoryItem {
   error: string | null;
 }
 
+export interface PersonalHeartbeatView {
+  kernel: "running" | "stopped";
+  org_id: string;
+  inbox_count: number;
+  inbox_digest: string;
+  memory: ProcessMemoryView;
+  pressure: {
+    level: "ok" | "elevated" | "critical";
+    interactive_ready: boolean;
+    throttle_history: boolean;
+    throttle_media: boolean;
+  };
+  reachability: "live" | "degraded" | "offline";
+  pull: Pick<
+    PullStatusView,
+    "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
+  >;
+}
+
 export interface PersonalEngineView {
   kernel: "running" | "stopped";
   org_id: string;
@@ -591,7 +610,7 @@ export interface StoreClearView {
   };
 }
 
-export type EngineChipState = "running" | "syncing" | "stopped";
+export type EngineChipState = "running" | "syncing" | "degraded" | "stopped";
 
 export interface ReplyAttachmentInput {
   filename: string;

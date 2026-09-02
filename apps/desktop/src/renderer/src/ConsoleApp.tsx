@@ -9,17 +9,22 @@ import {
   ackConversationAttention,
   createConversation,
   currentApiOrigin,
-  fetchEngine,
   fetchInbox,
   fetchInboxHeads,
   fetchUiPrefs,
   focusConversation,
   dismissWorkItem,
   isInboxAbortError,
+  isKernelTimeoutError,
   runWorkItem,
   saveUiPrefs,
   updateConversationPrefs,
 } from "./api";
+import { fetchRuntimePulse } from "./runtime-pulse-fetch.ts";
+import {
+  connectionErrorForReachability,
+  type KernelReachability,
+} from "../../shared/connection-state.ts";
 import { BrandBadge } from "./Brand";
 import { EngineChip, RailButton } from "./console-chrome";
 import { engineRevision } from "./console-refresh";
@@ -119,9 +124,11 @@ export function ConsoleApp() {
     Record<string, InboxViewItem[]>
   >({});
   const [engine, setEngine] = useState<PersonalEngineView | null>(null);
+  const engineRef = useRef<PersonalEngineView | null>(null);
   const [drafts, setDrafts] = useState<CreatedConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reachability, setReachability] = useState<KernelReachability>("live");
   const [creating, setCreating] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [seedingId, setSeedingId] = useState<string | null>(null);
@@ -648,7 +655,12 @@ export function ConsoleApp() {
         refreshAgain.current = false;
         const epoch = workspaceEpoch.current;
         const detailed = navRef.current === "engine";
-        const nextEngine = await fetchEngine({ detailed });
+        const pulse = await fetchRuntimePulse({
+          detailed,
+          current: engineRef.current,
+        });
+        const nextEngine = pulse.engine;
+        engineRef.current = nextEngine;
         if (workspaceEpoch.current !== epoch) {
           continue;
         }
@@ -767,14 +779,35 @@ export function ConsoleApp() {
             current?.catalog?.length && !nextEngine.catalog?.length
               ? { ...nextEngine, catalog: current.catalog }
               : nextEngine;
-          return engineRevision(current, detailed) === engineRevision(merged, detailed)
+          const next = engineRevision(current, detailed) === engineRevision(merged, detailed)
             ? current
             : merged;
+          engineRef.current = next;
+          return next;
         });
-        setError((current) => (current === null ? current : null));
+        setReachability(pulse.reachability);
+        const reachCopy = connectionErrorForReachability(
+          pulse.reachability,
+          currentApiOrigin(),
+          {
+            offline: (input) =>
+              translate("chrome.cannotReach", { origin: input.origin }),
+            degraded: (input) =>
+              translate("chrome.degradedReach", { origin: input.origin }),
+          },
+        );
+        setError(reachCopy);
       } while (refreshAgain.current);
-    } catch {
+    } catch (caught) {
+      if (isKernelTimeoutError(caught)) {
+        setReachability("degraded");
+        setError(
+          translate("chrome.degradedReach", { origin: currentApiOrigin() }),
+        );
+      } else {
+        setReachability("offline");
         setError(translate("chrome.cannotReach", { origin: currentApiOrigin() }));
+      }
     } finally {
       refreshInFlight.current = false;
     }
@@ -1056,7 +1089,7 @@ export function ConsoleApp() {
     selectedThreadRef.current = opened;
     return opened;
   }, [catalogThreads, selectedId, messagesByThread]);
-  const chip = engineChip(engine);
+  const chip = engineChip(engine, reachability);
   const createTargets = createConversationTargets(engine);
 
   const startConversation = async (installationId: string) => {

@@ -5,6 +5,7 @@ import type { StandardPlaceholder } from "@regenic/domain";
 import { processMemoryView } from "./process-memory";
 import { PersonalApiKeyService } from "./personal-api-key.service";
 import { PersonalPairingService } from "./personal-pairing.service";
+import { KernelRuntimeService } from "./kernel-runtime.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 @Controller()
@@ -16,6 +17,8 @@ export class HealthController {
     private readonly keys: PersonalApiKeyService,
     @Inject(PersonalPairingService)
     private readonly pairing: PersonalPairingService,
+    @Inject(KernelRuntimeService)
+    private readonly kernelRuntime: KernelRuntimeService,
   ) {}
 
   @Get("health")
@@ -28,12 +31,14 @@ export class HealthController {
       const sqlite = this.runtime.isReady() ? "up" : "down";
       const personal = isPersonalApiEnabled(env);
       const expectedKey = this.keys.expectedKey();
+      const pressure = this.kernelRuntime.pressureView();
       return {
-        status: sqlite === "up" ? "ok" : "degraded",
+        status: sqlite === "up" && pressure.interactive_ready ? "ok" : "degraded",
         service: "api",
         mode: personal ? "personal" : "service",
         sqlite,
         memory: processMemoryView(),
+        runtime: pressure,
         domain: "@regenic/domain",
         ...(personal
           ? {

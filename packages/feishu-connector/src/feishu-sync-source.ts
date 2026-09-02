@@ -6,6 +6,34 @@ import { feishuStreamKey } from "./feishu-streams";
 const GROUP_PAGE_SIZE = 100;
 const P2P_PAGE_SIZE = 50;
 
+interface FeishuRecentCatalogClient {
+  listRecentChats?(
+    types?: FeishuChatMode[],
+    options?: { names?: boolean },
+  ): Promise<FeishuChat[]>;
+  listChats?: FeishuImClient["listChats"];
+}
+
+export function createFeishuRecentSyncSource(
+  client: FeishuRecentCatalogClient,
+  kinds: FeishuChatMode[],
+): SyncSource {
+  return {
+    async listDirectory(): Promise<SyncDirectoryPage> {
+      const chats = await listRecentFeishuCatalogChats(client, kinds);
+      return {
+        members: chats.map((chat) => ({
+          stream_key: feishuStreamKey(chat.chat_id),
+          thread_id: `${FEISHU_SOURCE}:${chat.chat_id}`,
+          ...(chat.name?.trim() ? { label: chat.name.trim() } : {}),
+          kind: chat.chat_mode,
+        })),
+        complete: true,
+      };
+    },
+  };
+}
+
 export function createFeishuSyncSource(
   client: Pick<FeishuImClient, "listChats">,
   kinds: FeishuChatMode[],
@@ -101,4 +129,28 @@ function encodeDirectoryCursor(phase: "group" | "p2p", token?: string): string {
 
 function chatMatchesKinds(chat: FeishuChat, kinds: FeishuChatMode[]): boolean {
   return !chat.chat_mode || kinds.includes(chat.chat_mode);
+}
+
+async function listRecentFeishuCatalogChats(
+  client: FeishuRecentCatalogClient,
+  kinds: FeishuChatMode[],
+): Promise<FeishuChat[]> {
+  try {
+    if (client.listRecentChats) {
+      return (await client.listRecentChats(kinds, { names: true })).filter((chat) =>
+        chatMatchesKinds(chat, kinds),
+      );
+    }
+    if (client.listChats) {
+      const page = await client.listChats({
+        page_size: 50,
+        types: kinds,
+        names: kinds.includes("p2p"),
+      });
+      return page.items.filter((chat) => chatMatchesKinds(chat, kinds));
+    }
+  } catch {
+    // Keep the install usable when the directory misses.
+  }
+  return [];
 }

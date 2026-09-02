@@ -24,6 +24,8 @@ import {
   runInSyncLane,
   settleIsolated,
   SyncEngine,
+  applyKernelPressureToSyncBudget,
+  buildSyncProgressSnapshot,
   loadSyncProgress,
   scopeSyncCatalogMembers,
   withDeadline,
@@ -53,6 +55,7 @@ import {
 } from "./personal-connector-view";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
+import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
   applyPullOutcome,
   beginPull,
@@ -172,6 +175,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
     private readonly inbox: PersonalInboxService,
     @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
+    @Inject(KernelRuntimeService)
+    private readonly kernelRuntime: KernelRuntimeService,
   ) {}
 
   startAfterListen(): void {
@@ -1446,12 +1451,19 @@ export class PersonalConnectorService implements OnModuleDestroy {
       const streamByKey = new Map(
         streams.map((stream) => [stream.stream_key, stream] as const),
       );
+      const pressure = this.kernelRuntime.pressureView();
       const selected = work.flatMap((item) => {
         if (item.lane === "catalog") {
           return [];
         }
         const stream = streamByKey.get(item.stream_key);
         if (!stream) {
+          return [];
+        }
+        if (pressure.throttle_history && (item.older || item.lane === "history")) {
+          return [];
+        }
+        if (pressure.throttle_media && item.media) {
           return [];
         }
         const key = streamPaceKey(installation.id, stream.stream_key);
@@ -1466,13 +1478,24 @@ export class PersonalConnectorService implements OnModuleDestroy {
           pages: item.pages,
           catchUpPages: streamCatchUpPages(stream, item.pages),
         });
+        const throttled = applyKernelPressureToSyncBudget(
+          {
+            pages: budget.pages,
+            concurrency: budget.concurrency,
+            lane: item.lane,
+          },
+          pressure.level,
+        );
+        if (throttled.concurrency <= 0) {
+          return [];
+        }
         return [
           {
             stream,
             key,
             idleMs: streamIdleMs(stream),
             older: item.older,
-            pages: budget.pages,
+            pages: throttled.pages,
             lane: item.lane,
             media: item.media,
           },
@@ -1599,6 +1622,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         notifyAccepted(mediaItems, mediaBatches);
       }
       this.publishStreams();
+      void this.refreshSyncSnapshot(installation.id, streams);
       return {
         installation_id: installation.id,
         pages_attempted: runs.length,
@@ -1615,6 +1639,33 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
       this.publishStreams();
       throw wrapDriverError(error, "sync_failed");
+    }
+  }
+
+  private async refreshSyncSnapshot(
+    installationId: string,
+    streams: readonly ConnectorStream[],
+  ): Promise<void> {
+    try {
+      const store = this.runtime.requireHost().get("authority");
+      const [catalog, states] = await Promise.all([
+        store.getSyncCatalog(installationId),
+        store.listSyncStates(installationId),
+      ]);
+      const fallbackMembers = catalogMembersFromStreams(installationId, streams);
+      const snapshot = buildSyncProgressSnapshot({
+        installation_id: installationId,
+        members: catalog.members,
+        states,
+        catalog_complete: catalog.catalog?.complete === true,
+        mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
+        fallbackMembers,
+      });
+      if (snapshot) {
+        this.kernelRuntime.publishSyncSnapshot(snapshot);
+      }
+    } catch (error) {
+      console.warn("sync progress snapshot refresh failed", error);
     }
   }
 

@@ -10,6 +10,10 @@ import {
   toggleCsvValue,
 } from "./connector-config";
 import {
+  feishuNeedsAllSyncConfirm,
+  matchesConnectorFieldWhen,
+} from "./connector-install-guard";
+import {
   attemptSummary,
   connectorActionError,
   installationStatusLabel,
@@ -323,13 +327,20 @@ function ConnectorSettingsForm({
     ...defaultFieldValues(kind),
     ...initialValues,
   }));
+  const [allSyncConfirmed, setAllSyncConfirmed] = useState(false);
+  const needsAllSyncConfirm = feishuNeedsAllSyncConfirm(kind.connector_type, values);
   const [remoteOptions, setRemoteOptions] = useState<
     Record<string, { value: string; label: string }[]>
   >({});
   const [loadingOptions, setLoadingOptions] = useState(false);
   const needsRemote = kind.fields
-    .filter((field) => matchesWhen(field.visible_when, values))
+    .filter((field) => matchesConnectorFieldWhen(field.visible_when, values))
     .some(fieldNeedsRemoteOptions);
+  useEffect(() => {
+    if (!needsAllSyncConfirm && allSyncConfirmed) {
+      setAllSyncConfirmed(false);
+    }
+  }, [allSyncConfirmed, needsAllSyncConfirm]);
   useEffect(() => {
     if (!needsRemote) {
       return;
@@ -356,18 +367,19 @@ function ConnectorSettingsForm({
       ...field,
       options: remoteOptions[field.key] ?? field.options,
     }))
-    .filter((field) => matchesWhen(field.visible_when, values));
+    .filter((field) => matchesConnectorFieldWhen(field.visible_when, values));
   const prerequisites = visiblePrerequisites(kind, values);
   const blocked = prerequisites.some((item) => item.required && !item.ready);
   const missingRequired = fields.some(
     (field) => field.required && !(values[field.key] ?? "").trim(),
   );
+  const guardBlocked = needsAllSyncConfirm && !allSyncConfirmed;
   return (
     <form
       className="install-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (busy) {
+        if (busy || guardBlocked) {
           return;
         }
         onSubmit(configWithOptionNames(values, fields));
@@ -443,18 +455,33 @@ function ConnectorSettingsForm({
           </label>
         );
       })}
+      {needsAllSyncConfirm ? (
+        <div className="install-guard">
+          <p className="action-error">{t("connector.feishuAllSyncWarning")}</p>
+          <label className="check-item">
+            <input
+              type="checkbox"
+              checked={allSyncConfirmed}
+              onChange={(event) => setAllSyncConfirmed(event.target.checked)}
+            />
+            <span>{t("connector.feishuAllSyncConfirm")}</span>
+          </label>
+        </div>
+      ) : null}
       <button
         type="submit"
         className="primary"
-        disabled={busy || blocked || missingRequired}
+        disabled={busy || blocked || missingRequired || guardBlocked}
       >
         {busy
           ? busyLabel
-          : blocked
-            ? t("connector.prereqFirst")
-            : missingRequired
-              ? t("connector.fillRequired")
-              : submitLabel}
+          : guardBlocked
+            ? t("connector.feishuAllSyncConfirmRequired")
+            : blocked
+              ? t("connector.prereqFirst")
+              : missingRequired
+                ? t("connector.fillRequired")
+                : submitLabel}
       </button>
     </form>
   );
@@ -560,7 +587,9 @@ function SetupStepList({
 }) {
   const { t } = useLocale();
   const [copied, setCopied] = useState<string | null>(null);
-  const visible = steps.filter((step) => matchesWhen(step.visible_when, values));
+  const visible = steps.filter((step) =>
+    matchesConnectorFieldWhen(step.visible_when, values),
+  );
   if (visible.length === 0) {
     return null;
   }
@@ -688,7 +717,7 @@ function visiblePrerequisites(
   values: Record<string, string>,
 ): ConnectorCatalogItem["prerequisites"] {
   return (kind.prerequisites ?? []).filter((item) =>
-    matchesWhen(item.visible_when, values),
+    matchesConnectorFieldWhen(item.visible_when, values),
   );
 }
 
@@ -696,10 +725,7 @@ function matchesWhen(
   when: { field: string; value: string } | undefined,
   values: Record<string, string>,
 ): boolean {
-  if (!when) {
-    return true;
-  }
-  return (values[when.field] ?? "") === when.value;
+  return matchesConnectorFieldWhen(when, values);
 }
 
 function ConnectorRow({

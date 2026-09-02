@@ -88,9 +88,8 @@ export function inboxHeadsRequest(input: {
     request.changed = true;
     request.since_digest = input.previousDigest;
   }
-  if (input.decision.mode === "full") {
-    request.live = true;
-  }
+  // Full heads refresh stays on local SQLite unread. Source overlays (live=1)
+  // are opt-in via focus / thread open, not every 45s list poll.
   return request;
 }
 

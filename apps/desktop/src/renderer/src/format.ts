@@ -84,6 +84,9 @@ export function chipLabel(state: EngineChipState): string {
   if (state === "syncing") {
     return t("chip.syncing");
   }
+  if (state === "degraded") {
+    return t("chip.degraded");
+  }
   return t("chip.stopped");
 }
 
