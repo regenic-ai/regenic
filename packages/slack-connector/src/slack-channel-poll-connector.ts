@@ -5,6 +5,7 @@ import {
   type ConnectorCursor,
   type IngestBatch,
   type PollResult,
+  type SyncPollHint,
 } from "@regenic/domain";
 
 export interface SlackHistoryMessage {
@@ -131,7 +132,12 @@ export class SlackChannelPollConnector {
         this.toRecord(message),
       ),
     };
-    return { batch, next_cursor: nextCursor, has_more: Boolean(nextCursor) };
+    return {
+      batch,
+      next_cursor: nextCursor,
+      has_more: Boolean(nextCursor),
+      poll_hint: slackPollHint(cursor?.value, Boolean(nextCursor)),
+    };
   }
 
   private toRecord(message: SlackHistoryMessage): IngestBatch["records"] {
@@ -170,6 +176,16 @@ export class SlackChannelPollConnector {
     const hash = createHash("sha256").update(pageIdentity).digest("hex");
     return `slack-history:${this.options.channel_id}:${hash}`;
   }
+}
+
+export function slackPollHint(
+  previousCursor: string | undefined,
+  hasMore: boolean,
+): SyncPollHint {
+  return {
+    live_seeded: previousCursor !== undefined || !hasMore,
+    history_pending: hasMore,
+  };
 }
 
 function slackTimestampToIso(timestamp: string): string {

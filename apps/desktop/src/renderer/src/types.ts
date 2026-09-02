@@ -363,7 +363,14 @@ export interface IngestAttempt {
 
 export interface ConnectorFieldWhen {
   field: string;
-  value: string;
+  value?: string;
+  values?: string[];
+}
+
+export interface ConnectorInstallConfirm {
+  when: ConnectorFieldWhen;
+  warning: string;
+  ack: string;
 }
 
 export interface ConnectorField {
@@ -423,6 +430,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  install_confirm?: ConnectorInstallConfirm;
   import_files?: ConnectorImportFiles;
   unit_kinds?: RecipeUnitKindOption[];
   docs: CatalogDocRef[];
@@ -453,6 +461,8 @@ export interface SyncProgressView {
   backfilling: number;
   media_pending: number;
   catalog_complete: boolean;
+  bootstrap_pending: number;
+  steady: number;
 }
 
 export interface CreatedConversation {
@@ -543,6 +553,32 @@ export interface PluginInventoryItem {
   error: string | null;
 }
 
+export interface PersonalHeartbeatInstallationPulse {
+  id: string;
+  sync: SyncProgressView | null;
+  last_attempt?: IngestAttempt | null;
+}
+
+export interface PersonalHeartbeatView {
+  kernel: "running" | "stopped";
+  org_id: string;
+  inbox_count: number;
+  inbox_digest: string;
+  memory: ProcessMemoryView;
+  pressure: {
+    level: "ok" | "elevated" | "critical";
+    interactive_ready: boolean;
+    throttle_history: boolean;
+    throttle_media: boolean;
+  };
+  reachability: "live" | "degraded" | "offline";
+  pull: Pick<
+    PullStatusView,
+    "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
+  >;
+  installations: PersonalHeartbeatInstallationPulse[];
+}
+
 export interface PersonalEngineView {
   kernel: "running" | "stopped";
   org_id: string;
@@ -550,6 +586,7 @@ export interface PersonalEngineView {
   inbox_count: number;
   inbox_digest?: string;
   memory?: ProcessMemoryView;
+  pressure?: PersonalHeartbeatView["pressure"];
   pull?: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
@@ -591,7 +628,7 @@ export interface StoreClearView {
   };
 }
 
-export type EngineChipState = "running" | "syncing" | "stopped";
+export type EngineChipState = "running" | "syncing" | "degraded" | "stopped";
 
 export interface ReplyAttachmentInput {
   filename: string;

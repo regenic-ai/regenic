@@ -128,6 +128,31 @@ describe("sqlite read/write split", () => {
     await store.close();
   });
 
+  it("scopes context reads to one thread without loading the org", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const service = new IngestionService(
+      new FsBlobStore(join(root, "blobs")),
+      store,
+    );
+    await service.ingest(createBatch("thread-a"));
+    await service.ingest(createBatch("thread-b"));
+    const full = await store.openContextRead("local-owner");
+    const scoped = await store.openContextReadForThread(
+      "local-owner",
+      "regenic:thread-a",
+    );
+    assert.equal(full.events.length, 2);
+    assert.equal(scoped.events.length, 1);
+    assert.equal(scoped.events[0].thread_id, "regenic:thread-a");
+    assert.deepEqual(scoped.lifecycle_heads, [{
+      source: "regenic",
+      external_id: "thread-a",
+      head_event_id: scoped.events[0].id,
+    }]);
+    await store.close();
+  });
+
   it("lets the reader see a full thread as soon as the writer commits", async () => {
     const root = await createRoot();
     const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
@@ -399,9 +424,9 @@ describe("sqlite read/write split", () => {
         started_at: stamp,
       });
     }
-    const first = await store.pruneIngestAttempts(64, 3);
+    const first = await store.pruneIngestAttempts(64, 3, 1);
     const mid = await store.listAttempts(installation.id);
-    const second = await store.pruneIngestAttempts(64, 3);
+    const second = await store.pruneIngestAttempts(64, 3, 1);
     const remaining = await store.listAttempts(installation.id);
     assert.equal(first.deleted, 3);
     assert.equal(mid.length, 67);

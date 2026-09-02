@@ -124,7 +124,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | DSH web（本机） | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 目录会探测 `dsh web`，但探测失败不挡安装。装完后要本机 `dsh web --port 3080` 在跑，内核才能拉。`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
 | DSH web（托管） | 只填可选 `session_id`；不填 `base_url` | 内核环境变量 `REGENIC_DSH_BASE_URL`（集群 DNS） | 同上；核心只走内网，不要填 Sealos 公网 URL |
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
-| 飞书 | 弹窗里默认勾选全部群和全部单聊；也可勾选具体会话。安装后随时 Edit sync | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 按选择拉群和单聊，记录群名/对方名和发送者名。安装后立刻拉，之后内核轮询。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
+| 飞书 | 弹窗里默认选「最近活跃」；也可自选会话，或改成全部群和单聊（需二次确认）。安装后随时 Edit sync | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 默认只跟最近活跃会话和当前工作；全量同步需明确确认。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
 
 DSH 安装不接收 token / `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
 

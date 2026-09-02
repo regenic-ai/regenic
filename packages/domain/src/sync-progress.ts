@@ -4,6 +4,7 @@ import type {
   SyncStore,
   SyncStreamState,
 } from "./sync-contracts";
+import { summarizeSyncLifecycle } from "./sync-lifecycle";
 
 export interface SyncProgressView {
   discovered: number;
@@ -12,6 +13,10 @@ export interface SyncProgressView {
   backfilling: number;
   media_pending: number;
   catalog_complete: boolean;
+  /** Streams still in one-time seed or history backfill. */
+  bootstrap_pending: number;
+  /** Streams on ongoing live/steady tail only. */
+  steady: number;
 }
 
 export function emptySyncProgress(): SyncProgressView {
@@ -22,6 +27,8 @@ export function emptySyncProgress(): SyncProgressView {
     backfilling: 0,
     media_pending: 0,
     catalog_complete: false,
+    bootstrap_pending: 0,
+    steady: 0,
   };
 }
 
@@ -62,6 +69,7 @@ export function summarizeSyncProgress(
       mediaPending += 1;
     }
   }
+  const lifecycle = summarizeSyncLifecycle(catalog.members, byKey);
   return {
     discovered: catalog.members.length,
     seeded,
@@ -69,6 +77,8 @@ export function summarizeSyncProgress(
     backfilling,
     media_pending: mediaPending,
     catalog_complete: catalog.catalog?.complete === true,
+    bootstrap_pending: lifecycle.bootstrap_pending,
+    steady: lifecycle.steady,
   };
 }
 
@@ -98,6 +108,8 @@ export function aggregateSyncProgress(
     backfilling: active.reduce((sum, item) => sum + item.backfilling, 0),
     media_pending: active.reduce((sum, item) => sum + item.media_pending, 0),
     catalog_complete: active.every((item) => item.catalog_complete),
+    bootstrap_pending: active.reduce((sum, item) => sum + item.bootstrap_pending, 0),
+    steady: active.reduce((sum, item) => sum + item.steady, 0),
   };
 }
 

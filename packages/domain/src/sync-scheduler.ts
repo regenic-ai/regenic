@@ -5,7 +5,20 @@ import type {
   SyncWorkItem,
 } from "./sync-contracts";
 import { SYNC_CATALOG_STREAM, UNSEEN_SEED_PER_TICK } from "./sync-contracts";
+import { partitionMembersByLifecycle } from "./sync-lifecycle";
+import { SyncLiveRing } from "./sync-ring";
 import { syncStateIsDue } from "./sync-phase";
+import { steadyLaneLimits } from "./sync-steady-capacity";
+
+export { DEFAULT_STEADY_LANE_LIMITS, steadyLaneLimits } from "./sync-steady-capacity";
+
+export const DEFAULT_BOOTSTRAP_LANE_LIMITS: SyncLaneLimits = {
+  interactive: 1,
+  live: 16,
+  catalog: 1,
+  history: 32,
+  media: 2,
+};
 
 export function syncLaneLimits(
   humanIdle: boolean,
@@ -29,6 +42,15 @@ export function syncLaneLimits(
   };
 }
 
+export function bootstrapWorkerLaneLimits(
+  catalogIncomplete: boolean,
+): SyncLaneLimits {
+  return {
+    ...DEFAULT_BOOTSTRAP_LANE_LIMITS,
+    catalog: catalogIncomplete ? DEFAULT_BOOTSTRAP_LANE_LIMITS.catalog : 0,
+  };
+}
+
 export interface SyncScheduleInput {
   members: readonly SyncCatalogMember[];
   states: ReadonlyMap<string, SyncStreamState>;
@@ -40,6 +62,117 @@ export interface SyncScheduleInput {
   now: string;
   limits?: Partial<SyncLaneLimits>;
   pages?: number;
+}
+
+export interface SyncBootstrapScheduleInput
+  extends Omit<SyncScheduleInput, "humanIdle" | "limits"> {
+  limits?: Partial<SyncLaneLimits>;
+}
+
+export interface SyncSteadyScheduleInput
+  extends Omit<SyncScheduleInput, "humanIdle" | "limits"> {
+  limits?: Partial<SyncLaneLimits>;
+  liveRing?: SyncLiveRing;
+}
+
+/** Plans one-time recent seed + history backfill work only. */
+export function planBootstrapSyncWork(
+  input: SyncBootstrapScheduleInput,
+): SyncWorkItem[] {
+  const { bootstrap } = partitionMembersByLifecycle(input.members, input.states);
+  return planSyncWork({
+    ...input,
+    members: bootstrap,
+    humanIdle: true,
+    limits: {
+      ...bootstrapWorkerLaneLimits(input.catalogIncomplete),
+      ...input.limits,
+      history:
+        input.limits?.history ??
+        bootstrapWorkerLaneLimits(input.catalogIncomplete).history,
+    },
+  });
+}
+
+/** Plans ongoing live/media polls; never schedules history. */
+export function planSteadySyncWork(input: SyncSteadyScheduleInput): SyncWorkItem[] {
+  const limits = {
+    ...steadyLaneLimits(input.catalogIncomplete),
+    ...input.limits,
+    history: 0,
+  };
+  const pages = input.pages ?? 1;
+  const preferredId = input.preferredThreadId?.trim() || null;
+  const preferred = preferredId
+    ? input.members.find((member) => member.thread_id === preferredId)
+    : undefined;
+  const planned: SyncWorkItem[] = [];
+  const taken = new Set<string>();
+
+  if (preferred && limits.interactive > 0) {
+    planned.push({
+      lane: "interactive",
+      stream_key: preferred.stream_key,
+      thread_id: preferred.thread_id,
+      older: false,
+      media: false,
+      pages,
+    });
+    taken.add(preferred.stream_key);
+  }
+
+  const ring = input.liveRing ?? new SyncLiveRing();
+  ring.adoptRotateFrom(input.rotateFrom, input.members);
+  const liveMembers = ring.nextDue(
+    input.members,
+    input.states,
+    input.now,
+    Math.max(0, limits.live),
+    taken,
+  );
+  for (const member of liveMembers) {
+    planned.push({
+      lane: "live",
+      stream_key: member.stream_key,
+      thread_id: member.thread_id,
+      older: false,
+      media: false,
+      pages,
+    });
+    taken.add(member.stream_key);
+  }
+
+  if (limits.catalog > 0 && input.catalogIncomplete) {
+    planned.push({
+      lane: "catalog",
+      stream_key: SYNC_CATALOG_STREAM,
+      older: false,
+      media: false,
+      pages: 1,
+    });
+  }
+
+  if (limits.media > 0) {
+    const pending = input.members.filter(
+      (member) => input.states.get(member.stream_key)?.media_pending === true,
+    );
+    const mediaPool = [
+      ...pending.filter((member) => member.thread_id === preferredId),
+      ...pending.filter((member) => member.thread_id !== preferredId),
+    ];
+    for (const member of mediaPool.slice(0, limits.media)) {
+      planned.push({
+        lane: "media",
+        stream_key: member.stream_key,
+        thread_id: member.thread_id,
+        older: false,
+        media: true,
+        pages: 1,
+      });
+    }
+  }
+
+  return planned;
 }
 
 export function planSyncWork(input: SyncScheduleInput): SyncWorkItem[] {
@@ -195,7 +328,7 @@ function rankLiveMembers(
   const rest = members.filter((member) => member.thread_id !== preferredId);
   const catchingUp = rest.filter((member) => {
     const phase = states.get(member.stream_key)?.phase;
-    return !phase || phase === "unseeded" || phase === "history";
+    return !phase || phase === "unseeded";
   });
   const live = rest.filter((member) => {
     const phase = states.get(member.stream_key)?.phase;

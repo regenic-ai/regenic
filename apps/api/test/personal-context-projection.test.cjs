@@ -31,7 +31,7 @@ function job(overrides = {}) {
   };
 }
 
-function fixture(claimed, project) {
+function fixture(claimed, projectThread, getEvent = async () => null) {
   const calls = { claims: [], projects: [], completes: [], failures: [] };
   const outbox = {
     async claimContextProjectionJobs(input) {
@@ -48,15 +48,36 @@ function fixture(claimed, project) {
     },
   };
   const runner = {
-    async project(orgId, generation) {
-      calls.projects.push({ orgId, generation });
-      return project(orgId, generation);
+    async projectThread(orgId, generation, threadId) {
+      calls.projects.push({ orgId, generation, threadId });
+      return projectThread(orgId, generation, threadId);
+    },
+  };
+  const authority = {
+    async getEvent(orgId, eventId) {
+      return getEvent(orgId, eventId);
+    },
+    async listInstallations() {
+      return [];
+    },
+    async getSyncCatalog() {
+      return { members: [] };
+    },
+    async listSyncStates() {
+      return [];
+    },
+  };
+  const connectors = {
+    listStreams() {
+      return [];
     },
   };
   const host = {
     get(name) {
       if (name === "context-projection-outbox") return outbox;
       if (name === "context-projections") return runner;
+      if (name === "authority") return authority;
+      if (name === "connectors") return connectors;
       throw new Error(`unexpected service ${name}`);
     },
   };
@@ -65,6 +86,19 @@ function fixture(claimed, project) {
     requireHost: () => host,
   };
   return { service: new PersonalContextProjectionService(runtime), calls };
+}
+
+function eventRecord(orgId, eventId, threadId) {
+  return {
+    id: eventId,
+    org_id: orgId,
+    source: "synthetic",
+    external_id: eventId,
+    operation: "create",
+    occurred_at: "2026-08-30T00:00:00.000Z",
+    ingested_at: "2026-08-30T00:00:00.000Z",
+    ...(threadId ? { thread_id: threadId } : {}),
+  };
 }
 
 describe("PersonalContextProjectionService", () => {
@@ -115,30 +149,56 @@ describe("PersonalContextProjectionService", () => {
     assert.equal((await host.get("context-projection-outbox").listContextProjectionJobs("example-org"))[0].status, "succeeded");
   });
 
-  it("projects each organization once and completes every claimed job", async () => {
+  it("projects each thread once and completes every claimed job", async () => {
     const { service, calls } = fixture([
       job(),
       job({ id: "job-2", event_id: "event-2", attempts: 2 }),
       job({ id: "job-3", org_id: "other-org", event_id: "event-3" }),
-    ], async () => []);
+    ], async () => [], async (orgId, eventId) =>
+      eventRecord(
+        orgId,
+        eventId,
+        eventId === "event-3" ? "thread-other" : "thread-1",
+      ),
+    );
 
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
 
     assert.equal(calls.claims.length, 1);
     assert.equal(calls.claims[0].limit, 50);
     assert.deepEqual(calls.projects, [
-      { orgId: "example-org", generation: "continuous-v1" },
-      { orgId: "other-org", generation: "continuous-v1" },
+      { orgId: "example-org", generation: "continuous-v1", threadId: "thread-1" },
+      { orgId: "other-org", generation: "continuous-v1", threadId: "thread-other" },
     ]);
     assert.deepEqual(calls.completes.map((value) => value.id), ["job-1", "job-2", "job-3"]);
     assert.equal(calls.failures.length, 0);
     await service.onModuleDestroy();
   });
 
+  it("completes threadless events without calling projection", async () => {
+    const { service, calls } = fixture(
+      [job()],
+      async () => {
+        throw new Error("projection should not run");
+      },
+      async (orgId, eventId) => eventRecord(orgId, eventId, null),
+    );
+
+    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+
+    assert.equal(calls.projects.length, 0);
+    assert.deepEqual(calls.completes.map((value) => value.id), ["job-1"]);
+    await service.onModuleDestroy();
+  });
+
   it("fails a group with bounded backoff and a secret-safe error code", async () => {
-    const { service, calls } = fixture([job({ attempts: 3 })], async () => {
-      throw new Error("secret message body");
-    });
+    const { service, calls } = fixture(
+      [job({ attempts: 3 })],
+      async () => {
+        throw new Error("secret message body");
+      },
+      async (orgId, eventId) => eventRecord(orgId, eventId, "thread-1"),
+    );
 
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
 
@@ -157,7 +217,11 @@ describe("PersonalContextProjectionService", () => {
   it("does not overlap ticks", async () => {
     let release;
     const blocked = new Promise((resolve) => { release = resolve; });
-    const { service, calls } = fixture([job()], async () => blocked);
+    const { service, calls } = fixture(
+      [job()],
+      async () => blocked,
+      async (orgId, eventId) => eventRecord(orgId, eventId, "thread-1"),
+    );
 
     const first = service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
     await new Promise((resolve) => setImmediate(resolve));

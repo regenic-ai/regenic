@@ -1,7 +1,7 @@
 import { activeLocale, t } from "../../shared/i18n.ts";
 import { localeTag } from "../../shared/locale.ts";
-import { firstLine } from "./message-view";
-import type { EngineChipState } from "./types";
+import { firstLine } from "./message-view.ts";
+import type { EngineChipState } from "./types.ts";
 
 export {
   engineChip,
@@ -33,6 +33,30 @@ export function formatTime(iso: string): string {
   }).format(date);
 }
 
+function chatTimeFormatOptions(
+  date: Date,
+  now: Date,
+): Intl.DateTimeFormatOptions {
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (sameDay) {
+    return { hour: "numeric", minute: "2-digit" };
+  }
+  const sameYear = date.getFullYear() === now.getFullYear();
+  if (sameYear) {
+    return { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" };
+  }
+  return {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  };
+}
+
 export function formatNextRunWhen(
   iso: string | undefined,
   now = new Date(),
@@ -47,33 +71,20 @@ export function formatNextRunWhen(
   if (date.getTime() <= now.getTime() + 30_000) {
     return "due";
   }
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
   return new Intl.DateTimeFormat(
     localeTag(activeLocale()),
-    sameDay
-      ? { hour: "numeric", minute: "2-digit" }
-      : { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" },
+    chatTimeFormatOptions(date, now),
   ).format(date);
 }
 
-export function formatChatTime(iso: string): string {
+export function formatChatTime(iso: string, now = new Date()): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
     return iso;
   }
-  const now = new Date();
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
   return new Intl.DateTimeFormat(
     localeTag(activeLocale()),
-    sameDay
-      ? { hour: "numeric", minute: "2-digit" }
-      : { month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" },
+    chatTimeFormatOptions(date, now),
   ).format(date);
 }
 
@@ -83,6 +94,9 @@ export function chipLabel(state: EngineChipState): string {
   }
   if (state === "syncing") {
     return t("chip.syncing");
+  }
+  if (state === "degraded") {
+    return t("chip.degraded");
   }
   return t("chip.stopped");
 }

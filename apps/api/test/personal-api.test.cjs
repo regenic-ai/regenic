@@ -3124,7 +3124,7 @@ describe("personal /v1/me", () => {
     await ingestActionable(database, blobRoot);
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
-      const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
+      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
       assert.equal(engine.executor_catalog.length, 2);
       assert.equal(engine.executor_catalog[0].kind, "local_connector");
       assert.equal(engine.executor_catalog[1].kind, "http");

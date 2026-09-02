@@ -133,6 +133,11 @@ export interface ContextAuthorityRead {
 
 export interface ContextAuthorityReader {
   openContextRead(orgId: string): Promise<ContextAuthorityRead>;
+  /** Thread-scoped read for incremental projection without scanning the org. */
+  openContextReadForThread(
+    orgId: string,
+    threadId: string,
+  ): Promise<ContextAuthorityRead>;
 }
 
 export interface ContextVisibilityInput {
@@ -188,6 +193,16 @@ export interface ContextProjectorRegistry {
 
 export interface ContextProjectionRunner {
   project(orgId: string, generation: string): Promise<Array<{
+    projector_id: string;
+    projected_events: number;
+    stored_artifacts: number;
+    checkpoint_sequence: number;
+  }>>;
+  projectThread(
+    orgId: string,
+    generation: string,
+    threadId: string,
+  ): Promise<Array<{
     projector_id: string;
     projected_events: number;
     stored_artifacts: number;

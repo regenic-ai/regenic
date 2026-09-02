@@ -56,6 +56,13 @@ import {
   type ThreadReceiptQuery,
   type WorkFace,
   loadSyncProgress,
+  personalReadTierFromDetail,
+  personalReadTierSpec,
+  personalInboxReadTier,
+  personalInboxReadTierSpec,
+  shouldQueryInboxChannelOverlays,
+  classifyKernelReachability,
+  type KernelPressureView,
   type SyncStore,
   withDeadline,
 } from "@regenic/domain";
@@ -77,6 +84,7 @@ import {
 } from "./personal-connector-view";
 import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-status";
 import { processMemoryView } from "./process-memory";
+import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
   PersonalKernelStoppedError,
   PersonalRuntimeService,
@@ -172,6 +180,7 @@ export interface PersonalEngineView {
   inbox_count: number;
   inbox_digest: string;
   memory: { rss_bytes: number; heap_used_bytes: number };
+  pressure: KernelPressureView;
   pull: PullStatusView;
   installations: EngineInstallationView[];
   catalog: ConnectorCatalogItem[];
@@ -179,6 +188,27 @@ export interface PersonalEngineView {
   executor_catalog: ExecutorKindCatalogItem[];
   plugins: PluginInventoryItem[];
   plugin_dir: string | null;
+}
+
+export interface PersonalHeartbeatInstallationPulse {
+  id: string;
+  sync: import("@regenic/domain").SyncProgressView | null;
+  last_attempt?: import("@regenic/domain").IngestAttempt | null;
+}
+
+export interface PersonalHeartbeatView {
+  kernel: "running" | "stopped";
+  org_id: string;
+  inbox_count: number;
+  inbox_digest: string;
+  memory: { rss_bytes: number; heap_used_bytes: number };
+  pressure: KernelPressureView;
+  reachability: "live" | "degraded" | "offline";
+  pull: Pick<
+    PullStatusView,
+    "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
+  >;
+  installations: PersonalHeartbeatInstallationPulse[];
 }
 
 export interface InboxListQuery {
@@ -611,15 +641,7 @@ function headThreadId(item: {
 }
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
-  // live=1 is the slow path (CLI read_status / receipts). Everything else
-  // stays on SQLite so list refresh and chat switching do not wait on lark-cli.
-  if (query.live) {
-    return false;
-  }
-  if (query.heads) {
-    return true;
-  }
-  return Boolean(query.thread_id);
+  return !shouldQueryInboxChannelOverlays(query);
 }
 
 export interface EngineQuery {
@@ -675,6 +697,8 @@ export class PersonalInboxService {
     private readonly executors: PersonalExecutorService,
     @Inject(PersonalEventsService)
     private readonly events: PersonalEventsService,
+    @Inject(KernelRuntimeService)
+    private readonly kernelRuntime: KernelRuntimeService,
   ) {}
 
   startAfterListen(): void {
@@ -714,6 +738,30 @@ export class PersonalInboxService {
     }
   }
 
+  private async summarizeInboxCached(
+    orgId: string,
+    authority: Pick<AuthorityStore, "summarizeInbox">,
+  ): Promise<{ count: number; digest: string }> {
+    const cached = this.kernelRuntime.inboxSummary.summary(orgId);
+    if (cached) {
+      return cached;
+    }
+    const inbox = await authority.summarizeInbox(orgId);
+    this.kernelRuntime.inboxSummary.publish({
+      org_id: orgId,
+      count: inbox.count,
+      digest: inbox.digest,
+      updated_at: new Date().toISOString(),
+    });
+    return inbox;
+  }
+
+  /** Drop cached digest and republish from the store after inbox-affecting writes. */
+  touchInboxDigest(): void {
+    this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
+    void this.publishInboxDigest();
+  }
+
   async publishInboxDigest(): Promise<void> {
     if (!this.runtime.isReady()) {
       return;
@@ -722,7 +770,15 @@ export class PersonalInboxService {
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
     const [inbox, installations] = await Promise.all([
-      authority.summarizeInbox(orgId),
+      authority.summarizeInbox(orgId).then((summary) => {
+        this.kernelRuntime.inboxSummary.publish({
+          org_id: orgId,
+          count: summary.count,
+          digest: summary.digest,
+          updated_at: new Date().toISOString(),
+        });
+        return summary;
+      }),
       authority.listInstallations(orgId),
     ]);
     this.events.inboxDigest(
@@ -744,14 +800,19 @@ export class PersonalInboxService {
   async listInbox(
     query: InboxListQuery = {},
   ): Promise<InboxViewItem[] | InboxHeadsPage> {
+    this.kernelRuntime.noteInteractiveWaiter(1);
+    try {
     const normalized = {
       ...query,
       limit: normalizeInboxLimit(query.limit),
     };
     if (shouldLoadChangedInboxHeads(normalized)) {
-      return this.loadChangedInboxHeads(normalized);
+      return await this.loadChangedInboxHeads(normalized);
     }
-    return this.loadThreadInbox(normalized);
+    return await this.loadThreadInbox(normalized);
+    } finally {
+      this.kernelRuntime.noteInteractiveWaiter(-1);
+    }
   }
 
   async getInboxItem(
@@ -851,13 +912,86 @@ export class PersonalInboxService {
     return forwardedTo ? { ...view, forwarded_to: forwardedTo } : view;
   }
 
+  async getHeartbeat(started = Date.now()): Promise<PersonalHeartbeatView> {
+    this.kernelRuntime.noteInteractiveWaiter(1);
+    try {
+      const orgId = this.runtime.orgId();
+      if (!this.runtime.isReady()) {
+        return {
+          kernel: "stopped",
+          org_id: orgId,
+          inbox_count: 0,
+          inbox_digest: withSurfaceGeneration(inboxDigest([]), ""),
+          memory: processMemoryView(),
+          pressure: this.kernelRuntime.pressureView(),
+          reachability: "offline",
+          pull: {
+            phase: pullStatus.phase,
+            catching_up_count: pullStatus.catching_up_count,
+            last_tick_at: pullStatus.last_tick_at,
+            last_accepted_count: pullStatus.last_accepted_count,
+          },
+          installations: [],
+        };
+      }
+      const host = this.runtime.requireHost();
+      const authority = host.get("authority");
+      const [inbox, installations] = await Promise.all([
+        this.summarizeInboxCached(orgId, authority),
+        authority.listInstallations(orgId),
+      ]);
+      const pressure = this.kernelRuntime.pressureView();
+      return {
+        kernel: "running",
+        org_id: orgId,
+        inbox_count: inbox.count,
+        inbox_digest: withSurfaceGeneration(
+          inbox.digest,
+          this.drivers.surfaceGeneration(installations, host),
+        ),
+        memory: processMemoryView(),
+        pressure,
+        reachability: classifyKernelReachability({
+          health_ok: true,
+          personal_ok: true,
+          latency_ms: Date.now() - started,
+          pressure_level: pressure.level,
+        }),
+        pull: {
+          phase: pullStatus.phase,
+          catching_up_count: pullStatus.catching_up_count,
+          last_tick_at: pullStatus.last_tick_at,
+          last_accepted_count: pullStatus.last_accepted_count,
+        },
+        installations: installations.map((installation) => {
+          const pulse: PersonalHeartbeatInstallationPulse = {
+            id: installation.id,
+            sync: this.kernelRuntime.syncSnapshots.peekProgress(installation.id),
+          };
+          const attempt = this.kernelRuntime.peekInstallAttempt(installation.id);
+          if (attempt) {
+            pulse.last_attempt = attempt;
+          }
+          return pulse;
+        }),
+      };
+    } finally {
+      this.kernelRuntime.noteInteractiveWaiter(-1);
+    }
+  }
+
   async getEngine(query: EngineQuery = {}): Promise<PersonalEngineView> {
-    const detailed = query.detailed !== false;
+    this.kernelRuntime.noteInteractiveWaiter(1);
+    try {
+    const tier = personalReadTierSpec(personalReadTierFromDetail(query.detailed));
     const options = this.runtime.getOptions();
     const orgId = this.runtime.orgId();
     const catalogReady = (
       installations: EngineInstallationView[],
     ) => {
+      if (!tier.include_connector_catalog) {
+        return [];
+      }
       const extras = catalogFromDrivers(this.drivers, process.env, query.locale);
       this.catalogProbes.schedule(this.drivers);
       const probed = this.catalogProbes.peek();
@@ -871,7 +1005,9 @@ export class PersonalInboxService {
       });
     };
     if (!this.runtime.isReady()) {
-      const executorCatalog = this.executors.kindCatalog([], []);
+      const executorCatalog = tier.include_executor_catalog
+        ? this.executors.kindCatalog([], [])
+        : [];
       return {
         kernel: "stopped",
         org_id: orgId,
@@ -879,6 +1015,7 @@ export class PersonalInboxService {
         inbox_count: 0,
         inbox_digest: withSurfaceGeneration(inboxDigest([]), ""),
         memory: processMemoryView(),
+        pressure: this.kernelRuntime.pressureView(),
         pull: { ...pullStatus },
         installations: [],
         catalog: catalogReady([]),
@@ -891,7 +1028,7 @@ export class PersonalInboxService {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const [inbox, installations] = await Promise.all([
-      authority.summarizeInbox(orgId),
+      this.summarizeInboxCached(orgId, authority),
       authority.listInstallations(orgId),
     ]);
     const views = await Promise.all(
@@ -899,15 +1036,19 @@ export class PersonalInboxService {
         const store = authority as SyncStore & {
           latestAttempt(id: string): Promise<IngestAttempt | null>;
         };
-        const streams = host.get("connectors").listStreams(installation.id);
-        const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
-        const [attempt, sync] = await Promise.all([
-          detailed ? store.latestAttempt(installation.id) : Promise.resolve(null),
-          loadSyncProgress(store, installation.id, {
-            mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
-            fallbackMembers,
-          }),
-        ]);
+        let sync = null;
+        if (tier.sync_progress === "live") {
+          sync = await loadSyncProgress(store, installation.id);
+        } else if (tier.sync_progress === "snapshot") {
+          sync = this.kernelRuntime.syncSnapshots.peekProgress(installation.id);
+        }
+        const attempt =
+          tier.include_install_attempts
+            ? await store.latestAttempt(installation.id)
+            : null;
+        if (attempt) {
+          this.kernelRuntime.publishInstallAttempt(installation.id, attempt);
+        }
         return toInstallationView(
           installation,
           attempt,
@@ -917,10 +1058,12 @@ export class PersonalInboxService {
         );
       }),
     );
-    const [executorInstallations, connectorOptions] = await Promise.all([
-      this.executors.listViews(query.locale),
-      this.executors.creatableConnectorOptions(query.locale),
-    ]);
+    const [executorInstallations, connectorOptions] = tier.include_executor_catalog
+      ? await Promise.all([
+          this.executors.listViews(query.locale),
+          this.executors.creatableConnectorOptions(query.locale),
+        ])
+      : [[], [] as Awaited<ReturnType<PersonalExecutorService["creatableConnectorOptions"]>>];
     return {
       kernel: "running",
       org_id: orgId,
@@ -931,17 +1074,23 @@ export class PersonalInboxService {
         this.drivers.surfaceGeneration(installations, host),
       ),
       memory: processMemoryView(),
+      pressure: this.kernelRuntime.pressureView(),
       pull: { ...pullStatus },
       installations: views,
       catalog: catalogReady(views),
       executor_installations: executorInstallations,
-      executor_catalog: this.executors.kindCatalog(
-        executorInstallations,
-        connectorOptions,
-      ),
+      executor_catalog: tier.include_executor_catalog
+        ? this.executors.kindCatalog(
+            executorInstallations,
+            connectorOptions,
+          )
+        : [],
       plugins: listPluginInventory(),
       plugin_dir: resolvePluginDirectory(),
     };
+    } finally {
+      this.kernelRuntime.noteInteractiveWaiter(-1);
+    }
   }
 
   async getStore(): Promise<StoreView> {
@@ -959,6 +1108,9 @@ export class PersonalInboxService {
     } catch (error) {
       console.error("blob store clear leftover files", error);
     }
+    this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
+    this.kernelRuntime.clearInstallationSnapshots();
+    this.touchInboxDigest();
     return result;
   }
 
@@ -1270,9 +1422,12 @@ export class PersonalInboxService {
           )
         : inboundFromPage;
     const awaitingUser = awaitingUserThreads(resolved);
-    const liveChannel = !shouldSkipLiveChannelOverlays(query);
+    const inboxTier = personalInboxReadTierSpec(personalInboxReadTier(query));
+    const liveChannel = inboxTier.channel_overlays;
     const [livePrompts, attention, receiptPage] = await Promise.all([
-      this.drivers.listPromptsForThreads(installations, threads, host),
+      inboxTier.connector_prompts
+        ? this.drivers.listPromptsForThreads(installations, threads, host)
+        : Promise.resolve(new Map<string, ThreadPrompt[]>()),
       liveChannel
         ? this.drivers.readAttention(
             installations,
@@ -1322,7 +1477,7 @@ export class PersonalInboxService {
         return [];
       }
     });
-    if (agentThreads.length > 0) {
+    if (inboxTier.agent_prompts && agentThreads.length > 0) {
       const extra = await this.drivers.listPromptsForThreads(
         installations,
         agentThreads,
@@ -1426,7 +1581,7 @@ export class PersonalInboxService {
         : {}),
       updated_at: new Date().toISOString(),
     });
-    void this.publishInboxDigest();
+    this.touchInboxDigest();
     return toPrefView(pref);
   }
 
@@ -1496,7 +1651,7 @@ export class PersonalInboxService {
       host,
     );
     await this.work.ackDoneThread(threadId);
-    void this.publishInboxDigest();
+    this.touchInboxDigest();
     return toPrefView(pref);
   }
 

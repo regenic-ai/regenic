@@ -18,12 +18,13 @@ import {
 import { ImageLightbox } from "./ImageLightbox";
 import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
+import type { InboxViewItem } from "./types";
 import {
   messageRole,
+  messageSpeakerLabel,
+  messageSpeakerMark,
   receiptCopy,
-  roleLabel,
   sameSpeaker,
-  speakerMark,
   threadPaneEmptyCopy,
   type MessageRole,
 } from "./message-view";
@@ -38,7 +39,6 @@ import {
   shouldRearmLoadOlder,
   THREAD_OVERSCAN,
 } from "./thread-window";
-import type { InboxViewItem } from "./types";
 
 export interface ThreadMessageListHandle {
   scrollToEnd: () => void;
@@ -392,7 +392,7 @@ export const ThreadMessageList = memo(
                 >
                   <details>
                     <summary>
-                      {roleLabel(role, channel, item.actor_label)} ·{" "}
+                      {messageSpeakerLabel(item)} ·{" "}
                       {formatChatTime(item.event.occurred_at)}
                       <ChatCopyButton item={item} />
                     </summary>
@@ -413,7 +413,7 @@ export const ThreadMessageList = memo(
                   }
                 >
                   <div className="chat-meta">
-                    <strong>{roleLabel(role, channel, item.actor_label)}</strong>
+                    <strong>{messageSpeakerLabel(item)}</strong>
                     <span>{formatChatTime(item.event.occurred_at)}</span>
                     <span className="chat-actions">
                       <ChatCopyButton item={item} />
@@ -563,7 +563,7 @@ const ChatRow = memo(function ChatRow({
       }${selected ? " is-selected" : ""}${selecting ? " is-selecting" : ""}`}
       onContextMenu={onMenu}
     >
-      <ChatAvatar role={role} label={item.actor_label} />
+      <ChatAvatar item={item} />
       <div className="chat-main">
         <div className="chat-meta">
           {canSelect ? (
@@ -587,7 +587,7 @@ const ChatRow = memo(function ChatRow({
               }}
             />
           ) : null}
-          <strong>{roleLabel(role, channel, item.actor_label)}</strong>
+          <strong>{messageSpeakerLabel(item)}</strong>
           <span>{formatChatTime(item.event.occurred_at)}</span>
           {receipt ? (
             <span className={`chat-receipt is-${item.receipt?.state ?? "sent"}`}>
@@ -761,13 +761,14 @@ function ChatContextMenu({
 }
 
 function ChatAvatar({
-  role,
-  label,
+  item,
 }: {
-  role: MessageRole;
-  label?: string | null;
+  item: Pick<InboxViewItem, "kind" | "actor_label" | "direction">;
 }) {
+  const role = messageRole(item);
   return (
-    <span className={`chat-avatar chat-avatar-${role}`}>{speakerMark(role, label)}</span>
+    <span className={`chat-avatar chat-avatar-${role}`}>
+      {messageSpeakerMark(item)}
+    </span>
   );
 }

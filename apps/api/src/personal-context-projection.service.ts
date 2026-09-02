@@ -4,8 +4,11 @@ import type {
   ContextProjectionJob,
   ContextProjectionOutboxStore,
   ContextProjectionRunner,
+  EventRecord,
 } from "@regenic/domain";
+import { shouldDeferWorkForSync } from "@regenic/domain";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { syncPhaseForThread } from "./personal-sync-phase";
 
 const PROJECTION_TICK_MS = 2_000;
 const PROJECTION_LEASE_MS = 30_000;
@@ -50,6 +53,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
     this.running = true;
     try {
       const host = this.runtime.requireHost();
+      const authority = host.get("authority");
       const outbox = host.get("context-projection-outbox") as ContextProjectionOutboxStore;
       const runner = host.get("context-projections") as ContextProjectionRunner;
       const claimed = await outbox.claimContextProjectionJobs({
@@ -58,11 +62,38 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
         lease_ms: PROJECTION_LEASE_MS,
         limit: PROJECTION_BATCH_SIZE,
       });
-      for (const jobs of groupByOrganization(claimed)) {
+      const groups = await groupProjectionJobs(claimed, (orgId, eventId) =>
+        authority.getEvent(orgId, eventId),
+      );
+      for (const group of groups) {
         try {
-          await runner.project(jobs[0].org_id, PROJECTION_GENERATION);
+          if (group.thread_id) {
+            const phase = await syncPhaseForThread(
+              authority,
+              group.org_id,
+              group.thread_id,
+            );
+            if (shouldDeferWorkForSync({ requires_full_sync: true, phase })) {
+              const retryAt = new Date(now.getTime() + 5_000).toISOString();
+              for (const job of group.jobs) {
+                await outbox.failContextProjectionJob({
+                  id: job.id,
+                  owner: this.owner,
+                  failed_at: now.toISOString(),
+                  next_retry_at: retryAt,
+                  error_code: "bootstrap_pending",
+                });
+              }
+              continue;
+            }
+            await runner.projectThread(
+              group.org_id,
+              PROJECTION_GENERATION,
+              group.thread_id,
+            );
+          }
           const completedAt = new Date().toISOString();
-          for (const job of jobs) {
+          for (const job of group.jobs) {
             await outbox.completeContextProjectionJob({
               id: job.id,
               owner: this.owner,
@@ -71,7 +102,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
           }
         } catch {
           const failedAt = new Date();
-          for (const job of jobs) {
+          for (const job of group.jobs) {
             await outbox.failContextProjectionJob({
               id: job.id,
               owner: this.owner,
@@ -92,12 +123,31 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
   }
 }
 
-function groupByOrganization(jobs: ContextProjectionJob[]): ContextProjectionJob[][] {
-  const grouped = new Map<string, ContextProjectionJob[]>();
+export interface ContextProjectionJobGroup {
+  org_id: string;
+  thread_id: string | null;
+  jobs: ContextProjectionJob[];
+}
+
+export async function groupProjectionJobs(
+  jobs: ContextProjectionJob[],
+  getEvent: (orgId: string, eventId: string) => Promise<EventRecord | null>,
+): Promise<ContextProjectionJobGroup[]> {
+  const grouped = new Map<string, ContextProjectionJobGroup>();
   for (const job of jobs) {
-    const values = grouped.get(job.org_id) ?? [];
-    values.push(job);
-    grouped.set(job.org_id, values);
+    const event = await getEvent(job.org_id, job.event_id);
+    const threadId = event?.thread_id?.trim() || null;
+    const key = `${job.org_id}\u0000${threadId ?? job.event_id}`;
+    const current = grouped.get(key);
+    if (current) {
+      current.jobs.push(job);
+      continue;
+    }
+    grouped.set(key, {
+      org_id: job.org_id,
+      thread_id: threadId,
+      jobs: [job],
+    });
   }
   return [...grouped.values()];
 }

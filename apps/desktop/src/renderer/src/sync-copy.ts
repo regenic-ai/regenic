@@ -11,8 +11,8 @@ export function syncProgressSummary(
     discovered: sync.catalog_complete
       ? sync.discovered
       : `${sync.discovered}+`,
-    seeded: sync.seeded,
-    backfilling: sync.backfilling,
+    bootstrap_pending: sync.bootstrap_pending,
+    steady: sync.steady,
   });
 }
 
@@ -22,7 +22,7 @@ export function syncProgressTone(
   if (!sync) {
     return undefined;
   }
-  if (!sync.catalog_complete || sync.unseeded > 0 || sync.backfilling > 0) {
+  if (!sync.catalog_complete || sync.bootstrap_pending > 0) {
     return "warn";
   }
   return "ok";
@@ -45,5 +45,7 @@ export function aggregateInstallationSync(
     backfilling: items.reduce((sum, item) => sum + item.backfilling, 0),
     media_pending: items.reduce((sum, item) => sum + item.media_pending, 0),
     catalog_complete: items.every((item) => item.catalog_complete),
+    bootstrap_pending: items.reduce((sum, item) => sum + item.bootstrap_pending, 0),
+    steady: items.reduce((sum, item) => sum + item.steady, 0),
   };
 }

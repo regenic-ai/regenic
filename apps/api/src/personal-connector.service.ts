@@ -22,11 +22,17 @@ import {
   requireCreateThread,
   requireWebhookPorts,
   runInSyncLane,
-  settleIsolated,
   SyncEngine,
+  applyKernelPressureToSyncBudget,
+  buildSyncProgressSnapshot,
   loadSyncProgress,
   scopeSyncCatalogMembers,
+  SyncLiveRing,
+  steadyCapacityFromEnv,
+  steadyLaneLimitsForCount,
+  syncPageOutcomeFromPollRuns,
   withDeadline,
+  yieldToEventLoop,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -53,6 +59,7 @@ import {
 } from "./personal-connector-view";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
+import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
   applyPullOutcome,
   beginPull,
@@ -111,6 +118,8 @@ export interface ConnectorSyncOptions {
   capCatchUp?: boolean;
   allowHistory?: boolean;
   discover?: boolean;
+  /** When set with capCatchUp, schedules only one sync plane. */
+  syncPlane?: "bootstrap" | "steady";
 }
 
 export interface ConnectorSyncView {
@@ -157,8 +166,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly hydrateCooldown = new Map<string, number>();
   private lastCatchUpCursor: string | undefined;
   private lastSeedCursor: string | undefined;
+  private readonly liveRing = new SyncLiveRing();
   private timer: ReturnType<typeof setInterval> | undefined;
+  private bootstrapTimer: ReturnType<typeof setInterval> | undefined;
   private startTimer: ReturnType<typeof setTimeout> | undefined;
+  private bootstrapStartTimer: ReturnType<typeof setTimeout> | undefined;
   private ticking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
@@ -172,6 +184,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
     private readonly inbox: PersonalInboxService,
     @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
+    @Inject(KernelRuntimeService)
+    private readonly kernelRuntime: KernelRuntimeService,
   ) {}
 
   startAfterListen(): void {
@@ -191,6 +205,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
         void this.tick();
       }, pullMs);
     }
+    const bootstrapMs = bootstrapPullIntervalMs();
+    if (bootstrapMs > 0) {
+      this.bootstrapStartTimer = setTimeout(() => {
+        this.bootstrapStartTimer = undefined;
+        void this.bootstrapTick();
+      }, START_PULL_DELAY_MS);
+      this.bootstrapTimer = setInterval(() => {
+        void this.bootstrapTick();
+      }, bootstrapMs);
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -198,9 +222,17 @@ export class PersonalConnectorService implements OnModuleDestroy {
       clearTimeout(this.startTimer);
       this.startTimer = undefined;
     }
+    if (this.bootstrapStartTimer) {
+      clearTimeout(this.bootstrapStartTimer);
+      this.bootstrapStartTimer = undefined;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
+    }
+    if (this.bootstrapTimer) {
+      clearInterval(this.bootstrapTimer);
+      this.bootstrapTimer = undefined;
     }
   }
 
@@ -322,6 +354,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
         { status: "completed" | "retryable_failure" }
       >;
       const summary = summarizeWebhook(accepted);
+      if (summary.accepted_count > 0) {
+        this.inbox.touchInboxDigest();
+      }
+      if (accepted.wake_thread_ids?.length) {
+        await this.wakeStreamsForThreads(
+          installation.id,
+          accepted.wake_thread_ids,
+        );
+      }
       return {
         installation_id: installation.id,
         ...summary,
@@ -729,7 +770,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         });
         this.hydrateCooldown.set(threadId, Date.now() + HYDRATE_COOLDOWN_MS);
         this.inbox.publishThreadUpdated(threadId);
-        void this.inbox.publishInboxDigest();
+        this.inbox.touchInboxDigest();
       } catch (error) {
         this.rememberStreamPace({
           key,
@@ -819,7 +860,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         });
         if (accepted > 0) {
           this.inbox.publishThreadUpdated(threadId);
-          void this.inbox.publishInboxDigest();
+          this.inbox.touchInboxDigest();
         }
       } catch (error) {
         this.rememberStreamPace({
@@ -1203,6 +1244,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return { id: installationId, removed: true };
     }
     await store.deleteInstallation(current.id, this.runtime.orgId());
+    this.kernelRuntime.clearInstallationSnapshots(current.id);
     return { id: current.id, removed: true };
   }
 
@@ -1270,6 +1312,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
       return;
     }
+    if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+      return;
+    }
     this.ticking = true;
     if (this.maintenanceHold) {
       this.ticking = false;
@@ -1287,22 +1332,77 @@ export class PersonalConnectorService implements OnModuleDestroy {
           !this.inflight.has(installation.id)
         );
       });
-      const errors = await settleIsolated(
-        eligible.map(
-          (installation) => () =>
+      const errors: unknown[] = [];
+      for (const installation of eligible) {
+        if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+          break;
+        }
+        try {
+          await withDeadline(
             this.sync(installation.id, DEFAULT_MAX_PAGES, {
               skipIdle: true,
               capCatchUp: true,
-              allowHistory: isHumanIdle(),
+              syncPlane: "steady",
+              allowHistory: false,
             }),
-        ),
-        {
-          timeoutMs: connectorSyncTimeoutMs(),
-          label: (index) =>
-            `sync ${eligible[index]?.connector_type ?? "install"}`,
-        },
-      );
+            connectorSyncTimeoutMs(),
+            `sync ${installation.connector_type}`,
+          );
+        } catch (error) {
+          errors.push(error);
+        }
+        await yieldToEventLoop();
+      }
       pullStatus.last_tick_at = new Date().toISOString();
+      await applyPullOutcome(errors);
+    } catch (error) {
+      await applyPullOutcome([error]);
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async bootstrapTick(): Promise<void> {
+    if (this.maintenanceHold || this.ticking || !this.runtime.isReady()) {
+      return;
+    }
+    if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+      return;
+    }
+    this.ticking = true;
+    try {
+      const store = this.runtime.requireHost().get("authority");
+      const installations = await store.listInstallations(this.runtime.orgId());
+      const eligible = installations.filter((installation) => {
+        const driver = this.drivers.get(installation.connector_type);
+        return (
+          installation.status === "enabled" &&
+          driver &&
+          driverPolls(driver) &&
+          !this.inflight.has(installation.id)
+        );
+      });
+      const errors: unknown[] = [];
+      for (const installation of eligible) {
+        if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+          break;
+        }
+        try {
+          await withDeadline(
+            this.sync(installation.id, DEFAULT_MAX_PAGES, {
+              skipIdle: true,
+              capCatchUp: true,
+              syncPlane: "bootstrap",
+              allowHistory: true,
+            }),
+            connectorSyncTimeoutMs(),
+            `bootstrap ${installation.connector_type}`,
+          );
+        } catch (error) {
+          errors.push(error);
+        }
+        await yieldToEventLoop();
+      }
       await applyPullOutcome(errors);
     } catch (error) {
       await applyPullOutcome([error]);
@@ -1317,7 +1417,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         this.sync(installationId, DEFAULT_MAX_PAGES, {
           skipIdle: true,
           capCatchUp: true,
-          allowHistory: false,
+          syncPlane: "bootstrap",
+          allowHistory: true,
           discover: true,
         }),
         connectorSyncTimeoutMs(),
@@ -1415,14 +1516,24 @@ export class PersonalConnectorService implements OnModuleDestroy {
       );
       await this.persistPickedChatNames(store, installation, streams);
       this.pruneStreamPace(installation.id, streams);
+      const storedStates = await store.listSyncStates(installation.id);
+      const stateByKey = new Map(
+        storedStates.map((state) => [state.stream_key, state] as const),
+      );
       const cursorStates = new Map<string, string | undefined>();
+      const cursorKeys = streams
+        .map((stream) => stream.stream_key)
+        .filter((streamKey) => {
+          const state = stateByKey.get(streamKey);
+          return !state || state.phase === "live" || state.phase === "steady";
+        });
       await Promise.all(
-        streams.map(async (stream) => {
+        cursorKeys.map(async (streamKey) => {
           const cursor = await store.getCursor(
             installation.id,
-            stream.stream_key,
+            streamKey,
           );
-          cursorStates.set(stream.stream_key, cursor?.cursor);
+          cursorStates.set(streamKey, cursor?.cursor);
         }),
       );
       const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
@@ -1432,7 +1543,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
         mountedStreamKeys,
         fallbackMembers,
       );
-      const work = await engine.plan({
+      const catalogIncomplete = catalog.catalog ? !catalog.catalog.complete : true;
+      const steadyEnv = steadyCapacityFromEnv();
+      const planInput = {
         installation_id: installation.id,
         preferredThreadId: preferredThreadId(),
         humanIdle,
@@ -1442,16 +1555,47 @@ export class PersonalConnectorService implements OnModuleDestroy {
         members: planMembers,
         fallbackMembers,
         cursorStates,
-      });
+      };
+      const splitPlan =
+        options?.capCatchUp || options?.syncPlane
+          ? await engine.planSplit({
+              ...planInput,
+              liveRing: this.liveRing,
+              steadyLimits: steadyLaneLimitsForCount({
+                members: planMembers,
+                states: stateByKey,
+                tickIntervalMs: pullIntervalMs(),
+                catalogIncomplete,
+                targetIdleMs: steadyEnv.targetIdleMs,
+                maxLive: steadyEnv.maxLive,
+              }),
+            })
+          : null;
+      const work = splitPlan
+        ? options?.syncPlane === "bootstrap"
+          ? splitPlan.bootstrap
+          : options?.syncPlane === "steady"
+            ? splitPlan.steady
+            : splitPlan.all
+        : await engine.plan(planInput);
       const streamByKey = new Map(
         streams.map((stream) => [stream.stream_key, stream] as const),
       );
+      const pressure = this.kernelRuntime.pressureView();
       const selected = work.flatMap((item) => {
         if (item.lane === "catalog") {
           return [];
         }
         const stream = streamByKey.get(item.stream_key);
         if (!stream) {
+          return [];
+        }
+        if (pressure.throttle_history && (item.older || item.lane === "history")) {
+          if (options?.syncPlane !== "bootstrap") {
+            return [];
+          }
+        }
+        if (pressure.throttle_media && item.media) {
           return [];
         }
         const key = streamPaceKey(installation.id, stream.stream_key);
@@ -1466,13 +1610,24 @@ export class PersonalConnectorService implements OnModuleDestroy {
           pages: item.pages,
           catchUpPages: streamCatchUpPages(stream, item.pages),
         });
+        const throttled = applyKernelPressureToSyncBudget(
+          {
+            pages: budget.pages,
+            concurrency: budget.concurrency,
+            lane: item.lane,
+          },
+          pressure.level,
+        );
+        if (throttled.concurrency <= 0) {
+          return [];
+        }
         return [
           {
             stream,
             key,
             idleMs: streamIdleMs(stream),
             older: item.older,
-            pages: budget.pages,
+            pages: throttled.pages,
             lane: item.lane,
             media: item.media,
           },
@@ -1561,6 +1716,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       };
       // Text first so the open thread's lease is free before its media drain.
       const textBatches = await mapLimit(textItems, textConcurrency, runSelected);
+      await yieldToEventLoop();
       const mediaBatches = await mapLimit(mediaItems, mediaConcurrency, runSelected);
       const batches = [...textBatches, ...mediaBatches];
       const runs = batches.flatMap((batch) => batch.pages);
@@ -1577,7 +1733,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         catchingUp: this.streamCatchingUp.size,
       });
       if (summary.accepted_count > 0) {
-        void this.inbox.publishInboxDigest();
+        await this.inbox.publishInboxDigest();
         const notifyAccepted = (
           items: Array<{ stream: ConnectorStream }>,
           batches: Array<{ pages: ConnectorPollRunResult[] }>,
@@ -1599,6 +1755,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         notifyAccepted(mediaItems, mediaBatches);
       }
       this.publishStreams();
+      void this.refreshSyncSnapshot(installation.id, streams);
       return {
         installation_id: installation.id,
         pages_attempted: runs.length,
@@ -1615,6 +1772,34 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
       this.publishStreams();
       throw wrapDriverError(error, "sync_failed");
+    }
+  }
+
+  private async refreshSyncSnapshot(
+    installationId: string,
+    streams: readonly ConnectorStream[],
+  ): Promise<void> {
+    try {
+      const store = this.runtime.requireHost().get("authority");
+      const [catalog, states, attempt] = await Promise.all([
+        store.getSyncCatalog(installationId),
+        store.listSyncStates(installationId),
+        store.latestAttempt(installationId),
+      ]);
+      const snapshot = buildSyncProgressSnapshot({
+        installation_id: installationId,
+        members: catalog.members,
+        states,
+        catalog_complete: catalog.catalog?.complete === true,
+      });
+      if (snapshot) {
+        this.kernelRuntime.publishSyncSnapshot(snapshot);
+      }
+      if (attempt) {
+        this.kernelRuntime.publishInstallAttempt(installationId, attempt);
+      }
+    } catch (error) {
+      console.warn("sync progress snapshot refresh failed", error);
     }
   }
 
@@ -1817,6 +2002,31 @@ export class PersonalConnectorService implements OnModuleDestroy {
       );
     }
     return installation;
+  }
+
+  private async wakeStreamsForThreads(
+    installationId: string,
+    threadIds: readonly string[],
+  ): Promise<void> {
+    const want = new Set(
+      threadIds.map((id) => id.trim()).filter((id) => id.length > 0),
+    );
+    if (want.size === 0) {
+      return;
+    }
+    const prefix = `${installationId}:`;
+    for (const [key, meta] of this.streamMeta) {
+      if (key.startsWith(prefix) && meta.thread_id && want.has(meta.thread_id)) {
+        this.liveRing.nudge(key.slice(prefix.length));
+      }
+    }
+    const store = this.runtime.requireHost().get("authority");
+    const catalog = await store.getSyncCatalog(installationId);
+    for (const member of catalog.members) {
+      if (member.thread_id && want.has(member.thread_id)) {
+        this.liveRing.nudge(member.stream_key);
+      }
+    }
   }
 
   private pruneStreamPace(
@@ -2106,6 +2316,7 @@ async function pollStream(
       break;
     }
     seenCursors.add(run.next_cursor);
+    await yieldToEventLoop();
   }
   return runs;
 }
@@ -2116,6 +2327,14 @@ function pullIntervalMs(): number {
     return 0;
   }
   return Math.max(1_000, Math.min(raw, 60_000));
+}
+
+function bootstrapPullIntervalMs(): number {
+  const raw = Number(process.env.REGENIC_BOOTSTRAP_PULL_MS ?? 1_500);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 0;
+  }
+  return Math.max(500, Math.min(raw, 30_000));
 }
 
 function delay(ms: number): Promise<void> {
@@ -2222,34 +2441,18 @@ async function rememberEngineResult(
   item: { stream: ConnectorStream; older: boolean; media: boolean; idleMs?: number },
   result: { pages: ConnectorPollRunResult[]; error?: unknown },
 ): Promise<void> {
-  const summary = summarizeRuns(result.pages);
-  const last = [...result.pages].reverse().find((page) => "next_cursor" in page);
-  const nextCursor =
-    last && "next_cursor" in last ? last.next_cursor : undefined;
-  const mediaPage = [...result.pages]
-    .reverse()
-    .find((page) => "media_pending" in page);
-  await engine.rememberResult({
-    installation_id: installationId,
-    stream_key: item.stream.stream_key,
-    thread_id: item.stream.thread_id,
-    older: item.older,
-    media: item.media,
-    accepted_count: summary.accepted_count,
-    quarantined_count: summary.quarantined_count,
-    has_more: result.pages.some(
-      (page) => "has_more" in page && page.has_more === true,
+  await engine.rememberResult(
+    syncPageOutcomeFromPollRuns(
+      installationId,
+      {
+        stream: item.stream,
+        work: { older: item.older, media: item.media },
+        idleMs: item.idleMs,
+      },
+      result,
+      new Date().toISOString(),
     ),
-    next_live_cursor: nextCursor,
-    next_history_cursor: nextCursor,
-    media_pending:
-      mediaPage && "media_pending" in mediaPage
-        ? mediaPage.media_pending
-        : undefined,
-    idle_ms: item.idleMs,
-    error: result.error,
-    now: new Date().toISOString(),
-  });
+  );
 }
 
 function summarizeWebhook(run: Extract<

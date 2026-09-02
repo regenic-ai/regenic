@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   configWithOptionNames,
   conversationNameFromOptionLabel,
+  filterCatalogChatOptions,
 } from "../src/renderer/src/connector-config.ts";
 
 describe("configWithOptionNames", () => {
@@ -48,5 +49,39 @@ describe("conversationNameFromOptionLabel", () => {
     );
     assert.equal(conversationNameFromOptionLabel("单聊 · Ada", "oc_3"), "Ada");
     assert.equal(conversationNameFromOptionLabel("Group · oc_1", "oc_1"), "");
+  });
+});
+
+describe("filterCatalogChatOptions", () => {
+  const options = [
+    { value: "oc_g", label: "Group · Eng" },
+    { value: "oc_p", label: "Direct · Ada" },
+  ];
+
+  it("filters picked chats by kinds", () => {
+    assert.deepEqual(
+      filterCatalogChatOptions("chat_ids", options, {
+        selection: "pick",
+        kinds: "group",
+      }),
+      [options[0]],
+    );
+    assert.deepEqual(
+      filterCatalogChatOptions("chat_ids", options, {
+        selection: "pick",
+        kinds: "p2p",
+      }),
+      [options[1]],
+    );
+  });
+
+  it("keeps all chats when both kinds are selected", () => {
+    assert.deepEqual(
+      filterCatalogChatOptions("chat_ids", options, {
+        selection: "pick",
+        kinds: "group,p2p",
+      }),
+      options,
+    );
   });
 });

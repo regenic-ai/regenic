@@ -57,7 +57,7 @@ import {
   listFeishuCatalogChats,
   probeLarkCli,
 } from "./probe";
-import { createFeishuSyncSource } from "./feishu-sync-source";
+import { createFeishuRecentSyncSource, createFeishuSyncSource } from "./feishu-sync-source";
 
 export const feishuChatDriver: ChannelDriver = {
   connector_type: "feishu-chat",
@@ -80,7 +80,7 @@ export const feishuChatDriver: ChannelDriver = {
     if (thread.source !== FEISHU_SOURCE || installation.status !== "enabled") {
       return false;
     }
-    if (feishuSelection(installation.config) === "all") {
+    if (feishuSelection(installation.config) !== "pick") {
       return true;
     }
     return feishuPickedChatIds(installation.config).includes(thread.target);
@@ -101,10 +101,11 @@ export const feishuChatDriver: ChannelDriver = {
           key: "selection",
           label: "field.selection",
           required: true,
-          default: "all",
+          default: "recent",
           options: [
-            { value: "all", label: "option.selection.all" },
+            { value: "recent", label: "option.selection.recent" },
             { value: "pick", label: "option.selection.pick" },
+            { value: "all", label: "option.selection.all" },
           ],
         },
         {
@@ -117,7 +118,7 @@ export const feishuChatDriver: ChannelDriver = {
             { value: "group", label: "option.kinds.group" },
             { value: "p2p", label: "option.kinds.p2p" },
           ],
-          visible_when: { field: "selection", value: "all" },
+          visible_when: { field: "selection", values: ["all", "recent", "pick"] },
         },
         {
           key: "chat_ids",
@@ -153,6 +154,11 @@ export const feishuChatDriver: ChannelDriver = {
           body: "setup.choose.body",
         },
       ],
+      install_confirm: {
+        when: { field: "selection", value: "all" },
+        warning: "confirm.all.warning",
+        ack: "confirm.all.ack",
+      },
     };
   },
 
@@ -162,6 +168,9 @@ export const feishuChatDriver: ChannelDriver = {
     const chatIds = feishuPickedChatIds(config);
     const chatName = configString(config, "chat_name");
     const chatId = configString(config, "chat_id");
+    if (selection === "recent") {
+      return { label: feishuRecentLabel(config), detail: { literal: "cli" } };
+    }
     if (selection === "all" || (!selection && chatIds.length === 0 && !chatId)) {
       return { label: feishuAllLabel(config), detail: { literal: "cli" } };
     }
@@ -211,6 +220,7 @@ export const feishuChatDriver: ChannelDriver = {
     const mounted = feishuChatsFromStreams(
       host.get("connectors").listStreams(installation.id),
     );
+    const selection = feishuSelection(installation.config);
     const chats = await resolveFeishuChatTargets(installation.config, client, {
       known: mergeFeishuChats(
         feishuChatsFromThreads(
@@ -220,18 +230,18 @@ export const feishuChatDriver: ChannelDriver = {
         ),
         feishuChatsFromCatalog(options?.catalog ?? []),
       ),
-      discover:
-        feishuSelection(installation.config) === "pick"
-          ? "known"
-          : options?.discover === true
-            ? "full"
-            : "known",
+      discover: feishuStreamDiscover(selection, options?.discover === true),
     });
     return mountFeishuChats(host, installation, chats, env, client, false);
   },
 
   async bindSyncSource(installation, _host, env) {
-    return createFeishuSyncSource(larkClient(env), feishuKinds(installation.config));
+    const client = larkClient(env);
+    const kinds = feishuKinds(installation.config);
+    if (feishuSelection(installation.config) === "recent") {
+      return createFeishuRecentSyncSource(client, kinds);
+    }
+    return createFeishuSyncSource(client, kinds);
   },
 
   async resolveThreadStream(installation, thread, host, env) {
@@ -485,12 +495,27 @@ export function feishuWriteBackLabels(label: string): string[] {
   return [...new Set([trimmed, ...aliases])];
 }
 
-export function feishuSelection(config: Record<string, unknown>): "all" | "pick" {
+export function feishuSelection(
+  config: Record<string, unknown>,
+): "all" | "pick" | "recent" {
   const selection = configString(config, "selection");
-  if (selection === "all" || selection === "pick") {
+  if (selection === "all" || selection === "pick" || selection === "recent") {
     return selection;
   }
   return configString(config, "chat_id") ? "pick" : "all";
+}
+
+export function feishuStreamDiscover(
+  selection: ReturnType<typeof feishuSelection>,
+  discoverRequested: boolean,
+): FeishuChatDiscover {
+  if (selection === "pick") {
+    return "known";
+  }
+  if (selection === "recent") {
+    return discoverRequested ? "recent" : "known";
+  }
+  return discoverRequested ? "full" : "known";
 }
 
 export function feishuPickedChatIds(config: Record<string, unknown>): string[] {
@@ -510,6 +535,19 @@ export function feishuKinds(config: Record<string, unknown>): FeishuChatMode[] {
   return (["group", "p2p"] as const).filter((kind) => raw.includes(kind));
 }
 
+function feishuRecentLabel(config: Record<string, unknown>): string {
+  const kinds = feishuKinds(config);
+  const groups = kinds.includes("group");
+  const p2p = kinds.includes("p2p");
+  if (groups && p2p) {
+    return "present.recentConversations";
+  }
+  if (p2p) {
+    return "present.recentDirect";
+  }
+  return "present.recentGroups";
+}
+
 function feishuAllLabel(config: Record<string, unknown>): string {
   const kinds = feishuKinds(config);
   const groups = kinds.includes("group");
@@ -526,7 +564,23 @@ function feishuAllLabel(config: Record<string, unknown>): string {
 export function feishuInstallConfig(
   input: Record<string, unknown>,
 ): Record<string, JsonValue> {
-  const selection = feishuSelection(input);
+  const rawSelection = configString(input, "selection") ?? "";
+  const selection =
+    rawSelection.length > 0
+      ? feishuSelection(input)
+      : feishuPickedChatIds(input).length > 0
+        ? "pick"
+        : "recent";
+  if (selection === "recent") {
+    const kinds = feishuKinds(input);
+    if (kinds.length === 0) {
+      throw new ChannelDriverError(
+        "invalid_config",
+        "Feishu install requires groups, direct messages, or both",
+      );
+    }
+    return { selection: "recent", kinds };
+  }
   if (selection === "all") {
     const kinds = feishuKinds(input);
     if (kinds.length === 0) {

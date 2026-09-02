@@ -6,6 +6,7 @@ import {
   type ContentPart,
   type IngestBatch,
   type PollResult,
+  type SyncPollHint,
 } from "@regenic/domain";
 import type {
   FeishuChatMode,
@@ -162,6 +163,7 @@ export class FeishuChatPollConnector {
         next_cursor: nextCursor,
         has_more: false,
         media_pending: (state.media_jobs?.length ?? 0) > 0,
+        poll_hint: feishuPollHint(state),
       };
     }
     const page = request
@@ -209,6 +211,7 @@ export class FeishuChatPollConnector {
         Boolean(request) &&
         feishuHistoryHasMore(state, page, request?.sort_type, nextState),
       media_pending: drained.jobs.length > 0,
+      poll_hint: feishuPollHint(nextState),
     };
   }
 
@@ -233,6 +236,7 @@ export class FeishuChatPollConnector {
         next_cursor: nextCursor,
         has_more: false,
         media_pending: (state.media_jobs?.length ?? 0) > 0,
+        poll_hint: feishuPollHint(state),
       };
     }
     const drained = await this.drainMediaJobs(state.media_jobs ?? [], nowMs);
@@ -256,6 +260,7 @@ export class FeishuChatPollConnector {
       next_cursor: nextCursor,
       has_more: false,
       media_pending: drained.jobs.length > 0,
+      poll_hint: feishuPollHint(nextState),
     };
   }
 
@@ -748,6 +753,13 @@ export function nextFeishuCursor(
     ...(liveStart ? { start_time: liveStart } : {}),
     recent_seeded: true,
     ...(history ? { history_token: history } : {}),
+  };
+}
+
+export function feishuPollHint(state: FeishuCursorState): SyncPollHint {
+  return {
+    live_seeded: state.recent_seeded === true,
+    history_pending: Boolean(deferredHistoryToken(state)),
   };
 }
 

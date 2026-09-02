@@ -1,6 +1,7 @@
 import type {
   SyncPageOutcome,
   SyncPhase,
+  SyncPollHint,
   SyncStreamState,
 } from "./sync-contracts";
 
@@ -52,8 +53,12 @@ export function deriveSyncPhase(input: {
   live_cursor?: string | null;
   history_cursor?: string | null;
   idle_until?: string | null;
+  poll_hint?: SyncPollHint;
   now?: string;
 }): SyncPhase {
+  if (input.poll_hint) {
+    return deriveSyncPhaseFromHint(input.poll_hint, input.idle_until, input.now);
+  }
   if (streamCursorUnseeded(input.live_cursor)) {
     return "unseeded";
   }
@@ -61,6 +66,23 @@ export function deriveSyncPhase(input: {
     return "history";
   }
   if (input.idle_until && input.now && input.idle_until > input.now) {
+    return "steady";
+  }
+  return "live";
+}
+
+export function deriveSyncPhaseFromHint(
+  hint: SyncPollHint,
+  idleUntil?: string | null,
+  now?: string,
+): SyncPhase {
+  if (hint.live_seeded === false) {
+    return "unseeded";
+  }
+  if (hint.history_pending === true) {
+    return "history";
+  }
+  if (idleUntil && now && idleUntil > now) {
     return "steady";
   }
   return "live";
@@ -117,6 +139,7 @@ export function advanceSyncState(
         live_cursor: live,
         history_cursor: history,
         idle_until: idleUntil,
+        poll_hint: outcome.poll_hint,
         now: outcome.now,
       });
   return {

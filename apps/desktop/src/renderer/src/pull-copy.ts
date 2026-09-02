@@ -1,9 +1,38 @@
 import { t } from "../../shared/i18n.ts";
+import type { KernelReachability } from "../../shared/connection-state.ts";
 import type { EngineChipState, PersonalEngineView, PullStatusView } from "./types.ts";
 
-export function engineChip(engine: PersonalEngineView | null): EngineChipState {
+export function engineChip(
+  engine: PersonalEngineView | null,
+  reachability: KernelReachability = "live",
+): EngineChipState {
   if (!engine || engine.kernel === "stopped") {
     return "stopped";
+  }
+  if (reachability === "degraded") {
+    return "degraded";
+  }
+  const pull = engine.pull;
+  if (pull) {
+    const streams = pull.streams ?? [];
+    if (streams.some(isHistoryWork)) {
+      return "syncing";
+    }
+    if (streams.some((stream) => stream.phase === "catching_up")) {
+      return "syncing";
+    }
+    const catchingUp = pull.catching_up_count ?? 0;
+    if (catchingUp > 0) {
+      const detailed = streams.filter(
+        (stream) =>
+          stream.phase === "pulling" ||
+          stream.phase === "catching_up" ||
+          stream.work === "history",
+      ).length;
+      if (detailed === 0 || catchingUp > detailed) {
+        return "syncing";
+      }
+    }
   }
   if (engine.installations.some((item) => item.last_attempt?.status === "running")) {
     return "syncing";

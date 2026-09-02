@@ -9,6 +9,7 @@ import {
   type MessageKind,
   type MessageTurn,
   type PollResult,
+  type SyncPollHint,
   type ThreadActivity,
 } from "@regenic/domain";
 import { DshApiError, type DshHistoryEvent, type DshHistoryPage } from "./dsh-cli-client";
@@ -104,6 +105,7 @@ export class DshSessionPollConnector {
       return {
         ...this.toPollResult(cursor?.value, nextCursor, []),
         has_more: true,
+        poll_hint: dshPollHint(nextCursor, true),
       };
     }
     const surface = toSurfaceEvents(collected.events).filter((event) => event.seq > afterSeq);
@@ -126,7 +128,10 @@ export class DshSessionPollConnector {
       events: window,
       hasMore: surface.length > window.length,
     };
-    return this.toPollResult(cursor?.value, nextCursor, window);
+    return {
+      ...this.toPollResult(cursor?.value, nextCursor, window),
+      poll_hint: dshPollHint(nextCursor, surface.length > window.length),
+    };
   }
 
   private async collectHistoryAfter(
@@ -464,6 +469,22 @@ function parseCursor(cursor: ConnectorCursor | null): {
 
 function formatResumeCursor(afterSeq: number, resumeBefore: number): string {
   return `${afterSeq}:${resumeBefore}`;
+}
+
+export function dshPollHint(
+  nextCursor: string | undefined,
+  hasMore: boolean,
+): SyncPollHint {
+  if (!nextCursor) {
+    return { live_seeded: false, history_pending: false };
+  }
+  if (/^(-1|\d+):(\d+)$/.test(nextCursor)) {
+    return { live_seeded: false, history_pending: true };
+  }
+  return {
+    live_seeded: true,
+    history_pending: hasMore,
+  };
 }
 
 function userMessageFromData(data: unknown): unknown {

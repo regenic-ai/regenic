@@ -287,9 +287,7 @@ export class SqliteAuthorityStore
 
   constructor(path: string, options: SqliteOpenOptions = {}) {
     this.readonly = options.readonly === true;
-    if (!this.readonly) {
-      mkdirSync(dirname(path), { recursive: true });
-    }
+    mkdirSync(dirname(path), { recursive: true });
     this.database = new Database(
       path,
       this.readonly ? { fileMustExist: true } : undefined,
@@ -389,10 +387,39 @@ export class SqliteAuthorityStore
   }
 
   async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
+    return this.openContextReadInternal(orgId);
+  }
+
+  async openContextReadForThread(
+    orgId: string,
+    threadId: string,
+  ): Promise<ContextAuthorityRead> {
+    const scopedThreadId = threadId.trim();
+    if (!scopedThreadId) {
+      throw new Error("Context thread read requires a thread id");
+    }
+    return this.openContextReadInternal(orgId, scopedThreadId);
+  }
+
+  private async openContextReadInternal(
+    orgId: string,
+    threadId?: string,
+  ): Promise<ContextAuthorityRead> {
     const read = this.database.transaction(() => {
       const rows = this.database
         .prepare(
+          threadId
+            ? `
+                 SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
+                   e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
+                   e.required_scope_ids_json, e.occurred_at, e.ingested_at,
+                   b.media_type AS content_media_type
+                 FROM events e
+                 LEFT JOIN blobs b ON b.content_hash = e.content_hash
+                 WHERE e.org_id = ? AND e.thread_id = ?
+                 ORDER BY e.sequence ASC
           `
+            : `
                  SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                    e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
                    e.required_scope_ids_json, e.occurred_at, e.ingested_at,
@@ -403,17 +430,36 @@ export class SqliteAuthorityStore
                  ORDER BY e.sequence ASC
           `,
         )
-             .all(orgId) as ContextEventRow[];
-      const lifecycleHeads = this.database
-        .prepare(
-          `
+        .all(...(threadId ? [orgId, threadId] : [orgId])) as ContextEventRow[];
+      const lifecycleHeads = threadId
+        ? (this.database
+            .prepare(
+              `
+            SELECT sh.source, sh.external_id, sh.current_event_id AS head_event_id
+            FROM source_heads sh
+            WHERE sh.org_id = ?
+              AND EXISTS (
+                SELECT 1
+                FROM events e
+                WHERE e.org_id = sh.org_id
+                  AND e.source = sh.source
+                  AND e.external_id = sh.external_id
+                  AND e.thread_id = ?
+              )
+            ORDER BY sh.source ASC, sh.external_id ASC
+          `,
+            )
+            .all(orgId, threadId) as ContextAuthorityRead["lifecycle_heads"])
+        : (this.database
+            .prepare(
+              `
             SELECT source, external_id, current_event_id AS head_event_id
             FROM source_heads
             WHERE org_id = ?
             ORDER BY source ASC, external_id ASC
           `,
-        )
-        .all(orgId) as ContextAuthorityRead["lifecycle_heads"];
+            )
+            .all(orgId) as ContextAuthorityRead["lifecycle_heads"]);
       const recordedAt = new Date().toISOString();
       const events = rows.map((row) => ({
         ...this.toEvent(row),
@@ -424,6 +470,7 @@ export class SqliteAuthorityStore
       return {
         read_epoch: `authority:${hashCanonicalContext({
           org_id: orgId,
+          ...(threadId ? { thread_id: threadId } : {}),
           recorded_at: recordedAt,
           events,
           lifecycle_heads: lifecycleHeads,
@@ -2066,6 +2113,7 @@ export class SqliteAuthorityStore
   async pruneIngestAttempts(
     keepPerInstallation = 64,
     batchSize = 5_000,
+    installationLimit = Number.POSITIVE_INFINITY,
   ): Promise<{ deleted: number }> {
     this.assertWritable();
     const keep =
@@ -2074,9 +2122,22 @@ export class SqliteAuthorityStore
         : 64;
     const batch =
       Number.isInteger(batchSize) && batchSize > 0 ? batchSize : 5_000;
+    const limit =
+      Number.isInteger(installationLimit) && installationLimit > 0
+        ? installationLimit
+        : Number.POSITIVE_INFINITY;
     const installations = this.database
-      .prepare(`SELECT id FROM connector_installations`)
-      .all() as Array<{ id: string }>;
+      .prepare(
+        `
+          SELECT connector_installation_id AS id
+          FROM ingest_attempts
+          GROUP BY connector_installation_id
+          HAVING COUNT(*) > ?
+          ORDER BY COUNT(*) DESC, connector_installation_id ASC
+          LIMIT ?
+        `,
+      )
+      .all(keep, Number.isFinite(limit) ? limit : -1) as Array<{ id: string }>;
     const deleteQuarantines = this.database.prepare(
       `
         DELETE FROM ingest_quarantines
@@ -2120,22 +2181,24 @@ export class SqliteAuthorityStore
       `,
     );
     let deleted = 0;
-    this.database.transaction(() => {
-      for (const installation of installations) {
-        deleteQuarantines.run(
-          installation.id,
-          installation.id,
-          keep,
-          batch,
-        );
-        deleted += deleteAttempts.run(
-          installation.id,
-          installation.id,
-          keep,
-          batch,
-        ).changes;
-      }
-    }).immediate();
+    for (const installation of installations) {
+      this.database
+        .transaction(() => {
+          deleteQuarantines.run(
+            installation.id,
+            installation.id,
+            keep,
+            batch,
+          );
+          deleted += deleteAttempts.run(
+            installation.id,
+            installation.id,
+            keep,
+            batch,
+          ).changes;
+        })
+        .immediate();
+    }
     return { deleted };
   }
 

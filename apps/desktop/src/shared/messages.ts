@@ -10,6 +10,8 @@ export const en = {
   "chrome.currentWorkCount": "{count} open",
   "chrome.kernel": "Kernel {state}",
   "chrome.cannotReach": "Cannot reach the kernel at {origin}",
+  "chrome.degradedReach":
+    "Local service is catching up at {origin}. Your list may lag a few seconds.",
   "chrome.sendTimedOut":
     "The local service is still sending this. Wait a bit, then check the thread — it may already be there.",
 
@@ -137,6 +139,7 @@ export const en = {
   "label.agent": "Agent",
   "label.group": "Group",
   "label.you": "You",
+  "label.participant": "Member",
   "label.runtime": "Runtime",
   "label.assistant": "Assistant",
   "label.dshAgent": "DSH Agent",
@@ -488,6 +491,7 @@ export const en = {
 
   "chip.running": "Running",
   "chip.syncing": "Syncing",
+  "chip.degraded": "Syncing (slow)",
   "chip.stopped": "Stopped",
   "status.enabled": "Enabled",
   "status.disabled": "Disabled",
@@ -505,7 +509,7 @@ export const en = {
   "sync.okWhen": "OK · accepted {count} · {when}",
   "sync.noneFound": "No conversations listed yet",
   "sync.coverage":
-    "Listed {discovered} · recent synced {seeded} · catching up {backfilling}",
+    "Listed {discovered} · bootstrap {bootstrap_pending} · steady {steady}",
   "sync.off": "off",
   "sync.syncingCount": "Syncing {count} conversations",
   "sync.syncingNamed": "Syncing {label}",
@@ -552,6 +556,7 @@ export const en = {
     "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not a WhatsApp password.",
   "connector.showPairing": "Show pairing code",
   "connector.hidePairing": "Hide",
+  "connector.installConfirmRequired": "Confirm the install choice first",
 
   "docs.connector": "Connector spec",
   "docs.executor": "Executor spec",
@@ -618,9 +623,11 @@ export const zh: Record<MessageKey, string> = {
   "nav.settings": "设置",
 
   "chrome.searchSoon": "搜索即将推出",
-  "chrome.currentWorkCount": "{count} 条进行中",
+  "chrome.currentWorkCount": "{count} 个待办",
   "chrome.kernel": "本机服务 {state}",
   "chrome.cannotReach": "连不上 {origin} 上的本机服务",
+  "chrome.degradedReach":
+    "{origin} 上的本机服务正在后台同步，列表可能会慢几秒。",
   "chrome.sendTimedOut": "本机服务还在发这条。先等一会儿再看会话，可能已经发出去了。",
 
   "inbox.title": "工作",
@@ -703,7 +710,7 @@ export const zh: Record<MessageKey, string> = {
   "thread.bindRecipeTitle": "把这条会话交给助手",
   "thread.loadingEarlier": "正在加载更早的消息",
   "thread.opening": "同步中…",
-  "thread.recentMessages": "最近 {count} 条",
+  "thread.recentMessages": "最近 {count} 条，向上可加载更早",
   "thread.messages": "{count} 条消息",
   "thread.noMessages": "这条会话没有可显示的消息。",
   "thread.openingConversation": "正在同步消息…",
@@ -743,6 +750,7 @@ export const zh: Record<MessageKey, string> = {
   "label.agent": "Agent",
   "label.group": "群聊",
   "label.you": "你",
+  "label.participant": "成员",
   "label.runtime": "运行时",
   "label.assistant": "助手",
   "label.dshAgent": "DSH Agent",
@@ -999,7 +1007,7 @@ export const zh: Record<MessageKey, string> = {
   "engine.eyebrow": "运行时",
   "engine.title": "引擎",
   "engine.lead":
-    "本机数据、连接器和助手。本机在跑时，已启用的连接器会自己拉消息。进行中只看待办；同步覆盖是渠道目录里已列出的全部会话。",
+    "本机数据、连接器和助手。本机在跑时，已启用的连接器会自己拉消息。待办是会话里有待处理消息的条数；同步覆盖是渠道目录里已发现会话的补齐进度。",
   "engine.disconnected": "本机服务还没连上。",
   "engine.kernel": "本机服务",
   "engine.status": "状态",
@@ -1008,7 +1016,7 @@ export const zh: Record<MessageKey, string> = {
   "engine.org": "组织",
   "engine.database": "数据库",
   "engine.pluginDir": "插件",
-  "engine.currentWork": "进行中",
+  "engine.currentWork": "待办",
   "engine.coverage": "同步覆盖",
   "engine.livePull": "自动拉取",
   "engine.network": "网络",
@@ -1068,6 +1076,7 @@ export const zh: Record<MessageKey, string> = {
 
   "chip.running": "运行中",
   "chip.syncing": "同步中",
+  "chip.degraded": "同步中（响应慢）",
   "chip.stopped": "已停止",
   "status.enabled": "已启用",
   "status.disabled": "已停用",
@@ -1083,7 +1092,7 @@ export const zh: Record<MessageKey, string> = {
   "sync.failedWhen": "失败{code} · {when}",
   "sync.okWhen": "成功 · 新入库 {count} · {when}",
   "sync.noneFound": "目录里还没有会话",
-  "sync.coverage": "已列出 {discovered} · 最近已同步 {seeded} · 补历史中 {backfilling}",
+  "sync.coverage": "已列出 {discovered} · 补齐中 {bootstrap_pending} · 已就绪 {steady}",
   "sync.off": "已关闭",
   "sync.syncingCount": "正在同步 {count} 个会话",
   "sync.syncingNamed": "正在同步 {label}",
@@ -1130,6 +1139,7 @@ export const zh: Record<MessageKey, string> = {
     "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是 WhatsApp 密码。",
   "connector.showPairing": "显示配对码",
   "connector.hidePairing": "隐藏",
+  "connector.installConfirmRequired": "请先确认安装选项",
 
   "docs.connector": "连接器规范",
   "docs.executor": "执行器规范",

@@ -26,6 +26,30 @@ export function conversationNameFromOptionLabel(
   return name;
 }
 
+export function filterCatalogChatOptions(
+  fieldKey: string,
+  options: Array<{ value: string; label: string }>,
+  values: Record<string, string>,
+): Array<{ value: string; label: string }> {
+  if (fieldKey !== "chat_ids" || values.selection !== "pick") {
+    return options;
+  }
+  const kinds = splitValues(values.kinds ?? "group,p2p");
+  if (kinds.length === 0 || kinds.length >= 2) {
+    return options;
+  }
+  return options.filter((option) => {
+    const label = option.label;
+    if (kinds.includes("group") && /^(Group|群聊)\s*·/i.test(label)) {
+      return true;
+    }
+    if (kinds.includes("p2p") && /^(Direct|单聊)\s*·/i.test(label)) {
+      return true;
+    }
+    return false;
+  });
+}
+
 export function configWithOptionNames(
   values: Record<string, string>,
   fields: Array<{

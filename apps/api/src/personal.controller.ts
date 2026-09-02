@@ -192,6 +192,12 @@ export class PersonalController {
     return item;
   }
 
+  @Get("heartbeat")
+  getHeartbeat() {
+    const started = Date.now();
+    return this.guard(() => this.inbox.getHeartbeat(started));
+  }
+
   @Get("engine")
   getEngine(
     @Query("detail") detail?: string,

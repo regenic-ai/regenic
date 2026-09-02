@@ -76,6 +76,7 @@ describe("LarkCliClient", () => {
         container_id: "oc_1",
         sort_type: "ByCreateTimeAsc",
         page_size: 20,
+        user_id_type: "open_id",
         page_token: "cur",
         start_time: "1723420800",
       }),

@@ -21,6 +21,7 @@ export class PersonalWorkSupervise {
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly channel: PersonalWorkChannel,
+    private readonly touchInboxDigest?: () => void,
   ) {}
 
   async refreshRuns(): Promise<void> {
@@ -127,6 +128,7 @@ export class PersonalWorkSupervise {
       if (!isActiveWorkStatus(status)) {
         if (!recipeWantsWriteBack(recipe)) {
           await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
+          this.touchInboxDigest?.();
         }
       }
     }

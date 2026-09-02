@@ -5,6 +5,7 @@ import {
   connectorActionError,
   networkWatchHint,
 } from "../src/renderer/src/connector-errors.ts";
+import { formatChatTime } from "../src/renderer/src/format.ts";
 import {
   engineChip,
   pullStatusLabel,
@@ -127,17 +128,19 @@ describe("sync coverage copy", () => {
       backfilling: 8,
       media_pending: 0,
       catalog_complete: false,
+      bootstrap_pending: 94,
+      steady: 26,
     };
     assert.equal(
       syncProgressSummary(sync),
-      "Listed 120+ · recent synced 34 · catching up 8",
+      "Listed 120+ · bootstrap 94 · steady 26",
     );
     assert.equal(syncProgressTone(sync), "warn");
     setActiveLocale("zh");
     try {
       assert.equal(
         syncProgressSummary(sync),
-        "已列出 120+ · 最近已同步 34 · 补历史中 8",
+        "已列出 120+ · 补齐中 94 · 已就绪 26",
       );
     } finally {
       setActiveLocale("en");
@@ -163,6 +166,8 @@ describe("sync coverage copy", () => {
           backfilling: 8,
           media_pending: 0,
           catalog_complete: false,
+          bootstrap_pending: 94,
+          steady: 26,
         },
       },
     ];
@@ -200,5 +205,32 @@ describe("connector action errors", () => {
       connectorActionError("feishu-chat is already installed"),
       "This connector is already installed",
     );
+  });
+});
+
+describe("formatChatTime", () => {
+  it("shows time only for same-day messages", () => {
+    setActiveLocale("en");
+    const now = new Date("2026-09-02T12:00:00");
+    assert.equal(
+      formatChatTime("2026-09-02T15:44:00", now),
+      "3:44 PM",
+    );
+  });
+
+  it("omits the year for earlier dates in the same year", () => {
+    setActiveLocale("en");
+    const now = new Date("2026-09-02T12:00:00");
+    const formatted = formatChatTime("2026-04-21T18:28:00", now);
+    assert.match(formatted, /4\/21/);
+    assert.doesNotMatch(formatted, /2026/);
+  });
+
+  it("includes the year for messages from a previous year", () => {
+    setActiveLocale("en");
+    const now = new Date("2026-09-02T12:00:00");
+    const formatted = formatChatTime("2025-04-21T18:28:00", now);
+    assert.match(formatted, /2025/);
+    assert.match(formatted, /4\/21/);
   });
 });

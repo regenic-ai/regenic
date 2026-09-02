@@ -56,6 +56,10 @@ describe("SlackChannelPollConnector", () => {
     assert.equal(result.batch.records[1].type, "thread_reply");
     assert.equal(result.batch.records[1].parent_external_id, "C123:1723420800.000001");
     assert.equal(result.batch.records[1].scope.name, "engineering");
+    assert.deepEqual(result.poll_hint, {
+      live_seeded: true,
+      history_pending: true,
+    });
   });
 
   it("settles a Slack page through the shared connector runtime", async () => {

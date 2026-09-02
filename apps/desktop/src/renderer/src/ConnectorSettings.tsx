@@ -6,9 +6,14 @@ import {
 } from "./whatsapp-import";
 import {
   configWithOptionNames,
+  filterCatalogChatOptions,
   splitValues,
   toggleCsvValue,
 } from "./connector-config";
+import {
+  catalogInstallConfirm,
+  matchesCatalogFieldWhen,
+} from "./connector-install-guard";
 import {
   attemptSummary,
   connectorActionError,
@@ -323,15 +328,26 @@ function ConnectorSettingsForm({
     ...defaultFieldValues(kind),
     ...initialValues,
   }));
+  const [installConfirmed, setInstallConfirmed] = useState(false);
+  const installConfirm = catalogInstallConfirm(kind, values);
   const [remoteOptions, setRemoteOptions] = useState<
     Record<string, { value: string; label: string }[]>
   >({});
   const [loadingOptions, setLoadingOptions] = useState(false);
+  const prerequisites = visiblePrerequisites(kind, values);
+  const prerequisitesReady = prerequisites.every(
+    (item) => !item.required || item.ready,
+  );
   const needsRemote = kind.fields
-    .filter((field) => matchesWhen(field.visible_when, values))
+    .filter((field) => matchesCatalogFieldWhen(field.visible_when, values))
     .some(fieldNeedsRemoteOptions);
   useEffect(() => {
-    if (!needsRemote) {
+    if (!installConfirm && installConfirmed) {
+      setInstallConfirmed(false);
+    }
+  }, [installConfirm, installConfirmed]);
+  useEffect(() => {
+    if (!needsRemote || !prerequisitesReady) {
       return;
     }
     let cancelled = false;
@@ -350,24 +366,28 @@ function ConnectorSettingsForm({
     return () => {
       cancelled = true;
     };
-  }, [kind.connector_type, needsRemote]);
+  }, [kind.connector_type, needsRemote, prerequisitesReady]);
   const fields = kind.fields
     .map((field) => ({
       ...field,
-      options: remoteOptions[field.key] ?? field.options,
+      options: filterCatalogChatOptions(
+        field.key,
+        remoteOptions[field.key] ?? field.options ?? [],
+        values,
+      ),
     }))
-    .filter((field) => matchesWhen(field.visible_when, values));
-  const prerequisites = visiblePrerequisites(kind, values);
+    .filter((field) => matchesCatalogFieldWhen(field.visible_when, values));
   const blocked = prerequisites.some((item) => item.required && !item.ready);
   const missingRequired = fields.some(
     (field) => field.required && !(values[field.key] ?? "").trim(),
   );
+  const guardBlocked = installConfirm !== undefined && !installConfirmed;
   return (
     <form
       className="install-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (busy) {
+        if (busy || guardBlocked) {
           return;
         }
         onSubmit(configWithOptionNames(values, fields));
@@ -443,18 +463,33 @@ function ConnectorSettingsForm({
           </label>
         );
       })}
+      {installConfirm ? (
+        <div className="install-guard">
+          <p className="action-error">{installConfirm.warning}</p>
+          <label className="check-item">
+            <input
+              type="checkbox"
+              checked={installConfirmed}
+              onChange={(event) => setInstallConfirmed(event.target.checked)}
+            />
+            <span>{installConfirm.ack}</span>
+          </label>
+        </div>
+      ) : null}
       <button
         type="submit"
         className="primary"
-        disabled={busy || blocked || missingRequired}
+        disabled={busy || blocked || missingRequired || guardBlocked}
       >
         {busy
           ? busyLabel
-          : blocked
-            ? t("connector.prereqFirst")
-            : missingRequired
-              ? t("connector.fillRequired")
-              : submitLabel}
+          : guardBlocked
+            ? t("connector.installConfirmRequired")
+            : blocked
+              ? t("connector.prereqFirst")
+              : missingRequired
+                ? t("connector.fillRequired")
+                : submitLabel}
       </button>
     </form>
   );
@@ -560,7 +595,9 @@ function SetupStepList({
 }) {
   const { t } = useLocale();
   const [copied, setCopied] = useState<string | null>(null);
-  const visible = steps.filter((step) => matchesWhen(step.visible_when, values));
+  const visible = steps.filter((step) =>
+    matchesCatalogFieldWhen(step.visible_when, values),
+  );
   if (visible.length === 0) {
     return null;
   }
@@ -688,18 +725,8 @@ function visiblePrerequisites(
   values: Record<string, string>,
 ): ConnectorCatalogItem["prerequisites"] {
   return (kind.prerequisites ?? []).filter((item) =>
-    matchesWhen(item.visible_when, values),
+    matchesCatalogFieldWhen(item.visible_when, values),
   );
-}
-
-function matchesWhen(
-  when: { field: string; value: string } | undefined,
-  values: Record<string, string>,
-): boolean {
-  if (!when) {
-    return true;
-  }
-  return (values[when.field] ?? "") === when.value;
 }
 
 function ConnectorRow({

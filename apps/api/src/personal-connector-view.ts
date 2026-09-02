@@ -12,6 +12,7 @@ import {
   type CopyRef,
   type DriverInstallCatalog,
   type IngestAttempt,
+  matchesCatalogFieldWhen,
   type SyncProgressView,
 } from "@regenic/domain";
 import {
@@ -21,9 +22,12 @@ import {
 
 export type { CatalogDocRef };
 
-export interface ConnectorFieldWhen {
-  field: string;
-  value: string;
+export type ConnectorFieldWhen = import("@regenic/domain").DriverCatalogFieldWhen;
+
+export interface ConnectorInstallConfirm {
+  when: ConnectorFieldWhen;
+  warning: string;
+  ack: string;
 }
 
 export interface ConnectorField {
@@ -76,6 +80,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  install_confirm?: ConnectorInstallConfirm;
   import_files?: ConnectorImportFiles;
   unit_kinds: Array<{ id: string; label: string }>;
   docs: CatalogDocRef[];
@@ -105,6 +110,7 @@ interface CatalogDefinition {
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
   setup_steps: ConnectorSetupStep[];
+  install_confirm?: ConnectorInstallConfirm;
   import_files?: ConnectorImportFiles;
   unit_kinds: Array<{ id: string; label: string }>;
   docs: CatalogDocRef[];
@@ -161,6 +167,9 @@ function catalogDefinitionFromDriver(
       visible_when: prerequisite.visible_when,
     })),
     setup_steps: catalogSetupSteps(resolved.setup_steps),
+    ...(resolved.install_confirm
+      ? { install_confirm: resolved.install_confirm }
+      : {}),
     ...(importFiles ? { import_files: importFiles } : {}),
     docs: CONNECTOR_INSTALL_DOCS,
   };
@@ -464,10 +473,7 @@ export function matchesWhen(
   when: ConnectorFieldWhen | undefined,
   values: Record<string, string>,
 ): boolean {
-  if (!when) {
-    return true;
-  }
-  return (values[when.field] ?? "") === when.value;
+  return matchesCatalogFieldWhen(when, values);
 }
 
 function defaultFieldValues(fields: ConnectorField[]): Record<string, string> {

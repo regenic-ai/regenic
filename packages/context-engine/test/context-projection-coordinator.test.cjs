@@ -17,10 +17,23 @@ const event = {
   ingested_at: "2026-09-01T00:01:00.000Z",
 };
 
-function authority() {
+function authority(overrides = {}) {
+  const base = {
+    read_epoch: "authority:1",
+    recorded_at: "2026-09-01T00:01:00.000Z",
+    events: [event],
+    lifecycle_heads: [],
+  };
+  const read = { ...base, ...overrides };
   return {
     async openContextRead() {
-      return { read_epoch: "authority:1", recorded_at: "2026-09-01T00:01:00.000Z", events: [event], lifecycle_heads: [] };
+      return read;
+    },
+    async openContextReadForThread(_orgId, threadId) {
+      return {
+        ...read,
+        events: read.events.filter((item) => item.thread_id === threadId),
+      };
     },
   };
 }
@@ -112,6 +125,9 @@ describe("ContextProjectionCoordinator", () => {
         async openContextRead() {
           return { ...await authority().openContextRead(), events: [{ ...event, org_id: "other-org" }] };
         },
+        async openContextReadForThread() {
+          return authority().openContextRead();
+        },
       }, artifacts, registry).project("example-org", "generation-1"),
       /another organization/,
     );
@@ -135,6 +151,9 @@ describe("ContextProjectionCoordinator", () => {
         async openContextRead() {
           return { ...await authority().openContextRead(), read_epoch: "", recorded_at: "not-a-time" };
         },
+        async openContextReadForThread() {
+          return authority().openContextRead();
+        },
       }, artifacts, registry).project("example-org", "generation-1"),
       /invalid read boundary/,
     );
@@ -151,10 +170,49 @@ describe("ContextProjectionCoordinator", () => {
         readCalls += 1;
         return authority().openContextRead();
       },
+      async openContextReadForThread() {
+        readCalls += 1;
+        return authority().openContextRead();
+      },
     }, artifacts, registry);
 
     await assert.rejects(coordinator.project(" ", "generation-1"), /organization and generation/);
     await assert.rejects(coordinator.project("example-org", " "), /organization and generation/);
     assert.equal(readCalls, 0);
+  });
+
+  it("projects one thread through a scoped authority read", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const registry = new MemoryContextProjectorRegistry();
+    registry.register(projector());
+    let scopedThread = null;
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead() {
+        throw new Error("full org read should not run");
+      },
+      async openContextReadForThread(_orgId, threadId) {
+        scopedThread = threadId;
+        return authority().openContextReadForThread(_orgId, threadId);
+      },
+    }, artifacts, registry);
+
+    assert.deepEqual(
+      await coordinator.projectThread("example-org", "continuous-v1", "thread-1"),
+      [{
+        projector_id: "test-projector",
+        projected_events: 1,
+        stored_artifacts: 1,
+        checkpoint_sequence: 1,
+      }],
+    );
+    assert.equal(scopedThread, "thread-1");
+    assert.equal(
+      (await artifacts.getCheckpoint(
+        "example-org",
+        "test-projector",
+        "continuous-v1@thread:thread-1",
+      ))?.sequence,
+      1,
+    );
   });
 });

@@ -10,7 +10,7 @@ export function engineRevision(
   const installs = engine.installations
     .map(
       (item) =>
-        `${item.id}:${item.status}:${item.last_attempt?.status ?? ""}:${item.label}:${item.channel_label ?? ""}:${item.sync?.discovered ?? ""}:${item.sync?.seeded ?? ""}:${item.sync?.backfilling ?? ""}:${item.sync?.catalog_complete ? 1 : 0}`,
+        `${item.id}:${item.status}:${item.last_attempt?.status ?? ""}:${item.label}:${item.channel_label ?? ""}:${item.sync?.discovered ?? ""}:${item.sync?.bootstrap_pending ?? ""}:${item.sync?.steady ?? ""}:${item.sync?.catalog_complete ? 1 : 0}`,
     )
     .join(",");
   const catalog = (engine.catalog ?? [])
