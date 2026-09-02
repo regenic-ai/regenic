@@ -14,6 +14,8 @@ export interface SyncProgressCounts {
   seeded: number;
   backfilling: number;
   media_pending: number;
+  bootstrap_pending: number;
+  steady: number;
 }
 
 export interface SyncProgressSnapshot {
@@ -31,6 +33,8 @@ export function emptySyncProgressCounts(): SyncProgressCounts {
     seeded: 0,
     backfilling: 0,
     media_pending: 0,
+    bootstrap_pending: 0,
+    steady: 0,
   };
 }
 
@@ -44,6 +48,8 @@ export function syncProgressViewFromCounts(
     backfilling: counts.backfilling,
     media_pending: counts.media_pending,
     catalog_complete: counts.catalog_complete,
+    bootstrap_pending: counts.bootstrap_pending,
+    steady: counts.steady,
   };
 }
 
@@ -74,6 +80,8 @@ export function countSyncProgress(
     seeded: progress.seeded,
     backfilling: progress.backfilling,
     media_pending: progress.media_pending,
+    bootstrap_pending: progress.bootstrap_pending,
+    steady: progress.steady,
   };
 }
 

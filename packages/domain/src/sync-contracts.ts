@@ -10,6 +10,14 @@ export type SyncLane =
 
 export type SyncPhase = "unseeded" | "live" | "history" | "steady";
 
+/** Connector-declared lifecycle; core must not parse wire cursors when this is set. */
+export interface SyncPollHint {
+  /** Recent/live tail has been seeded at least once. */
+  live_seeded?: boolean;
+  /** History backfill still has older pages. */
+  history_pending?: boolean;
+}
+
 export const SYNC_LANES: readonly SyncLane[] = [
   "interactive",
   "live",
@@ -111,6 +119,7 @@ export interface SyncPageOutcome {
   next_history_cursor?: string;
   media_pending?: boolean;
   idle_ms?: number;
+  poll_hint?: SyncPollHint;
   error?: unknown;
   now: string;
 }

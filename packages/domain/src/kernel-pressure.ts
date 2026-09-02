@@ -104,14 +104,11 @@ export function kernelPressureView(
   };
 }
 
-/** Background connector ticks should wait while inbox/engine reads are in flight. */
+/** Background connector ticks yield only under critical load; elevated throttles history instead. */
 export function shouldDeferBackgroundSync(
   sample: KernelPressureSample,
   thresholds: KernelPressureThresholds = DEFAULT_KERNEL_PRESSURE_THRESHOLDS,
 ): boolean {
-  if ((sample.interactive_waiters ?? 0) > 0) {
-    return true;
-  }
   return classifyKernelPressure(sample, thresholds) === "critical";
 }
 

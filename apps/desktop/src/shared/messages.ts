@@ -508,7 +508,7 @@ export const en = {
   "sync.okWhen": "OK · accepted {count} · {when}",
   "sync.noneFound": "No conversations listed yet",
   "sync.coverage":
-    "Listed {discovered} · recent synced {seeded} · catching up {backfilling}",
+    "Listed {discovered} · bootstrap {bootstrap_pending} · steady {steady}",
   "sync.off": "off",
   "sync.syncingCount": "Syncing {count} conversations",
   "sync.syncingNamed": "Syncing {label}",
@@ -1090,7 +1090,7 @@ export const zh: Record<MessageKey, string> = {
   "sync.failedWhen": "失败{code} · {when}",
   "sync.okWhen": "成功 · 新入库 {count} · {when}",
   "sync.noneFound": "目录里还没有会话",
-  "sync.coverage": "已列出 {discovered} · 最近已同步 {seeded} · 补历史中 {backfilling}",
+  "sync.coverage": "已列出 {discovered} · 补齐中 {bootstrap_pending} · 已就绪 {steady}",
   "sync.off": "已关闭",
   "sync.syncingCount": "正在同步 {count} 个会话",
   "sync.syncingNamed": "正在同步 {label}",

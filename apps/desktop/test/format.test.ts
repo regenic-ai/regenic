@@ -127,17 +127,19 @@ describe("sync coverage copy", () => {
       backfilling: 8,
       media_pending: 0,
       catalog_complete: false,
+      bootstrap_pending: 94,
+      steady: 26,
     };
     assert.equal(
       syncProgressSummary(sync),
-      "Listed 120+ · recent synced 34 · catching up 8",
+      "Listed 120+ · bootstrap 94 · steady 26",
     );
     assert.equal(syncProgressTone(sync), "warn");
     setActiveLocale("zh");
     try {
       assert.equal(
         syncProgressSummary(sync),
-        "已列出 120+ · 最近已同步 34 · 补历史中 8",
+        "已列出 120+ · 补齐中 94 · 已就绪 26",
       );
     } finally {
       setActiveLocale("en");
@@ -163,6 +165,8 @@ describe("sync coverage copy", () => {
           backfilling: 8,
           media_pending: 0,
           catalog_complete: false,
+          bootstrap_pending: 94,
+          steady: 26,
         },
       },
     ];

@@ -69,11 +69,13 @@ const heartbeat: PersonalHeartbeatView = {
       id: "feishu-1",
       sync: {
         discovered: 40,
-        seeded: 10,
-        unseeded: 30,
+        seeded: 12,
+        unseeded: 28,
         backfilling: 12,
         media_pending: 2,
         catalog_complete: false,
+        bootstrap_pending: 40,
+        steady: 0,
       },
       last_attempt: {
         id: "attempt-1",

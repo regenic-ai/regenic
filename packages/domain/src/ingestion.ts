@@ -1,5 +1,5 @@
 import type { ArrangementDecision, InboxItem } from "./arrangement";
-import type { SyncStore } from "./sync-contracts";
+import type { SyncPollHint, SyncStore } from "./sync-contracts";
 
 export const INGEST_SCHEMA_VERSION = "1.0" as const;
 
@@ -151,6 +151,8 @@ export interface PollResult {
   has_more?: boolean;
   /** Remaining attachment jobs after this page. Opaque to the kernel. */
   media_pending?: boolean;
+  /** Optional lifecycle hint so core scheduling stays wire-agnostic. */
+  poll_hint?: SyncPollHint;
 }
 
 export interface BackfillRange {

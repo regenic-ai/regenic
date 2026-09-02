@@ -37,6 +37,10 @@ describe("DshSessionPollConnector", () => {
     const result = await connector.poll(null);
 
     assert.equal(result.next_cursor, "1");
+    assert.deepEqual(result.poll_hint, {
+      live_seeded: true,
+      history_pending: false,
+    });
     assert.equal(result.batch.records[0].external_id, "dsh-main:0");
     assert.equal(result.batch.records[0].actor.id, "user");
     assert.deepEqual(result.batch.records[0].direction_tags, ["outbound"]);

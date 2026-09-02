@@ -23,8 +23,6 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   private compacting: Promise<ContentCompactOutcome> | null = null;
   private compactTimer: ReturnType<typeof setTimeout> | undefined;
   private compactFinished = false;
-  private maintainTimer: ReturnType<typeof setTimeout> | undefined;
-  private maintainFinished = false;
 
   async onModuleInit(): Promise<void> {
     const env = loadEnv();
@@ -47,19 +45,13 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   startAfterListen(): void {
     markKernelReady();
     this.scheduleCompact();
-    this.scheduleStoreMaintenance();
   }
 
   async onModuleDestroy(): Promise<void> {
     this.compactFinished = true;
-    this.maintainFinished = true;
     if (this.compactTimer) {
       clearTimeout(this.compactTimer);
       this.compactTimer = undefined;
-    }
-    if (this.maintainTimer) {
-      clearTimeout(this.maintainTimer);
-      this.maintainTimer = undefined;
     }
     this.compactAbort?.abort();
     if (this.compacting) {
@@ -108,39 +100,6 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       this.compactTimer = undefined;
       void this.maybeStartCompact();
     }, HUMAN_IDLE_MS);
-  }
-
-  private scheduleStoreMaintenance(): void {
-    if (this.maintainFinished || this.maintainTimer || !this.host) {
-      return;
-    }
-    this.maintainTimer = setTimeout(() => {
-      this.maintainTimer = undefined;
-      void this.maybeMaintainStore();
-    }, HUMAN_IDLE_MS);
-  }
-
-  private async maybeMaintainStore(): Promise<void> {
-    if (this.maintainFinished || !this.host) {
-      return;
-    }
-    if (!isHumanIdle()) {
-      this.scheduleStoreMaintenance();
-      return;
-    }
-    const authority = this.host.get("authority") as {
-      maintainStore?: () => Promise<{ deleted: number }>;
-    };
-    if (typeof authority.maintainStore !== "function") {
-      this.maintainFinished = true;
-      return;
-    }
-    try {
-      await authority.maintainStore();
-    } catch (error) {
-      console.warn("authority store maintenance failed", error);
-    }
-    this.scheduleStoreMaintenance();
   }
 
   private async maybeStartCompact(): Promise<void> {

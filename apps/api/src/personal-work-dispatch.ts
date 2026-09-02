@@ -19,6 +19,7 @@ import {
   recipeWantsContext,
   selectRecipeForSubject,
   shouldAcceptPushRecord,
+  shouldDeferWorkForSync,
   shouldRetryFailedPush,
   workSubjectFromEvent,
   type ConnectorInstallation,
@@ -33,6 +34,7 @@ import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { syncPhaseForThread } from "./personal-sync-phase";
 
 export class PersonalWorkDispatch {
   private readonly starting = new Set<string>();
@@ -253,6 +255,18 @@ export class PersonalWorkDispatch {
     if (!executor) {
       await this.noteStartFailed(item, recipe, "Unknown executor", mode);
       return undefined;
+    }
+    if (recipeWantsContext(recipe)) {
+      const host = this.runtime.requireHost();
+      const phase = await syncPhaseForThread(
+        host.get("authority"),
+        host.get("connectors"),
+        this.runtime.orgId(),
+        item.thread_id,
+      );
+      if (shouldDeferWorkForSync({ requires_full_sync: true, phase })) {
+        return undefined;
+      }
     }
     if (this.starting.has(item.id)) {
       return undefined;

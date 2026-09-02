@@ -10,7 +10,16 @@ import type {
 } from "./sync-contracts";
 import { CATALOG_RESCAN_MS } from "./sync-contracts";
 import { yieldToEventLoop } from "./sync-budget";
-import { lastHistoryWorkKey, lastSeedWorkKey, planSyncWork, syncLaneLimits } from "./sync-scheduler";
+import {
+  lastHistoryWorkKey,
+  lastSeedWorkKey,
+  planSyncWork,
+  syncLaneLimits,
+  type SyncBootstrapScheduleInput,
+  type SyncSteadyScheduleInput,
+} from "./sync-scheduler";
+import { planSyncTick, type SyncTickPlan } from "./sync-orchestrator";
+import { SyncLiveRing } from "./sync-ring";
 import { advanceSyncState, syncStateFromCursor } from "./sync-phase";
 
 export interface SyncEngineOptions {
@@ -29,6 +38,12 @@ export interface SyncPlanInput {
   members?: readonly SyncCatalogMember[];
   fallbackMembers?: readonly SyncCatalogMember[];
   cursorStates?: ReadonlyMap<string, string | undefined>;
+}
+
+export interface SyncPlanSplitInput extends SyncPlanInput {
+  liveRing?: SyncLiveRing;
+  bootstrapLimits?: SyncBootstrapScheduleInput["limits"];
+  steadyLimits?: SyncSteadyScheduleInput["limits"];
 }
 
 export interface SyncRefreshCatalogInput {
@@ -148,6 +163,74 @@ export class SyncEngine {
       now,
       pages: input.pages,
       limits: syncLaneLimits(input.humanIdle, catalogIncomplete),
+    });
+  }
+
+  async planSplit(input: SyncPlanSplitInput): Promise<SyncTickPlan> {
+    const view = await this.store.getSyncCatalog(input.installation_id);
+    const storedStates = await this.store.listSyncStates(input.installation_id);
+    const states = new Map(
+      storedStates.map((state) => [state.stream_key, state] as const),
+    );
+    const members =
+      input.members && input.members.length > 0
+        ? [...input.members]
+        : view.members.length > 0
+          ? view.members
+          : [...(input.fallbackMembers ?? [])];
+    const now = this.now();
+    if (input.cursorStates) {
+      for (const [streamKey, state] of states) {
+        if (state.phase !== "live" && state.phase !== "steady") {
+          continue;
+        }
+        if (!input.cursorStates.has(streamKey)) {
+          continue;
+        }
+        const runtimeCursor = input.cursorStates.get(streamKey);
+        const derived = syncStateFromCursor({
+          installation_id: input.installation_id,
+          stream_key: streamKey,
+          cursor: runtimeCursor,
+          now,
+          generation: state.generation,
+        });
+        if (derived.phase !== "unseeded" && derived.phase !== "history") {
+          continue;
+        }
+        states.set(streamKey, derived);
+        await this.store.putSyncState(derived);
+      }
+    }
+    for (const member of members) {
+      if (states.has(member.stream_key)) {
+        continue;
+      }
+      const cursor = input.cursorStates?.get(member.stream_key);
+      states.set(
+        member.stream_key,
+        syncStateFromCursor({
+          installation_id: input.installation_id,
+          stream_key: member.stream_key,
+          cursor,
+          now,
+        }),
+      );
+    }
+    const catalogIncomplete = view.catalog ? !view.catalog.complete : true;
+    return planSyncTick({
+      members,
+      states,
+      preferredThreadId: input.preferredThreadId,
+      humanIdle: input.humanIdle,
+      catalogIncomplete,
+      rotateFrom: input.rotateFrom,
+      rotateSeedFrom: input.rotateSeedFrom,
+      now,
+      pages: input.pages,
+      liveRing: input.liveRing,
+      bootstrapLimits: input.bootstrapLimits,
+      steadyLimits: input.steadyLimits,
     });
   }
 

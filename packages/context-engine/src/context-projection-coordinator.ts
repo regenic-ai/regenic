@@ -3,10 +3,12 @@ import {
   bodyTextFromStored,
   hashCanonicalContext,
   hashContextArtifactInputs,
+  threadProjectionGeneration,
   type BlobStore,
   type ContextArtifact,
   type ContextArtifactStore,
   type ContextAuthorityReader,
+  type ContextAuthorityRead,
   type ContextProjector,
   type ContextProjectorRegistry,
   type ContextProjectionRunner,
@@ -21,6 +23,8 @@ export interface ContextProjectionRun {
   checkpoint_sequence: number;
 }
 
+type AuthorityEvent = ContextAuthorityRead["events"][number];
+
 export class ContextProjectionCoordinator implements ContextProjectionRunner {
   constructor(
     private readonly authority: ContextAuthorityReader,
@@ -30,10 +34,30 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
   ) {}
 
   async project(orgId: string, generation: string): Promise<ContextProjectionRun[]> {
-    if (!orgId.trim() || !generation.trim()) {
-      throw new Error("Context projection organization and generation are required");
-    }
+    requireProjectionNamespace(orgId, generation);
     const read = structuredClone(await this.authority.openContextRead(orgId));
+    return this.projectRead(orgId, generation, read);
+  }
+
+  async projectThread(
+    orgId: string,
+    generation: string,
+    threadId: string,
+  ): Promise<ContextProjectionRun[]> {
+    requireProjectionNamespace(orgId, generation);
+    const scopedGeneration = threadProjectionGeneration(generation, threadId);
+    const read = structuredClone(
+      await this.authority.openContextReadForThread(orgId, threadId),
+    );
+    return this.projectRead(orgId, scopedGeneration, read, orgId);
+  }
+
+  private async projectRead(
+    orgId: string,
+    generation: string,
+    read: ContextAuthorityRead,
+    validateOrgId = orgId,
+  ): Promise<ContextProjectionRun[]> {
     if (
       typeof read.read_epoch !== "string" ||
       !read.read_epoch.trim() ||
@@ -42,7 +66,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     ) {
       throw new Error("Context projection authority returned an invalid read boundary");
     }
-    if (read.events.some((event) => event.org_id !== orgId)) {
+    if (read.events.some((event) => event.org_id !== validateOrgId)) {
       throw new Error("Context projection authority read contains an Event from another organization");
     }
     const evidence = read.events.map(toEvidence);
@@ -79,7 +103,14 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
       });
       let storedArtifacts = 0;
       for (const proposal of proposals) {
-        const artifact = validateProposal(proposal, projector, orgId, generation, read.recorded_at, eventsByEvidence);
+        const artifact = validateProposal(
+          proposal,
+          projector,
+          orgId,
+          generation,
+          read.recorded_at,
+          eventsByEvidence,
+        );
         if (artifact.attrs !== undefined && artifact.body_hash) {
           await this.blobs?.put(
             artifact.body_hash,
@@ -110,7 +141,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
   }
 }
 
-function toEvidence(event: Awaited<ReturnType<ContextAuthorityReader["openContextRead"]>>["events"][number]): EvidenceReference {
+function toEvidence(event: AuthorityEvent): EvidenceReference {
   return {
     event_id: event.id,
     source: event.source,
@@ -127,7 +158,7 @@ function validateProposal(
   orgId: string,
   generation: string,
   recordedAt: string,
-  eventsByEvidence: ReadonlyMap<string, Awaited<ReturnType<ContextAuthorityReader["openContextRead"]>>["events"][number]>,
+  eventsByEvidence: ReadonlyMap<string, AuthorityEvent>,
 ): ContextArtifact {
   if (
     proposal.org_id !== orgId ||
@@ -160,7 +191,7 @@ function validateProposal(
 }
 
 async function toSourceEvents(
-  events: Awaited<ReturnType<ContextAuthorityReader["openContextRead"]>>["events"],
+  events: AuthorityEvent[],
   blobs?: BlobStore,
 ): Promise<ContextSourceEvent[]> {
   const hashes = [...new Set(events.flatMap((event) =>
@@ -188,4 +219,10 @@ async function toSourceEvents(
       ...(text === undefined ? {} : { text }),
     };
   });
+}
+
+function requireProjectionNamespace(orgId: string, generation: string): void {
+  if (!orgId.trim() || !generation.trim()) {
+    throw new Error("Context projection organization and generation are required");
+  }
 }

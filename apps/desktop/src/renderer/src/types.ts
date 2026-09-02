@@ -461,6 +461,8 @@ export interface SyncProgressView {
   backfilling: number;
   media_pending: number;
   catalog_complete: boolean;
+  bootstrap_pending: number;
+  steady: number;
 }
 
 export interface CreatedConversation {

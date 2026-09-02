@@ -60,6 +60,7 @@ import { SqliteWriteClient } from "./sqlite-write-client";
 
 export const INGEST_ATTEMPT_KEEP_PER_INSTALLATION = 64;
 export const INGEST_ATTEMPT_PRUNE_BATCH = 5_000;
+export const INGEST_ATTEMPT_PRUNE_INSTALLATIONS = 25;
 
 export class SqliteSplitAuthorityStore
   implements
@@ -124,6 +125,13 @@ export class SqliteSplitAuthorityStore
 
   async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
     return this.reader.call("openContextRead", [orgId]);
+  }
+
+  async openContextReadForThread(
+    orgId: string,
+    threadId: string,
+  ): Promise<ContextAuthorityRead> {
+    return this.reader.call("openContextReadForThread", [orgId, threadId]);
   }
 
   async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
@@ -475,14 +483,22 @@ export class SqliteSplitAuthorityStore
     for (;;) {
       const batch = await this.writer.call<{ deleted: number }>(
         "pruneIngestAttempts",
-        [INGEST_ATTEMPT_KEEP_PER_INSTALLATION, INGEST_ATTEMPT_PRUNE_BATCH],
+        [
+          INGEST_ATTEMPT_KEEP_PER_INSTALLATION,
+          INGEST_ATTEMPT_PRUNE_BATCH,
+          INGEST_ATTEMPT_PRUNE_INSTALLATIONS,
+        ],
       );
       deleted += batch.deleted;
       if (batch.deleted === 0) {
         break;
       }
     }
-    await this.writer.call("checkpointWal", []);
+    try {
+      await this.writer.call("checkpointWal", []);
+    } catch {
+      // Prune already committed; a busy WAL checkpoint should not fail maintenance.
+    }
     return { deleted };
   }
 

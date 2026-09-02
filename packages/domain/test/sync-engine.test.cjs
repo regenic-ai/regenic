@@ -253,7 +253,7 @@ describe("sync scheduler", () => {
     });
     assert.deepEqual(
       selected.map((item) => `${item.lane}:${item.stream_key}:${item.older ? "older" : "live"}`),
-      ["interactive:chat:open:live", "live:chat:a:live", "live:chat:b:live", "catalog:__catalog__:live"],
+      ["interactive:chat:open:live", "live:chat:b:live", "catalog:__catalog__:live"],
     );
     assert.equal(syncLaneLimits(false, true).history, 0);
   });
@@ -278,9 +278,9 @@ describe("sync scheduler", () => {
     });
     assert.deepEqual(
       selected.map((item) => `${item.lane}:${item.stream_key}:${item.older ? "older" : "live"}`),
-      ["interactive:chat:open:live", "live:chat:a:live", "history:chat:b:older"],
+      ["interactive:chat:open:live", "history:chat:b:older", "history:chat:a:older"],
     );
-    assert.equal(lastHistoryWorkKey(selected), "chat:b");
+    assert.equal(lastHistoryWorkKey(selected), "chat:a");
   });
 
   it("seeds unseen streams on the live lane before history", () => {
@@ -569,6 +569,8 @@ describe("sync progress", () => {
       backfilling: 1,
       media_pending: 1,
       catalog_complete: false,
+      bootstrap_pending: 2,
+      steady: 1,
     });
   });
 
@@ -588,6 +590,8 @@ describe("sync progress", () => {
         backfilling: 0,
         media_pending: 0,
         catalog_complete: false,
+        bootstrap_pending: 0,
+        steady: 0,
       },
       {
         discovered: 10,
@@ -596,6 +600,8 @@ describe("sync progress", () => {
         backfilling: 1,
         media_pending: 0,
         catalog_complete: true,
+        bootstrap_pending: 3,
+        steady: 7,
       },
       {
         discovered: 5,
@@ -604,11 +610,15 @@ describe("sync progress", () => {
         backfilling: 0,
         media_pending: 2,
         catalog_complete: true,
+        bootstrap_pending: 0,
+        steady: 5,
       },
     ]);
     assert.equal(total.discovered, 15);
     assert.equal(total.seeded, 13);
     assert.equal(total.backfilling, 1);
+    assert.equal(total.bootstrap_pending, 3);
+    assert.equal(total.steady, 12);
     assert.equal(total.catalog_complete, true);
   });
 });

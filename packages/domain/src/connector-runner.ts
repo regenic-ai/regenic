@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { SyncPollHint } from "./sync-contracts";
 import type {
   ChannelConnector,
   ConnectorPollOptions,
   ConnectorQuotaHint,
   ConnectorRuntimeStore,
+  IngestBatch,
   IngestBatchResult,
   IngestRecordResult,
   WebhookRequest,
@@ -46,6 +48,7 @@ export type ConnectorPollRunResult =
       next_cursor?: string;
       has_more?: boolean;
       media_pending?: boolean;
+      poll_hint?: SyncPollHint;
     };
 
 export interface RunConnectorWebhookInput {
@@ -63,6 +66,8 @@ export type ConnectorWebhookRunResult =
       status: "completed" | "retryable_failure";
       installation_id: string;
       result: IngestBatchResult;
+      /** Threads that should skip steady idle on the next poll tick. */
+      wake_thread_ids?: string[];
     };
 
 export type RunnerConnector = Pick<
@@ -230,6 +235,7 @@ export class ConnectorRunner {
       next_cursor: nextCursor,
       has_more: pollResult.has_more,
       media_pending: pollResult.media_pending,
+      poll_hint: pollResult.poll_hint,
     };
   }
 
@@ -278,6 +284,7 @@ export class ConnectorRunner {
 
     const result = this.requireValidResult(await this.processor.ingest(batch));
     const summary = this.summarize(result.records);
+    const wakeThreadIds = webhookWakeThreadIds(batch);
     return {
       status:
         summary.retryable_failure_count === 0
@@ -285,6 +292,7 @@ export class ConnectorRunner {
           : "retryable_failure",
       installation_id: input.installation_id,
       result,
+      wake_thread_ids: wakeThreadIds.length > 0 ? wakeThreadIds : undefined,
     };
   }
 
@@ -328,6 +336,17 @@ export class ConnectorRunner {
       error_code: retryable?.error_code,
     };
   }
+}
+
+function webhookWakeThreadIds(batch: IngestBatch): string[] {
+  const ids = new Set<string>();
+  for (const record of batch.records) {
+    const id = record.thread?.id?.trim();
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return [...ids];
 }
 
 function pollOptions(

@@ -29,6 +29,7 @@ import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.servic
 import { PersonalEventsService } from "./personal-events.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
+import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.service";
 
 @Module({
   controllers: [
@@ -50,6 +51,7 @@ import { PersonalWorkService } from "./personal-work.service";
     PersonalReplyService,
     PersonalForwardService,
     PersonalWorkService,
+    PersonalStoreMaintenanceService,
     PersonalExecutorService,
     PersonalConnectorService,
     PersonalEventsService,

@@ -84,7 +84,7 @@ describe("kernel pressure", () => {
     );
   });
 
-  it("defers background sync while interactive reads are waiting", () => {
+  it("keeps background sync running while interactive reads are waiting", () => {
     assert.equal(
       shouldDeferBackgroundSync({
         rss_bytes: 100_000_000,
@@ -99,7 +99,7 @@ describe("kernel pressure", () => {
         heap_used_bytes: 90_000_000,
         interactive_waiters: 2,
       }),
-      true,
+      false,
     );
   });
 
