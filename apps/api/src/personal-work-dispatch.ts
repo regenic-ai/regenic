@@ -19,7 +19,6 @@ import {
   recipeWantsContext,
   selectRecipeForSubject,
   shouldAcceptPushRecord,
-  shouldDeferWorkForSync,
   shouldRetryFailedPush,
   workSubjectFromEvent,
   type ConnectorInstallation,
@@ -31,10 +30,11 @@ import {
   type WorkRun,
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
+import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
-import { syncPhaseForThread } from "./personal-sync-phase";
+import { shouldDeferWorkForThread } from "./personal-sync-phase";
 
 export class PersonalWorkDispatch {
   private readonly starting = new Set<string>();
@@ -150,6 +150,13 @@ export class PersonalWorkDispatch {
       if (!isPullDue(recipe, nowIso)) {
         continue;
       }
+      if (recipeWantsContext(recipe)) {
+        if (
+          await shouldDeferWorkForThread(authority, orgId, threadId)
+        ) {
+          continue;
+        }
+      }
       const fireAt = recipe.next_run_at ?? nowIso;
       const unit_key = pullUnitKey(recipe.id, fireAt);
       const existing = findWorkItemByUnitKey(items, threadId, unit_key);
@@ -257,14 +264,19 @@ export class PersonalWorkDispatch {
       return undefined;
     }
     if (recipeWantsContext(recipe)) {
-      const host = this.runtime.requireHost();
-      const phase = await syncPhaseForThread(
+      const deferred = await shouldDeferWorkForThread(
         host.get("authority"),
-        host.get("connectors"),
         this.runtime.orgId(),
         item.thread_id,
       );
-      if (shouldDeferWorkForSync({ requires_full_sync: true, phase })) {
+      if (deferred) {
+        if (mode === "manual") {
+          throw new PersonalConnectorError(
+            "bootstrap_pending",
+            "Thread history sync is still in progress",
+            409,
+          );
+        }
         return undefined;
       }
     }

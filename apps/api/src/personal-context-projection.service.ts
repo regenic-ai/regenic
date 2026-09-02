@@ -70,7 +70,6 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
           if (group.thread_id) {
             const phase = await syncPhaseForThread(
               authority,
-              host.get("connectors"),
               group.org_id,
               group.thread_id,
             );

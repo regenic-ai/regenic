@@ -1,29 +1,43 @@
-import type { SyncPhase } from "@regenic/domain";
+import {
+  shouldDeferWorkForSync,
+  syncPhaseForThread as domainSyncPhaseForThread,
+  type SyncCatalogMember,
+  type SyncPhase,
+  type SyncStreamState,
+} from "@regenic/domain";
+
+type SyncPhaseAuthority = {
+  listInstallations(orgId: string): Promise<Array<{ id: string; status: string }>>;
+  getSyncCatalog(installationId: string): Promise<{ members: SyncCatalogMember[] }>;
+  listSyncStates(installationId: string): Promise<SyncStreamState[]>;
+};
 
 export async function syncPhaseForThread(
-  authority: {
-    listInstallations(orgId: string): Promise<Array<{ id: string; status: string }>>;
-    getSyncState(installationId: string, streamKey: string): Promise<{ phase: SyncPhase } | null>;
-  },
-  connectors: {
-    listStreams(installationId: string): Array<{ thread_id?: string | null; stream_key: string }>;
-  },
+  authority: SyncPhaseAuthority,
   orgId: string,
   threadId: string,
 ): Promise<SyncPhase | undefined> {
   const installations = await authority.listInstallations(orgId);
+  const members: SyncCatalogMember[] = [];
+  const states = new Map<string, SyncStreamState>();
   for (const installation of installations) {
     if (installation.status !== "enabled") {
       continue;
     }
-    const stream = connectors
-      .listStreams(installation.id)
-      .find((item) => item.thread_id === threadId);
-    if (!stream) {
-      continue;
+    const catalog = await authority.getSyncCatalog(installation.id);
+    members.push(...catalog.members);
+    for (const state of await authority.listSyncStates(installation.id)) {
+      states.set(state.stream_key, state);
     }
-    const state = await authority.getSyncState(installation.id, stream.stream_key);
-    return state?.phase;
   }
-  return undefined;
+  return domainSyncPhaseForThread(threadId, members, states);
+}
+
+export async function shouldDeferWorkForThread(
+  authority: SyncPhaseAuthority,
+  orgId: string,
+  threadId: string,
+): Promise<boolean> {
+  const phase = await syncPhaseForThread(authority, orgId, threadId);
+  return shouldDeferWorkForSync({ requires_full_sync: true, phase });
 }

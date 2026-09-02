@@ -1403,9 +1403,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         }
         await yieldToEventLoop();
       }
-      if (errors.length > 0) {
-        await applyPullOutcome(errors);
-      }
+      await applyPullOutcome(errors);
     } catch (error) {
       await applyPullOutcome([error]);
     } finally {

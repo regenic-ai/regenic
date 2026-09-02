@@ -60,6 +60,12 @@ function fixture(claimed, projectThread, getEvent = async () => null) {
     async listInstallations() {
       return [];
     },
+    async getSyncCatalog() {
+      return { members: [] };
+    },
+    async listSyncStates() {
+      return [];
+    },
   };
   const connectors = {
     listStreams() {
