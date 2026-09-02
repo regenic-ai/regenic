@@ -24,7 +24,7 @@ A connector install is L0. It is not a lane. One Feishu install can emit a DM (`
 
 Speaker (L3) applies only to `utterance`. A person inside an agent session is still `user`. A bot inside a human group is still `assistant`. Those facts do not move to the install.
 
-L6 reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `readTranscript`), or through the generic HTTP executor contract. Completion is `WaitStatus`, not a chat bubble. Executors are installed on the Engine page: a local connector or an HTTP API. The default open-source tree seeds an absentee `dsh` local binding. Cursor follows. A private Agent OS stays an internal plugin package or is called over HTTP.
+L6 reaches the channel only through `ExecutorContext` (`spawnSysout` / `writeStdin` / `readTranscript`), or through the generic HTTP executor contract. Completion is `WaitStatus`, not a chat bubble. Executors that declare `wait` are subscribed through `ChannelDriver.waitThread` (DSH web is mux `turn/end`); history poll is catch-up. Executors are installed on the Engine page: a local connector or an HTTP API. The default open-source tree seeds an absentee `dsh` local binding. Cursor follows. A private Agent OS stays an internal plugin package or is called over HTTP.
 
 Kernel and desktop read `record_class`, `thread_facet`, `unit_kind`, `attention`, and `work`. They do not classify chat / agent / ticket by connector name, and they do not interpret the `unit_kind` string. The list and thread header draw a type chip from the catalog `label`.
 

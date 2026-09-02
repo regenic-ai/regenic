@@ -227,6 +227,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
   resolveConversationLabels?(installation, threads, env): Promise<Map<string, string>>;
   listPrompts?(installation, thread, host, env): Promise<ThreadPrompt[]>;
   answerPrompt?(installation, thread, answer, host, env): Promise<{ accepted: boolean }>;
+  waitThread?(installation, thread, host, env, onNotify): (() => void) | undefined;
   readAttention?(installation, threads, host, env): Promise<Map<string, ThreadAttention>>;
   ackAttention?(installation, thread, ack, host, env): Promise<void>;
   readReceipts?(installation, threads, host, env): Promise<Map<string, MessageReceipt>>;
@@ -249,6 +250,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`、`create_with_task`、`hold_while_working`。`await_reply`：DSH / Cursor 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH / Cursor 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时拉最近一页；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Slack / Cursor 不写。`create_with_task` / `hold_while_working`：Cursor 为 true；DSH 不写。 |
 | `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。只读本地已有名字：飞书用安装里的 `chat_names`，Slack 用 `channel_name`。不得为了补名去 `listAllChats` 或挡住打开会话。 |
 | `listPrompts` / `answerPrompt` | 可选。活的待决决策。DSH web 挂 mux，把 `question/requested` / `approval/requested` 映射成渠道无关 Prompt，答题走 `/api/respond`。`not-pending` 视为已解决。 |
+| `waitThread` | 可选。该线程 inferior 的 wait fd。DSH web 订阅 mux 上的 `session/event`（`turn/start` / `turn/end`）和提问帧；内核 follow 该流把活页入库，再 `status()` reap。连接器不得写 Event。没有 wait 的渠道仍靠 history poll 兜底。 |
 | `readAttention` / `ackAttention` | 可选。来源已读覆盖（我看对方）。飞书对最新 inbound `om_` 调用户态 `read_status`；失败或官方已读都不消本机未读。ack 先写本地游标。 |
 | `readReceipts` | 可选。对端是否已读我的出站。飞书对 `:out:om_` 调用户态 `read_users`。空 items 是 Sent。不得用来源会话未读。 |
 | `surfaceGeneration` | 可选。活 surface 世代，拼进 `inbox_digest` 的 `&s=`，审批弹出时桌面轮询能看见。 |

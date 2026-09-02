@@ -1,5 +1,10 @@
 import { DshWebRpcClient } from "./dsh-rpc-client";
 import { DshPromptStore, muxFrameFromMessage } from "./dsh-prompt-store";
+import {
+  dshMuxFrameWaits,
+  sessionEventFromMuxFrame,
+  type DshSessionLiveHub,
+} from "./dsh-session-live";
 
 export interface DshMuxSocket {
   close(): void;
@@ -22,6 +27,7 @@ export class DshMuxSubscriber {
     private readonly client: DshWebRpcClient,
     private readonly store: DshPromptStore,
     private readonly open: DshMuxOpen = openDshMuxSocket,
+    private readonly live?: DshSessionLiveHub,
   ) {}
 
   start(): void {
@@ -51,6 +57,20 @@ export class DshMuxSubscriber {
       return;
     }
     this.store.applyEnvelope(envelope.rpcId, envelope.frame);
+    const sessionEvent = sessionEventFromMuxFrame(envelope.frame);
+    if (sessionEvent) {
+      this.live?.offer(sessionEvent.sessionId, sessionEvent.event);
+    }
+    if (dshMuxFrameWaits(envelope.frame)) {
+      const sessionId =
+        sessionEvent?.sessionId ??
+        (typeof envelope.frame.sessionId === "string"
+          ? envelope.frame.sessionId.trim()
+          : "");
+      if (sessionId) {
+        this.live?.notify(sessionId);
+      }
+    }
   }
 
   private async connect(): Promise<void> {
@@ -65,6 +85,7 @@ export class DshMuxSubscriber {
         onClose: () => this.scheduleReconnect(),
       });
       this.delayMs = 1_000;
+      this.live?.notifyReconnect();
     } catch {
       this.scheduleReconnect();
     }

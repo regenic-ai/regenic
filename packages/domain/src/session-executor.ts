@@ -45,6 +45,7 @@ export function createSessionTaskExecutor(meta?: {
         status: true,
         prompts: true,
         local_workspace: true,
+        wait: true,
       };
     },
 

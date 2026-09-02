@@ -419,6 +419,18 @@ export interface ChannelDriver
    * writes Events; the driver does not.
    */
   parseImport?(input: ConnectorImportInput): ConnectorImportParseResult | Promise<ConnectorImportParseResult>;
+  /**
+   * Subscribe to absentee notify for one sysout thread. The driver must not
+   * write Events; the kernel follow/polls that stream, then reaps. Omit when
+   * the channel has no wait fd (history poll stays the catch-up).
+   */
+  waitThread?(
+    installation: ConnectorInstallation,
+    thread: ConversationThread,
+    host: ConnectorHost,
+    env: NodeJS.ProcessEnv,
+    onNotify: () => void,
+  ): (() => void) | undefined;
   /** Optional aliases for write-back. Kernel matches these exactly. */
   writeBackLabels?(label: string): string[];
   /**

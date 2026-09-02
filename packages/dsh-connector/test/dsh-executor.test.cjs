@@ -48,6 +48,7 @@ describe("dshTaskExecutor", () => {
     assert.equal(dshTaskExecutor.catalog().fields[1].hint, "executor.field.prompt.hint");
     assert.equal(dshTaskExecutor.capabilities().prompts, true);
     assert.equal(dshTaskExecutor.capabilities().local_workspace, true);
+    assert.equal(dshTaskExecutor.capabilities().wait, true);
   });
 
   it("loads short history through AGENTS.md and keeps stdin as the current task", async () => {

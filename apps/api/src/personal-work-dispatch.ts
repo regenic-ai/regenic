@@ -32,6 +32,7 @@ import {
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
+import { PersonalWorkWait } from "./personal-work-wait";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { shouldDeferWorkForThread } from "./personal-sync-phase";
@@ -43,6 +44,7 @@ export class PersonalWorkDispatch {
     private readonly runtime: PersonalRuntimeService,
     private readonly channel: PersonalWorkChannel,
     private readonly supervise: PersonalWorkSupervise,
+    private readonly waits: PersonalWorkWait,
   ) {}
 
   async reconcileInbox(): Promise<void> {
@@ -368,8 +370,13 @@ export class PersonalWorkDispatch {
       updated_at: now,
     };
     await this.supervise.applyHandle(item, recipe, run, handle);
+    const latest = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
+    const latestItem = await host.get("authority").getWorkItem(item.org_id, item.id);
+    if (latest && latestItem && isActiveWorkStatus(latestItem.status)) {
+      this.waits.attach(latestItem, latest, executor);
+    }
     return (
-      (await host.get("authority").getActiveWorkRun(item.org_id, item.id)) ?? run
+      latest ?? run
     );
   }
 

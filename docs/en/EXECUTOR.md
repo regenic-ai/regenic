@@ -45,7 +45,7 @@ kernel does not infer them from the driver name.
 ```ts
 interface TaskExecutor {
   readonly executor_type: string;
-  capabilities(): { start: boolean; resume: boolean; status: boolean; prompts?: boolean };
+  capabilities(): { start: boolean; resume: boolean; status: boolean; prompts?: boolean; wait?: boolean };
   catalog(): ExecutorCatalogEntry;
   start(input, ctx): Promise<ExecutorRunHandle>;
   resume(input, ctx): Promise<ExecutorRunHandle>;
@@ -155,8 +155,12 @@ Tokens are prerequisites, not form fields.
 
 ## Completion and write-back
 
-Public DSH absentee notify is durable `turn/end` (an unclosed `turn/start`
-or `working` stays running), or a gone session. The kernel reaps the job
+Public DSH absentee notify is mux `session/event` `turn/end` (an unclosed
+`turn/start` or `working` stays running), or a gone session. An executor
+that sets `capabilities().wait` is subscribed through
+`ChannelDriver.waitThread` after `start()`. That callback follow/polls
+the sysout so Events land, then reaps. `session.history` poll is
+catch-up, cold start, and CLI. The kernel reaps the job
 on `exited`. Write-back happens only on that real exit, and only when the
 Recipe has `can_write_back`. The kernel matches the first result line
 exactly to a live prompt option. Aliases come from
