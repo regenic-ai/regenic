@@ -11,9 +11,7 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
-  "dependencies": {
-    "@regenic/domain": "workspace:*"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

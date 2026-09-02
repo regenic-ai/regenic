@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { matchesCatalogFieldWhen } from "@regenic/domain";
-import { catalogInstallConfirm } from "../src/renderer/src/connector-install-guard.ts";
+import {
+  catalogInstallConfirm,
+  matchesCatalogFieldWhen,
+} from "../src/renderer/src/connector-install-guard.ts";
 import type { ConnectorCatalogItem } from "../src/renderer/src/types.ts";
 
 describe("connector-install-guard", () => {

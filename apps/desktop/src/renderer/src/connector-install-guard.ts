@@ -1,7 +1,28 @@
-import { matchesCatalogFieldWhen } from "@regenic/domain";
 import type { ConnectorCatalogItem } from "./types.ts";
 
-export { matchesCatalogFieldWhen };
+// Keep in sync with packages/domain `catalog-field-when`.
+// The desktop renderer bundle does not import @regenic/domain.
+
+type CatalogFieldWhen = NonNullable<
+  ConnectorCatalogItem["install_confirm"]
+>["when"];
+
+export function matchesCatalogFieldWhen(
+  when: CatalogFieldWhen | undefined,
+  values: Record<string, unknown>,
+): boolean {
+  if (!when) {
+    return true;
+  }
+  const current = String(values[when.field] ?? "");
+  if (when.values?.length) {
+    return when.values.includes(current);
+  }
+  if (when.value !== undefined) {
+    return current === when.value;
+  }
+  return true;
+}
 
 export function catalogInstallConfirm(
   kind: ConnectorCatalogItem,
