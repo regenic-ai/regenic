@@ -82,10 +82,6 @@ importers:
         version: 5.9.3
 
   apps/desktop:
-    dependencies:
-      '@regenic/domain':
-        specifier: workspace:*
-        version: link:../../packages/domain
     devDependencies:
       '@types/react':
         specifier: ^19.1.8
