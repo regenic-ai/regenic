@@ -242,6 +242,7 @@ export class LarkCliClient implements FeishuImClient {
       container_id: input.chat_id,
       sort_type: input.sort_type ?? "ByCreateTimeAsc",
       page_size: input.page_size,
+      user_id_type: "open_id",
     };
     if (input.page_token) {
       params.page_token = input.page_token;

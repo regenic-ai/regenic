@@ -1,5 +1,5 @@
 import { t } from "../../shared/i18n.ts";
-import type { InboxViewItem, MessageKind } from "./types";
+import type { InboxViewItem, MessageDirection, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
 
 export type MessageRole = MessageKind;
@@ -17,18 +17,31 @@ export function roleLabel(
   role: MessageRole,
   channel?: string,
   actorLabel?: string | null,
+  direction?: MessageDirection | null,
 ): string {
   const named = actorLabel?.replace(/\s+/g, " ").trim();
   if (named) {
     return named;
   }
   if (role === "user") {
-    return t("label.you");
+    return direction === "outbound" ? t("label.you") : t("label.participant");
   }
   if (role === "system") {
     return t("label.runtime");
   }
   return channel === "dsh" ? t("label.dshAgent") : t("label.assistant");
+}
+
+export function messageSpeakerLabel(
+  item: Pick<InboxViewItem, "kind" | "channel" | "actor_label" | "direction">,
+): string {
+  return roleLabel(item.kind, item.channel, item.actor_label, item.direction);
+}
+
+export function messageSpeakerMark(
+  item: Pick<InboxViewItem, "kind" | "actor_label" | "direction">,
+): string {
+  return speakerMark(item.kind, item.actor_label, item.direction);
 }
 
 export function receiptCopy(item: InboxViewItem): string | undefined {
@@ -607,13 +620,16 @@ export function sameSpeaker(left: InboxViewItem, right: InboxViewItem): boolean 
 export function speakerMark(
   role: MessageRole,
   actorLabel?: string | null,
+  direction?: MessageDirection | null,
 ): string {
   const named = actorLabel?.replace(/\s+/g, " ").trim();
   if (named) {
     return named.slice(0, 1);
   }
   if (role === "user") {
-    return "Y";
+    return direction === "outbound"
+      ? "Y"
+      : t("label.participant").slice(0, 1);
   }
   if (role === "system") {
     return "R";
@@ -626,6 +642,9 @@ function speakerKey(item: InboxViewItem): string {
   const named = item.actor_label?.replace(/\s+/g, " ").trim();
   if (named) {
     return `${role}:${named}`;
+  }
+  if (role === "user") {
+    return `${role}:${item.direction ?? "unknown"}`;
   }
   return role;
 }

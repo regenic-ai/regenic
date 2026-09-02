@@ -1036,14 +1036,9 @@ export class PersonalInboxService {
         const store = authority as SyncStore & {
           latestAttempt(id: string): Promise<IngestAttempt | null>;
         };
-        const streams = host.get("connectors").listStreams(installation.id);
-        const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
         let sync = null;
         if (tier.sync_progress === "live") {
-          sync = await loadSyncProgress(store, installation.id, {
-            mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
-            fallbackMembers,
-          });
+          sync = await loadSyncProgress(store, installation.id);
         } else if (tier.sync_progress === "snapshot") {
           sync = this.kernelRuntime.syncSnapshots.peekProgress(installation.id);
         }

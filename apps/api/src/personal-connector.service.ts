@@ -1788,14 +1788,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
         store.listSyncStates(installationId),
         store.latestAttempt(installationId),
       ]);
-      const fallbackMembers = catalogMembersFromStreams(installationId, streams);
       const snapshot = buildSyncProgressSnapshot({
         installation_id: installationId,
         members: catalog.members,
         states,
         catalog_complete: catalog.catalog?.complete === true,
-        mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
-        fallbackMembers,
       });
       if (snapshot) {
         this.kernelRuntime.publishSyncSnapshot(snapshot);

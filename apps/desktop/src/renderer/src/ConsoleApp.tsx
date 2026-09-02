@@ -22,7 +22,6 @@ import {
 } from "./api";
 import { fetchRuntimePulse } from "./runtime-pulse-fetch.ts";
 import {
-  connectionErrorForReachability,
   type KernelReachability,
 } from "../../shared/connection-state.ts";
 import { BrandBadge } from "./Brand";
@@ -786,24 +785,16 @@ export function ConsoleApp() {
           return next;
         });
         setReachability(pulse.reachability);
-        const reachCopy = connectionErrorForReachability(
-          pulse.reachability,
-          currentApiOrigin(),
-          {
-            offline: (input) =>
-              translate("chrome.cannotReach", { origin: input.origin }),
-            degraded: (input) =>
-              translate("chrome.degradedReach", { origin: input.origin }),
-          },
+        setError(
+          pulse.reachability === "offline"
+            ? translate("chrome.cannotReach", { origin: currentApiOrigin() })
+            : null,
         );
-        setError(reachCopy);
       } while (refreshAgain.current);
     } catch (caught) {
       if (isKernelTimeoutError(caught)) {
         setReachability("degraded");
-        setError(
-          translate("chrome.degradedReach", { origin: currentApiOrigin() }),
-        );
+        setError(null);
       } else {
         setReachability("offline");
         setError(translate("chrome.cannotReach", { origin: currentApiOrigin() }));

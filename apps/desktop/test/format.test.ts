@@ -5,6 +5,7 @@ import {
   connectorActionError,
   networkWatchHint,
 } from "../src/renderer/src/connector-errors.ts";
+import { formatChatTime } from "../src/renderer/src/format.ts";
 import {
   engineChip,
   pullStatusLabel,
@@ -204,5 +205,32 @@ describe("connector action errors", () => {
       connectorActionError("feishu-chat is already installed"),
       "This connector is already installed",
     );
+  });
+});
+
+describe("formatChatTime", () => {
+  it("shows time only for same-day messages", () => {
+    setActiveLocale("en");
+    const now = new Date("2026-09-02T12:00:00");
+    assert.equal(
+      formatChatTime("2026-09-02T15:44:00", now),
+      "3:44 PM",
+    );
+  });
+
+  it("omits the year for earlier dates in the same year", () => {
+    setActiveLocale("en");
+    const now = new Date("2026-09-02T12:00:00");
+    const formatted = formatChatTime("2026-04-21T18:28:00", now);
+    assert.match(formatted, /4\/21/);
+    assert.doesNotMatch(formatted, /2026/);
+  });
+
+  it("includes the year for messages from a previous year", () => {
+    setActiveLocale("en");
+    const now = new Date("2026-09-02T12:00:00");
+    const formatted = formatChatTime("2025-04-21T18:28:00", now);
+    assert.match(formatted, /2025/);
+    assert.match(formatted, /4\/21/);
   });
 });
