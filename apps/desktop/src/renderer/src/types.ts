@@ -363,7 +363,14 @@ export interface IngestAttempt {
 
 export interface ConnectorFieldWhen {
   field: string;
-  value: string;
+  value?: string;
+  values?: string[];
+}
+
+export interface ConnectorInstallConfirm {
+  when: ConnectorFieldWhen;
+  warning: string;
+  ack: string;
 }
 
 export interface ConnectorField {
@@ -423,6 +430,7 @@ export interface ConnectorCatalogItem {
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
+  install_confirm?: ConnectorInstallConfirm;
   import_files?: ConnectorImportFiles;
   unit_kinds?: RecipeUnitKindOption[];
   docs: CatalogDocRef[];

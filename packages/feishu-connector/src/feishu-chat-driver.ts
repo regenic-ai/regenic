@@ -118,7 +118,7 @@ export const feishuChatDriver: ChannelDriver = {
             { value: "group", label: "option.kinds.group" },
             { value: "p2p", label: "option.kinds.p2p" },
           ],
-          visible_when: { field: "selection", value: "all|recent" },
+          visible_when: { field: "selection", values: ["all", "recent"] },
         },
         {
           key: "chat_ids",
@@ -154,6 +154,11 @@ export const feishuChatDriver: ChannelDriver = {
           body: "setup.choose.body",
         },
       ],
+      install_confirm: {
+        when: { field: "selection", value: "all" },
+        warning: "confirm.all.warning",
+        ack: "confirm.all.ack",
+      },
     };
   },
 

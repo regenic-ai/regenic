@@ -17,7 +17,6 @@ export class KernelRuntimeService implements OnModuleDestroy {
   readonly syncSnapshots = new SyncProgressSnapshotStore();
   readonly inboxSummary = new InboxSummarySnapshotStore();
   private lagTimer: ReturnType<typeof setInterval> | undefined;
-  private lastLagAt = 0;
   private eventLoopLagMs = 0;
   private interactiveWaiters = 0;
 
@@ -30,7 +29,6 @@ export class KernelRuntimeService implements OnModuleDestroy {
       const now = Date.now();
       this.eventLoopLagMs = Math.max(0, now - expected - LAG_SAMPLE_MS);
       expected = now + LAG_SAMPLE_MS;
-      this.lastLagAt = now;
     }, LAG_SAMPLE_MS);
   }
 

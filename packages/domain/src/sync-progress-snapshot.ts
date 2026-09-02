@@ -2,6 +2,7 @@ import type { SyncCatalogMember, SyncStreamState } from "./sync-contracts";
 import {
   emptySyncProgress,
   scopeSyncCatalogMembers,
+  summarizeSyncProgress,
   type SyncProgressView,
 } from "./sync-progress";
 
@@ -51,32 +52,28 @@ export function countSyncProgress(
   states: readonly SyncStreamState[],
   catalogComplete: boolean,
 ): SyncProgressCounts {
-  const byKey = new Map(states.map((state) => [state.stream_key, state]));
-  let seeded = 0;
-  let unseeded = 0;
-  let backfilling = 0;
-  let mediaPending = 0;
-  for (const member of members) {
-    const state = byKey.get(member.stream_key);
-    if (!state || state.phase === "unseeded") {
-      unseeded += 1;
-    } else {
-      seeded += 1;
-    }
-    if (state?.phase === "history") {
-      backfilling += 1;
-    }
-    if (state?.media_pending) {
-      mediaPending += 1;
-    }
-  }
+  const progress = summarizeSyncProgress(
+    {
+      members: [...members],
+      catalog:
+        catalogComplete && members[0]
+          ? {
+              installation_id: members[0].installation_id,
+              complete: true,
+              generation: 0,
+              updated_at: "",
+            }
+          : null,
+    },
+    states,
+  );
   return {
-    catalog_members: members.length,
+    catalog_members: progress.discovered,
     catalog_complete: catalogComplete,
-    unseeded,
-    seeded,
-    backfilling,
-    media_pending: mediaPending,
+    unseeded: progress.unseeded,
+    seeded: progress.seeded,
+    backfilling: progress.backfilling,
+    media_pending: progress.media_pending,
   };
 }
 

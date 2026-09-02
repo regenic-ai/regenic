@@ -14,6 +14,7 @@ import type {
   DriverCatalogSetupStep,
   DriverImportFiles,
   DriverInstallCatalog,
+  DriverInstallConfirm,
   DriverInstallPresentation,
 } from "./channel-driver";
 import type { ExecutorCatalogEntry } from "./executor";
@@ -55,6 +56,12 @@ export interface ResolvedImportFiles {
   description?: string;
 }
 
+export interface ResolvedInstallConfirm {
+  when: DriverInstallConfirm["when"];
+  warning: string;
+  ack: string;
+}
+
 export interface ResolvedInstallCatalog {
   title: string;
   description: string;
@@ -64,6 +71,7 @@ export interface ResolvedInstallCatalog {
   fields?: ResolvedCatalogField[];
   prerequisites?: ResolvedCatalogPrerequisite[];
   setup_steps?: ResolvedCatalogSetupStep[];
+  install_confirm?: ResolvedInstallConfirm;
   import_files?: ResolvedImportFiles;
   instance_label?: string;
   instance_detail_key?: string;
@@ -94,6 +102,19 @@ export function resolveInstallCatalog(
       const resolved = resolveSetupStep(step, tables, locale);
       return resolved ? [resolved] : [];
     }),
+    ...(catalog.install_confirm
+      ? {
+          install_confirm: {
+            when: catalog.install_confirm.when,
+            warning: resolveCopyText(
+              tables,
+              locale,
+              catalog.install_confirm.warning,
+            ),
+            ack: resolveCopyText(tables, locale, catalog.install_confirm.ack),
+          },
+        }
+      : {}),
     ...(importFiles ? { import_files: importFiles } : {}),
     ...(copyOptional(tables, locale, catalog.instance_label, "instance_label")),
     ...(catalog.instance_detail_key

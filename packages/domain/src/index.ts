@@ -32,6 +32,7 @@ export * from "./source-mode";
 export * from "./quota";
 export * from "./sync-contracts";
 export * from "./sync-budget";
+export * from "./catalog-field-when";
 export * from "./sync-catalog";
 export * from "./sync-phase";
 export * from "./sync-scheduler";

@@ -1,20 +1,15 @@
-export function feishuNeedsAllSyncConfirm(
-  connectorType: string,
-  values: Record<string, string>,
-): boolean {
-  return connectorType === "feishu-chat" && values.selection === "all";
-}
+import { matchesCatalogFieldWhen } from "@regenic/domain";
+import type { ConnectorCatalogItem } from "./types.ts";
 
-export function matchesConnectorFieldWhen(
-  when: { field: string; value: string } | undefined,
+export { matchesCatalogFieldWhen };
+
+export function catalogInstallConfirm(
+  kind: ConnectorCatalogItem,
   values: Record<string, string>,
-): boolean {
-  if (!when) {
-    return true;
+): ConnectorCatalogItem["install_confirm"] | undefined {
+  const confirm = kind.install_confirm;
+  if (!confirm || !matchesCatalogFieldWhen(confirm.when, values)) {
+    return undefined;
   }
-  const current = values[when.field] ?? "";
-  if (when.value.includes("|")) {
-    return when.value.split("|").includes(current);
-  }
-  return current === when.value;
+  return confirm;
 }

@@ -142,7 +142,14 @@ export interface ConnectorCatalogProbe {
 /** Drivers declare their own install card. The host does not keep a parallel catalog. */
 export interface DriverCatalogFieldWhen {
   field: string;
-  value: string;
+  value?: string;
+  values?: string[];
+}
+
+export interface DriverInstallConfirm {
+  when: DriverCatalogFieldWhen;
+  warning: CopyRef;
+  ack: CopyRef;
 }
 
 export interface DriverCatalogField {
@@ -214,6 +221,10 @@ export interface DriverInstallCatalog {
    * The desktop does not hard-code steps per connector type.
    */
   setup_steps?: DriverCatalogSetupStep[];
+  /**
+   * Optional second confirmation before install/save when `when` matches form values.
+   */
+  install_confirm?: DriverInstallConfirm;
   /**
    * File picker on the Engine card. The desktop does not hard-code importers.
    */

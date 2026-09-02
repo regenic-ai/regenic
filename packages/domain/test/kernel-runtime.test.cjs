@@ -103,6 +103,31 @@ describe("kernel pressure", () => {
   });
 });
 
+describe("catalog field when", () => {
+  const { matchesCatalogFieldWhen } = require("../dist/catalog-field-when.js");
+
+  it("matches a single value or any listed value", () => {
+    assert.equal(
+      matchesCatalogFieldWhen({ field: "selection", value: "all" }, {
+        selection: "all",
+      }),
+      true,
+    );
+    assert.equal(
+      matchesCatalogFieldWhen({ field: "selection", values: ["all", "recent"] }, {
+        selection: "recent",
+      }),
+      true,
+    );
+    assert.equal(
+      matchesCatalogFieldWhen({ field: "selection", values: ["all", "recent"] }, {
+        selection: "pick",
+      }),
+      false,
+    );
+  });
+});
+
 describe("sync budget", () => {
   it("yields the event loop", async () => {
     let yielded = false;

@@ -555,11 +555,7 @@ export const en = {
     "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not a WhatsApp password.",
   "connector.showPairing": "Show pairing code",
   "connector.hidePairing": "Hide",
-  "connector.feishuAllSyncWarning":
-    "Syncing every group and direct message can pull hundreds of conversations into the background. Memory use and list lag may increase.",
-  "connector.feishuAllSyncConfirm":
-    "I understand this may sync hundreds of conversations and slow the app",
-  "connector.feishuAllSyncConfirmRequired": "Confirm full sync first",
+  "connector.installConfirmRequired": "Confirm the install choice first",
 
   "docs.connector": "Connector spec",
   "docs.executor": "Executor spec",
@@ -1141,11 +1137,7 @@ export const zh: Record<MessageKey, string> = {
     "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是 WhatsApp 密码。",
   "connector.showPairing": "显示配对码",
   "connector.hidePairing": "隐藏",
-  "connector.feishuAllSyncWarning":
-    "同步全部群和单聊可能会把数百个会话拉进后台，内存占用和列表延迟都可能上升。",
-  "connector.feishuAllSyncConfirm":
-    "我知道这可能会同步数百个会话，并让界面变慢",
-  "connector.feishuAllSyncConfirmRequired": "请先确认全量同步",
+  "connector.installConfirmRequired": "请先确认安装选项",
 
   "docs.connector": "连接器规范",
   "docs.executor": "执行器规范",

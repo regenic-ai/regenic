@@ -33,6 +33,10 @@ export const feishuLocaleTables = defineLocaleTables({
     "present.allDirect": "All direct messages",
     "present.allGroups": "All groups",
     "present.pickedCount": "{count} conversations",
+    "confirm.all.warning":
+      "Syncing every group and direct message can pull hundreds of conversations into the background. Memory use and list lag may increase.",
+    "confirm.all.ack":
+      "I understand this may sync hundreds of conversations and slow the app",
     "probe.notInstalled":
       "Not installed. Run: npx @larksuite/cli@latest install. Docs: https://github.com/larksuite/cli",
     "probe.notSignedIn":
@@ -69,6 +73,10 @@ export const feishuLocaleTables = defineLocaleTables({
     "present.allDirect": "全部单聊",
     "present.allGroups": "全部群",
     "present.pickedCount": "{count} 个会话",
+    "confirm.all.warning":
+      "同步全部群和单聊可能会把数百个会话拉进后台，内存占用和列表延迟都可能上升。",
+    "confirm.all.ack":
+      "我知道这可能会同步数百个会话，并让界面变慢",
     "probe.notInstalled":
       "未安装。运行：npx @larksuite/cli@latest install。文档：https://github.com/larksuite/cli",
     "probe.notSignedIn":

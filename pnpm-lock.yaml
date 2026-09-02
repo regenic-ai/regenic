@@ -82,6 +82,10 @@ importers:
         version: 5.9.3
 
   apps/desktop:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
     devDependencies:
       '@types/react':
         specifier: ^19.1.8
@@ -205,25 +209,6 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/cursor-connector:
-    dependencies:
-      '@cursor/sdk':
-        specifier: ^1.0.30
-        version: 1.0.30
-      '@regenic/domain':
-        specifier: workspace:*
-        version: link:../domain
-      '@regenic/plugin-host':
-        specifier: workspace:*
-        version: link:../plugin-host
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.2
-        version: 22.20.1
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-
   packages/context-engine:
     dependencies:
       '@regenic/domain':
@@ -239,6 +224,25 @@ importers:
       '@regenic/blob-store':
         specifier: workspace:*
         version: link:../blob-store
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/cursor-connector:
+    dependencies:
+      '@cursor/sdk':
+        specifier: ^1.0.30
+        version: 1.0.30
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+    devDependencies:
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1

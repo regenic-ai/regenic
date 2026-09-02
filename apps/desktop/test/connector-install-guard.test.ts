@@ -1,37 +1,42 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-  feishuNeedsAllSyncConfirm,
-  matchesConnectorFieldWhen,
-} from "../src/renderer/src/connector-install-guard.ts";
+import { matchesCatalogFieldWhen } from "@regenic/domain";
+import { catalogInstallConfirm } from "../src/renderer/src/connector-install-guard.ts";
+import type { ConnectorCatalogItem } from "../src/renderer/src/types.ts";
 
 describe("connector-install-guard", () => {
-  it("requires confirmation only for Feishu full sync", () => {
-    assert.equal(
-      feishuNeedsAllSyncConfirm("feishu-chat", { selection: "all" }),
-      true,
+  const feishuKind = {
+    connector_type: "feishu-chat",
+    install_confirm: {
+      when: { field: "selection", value: "all" },
+      warning: "warning",
+      ack: "ack",
+    },
+  } as ConnectorCatalogItem;
+
+  it("requires confirmation from catalog install_confirm", () => {
+    assert.deepEqual(
+      catalogInstallConfirm(feishuKind, { selection: "all" }),
+      feishuKind.install_confirm,
     );
     assert.equal(
-      feishuNeedsAllSyncConfirm("feishu-chat", { selection: "recent" }),
-      false,
+      catalogInstallConfirm(feishuKind, { selection: "recent" }),
+      undefined,
     );
-    assert.equal(
-      feishuNeedsAllSyncConfirm("slack", { selection: "all" }),
-      false,
-    );
+    assert.equal(catalogInstallConfirm({} as ConnectorCatalogItem, {}), undefined);
   });
 
-  it("matches pipe-separated visible_when values", () => {
+  it("matches multi-value visible_when through domain helper", () => {
     assert.equal(
-      matchesConnectorFieldWhen(
-        { field: "selection", value: "all|recent" },
+      matchesCatalogFieldWhen(
+        { field: "selection", values: ["all", "recent"] },
         { selection: "recent" },
       ),
       true,
     );
     assert.equal(
-      matchesConnectorFieldWhen(
-        { field: "selection", value: "all|recent" },
+      matchesCatalogFieldWhen(
+        { field: "selection", values: ["all", "recent"] },
         { selection: "pick" },
       ),
       false,

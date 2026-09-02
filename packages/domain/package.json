@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./kernel-reachability": {
+      "types": "./dist/kernel-reachability.d.ts",
+      "default": "./dist/kernel-reachability.js"
     }
   },
 
