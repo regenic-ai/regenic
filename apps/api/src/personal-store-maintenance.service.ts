@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import { PersonalConnectorService } from "./personal-connector.service";
 import { HUMAN_IDLE_MS, isHumanIdle } from "./personal-human-pace";
@@ -13,9 +13,13 @@ export class PersonalStoreMaintenanceService implements OnModuleDestroy {
   private maintainFinished = false;
 
   constructor(
+    @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(KernelRuntimeService)
     private readonly kernelRuntime: KernelRuntimeService,
+    @Inject(PersonalConnectorService)
     private readonly connectors: PersonalConnectorService,
+    @Inject(PersonalWorkService)
     private readonly work: PersonalWorkService,
   ) {}
 
