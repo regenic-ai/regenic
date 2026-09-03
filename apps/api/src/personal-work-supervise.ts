@@ -134,10 +134,8 @@ export class PersonalWorkSupervise {
       });
       if (!isActiveWorkStatus(status)) {
         this.waits?.drop(run.id);
-        if (!recipeWantsWriteBack(recipe)) {
-          await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
-          this.touchInboxDigest?.();
-        }
+        await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
+        this.touchInboxDigest?.();
       }
     }
   }
