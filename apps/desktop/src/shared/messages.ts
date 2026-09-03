@@ -576,6 +576,9 @@ export const en = {
   "prompt.yourAnswer": "Your answer",
   "prompt.sending": "Sending…",
   "prompt.continue": "Continue",
+  "prompt.showChoices": "Choose",
+  "prompt.hideChoices": "Collapse",
+  "prompt.pickToContinue": "Pick an option to continue",
 
   "composer.message": "Message",
   "composer.sendMessage": "Send a message",
@@ -1159,6 +1162,9 @@ export const zh: Record<MessageKey, string> = {
   "prompt.yourAnswer": "你的回答",
   "prompt.sending": "发送中…",
   "prompt.continue": "继续",
+  "prompt.showChoices": "去选择",
+  "prompt.hideChoices": "收起",
+  "prompt.pickToContinue": "选一项后继续",
 
   "composer.message": "消息",
   "composer.sendMessage": "发消息",

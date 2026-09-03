@@ -2408,6 +2408,88 @@ button {
   background: var(--surface);
 }
 
+.prompt-panel.is-compact {
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.prompt-compact-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.prompt-compact-open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.prompt-compact-open:hover .prompt-compact-cta {
+  color: var(--text);
+}
+
+.prompt-compact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.prompt-compact-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.prompt-compact-cta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-compact-continue,
+.prompt-compact-choose {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 14px;
+}
+
+.prompt-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.prompt-fold-toggle {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
+.prompt-fold-toggle:hover {
+  color: var(--text);
+}
+
 .prompt-kicker,
 .prompt-count {
   margin: 0;

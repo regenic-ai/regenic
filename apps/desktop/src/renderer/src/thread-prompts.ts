@@ -109,9 +109,20 @@ export function humanizePromptProse(text: string, locale: string): string {
     .replace(/不得\s*complete\s*/gi, "不要结束");
 }
 
-/** Approval detail stays available but folded — not dropped. */
+/** Prompt detail stays available but folded — not dropped. */
 export function foldPromptDetail(presentation: ThreadPrompt["presentation"]): boolean {
-  return presentation === "approval";
+  return (
+    presentation === "approval" ||
+    presentation === "choice" ||
+    presentation === "plan_review"
+  );
+}
+
+/** Choice / plan_review docks start compact so thread evidence stays visible. */
+export function promptStartsCollapsed(
+  presentation: ThreadPrompt["presentation"],
+): boolean {
+  return presentation === "choice" || presentation === "plan_review";
 }
 
 export function optionPrimaryLabel(option: {
@@ -125,13 +136,47 @@ export function optionPrimaryLabel(option: {
   return option.label;
 }
 
+/**
+ * Human secondary copy only. Machine keys (NEED_QUOTE_*) stay off the face —
+ * answers still submit raw option.label.
+ */
 export function optionSecondaryLabel(option: {
   label: string;
   description?: string;
 }): string | null {
   const description = option.description?.replace(/\s+/g, " ").trim() ?? "";
   if (description && looksLikeMachineKey(option.label)) {
-    return option.label.trim();
+    return null;
   }
   return description || null;
+}
+
+/** Compact-dock summary of the current selection (display labels). */
+export function selectedOptionSummary(
+  prompt: ThreadPrompt,
+  answers: Record<string, PromptAnswerItem>,
+  t: DecisionCopy,
+): string | null {
+  const parts: string[] = [];
+  for (const question of prompt.questions) {
+    const current = answers[question.id];
+    if (!current) {
+      continue;
+    }
+    for (const label of current.selected) {
+      const option = question.options?.find((item) => item.label === label);
+      const primary = option
+        ? optionPrimaryLabel(option)
+        : label;
+      parts.push(decisionDisplayLabel(primary, t));
+    }
+    const custom = current.custom?.trim();
+    if (custom) {
+      parts.push(custom);
+    }
+  }
+  if (!parts.length) {
+    return null;
+  }
+  return parts.join(" · ");
 }
