@@ -827,6 +827,8 @@ describe("prompt answers", () => {
       promptTitleDisplay,
       humanizePromptProse,
       foldPromptDetail,
+      promptStartsCollapsed,
+      selectedOptionSummary,
     } = await import("../src/renderer/src/thread-prompts.ts");
     assert.equal(
       optionPrimaryLabel({
@@ -840,7 +842,7 @@ describe("prompt answers", () => {
         label: "SEND_AND_CLOSE",
         description: "用 CRM scene 模板回邮后关单",
       }),
-      "SEND_AND_CLOSE",
+      null,
     );
     assert.equal(
       optionPrimaryLabel({
@@ -848,6 +850,13 @@ describe("prompt answers", () => {
         description: "不发信、不关单",
       }),
       "不发信、不关单",
+    );
+    assert.equal(
+      optionSecondaryLabel({
+        label: "Send the reply",
+        description: "Post the drafted answer",
+      }),
+      "Post the drafted answer",
     );
     assert.equal(optionPrimaryLabel({ label: "Allow" }), "Allow");
     const t = (key: "prompt.approve" | "prompt.reject" | "prompt.confirmResult") =>
@@ -861,8 +870,34 @@ describe("prompt answers", () => {
     assert.equal(decisionDisplayLabel("Allow", t), "通过");
     assert.equal(promptTitleDisplay("写回", t), "确认结果");
     assert.equal(foldPromptDetail("approval"), true);
-    assert.equal(foldPromptDetail("choice"), false);
-    assert.equal(foldPromptDetail("plan_review"), false);
+    assert.equal(foldPromptDetail("choice"), true);
+    assert.equal(foldPromptDetail("plan_review"), true);
+    assert.equal(promptStartsCollapsed("choice"), true);
+    assert.equal(promptStartsCollapsed("plan_review"), true);
+    assert.equal(promptStartsCollapsed("approval"), false);
+    assert.equal(
+      selectedOptionSummary(
+        {
+          prompt_id: "p1",
+          presentation: "choice",
+          questions: [
+            {
+              id: "scene",
+              prompt: "Pick",
+              options: [
+                {
+                  label: "NEED_QUOTE_GENERIC",
+                  description: "通用报价模板回复后关单",
+                },
+              ],
+            },
+          ],
+        },
+        { scene: { id: "scene", selected: ["NEED_QUOTE_GENERIC"] } },
+        t,
+      ),
+      "通用报价模板回复后关单",
+    );
     assert.equal(
       humanizePromptProse(
         "只改本订单内审（APPROVED / REJECTED）。不得 complete 关联运营任务。",

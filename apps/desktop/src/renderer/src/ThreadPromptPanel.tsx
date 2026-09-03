@@ -6,7 +6,9 @@ import {
   humanizePromptProse,
   optionPrimaryLabel,
   optionSecondaryLabel,
+  promptStartsCollapsed,
   promptTitleDisplay,
+  selectedOptionSummary,
   shouldShowQuestionLegend,
   togglePromptOption,
   typePromptCustom,
@@ -39,45 +41,58 @@ export function ThreadPromptPanel({
   const detail = prompt.detail?.trim()
     ? humanizePromptProse(prompt.detail, locale)
     : null;
-  return (
-    <form
-      className={`prompt-panel presentation-${prompt.presentation}`}
-      onSubmit={(event) => {
-        event.preventDefault();
-      }}
-    >
-      <div className="prompt-head">
-        <p className="prompt-kicker">{heading}</p>
-        {title ? <h2>{title}</h2> : null}
-        {detail ? (
-          foldPromptDetail(prompt.presentation) ? (
-            <details className="prompt-detail-fold">
-              <summary>{t("prompt.moreDetail")}</summary>
-              <p className="prompt-detail-fold-body">{detail}</p>
-            </details>
-          ) : (
-            <PromptDetail text={detail} />
-          )
-        ) : null}
-        {prompts.length > 1 ? (
-          <p className="prompt-count">{t("prompt.of", { count: prompts.length })}</p>
-        ) : null}
-      </div>
-      {prompt.presentation === "approval" ? (
+  const collapsible = promptStartsCollapsed(prompt.presentation);
+  const [expanded, setExpanded] = useState(!collapsible);
+
+  if (prompt.presentation === "approval") {
+    return (
+      <form
+        className={`prompt-panel presentation-${prompt.presentation}`}
+        onSubmit={(event) => {
+          event.preventDefault();
+        }}
+      >
+        <div className="prompt-head">
+          <p className="prompt-kicker">{heading}</p>
+          {title ? <h2>{title}</h2> : null}
+          {detail ? (
+            foldPromptDetail(prompt.presentation) ? (
+              <details className="prompt-detail-fold">
+                <summary>{t("prompt.moreDetail")}</summary>
+                <p className="prompt-detail-fold-body">{detail}</p>
+              </details>
+            ) : (
+              <PromptDetail text={detail} />
+            )
+          ) : null}
+          {prompts.length > 1 ? (
+            <p className="prompt-count">{t("prompt.of", { count: prompts.length })}</p>
+          ) : null}
+        </div>
         <ApprovalPrompt
           prompt={prompt}
           submitting={submitting}
           onAnswer={onAnswer}
         />
-      ) : (
-        <ChoicePrompt
-          prompt={prompt}
-          submitting={submitting}
-          onAnswer={onAnswer}
-        />
-      )}
-      {error ? <p className="action-error">{error}</p> : null}
-    </form>
+        {error ? <p className="action-error">{error}</p> : null}
+      </form>
+    );
+  }
+
+  return (
+    <ChoicePrompt
+      prompt={prompt}
+      promptCount={prompts.length}
+      heading={heading}
+      title={title}
+      detail={detail}
+      expanded={expanded}
+      onExpand={() => setExpanded(true)}
+      onCollapse={() => setExpanded(false)}
+      submitting={submitting}
+      error={error}
+      onAnswer={onAnswer}
+    />
   );
 }
 
@@ -168,11 +183,27 @@ function ApprovalPrompt({
 
 function ChoicePrompt({
   prompt,
+  promptCount,
+  heading,
+  title,
+  detail,
+  expanded,
+  onExpand,
+  onCollapse,
   submitting,
+  error,
   onAnswer,
 }: {
   prompt: ThreadPrompt;
+  promptCount: number;
+  heading: string;
+  title: string | null;
+  detail: string | null;
+  expanded: boolean;
+  onExpand: () => void;
+  onCollapse: () => void;
   submitting: boolean;
+  error: string | null;
   onAnswer: (prompt: ThreadPrompt, answers: PromptAnswerItem[]) => Promise<void>;
 }) {
   const { t } = useLocale();
@@ -182,8 +213,101 @@ function ChoicePrompt({
     const current = answers[question.id];
     return Boolean(current?.selected.length || current?.custom?.trim());
   });
+  const summary = selectedOptionSummary(prompt, answers, t);
+  const submit = () => {
+    void onAnswer(
+      prompt,
+      prompt.questions.map((question) => ({
+        id: question.id,
+        selected: answers[question.id]?.selected ?? [],
+        ...(answers[question.id]?.custom?.trim()
+          ? { custom: answers[question.id]?.custom?.trim() }
+          : {}),
+      })),
+    );
+  };
+
+  if (!expanded) {
+    return (
+      <form
+        className={`prompt-panel presentation-${prompt.presentation} is-compact`}
+        onSubmit={(event) => {
+          event.preventDefault();
+        }}
+      >
+        <div className="prompt-compact-bar">
+          <button
+            type="button"
+            className="prompt-compact-open"
+            onClick={onExpand}
+            aria-expanded={false}
+          >
+            <span className="prompt-compact-meta">
+              <span className="prompt-kicker">{heading}</span>
+              {title ? <span className="prompt-compact-title">{title}</span> : null}
+            </span>
+            <span className="prompt-compact-cta">
+              {summary ?? t("prompt.pickToContinue")}
+            </span>
+          </button>
+          {ready ? (
+            <button
+              type="button"
+              className="primary prompt-compact-continue"
+              disabled={submitting}
+              onClick={submit}
+            >
+              {submitting ? t("prompt.sending") : t("prompt.continue")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ghost prompt-compact-choose"
+              onClick={onExpand}
+            >
+              {t("prompt.showChoices")}
+            </button>
+          )}
+        </div>
+        {error ? <p className="action-error">{error}</p> : null}
+      </form>
+    );
+  }
+
   return (
-    <>
+    <form
+      className={`prompt-panel presentation-${prompt.presentation}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+      }}
+    >
+      <div className="prompt-head">
+        <div className="prompt-head-row">
+          <p className="prompt-kicker">{heading}</p>
+          <button
+            type="button"
+            className="prompt-fold-toggle"
+            aria-expanded={true}
+            onClick={onCollapse}
+          >
+            {t("prompt.hideChoices")}
+          </button>
+        </div>
+        {title ? <h2>{title}</h2> : null}
+        {detail ? (
+          foldPromptDetail(prompt.presentation) ? (
+            <details className="prompt-detail-fold">
+              <summary>{t("prompt.moreDetail")}</summary>
+              <p className="prompt-detail-fold-body">{detail}</p>
+            </details>
+          ) : (
+            <PromptDetail text={detail} />
+          )
+        ) : null}
+        {promptCount > 1 ? (
+          <p className="prompt-count">{t("prompt.of", { count: promptCount })}</p>
+        ) : null}
+      </div>
       {prompt.questions.map((question) => {
         const showLegend = shouldShowQuestionLegend(prompt, question);
         const legendText =
@@ -248,23 +372,13 @@ function ChoicePrompt({
           type="button"
           className="primary"
           disabled={submitting || !ready}
-          onClick={() => {
-            void onAnswer(
-              prompt,
-              prompt.questions.map((question) => ({
-                id: question.id,
-                selected: answers[question.id]?.selected ?? [],
-                ...(answers[question.id]?.custom?.trim()
-                  ? { custom: answers[question.id]?.custom?.trim() }
-                  : {}),
-              })),
-            );
-          }}
+          onClick={submit}
         >
           {submitting ? t("prompt.sending") : t("prompt.continue")}
         </button>
       </div>
-    </>
+      {error ? <p className="action-error">{error}</p> : null}
+    </form>
   );
 }
 
