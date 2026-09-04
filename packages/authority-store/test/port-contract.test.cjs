@@ -13,6 +13,7 @@ const {
 } = require("@regenic/domain");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { createHost } = require("@regenic/plugin-host");
+const { Client } = require("pg");
 const { sqliteAuthorityPlugin } = require("../dist/sqlite");
 const { postgresAuthorityPlugin } = require("../dist/postgres");
 
@@ -20,6 +21,20 @@ const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
 const HASH_C = "c".repeat(64);
 const KEEP = 64;
+
+async function isolatedPostgresUrl(base) {
+  const schema = `s${randomUUID().replaceAll("-", "")}`;
+  const client = new Client({ connectionString: base });
+  await client.connect();
+  try {
+    await client.query(`CREATE SCHEMA ${schema}`);
+  } finally {
+    await client.end();
+  }
+  const url = new URL(base);
+  url.searchParams.set("options", `-csearch_path=${schema}`);
+  return url.toString();
+}
 
 const drivers = [
   {
@@ -45,7 +60,11 @@ if (process.env.TEST_DATABASE_URL?.trim()) {
       const root = await mkdtemp(join(tmpdir(), "regenic-port-pg-"));
       return {
         plugin: postgresAuthorityPlugin,
-        config: { connectionString: process.env.TEST_DATABASE_URL.trim() },
+        config: {
+          connectionString: await isolatedPostgresUrl(
+            process.env.TEST_DATABASE_URL.trim(),
+          ),
+        },
         blobRoot: join(root, "blobs"),
         async teardown() {
           await rm(root, { recursive: true, force: true });
@@ -287,12 +306,14 @@ for (const driver of drivers) {
         occurred_at: "2026-08-30T00:00:00.000Z",
         expected_head_id: null,
       });
-      const [claimed] = await store.claimContextProjectionJobs({
-        owner: "worker-1",
-        now: "2026-08-30T00:01:00.000Z",
-        lease_ms: 60_000,
-        limit: 50,
-      });
+      const [claimed] = (
+        await store.claimContextProjectionJobs({
+          owner: "worker-1",
+          now: "2026-08-30T00:01:00.000Z",
+          lease_ms: 60_000,
+          limit: 100,
+        })
+      ).filter((job) => job.org_id === orgId);
       assert.equal(claimed.org_id, orgId);
       assert.equal(claimed.attempts, 1);
       assert.equal(
@@ -301,7 +322,7 @@ for (const driver of drivers) {
             owner: "worker-2",
             now: "2026-08-30T00:01:30.000Z",
             lease_ms: 60_000,
-            limit: 50,
+            limit: 100,
           })
         ).some((job) => job.id === claimed.id),
         false,
@@ -329,7 +350,7 @@ for (const driver of drivers) {
           owner: "worker-2",
           now: "2026-08-30T00:02:00.000Z",
           lease_ms: 60_000,
-          limit: 50,
+          limit: 100,
         })
       ).filter((job) => job.id === claimed.id);
       assert.equal(retried.attempts, 2);
@@ -404,7 +425,9 @@ const describePg = process.env.TEST_DATABASE_URL?.trim() ? describe : describe.s
 
 describePg("postgres concurrent claim", () => {
   it("does not let two claimers take the same projection job", async () => {
-    const connectionString = process.env.TEST_DATABASE_URL.trim();
+    const connectionString = await isolatedPostgresUrl(
+      process.env.TEST_DATABASE_URL.trim(),
+    );
     const hostA = await createHost();
     const hostB = await createHost();
     const hostWriter = await createHost();
@@ -430,13 +453,13 @@ describePg("postgres concurrent claim", () => {
           owner: "worker-a",
           now,
           lease_ms: 60_000,
-          limit: 10_000,
+          limit: 100,
         }),
         hostB.get("authority").claimContextProjectionJobs({
           owner: "worker-b",
           now,
           lease_ms: 60_000,
-          limit: 10_000,
+          limit: 100,
         }),
       ]);
       const ids = [...first, ...second]

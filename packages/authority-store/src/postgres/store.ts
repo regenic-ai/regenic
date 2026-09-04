@@ -430,7 +430,7 @@ export class PostgresAuthorityStore
         input.thread_id,
         input.event_id ?? null,
         input.status,
-        input.channel_message_ids ?? null,
+        jsonb(input.channel_message_ids),
         createdAt,
         input.now,
       ],
@@ -636,7 +636,7 @@ export class PostgresAuthorityStore
         artifact.status,
         artifact.generation,
         artifact.recorded_at,
-        parseContextJson(payload),
+        payload,
       ],
     );
     return parseContextJson<ContextArtifact>(payload);
@@ -706,7 +706,7 @@ export class PostgresAuthorityStore
       payload,
       "snapshot",
       "INSERT INTO context_snapshots (org_id, id, payload_json) VALUES ($1, $2, $3)",
-      [snapshot.org_id, snapshot.id, parseContextJson(payload)],
+      [snapshot.org_id, snapshot.id, payload],
     );
   }
 
@@ -743,7 +743,7 @@ export class PostgresAuthorityStore
           consumer_id, payload_json
         ) VALUES ($1, $2, $3, $4, $5, $6)
       `,
-      [...lookup, parseContextJson(payload)],
+      [...lookup, payload],
     );
   }
 
@@ -827,7 +827,7 @@ export class PostgresAuthorityStore
           stableCheckpoint.sequence,
           stableCheckpoint.watermark,
           stableCheckpoint.updated_at,
-          parseContextJson(payload),
+          payload,
         ],
         client,
       );
@@ -975,7 +975,7 @@ export class PostgresAuthorityStore
         decision.org_id,
         decision.disposition,
         decision.layer,
-        decision.reason_codes,
+        jsonb(decision.reason_codes),
         decision.score,
         decision.decided_at,
       ],
@@ -1413,9 +1413,9 @@ export class PostgresAuthorityStore
         recipe.id,
         recipe.org_id,
         recipe.name,
-        recipe.match,
+        jsonb(recipe.match),
         recipe.executor_type,
-        recipe.executor_config,
+        jsonb(recipe.executor_config),
         recipe.can_write_back,
         recipe.include_context,
         recipe.enabled,
@@ -1564,7 +1564,7 @@ export class PostgresAuthorityStore
         run.external_run_id ?? null,
         run.agent_thread_id ?? null,
         run.status,
-        run.result ?? null,
+        jsonb(run.result),
         run.created_at,
         run.updated_at,
       ],
@@ -1637,10 +1637,10 @@ export class PostgresAuthorityStore
         delivery.attempts,
         delivery.last_error ?? null,
         delivery.next_retry_at ?? null,
-        delivery.payload ?? null,
+        jsonb(delivery.payload),
         delivery.lease_expires_at ?? null,
         delivery.idempotency_key ?? null,
-        delivery.channel_receipt ?? null,
+        jsonb(delivery.channel_receipt),
         delivery.created_at,
         delivery.updated_at,
       ],
@@ -1719,7 +1719,7 @@ export class PostgresAuthorityStore
         installation.kind,
         installation.name,
         installation.status,
-        installation.config,
+        jsonb(installation.config),
         installation.created_at,
         installation.updated_at,
       ],
@@ -1895,7 +1895,7 @@ export class PostgresAuthorityStore
         installation.org_id,
         installation.connector_type,
         installation.status,
-        installation.config,
+        jsonb(installation.config),
         installation.credentials_ref ?? null,
         installation.created_at,
         installation.updated_at,
@@ -1949,7 +1949,7 @@ export class PostgresAuthorityStore
         UPDATE connector_installations SET config_json = $1, updated_at = $2
         WHERE id = $3 AND org_id = $4
       `,
-      [input.config, input.updated_at, input.id, input.org_id],
+      [jsonb(input.config), input.updated_at, input.id, input.org_id],
     );
     return rowCount === 1 ? this.findInstallation(input.id) : null;
   }
@@ -2204,7 +2204,7 @@ export class PostgresAuthorityStore
             input.attempt_id,
             quarantine.record_external_id,
             quarantine.reason_code,
-            quarantine.safe_metadata,
+            jsonb(quarantine.safe_metadata),
             quarantine.created_at,
           ],
           client,
@@ -2798,7 +2798,7 @@ export class PostgresAuthorityStore
         event.ingested_at,
         event.thread_id ?? conversationId(event.source, event.external_id, event.id),
         event.actor_id ?? null,
-        event.required_scope_ids ?? null,
+        jsonb(event.required_scope_ids),
       ],
       client,
     );
@@ -3502,6 +3502,14 @@ function parseDeliveryPayload(
 
 function parseContextJson<T>(value: unknown): T {
   return asJson<T>(value);
+}
+
+/** node-pg encodes JS arrays as PG arrays; JSONB columns need JSON text. */
+function jsonb(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 function asJson<T>(value: unknown): T {

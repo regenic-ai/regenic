@@ -11,17 +11,38 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { createHost } = require("@regenic/plugin-host");
+const { Client } = require("pg");
 const {
   PostgresAuthorityStore,
   postgresAuthorityPlugin,
 } = require("../dist/postgres");
 
-const connectionString = process.env.TEST_DATABASE_URL?.trim();
-const describePg = connectionString ? describe : describe.skip;
+const baseConnectionString = process.env.TEST_DATABASE_URL?.trim();
+const describePg = baseConnectionString ? describe : describe.skip;
+
+async function isolatedPostgresUrl(base) {
+  const schema = `s${randomUUID().replaceAll("-", "")}`;
+  const client = new Client({ connectionString: base });
+  await client.connect();
+  try {
+    await client.query(`CREATE SCHEMA ${schema}`);
+  } finally {
+    await client.end();
+  }
+  const url = new URL(base);
+  url.searchParams.set("options", `-csearch_path=${schema}`);
+  return url.toString();
+}
 
 describePg("postgres authority store", () => {
   const stores = [];
   const roots = [];
+  let connectionStringPromise;
+
+  function isolatedUrl() {
+    connectionStringPromise ??= isolatedPostgresUrl(baseConnectionString);
+    return connectionStringPromise;
+  }
 
   after(async () => {
     await Promise.all(stores.splice(0).map((store) => store.close()));
@@ -29,7 +50,7 @@ describePg("postgres authority store", () => {
   });
 
   async function openStore() {
-    const store = await PostgresAuthorityStore.open(connectionString);
+    const store = await PostgresAuthorityStore.open(await isolatedUrl());
     stores.push(store);
     return store;
   }
@@ -162,13 +183,13 @@ describePg("postgres authority store", () => {
         owner: "worker-a",
         now,
         lease_ms: 60_000,
-        limit: 10_000,
+        limit: 100,
       }),
       claimerB.claimContextProjectionJobs({
         owner: "worker-b",
         now,
         lease_ms: 60_000,
-        limit: 10_000,
+        limit: 100,
       }),
     ]);
     const ids = [...first, ...second].filter((job) => job.org_id === orgId).map((job) => job.id);
@@ -180,7 +201,7 @@ describePg("postgres authority store", () => {
     const host = await createHost();
     try {
       const handle = await host.plugin(postgresAuthorityPlugin, {
-        connectionString,
+        connectionString: await isolatedUrl(),
       });
       await handle.ready();
       const store = host.get("authority");
