@@ -154,6 +154,10 @@ export class PersonalWorkSupervise {
     if (!force) {
       return handle;
     }
+    const latest = await executor.status(run, ctx);
+    if (latest.status !== "running") {
+      return latest;
+    }
     return handleFromInboxEnd(run, scan, transcript);
   }
 
