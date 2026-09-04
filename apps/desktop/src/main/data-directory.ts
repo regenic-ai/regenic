@@ -174,6 +174,15 @@ export function sidecarFiles(database: string): string[] {
   return SIDECAR_SUFFIXES.map((suffix) => `${database}${suffix}`);
 }
 
+export function lexicalDatabaseFile(database: string): string {
+  return `${database}.lexical.db`;
+}
+
+export function databasePayloadFiles(database: string): string[] {
+  const lexical = lexicalDatabaseFile(database);
+  return [database, ...sidecarFiles(database), lexical, ...sidecarFiles(lexical)];
+}
+
 export function kernelDatabaseMatches(
   expected: string,
   reported: string | null | undefined,
@@ -366,7 +375,7 @@ export function storeHasData(
   exists: (path: string) => boolean = existsSync,
   readDir: (path: string) => string[] = readdirSync,
 ): boolean {
-  if (exists(paths.database)) {
+  if (databasePayloadFiles(paths.database).some(exists)) {
     return true;
   }
   if (!exists(paths.blobRoot)) {
@@ -517,7 +526,7 @@ export function cleanupIncomingStaging(root: string): void {
 
 export function wipeStorePayload(root: string): void {
   const paths = storePaths(root);
-  for (const file of [paths.database, ...sidecarFiles(paths.database)]) {
+  for (const file of databasePayloadFiles(paths.database)) {
     rmSync(file, { force: true });
   }
   if (existsSync(paths.blobRoot)) {
@@ -561,9 +570,8 @@ export function storeFootprintBytes(root: string): number {
       // Missing sidecars are normal.
     }
   };
-  addFile(paths.database);
-  for (const sidecar of sidecarFiles(paths.database)) {
-    addFile(sidecar);
+  for (const file of databasePayloadFiles(paths.database)) {
+    addFile(file);
   }
   walkFiles(paths.blobRoot, addFile);
   return total;
@@ -631,14 +639,13 @@ export function copyStore(
 ): void {
   const dest = storePaths(destRoot);
   mkdirSync(dest.dataRoot, { recursive: true });
-  if (existsSync(from.database)) {
-    copyFileSync(from.database, dest.database);
-  }
-  for (const sidecar of sidecarFiles(from.database)) {
-    if (!existsSync(sidecar)) {
+  const sources = databasePayloadFiles(from.database);
+  const targets = databasePayloadFiles(dest.database);
+  for (let index = 0; index < sources.length; index += 1) {
+    if (!existsSync(sources[index])) {
       continue;
     }
-    copyFileSync(sidecar, join(dest.dataRoot, basenameOf(sidecar)));
+    copyFileSync(sources[index], targets[index]);
   }
   if (existsSync(from.blobRoot)) {
     mkdirSync(dest.blobRoot, { recursive: true });
@@ -648,10 +655,12 @@ export function copyStore(
 
 function parkStore(root: string, parked: string): void {
   const paths = storePaths(root);
+  const targets = storePaths(parked);
   mkdirSync(parked, { recursive: true });
-  moveIfPresent(paths.database, join(parked, STORE_DB));
-  for (const sidecar of sidecarFiles(paths.database)) {
-    moveIfPresent(sidecar, join(parked, basenameOf(sidecar)));
+  const sources = databasePayloadFiles(paths.database);
+  const databaseTargets = databasePayloadFiles(targets.database);
+  for (let index = 0; index < sources.length; index += 1) {
+    moveIfPresent(sources[index], databaseTargets[index]);
   }
   moveIfPresent(paths.blobRoot, join(parked, STORE_BLOBS));
 }
@@ -659,9 +668,10 @@ function parkStore(root: string, parked: string): void {
 function promoteStore(incoming: string, destRoot: string): void {
   const from = storePaths(incoming);
   const dest = storePaths(destRoot);
-  moveIfPresent(from.database, dest.database);
-  for (const sidecar of sidecarFiles(from.database)) {
-    moveIfPresent(sidecar, join(dest.dataRoot, basenameOf(sidecar)));
+  const sources = databasePayloadFiles(from.database);
+  const targets = databasePayloadFiles(dest.database);
+  for (let index = 0; index < sources.length; index += 1) {
+    moveIfPresent(sources[index], targets[index]);
   }
   moveIfPresent(from.blobRoot, dest.blobRoot);
 }

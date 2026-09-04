@@ -18,6 +18,7 @@ import { backgroundSyncReleased } from "./personal-interactive-gate";
 const PROJECTION_TICK_MS = 2_000;
 const PROJECTION_LEASE_MS = 30_000;
 const PROJECTION_BATCH_SIZE = 5;
+const PROJECTION_HEARTBEAT_MS = 10_000;
 const PROJECTION_GENERATION = "continuous-v1";
 const MAX_RETRY_MS = 5 * 60_000;
 
@@ -28,6 +29,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
   private started = false;
   private running = false;
   private stopping = false;
+  private bootstrapped = false;
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -66,6 +68,10 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
       const authority = host.get("authority");
       const outbox = host.get("context-projection-outbox") as ContextProjectionOutboxStore;
       const runner = host.get("context-projections") as ContextProjectionRunner;
+      if (!this.bootstrapped) {
+        await runner.syncLexicalIndex(this.runtime.orgId(), PROJECTION_GENERATION);
+        this.bootstrapped = true;
+      }
       const claimed = await outbox.claimContextProjectionJobs({
         owner: this.owner,
         now: now.toISOString(),
@@ -103,21 +109,35 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
               }
               continue;
             }
-            await runner.projectThread(
-              group.org_id,
-              PROJECTION_GENERATION,
-              group.thread_id,
-            );
+            await withProjectionLease(outbox, group.jobs, this.owner, async () => {
+              await runner.syncLexicalIndex(
+                group.org_id,
+                PROJECTION_GENERATION,
+                group.jobs.map((job) => job.event_id),
+                group.thread_id!,
+              );
+              await runner.projectThread(
+                group.org_id,
+                PROJECTION_GENERATION,
+                group.thread_id!,
+              );
+            });
           }
           const completedAt = new Date().toISOString();
           for (const job of group.jobs) {
-            await outbox.completeContextProjectionJob({
+            const completed = await outbox.completeContextProjectionJob({
               id: job.id,
               owner: this.owner,
               completed_at: completedAt,
             });
+            if (!completed) {
+              throw new ProjectionLeaseLostError();
+            }
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof ProjectionLeaseLostError) {
+            continue;
+          }
           const failedAt = new Date();
           for (const job of group.jobs) {
             await outbox.failContextProjectionJob({
@@ -137,6 +157,44 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
     } finally {
       this.running = false;
     }
+  }
+}
+
+class ProjectionLeaseLostError extends Error {}
+
+async function withProjectionLease<T>(
+  outbox: ContextProjectionOutboxStore,
+  jobs: ContextProjectionJob[],
+  owner: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  let leaseLost = false;
+  let heartbeat = Promise.resolve();
+  const timer = setInterval(() => {
+    heartbeat = heartbeat.then(async () => {
+      const now = new Date().toISOString();
+      const renewed = await Promise.all(jobs.map((job) =>
+        outbox.renewContextProjectionJob({
+          id: job.id,
+          owner,
+          now,
+          lease_ms: PROJECTION_LEASE_MS,
+        }),
+      ));
+      leaseLost = leaseLost || renewed.some((value) => !value);
+    }).catch(() => {
+      leaseLost = true;
+    });
+  }, PROJECTION_HEARTBEAT_MS);
+  try {
+    const value = await run();
+    await heartbeat;
+    if (leaseLost) {
+      throw new ProjectionLeaseLostError();
+    }
+    return value;
+  } finally {
+    clearInterval(timer);
   }
 }
 

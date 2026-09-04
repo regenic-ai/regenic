@@ -61,6 +61,7 @@ export * from "./context-snapshot";
 export * from "./context-bundle";
 export * from "./context-canonical";
 export * from "./context-compatibility";
+export * from "./context-lexical";
 export * from "./context-projection-outbox";
 export * from "./context-projection-scope";
 export * from "./context-schema";

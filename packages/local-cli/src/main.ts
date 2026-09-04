@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { INGEST_ATTEMPT_KEEP_PER_INSTALLATION } from "@regenic/authority-store";
-import { ContextQuestionAnswerer } from "@regenic/context-engine";
+import {
+  ContextQuestionAnswerer,
+  evaluateContextRetrieval,
+  type ContextEvaluationDataset,
+} from "@regenic/context-engine";
 import {
   ConnectorRunner,
   envCredentialsRef,
@@ -135,8 +139,11 @@ export async function runLocalCli(
     case "context-ask":
       await askContext(commandOptions, env, stdout, createId);
       return;
+    case "context-evaluate":
+      await evaluateContext(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate");
   }
 }
 
@@ -681,6 +688,7 @@ async function assembleContext(
     orgId,
     model: { driver: "none" },
   }, async (host) => {
+    await bootstrapLocalContextSearch(host, orgId);
     writeJson(stdout, await host.get("context").assemble(
       localContextRequest(options, orgId, createId),
     ));
@@ -773,6 +781,7 @@ async function askContext(
     orgId,
     model: modelProviderConfigFromEnv(env),
   }, async (host) => {
+    await bootstrapLocalContextSearch(host, orgId);
     const request = localContextRequest(
       options,
       orgId,
@@ -786,6 +795,57 @@ async function askContext(
       host.get("model"),
     ).ask(request, question));
   });
+}
+
+async function evaluateContext(
+  options: CommandOptions,
+  stdout: CliOutput,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const dataset = JSON.parse(
+    await readFile(requirePath(options, "dataset"), "utf8"),
+  ) as ContextEvaluationDataset;
+  assertPersonalEvaluationDataset(dataset, orgId);
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    await bootstrapLocalContextSearch(host, orgId);
+    const report = await evaluateContextRetrieval(host.get("context"), dataset, {
+      k: requirePositiveInteger(options, "k", 10),
+    });
+    const output = optionString(options, "output");
+    if (output) {
+      await writeFile(resolve(output), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    }
+    writeJson(stdout, report);
+  });
+}
+
+async function bootstrapLocalContextSearch(
+  host: import("@regenic/plugin-host").Host,
+  orgId: string,
+): Promise<void> {
+  await host.get("context-projections").syncLexicalIndex(orgId, "continuous-v1");
+}
+
+function assertPersonalEvaluationDataset(
+  dataset: ContextEvaluationDataset,
+  orgId: string,
+): void {
+  if (
+    !dataset ||
+    !Array.isArray(dataset.cases) ||
+    dataset.cases.some(({ request }) =>
+      request?.org_id !== orgId ||
+      request?.principal?.actor_type !== "human" ||
+      request?.principal?.actor_id !== orgId,
+    )
+  ) {
+    throw new Error("Context evaluation dataset exceeds the local Personal authority boundary");
+  }
 }
 
 function localContextRequest(

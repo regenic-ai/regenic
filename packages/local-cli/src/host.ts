@@ -1,9 +1,12 @@
 import { sqliteAuthorityPlugin } from "@regenic/authority-store";
 import { fsBlobPlugin } from "@regenic/blob-store";
 import {
-  deterministicEventRetrieverPlugin,
+  contextProjectionCoordinatorPlugin,
+  deterministicThreadSummaryProjectorPlugin,
+  indexedEventRetrieverPlugin,
   personalContextEnginePlugin,
 } from "@regenic/context-engine";
+import { sqliteContextLexicalIndexPlugin } from "@regenic/lexical-index";
 import { contextRegistriesPlugin, ingestPlugin, MemoryBlobStore } from "@regenic/domain";
 import {
   modelProviderPlugin,
@@ -40,7 +43,14 @@ export async function createLocalHost(options: LocalHostOptions): Promise<Host> 
         throw new Error("Context commands require a Blob root");
       }
       await host.plugin(contextRegistriesPlugin);
-      await host.plugin(deterministicEventRetrieverPlugin);
+      await host.plugin(sqliteContextLexicalIndexPlugin, {
+        path: `${options.database}.lexical.db`,
+      });
+      await host.plugin(indexedEventRetrieverPlugin);
+      await host.plugin(deterministicThreadSummaryProjectorPlugin);
+      await host.plugin(contextProjectionCoordinatorPlugin, {
+        lexical_index: host.get("context-lexical-index"),
+      });
       await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });
       await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
     }

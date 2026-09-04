@@ -525,6 +525,22 @@ Evidence references, and scope union are deterministic. The canonical summary
 body is content-addressed in Blob storage; the Artifact remains a replaceable,
 evidence-bound proposal rather than authority.
 
+### 8.2 Personal lexical index
+
+Personal uses a separate, rebuildable SQLite FTS5 sidecar. The projection
+outbox updates summaries and lexical documents before completing a leased job;
+long runs renew their leases. A missing sidecar or changed generation triggers
+an atomic organization rebuild. Content-hash repointing requeues affected
+Events, and a checkpoint may advance to a newer content watermark at the same
+Event count only when its recorded time also moves forward.
+
+FTS receives literal Unicode terms, never raw `MATCH` syntax. The versioned
+tokenizer applies NFKC and lowercase normalization plus deterministic one- to
+three-character CJK n-grams. Oversized documents remain uncovered and use the
+correctness fallback instead of consuming unbounded index resources. FTS is a
+candidate accelerator, not an authority or rank oracle: v1 exposes no global
+BM25, snippets, corpus counts, principal, policy, or hidden-resource metadata.
+
 Projectors follow these rules:
 
 - idempotency key: `(projector_id, algorithm_version, event_id)`;
@@ -542,6 +558,11 @@ The coordinator rejects dependency cycles.
 
 - `visible(principal, resource, purpose)` is applied before every retrieval
   channel and again before bundle projection.
+- Blob bodies are materialized only after whole-lifecycle authorization and
+  temporal resolution. The index receives only exact authorized
+  `(event_id, content_hash)` keys; unknown, stale, or duplicate keys fail closed.
+- Caller-visible read epochs are derived from authorized lifecycle metadata and
+  the policy hash, so hidden lifecycle changes do not perturb snapshots.
 - Lifecycle authorization is all-or-nothing. If any revision or tombstone in an
   identity chain is not visible, no member or derived status from that chain is
   exposed to retrievers.
@@ -587,8 +608,11 @@ the same transaction as its Event-derived state, while connector, executor, and
 recipe configuration remains intact.
 
 The Personal API host mounts the authority-backed evidence source, deterministic
-Event retriever, personal-owner policy, and durable context engine as one plugin
-lifecycle. Replay reads the persisted snapshot and bundle without rerunning the
+indexed Event retriever, personal-owner policy, and durable context engine as
+one plugin lifecycle. The FTS database and its WAL files are migrated, parked,
+restored, measured, and wiped with the authority database. Organization clear
+uses SQLite secure deletion, a truncated WAL, and vacuum for the lexical
+sidecar. Replay reads the persisted snapshot and bundle without rerunning the
 source, retriever, or a model.
 
 ## 11. Graceful Degradation
@@ -603,6 +627,12 @@ The planner builds a capability-aware plan and records missing capabilities:
 | Reranker | Use deterministic fused rank and authority/time rules |
 | Artifact projector | Retrieve authorized Events directly |
 | FTS | Use indexed metadata and bounded recent/thread scans |
+
+Runtime flags distinguish `lexical_index_absent`,
+`lexical_index_unbuilt`, and `lexical_index_partial`. Exact content-hash
+coverage determines freshness. Uncovered authorized Events are verified by the
+same versioned local lexical algorithm, so index loss or lag changes latency,
+not authorization or recall correctness.
 
 `degradation_flags` make quality differences observable. Missing optional
 capabilities never disable ACL or provenance checks.
@@ -644,6 +674,14 @@ Required operational measures include:
 
 Evaluation fixtures use synthetic identities and content. Production messages do
 not become test fixtures or prompt examples.
+
+The deterministic evaluation runner reports Recall@K, MRR@K, nDCG@K, citation
+coverage, negative-case selection rate, and forbidden/stale selections. Empty
+ground-truth cases are safety negatives and do not inflate quality means. The
+hard gate requires no forbidden or stale selection, no negative-case selection,
+and complete citation coverage. Reports contain Event IDs and hashes but no
+message bodies or timing-dependent fields; identical inputs produce the same
+report hash.
 
 ## 14. First Vertical Slice
 
@@ -692,7 +730,7 @@ Acceptance criteria:
 3. SQLite snapshot/artifact store and replay.
 4. API/CLI integration and `EvidenceBundle` v1 compatibility.
 5. Projection outbox and D0 structured summaries. **Implemented for Personal SQLite.**
-6. Lexical index adapter and evaluation harness.
+6. Lexical index adapter and evaluation harness. **Implemented for Personal SQLite.**
 7. Optional model, vector, graph, and rerank plugins.
 8. Bitemporal Claim promotion after its query semantics are accepted.
 9. Identity and topic lifecycle after their governance RFCs are accepted.

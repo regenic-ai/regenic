@@ -314,6 +314,9 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 
 Context 装配是确定性的，不配置模型也能使用。它只读取已提交的 Event/Blob 证据，在排名前
 应用 Personal 权威边界，持久化不可变 snapshot 与 bundle，并支持进程重启后 replay。
+个人版通过可重建的 SQLite FTS5 sidecar 执行 literal Unicode 搜索；只有完成 ACL 与生命周期
+解析后，精确的 Event/hash key 才会进入索引。索引不可用或覆盖不完整时，使用同一套本地
+评分规则 fallback。
 
 ```bash
 pnpm local context-assemble --database ./regenic.db --blob-root ./blobs \
@@ -324,6 +327,15 @@ pnpm local context-snapshot --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
+```
+
+可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、
+MRR@K、nDCG@K、citation coverage 和 forbidden/stale selection 安全门，但不包含消息正文。
+
+```bash
+pnpm local context-evaluate --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --dataset ./context-evaluation.json --k 10 \
+	--output ./context-evaluation-report.json
 ```
 
 当已有使用方只需要 citation 时，可将 replay 后的 Context bundle 投射为现有的

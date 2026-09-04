@@ -36,8 +36,13 @@ function job(overrides = {}) {
   };
 }
 
-function fixture(claimed, projectThread, getEvent = async () => null) {
-  const calls = { claims: [], projects: [], completes: [], failures: [] };
+function fixture(
+  claimed,
+  projectThread,
+  getEvent = async () => null,
+  syncLexicalIndex = async () => undefined,
+) {
+  const calls = { claims: [], projects: [], indexSyncs: [], completes: [], failures: [] };
   const outbox = {
     async claimContextProjectionJobs(input) {
       calls.claims.push(input);
@@ -51,11 +56,18 @@ function fixture(claimed, projectThread, getEvent = async () => null) {
       calls.failures.push(input);
       return true;
     },
+    async renewContextProjectionJob() {
+      return true;
+    },
   };
   const runner = {
     async projectThread(orgId, generation, threadId) {
       calls.projects.push({ orgId, generation, threadId });
       return projectThread(orgId, generation, threadId);
+    },
+    async syncLexicalIndex(orgId, generation, eventIds, threadId) {
+      calls.indexSyncs.push({ orgId, generation, eventIds, threadId });
+      return syncLexicalIndex(orgId, generation, eventIds, threadId);
     },
   };
   const authority = {
@@ -89,6 +101,7 @@ function fixture(claimed, projectThread, getEvent = async () => null) {
   const runtime = {
     isReady: () => true,
     requireHost: () => host,
+    orgId: () => "example-org",
   };
   const kernelRuntime = {
     shouldDeferBackgroundSync: () => false,
@@ -122,7 +135,7 @@ describe("PersonalContextProjectionService", () => {
     const body = Buffer.from("A durable summary source", "utf8");
     const contentHash = createHash("sha256").update(body).digest("hex");
     await host.get("blobs").put(contentHash, body, "text/plain");
-    await host.get("authority").append({
+    const event = await host.get("authority").append({
       org_id: "example-org",
       source: "synthetic",
       external_id: "message-1",
@@ -138,6 +151,7 @@ describe("PersonalContextProjectionService", () => {
     const runtime = {
       isReady: () => true,
       requireHost: () => host,
+      orgId: () => "example-org",
     };
     const kernelRuntime = {
       shouldDeferBackgroundSync: () => false,
@@ -151,7 +165,7 @@ describe("PersonalContextProjectionService", () => {
       await rm(root, { recursive: true, force: true });
     });
 
-    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+    await service.runOnce();
 
     const artifacts = await host.get("context-artifacts").listArtifacts({
       org_id: "example-org",
@@ -161,6 +175,34 @@ describe("PersonalContextProjectionService", () => {
     assert.equal(artifacts[0].attrs.thread_id, "thread-1");
     assert.equal(artifacts[0].attrs.messages[0].text, "A durable summary source");
     assert.equal(await host.get("blobs").exists(artifacts[0].body_hash), true);
+    const lexical = await host.get("context-lexical-index").matchAuthorized({
+      org_id: "example-org",
+      query: "durable summary",
+      authorized: [{ event_id: event.id, content_hash: contentHash }],
+    });
+    assert.equal(lexical.generation, "continuous-v1");
+    assert.deepEqual(lexical.matched, [{ event_id: event.id, content_hash: contentHash }]);
+    const assembled = await host.get("context").assemble({
+      schema_version: "1.0",
+      id: "request-indexed-1",
+      org_id: "example-org",
+      principal: { actor_type: "human", actor_id: "example-org" },
+      consumer_id: "projection-e2e",
+      purpose: "find a durable summary source",
+      allowed_uses: ["display"],
+      query: "durable summary",
+      temporal: { mode: "current" },
+      budget: {
+        profile: "test-v1",
+        max_tokens: 100,
+        max_items: 10,
+        max_raw_evidence: 10,
+      },
+      requested_kinds: ["event"],
+    });
+    assert.equal(assembled.bundle.sections[0].items[0].resource_id, event.id);
+    assert.equal(assembled.bundle.sections[0].items[0].text, "A durable summary source");
+    assert.ok(!assembled.bundle.degradation_flags.includes("lexical_index_partial"));
     assert.equal((await host.get("context-projection-outbox").listContextProjectionJobs("example-org"))[0].status, "succeeded");
   });
 
@@ -184,6 +226,26 @@ describe("PersonalContextProjectionService", () => {
     assert.deepEqual(calls.projects, [
       { orgId: "example-org", generation: "continuous-v1", threadId: "thread-1" },
       { orgId: "other-org", generation: "continuous-v1", threadId: "thread-other" },
+    ]);
+    assert.deepEqual(calls.indexSyncs, [
+      {
+        orgId: "example-org",
+        generation: "continuous-v1",
+        eventIds: undefined,
+        threadId: undefined,
+      },
+      {
+        orgId: "example-org",
+        generation: "continuous-v1",
+        eventIds: ["event-1", "event-2"],
+        threadId: "thread-1",
+      },
+      {
+        orgId: "other-org",
+        generation: "continuous-v1",
+        eventIds: ["event-3"],
+        threadId: "thread-other",
+      },
     ]);
     assert.deepEqual(calls.completes.map((value) => value.id), ["job-1", "job-2", "job-3"]);
     assert.equal(calls.failures.length, 0);
@@ -262,6 +324,7 @@ describe("PersonalContextProjectionService", () => {
       },
     };
     const runner = {
+      async syncLexicalIndex() {},
       async projectThread(orgId, generation, threadId) {
         calls.projects.push({ orgId, generation, threadId });
         return [];
@@ -319,7 +382,7 @@ describe("PersonalContextProjectionService", () => {
     clearOrgSyncPhaseIndex();
     note();
     const service = new PersonalContextProjectionService(
-      { isReady: () => true, requireHost: () => host },
+      { isReady: () => true, requireHost: () => host, orgId: () => "example-org" },
       {
         shouldDeferBackgroundSync: () => false,
         shouldDeferHistorySync: () => false,
@@ -333,5 +396,21 @@ describe("PersonalContextProjectionService", () => {
     await service.onModuleDestroy();
     reset();
     clearOrgSyncPhaseIndex();
+  });
+
+  it("bootstraps the lexical index only once when no job is pending", async () => {
+    const { service, calls } = fixture([], async () => []);
+
+    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+    await service.runOnce(new Date("2026-08-30T00:01:01.000Z"));
+
+    assert.deepEqual(calls.projects, []);
+    assert.deepEqual(calls.indexSyncs, [{
+      orgId: "example-org",
+      generation: "continuous-v1",
+      eventIds: undefined,
+      threadId: undefined,
+    }]);
+    await service.onModuleDestroy();
   });
 });

@@ -480,6 +480,18 @@ tombstone 正文，并输出结构化 `thread_summary`。Artifact ID、input has
 Evidence 引用及 scope 并集均为确定性结果。Canonical summary body 按内容寻址写入 Blob；
 Artifact 仍是可替换、绑定证据的 proposal，而不是权威记录。
 
+### 8.2 个人版词法索引
+
+个人版使用独立、可重建的 SQLite FTS5 sidecar。Projection outbox 在完成 leased job 前
+同时更新摘要与 lexical document；长任务会续租。Sidecar 缺失或 generation 改变时，按组织
+原子重建。Content hash 重指向会重新排队受影响 Event；同一 Event 数量下，checkpoint 只在
+recorded time 也前进时，才允许更新到更晚的内容 watermark。
+
+FTS 接收 literal Unicode term，绝不接收原始 `MATCH` 语法。版本化 tokenizer 执行 NFKC、
+小写归一化和确定性的 CJK 一至三字符 n-gram。超大文档保持 uncovered 并走正确性 fallback，
+不消耗无上限的索引资源。FTS 只是候选加速器，不是权威或排名裁判：v1 不暴露全局 BM25、
+snippet、语料计数、principal、policy 或隐藏资源 metadata。
+
 Projector 遵守：
 
 - 幂等键：`(projector_id, algorithm_version, event_id)`；
@@ -495,6 +507,10 @@ Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 ## 9. ACL 与隐私
 
 - 每个检索通道都先执行 `visible(principal, resource, purpose)`，bundle 投影前再次校验；
+- Blob body 只在完整生命周期授权和时序解析之后物化。索引只收到精确的已授权
+  `(event_id, content_hash)` key；未知、过时或重复 key 按拒绝优先处理；
+- 调用方可见 read epoch 从已授权生命周期 metadata 与 policy hash 派生，因此隐藏生命周期
+  的变化不会扰动 snapshot；
 - 生命周期授权采用 all-or-nothing：同一 identity chain 中任一 revision 或 tombstone 不可见
   时，不向 retriever 暴露该链的任何成员或派生 status；
 - Artifact 从全部证据派生 `required_scope_ids`，projector 不能选择更宽 scope；
@@ -533,8 +549,10 @@ data 时，会在删除 Event 派生状态的同一事务中删除这些 Context
 executor 与 recipe 配置。
 
 Personal API host 在同一个 plugin 生命周期中挂载 authority-backed evidence source、确定性
-Event retriever、personal-owner policy 与 durable context engine。Replay 直接读取持久化的
-snapshot 和 bundle，不重新执行 source、retriever 或模型。
+indexed Event retriever、personal-owner policy 与 durable context engine。FTS 数据库及其 WAL
+会随 authority database 一起迁移、暂存、恢复、统计和擦除。清理组织时，lexical sidecar
+启用 SQLite secure delete、截断 WAL 并执行 vacuum。Replay 直接读取持久化 snapshot 与
+bundle，不重新执行 source、retriever 或模型。
 
 ## 11. 优雅降级
 
@@ -548,6 +566,10 @@ Planner 根据能力构建 plan，并记录缺失能力：
 | Reranker | 使用确定性融合排名和权威度/时间规则 |
 | Artifact projector | 直接召回已授权 Event |
 | FTS | 使用有索引的 metadata 与有界 recent/thread scan |
+
+运行时 flag 区分 `lexical_index_absent`、`lexical_index_unbuilt` 与
+`lexical_index_partial`。Freshness 由精确 content-hash coverage 判断。未覆盖的已授权 Event
+使用同一版本的本地词法算法复核，因此索引丢失或落后只改变延迟，不改变授权或召回正确性。
 
 `degradation_flags` 使质量差异可观测。缺少可选能力时，不能关闭 ACL 或 provenance 检查。
 
@@ -581,6 +603,11 @@ evidence 被召回并放入硬预算，否则 assembly 失败，不能静默省�
 - Event、Blob、Artifact、index 与 snapshot 的存储占用。
 
 评测 fixture 使用合成身份和内容，不能把生产消息变成测试 fixture 或 prompt 示例。
+
+确定性评测 runner 输出 Recall@K、MRR@K、nDCG@K、citation coverage、负例选择率，以及
+forbidden/stale selection 数。空 ground-truth case 是安全负例，不参与质量均值。硬门要求：
+无 forbidden 或 stale selection、负例无选择且 citation coverage 为 100%。报告包含 Event ID
+与 hash，但不含消息正文或依赖时钟的字段；相同输入生成相同 report hash。
 
 ## 14. 第一条垂直切片
 
@@ -623,7 +650,7 @@ Context Request/Snapshot/Bundle v2、重放保证、read-epoch 语义与 canonic
 3. SQLite snapshot/artifact store 与 replay。
 4. API/CLI 集成和 `EvidenceBundle` v1 兼容。
 5. Projection outbox 与 D0 结构化摘要。**个人版 SQLite 已实现。**
-6. Lexical index adapter 与评测框架。
+6. Lexical index adapter 与评测框架。**个人版 SQLite 已实现。**
 7. 可选 model、vector、graph 和 rerank 插件。
 8. 双时态 query 语义获批后再晋升 Claim。
 9. 身份与话题治理 RFC 获批后再实现其生命周期。

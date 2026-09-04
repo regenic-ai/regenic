@@ -71,6 +71,60 @@ describe("ContextProjectionCoordinator", () => {
     }]);
   });
 
+  it("bootstraps and incrementally advances the lexical index from committed Events", async () => {
+    const registry = new MemoryContextProjectorRegistry();
+    const calls = { replacements: [], upserts: [] };
+    let generation;
+    const index = {
+      async getStatus() {
+        return {
+          available: true,
+          algorithm_version: "literal-unicode-v1",
+          ...(generation ? { generation, watermark: "authority:1" } : {}),
+        };
+      },
+      async replaceOrganization(input) {
+        calls.replacements.push(structuredClone(input));
+        generation = input.generation;
+      },
+      async upsertDocuments(input) {
+        calls.upserts.push(structuredClone(input));
+      },
+    };
+    const blobs = {
+      async getMany() { return new Map([[HASH, Buffer.from("Indexed body")]]); },
+    };
+    const indexedAuthority = {
+      async openContextRead() {
+        return {
+          ...await authority().openContextRead(),
+          events: [{ ...event, content_media_type: "text/plain" }],
+        };
+      },
+    };
+    const coordinator = new ContextProjectionCoordinator(
+      indexedAuthority,
+      new MemoryContextArtifactStore(),
+      registry,
+      blobs,
+      index,
+    );
+
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1");
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1", ["event-1"]);
+
+    assert.deepEqual(calls.replacements[0].documents, [{
+      event_id: "event-1",
+      content_hash: HASH,
+      text: "Indexed body",
+    }]);
+    assert.deepEqual(calls.upserts[0].documents, calls.replacements[0].documents);
+    await assert.rejects(
+      coordinator.syncLexicalIndex("example-org", "continuous-v1", ["event-unknown"]),
+      /outside the authority read/,
+    );
+  });
+
   it("rejects proposals that do not preserve authority evidence scopes", async () => {
     const artifacts = new MemoryContextArtifactStore();
     const registry = new MemoryContextProjectorRegistry();

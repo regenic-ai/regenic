@@ -24,7 +24,8 @@ describe("personal context host", () => {
     assert.ok(host.get("context"));
     assert.equal(host.get("authority"), host.get("context-authority"));
     assert.equal(host.get("authority"), host.get("context-artifacts"));
-    assert.ok(host.get("context-retrievers").get("event-deterministic"));
+    assert.ok(host.get("context-retrievers").get("event-lexical-indexed"));
+    assert.equal((await host.get("context-lexical-index").getStatus("local-owner")).available, true);
     assert.deepEqual(await host.get("model").health(), {
       status: "degraded",
       driver: "none",

@@ -31,6 +31,7 @@ import {
   type ContextReplayRequest,
   type ContextRequest,
   type ContextRetriever,
+  type ContextRetrievalResult,
   type ContextRetrievalCapabilities,
   type ContextRetrieverRegistry,
   type ContextSectionKind,
@@ -41,6 +42,11 @@ import {
 } from "@regenic/domain";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const RETRIEVAL_DEGRADATION_FLAGS = new Set([
+  "lexical_index_absent",
+  "lexical_index_partial",
+  "lexical_index_unbuilt",
+]);
 
 export interface ContextRetrievalProfile {
   version: string;
@@ -126,28 +132,41 @@ export class DeterministicContextEngine implements ContextEngine {
       stableRequest,
       sourceRead.events,
     );
-    const lifecycleEvents = resolveEventLifecycle(
+    const authorizedReadEpoch = authorizedReadEpochFor(
+      sourceRead,
+      visibleLifecycleEvents,
+      policyHash,
+      stableRequest.org_id,
+    );
+    const lifecycleMetadata = resolveEventLifecycle(
       visibleLifecycleEvents,
       stableRequest,
       sourceRead.recorded_at,
     );
+    const lifecycleEvents = await this.materialize(lifecycleMetadata);
     const plan = {
       request: stableRequest,
-      read_epoch: sourceRead.read_epoch,
+      read_epoch: authorizedReadEpoch,
       recorded_at: sourceRead.recorded_at,
       principal_policy_hash: policyHash,
       events: lifecycleEvents,
     };
     const protectedEventIds = await this.protectedEventIds(plan);
     const retrievers = this.supportingRetrievers(stableRequest);
-    const retrieved = (await Promise.all(retrievers.map(async (active) =>
-      (await active.retriever.retrieve(clone(plan))).map((value) => ({ active, value })),
-    )))
-      .flat();
+    const retrievalRuns = await Promise.all(retrievers.map(async (active) => ({
+      active,
+      result: normalizeRetrievalResult(await active.retriever.retrieve(clone(plan))),
+    })));
+    const retrieved = retrievalRuns.flatMap(({ active, result }) =>
+      result.candidates.map((value) => ({ active, value })),
+    );
     const candidates = await this.fuse(retrieved, stableRequest, lifecycleEvents, protectedEventIds);
     assertProtectedCandidates(protectedEventIds, candidates);
     const assembled = this.assembleBudget(stableRequest, candidates, protectedEventIds);
-    const degradationFlags = degradationFlagsFor(retrievers);
+    const degradationFlags = degradationFlagsFor(
+      retrievers,
+      retrievalRuns.flatMap((run) => run.result.degradation_flags ?? []),
+    );
     const requestHash = hashContextRequest(stableRequest);
     const bundlePayload = createBundlePayload({
       request: stableRequest,
@@ -162,7 +181,7 @@ export class DeterministicContextEngine implements ContextEngine {
       request: stableRequest,
       requestHash,
       policyHash,
-      readEpoch: sourceRead.read_epoch,
+      readEpoch: authorizedReadEpoch,
       recordedAt: sourceRead.recorded_at,
       retrievalProfileVersion: this.retrievalProfile.version,
       assemblyProfileVersion: this.assemblyProfile.version,
@@ -203,6 +222,17 @@ export class DeterministicContextEngine implements ContextEngine {
       throw new ContextEngineError("replay_forbidden", "Context replay is not authorized");
     }
     return clone(bundle);
+  }
+
+  private async materialize(
+    events: AuthorizedContextSourceEvent[],
+  ): Promise<AuthorizedContextSourceEvent[]> {
+    if (!this.source.materialize) {
+      return events;
+    }
+    const materialized = clone(await this.source.materialize(clone(events)));
+    assertMaterializedEvents(events, materialized);
+    return materialized;
   }
 
   private async authorizedLifecycleEvents(
@@ -704,7 +734,10 @@ function uniqueCitations(citations: ContextBundleItem["evidence"]): ContextBundl
   return [...byEvent.values()].sort((left, right) => compare(left.event_id, right.event_id));
 }
 
-function degradationFlagsFor(retrievers: ActiveRetriever[]): string[] {
+function degradationFlagsFor(
+  retrievers: ActiveRetriever[],
+  runtimeFlags: string[] = [],
+): string[] {
   const capabilities = retrievers.map((retriever) => retriever.capabilities);
   const flags = ["model_absent"];
   for (const capability of ["lexical", "vector", "graph", "rerank"] as const) {
@@ -712,7 +745,26 @@ function degradationFlagsFor(retrievers: ActiveRetriever[]): string[] {
       flags.push(`${capability}_absent`);
     }
   }
-  return flags.sort(compare);
+  return uniqueSorted([...flags, ...runtimeFlags]);
+}
+
+function normalizeRetrievalResult(
+  value: RetrievedContextCandidate[] | ContextRetrievalResult,
+): ContextRetrievalResult {
+  const result = Array.isArray(value) ? { candidates: value } : value;
+  if (
+    !result ||
+    !Array.isArray(result.candidates) ||
+    (result.degradation_flags !== undefined &&
+      (!Array.isArray(result.degradation_flags) ||
+        result.degradation_flags.length > 100 ||
+        result.degradation_flags.some((flag) => typeof flag !== "string" || !flag.trim()) ||
+        result.degradation_flags.some((flag) => !RETRIEVAL_DEGRADATION_FLAGS.has(flag)) ||
+        new Set(result.degradation_flags).size !== result.degradation_flags.length))
+  ) {
+    throw new ContextEngineError("invalid_candidate", "Retriever returned an invalid result envelope");
+  }
+  return clone(result);
 }
 
 function assertValidResult(
@@ -947,7 +999,10 @@ function validateSourceRead(
       byId.has(event.event_id) ||
       !Array.isArray(source.required_scope_ids) ||
       source.required_scope_ids.some((scope) => typeof scope !== "string" || !scope.trim()) ||
-      uniqueSorted(source.required_scope_ids).length !== source.required_scope_ids.length
+      uniqueSorted(source.required_scope_ids).length !== source.required_scope_ids.length ||
+      (source.content_media_type !== undefined &&
+        (typeof source.content_media_type !== "string" || !source.content_media_type.trim())) ||
+      (source.text !== undefined && typeof source.text !== "string")
     ) {
       throw new ContextEngineError("source_boundary", "Context source returned an invalid or duplicate event");
     }
@@ -1096,4 +1151,59 @@ function estimateTextTokens(text: string | undefined): number {
 function bundlePayloadOf(bundle: ContextBundle): ContextBundlePayload {
   const { snapshot_id: _snapshotId, content_hash: _contentHash, ...payload } = bundle;
   return payload;
+}
+
+function assertMaterializedEvents(
+  expected: AuthorizedContextSourceEvent[],
+  materialized: AuthorizedContextSourceEvent[],
+): void {
+  const byId = new Map(materialized.map((source) => [source.event.event_id, source]));
+  if (byId.size !== materialized.length || materialized.length !== expected.length) {
+    throw new ContextEngineError("source_boundary", "Context materializer changed the authorized Event set");
+  }
+  for (const source of expected) {
+    const value = byId.get(source.event.event_id);
+    if (
+      !value ||
+      canonicalContextJson(withoutMaterial(value)) !== canonicalContextJson(withoutMaterial(source)) ||
+      (value.text !== undefined && typeof value.text !== "string") ||
+      (value.estimated_tokens !== undefined &&
+        (!Number.isSafeInteger(value.estimated_tokens) || value.estimated_tokens < 0))
+    ) {
+      throw new ContextEngineError("source_boundary", "Context materializer changed authorized Event metadata");
+    }
+  }
+}
+
+function withoutMaterial(source: AuthorizedContextSourceEvent): Omit<AuthorizedContextSourceEvent, "text" | "estimated_tokens"> {
+  const { text: _text, estimated_tokens: _estimatedTokens, ...metadata } = source;
+  return metadata;
+}
+
+function authorizedReadEpochFor(
+  read: ContextSourceRead,
+  visible: ContextSourceEvent[],
+  policyHash: string,
+  orgId: string,
+): string {
+  const visibleIds = new Set(visible.map((source) => source.event.event_id));
+  const events = visible.map((source) => ({
+    event: source.event,
+    ...(source.thread_id ? { thread_id: source.thread_id } : {}),
+    ...(source.actor_id ? { actor_id: source.actor_id } : {}),
+    required_scope_ids: uniqueSorted(source.required_scope_ids),
+  })).sort((left, right) => compare(left.event.event_id, right.event.event_id));
+  const lifecycleHeads = read.lifecycle_heads
+    .filter((head) => visibleIds.has(head.head_event_id))
+    .sort((left, right) => compare(
+      canonicalContextJson([left.source, left.external_id]),
+      canonicalContextJson([right.source, right.external_id]),
+    ));
+  return `authorized:${hashCanonicalContext({
+    org_id: orgId,
+    principal_policy_hash: policyHash,
+    recorded_at: read.recorded_at,
+    events,
+    lifecycle_heads: lifecycleHeads,
+  })}`;
 }

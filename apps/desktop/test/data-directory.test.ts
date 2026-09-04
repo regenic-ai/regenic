@@ -307,7 +307,7 @@ describe("data directory actions", () => {
     }
   });
 
-  it("copies the database, WAL files, and blobs", () => {
+  it("copies authority and lexical databases, WAL files, and blobs", () => {
     const root = tempDir();
     try {
       const from = storePaths(join(root, "from"));
@@ -315,11 +315,15 @@ describe("data directory actions", () => {
       mkdirSync(join(from.blobRoot, "a"), { recursive: true });
       writeFileSync(from.database, "db");
       writeFileSync(`${from.database}-wal`, "wal");
+      writeFileSync(`${from.database}.lexical.db`, "fts");
+      writeFileSync(`${from.database}.lexical.db-wal`, "fts-wal");
       writeFileSync(join(from.blobRoot, "a", "file.bin"), "blob");
       copyStore(from, dest);
       const copied = storePaths(dest);
       assert.equal(readFileSync(copied.database, "utf8"), "db");
       assert.equal(readFileSync(`${copied.database}-wal`, "utf8"), "wal");
+      assert.equal(readFileSync(`${copied.database}.lexical.db`, "utf8"), "fts");
+      assert.equal(readFileSync(`${copied.database}.lexical.db-wal`, "utf8"), "fts-wal");
       assert.equal(readFileSync(join(copied.blobRoot, "a", "file.bin"), "utf8"), "blob");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -334,11 +338,14 @@ describe("data directory actions", () => {
       mkdirSync(from.blobRoot, { recursive: true });
       mkdirSync(dest.blobRoot, { recursive: true });
       writeFileSync(from.database, "new");
+      writeFileSync(`${from.database}.lexical.db`, "new-index");
       writeFileSync(join(from.blobRoot, "n.txt"), "n");
       writeFileSync(dest.database, "old");
+      writeFileSync(`${dest.database}.lexical.db`, "old-index");
       writeFileSync(join(dest.blobRoot, "o.txt"), "o");
       materializeDataRoot("replace", from, dest.dataRoot);
       assert.equal(readFileSync(dest.database, "utf8"), "new");
+      assert.equal(readFileSync(`${dest.database}.lexical.db`, "utf8"), "new-index");
       assert.equal(readFileSync(join(dest.blobRoot, "n.txt"), "utf8"), "n");
       assert.equal(storeHasData(dest), true);
     } finally {
@@ -436,6 +443,8 @@ describe("data directory actions", () => {
       mkdirSync(dest.blobRoot, { recursive: true });
       writeFileSync(dest.database, "db");
       writeFileSync(`${dest.database}-wal`, "wal");
+      writeFileSync(`${dest.database}.lexical.db`, "fts");
+      writeFileSync(`${dest.database}.lexical.db-shm`, "fts-shm");
       writeFileSync(join(dest.blobRoot, "a.bin"), "blob");
       writeFileSync(join(dest.dataRoot, "notes.txt"), "keep");
       writeFileSync(join(dest.dataRoot, "regenic.store.json"), "{}");
@@ -444,6 +453,8 @@ describe("data directory actions", () => {
       wipeStorePayload(dest.dataRoot);
       assert.equal(existsSync(dest.database), false);
       assert.equal(existsSync(`${dest.database}-wal`), false);
+      assert.equal(existsSync(`${dest.database}.lexical.db`), false);
+      assert.equal(existsSync(`${dest.database}.lexical.db-shm`), false);
       assert.equal(existsSync(dest.blobRoot), false);
       assert.equal(existsSync(join(dest.dataRoot, "regenic.store.json")), false);
       assert.equal(existsSync(join(dest.dataRoot, "regenic.store.lock")), false);
@@ -457,16 +468,18 @@ describe("data directory actions", () => {
     }
   });
 
-  it("counts only the database sidecars and attachments", () => {
+  it("counts authority and lexical database sidecars plus attachments", () => {
     const root = tempDir();
     try {
       const dest = storePaths(join(root, "dest"));
       mkdirSync(dest.blobRoot, { recursive: true });
       writeFileSync(dest.database, "12345");
       writeFileSync(`${dest.database}-wal`, "ww");
+      writeFileSync(`${dest.database}.lexical.db`, "fts");
+      writeFileSync(`${dest.database}.lexical.db-wal`, "w");
       writeFileSync(join(dest.blobRoot, "a.bin"), "blob");
       writeFileSync(join(dest.dataRoot, "notes.txt"), "ignored");
-      assert.equal(storeFootprintBytes(dest.dataRoot), 5 + 2 + 4);
+      assert.equal(storeFootprintBytes(dest.dataRoot), 5 + 2 + 3 + 1 + 4);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
