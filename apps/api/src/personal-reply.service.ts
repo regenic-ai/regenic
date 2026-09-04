@@ -97,23 +97,31 @@ export class PersonalReplyService {
 
   async send(input: ReplyInput): Promise<ReplyView> {
     const clientRequestId = input.client_request_id?.trim() || undefined;
-    if (clientRequestId) {
-      const key = this.clientKey(clientRequestId);
-      const inflight = this.sendingByClient.get(key);
-      if (inflight) {
-        return inflight;
-      }
-      const prior = await this.replayPriorAttempt(clientRequestId, input.thread_id);
-      if (prior) {
-        return prior;
-      }
-      const run = this.sendOnce(input, clientRequestId).finally(() => {
-        this.sendingByClient.delete(key);
-      });
-      this.sendingByClient.set(key, run);
-      return run;
+    if (!clientRequestId) {
+      return this.sendOnce(input, undefined);
     }
-    return this.sendOnce(input, undefined);
+    const key = this.clientKey(clientRequestId);
+    const inflight = this.sendingByClient.get(key);
+    if (inflight) {
+      return inflight;
+    }
+    // Register before any await so concurrent retries coalesce on this promise.
+    const run = this.runIdempotentSend(input, clientRequestId).finally(() => {
+      this.sendingByClient.delete(key);
+    });
+    this.sendingByClient.set(key, run);
+    return run;
+  }
+
+  private async runIdempotentSend(
+    input: ReplyInput,
+    clientRequestId: string,
+  ): Promise<ReplyView> {
+    const prior = await this.replayPriorAttempt(clientRequestId, input.thread_id);
+    if (prior) {
+      return prior;
+    }
+    return this.sendOnce(input, clientRequestId);
   }
 
   private async sendOnce(
@@ -179,6 +187,18 @@ export class PersonalReplyService {
         }),
       ),
     ];
+
+    const claimNow = new Date().toISOString();
+    if (clientRequestId) {
+      await host.get("authority").putOutboundAttempt({
+        org_id: this.runtime.orgId(),
+        client_request_id: clientRequestId,
+        thread_id: threadId,
+        status: "pending",
+        now: claimNow,
+      });
+    }
+
     let receipt: DeliveryReceipt;
     let outboundId: ReturnType<typeof requireReplyPorts>["outboundId"];
     try {
@@ -197,10 +217,36 @@ export class PersonalReplyService {
         ...(clientRequestId ? { idempotency_key: clientRequestId } : {}),
       });
     } catch (error) {
+      if (clientRequestId) {
+        await host
+          .get("authority")
+          .putOutboundAttempt({
+            org_id: this.runtime.orgId(),
+            client_request_id: clientRequestId,
+            thread_id: threadId,
+            status: "failed",
+            now: new Date().toISOString(),
+          })
+          .catch(() => undefined);
+      }
       throw wrapDriverError(error, "send_failed");
     }
 
-    const now = new Date().toISOString();
+    const channelIds = channelMessageIds(receipt);
+    const acceptedAt = new Date().toISOString();
+    if (clientRequestId) {
+      // Persist channel ids before ingest so a crash cannot double-send on retry.
+      await host.get("authority").putOutboundAttempt({
+        org_id: this.runtime.orgId(),
+        client_request_id: clientRequestId,
+        thread_id: threadId,
+        status: "accepted",
+        channel_message_ids: channelIds,
+        now: acceptedAt,
+      });
+    }
+
+    const now = acceptedAt;
     const stamp = await this.conversationStamp(thread.target, threadId, quoted, {
       installationId: installation.id,
       host,
@@ -254,7 +300,6 @@ export class PersonalReplyService {
       );
     }
 
-    const channelIds = channelMessageIds(receipt);
     await this.bindChannelAliases({
       host,
       source: driver.source,
@@ -272,7 +317,7 @@ export class PersonalReplyService {
         event_id: eventId,
         status: "sent",
         channel_message_ids: channelIds,
-        now,
+        now: new Date().toISOString(),
       });
     }
 
@@ -307,7 +352,7 @@ export class PersonalReplyService {
     const prior = await host
       .get("authority")
       .getOutboundAttempt(this.runtime.orgId(), clientRequestId);
-    if (!prior || prior.status !== "sent" || !prior.event_id) {
+    if (!prior) {
       return null;
     }
     if (threadId?.trim() && prior.thread_id !== threadId.trim()) {
@@ -317,9 +362,36 @@ export class PersonalReplyService {
         409,
       );
     }
+    if (prior.status === "failed") {
+      // Allow a conscious client retry with the same key after a hard failure.
+      return null;
+    }
+    if (prior.status === "pending") {
+      throw new PersonalConnectorError(
+        "send_in_progress",
+        "Reply with this client_request_id is still in progress",
+        409,
+      );
+    }
+    if (prior.status === "accepted") {
+      // Channel already got the message; never egress again.
+      throw new PersonalConnectorError(
+        "send_in_progress",
+        "Reply was already delivered to the channel; refresh the conversation",
+        409,
+      );
+    }
+    if (prior.status !== "sent" || !prior.event_id) {
+      return null;
+    }
     const item = await this.inbox.getInboxItem(prior.event_id);
     if (!item) {
-      return null;
+      // Attempt is durable; do not fall through to another channel send.
+      throw new PersonalConnectorError(
+        "send_failed",
+        "Reply was already accepted; refresh the conversation",
+        502,
+      );
     }
     return {
       accepted: true,

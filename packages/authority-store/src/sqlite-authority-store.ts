@@ -375,7 +375,7 @@ export class SqliteAuthorityStore
           client_request_id: string;
           thread_id: string;
           event_id: string | null;
-          status: "sent" | "failed";
+          status: "pending" | "accepted" | "sent" | "failed";
           channel_message_ids_json: string | null;
           created_at: string;
           updated_at: string;

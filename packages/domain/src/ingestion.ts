@@ -415,7 +415,7 @@ export interface OutboundAttemptRecord {
   client_request_id: string;
   thread_id: string;
   event_id?: string;
-  status: "sent" | "failed";
+  status: "pending" | "accepted" | "sent" | "failed";
   channel_message_ids?: string[];
   created_at: string;
   updated_at: string;
@@ -426,7 +426,7 @@ export interface OutboundAttemptPut {
   client_request_id: string;
   thread_id: string;
   event_id?: string;
-  status: "sent" | "failed";
+  status: "pending" | "accepted" | "sent" | "failed";
   channel_message_ids?: string[];
   now: string;
 }

@@ -734,15 +734,48 @@ function ackedOutbound(pending: InboxViewItem, messages: InboxViewItem[]): boole
     if (item.event.id === pending.event.id) {
       return true;
     }
+    if (messageRole(item) !== messageRole(pending)) {
+      return false;
+    }
     const pendingHasFiles = (pending.attachments?.length ?? 0) > 0;
     const itemHasFiles = (item.attachments?.length ?? 0) > 0;
     if (pendingHasFiles || itemHasFiles) {
+      return sameOutboundAttachments(pending, item);
+    }
+    return sameUtterance(item, pending);
+  });
+}
+
+function sameOutboundAttachments(
+  left: InboxViewItem,
+  right: InboxViewItem,
+): boolean {
+  const leftFiles = attachmentFingerprints(left);
+  const rightFiles = attachmentFingerprints(right);
+  if (leftFiles.length === 0 || leftFiles.length !== rightFiles.length) {
+    return false;
+  }
+  for (let index = 0; index < leftFiles.length; index += 1) {
+    if (leftFiles[index] !== rightFiles[index]) {
       return false;
     }
-    return (
-      messageRole(item) === messageRole(pending) && sameUtterance(item, pending)
-    );
-  });
+  }
+  const leftText = (left.body_text ?? "").replace(/\s+/g, " ").trim();
+  const rightText = (right.body_text ?? "").replace(/\s+/g, " ").trim();
+  // Allow server-side quote prefix on the stored body.
+  if (!leftText || !rightText) {
+    return true;
+  }
+  return rightText === leftText || rightText.endsWith(leftText);
+}
+
+function attachmentFingerprints(item: InboxViewItem): string[] {
+  return (item.attachments ?? [])
+    .map((file) => {
+      const bytes = file.data_base64?.length ?? 0;
+      return `${file.media_type}\0${file.filename}\0${bytes}`;
+    })
+    .sort();
 }
 
 function localOutbound(
