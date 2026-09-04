@@ -250,11 +250,17 @@ export class LarkCliClient implements FeishuImClient {
     if (input.start_time) {
       params.start_time = input.start_time;
     }
-    const payload = await this.request({
-      method: "GET",
+    const request = {
+      method: "GET" as const,
       path: "/open-apis/im/v1/messages",
       params,
-    });
+    };
+    // HTTP list shares the CLI slot pool so interactive polls keep a reserved lane.
+    const viaHttp = this.options.userToken
+      ? await withLarkCliSlot(() => this.requestViaHttp(request))
+      : undefined;
+    const payload =
+      viaHttp !== undefined ? viaHttp : await this.requestViaCli(request);
     return parseHistoryPage(payload);
   }
 
@@ -288,12 +294,16 @@ export class LarkCliClient implements FeishuImClient {
     if (input.page_token) {
       params.page_token = input.page_token;
     }
+    const request = {
+      method: "GET" as const,
+      path: "/open-apis/im/v1/chats",
+      params,
+    };
+    const viaHttp = this.options.userToken
+      ? await withLarkCliSlot(() => this.requestViaHttp(request))
+      : undefined;
     const page = parseChatPage(
-      await this.request({
-        method: "GET",
-        path: "/open-apis/im/v1/chats",
-        params,
-      }),
+      viaHttp !== undefined ? viaHttp : await this.requestViaCli(request),
     );
     return {
       ...page,

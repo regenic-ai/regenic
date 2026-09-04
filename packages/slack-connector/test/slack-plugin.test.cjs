@@ -99,6 +99,7 @@ describe("slackChannelPlugin", () => {
       reply: false,
       create: false,
       list_title: "conversation",
+      hydrate_on_open: true,
     });
     assert.equal(slackChannelDriver.createThread, undefined);
     assert.equal(slackChannelDriver.bindEgress, undefined);

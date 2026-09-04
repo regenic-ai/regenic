@@ -12,11 +12,8 @@ export function engineChip(
   if (reachability === "degraded") {
     return "degraded";
   }
-  // Background history catch-up must not paint the kernel chip as "syncing" —
-  // that reads as "latest is stuck". History progress lives in pullStatusLabel.
-  if (engine.installations.some((item) => item.last_attempt?.status === "running")) {
-    return "syncing";
-  }
+  // Connector attempts (live or history) must not paint the kernel as stuck.
+  // Freshness/backfill copy lives in pullProgressChip / pullStatusLabel.
   return "running";
 }
 

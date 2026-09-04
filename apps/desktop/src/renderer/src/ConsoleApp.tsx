@@ -984,6 +984,24 @@ export function ConsoleApp() {
   }, []);
 
   useEffect(() => {
+    window.regenic?.reportOpenConversation?.({
+      threadId: selectedId,
+      nav,
+    });
+  }, [selectedId, nav]);
+
+  useEffect(() => {
+    const report = () => {
+      window.regenic?.reportPageVisibility?.(document.visibilityState);
+    };
+    report();
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      document.removeEventListener("visibilitychange", report);
+    };
+  }, []);
+
+  useEffect(() => {
     replaceFocusAbort();
     if (!selectedId) {
       setOpeningId(null);

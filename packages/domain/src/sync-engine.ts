@@ -74,7 +74,11 @@ export class SyncEngine {
       return this.store.getSyncCatalog(input.installation_id);
     }
     let view = await this.store.getSyncCatalog(input.installation_id);
-    const pages = Math.max(1, input.pages ?? 1);
+    const pages =
+      input.pages === 0 ? 0 : Math.max(1, input.pages ?? 1);
+    if (pages === 0) {
+      return view;
+    }
     if (!input.force && this.catalogFresh(view)) {
       return view;
     }

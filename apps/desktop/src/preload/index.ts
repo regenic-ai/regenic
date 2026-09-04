@@ -44,4 +44,10 @@ contextBridge.exposeInMainWorld("regenic", {
   quitApp: () => ipcRenderer.invoke("regenic:quit"),
   openExternal: (url: string) => ipcRenderer.invoke("regenic:open-external", url),
   getHostStats: () => ipcRenderer.invoke("regenic:get-host-stats"),
+  reportOpenConversation: (input: { threadId: string | null; nav: string }) => {
+    ipcRenderer.send("regenic:report-open-conversation", input);
+  },
+  reportPageVisibility: (state: string) => {
+    ipcRenderer.send("regenic:report-page-visibility", state);
+  },
 });

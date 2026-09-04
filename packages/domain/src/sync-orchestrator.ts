@@ -1,6 +1,8 @@
 import type { SyncCatalogMember, SyncStreamState, SyncWorkItem } from "./sync-contracts";
 import { partitionMembersByLifecycle } from "./sync-lifecycle";
 import {
+  DEFAULT_STEADY_LANE_LIMITS,
+  HUMAN_PRESENT_STEADY_LIVE,
   planBootstrapSyncWork,
   planSteadySyncWork,
   type SyncBootstrapScheduleInput,
@@ -30,6 +32,7 @@ export function planSyncTick(input: SyncTickPlanInput): SyncTickPlan {
     members: bootstrap,
     states: input.states,
     preferredThreadId: input.preferredThreadId,
+    humanIdle: input.humanIdle,
     catalogIncomplete: input.catalogIncomplete,
     rotateFrom: input.rotateFrom,
     rotateSeedFrom: input.rotateSeedFrom,
@@ -37,6 +40,18 @@ export function planSyncTick(input: SyncTickPlanInput): SyncTickPlan {
     pages: input.pages,
     limits: input.bootstrapLimits,
   });
+  const steadyLimits = input.humanIdle
+    ? input.steadyLimits
+    : {
+        ...input.steadyLimits,
+        live: Math.min(
+          input.steadyLimits?.live ?? DEFAULT_STEADY_LANE_LIMITS.live,
+          HUMAN_PRESENT_STEADY_LIVE,
+        ),
+        catalog: 0,
+        history: 0,
+        media: Math.min(input.steadyLimits?.media ?? 1, 1),
+      };
   const steadyItems = planSteadySyncWork({
     members: steady,
     states: input.states,
@@ -46,7 +61,7 @@ export function planSyncTick(input: SyncTickPlanInput): SyncTickPlan {
     rotateSeedFrom: input.rotateSeedFrom,
     now: input.now,
     pages: input.pages,
-    limits: input.steadyLimits,
+    limits: steadyLimits,
     liveRing: input.liveRing,
   });
   return mergeSyncTickPlan(bootstrapItems, steadyItems);

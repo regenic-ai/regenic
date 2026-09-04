@@ -23,6 +23,7 @@ const {
   resolveLarkCommand,
   unwrapLarkCli,
 } = require("../dist");
+const { runInSyncLane } = require("@regenic/domain");
 
 afterEach(() => {
   resetLarkCliSlot();
@@ -176,6 +177,64 @@ describe("LarkCliClient", () => {
     );
     assert.equal(spawned.length, 0);
     assert.ok(attempts >= 1);
+  });
+
+  it("lets an interactive HTTP list proceed while history holds a slot", async () => {
+    resetLarkCliSlot();
+    let releaseHistory;
+    const historyGate = new Promise((resolve) => {
+      releaseHistory = resolve;
+    });
+    let interactiveFetches = 0;
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn() {
+        throw new Error("CLI should not run");
+      },
+      userToken: {
+        async token() {
+          return "u-test";
+        },
+        async refresh() {},
+        async identity() {
+          return { app_id: "cli_1", user_open_id: "ou_1", brand: "feishu" };
+        },
+        async brand() {
+          return "feishu";
+        },
+      },
+      async fetch(url) {
+        if (String(url).includes("oc_busy")) {
+          await historyGate;
+        } else {
+          interactiveFetches += 1;
+        }
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              code: 0,
+              data: { items: [{ message_id: "om_open", msg_type: "text" }], has_more: false },
+            });
+          },
+          async json() {
+            return JSON.parse(await this.text());
+          },
+        };
+      },
+    });
+    const history = runInSyncLane("history", () =>
+      client.listMessages({ chat_id: "oc_busy", page_size: 1 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const page = await runInSyncLane("interactive", () =>
+      client.listMessages({ chat_id: "oc_open", page_size: 1 }),
+    );
+    assert.equal(page.items[0].message_id, "om_open");
+    assert.equal(interactiveFetches, 1);
+    releaseHistory();
+    await history;
   });
 
   it("lists groups over HTTP when a user token is available", async () => {
