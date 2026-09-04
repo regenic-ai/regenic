@@ -747,6 +747,39 @@ export function resolveThreadAttention(thread: InboxThread): AttentionClass {
 export function groupThreadsByAttention(
   threads: InboxThread[],
 ): Array<{ key: string; label: string | null; items: InboxThread[] }> {
+  const pinned: InboxThread[] = [];
+  const rest: InboxThread[] = [];
+  for (const thread of threads) {
+    if (thread.pinned) {
+      pinned.push(thread);
+    } else {
+      rest.push(thread);
+    }
+  }
+  const restSections = attentionRuns(rest);
+  if (pinned.length === 0) {
+    return restSections.length <= 1
+      ? [{ key: "all", label: null, items: threads }]
+      : restSections;
+  }
+  if (restSections.length === 0) {
+    const pinRuns = attentionRuns(pinned);
+    return pinRuns.length <= 1
+      ? [{ key: "all", label: null, items: pinned }]
+      : pinRuns;
+  }
+  return [
+    { key: "pinned", label: t("inbox.sectionPinned"), items: pinned },
+    ...restSections,
+  ];
+}
+
+function attentionRuns(
+  threads: InboxThread[],
+): Array<{ key: string; label: string; items: InboxThread[] }> {
+  if (threads.length === 0) {
+    return [];
+  }
   const labels: Record<AttentionClass, string> = {
     waiting_you: t("inbox.needsYou"),
     needs_ack: t("inbox.needsYou"),
@@ -754,21 +787,28 @@ export function groupThreadsByAttention(
     unread: t("inbox.unread"),
     quiet: t("inbox.theRest"),
   };
-  const sections: Array<{ key: string; label: string; items: InboxThread[] }> = [];
+  const sections: Array<{
+    key: string;
+    kind: string;
+    label: string;
+    items: InboxThread[];
+  }> = [];
   for (const thread of threads) {
     const attention = resolveThreadAttention(thread);
-    const key = attention === "needs_ack" ? "waiting_you" : attention;
+    const kind = attention === "needs_ack" ? "waiting_you" : attention;
     const last = sections[sections.length - 1];
-    if (last?.key === key) {
+    if (last?.kind === kind) {
       last.items.push(thread);
     } else {
-      sections.push({ key, label: labels[attention], items: [thread] });
+      sections.push({
+        key: `${kind}:${sections.length}`,
+        kind,
+        label: labels[attention],
+        items: [thread],
+      });
     }
   }
-  if (sections.length <= 1) {
-    return [{ key: "all", label: null, items: threads }];
-  }
-  return sections;
+  return sections.map(({ key, label, items }) => ({ key, label, items }));
 }
 
 function compareInboxThreads(

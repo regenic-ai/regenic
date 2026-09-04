@@ -331,14 +331,14 @@ export function InboxWorkspace({
             : sortMode === "attention"
               ? groupThreadsByAttention(visible)
               : [{ key: "all", label: null, items: visible }]
-          ).map((section) => (
-            <div key={section.key} className="list-section">
+          ).map((section, index) => (
+            <div key={`${index}:${section.key}`} className="list-section">
               {section.label ? (
                 <div className="list-section-label">{section.label}</div>
               ) : null}
               {section.items.map((thread) => (
                 <WorkRow
-                  key={thread.id}
+                  key={`${section.key}:${thread.id}`}
                   thread={thread}
                   selected={selected?.id === thread.id}
                   renaming={renamingId === thread.id}
