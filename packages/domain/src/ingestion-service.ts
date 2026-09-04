@@ -194,6 +194,15 @@ export class IngestionService {
     const current =
       overlayCurrent ?? (await this.authorityStore.findBySourceIdentity(identity));
 
+    if (
+      current &&
+      record.operation !== "tombstone" &&
+      current.external_id !== record.external_id
+    ) {
+      // Channel-native id aliased to a local `:out:` Event — identity bind wins.
+      return this.replayedInspected(record, current, overlayCurrent);
+    }
+
     if (record.operation === "tombstone") {
       if (current?.operation === "tombstone") {
         return this.replayedInspected(record, current, overlayCurrent);
@@ -534,7 +543,11 @@ export class IngestionService {
     for (const event of ordered) {
       if (needle.text) {
         const existing = await this.readEventText(event);
-        if (existing && normalizeUtterance(existing) === needle.text) {
+        if (!existing || normalizeUtterance(existing) !== needle.text) {
+          continue;
+        }
+        const existingAttachments = await this.readEventAttachments(event);
+        if (echoAttachmentsAgree(needle.attachments, existingAttachments)) {
           return event;
         }
         continue;
@@ -669,7 +682,15 @@ class PendingIngestOverlay {
     for (const item of ordered) {
       if (needle.text) {
         const existing = normalizeUtterance(recordBodyText(item.record));
-        if (existing && existing === needle.text) {
+        if (!existing || existing !== needle.text) {
+          continue;
+        }
+        if (
+          echoAttachmentsAgree(
+            needle.attachments,
+            attachmentDigestsFromParts(item.record.content ?? []),
+          )
+        ) {
           return item.event;
         }
         continue;
@@ -731,6 +752,18 @@ function duplicateResult(
 
 function identityKey(identity: SourceIdentity): string {
   return JSON.stringify([identity.org_id, identity.source, identity.external_id]);
+}
+
+function echoAttachmentsAgree(
+  incoming: readonly string[],
+  existing: readonly string[],
+): boolean {
+  // Text-only history against a captioned outbound (or text-only both sides).
+  if (incoming.length === 0) {
+    return true;
+  }
+  // Same text with attachments: require digests to be covered by outbound.
+  return attachmentsCoveredBy(incoming, existing);
 }
 
 function recordBodyText(record: IngestRecord): string | undefined {

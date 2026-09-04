@@ -1059,7 +1059,11 @@ describe("FeishuChatEgress", () => {
     assert.equal(calls[0].chat_id, "oc_1");
     assert.equal(calls[0].text, "hello");
     assert.equal(typeof calls[0].uuid, "string");
-    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_out" });
+    assert.deepEqual(receipt, {
+      accepted: true,
+      rpc_id: "om_out",
+      channel_message_ids: ["om_out"],
+    });
   });
 
   it("uploads an image and sends it as an image message", async () => {
@@ -1087,7 +1091,11 @@ describe("FeishuChatEgress", () => {
     assert.equal(texts.length, 0);
     assert.equal(messages[0].msg_type, "image");
     assert.deepEqual(messages[0].content, { image_key: "img_shot.png" });
-    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_image" });
+    assert.deepEqual(receipt, {
+      accepted: true,
+      rpc_id: "om_image",
+      channel_message_ids: ["om_image"],
+    });
   });
 
   it("sends text and the image as separate IM messages", async () => {
@@ -1115,7 +1123,11 @@ describe("FeishuChatEgress", () => {
     assert.equal(messages.length, 1);
     assert.equal(messages[0].msg_type, "image");
     assert.deepEqual(messages[0].content, { image_key: "img_tasks.png" });
-    assert.deepEqual(receipt, { accepted: true, rpc_id: "om_text" });
+    assert.deepEqual(receipt, {
+      accepted: true,
+      rpc_id: "om_text",
+      channel_message_ids: ["om_text", "om_image"],
+    });
   });
 
   it("rejects an attachment without bytes instead of sending text only", async () => {

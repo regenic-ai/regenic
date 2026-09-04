@@ -919,4 +919,138 @@ describe("IngestionService", () => {
     assert.equal(stored.has("missing"), false);
     assert.deepEqual(stored.get(hash), await blobStore.get(hash));
   });
+
+  it("binds channel-native ids as aliases of a local outbound", async () => {
+    const { authorityStore, service } = createHarness();
+    const outbound = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "out-alias-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:out:om_text",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "oc_1",
+          text: "hello",
+        }),
+      ],
+    });
+    const eventId = outbound.records[0].event_id;
+    await authorityStore.bindSourceIdentityAliases({
+      org_id: "local-owner",
+      event_id: eventId,
+      aliases: [
+        { source: "feishu", external_id: "oc_1:om_text" },
+        { source: "feishu", external_id: "oc_1:om_image" },
+      ],
+    });
+    const echoed = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "sync-alias-1",
+      received_at: "2026-08-21T00:00:02.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_text",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "ou_me",
+          scope_id: "oc_1",
+          text: "hello",
+        }),
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_image",
+          occurred_at: "2026-08-21T00:00:01.100Z",
+          actor_id: "ou_me",
+          scope_id: "oc_1",
+          direction_tags: ["outbound"],
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "shot.png",
+              bytes: Buffer.from("png-bytes"),
+            },
+          ],
+        }),
+      ],
+    });
+    assert.equal(echoed.records[0].status, "duplicate");
+    assert.equal(echoed.records[1].status, "duplicate");
+    assert.equal(echoed.records[0].event_id, eventId);
+    assert.equal(echoed.records[1].event_id, eventId);
+  });
+
+  it("does not echo-match same text with different attachment digests", async () => {
+    const { service } = createHarness();
+    const firstPng = Buffer.from("image-one");
+    const secondPng = Buffer.from("image-two");
+    await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "out-diff-1",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:out:om_a",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor_id: "local-owner",
+          scope_id: "oc_1",
+          text: "same caption",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "a.png",
+              bytes: firstPng,
+            },
+          ],
+        }),
+      ],
+    });
+    const second = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "sync-diff-1",
+      received_at: "2026-08-21T00:00:02.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "outbound",
+          external_id: "oc_1:om_b",
+          occurred_at: "2026-08-21T00:00:01.000Z",
+          actor_id: "ou_me",
+          scope_id: "oc_1",
+          text: "same caption",
+          content: [
+            {
+              role: "attachment",
+              media_type: "image/png",
+              source_filename: "b.png",
+              bytes: secondPng,
+            },
+          ],
+        }),
+      ],
+    });
+    assert.equal(second.records[0].status, "accepted");
+  });
 });

@@ -4,7 +4,13 @@ import type { InboxThread } from "./inbox";
 
 export type MessageRole = MessageKind;
 
-export function messageRole(item: InboxViewItem | string | undefined): MessageRole {
+export function messageRole(
+  item:
+    | Pick<InboxViewItem, "kind">
+    | InboxViewItem
+    | string
+    | undefined,
+): MessageRole {
   if (item && typeof item === "object") {
     if (item.kind === "user" || item.kind === "assistant" || item.kind === "system") {
       return item.kind;
@@ -47,6 +53,12 @@ export function messageSpeakerMark(
 export function receiptCopy(item: InboxViewItem): string | undefined {
   if (item.direction !== "outbound") {
     return undefined;
+  }
+  if (item.send_state === "sending") {
+    return t("composer.sending");
+  }
+  if (item.send_state === "failed") {
+    return t("error.sendFailed");
   }
   if (item.receipt?.state === "read") {
     return t("label.read");

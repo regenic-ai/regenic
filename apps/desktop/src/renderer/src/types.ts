@@ -204,6 +204,10 @@ export interface InboxViewItem {
   unread_count?: number;
   can_receipt?: boolean;
   receipt?: MessageReceipt;
+  /** Local optimistic send lifecycle; absent on server items. */
+  send_state?: "sending" | "failed";
+  /** Client txn id used to replace optimistic rows with ReplyView.item. */
+  client_request_id?: string;
   record_class?: RecordClass;
   thread_facet?: ThreadFacet;
   attention?: AttentionClass;
@@ -641,6 +645,7 @@ export interface ReplyView {
   source: string;
   thread_id: string;
   rpc_id?: string;
+  client_request_id?: string;
   item: InboxViewItem;
 }
 

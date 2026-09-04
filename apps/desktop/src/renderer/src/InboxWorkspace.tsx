@@ -41,6 +41,7 @@ import type {
   ForwardView,
   InboxSortMode,
   InboxListView,
+  InboxViewItem,
   PersonalEngineView,
 } from "./types";
 
@@ -63,6 +64,8 @@ export function InboxWorkspace({
   onCommitDraft,
   onSelect,
   onRefresh,
+  onApplyOutbound,
+  onRefreshThread,
   onRename,
   onPin,
   onHide,
@@ -100,6 +103,8 @@ export function InboxWorkspace({
   ) => Promise<CreatedConversation | undefined>;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
+  onApplyOutbound?: (threadId: string, item: InboxViewItem, clientRequestId?: string) => void;
+  onRefreshThread?: (threadId: string) => Promise<void>;
   onRename: (thread: InboxThread, title: string | null) => Promise<void>;
   onPin: (thread: InboxThread, pinned: boolean) => Promise<void>;
   onHide: (thread: InboxThread, hidden: boolean) => Promise<void>;
@@ -377,6 +382,17 @@ export function InboxWorkspace({
               void onRefresh();
             }}
             onRefresh={onRefresh}
+            onApplyOutbound={
+              onApplyOutbound
+                ? (item, clientRequestId) =>
+                    onApplyOutbound(selected.id, item, clientRequestId)
+                : undefined
+            }
+            onRefreshThread={
+              onRefreshThread
+                ? () => onRefreshThread(selected.id)
+                : undefined
+            }
             onCommitDraft={onCommitDraft}
             onRename={renameSelected}
             onPin={pinSelected}

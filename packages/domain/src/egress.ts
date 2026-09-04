@@ -21,7 +21,14 @@ export interface SendIntent {
 
 export interface DeliveryReceipt {
   accepted: boolean;
+  /** Primary channel message id used for `:out:{rpc_id}` when present. */
   rpc_id?: string;
+  /**
+   * Every channel-native message id produced by this send (e.g. Feishu may
+   * split text/images/files into multiple IM messages). Bound as source-identity
+   * aliases of the local outbound Event so pull hits identity, not content echo.
+   */
+  channel_message_ids?: string[];
 }
 
 export interface EgressAdapter {

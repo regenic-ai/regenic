@@ -13,8 +13,11 @@ import type {
   InboxSummary,
   IngestCommitRequest,
   NewEvent,
+  OutboundAttemptPut,
+  OutboundAttemptRecord,
   RepointContentInput,
   SourceIdentity,
+  SourceIdentityAliasBind,
   StoreClearResult,
   StoreFootprint,
   TombstoneEvent,
@@ -108,6 +111,7 @@ export class MemoryAuthorityStore
   private readonly blobs = new Map<string, BlobRecord>();
   private readonly dispositions = new Map<string, ArrangementDecision>();
   private readonly prefs = new Map<string, ConversationPref>();
+  private readonly outboundAttempts = new Map<string, OutboundAttemptRecord>();
   private nextId = 1;
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
@@ -133,6 +137,59 @@ export class MemoryAuthorityStore
   ): Promise<EventRecord | null> {
     const event = this.currentBySource.get(sourceKey(identity));
     return event ? cloneEvent(event) : null;
+  }
+
+  async bindSourceIdentityAliases(input: SourceIdentityAliasBind): Promise<void> {
+    const event = this.events.find(
+      (item) => item.org_id === input.org_id && item.id === input.event_id,
+    );
+    if (!event) {
+      throw new Error(`Unknown event for identity alias: ${input.event_id}`);
+    }
+    for (const alias of input.aliases) {
+      const externalId = alias.external_id.trim();
+      if (!alias.source.trim() || !externalId) {
+        continue;
+      }
+      const key = sourceKey({
+        org_id: input.org_id,
+        source: alias.source,
+        external_id: externalId,
+      });
+      if (!this.currentBySource.has(key)) {
+        this.currentBySource.set(key, event);
+      }
+    }
+  }
+
+  async getOutboundAttempt(
+    orgId: string,
+    clientRequestId: string,
+  ): Promise<OutboundAttemptRecord | null> {
+    const row = this.outboundAttempts.get(`${orgId}\0${clientRequestId}`);
+    return row ? { ...row, channel_message_ids: row.channel_message_ids?.slice() } : null;
+  }
+
+  async putOutboundAttempt(
+    input: OutboundAttemptPut,
+  ): Promise<OutboundAttemptRecord> {
+    const key = `${input.org_id}\0${input.client_request_id}`;
+    const previous = this.outboundAttempts.get(key);
+    const record: OutboundAttemptRecord = {
+      org_id: input.org_id,
+      client_request_id: input.client_request_id,
+      thread_id: input.thread_id,
+      event_id: input.event_id,
+      status: input.status,
+      channel_message_ids: input.channel_message_ids?.slice(),
+      created_at: previous?.created_at ?? input.now,
+      updated_at: input.now,
+    };
+    this.outboundAttempts.set(key, record);
+    return {
+      ...record,
+      channel_message_ids: record.channel_message_ids?.slice(),
+    };
   }
 
   async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {

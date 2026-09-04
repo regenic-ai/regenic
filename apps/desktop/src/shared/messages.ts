@@ -588,6 +588,7 @@ export const en = {
   "composer.attach": "Attach image or file",
   "composer.sending": "Sending",
   "composer.send": "Send",
+  "composer.retrySend": "Retry",
   "composer.remove": "Remove {name}",
   "composer.drop": "Drop to attach",
 
@@ -1174,6 +1175,7 @@ export const zh: Record<MessageKey, string> = {
   "composer.attach": "添加图片或文件",
   "composer.sending": "发送中",
   "composer.send": "发送",
+  "composer.retrySend": "重试",
   "composer.remove": "移除 {name}",
   "composer.drop": "松开即可添加附件",
 

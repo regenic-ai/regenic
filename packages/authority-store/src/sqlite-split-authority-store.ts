@@ -34,6 +34,8 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  OutboundAttemptPut,
+  OutboundAttemptRecord,
   ApplySyncCatalogPageInput,
   SyncCatalogView,
   SyncStreamState,
@@ -44,6 +46,7 @@ import type {
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
   SourceIdentity,
+  SourceIdentityAliasBind,
   TombstoneEvent,
   Recipe,
   StoreClearResult,
@@ -110,6 +113,23 @@ export class SqliteSplitAuthorityStore
     identity: SourceIdentity,
   ): Promise<EventRecord | null> {
     return this.reader.call("findBySourceIdentity", [identity]);
+  }
+
+  async bindSourceIdentityAliases(input: SourceIdentityAliasBind): Promise<void> {
+    await this.writer.call("bindSourceIdentityAliases", [input]);
+  }
+
+  async getOutboundAttempt(
+    orgId: string,
+    clientRequestId: string,
+  ): Promise<OutboundAttemptRecord | null> {
+    return this.reader.call("getOutboundAttempt", [orgId, clientRequestId]);
+  }
+
+  async putOutboundAttempt(
+    input: OutboundAttemptPut,
+  ): Promise<OutboundAttemptRecord> {
+    return this.writer.call("putOutboundAttempt", [input]);
   }
 
   async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {

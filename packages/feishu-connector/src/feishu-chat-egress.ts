@@ -49,14 +49,14 @@ export class FeishuChatEgress implements EgressAdapter {
     }
     requireAttachmentClient(this.client, parts);
     const chatId = this.options.chat_id;
-    let rpcId: string | undefined;
+    const channelMessageIds: string[] = [];
     if (parts.text) {
       const message = await this.client.sendText({
         chat_id: chatId,
         text: parts.text,
         uuid: randomUUID(),
       });
-      rpcId = message.message_id;
+      channelMessageIds.push(message.message_id);
     }
     for (const image of parts.images) {
       const uploaded = await this.client.uploadImage!(image);
@@ -66,7 +66,7 @@ export class FeishuChatEgress implements EgressAdapter {
         content: { image_key: uploaded.image_key },
         uuid: randomUUID(),
       });
-      rpcId ??= message.message_id;
+      channelMessageIds.push(message.message_id);
     }
     for (const file of parts.files) {
       const uploaded = await this.client.uploadFile!(file);
@@ -76,12 +76,17 @@ export class FeishuChatEgress implements EgressAdapter {
         content: { file_key: uploaded.file_key },
         uuid: randomUUID(),
       });
-      rpcId ??= message.message_id;
+      channelMessageIds.push(message.message_id);
     }
+    const rpcId = channelMessageIds[0];
     if (!rpcId) {
       throw new FeishuApiError("Feishu send did not return message_id");
     }
-    return { accepted: true, rpc_id: rpcId };
+    return {
+      accepted: true,
+      rpc_id: rpcId,
+      channel_message_ids: channelMessageIds,
+    };
   }
 }
 

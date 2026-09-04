@@ -48,9 +48,17 @@ import type {
   InboxViewItem,
   PersonalEngineView,
   PromptAnswerItem,
+  ReplyView,
   ThreadPrompt,
 } from "./types";
 import type { MessageKey } from "../../shared/i18n.ts";
+
+function newClientRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 export const ThreadPane = memo(function ThreadPane({
   thread,
@@ -62,6 +70,8 @@ export const ThreadPane = memo(function ThreadPane({
   onLoadOlder,
   onRetry,
   onRefresh,
+  onApplyOutbound,
+  onRefreshThread,
   onCommitDraft,
   onRename,
   onPin,
@@ -87,6 +97,8 @@ export const ThreadPane = memo(function ThreadPane({
   onLoadOlder: () => void;
   onRetry: () => void;
   onRefresh: () => Promise<void>;
+  onApplyOutbound?: (item: InboxViewItem, clientRequestId?: string) => void;
+  onRefreshThread?: () => Promise<void>;
   onCommitDraft?: (
     installationId: string,
     draft: ComposerDraft,
@@ -308,32 +320,82 @@ export const ThreadPane = memo(function ThreadPane({
     }
   };
 
-  const send = async (draft: ComposerDraft) => {
+  const send = async (draft: ComposerDraft, retryClientRequestId?: string) => {
     setSending(true);
     setSendError(null);
-    const optimistic = localOutbound(thread, draft);
-    setPending((current) => [...current, optimistic]);
+    const clientRequestId = retryClientRequestId ?? newClientRequestId();
+    const optimistic = localOutbound(thread, draft, clientRequestId);
+    setPending((current) => [
+      ...current.filter(
+        (item) =>
+          item.client_request_id !== clientRequestId &&
+          item.event.id !== optimistic.event.id,
+      ),
+      optimistic,
+    ]);
     listRef.current?.scrollToEnd();
     try {
       if (thread.draft_installation_id && onCommitDraft) {
         await onCommitDraft(thread.draft_installation_id, draft, thread.id);
+        setPending((current) =>
+          current.filter((item) => item.client_request_id !== clientRequestId),
+        );
       } else {
-        await sendReply({
+        const result: ReplyView = await sendReply({
           thread_id: thread.id,
           text: draft.text,
           reply_to_event_id: draft.reply_to?.event.id,
           attachments: draft.attachments,
+          client_request_id: clientRequestId,
         });
+        const applied = {
+          ...result.item,
+          client_request_id: result.client_request_id ?? clientRequestId,
+          send_state: undefined,
+        };
+        onApplyOutbound?.(applied, clientRequestId);
+        setPending((current) =>
+          current.filter((item) => item.client_request_id !== clientRequestId),
+        );
       }
       setQuote(null);
-      await onRefresh();
+      await (onRefreshThread ?? onRefresh)();
     } catch (caught) {
       setSendError(sendFailureCopy(caught, t));
+      setPending((current) =>
+        current.map((item) =>
+          item.client_request_id === clientRequestId
+            ? { ...item, send_state: "failed" as const }
+            : item,
+        ),
+      );
       throw caught instanceof Error ? caught : new Error(t("error.sendFailed"));
     } finally {
-      setPending((current) => current.filter((item) => item.event.id !== optimistic.event.id));
       setSending(false);
     }
+  };
+
+  const retryFailed = async (item: InboxViewItem) => {
+    if (!item.client_request_id || item.send_state !== "failed") {
+      return;
+    }
+    await send(
+      {
+        text: item.body_text ?? "",
+        attachments: (item.attachments ?? []).flatMap((file) =>
+          file.data_base64
+            ? [
+                {
+                  filename: file.filename,
+                  media_type: file.media_type,
+                  data_base64: file.data_base64,
+                },
+              ]
+            : [],
+        ),
+      },
+      item.client_request_id,
+    );
   };
   const resultSummary = thread.work?.result_summary?.trim();
   const awaitingPrompt = prompts.length > 0;
@@ -564,6 +626,9 @@ export const ThreadPane = memo(function ThreadPane({
         onRetry={onRetry}
         onReply={quoteMessage}
         onForward={openForwardMessage}
+        onRetrySend={(item) => {
+          void retryFailed(item).catch(() => undefined);
+        }}
         selectedIds={selectedIds}
         selecting={selectedIds.length > 0}
         onToggleSelect={toggleSelect}
@@ -659,19 +724,71 @@ export const ThreadPane = memo(function ThreadPane({
 });
 
 function ackedOutbound(pending: InboxViewItem, messages: InboxViewItem[]): boolean {
-  return messages.some(
-    (item) =>
-      item.event.id === pending.event.id ||
-      (messageRole(item) === messageRole(pending) && sameUtterance(item, pending)),
-  );
+  return messages.some((item) => {
+    if (
+      pending.client_request_id &&
+      item.client_request_id === pending.client_request_id
+    ) {
+      return true;
+    }
+    if (item.event.id === pending.event.id) {
+      return true;
+    }
+    if (messageRole(item) !== messageRole(pending)) {
+      return false;
+    }
+    const pendingHasFiles = (pending.attachments?.length ?? 0) > 0;
+    const itemHasFiles = (item.attachments?.length ?? 0) > 0;
+    if (pendingHasFiles || itemHasFiles) {
+      return sameOutboundAttachments(pending, item);
+    }
+    return sameUtterance(item, pending);
+  });
 }
 
-function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem {
+function sameOutboundAttachments(
+  left: InboxViewItem,
+  right: InboxViewItem,
+): boolean {
+  const leftFiles = attachmentFingerprints(left);
+  const rightFiles = attachmentFingerprints(right);
+  if (leftFiles.length === 0 || leftFiles.length !== rightFiles.length) {
+    return false;
+  }
+  for (let index = 0; index < leftFiles.length; index += 1) {
+    if (leftFiles[index] !== rightFiles[index]) {
+      return false;
+    }
+  }
+  const leftText = (left.body_text ?? "").replace(/\s+/g, " ").trim();
+  const rightText = (right.body_text ?? "").replace(/\s+/g, " ").trim();
+  // Allow server-side quote prefix on the stored body.
+  if (!leftText || !rightText) {
+    return true;
+  }
+  return rightText === leftText || rightText.endsWith(leftText);
+}
+
+function attachmentFingerprints(item: InboxViewItem): string[] {
+  return (item.attachments ?? [])
+    .map((file) => {
+      const bytes = file.data_base64?.length ?? 0;
+      return `${file.media_type}\0${file.filename}\0${bytes}`;
+    })
+    .sort();
+}
+
+function localOutbound(
+  thread: InboxThread,
+  draft: ComposerDraft,
+  clientRequestId: string,
+): InboxViewItem {
   const now = new Date().toISOString();
   const orgId = latestMessage(thread)?.event.org_id ?? "local-owner";
+  const localId = `local:${clientRequestId}`;
   return {
     decision: {
-      event_id: `local:${now}`,
+      event_id: localId,
       org_id: orgId,
       disposition: "current_work",
       layer: "L1_event",
@@ -680,7 +797,7 @@ function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem
       decided_at: now,
     },
     event: {
-      id: `local:${now}`,
+      id: localId,
       org_id: orgId,
       source: thread.source,
       external_id: `${thread.id.slice(thread.source.length + 1)}:out:local`,
@@ -696,6 +813,8 @@ function localOutbound(thread: InboxThread, draft: ComposerDraft): InboxViewItem
     direction: "outbound",
     can_send: thread.can_send,
     await_reply: thread.await_reply === true,
+    send_state: "sending",
+    client_request_id: clientRequestId,
   };
 }
 

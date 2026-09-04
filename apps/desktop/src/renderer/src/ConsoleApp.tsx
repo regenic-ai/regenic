@@ -1155,6 +1155,44 @@ export function ConsoleApp() {
     return created;
   };
 
+  const applyOutbound = (
+    threadId: string,
+    item: InboxViewItem,
+    clientRequestId?: string,
+  ) => {
+    setMessagesByThread((current) => {
+      const existing = current[threadId] ?? [];
+      const withoutDupes = existing.filter((row) => {
+        if (row.event.id === item.event.id) {
+          return false;
+        }
+        if (
+          clientRequestId &&
+          (row.client_request_id === clientRequestId ||
+            row.event.id === `local:${clientRequestId}`)
+        ) {
+          return false;
+        }
+        return true;
+      });
+      return rememberThreadMessages(
+        current,
+        threadId,
+        orderThreadMessages([
+          ...withoutDupes,
+          {
+            ...item,
+            client_request_id: clientRequestId ?? item.client_request_id,
+          },
+        ]),
+      );
+    });
+  };
+
+  const refreshThread = async (threadId: string) => {
+    await ensureThread(threadId, "poll");
+  };
+
   const openForwardedConversation = async (result: ForwardView) => {
     const created = draftFromForward(result);
     openedAtRef.current[created.thread_id] = created.opened_at ?? new Date().toISOString();
@@ -1454,6 +1492,8 @@ export function ConsoleApp() {
             onCommitDraft={commitDraft}
             onSelect={setSelectedId}
             onRefresh={refresh}
+            onApplyOutbound={applyOutbound}
+            onRefreshThread={refreshThread}
             onRename={renameThread}
             onPin={pinThread}
             onHide={hideThread}
