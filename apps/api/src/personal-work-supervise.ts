@@ -9,17 +9,30 @@ import {
   recipeWantsWriteBack,
   shouldWriteBackHandle,
   workStatusFromHandle,
+  type ExecutorContext,
   type ExecutorRunHandle,
   type Recipe,
+  type TaskExecutor,
   type WorkItem,
   type WorkRun,
 } from "@regenic/domain";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import type { PersonalWorkWait } from "./personal-work-wait";
+import {
+  handleFromInboxEnd,
+  isStaleWork,
+  shouldForceReap,
+  workAgeMs,
+  workReapStaleMs,
+  WORK_REAP_FOLLOW_COOLDOWN_MS,
+  WORK_REAP_LOG_EVERY_MS,
+} from "./personal-work-reap";
 
 export class PersonalWorkSupervise {
   private waits?: PersonalWorkWait;
+  private readonly lastReapLog = new Map<string, number>();
+  private readonly lastFollow = new Map<string, number>();
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -35,10 +48,10 @@ export class PersonalWorkSupervise {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const items = await host.get("authority").listWorkItems(orgId);
-    for (const item of items) {
-      if (item.status !== "running" && item.status !== "waiting_human") {
-        continue;
-      }
+    const active = items
+      .filter((item) => item.status === "running" || item.status === "waiting_human")
+      .sort((left, right) => left.created_at.localeCompare(right.created_at));
+    for (const item of active) {
       const recipe = item.recipe_id
         ? await host.get("authority").getRecipe(orgId, item.recipe_id)
         : null;
@@ -60,8 +73,131 @@ export class PersonalWorkSupervise {
     if (!executor) {
       return;
     }
-    const handle = await executor.status(run, this.channel.contextFor(executor));
+    const ctx = this.channel.contextFor(executor);
+    let handle = await executor.status(run, ctx);
+    const now = Date.now();
+    if (isStaleWork(item.created_at, now, workReapStaleMs()) && handle.status === "running") {
+      handle = await this.reapIfInboxEnded(item, run, handle, executor, ctx, now);
+    }
     await this.applyHandle(item, recipe, run, handle);
+  }
+
+  private async reapIfInboxEnded(
+    item: WorkItem,
+    run: WorkRun,
+    handle: ExecutorRunHandle,
+    executor: TaskExecutor,
+    ctx: ExecutorContext,
+    now: number,
+  ): Promise<ExecutorRunHandle> {
+    const sysoutId = run.agent_thread_id ?? run.external_run_id;
+    const waitAttached = this.waits?.attached(run.id) ?? false;
+    if (!waitAttached) {
+      this.waits?.attach(item, run, executor);
+    }
+    let followed = false;
+    const dueFollow =
+      !this.lastFollow.has(item.id) ||
+      now - (this.lastFollow.get(item.id) ?? 0) >= WORK_REAP_FOLLOW_COOLDOWN_MS;
+    if (sysoutId && dueFollow) {
+      this.lastFollow.set(item.id, now);
+      try {
+        followed = (await this.waits?.followSysout(item, run)) ?? false;
+      } catch (error) {
+        console.error("personal work follow-before-reap failed", error);
+      }
+      if (followed) {
+        handle = await executor.status(run, ctx);
+      }
+    }
+    if (handle.status !== "running" || !sysoutId) {
+      this.logReapProbe(item, run, handle, {
+        waitAttached,
+        followed,
+        sysoutId,
+        now,
+      });
+      return handle;
+    }
+    let scan;
+    let transcript;
+    try {
+      const inspected = await this.channel.inspectSysout(sysoutId);
+      scan = inspected.scan;
+      transcript = inspected.transcript;
+    } catch (error) {
+      console.error("personal work transcript inspect failed", error);
+      this.logReapProbe(item, run, handle, {
+        waitAttached,
+        followed,
+        sysoutId,
+        now,
+      });
+      return handle;
+    }
+    const force = shouldForceReap({
+      handleStatus: handle.status,
+      inboxEnded: scan.inboxEnded,
+    });
+    this.logReapProbe(item, run, handle, {
+      waitAttached,
+      followed,
+      sysoutId,
+      now,
+      liveTurn: scan.liveTurn,
+      liveActivity: scan.liveActivity,
+      inboxEnded: scan.inboxEnded,
+      transcriptTurn: transcript?.turn?.state,
+      transcriptActivity: transcript?.activity,
+      forced: force,
+    });
+    if (!force) {
+      return handle;
+    }
+    const latest = await executor.status(run, ctx);
+    if (latest.status !== "running") {
+      return latest;
+    }
+    return handleFromInboxEnd(run, scan, transcript);
+  }
+
+  private logReapProbe(
+    item: WorkItem,
+    _run: WorkRun,
+    handle: ExecutorRunHandle,
+    extra: {
+      now: number;
+      waitAttached: boolean;
+      followed: boolean;
+      sysoutId?: string;
+      liveTurn?: string;
+      liveActivity?: string;
+      inboxEnded?: boolean;
+      transcriptTurn?: string;
+      transcriptActivity?: string;
+      forced?: boolean;
+    },
+  ): void {
+    const previous = this.lastReapLog.get(item.id) ?? 0;
+    if (extra.now - previous < WORK_REAP_LOG_EVERY_MS && extra.forced !== true) {
+      return;
+    }
+    this.lastReapLog.set(item.id, extra.now);
+    console.warn("personal work reap probe", {
+      work_item_id: item.id,
+      status: item.status,
+      handle: handle.status,
+      age_ms: workAgeMs(item.created_at, extra.now),
+      wait_attached: extra.waitAttached,
+      followed: extra.followed,
+      sysout: extra.sysoutId,
+      live_turn: extra.liveTurn,
+      live_activity: extra.liveActivity,
+      inbox_ended: extra.inboxEnded,
+      transcript_turn: extra.transcriptTurn,
+      transcript_activity: extra.transcriptActivity,
+      forced: extra.forced === true,
+    });
   }
 
   async applyHandle(
