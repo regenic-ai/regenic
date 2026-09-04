@@ -3,7 +3,7 @@ export type ConversationFocusInput = {
   thread_id?: string;
   /** Cold open: ask the connector to hydrate when the driver supports it. */
   hydrate?: boolean;
-  /** Interactive focus for live receipt/read_status overlays. */
+  /** Interactive focus: prefer thread + kick an immediate recent live poll. */
   live?: boolean;
   /** Scroll-up: ask the connector for an older history page. */
   pull_older?: boolean;

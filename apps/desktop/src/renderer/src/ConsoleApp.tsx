@@ -28,7 +28,7 @@ import { BrandBadge } from "./Brand";
 import { EngineChip, RailButton } from "./console-chrome";
 import { engineRevision } from "./console-refresh";
 import { EnginePage } from "./EnginePage";
-import { engineChip, memoryWatchCopy } from "./format";
+import { engineChip, memoryWatchCopy, pullProgressChip } from "./format";
 import {
   evictThreadCache,
   groupInboxThreads,
@@ -1081,6 +1081,7 @@ export function ConsoleApp() {
     return opened;
   }, [catalogThreads, selectedId, messagesByThread]);
   const chip = engineChip(engine, reachability);
+  const pullProgress = pullProgressChip(engine?.pull);
   const createTargets = createConversationTargets(engine);
 
   const startConversation = async (installationId: string) => {
@@ -1416,6 +1417,11 @@ export function ConsoleApp() {
         <div className="search">{t("chrome.searchSoon")}</div>
         <div className="titlebar-meta">
           <EngineChip state={chip} />
+          {pullProgress ? (
+            <span className="chip" title={pullProgress}>
+              {pullProgress}
+            </span>
+          ) : null}
           {host && host.memory.kind !== "ok" ? (
             <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
           ) : null}

@@ -161,8 +161,9 @@ export class PersonalController {
     return this.guard(async () => {
       if (input.live) {
         this.connectors.noteInteractiveFocus(threadId);
-      }
-      if (input.hydrate) {
+        // Kick an interactive live poll immediately (warm reopen + receipts).
+        void this.connectors.kickInteractiveLive(threadId);
+      } else if (input.hydrate) {
         void this.connectors.hydrateOpenedThread(threadId);
       }
       if (shouldPullOlderFocus(input)) {

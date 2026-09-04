@@ -12,32 +12,9 @@ export function engineChip(
   if (reachability === "degraded") {
     return "degraded";
   }
-  const pull = engine.pull;
-  if (pull) {
-    const streams = pull.streams ?? [];
-    if (streams.some(isHistoryWork)) {
-      return "syncing";
-    }
-    if (streams.some((stream) => stream.phase === "catching_up")) {
-      return "syncing";
-    }
-    const catchingUp = pull.catching_up_count ?? 0;
-    if (catchingUp > 0) {
-      const detailed = streams.filter(
-        (stream) =>
-          stream.phase === "pulling" ||
-          stream.phase === "catching_up" ||
-          stream.work === "history",
-      ).length;
-      if (detailed === 0 || catchingUp > detailed) {
-        return "syncing";
-      }
-    }
-  }
+  // Background history catch-up must not paint the kernel chip as "syncing" —
+  // that reads as "latest is stuck". History progress lives in pullStatusLabel.
   if (engine.installations.some((item) => item.last_attempt?.status === "running")) {
-    return "syncing";
-  }
-  if (engine.pull?.streams.some((stream) => stream.work === "history")) {
     return "syncing";
   }
   return "running";
@@ -50,31 +27,36 @@ export function pullStatusLabel(pull?: PullStatusView | null): string {
   if (pull.phase === "pulling") {
     const historyCount = pull.streams.filter(isHistoryWork).length;
     if (historyCount > 1) {
-      return t("sync.syncingCount", { count: historyCount });
+      return t("sync.historyCount", { count: historyCount });
     }
     const history = pull.streams.find(isHistoryWork);
     if (history?.label) {
-      return t("sync.syncingNamed", { label: history.label });
+      return t("sync.historyNamed", { label: history.label });
     }
     if (history) {
-      return t("sync.older");
+      return t("sync.history");
     }
-    const live = pull.streams.find((stream) => stream.phase === "pulling");
+    const live = pull.streams.find(
+      (stream) => stream.phase === "pulling" && stream.work !== "history",
+    );
     if (live?.label) {
-      return t("sync.syncingNamed", { label: live.label });
+      return t("sync.latestNamed", { label: live.label });
+    }
+    if (live) {
+      return t("sync.latest");
     }
     return t("sync.pulling");
   }
   if (pull.catching_up_count > 1) {
-    return t("sync.catchingLeft", { count: pull.catching_up_count });
+    return t("sync.historyLeft", { count: pull.catching_up_count });
   }
   if (pull.catching_up_count === 1) {
     const active = pull.streams.find(
       (stream) => stream.phase === "catching_up" || stream.phase === "error",
     );
     return active?.label
-      ? t("sync.catchingNamed", { label: active.label })
-      : t("sync.catching");
+      ? t("sync.historyNamed", { label: active.label })
+      : t("sync.history");
   }
   if (pull.last_error) {
     return t("sync.retry");
@@ -83,6 +65,27 @@ export function pullStatusLabel(pull?: PullStatusView | null): string {
     return t("sync.every", { seconds: Math.round(pull.interval_ms / 1000) });
   }
   return t("sync.off");
+}
+
+/** Compact titlebar chip: only when history backfill or live pull is active. */
+export function pullProgressChip(pull?: PullStatusView | null): string | null {
+  if (!pull) {
+    return null;
+  }
+  const historyActive =
+    pull.catching_up_count > 0 ||
+    pull.streams.some(
+      (stream) => isHistoryWork(stream) || stream.phase === "catching_up",
+    );
+  const liveActive =
+    pull.phase === "pulling" &&
+    pull.streams.some(
+      (stream) => stream.phase === "pulling" && stream.work === "live",
+    );
+  if (!historyActive && !liveActive) {
+    return null;
+  }
+  return pullStatusLabel(pull);
 }
 
 export function threadSyncLabel(

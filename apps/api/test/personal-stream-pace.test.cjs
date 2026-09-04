@@ -238,6 +238,15 @@ describe("syncExecutionBudget", () => {
       }),
       { pages: 1, concurrency: 2 },
     );
+    assert.deepEqual(
+      syncExecutionBudget({
+        humanIdle: false,
+        capCatchUp: true,
+        lane: "live",
+        pages: 1,
+      }),
+      { pages: 1, concurrency: 8 },
+    );
   });
 
   it("keeps media on a small dedicated concurrency budget", () => {

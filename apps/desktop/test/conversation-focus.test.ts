@@ -12,11 +12,13 @@ describe("conversation focus requests", () => {
     assert.deepEqual(openThreadFocusRequest("feishu:oc_1", true), {
       thread_id: "feishu:oc_1",
       hydrate: true,
+      live: true,
       present: true,
     });
     assert.deepEqual(openThreadFocusRequest("feishu:oc_1", false), {
       thread_id: "feishu:oc_1",
       hydrate: false,
+      live: true,
       present: true,
     });
     assert.deepEqual(liveReceiptFocusRequest("feishu:oc_1"), {

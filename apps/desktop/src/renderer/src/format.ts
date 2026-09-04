@@ -5,6 +5,7 @@ import type { EngineChipState } from "./types.ts";
 
 export {
   engineChip,
+  pullProgressChip,
   pullStatusLabel,
   threadSyncLabel,
   threadSyncTone,

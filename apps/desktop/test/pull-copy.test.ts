@@ -27,7 +27,7 @@ const baseEngine: PersonalEngineView = {
 };
 
 describe("engineChip", () => {
-  it("shows syncing when heartbeat catch-up outruns stale stream detail", () => {
+  it("keeps running when only history catch-up remains", () => {
     const chip = engineChip(
       {
         ...baseEngine,
@@ -40,7 +40,7 @@ describe("engineChip", () => {
       },
       "live",
     );
-    assert.equal(chip, "syncing");
+    assert.equal(chip, "running");
   });
 
   it("keeps running for a live watermark pull with stream detail", () => {
