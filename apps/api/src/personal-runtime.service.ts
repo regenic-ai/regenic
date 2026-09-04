@@ -1,24 +1,30 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { loadEnv } from "@regenic/config";
+import { loadEnv, resolveAuthorityBackend } from "@regenic/config";
+import { postgresAuthorityPlugin, sqliteAuthorityPlugin } from "@regenic/authority-store";
+import { fsBlobPlugin } from "@regenic/blob-store";
 import { compactEmbeddedContent } from "@regenic/domain";
-import { modelProviderConfigFromEnv } from "@regenic/model-provider";
+import { modelProviderConfigFromEnv, type ModelProviderPluginConfig } from "@regenic/model-provider";
 import type { Host } from "@regenic/plugin-host";
 import {
   HUMAN_IDLE_MS,
   isHumanIdle,
   markKernelReady,
 } from "./personal-human-pace";
-import {
-  createPersonalHost,
-  type PersonalHostOptions,
-} from "./personal-host";
+import { createKernelHost } from "./kernel-host";
+
+export interface KernelRuntimeOptions {
+  blobRoot: string;
+  orgId: string;
+  database?: string;
+  model?: ModelProviderPluginConfig;
+}
 
 @Injectable()
 export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   private host: Host | null = null;
-  private options: PersonalHostOptions | null = null;
+  private options: KernelRuntimeOptions | null = null;
   private compactAbort: AbortController | null = null;
   private compacting: Promise<ContentCompactOutcome> | null = null;
   private compactTimer: ReturnType<typeof setTimeout> | undefined;
@@ -26,20 +32,47 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     const env = loadEnv();
-    if (!env.REGENIC_DATABASE || !env.REGENIC_BLOB_ROOT) {
+    const backend = resolveAuthorityBackend(env);
+    if (backend.driver === "none") {
       return;
     }
-    const database = resolve(env.REGENIC_DATABASE);
-    const blobRoot = resolve(env.REGENIC_BLOB_ROOT);
-    await mkdir(dirname(database), { recursive: true });
+    const blobRoot = resolve(backend.blobRoot);
     await mkdir(blobRoot, { recursive: true });
+    const model = modelProviderConfigFromEnv(process.env);
+    if (backend.driver === "sqlite") {
+      const database = resolve(backend.path);
+      await mkdir(dirname(database), { recursive: true });
+      this.options = {
+        database,
+        blobRoot,
+        orgId: env.REGENIC_ORG,
+        model,
+      };
+      this.host = await createKernelHost({
+        authority: {
+          plugin: sqliteAuthorityPlugin,
+          config: { path: database },
+        },
+        blobs: { plugin: fsBlobPlugin, config: { root: blobRoot } },
+        orgId: env.REGENIC_ORG,
+        model,
+      });
+      return;
+    }
     this.options = {
-      database,
       blobRoot,
       orgId: env.REGENIC_ORG,
-      model: modelProviderConfigFromEnv(process.env),
+      model,
     };
-    this.host = await createPersonalHost(this.options);
+    this.host = await createKernelHost({
+      authority: {
+        plugin: postgresAuthorityPlugin,
+        config: { connectionString: backend.url },
+      },
+      blobs: { plugin: fsBlobPlugin, config: { root: blobRoot } },
+      orgId: env.REGENIC_ORG,
+      model,
+    });
   }
 
   startAfterListen(): void {
@@ -68,6 +101,42 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     return this.host !== null;
   }
 
+  /**
+   * Probe the mounted authority through its own pool/connection.
+   * Sqlite has no live remote dependency — host presence is enough.
+   * Postgres must answer SELECT 1 or health reports down.
+   */
+  async probeAuthority(timeoutMs = 2_000): Promise<boolean> {
+    if (!this.host) {
+      return false;
+    }
+    const authority = this.host.get("authority") as {
+      ping?: () => Promise<void>;
+    };
+    if (typeof authority.ping !== "function") {
+      return true;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        authority.ping(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("authority probe timed out")),
+            timeoutMs,
+          );
+        }),
+      ]);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
   getHost(): Host | null {
     return this.host;
   }
@@ -79,7 +148,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     return this.host;
   }
 
-  getOptions(): PersonalHostOptions | null {
+  getOptions(): KernelRuntimeOptions | null {
     return this.options;
   }
 

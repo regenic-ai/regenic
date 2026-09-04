@@ -176,7 +176,7 @@ docker compose up --build
 curl -s http://localhost:3000/health
 ```
 
-接口进程需要 `REGENIC_DATABASE` 和 `REGENIC_BLOB_ROOT`。设了 `REGENIC_DSH_API_TOKEN` 的话，请求带 `Authorization: Bearer`。
+个人内核需要本机数据目录（`REGENIC_DATABASE` 和 `REGENIC_BLOB_ROOT`）。官方 Compose 烘焙 PostgreSQL（`REGENIC_AUTHORITY_DRIVER=postgres`）和附件卷；应用里不用选数据库引擎。设了 `REGENIC_DSH_API_TOKEN` 的话，请求带 `Authorization: Bearer`。
 
 ```http
 POST /v1/dsh/api/session.history

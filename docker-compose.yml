@@ -31,8 +31,14 @@ services:
       NODE_ENV: production
       PORT: 3000
       LISTEN_HOST: "0.0.0.0"
+      REGENIC_AUTHORITY_DRIVER: postgres
       DATABASE_URL: postgres://regenic:regenic@postgres:5432/regenic
+      REGENIC_BLOB_ROOT: /data/blobs
+      REGENIC_ORG: local-owner
+      REGENIC_PERSONAL_API: "1"
       REDIS_URL: redis://redis:6379
+    volumes:
+      - api-data:/data
     ports:
       - "3000:3000"
     depends_on:
@@ -54,3 +60,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+volumes:
+  api-data:

@@ -1,6 +1,5 @@
 import { Controller, Get, Inject } from "@nestjs/common";
-import { Client } from "pg";
-import { isPersonalApiEnabled, loadEnv } from "@regenic/config";
+import { isPersonalApiEnabled, loadEnv, resolveAuthorityBackend } from "@regenic/config";
 import type { StandardPlaceholder } from "@regenic/domain";
 import { processMemoryView } from "./process-memory";
 import { PersonalApiKeyService } from "./personal-api-key.service";
@@ -27,51 +26,59 @@ export class HealthController {
     const _domainProbe: StandardPlaceholder | null = null;
     void _domainProbe;
 
-    if (env.REGENIC_DATABASE) {
-      const sqlite = this.runtime.isReady() ? "up" : "down";
-      const personal = isPersonalApiEnabled(env);
-      const expectedKey = this.keys.expectedKey();
-      const pressure = this.kernelRuntime.pressureView();
+    const backend = resolveAuthorityBackend(env);
+    const personal = isPersonalApiEnabled(env);
+    const expectedKey = this.keys.expectedKey();
+    const pressure = this.kernelRuntime.pressureView();
+    const ready = this.runtime.isReady();
+    const connect = personal
+      ? {
+          connect: {
+            auth: expectedKey ? "shared-secret" : "none",
+            key_source: this.keys.keySource(),
+            pairing: {
+              ...this.pairing.snapshot(process.env),
+              reason: this.keys.pairingState(process.env).reason,
+            },
+          },
+        }
+      : {};
+
+    if (backend.driver === "sqlite") {
+      const sqlite = ready ? "up" : "down";
       return {
         status: sqlite === "up" && pressure.interactive_ready ? "ok" : "degraded",
         service: "api",
         mode: personal ? "personal" : "service",
         sqlite,
+        authority: "authority-sqlite",
         memory: processMemoryView(),
         runtime: pressure,
         domain: "@regenic/domain",
-        ...(personal
-          ? {
-              connect: {
-                auth: expectedKey ? "shared-secret" : "none",
-                key_source: this.keys.keySource(),
-                pairing: {
-                  ...this.pairing.snapshot(process.env),
-                  reason: this.keys.pairingState(process.env).reason,
-                },
-              },
-            }
-          : {}),
+        ...connect,
       };
     }
 
-    let postgres: "up" | "down" = "down";
-    const client = new Client({ connectionString: env.DATABASE_URL });
-    try {
-      await client.connect();
-      await client.query("select 1");
-      postgres = "up";
-    } catch {
-      postgres = "down";
-    } finally {
-      await client.end().catch(() => undefined);
+    if (backend.driver === "postgres") {
+      const postgres =
+        ready && (await this.runtime.probeAuthority()) ? "up" : "down";
+      return {
+        status: postgres === "up" && pressure.interactive_ready ? "ok" : "degraded",
+        service: "api",
+        mode: personal ? "personal" : "service",
+        postgres,
+        authority: "authority-postgres",
+        memory: processMemoryView(),
+        runtime: pressure,
+        domain: "@regenic/domain",
+        ...connect,
+      };
     }
 
     return {
-      status: postgres === "up" ? "ok" : "degraded",
+      status: "degraded",
       service: "api",
-      mode: "service",
-      postgres,
+      mode: personal ? "personal" : "service",
       memory: processMemoryView(),
       domain: "@regenic/domain",
     };

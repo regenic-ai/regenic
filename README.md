@@ -176,7 +176,7 @@ docker compose up --build
 curl -s http://localhost:3000/health
 ```
 
-The API process needs `REGENIC_DATABASE` and `REGENIC_BLOB_ROOT`. If `REGENIC_DSH_API_TOKEN` is set, callers send `Authorization: Bearer`.
+The API process for a personal kernel needs a local data folder (`REGENIC_DATABASE` and `REGENIC_BLOB_ROOT`). Official Compose bakes PostgreSQL (`REGENIC_AUTHORITY_DRIVER=postgres`) and an attachments volume; you do not pick a database engine in the app. If `REGENIC_DSH_API_TOKEN` is set, callers send `Authorization: Bearer`.
 
 ```http
 POST /v1/dsh/api/session.history

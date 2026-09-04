@@ -6,6 +6,7 @@ import {
   isLoopbackListenHost,
   isPersonalApiEnabled,
   loadEnv,
+  resolveAuthorityBackend,
 } from "@regenic/config";
 
 export type PersonalApiKeySource = "env" | "file" | "generated" | "none";
@@ -36,10 +37,14 @@ export class PersonalApiKeyService implements OnModuleInit {
       this.source = "env";
       return;
     }
-    if (!env.REGENIC_DATABASE || !isPersonalApiEnabled(env)) {
+    const backend = resolveAuthorityBackend(env);
+    if (backend.driver === "none" || !isPersonalApiEnabled(env)) {
       return;
     }
-    this.keyPath = join(dirname(env.REGENIC_DATABASE), KEY_FILE);
+    this.keyPath =
+      backend.driver === "sqlite"
+        ? join(dirname(backend.path), KEY_FILE)
+        : join(backend.blobRoot, KEY_FILE);
     const stored = await this.readStoredKey(this.keyPath);
     if (stored) {
       this.record = stored;

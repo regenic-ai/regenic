@@ -4,7 +4,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
-const { SqliteAuthorityStore } = require("@regenic/authority-store");
+const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService } = require("@regenic/domain");
 const { createHttpApp } = require("../dist/http-app");
@@ -105,6 +105,7 @@ async function startApi(root, model = { driver: "none" }) {
   const database = join(root, "authority.db");
   const blobRoot = join(root, "blobs");
   const env = {
+    REGENIC_AUTHORITY_DRIVER: "sqlite",
     REGENIC_DATABASE: database,
     REGENIC_BLOB_ROOT: blobRoot,
     REGENIC_ORG: "local-owner",

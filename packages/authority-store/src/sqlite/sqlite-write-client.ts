@@ -94,7 +94,14 @@ function resolveWorkerPath(): string {
   if (existsSync(here)) {
     return here;
   }
-  const built = join(__dirname, "..", "dist", "sqlite-write-worker.js");
+  const built = join(
+    __dirname,
+    "..",
+    "..",
+    "dist",
+    "sqlite",
+    "sqlite-write-worker.js",
+  );
   if (existsSync(built)) {
     return built;
   }

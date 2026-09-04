@@ -16,7 +16,7 @@ const {
   SqliteAuthorityStore,
   SqliteSplitAuthorityStore,
   sqliteAuthorityPlugin,
-} = require("../dist");
+} = require("../dist/sqlite");
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
