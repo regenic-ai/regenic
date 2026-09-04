@@ -105,6 +105,7 @@ describePg("postgres authority store", () => {
     assert.equal(inbox[0].event.org_id, orgId);
     const blobs = await authority.findBlobs([inbox[0].event.content_hash]);
     assert.equal(blobs.size, 1);
+    await authority.ping();
   });
 
   it("rolls back a conflicting ingest page", async () => {

@@ -330,6 +330,11 @@ export class PostgresAuthorityStore
     await this.pool.query("ANALYZE");
   }
 
+  /** Live connectivity check for /health — uses the store pool, not a one-off Client. */
+  async ping(): Promise<void> {
+    await this.pool.query("SELECT 1");
+  }
+
   async findBySourceIdentity(
     identity: SourceIdentity,
   ): Promise<EventRecord | null> {

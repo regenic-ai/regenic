@@ -101,6 +101,42 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     return this.host !== null;
   }
 
+  /**
+   * Probe the mounted authority through its own pool/connection.
+   * Sqlite has no live remote dependency — host presence is enough.
+   * Postgres must answer SELECT 1 or health reports down.
+   */
+  async probeAuthority(timeoutMs = 2_000): Promise<boolean> {
+    if (!this.host) {
+      return false;
+    }
+    const authority = this.host.get("authority") as {
+      ping?: () => Promise<void>;
+    };
+    if (typeof authority.ping !== "function") {
+      return true;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        authority.ping(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("authority probe timed out")),
+            timeoutMs,
+          );
+        }),
+      ]);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
   getHost(): Host | null {
     return this.host;
   }

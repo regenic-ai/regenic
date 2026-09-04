@@ -60,7 +60,8 @@ export class HealthController {
     }
 
     if (backend.driver === "postgres") {
-      const postgres = ready ? "up" : "down";
+      const postgres =
+        ready && (await this.runtime.probeAuthority()) ? "up" : "down";
       return {
         status: postgres === "up" && pressure.interactive_ready ? "ok" : "degraded",
         service: "api",
