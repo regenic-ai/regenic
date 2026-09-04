@@ -146,6 +146,7 @@ interface Recipe {
   executor_config: Record<string, unknown>;
   can_write_back: boolean;
   include_context: boolean;
+  max_concurrent?: number;
   enabled: boolean;
 }
 
@@ -185,6 +186,8 @@ Pull 协议：独立于连接器 pull。`next_run_at` 持久化，休眠醒来�
 没有 `can_write_back` 不得 egress（Pull 默认开）。蒸馏或看过 Digest ≠ 发送权。
 
 `include_context` 为真或 `trigger.kind=pull` 时，开跑只取来源会话最近一页可见历史写入 evidence（条数和字数封顶，多出来的标 omitted），禁止把几千上万条整段拉进内核或执行器。Push 默认只带触发/头消息。这是内核证据策略，不是 `executor_config` 的 key。
+
+`max_concurrent` 限制**自动开跑**，不限制采集。范围内工单仍入库并开 WorkItem；自动 `start` 只统计该规则上 `running` + `waiting_human`。省略表示不限制。连接器不得另做处理窗口。手动「立即处理」不受此帽。
 
 ## 9. TaskExecutor
 

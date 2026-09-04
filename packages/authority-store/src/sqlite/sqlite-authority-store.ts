@@ -1341,8 +1341,8 @@ export class SqliteAuthorityStore
           INSERT INTO recipes (
             id, org_id, name, match_json, executor_type, executor_config_json,
             can_write_back, include_context, enabled, trigger_kind,
-            trigger_interval_ms, trigger_coalesce, next_run_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            trigger_interval_ms, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
@@ -1354,6 +1354,7 @@ export class SqliteAuthorityStore
             trigger_kind = excluded.trigger_kind,
             trigger_interval_ms = excluded.trigger_interval_ms,
             trigger_coalesce = excluded.trigger_coalesce,
+            max_concurrent = excluded.max_concurrent,
             next_run_at = excluded.next_run_at,
             updated_at = excluded.updated_at
         `,
@@ -1371,6 +1372,7 @@ export class SqliteAuthorityStore
         trigger.kind,
         trigger.kind === "pull" ? (trigger.interval_ms ?? null) : null,
         trigger.kind === "push" && trigger.coalesce !== false ? 1 : 0,
+        recipe.max_concurrent ?? null,
         recipe.next_run_at ?? null,
         recipe.created_at,
         recipe.updated_at,
@@ -3258,6 +3260,7 @@ interface RecipeRow {
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
   trigger_coalesce: number | null;
+  max_concurrent: number | null;
   next_run_at: string | null;
   created_at: string;
   updated_at: string;
@@ -3350,6 +3353,9 @@ function toRecipe(row: RecipeRow): Recipe {
     can_write_back: row.can_write_back === 1,
     include_context: row.include_context === 1,
     enabled: row.enabled === 1,
+    ...(row.max_concurrent && row.max_concurrent > 0
+      ? { max_concurrent: row.max_concurrent }
+      : {}),
     ...(row.next_run_at ? { next_run_at: row.next_run_at } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,

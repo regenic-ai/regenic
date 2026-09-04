@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   isRecordClass,
   isThreadFacet,
+  normalizeRecipeMaxConcurrent,
   normalizeRecipeTrigger,
   normalizeUnitKind,
   recipeMatchIsSpecific,
@@ -23,6 +24,7 @@ export interface RecipeInput {
   executor_config?: Record<string, JsonValue>;
   can_write_back?: boolean;
   include_context?: boolean;
+  max_concurrent?: number | null;
   enabled?: boolean;
 }
 
@@ -62,6 +64,9 @@ export function normalizeRecipe(
     );
   }
   const pull = trigger.kind === "pull";
+  const max_concurrent = normalizeRecipeMaxConcurrent(
+    input.max_concurrent === undefined ? existing?.max_concurrent : input.max_concurrent,
+  );
   return {
     id: existing?.id ?? input.id?.trim() ?? `recipe-${randomUUID()}`,
     org_id: orgId,
@@ -73,6 +78,7 @@ export function normalizeRecipe(
     can_write_back: input.can_write_back ?? existing?.can_write_back ?? pull,
     include_context: input.include_context ?? existing?.include_context ?? pull,
     enabled: input.enabled ?? existing?.enabled ?? true,
+    ...(max_concurrent ? { max_concurrent } : {}),
     ...(pull
       ? {
           next_run_at: shouldKeepPullSchedule(existing, { match, trigger })

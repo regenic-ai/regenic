@@ -31,7 +31,6 @@ import {
 } from "@regenic/domain";
 import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
-import { releaseDriverOpenWindow } from "./open-window-release";
 import { stampFromThreadSurfaces } from "./personal-reply-stamp";
 import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
@@ -472,16 +471,6 @@ export class PersonalWorkChannel {
       });
     }
     return stampFromThreadSurfaces(thread.target, surfaces);
-  }
-
-  async releaseOpenWindowForItem(
-    item: Pick<WorkItem, "thread_id" | "org_id">,
-  ): Promise<void> {
-    const host = this.runtime.requireHost();
-    const installations = await host
-      .get("authority")
-      .listInstallations(item.org_id);
-    await releaseDriverOpenWindow(this.drivers, installations, item, host);
   }
 
   async canReplyThread(threadId: string): Promise<boolean | undefined> {

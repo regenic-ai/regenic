@@ -59,7 +59,6 @@ import {
   type EngineInstallationView,
 } from "./personal-connector-view";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
-import { openWindowPollHooksForInstallation } from "./open-window-release";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
@@ -1594,7 +1593,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
           threads,
           catalog: catalog.members,
           discover: !driver.bindSyncSource && options?.discover === true,
-          ...openWindowPollHooksForInstallation(host, installation),
         },
       );
       await this.persistPickedChatNames(store, installation, streams);

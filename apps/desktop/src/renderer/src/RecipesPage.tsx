@@ -138,6 +138,10 @@ export function RecipesPage({
             ? draft.can_write_back
             : false,
           include_context: draft.include_context,
+          max_concurrent:
+            draft.trigger_kind === "pull"
+              ? null
+              : parseMaxConcurrent(draft.max_concurrent),
           enabled: draft.enabled,
         },
         draft.id,
@@ -426,6 +430,25 @@ export function RecipesPage({
                       }))
                     }
                   />
+                ) : null}
+                {draft.trigger_kind !== "pull" ? (
+                  <div className="field">
+                    <span>{t("recipes.maxConcurrent")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      inputMode="numeric"
+                      placeholder={t("recipes.maxConcurrentUnlimited")}
+                      value={draft.max_concurrent}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          max_concurrent: event.target.value,
+                        }))
+                      }
+                    />
+                    <p className="muted">{t("recipes.maxConcurrentHint")}</p>
+                  </div>
                 ) : null}
               </section>
               <MoreOptions
@@ -769,6 +792,7 @@ interface RecipeDraft {
   config: Record<string, string>;
   can_write_back: boolean;
   include_context: boolean;
+  max_concurrent: string;
   enabled: boolean;
 }
 
@@ -789,6 +813,7 @@ function emptyDraft(executorType = ""): RecipeDraft {
     config: {},
     can_write_back: false,
     include_context: false,
+    max_concurrent: "",
     enabled: true,
   };
 }
@@ -861,6 +886,10 @@ function draftFromRecipe(
     config: configFromCatalog(catalog, config),
     can_write_back: recipe.can_write_back,
     include_context: recipe.include_context,
+    max_concurrent:
+      recipe.max_concurrent && recipe.max_concurrent > 0
+        ? String(recipe.max_concurrent)
+        : "",
     enabled: recipe.enabled,
   };
 }
@@ -986,6 +1015,18 @@ function unitKindLabel(
   return undefined;
 }
 
+function parseMaxConcurrent(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const n = Number(trimmed);
+  if (!Number.isFinite(n) || n < 1) {
+    return null;
+  }
+  return Math.min(Math.floor(n), 1_000);
+}
+
 function formTitle(
   draft: RecipeDraft,
   returnToWork: boolean,
@@ -1035,10 +1076,14 @@ function recipeCardLine(
     : recipe.trigger?.kind === "pull"
       ? t("recipes.outcomeKeep")
       : "";
+  const concurrent =
+    recipe.max_concurrent && recipe.max_concurrent > 0
+      ? t("recipes.outcomeConcurrent", { count: String(recipe.max_concurrent) })
+      : "";
   return t("recipes.cardLine", {
     when: whenCopy(recipe, sources, conversations, t),
     executor,
-    outcome,
+    outcome: `${outcome}${concurrent}`,
   });
 }
 

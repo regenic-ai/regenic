@@ -149,6 +149,53 @@ export function recipeWantsContext(recipe: {
   return recipe.trigger?.kind === "pull" || Boolean(recipe.include_context);
 }
 
+const RECIPE_MAX_CONCURRENT_CAP = 1_000;
+
+export function normalizeRecipeMaxConcurrent(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n < 1) {
+    return undefined;
+  }
+  return Math.min(Math.floor(n), RECIPE_MAX_CONCURRENT_CAP);
+}
+
+export function isOccupiedRecipeSlot(status: WorkItemStatus): boolean {
+  return status === "running" || status === "waiting_human";
+}
+
+export function occupiedRecipeSlots(
+  items: readonly Pick<WorkItem, "id" | "recipe_id" | "status">[],
+  recipeId: string,
+  exceptItemId?: string,
+): number {
+  return items.filter(
+    (item) =>
+      item.recipe_id === recipeId &&
+      item.id !== exceptItemId &&
+      isOccupiedRecipeSlot(item.status),
+  ).length;
+}
+
+export function recipeHasStartCapacity(input: {
+  recipe: Pick<Recipe, "id" | "max_concurrent">;
+  items: readonly Pick<WorkItem, "id" | "recipe_id" | "status">[];
+  exceptItemId?: string;
+  inflight?: number;
+}): boolean {
+  const max = input.recipe.max_concurrent;
+  if (max === undefined) {
+    return true;
+  }
+  return (
+    occupiedRecipeSlots(input.items, input.recipe.id, input.exceptItemId) +
+      (input.inflight ?? 0) <
+    max
+  );
+}
+
 export function shouldAcceptPushRecord(input: {
   kind?: string;
   direction?: string;

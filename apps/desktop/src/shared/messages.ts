@@ -193,6 +193,7 @@ export const en = {
   "recipes.cardLine": "{when} → {executor}{outcome}",
   "recipes.outcomeBack": " · send back",
   "recipes.outcomeKeep": " · keep here",
+  "recipes.outcomeConcurrent": " · {count} at a time",
   "recipes.nextRun": "Next {when}",
   "recipes.nextRunDue": "Due now",
   "recipes.paused": "Paused",
@@ -253,7 +254,7 @@ export const en = {
   "recipes.writeBackUnavailable":
     "This chat cannot receive replies yet. The result will stay here.",
   "recipes.writeBackMatchHint":
-    "If the chat has a live choice, the first line of the result must match an option. Reasons go on the next lines. Feishu approvals also accept 同意/通过 and 拒绝/驳回.",
+    "If the chat is waiting for a choice, put that on the first line. Reasons go below.",
   "recipes.lastRunFailed": "Last run failed",
   "recipes.lastRunDone": "Last run finished",
   "recipes.lastRunSkipped": "Last run was cleared",
@@ -265,6 +266,10 @@ export const en = {
     "On: send recent messages from this chat. Long threads are cut short. Off: only the latest item.",
   "recipes.includeContextHintPull":
     "A schedule always sends recent messages from this chat. Long threads are cut short.",
+  "recipes.maxConcurrent": "At once",
+  "recipes.maxConcurrentUnlimited": "No limit",
+  "recipes.maxConcurrentHint":
+    "How many can run at the same time. Leave empty for no limit.",
   "recipes.enabledCheck": "On",
   "recipes.advanced": "More",
   "recipes.facet": "Only this type",
@@ -811,6 +816,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.cardLine": "{when} → {executor}{outcome}",
   "recipes.outcomeBack": "，结果发回去",
   "recipes.outcomeKeep": "，结果留在这里",
+  "recipes.outcomeConcurrent": " · 同时 {count} 条",
   "recipes.nextRun": "下次 {when}",
   "recipes.nextRunDue": "已到点，即将处理",
   "recipes.paused": "已停用",
@@ -866,7 +872,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.writeBackHintPull": "结果会发回这条会话，不会再触发本规则。",
   "recipes.writeBackUnavailable": "这条会话现在发不回去，结果会留在这里。",
   "recipes.writeBackMatchHint":
-    "如果原会话有待选项，结果第一行要对上选项。原因写在后面。飞书审批也认同意/通过、拒绝/驳回。",
+    "原会话在等一个选项时，把选项写在第一行，原因写在后面。",
   "recipes.lastRunFailed": "上次失败",
   "recipes.lastRunDone": "上次已完成",
   "recipes.lastRunSkipped": "上次已取消",
@@ -878,6 +884,9 @@ export const zh: Record<MessageKey, string> = {
     "打开后带上这条会话最近的消息；太长会截断。关闭则只带最近这一条。",
   "recipes.includeContextHintPull":
     "按时间跑总会带上这条会话最近的消息；太长会截断。",
+  "recipes.maxConcurrent": "同时处理",
+  "recipes.maxConcurrentUnlimited": "不限制",
+  "recipes.maxConcurrentHint": "最多同时处理几条。留空不限制。",
   "recipes.enabledCheck": "启用",
   "recipes.advanced": "更多",
   "recipes.facet": "只看这类",

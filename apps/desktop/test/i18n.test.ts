@@ -25,6 +25,8 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "recipes.prompt"), "Prompt");
     assert.equal(translate("zh", "recipes.includeContextCheck"), "带上最近的消息");
     assert.equal(translate("en", "recipes.includeContextCheck"), "Include recent messages");
+    assert.equal(translate("zh", "recipes.maxConcurrent"), "同时处理");
+    assert.equal(translate("en", "recipes.maxConcurrentUnlimited"), "No limit");
     assert.equal(translate("zh", "recipes.triggerPull"), "定时查看");
     assert.equal(translate("en", "recipes.triggerPush"), "On a new message");
     assert.equal(translate("en", "work.dead"), "Not sent");
