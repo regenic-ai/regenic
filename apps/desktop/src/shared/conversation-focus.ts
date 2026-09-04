@@ -17,6 +17,8 @@ export function openThreadFocusRequest(
   return {
     thread_id: threadId,
     hydrate: coldOpen,
+    // Always kick an interactive live poll so warm re-opens refresh latest.
+    live: true,
     present: true,
   };
 }

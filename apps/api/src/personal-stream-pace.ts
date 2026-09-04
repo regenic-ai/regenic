@@ -1,7 +1,7 @@
 import type { SyncLane } from "@regenic/domain";
 
 export const CATCH_UP_STREAMS_PER_TICK = 3;
-export const LIVE_STREAM_CONCURRENCY = 4;
+export const LIVE_STREAM_CONCURRENCY = 8;
 export const IDLE_STREAM_CONCURRENCY = 6;
 export const BUSY_STREAM_CONCURRENCY = 2;
 export const IDLE_MEDIA_CONCURRENCY = 2;
@@ -177,6 +177,16 @@ export function syncExecutionBudget(input: {
     return {
       pages,
       concurrency: input.humanIdle ? IDLE_MEDIA_CONCURRENCY : BUSY_MEDIA_CONCURRENCY,
+    };
+  }
+  // Live/interactive must stay responsive while the human is present; only
+  // history/catalog pay the busy catch-up tax.
+  if (input.lane === "live" || input.lane === "interactive") {
+    return {
+      pages,
+      concurrency: input.humanIdle
+        ? IDLE_STREAM_CONCURRENCY
+        : LIVE_STREAM_CONCURRENCY,
     };
   }
   const concurrency = input.humanIdle

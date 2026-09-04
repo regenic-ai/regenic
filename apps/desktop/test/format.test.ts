@@ -71,8 +71,8 @@ describe("engine chip and pull copy", () => {
         ],
       }),
     });
-    assert.equal(engineChip(view), "syncing");
-    assert.equal(pullStatusLabel(view.pull), "Syncing 熊峰");
+    assert.equal(engineChip(view), "running");
+    assert.equal(pullStatusLabel(view.pull), "Backfilling history · 熊峰");
     assert.equal(threadSyncLabel("feishu:oc_1", view.pull), "Syncing older messages");
     assert.equal(threadSyncTone("feishu:oc_1", view.pull), "syncing");
   });
@@ -95,7 +95,7 @@ describe("engine chip and pull copy", () => {
       }),
     });
     assert.equal(engineChip(view), "running");
-    assert.equal(pullStatusLabel(view.pull), "Syncing Christy");
+    assert.equal(pullStatusLabel(view.pull), "Fetching latest · Christy");
     assert.equal(threadSyncLabel("feishu:oc_1", view.pull), null);
     assert.equal(threadSyncTone("feishu:oc_1", view.pull), null);
   });
