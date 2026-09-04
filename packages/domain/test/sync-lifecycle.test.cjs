@@ -182,14 +182,16 @@ describe("split sync planner", () => {
     assert.ok(plan.steady.length > 0);
   });
 
-  it("freezes fleet history while the human is present and only refreshes the open thread", () => {
+  it("preempts the open thread and keeps one leftover history stream while the human is present", () => {
     const members = [
       member("chat:boot", "feishu:boot"),
+      member("chat:hist", "feishu:hist"),
       member("chat:other", "feishu:other"),
       member("chat:live", "feishu:live"),
     ];
     const states = new Map([
       ["chat:boot", state("chat:boot", "history")],
+      ["chat:hist", state("chat:hist", "history")],
       ["chat:other", state("chat:other", "unseeded")],
       ["chat:live", state("chat:live", "live")],
     ]);
@@ -205,20 +207,48 @@ describe("split sync planner", () => {
       plan.bootstrap.map(
         (item) => `${item.lane}:${item.stream_key}:${item.older ? "older" : "head"}`,
       ),
-      ["interactive:chat:boot:head"],
+      ["interactive:chat:boot:head", "history:chat:hist:older"],
     );
     assert.equal(
-      plan.all.some((item) => item.lane === "history" || item.older === true),
+      plan.all.some(
+        (item) =>
+          (item.lane === "history" || item.older === true) &&
+          item.thread_id === "feishu:boot",
+      ),
       false,
     );
     assert.equal(
-      plan.steady.filter((item) => item.lane === "live").length <= 2,
-      true,
+      plan.steady.filter((item) => item.lane === "live").length,
+      1,
     );
     assert.equal(
       plan.steady.some((item) => item.lane === "catalog"),
       false,
     );
+  });
+
+  it("does not cap steady live fan-out while the human is present", () => {
+    const members = [
+      member("chat:1", "feishu:1"),
+      member("chat:2", "feishu:2"),
+      member("chat:3", "feishu:3"),
+      member("chat:4", "feishu:4"),
+    ];
+    const states = new Map([
+      ["chat:1", state("chat:1", "live")],
+      ["chat:2", state("chat:2", "live")],
+      ["chat:3", state("chat:3", "live")],
+      ["chat:4", state("chat:4", "live")],
+    ]);
+    const plan = planSyncTick({
+      members,
+      states,
+      humanIdle: false,
+      catalogIncomplete: false,
+      now: "2026-08-31T00:00:00.000Z",
+      steadyLimits: { live: 4 },
+    });
+    assert.equal(plan.steady.filter((item) => item.lane === "live").length, 4);
   });
 
   it("rotates steady live polls through a ring", () => {

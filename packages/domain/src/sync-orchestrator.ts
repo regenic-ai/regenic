@@ -1,8 +1,6 @@
 import type { SyncCatalogMember, SyncStreamState, SyncWorkItem } from "./sync-contracts";
 import { partitionMembersByLifecycle } from "./sync-lifecycle";
 import {
-  DEFAULT_STEADY_LANE_LIMITS,
-  HUMAN_PRESENT_STEADY_LIVE,
   planBootstrapSyncWork,
   planSteadySyncWork,
   type SyncBootstrapScheduleInput,
@@ -44,13 +42,7 @@ export function planSyncTick(input: SyncTickPlanInput): SyncTickPlan {
     ? input.steadyLimits
     : {
         ...input.steadyLimits,
-        live: Math.min(
-          input.steadyLimits?.live ?? DEFAULT_STEADY_LANE_LIMITS.live,
-          HUMAN_PRESENT_STEADY_LIVE,
-        ),
         catalog: 0,
-        history: 0,
-        media: Math.min(input.steadyLimits?.media ?? 1, 1),
       };
   const steadyItems = planSteadySyncWork({
     members: steady,

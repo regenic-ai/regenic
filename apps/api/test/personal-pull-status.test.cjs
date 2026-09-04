@@ -117,6 +117,12 @@ describe("pull status network watch", () => {
     assert.equal(preferredThreadId(1_000), "feishu:oc_hot");
     assert.equal(preferredThreadId(1_000 + PREFER_THREAD_MS), null);
   });
+
+  it("clears a preferred thread immediately", () => {
+    preferThread("feishu:oc_hot", 1_000);
+    preferThread(null, 1_100);
+    assert.equal(preferredThreadId(1_100), null);
+  });
 });
 
 describe("opened inbox hydrate", () => {
