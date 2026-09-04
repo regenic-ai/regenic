@@ -116,6 +116,12 @@ export class PersonalWorkFlush {
       if (force) {
         throw error;
       }
+    } finally {
+      try {
+        await this.channel.releaseOpenWindowForItem(item);
+      } catch (releaseError) {
+        console.error("personal open-window release failed", releaseError);
+      }
     }
   }
 }
