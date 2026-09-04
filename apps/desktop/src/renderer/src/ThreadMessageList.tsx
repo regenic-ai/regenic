@@ -58,6 +58,7 @@ export const ThreadMessageList = memo(
     onRetry?: () => void;
     onReply: (item: InboxViewItem) => void;
     onForward?: (item: InboxViewItem) => void;
+    onRetrySend?: (item: InboxViewItem) => void;
     selectedIds?: string[];
     selecting?: boolean;
     onToggleSelect?: (id: string, range: boolean) => void;
@@ -74,6 +75,7 @@ export const ThreadMessageList = memo(
     onRetry,
     onReply,
     onForward,
+    onRetrySend,
     selectedIds = [],
     selecting = false,
     onToggleSelect,
@@ -432,6 +434,7 @@ export const ThreadMessageList = memo(
                   selecting={selecting}
                   onReply={onReply}
                   onForward={onForward}
+                  onRetrySend={onRetrySend}
                   onToggleSelect={onToggleSelect}
                   onMenu={(event) => openMessageMenu(event, item, setMenu)}
                   onPreviewImage={openPreview}
@@ -534,6 +537,7 @@ const ChatRow = memo(function ChatRow({
   selecting,
   onReply,
   onForward,
+  onRetrySend,
   onToggleSelect,
   onMenu,
   onPreviewImage,
@@ -547,6 +551,7 @@ const ChatRow = memo(function ChatRow({
   selecting: boolean;
   onReply: (item: InboxViewItem) => void;
   onForward?: (item: InboxViewItem) => void;
+  onRetrySend?: (item: InboxViewItem) => void;
   onToggleSelect?: (id: string, range: boolean) => void;
   onMenu: (event: { preventDefault(): void; clientX: number; clientY: number }) => void;
   onPreviewImage: (id: string) => void;
@@ -556,11 +561,14 @@ const ChatRow = memo(function ChatRow({
   const canSelect = Boolean(onToggleSelect && canForwardItem(item));
   const forwardedFrom = item.forwarded_from;
   const forwardedTo = item.forwarded_to;
+  const sendState = item.send_state;
   return (
     <div
       className={`chat-row chat-row-${role} chat-row-${item.direction}${
         follow ? " is-follow" : ""
-      }${selected ? " is-selected" : ""}${selecting ? " is-selecting" : ""}`}
+      }${selected ? " is-selected" : ""}${selecting ? " is-selecting" : ""}${
+        sendState === "sending" ? " is-sending" : ""
+      }${sendState === "failed" ? " is-send-failed" : ""}`}
       onContextMenu={onMenu}
     >
       <ChatAvatar item={item} />
@@ -590,9 +598,27 @@ const ChatRow = memo(function ChatRow({
           <strong>{messageSpeakerLabel(item)}</strong>
           <span>{formatChatTime(item.event.occurred_at)}</span>
           {receipt ? (
-            <span className={`chat-receipt is-${item.receipt?.state ?? "sent"}`}>
+            <span
+              className={`chat-receipt is-${
+                sendState === "failed"
+                  ? "failed"
+                  : sendState === "sending"
+                    ? "sending"
+                    : (item.receipt?.state ?? "sent")
+              }`}
+            >
               {receipt}
             </span>
+          ) : null}
+          {sendState === "failed" && onRetrySend ? (
+            <button
+              type="button"
+              className="chat-action"
+              title={t("composer.retrySend")}
+              onClick={() => onRetrySend(item)}
+            >
+              {t("composer.retrySend")}
+            </button>
           ) : null}
           <span className="chat-actions">
             <ChatCopyButton item={item} />

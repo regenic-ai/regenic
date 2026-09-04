@@ -1847,6 +1847,24 @@ button {
   color: var(--accent);
 }
 
+.chat-receipt.is-sending {
+  opacity: 0.75;
+}
+
+.chat-receipt.is-failed {
+  color: var(--danger, #b42318);
+}
+
+.chat-row.is-sending .chat-main {
+  opacity: 0.72;
+}
+
+.chat-row.is-send-failed .chat-main {
+  outline: 1px solid color-mix(in srgb, var(--danger, #b42318) 45%, transparent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
 .chat-actions {
   margin-left: auto;
   display: inline-flex;

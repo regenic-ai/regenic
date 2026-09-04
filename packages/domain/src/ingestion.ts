@@ -404,12 +404,49 @@ export interface StoreClearResult {
   };
 }
 
+export interface SourceIdentityAliasBind {
+  org_id: string;
+  event_id: string;
+  aliases: Array<{ source: string; external_id: string }>;
+}
+
+export interface OutboundAttemptRecord {
+  org_id: string;
+  client_request_id: string;
+  thread_id: string;
+  event_id?: string;
+  status: "sent" | "failed";
+  channel_message_ids?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutboundAttemptPut {
+  org_id: string;
+  client_request_id: string;
+  thread_id: string;
+  event_id?: string;
+  status: "sent" | "failed";
+  channel_message_ids?: string[];
+  now: string;
+}
+
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
   findBlobs(
     contentHashes: readonly string[],
   ): Promise<Map<string, BlobRecord>>;
   findBySourceIdentity(identity: SourceIdentity): Promise<EventRecord | null>;
+  /**
+   * Point additional `(source, external_id)` heads at an existing Event so
+   * channel-native pull ids resolve to the local outbound without content echo.
+   */
+  bindSourceIdentityAliases(input: SourceIdentityAliasBind): Promise<void>;
+  getOutboundAttempt(
+    orgId: string,
+    clientRequestId: string,
+  ): Promise<OutboundAttemptRecord | null>;
+  putOutboundAttempt(input: OutboundAttemptPut): Promise<OutboundAttemptRecord>;
   getEvent(orgId: string, eventId: string): Promise<EventRecord | null>;
   listEvents(orgId: string, query?: EventListQuery): Promise<EventRecord[]>;
   append(input: NewEvent): Promise<EventRecord>;

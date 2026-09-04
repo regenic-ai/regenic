@@ -923,6 +923,7 @@ export async function sendReply(input: {
   text?: string;
   reply_to_event_id?: string;
   attachments?: ReplyAttachmentInput[];
+  client_request_id?: string;
 }): Promise<ReplyView> {
   const response = await kernelFetch("/v1/me/replies", {
     method: "POST",

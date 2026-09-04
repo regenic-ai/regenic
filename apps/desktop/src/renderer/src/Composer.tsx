@@ -49,6 +49,7 @@ export function Composer({
   const editorRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const attachmentsRef = useRef(attachments);
+  const sendingRef = useRef(false);
   const dragDepth = useRef(0);
   attachmentsRef.current = attachments;
   const blocked = Boolean(disabled || sending);
@@ -118,9 +119,10 @@ export function Composer({
   const send = async () => {
     const editor = editorRef.current;
     const text = editor ? htmlToMarkdown(editor) : "";
-    if (blocked || (text.length === 0 && attachments.length === 0)) {
+    if (blocked || sendingRef.current || (text.length === 0 && attachments.length === 0)) {
       return;
     }
+    sendingRef.current = true;
     setLocalError(null);
     try {
       await onSend({
@@ -130,6 +132,8 @@ export function Composer({
       });
     } catch {
       return;
+    } finally {
+      sendingRef.current = false;
     }
     if (editor) {
       editor.innerHTML = "";

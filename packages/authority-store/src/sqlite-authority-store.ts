@@ -62,6 +62,8 @@ import type {
   NewConnectorInstallation,
   NewEvent,
   NewIngestAttempt,
+  OutboundAttemptPut,
+  OutboundAttemptRecord,
   RepointContentInput,
   ResetConnectorCursor,
   ReleaseConnectorLease,
@@ -69,6 +71,7 @@ import type {
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
   SourceIdentity,
+  SourceIdentityAliasBind,
   TombstoneEvent,
   Recipe,
   WorkDelivery,
@@ -326,6 +329,125 @@ export class SqliteAuthorityStore
     identity: SourceIdentity,
   ): Promise<EventRecord | null> {
     return this.findCurrent(identity);
+  }
+
+  async bindSourceIdentityAliases(input: SourceIdentityAliasBind): Promise<void> {
+    this.assertWritable();
+    const event = await this.getEvent(input.org_id, input.event_id);
+    if (!event) {
+      throw new Error(`Unknown event for identity alias: ${input.event_id}`);
+    }
+    const insert = this.database.prepare(
+      `
+        INSERT OR IGNORE INTO source_heads (
+          org_id, source, external_id, current_event_id
+        ) VALUES (?, ?, ?, ?)
+      `,
+    );
+    const run = this.database.transaction(() => {
+      for (const alias of input.aliases) {
+        const externalId = alias.external_id.trim();
+        if (!alias.source.trim() || !externalId) {
+          continue;
+        }
+        insert.run(input.org_id, alias.source, externalId, input.event_id);
+      }
+    });
+    run();
+  }
+
+  async getOutboundAttempt(
+    orgId: string,
+    clientRequestId: string,
+  ): Promise<OutboundAttemptRecord | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT org_id, client_request_id, thread_id, event_id, status,
+                 channel_message_ids_json, created_at, updated_at
+          FROM outbound_attempts
+          WHERE org_id = ? AND client_request_id = ?
+        `,
+      )
+      .get(orgId, clientRequestId) as
+      | {
+          org_id: string;
+          client_request_id: string;
+          thread_id: string;
+          event_id: string | null;
+          status: "sent" | "failed";
+          channel_message_ids_json: string | null;
+          created_at: string;
+          updated_at: string;
+        }
+      | undefined;
+    if (!row) {
+      return null;
+    }
+    return {
+      org_id: row.org_id,
+      client_request_id: row.client_request_id,
+      thread_id: row.thread_id,
+      ...(row.event_id ? { event_id: row.event_id } : {}),
+      status: row.status,
+      ...(row.channel_message_ids_json
+        ? {
+            channel_message_ids: JSON.parse(row.channel_message_ids_json) as string[],
+          }
+        : {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  async putOutboundAttempt(
+    input: OutboundAttemptPut,
+  ): Promise<OutboundAttemptRecord> {
+    this.assertWritable();
+    const previous = await this.getOutboundAttempt(
+      input.org_id,
+      input.client_request_id,
+    );
+    const createdAt = previous?.created_at ?? input.now;
+    this.database
+      .prepare(
+        `
+          INSERT INTO outbound_attempts (
+            org_id, client_request_id, thread_id, event_id, status,
+            channel_message_ids_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(org_id, client_request_id) DO UPDATE SET
+            thread_id = excluded.thread_id,
+            event_id = excluded.event_id,
+            status = excluded.status,
+            channel_message_ids_json = excluded.channel_message_ids_json,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        input.org_id,
+        input.client_request_id,
+        input.thread_id,
+        input.event_id ?? null,
+        input.status,
+        input.channel_message_ids
+          ? JSON.stringify(input.channel_message_ids)
+          : null,
+        createdAt,
+        input.now,
+      );
+    return {
+      org_id: input.org_id,
+      client_request_id: input.client_request_id,
+      thread_id: input.thread_id,
+      ...(input.event_id ? { event_id: input.event_id } : {}),
+      status: input.status,
+      ...(input.channel_message_ids
+        ? { channel_message_ids: [...input.channel_message_ids] }
+        : {}),
+      created_at: createdAt,
+      updated_at: input.now,
+    };
   }
 
   async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {
@@ -1058,6 +1180,9 @@ export class SqliteAuthorityStore
         .run(orgId);
       this.database
         .prepare(`DELETE FROM ingest_attempts WHERE org_id = ?`)
+        .run(orgId);
+      this.database
+        .prepare(`DELETE FROM outbound_attempts WHERE org_id = ?`)
         .run(orgId);
       this.database.prepare(`DELETE FROM source_heads WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM events WHERE org_id = ?`).run(orgId);

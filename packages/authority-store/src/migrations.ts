@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 22;
+export const LATEST_SCHEMA_VERSION = 23;
 
 export const MIGRATIONS = [
   {
@@ -482,6 +482,25 @@ export const MIGRATIONS = [
         ON context_projection_outbox (status, next_retry_at, lease_expires_at, created_at);
       CREATE INDEX context_projection_outbox_org_idx
         ON context_projection_outbox (org_id, created_at, id);
+    `,
+  },
+  {
+    version: 23,
+    sql: `
+      CREATE TABLE outbound_attempts (
+        org_id TEXT NOT NULL,
+        client_request_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        event_id TEXT REFERENCES events(id),
+        status TEXT NOT NULL CHECK (status IN ('sent', 'failed')),
+        channel_message_ids_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (org_id, client_request_id)
+      );
+
+      CREATE INDEX outbound_attempts_event_idx
+        ON outbound_attempts (event_id);
     `,
   },
 ] as const;
