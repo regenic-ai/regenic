@@ -59,9 +59,8 @@ export const dshLocaleTables = defineLocaleTables({
     "executor.field.skill.hint": "Optional DSH skill or preset for this run.",
     "executor.field.prompt": "Prompt",
     "executor.field.prompt.hint":
-      "Optional. Sent before the work evidence. If the recipe writes back, put the option on line 1. Feishu approvals also accept 同意/通过 and 拒绝/驳回.",
-    "executor.field.prompt.placeholder":
-      "option-label\nReason on the following lines.",
+      "Optional. Tell the assistant what to do. If it should pick a choice, put that on the first line and the reason below.",
+    "executor.field.prompt.placeholder": "What this run should do.",
   },
   zh: {
     "catalog.title": "DSH",
@@ -116,8 +115,7 @@ export const dshLocaleTables = defineLocaleTables({
     "executor.field.skill.hint": "这次运行可选的 DSH skill 或预设。",
     "executor.field.prompt": "Prompt",
     "executor.field.prompt.hint":
-      "可选。写在工作材料前面。如果规则要回写，选项放在第一行。飞书审批也认同意/通过、拒绝/驳回。",
-    "executor.field.prompt.placeholder":
-      "option-label\n后面写原因。",
+      "可选。告诉助手这次做什么。若要回复一个选项，写在第一行，原因写在后面。",
+    "executor.field.prompt.placeholder": "这次要做什么。",
   },
 });
