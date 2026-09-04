@@ -20,16 +20,14 @@ export const DEFAULT_BOOTSTRAP_LANE_LIMITS: SyncLaneLimits = {
   media: 2,
 };
 
-/** Open-thread freshness only. Fleet history/seed wait until the human is idle. */
+/** Open-thread head wins the reserved lane; one leftover history stream may continue. */
 export const HUMAN_PRESENT_BOOTSTRAP_LIMITS: SyncLaneLimits = {
   interactive: 1,
   live: 0,
   catalog: 0,
-  history: 0,
+  history: 1,
   media: 0,
 };
-
-export const HUMAN_PRESENT_STEADY_LIVE = 2;
 
 export function syncLaneLimits(
   humanIdle: boolean,
@@ -48,7 +46,7 @@ export function syncLaneLimits(
     interactive: 1,
     live: 2,
     catalog: catalogIncomplete ? 1 : 0,
-    history: 0,
+    history: 1,
     media: 1,
   };
 }
@@ -110,7 +108,8 @@ export function planBootstrapSyncWork(
           ...HUMAN_PRESENT_BOOTSTRAP_LIMITS,
           ...input.limits,
           live: 0,
-          history: 0,
+          history:
+            input.limits?.history ?? HUMAN_PRESENT_BOOTSTRAP_LIMITS.history,
           catalog: 0,
         },
   });

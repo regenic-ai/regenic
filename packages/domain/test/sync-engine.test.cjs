@@ -253,9 +253,14 @@ describe("sync scheduler", () => {
     });
     assert.deepEqual(
       selected.map((item) => `${item.lane}:${item.stream_key}:${item.older ? "older" : "live"}`),
-      ["interactive:chat:open:live", "live:chat:b:live", "catalog:__catalog__:live"],
+      [
+        "interactive:chat:open:live",
+        "live:chat:b:live",
+        "catalog:__catalog__:live",
+        "history:chat:a:older",
+      ],
     );
-    assert.equal(syncLaneLimits(false, true).history, 0);
+    assert.equal(syncLaneLimits(false, true).history, 1);
   });
 
   it("backfills other threads when idle and rotates history", () => {

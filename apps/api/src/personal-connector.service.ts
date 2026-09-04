@@ -1557,7 +1557,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     try {
       const engine = new SyncEngine(store);
       const allowHistory = options?.allowHistory !== false;
-      const humanIdle = allowHistory && isHumanIdle();
+      const humanIdle = isHumanIdle();
       if (driver.bindSyncSource) {
         const source = await driver.bindSyncSource(
           installation,
@@ -1669,6 +1669,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
         }
         const stream = streamByKey.get(item.stream_key);
         if (!stream) {
+          return [];
+        }
+        if (!allowHistory && (item.older || item.lane === "history")) {
           return [];
         }
         if (pressure.throttle_history && (item.older || item.lane === "history")) {

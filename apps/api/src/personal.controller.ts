@@ -146,6 +146,8 @@ export class PersonalController {
     reportConversationPresence(next);
     if (next.looking && next.thread_id) {
       preferThread(next.thread_id);
+    } else {
+      preferThread(null);
     }
     return {
       accepted: true as const,
