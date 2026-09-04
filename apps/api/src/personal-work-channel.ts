@@ -35,6 +35,10 @@ import { releaseDriverOpenWindow } from "./open-window-release";
 import { stampFromThreadSurfaces } from "./personal-reply-stamp";
 import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import {
+  scanInboxTurns,
+  type InboxTurnScan,
+} from "./personal-work-reap";
 
 export class PersonalWorkChannel {
   constructor(
@@ -313,6 +317,43 @@ export class PersonalWorkChannel {
       visibleText: body.body_text,
       visibleActivity: body.surface?.activity,
     });
+  }
+
+  async inspectSysout(threadId: string): Promise<{
+    transcript: Transcript | null;
+    scan: InboxTurnScan;
+  }> {
+    const host = this.runtime.requireHost();
+    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
+      thread_ids: [threadId],
+      siblings: true,
+    });
+    const newest = [...items]
+      .reverse()
+      .filter((row) => row.event.operation !== "tombstone");
+    const hashes = newest
+      .map((row) => row.event.content_hash)
+      .filter((hash): hash is string => Boolean(hash));
+    const bodies = await resolveInboxBodies(
+      host.get("authority"),
+      host.get("blobs"),
+      hashes,
+      "meta",
+    );
+    const scan = scanInboxTurns(
+      newest.map((row) => {
+        const body = row.event.content_hash
+          ? bodies.get(row.event.content_hash)
+          : undefined;
+        return {
+          status: row.decision.reason_codes.includes("thread_status"),
+          turn: body?.surface?.turn,
+          activity: body?.surface?.activity,
+          text: body?.body_text,
+        };
+      }),
+    );
+    return { transcript: await this.readTranscript(threadId), scan };
   }
 
   async threadContextLines(

@@ -35,6 +35,29 @@ export class PersonalWorkWait {
     return this.byRun.has(runId);
   }
 
+  async followSysout(item: WorkItem, run: WorkRun): Promise<boolean> {
+    const sysoutId = run.agent_thread_id ?? run.external_run_id;
+    if (!sysoutId) {
+      return false;
+    }
+    let thread: ConversationThread;
+    try {
+      thread = parseConversationThread(sysoutId);
+    } catch {
+      return false;
+    }
+    const host = this.runtime.requireHost();
+    const installations = await host
+      .get("authority")
+      .listInstallations(item.org_id);
+    const found = this.drivers.findForThread(installations, thread);
+    if (!found) {
+      return false;
+    }
+    await this.connectors.followThread(found.installation.id, thread);
+    return true;
+  }
+
   drop(runId: string): void {
     const dispose = this.byRun.get(runId);
     this.byRun.delete(runId);
