@@ -221,4 +221,67 @@ describePg("postgres authority store", () => {
       await host.dispose();
     }
   });
+
+  it("upgrades v23 outbox indexes to partial claim indexes", async () => {
+    const connectionString = await isolatedPostgresUrl(baseConnectionString);
+    const setup = new Client({ connectionString });
+    await setup.connect();
+    try {
+      await setup.query(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL
+        );
+        INSERT INTO schema_migrations (version, applied_at) VALUES (23, now());
+        CREATE TABLE context_projection_outbox (
+          id TEXT PRIMARY KEY,
+          org_id TEXT NOT NULL,
+          event_id TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          lease_owner TEXT,
+          lease_expires_at TIMESTAMPTZ,
+          next_retry_at TIMESTAMPTZ,
+          last_error TEXT,
+          created_at TIMESTAMPTZ NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL
+        );
+        CREATE INDEX context_projection_outbox_due_idx
+          ON context_projection_outbox (status, next_retry_at, lease_expires_at, created_at);
+      `);
+    } finally {
+      await setup.end();
+    }
+
+    const store = await PostgresAuthorityStore.open(connectionString);
+    stores.push(store);
+
+    const check = new Client({ connectionString });
+    await check.connect();
+    try {
+      const versions = await check.query(
+        `SELECT version FROM schema_migrations ORDER BY version`,
+      );
+      assert.deepEqual(
+        versions.rows.map((row) => Number(row.version)),
+        [23, 24],
+      );
+      const indexes = await check.query(
+        `SELECT indexname FROM pg_indexes
+         WHERE schemaname = current_schema()
+           AND tablename = 'context_projection_outbox'
+         ORDER BY indexname`,
+      );
+      const names = indexes.rows.map((row) => row.indexname);
+      assert.equal(names.includes("context_projection_outbox_due_idx"), false);
+      assert.equal(names.includes("context_projection_outbox_pending_idx"), true);
+      assert.equal(names.includes("context_projection_outbox_failed_due_idx"), true);
+      assert.equal(
+        names.includes("context_projection_outbox_running_expired_idx"),
+        true,
+      );
+    } finally {
+      await check.end();
+    }
+  });
 });

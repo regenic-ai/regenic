@@ -1,4 +1,23 @@
-export const PG_SCHEMA_VERSION = 23;
+export const PG_SCHEMA_VERSION = 24;
+
+/** Applied when an existing postgres authority DB is already at a prior baseline. */
+export const PG_MIGRATIONS = [
+  {
+    version: 24,
+    sql: `
+DROP INDEX IF EXISTS context_projection_outbox_due_idx;
+CREATE INDEX context_projection_outbox_pending_idx
+  ON context_projection_outbox (created_at, id)
+  WHERE status = 'pending';
+CREATE INDEX context_projection_outbox_failed_due_idx
+  ON context_projection_outbox (next_retry_at, created_at, id)
+  WHERE status = 'failed';
+CREATE INDEX context_projection_outbox_running_expired_idx
+  ON context_projection_outbox (lease_expires_at, created_at, id)
+  WHERE status = 'running';
+`,
+  },
+] as const;
 
 export const PG_BASELINE_SQL = `
 CREATE TABLE blobs (
@@ -343,8 +362,16 @@ CREATE TABLE context_projection_outbox (
   updated_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX context_projection_outbox_due_idx
-  ON context_projection_outbox (status, next_retry_at, lease_expires_at, created_at);
+-- Claim is an OR of three status branches; partial indexes match each arm.
+CREATE INDEX context_projection_outbox_pending_idx
+  ON context_projection_outbox (created_at, id)
+  WHERE status = 'pending';
+CREATE INDEX context_projection_outbox_failed_due_idx
+  ON context_projection_outbox (next_retry_at, created_at, id)
+  WHERE status = 'failed';
+CREATE INDEX context_projection_outbox_running_expired_idx
+  ON context_projection_outbox (lease_expires_at, created_at, id)
+  WHERE status = 'running';
 CREATE INDEX context_projection_outbox_org_idx
   ON context_projection_outbox (org_id, created_at, id);
 
