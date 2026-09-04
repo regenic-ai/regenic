@@ -143,6 +143,9 @@ The following are not allowed:
   `hold_while_working`, `list_title`,
   `surface.activity`, and inbox `prompts` / `unread` / `can_receipt` /
   `receipt`. The Recipes type picker only renders `subjectCatalog`.
+- Holding ingest behind a processing window. Install fields choose what
+  to eat; in-scope work units are synced in. How many jobs run at once
+  is Recipe `max_concurrent`, not connector scheduling.
 
 ## Isolation
 
@@ -278,6 +281,7 @@ A connector does three declarative things:
    Stamping only the first record drops the chip.
 3. If the install form should limit what to sync, filter types with
    catalog `fields`. That is “what to ingest,” not “how to handle it.”
+   How many jobs run at once belongs on Recipe `max_concurrent`.
 
 The kernel only equality-matches `Recipe.match.unit_kind`. Specificity:
 `thread_id` > `unit_kind` > `source` > `record_class` > `thread_facet`.

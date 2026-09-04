@@ -317,6 +317,7 @@ export interface RecipeView {
   executor_config: Record<string, string>;
   can_write_back: boolean;
   include_context: boolean;
+  max_concurrent?: number;
   enabled: boolean;
   next_run_at?: string;
   last_run?: RecipeLastRun;

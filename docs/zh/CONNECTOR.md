@@ -111,6 +111,7 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
 - 在记录或安装上写 `recipe_id` / `executor_type`，或在插件里按任务类型
   选执行器。类型是声明，绑定是 Recipe。
 - 在 API 或桌面按渠道名加开关。桌面读 `can_send`、`can_create`、`create_with_task`、`await_reply`、`hold_while_working`、`list_title`、`surface.activity`，以及 inbox 上的 `prompts` / `unread` / `can_receipt` / `receipt`。规则页的类型下拉只渲染 `subjectCatalog`。
+- 用处理窗口卡住采集。安装表单筛「吃什么」；范围内的工单都同步进来。同时开跑几条是 Recipe `max_concurrent`，不是连接器调度。
 
 ## 隔离
 
@@ -200,7 +201,7 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
    `conversation_kind`。同一任务实例的**每条**记录都盖同一 id；列表只拉
    heads（最后一条可见消息）。只盖首条，芯片会丢。
 3. 安装表单若要限制同步范围，用 catalog `fields` 筛类型。那是「吃什么」，
-   不是「怎么处理」。
+   不是「怎么处理」。同时处理几条写在规则的 `max_concurrent` 上。
 
 内核只对 `Recipe.match.unit_kind` 做字符串相等。特异性：`thread_id` >
 `unit_kind` > `source` > `record_class` > `thread_facet`。只写

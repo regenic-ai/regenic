@@ -193,6 +193,7 @@ export const en = {
   "recipes.cardLine": "{when} → {executor}{outcome}",
   "recipes.outcomeBack": " · send back",
   "recipes.outcomeKeep": " · keep here",
+  "recipes.outcomeConcurrent": " · {count} at a time",
   "recipes.nextRun": "Next {when}",
   "recipes.nextRunDue": "Due now",
   "recipes.paused": "Paused",
@@ -265,6 +266,10 @@ export const en = {
     "On: send recent messages from this chat. Long threads are cut short. Off: only the latest item.",
   "recipes.includeContextHintPull":
     "A schedule always sends recent messages from this chat. Long threads are cut short.",
+  "recipes.maxConcurrent": "Run at once",
+  "recipes.maxConcurrentUnlimited": "No limit",
+  "recipes.maxConcurrentHint":
+    "How many matching jobs may run at the same time. Leave empty for no limit. Incoming work is still synced; only starts are capped.",
   "recipes.enabledCheck": "On",
   "recipes.advanced": "More",
   "recipes.facet": "Only this type",
@@ -811,6 +816,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.cardLine": "{when} → {executor}{outcome}",
   "recipes.outcomeBack": "，结果发回去",
   "recipes.outcomeKeep": "，结果留在这里",
+  "recipes.outcomeConcurrent": " · 同时 {count} 条",
   "recipes.nextRun": "下次 {when}",
   "recipes.nextRunDue": "已到点，即将处理",
   "recipes.paused": "已停用",
@@ -878,6 +884,10 @@ export const zh: Record<MessageKey, string> = {
     "打开后带上这条会话最近的消息；太长会截断。关闭则只带最近这一条。",
   "recipes.includeContextHintPull":
     "按时间跑总会带上这条会话最近的消息；太长会截断。",
+  "recipes.maxConcurrent": "同时处理",
+  "recipes.maxConcurrentUnlimited": "不限制",
+  "recipes.maxConcurrentHint":
+    "同时开跑的匹配工单数。留空表示不限制。工单仍会全部同步进来，只限制同时执行几条。",
   "recipes.enabledCheck": "启用",
   "recipes.advanced": "更多",
   "recipes.facet": "只看这类",

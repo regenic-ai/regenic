@@ -272,11 +272,6 @@ export class PersonalWorkSupervise {
         this.waits?.drop(run.id);
         await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
         this.touchInboxDigest?.();
-        try {
-          await this.channel.releaseOpenWindowForItem(item);
-        } catch (releaseError) {
-          console.error("personal open-window release failed", releaseError);
-        }
       }
     }
   }

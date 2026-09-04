@@ -873,6 +873,7 @@ describe("local ingestion persistence", () => {
       can_write_back: false,
       include_context: false,
       enabled: true,
+      max_concurrent: 3,
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
     });
@@ -955,6 +956,7 @@ describe("local ingestion persistence", () => {
     assert.equal(after.connectors, 1);
     assert.equal(after.executors, 1);
     assert.equal(recipes[0].id, "keep-recipe");
+    assert.equal(recipes[0].max_concurrent, 3);
     assert.equal(installations[0].id, "keep-connector");
     assert.equal(attempts.length, 0);
     assert.equal(cursor.cursor, undefined);

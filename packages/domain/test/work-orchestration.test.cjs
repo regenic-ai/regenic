@@ -37,6 +37,9 @@ const {
   recipeAllowsAutoStart,
   recipeAllowsPullDispatch,
   recipeAllowsPushDispatch,
+  recipeHasStartCapacity,
+  occupiedRecipeSlots,
+  normalizeRecipeMaxConcurrent,
   shouldAcceptPushRecord,
   shouldRetryFailedPush,
   recipeSpecificity,
@@ -187,6 +190,43 @@ describe("recipe auto-start specification", () => {
     assert.equal(recipeAllowsPullDispatch(pull), true);
     assert.equal(selectRecipeForSubject([pull, manual, push], subject).id, "push");
     assert.equal(selectRecipeForSubject([pull, manual], subject).id, "manual");
+  });
+
+  it("caps auto start without blocking ingest", () => {
+    assert.equal(normalizeRecipeMaxConcurrent(undefined), undefined);
+    assert.equal(normalizeRecipeMaxConcurrent(""), undefined);
+    assert.equal(normalizeRecipeMaxConcurrent(0), undefined);
+    assert.equal(normalizeRecipeMaxConcurrent(3), 3);
+    assert.equal(normalizeRecipeMaxConcurrent("2"), 2);
+    const recipe = { ...makeRecipe("cap", { record_class: "task" }), max_concurrent: 1 };
+    const items = [
+      {
+        id: "w1",
+        recipe_id: "cap",
+        status: "running",
+      },
+      {
+        id: "w2",
+        recipe_id: "cap",
+        status: "open",
+      },
+    ];
+    assert.equal(occupiedRecipeSlots(items, "cap"), 1);
+    assert.equal(recipeHasStartCapacity({ recipe, items, exceptItemId: "w2" }), false);
+    assert.equal(
+      recipeHasStartCapacity({
+        recipe: makeRecipe("open", { record_class: "task" }),
+        items,
+      }),
+      true,
+    );
+    assert.equal(
+      recipeHasStartCapacity({
+        recipe,
+        items: [{ id: "w1", recipe_id: "cap", status: "done" }],
+      }),
+      true,
+    );
   });
 
   it("ignores outbound and assistant echoes for push", () => {

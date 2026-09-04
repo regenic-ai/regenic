@@ -16,6 +16,7 @@ import {
   pullUnitKey,
   recipeAllowsPullDispatch,
   recipeAllowsPushDispatch,
+  recipeHasStartCapacity,
   recipeWantsContext,
   selectRecipeForSubject,
   shouldAcceptPushRecord,
@@ -38,7 +39,7 @@ import { PersonalRuntimeService } from "./personal-runtime.service";
 import { shouldDeferWorkForThread } from "./personal-sync-phase";
 
 export class PersonalWorkDispatch {
-  private readonly starting = new Set<string>();
+  private readonly starting = new Map<string, string>();
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -285,7 +286,10 @@ export class PersonalWorkDispatch {
     if (this.starting.has(item.id)) {
       return undefined;
     }
-    this.starting.add(item.id);
+    if (mode === "auto" && !(await this.hasStartCapacity(recipe, item.id))) {
+      return undefined;
+    }
+    this.starting.set(item.id, recipe.id);
     try {
       return await this.startClaimedItem(
         item,
@@ -378,6 +382,28 @@ export class PersonalWorkDispatch {
     return (
       latest ?? run
     );
+  }
+
+  private async hasStartCapacity(recipe: Recipe, exceptItemId: string): Promise<boolean> {
+    if (recipe.max_concurrent === undefined) {
+      return true;
+    }
+    const items = await this.runtime
+      .requireHost()
+      .get("authority")
+      .listWorkItems(this.runtime.orgId());
+    let inflight = 0;
+    for (const [itemId, recipeId] of this.starting) {
+      if (recipeId === recipe.id && itemId !== exceptItemId) {
+        inflight += 1;
+      }
+    }
+    return recipeHasStartCapacity({
+      recipe,
+      items,
+      exceptItemId,
+      inflight,
+    });
   }
 
   private async observeHead(input: {

@@ -67,6 +67,11 @@ export interface Recipe {
   can_write_back: boolean;
   /** Kernel evidence: send visible thread history, not just the head. */
   include_context: boolean;
+  /**
+   * Auto-start cap for this recipe. Counts `running` + `waiting_human`.
+   * Omit for unlimited. Does not gate ingest or opening WorkItems.
+   */
+  max_concurrent?: number;
   enabled: boolean;
   /** Pull only. Next wall-clock fire. Survives sleep and restart. */
   next_run_at?: string;

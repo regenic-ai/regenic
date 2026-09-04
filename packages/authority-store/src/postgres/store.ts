@@ -1398,8 +1398,8 @@ export class PostgresAuthorityStore
         INSERT INTO recipes (
           id, org_id, name, match_json, executor_type, executor_config_json,
           can_write_back, include_context, enabled, trigger_kind,
-          trigger_interval_ms, trigger_coalesce, next_run_at, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          trigger_interval_ms, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
@@ -1411,6 +1411,7 @@ export class PostgresAuthorityStore
           trigger_kind = EXCLUDED.trigger_kind,
           trigger_interval_ms = EXCLUDED.trigger_interval_ms,
           trigger_coalesce = EXCLUDED.trigger_coalesce,
+          max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
           updated_at = EXCLUDED.updated_at
       `,
@@ -1427,6 +1428,7 @@ export class PostgresAuthorityStore
         trigger.kind,
         trigger.kind === "pull" ? (trigger.interval_ms ?? null) : null,
         trigger.kind === "push" && trigger.coalesce !== false,
+        recipe.max_concurrent ?? null,
         recipe.next_run_at ?? null,
         recipe.created_at,
         recipe.updated_at,
@@ -3313,6 +3315,7 @@ interface RecipeRow {
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
   trigger_coalesce: unknown;
+  max_concurrent: number | null;
   next_run_at: unknown;
   created_at: unknown;
   updated_at: unknown;
@@ -3407,6 +3410,9 @@ function toRecipe(row: RecipeRow): Recipe {
     can_write_back: asBool(row.can_write_back),
     include_context: asBool(row.include_context),
     enabled: asBool(row.enabled),
+    ...(row.max_concurrent && row.max_concurrent > 0
+      ? { max_concurrent: row.max_concurrent }
+      : {}),
     ...(row.next_run_at ? { next_run_at: toIso(row.next_run_at) } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),

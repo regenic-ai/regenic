@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 24;
+export const PG_SCHEMA_VERSION = 25;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -15,6 +15,12 @@ CREATE INDEX context_projection_outbox_failed_due_idx
 CREATE INDEX context_projection_outbox_running_expired_idx
   ON context_projection_outbox (lease_expires_at, created_at, id)
   WHERE status = 'running';
+`,
+  },
+  {
+    version: 25,
+    sql: `
+ALTER TABLE recipes ADD COLUMN max_concurrent INTEGER;
 `,
   },
 ] as const;
@@ -172,6 +178,7 @@ CREATE TABLE recipes (
   trigger_kind TEXT NOT NULL DEFAULT 'push',
   trigger_interval_ms INTEGER,
   trigger_coalesce BOOLEAN NOT NULL DEFAULT TRUE,
+  max_concurrent INTEGER,
   next_run_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL

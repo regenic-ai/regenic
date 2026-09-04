@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 23;
+export const LATEST_SCHEMA_VERSION = 24;
 
 export const MIGRATIONS = [
   {
@@ -503,6 +503,12 @@ export const MIGRATIONS = [
 
       CREATE INDEX outbound_attempts_event_idx
         ON outbound_attempts (event_id);
+    `,
+  },
+  {
+    version: 24,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN max_concurrent INTEGER;
     `,
   },
 ] as const;
