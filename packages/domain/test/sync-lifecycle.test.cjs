@@ -172,7 +172,7 @@ describe("split sync planner", () => {
     const plan = planSyncTick({
       members,
       states,
-      humanIdle: false,
+      humanIdle: true,
       catalogIncomplete: false,
       now: "2026-08-31T00:00:00.000Z",
     });
@@ -180,6 +180,45 @@ describe("split sync planner", () => {
     assert.equal(new Set(keys).size, keys.length);
     assert.ok(plan.bootstrap.length > 0);
     assert.ok(plan.steady.length > 0);
+  });
+
+  it("freezes fleet history while the human is present and only refreshes the open thread", () => {
+    const members = [
+      member("chat:boot", "feishu:boot"),
+      member("chat:other", "feishu:other"),
+      member("chat:live", "feishu:live"),
+    ];
+    const states = new Map([
+      ["chat:boot", state("chat:boot", "history")],
+      ["chat:other", state("chat:other", "unseeded")],
+      ["chat:live", state("chat:live", "live")],
+    ]);
+    const plan = planSyncTick({
+      members,
+      states,
+      preferredThreadId: "feishu:boot",
+      humanIdle: false,
+      catalogIncomplete: true,
+      now: "2026-08-31T00:00:00.000Z",
+    });
+    assert.deepEqual(
+      plan.bootstrap.map(
+        (item) => `${item.lane}:${item.stream_key}:${item.older ? "older" : "head"}`,
+      ),
+      ["interactive:chat:boot:head"],
+    );
+    assert.equal(
+      plan.all.some((item) => item.lane === "history" || item.older === true),
+      false,
+    );
+    assert.equal(
+      plan.steady.filter((item) => item.lane === "live").length <= 2,
+      true,
+    );
+    assert.equal(
+      plan.steady.some((item) => item.lane === "catalog"),
+      false,
+    );
   });
 
   it("rotates steady live polls through a ring", () => {

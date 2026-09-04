@@ -471,6 +471,25 @@ describe("sync engine", () => {
     assert.equal(planned[0].stream_key, "chat:2");
   });
 
+  it("skips the directory census when pages is 0", async () => {
+    const store = new MemorySyncStore();
+    const engine = new SyncEngine(store);
+    let listed = 0;
+    const source = {
+      async listDirectory() {
+        listed += 1;
+        return { members: [{ stream_key: "chat:1" }], complete: true };
+      },
+    };
+    const view = await engine.refreshCatalog({
+      installation_id: "feishu-1",
+      source,
+      pages: 0,
+    });
+    assert.equal(listed, 0);
+    assert.equal(view.members.length, 0);
+  });
+
   it("plans only mounted members when an explicit scope is provided", async () => {
     const store = new MemorySyncStore();
     const engine = new SyncEngine(store);

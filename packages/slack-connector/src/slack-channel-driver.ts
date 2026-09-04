@@ -60,6 +60,7 @@ export const slackChannelDriver: ChannelDriver = {
       reply: false,
       create: false,
       list_title: "conversation",
+      hydrate_on_open: true,
     };
   },
 

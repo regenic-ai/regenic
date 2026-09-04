@@ -21,6 +21,7 @@ import {
   parseConversationThread,
   requireCreateThread,
   requireWebhookPorts,
+  currentSyncLane,
   runInSyncLane,
   SyncEngine,
   applyKernelPressureToSyncBudget,
@@ -839,10 +840,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
           pagesBudget: 1,
           idleMs: streamIdleMs(stream),
         });
-        this.hydrateCooldown.set(threadId, Date.now() + options.cooldownMs);
-        this.liveKickCooldown.set(threadId, Date.now() + options.cooldownMs);
-        this.inbox.publishThreadUpdated(threadId);
-        this.inbox.touchInboxDigest();
+        if (pages.some((page) => page.status === "completed")) {
+          this.hydrateCooldown.set(threadId, Date.now() + options.cooldownMs);
+          this.liveKickCooldown.set(threadId, Date.now() + options.cooldownMs);
+          this.inbox.publishThreadUpdated(threadId);
+          this.inbox.touchInboxDigest();
+        }
       } catch (error) {
         this.rememberStreamPace({
           key,
@@ -2392,6 +2395,10 @@ async function pollStream(
     });
     runs.push(run);
     if (run.status === "lease_unavailable") {
+      if (currentSyncLane() === "interactive") {
+        // Same-stream history may hold the lease; retry on the next focus/tick.
+        break;
+      }
       throw new PersonalConnectorError(
         "lease_unavailable",
         "Connector stream is already leased",

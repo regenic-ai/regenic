@@ -271,8 +271,8 @@ describe("syncExecutionBudget", () => {
 });
 
 describe("catalogRefreshPages", () => {
-  it("turns a page while the human is present and bursts when idle or discovering", () => {
-    assert.equal(catalogRefreshPages({ humanIdle: false }), 1);
+  it("skips the census while the human is present and bursts when idle or discovering", () => {
+    assert.equal(catalogRefreshPages({ humanIdle: false }), 0);
     assert.equal(catalogRefreshPages({ humanIdle: true }), 3);
     assert.equal(catalogRefreshPages({ discover: true, humanIdle: false }), 10);
   });

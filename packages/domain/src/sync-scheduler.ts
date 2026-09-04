@@ -20,6 +20,17 @@ export const DEFAULT_BOOTSTRAP_LANE_LIMITS: SyncLaneLimits = {
   media: 2,
 };
 
+/** Open-thread freshness only. Fleet history/seed wait until the human is idle. */
+export const HUMAN_PRESENT_BOOTSTRAP_LIMITS: SyncLaneLimits = {
+  interactive: 1,
+  live: 0,
+  catalog: 0,
+  history: 0,
+  media: 0,
+};
+
+export const HUMAN_PRESENT_STEADY_LIVE = 2;
+
 export function syncLaneLimits(
   humanIdle: boolean,
   catalogIncomplete: boolean,
@@ -67,6 +78,8 @@ export interface SyncScheduleInput {
 export interface SyncBootstrapScheduleInput
   extends Omit<SyncScheduleInput, "humanIdle" | "limits"> {
   limits?: Partial<SyncLaneLimits>;
+  /** Default true (catch-up worker). False = open-thread head only. */
+  humanIdle?: boolean;
 }
 
 export interface SyncSteadyScheduleInput
@@ -80,17 +93,26 @@ export function planBootstrapSyncWork(
   input: SyncBootstrapScheduleInput,
 ): SyncWorkItem[] {
   const { bootstrap } = partitionMembersByLifecycle(input.members, input.states);
+  const humanIdle = input.humanIdle !== false;
   return planSyncWork({
     ...input,
     members: bootstrap,
-    humanIdle: true,
-    limits: {
-      ...bootstrapWorkerLaneLimits(input.catalogIncomplete),
-      ...input.limits,
-      history:
-        input.limits?.history ??
-        bootstrapWorkerLaneLimits(input.catalogIncomplete).history,
-    },
+    humanIdle,
+    limits: humanIdle
+      ? {
+          ...bootstrapWorkerLaneLimits(input.catalogIncomplete),
+          ...input.limits,
+          history:
+            input.limits?.history ??
+            bootstrapWorkerLaneLimits(input.catalogIncomplete).history,
+        }
+      : {
+          ...HUMAN_PRESENT_BOOTSTRAP_LIMITS,
+          ...input.limits,
+          live: 0,
+          history: 0,
+          catalog: 0,
+        },
   });
 }
 

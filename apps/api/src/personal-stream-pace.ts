@@ -153,7 +153,7 @@ export function catalogRefreshPages(input: {
   if (input.discover === true) {
     return DISCOVER_CATALOG_PAGES;
   }
-  return input.humanIdle ? IDLE_CATALOG_PAGES : 1;
+  return input.humanIdle ? IDLE_CATALOG_PAGES : 0;
 }
 
 export function syncExecutionBudget(input: {

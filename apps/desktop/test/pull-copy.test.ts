@@ -27,6 +27,38 @@ const baseEngine: PersonalEngineView = {
 };
 
 describe("engineChip", () => {
+  it("keeps running when an installation attempt is in flight", () => {
+    const chip = engineChip(
+      {
+        ...baseEngine,
+        installations: [
+          {
+            id: "feishu-1",
+            connector_type: "feishu-chat",
+            status: "enabled",
+            label: "Feishu",
+            detail: null,
+            syncable: true,
+            can_reply: true,
+            can_create: false,
+            last_attempt: {
+              id: "a1",
+              status: "running",
+              started_at: "2026-09-04T00:00:00.000Z",
+              accepted_count: 0,
+              duplicate_count: 0,
+              quarantined_count: 0,
+              retryable_failure_count: 0,
+            },
+            sync: null,
+          },
+        ],
+      },
+      "live",
+    );
+    assert.equal(chip, "running");
+  });
+
   it("keeps running when only history catch-up remains", () => {
     const chip = engineChip(
       {
