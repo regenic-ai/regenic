@@ -13,9 +13,9 @@ describe("conversation focus", () => {
     assert.equal(conversationFocusThreadId({}), undefined);
   });
 
-  it("marks human presence by default", () => {
-    assert.equal(shouldMarkHumanPresent({ thread_id: "feishu:oc_1" }), true);
-    assert.equal(shouldMarkHumanPresent({ thread_id: "feishu:oc_1", present: false }), false);
+  it("does not treat focus polls as presence", () => {
+    assert.equal(shouldMarkHumanPresent({ thread_id: "feishu:oc_1" }), false);
+    assert.equal(shouldMarkHumanPresent({ thread_id: "feishu:oc_1", present: true }), true);
   });
 
   it("pulls older only when explicitly requested with a cursor", () => {

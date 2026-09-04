@@ -97,6 +97,8 @@ export interface RegenicDesktop {
   quitApp: () => Promise<void>;
   openExternal: (url: string) => Promise<void>;
   getHostStats: () => Promise<HostStats>;
+  reportOpenConversation: (input: { threadId: string | null; nav: string }) => void;
+  reportPageVisibility: (state: string) => void;
 }
 
 declare global {

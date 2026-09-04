@@ -28,7 +28,13 @@ import {
   shouldMarkHumanPresent,
   shouldPullOlderFocus,
 } from "./personal-conversation-focus";
-import { noteHumanActivity } from "./personal-human-pace";
+import {
+  conversationPresenceFromBody,
+  isHumanIdle,
+  noteHumanActivity,
+  reportConversationPresence,
+} from "./personal-human-pace";
+import { preferThread } from "./personal-pull-status";
 import {
   PersonalInboxService,
   PersonalKernelStoppedError,
@@ -129,6 +135,23 @@ export class PersonalController {
       locale: requestLocale(locale, acceptLanguage),
     };
     return this.guard(async () => this.inbox.listInbox(query));
+  }
+
+  @Post("presence")
+  reportPresence(
+    @Body()
+    body: { looking?: boolean; thread_id?: string | null } | undefined,
+  ) {
+    const next = conversationPresenceFromBody(body ?? {});
+    reportConversationPresence(next);
+    if (next.looking && next.thread_id) {
+      preferThread(next.thread_id);
+    }
+    return {
+      accepted: true as const,
+      looking: next.looking,
+      idle: isHumanIdle(),
+    };
   }
 
   @Post("conversations/focus")

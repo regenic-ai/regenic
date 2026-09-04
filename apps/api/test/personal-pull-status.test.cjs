@@ -154,11 +154,11 @@ describe("opened inbox hydrate", () => {
     );
     assert.equal(
       shouldMarkHumanPresent({ thread_id: "feishu:oc_1" }),
-      true,
+      false,
     );
     assert.equal(
-      shouldMarkHumanPresent({ thread_id: "feishu:oc_1", present: false }),
-      false,
+      shouldMarkHumanPresent({ thread_id: "feishu:oc_1", present: true }),
+      true,
     );
     assert.equal(
       shouldSkipLiveChannelOverlays({ thread_id: "feishu:oc_1" }),
