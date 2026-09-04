@@ -13,18 +13,15 @@ describe("conversation focus requests", () => {
       thread_id: "feishu:oc_1",
       hydrate: true,
       live: true,
-      present: true,
     });
     assert.deepEqual(openThreadFocusRequest("feishu:oc_1", false), {
       thread_id: "feishu:oc_1",
       hydrate: false,
       live: true,
-      present: true,
     });
     assert.deepEqual(liveReceiptFocusRequest("feishu:oc_1"), {
       thread_id: "feishu:oc_1",
       live: true,
-      present: true,
     });
     assert.deepEqual(
       pullOlderFocusRequest("feishu:oc_1", "2026-01-01T00:00:00.000Z", "e1"),
@@ -33,13 +30,11 @@ describe("conversation focus requests", () => {
         pull_older: true,
         before: "2026-01-01T00:00:00.000Z",
         before_id: "e1",
-        present: true,
       },
     );
     assert.deepEqual(mediaDrainFocusRequest("feishu:oc_1"), {
       thread_id: "feishu:oc_1",
       media: true,
-      present: true,
     });
   });
 });

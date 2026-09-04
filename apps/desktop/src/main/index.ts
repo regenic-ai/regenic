@@ -68,6 +68,10 @@ import {
 } from "./kernel-settings";
 import { connectCustomKernel } from "./kernel-connect";
 import { personalApiRequestHeaders } from "./personal-api-key";
+import {
+  attachConsolePresenceWindow,
+  createConversationPresence,
+} from "./conversation-presence";
 
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
@@ -82,6 +86,11 @@ let apiOrigin = `http://127.0.0.1:${DEFAULT_PORT}`;
 let personalApiKey: string | null = null;
 let quitting = false;
 let lastInboxCount: number | null = null;
+const conversationPresence = createConversationPresence({
+  getMainWindow: () => mainWindow,
+  getApiOrigin: () => apiOrigin,
+  getApiKey: () => personalApiKey,
+});
 
 function repoRoot(): string {
   return process.env.REGENIC_REPO_ROOT ?? join(app.getAppPath(), "../..");
@@ -753,6 +762,7 @@ function createMainWindow(): BrowserWindow {
   });
   attachExternalLinks(window);
   attachEditContextMenu(window);
+  attachConsolePresenceWindow(window, () => conversationPresence.notifyWindow());
   void loadSurface(window, "console");
   applyAppIcon(window);
   return window;
@@ -974,6 +984,18 @@ app.whenReady().then(async () => {
       appBytes: electronAppBytes,
     }),
   );
+  ipcMain.on("regenic:report-open-conversation", (event, input) => {
+    if (event.sender !== mainWindow?.webContents) {
+      return;
+    }
+    conversationPresence.setOpenConversation(input ?? {});
+  });
+  ipcMain.on("regenic:report-page-visibility", (event, state) => {
+    if (event.sender !== mainWindow?.webContents) {
+      return;
+    }
+    conversationPresence.setVisibilityState(state);
+  });
   ipcMain.handle(
     "regenic:set-kernel-settings",
     async (
@@ -1041,6 +1063,7 @@ app.whenReady().then(async () => {
   mainWindow = createMainWindow();
   trayWindow = createTrayWindow();
   createTray();
+  conversationPresence.start();
   void pollNotifications();
   setInterval(() => {
     void pollNotifications();
@@ -1053,6 +1076,7 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   quitting = true;
+  conversationPresence.stop();
   personalApiKey = null;
   sidecar?.kill();
   releaseOwnedStoreLock();

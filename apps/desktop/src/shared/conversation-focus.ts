@@ -19,7 +19,6 @@ export function openThreadFocusRequest(
     hydrate: coldOpen,
     // Always kick an interactive live poll so warm re-opens refresh latest.
     live: true,
-    present: true,
   };
 }
 
@@ -27,7 +26,6 @@ export function liveReceiptFocusRequest(threadId: string): ThreadFocusRequest {
   return {
     thread_id: threadId,
     live: true,
-    present: true,
   };
 }
 
@@ -41,7 +39,6 @@ export function pullOlderFocusRequest(
     pull_older: true,
     before,
     ...(beforeId ? { before_id: beforeId } : {}),
-    present: true,
   };
 }
 
@@ -49,6 +46,5 @@ export function mediaDrainFocusRequest(threadId: string): ThreadFocusRequest {
   return {
     thread_id: threadId,
     media: true,
-    present: true,
   };
 }

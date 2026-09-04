@@ -11,7 +11,7 @@ export type ConversationFocusInput = {
   before_id?: string;
   /** Drain queued attachment downloads for this thread. */
   media?: boolean;
-  /** Marks human presence for connector pacing (default true). */
+  /** Opt-in activity pulse. Desktop presence uses POST /v1/me/presence instead. */
   present?: boolean;
 };
 
@@ -23,7 +23,7 @@ export function conversationFocusThreadId(
 }
 
 export function shouldMarkHumanPresent(body: ConversationFocusInput): boolean {
-  return body.present !== false;
+  return body.present === true;
 }
 
 export function shouldPullOlderFocus(body: ConversationFocusInput): boolean {
