@@ -1,5 +1,5 @@
-import "@regenic/domain";
 import { definePlugin } from "@regenic/plugin-host";
+import { provideAuthorityServices } from "../bind";
 import { SqliteSplitAuthorityStore } from "./sqlite-split-authority-store";
 
 export interface SqliteAuthorityPluginConfig {
@@ -10,10 +10,6 @@ export const sqliteAuthorityPlugin = definePlugin<SqliteAuthorityPluginConfig>({
   name: "authority-sqlite",
   async apply(ctx, config) {
     const store = await SqliteSplitAuthorityStore.open(config.path);
-    ctx.provide("authority", store);
-    ctx.provide("context-authority", store);
-    ctx.provide("context-artifacts", store);
-    ctx.provide("context-projection-outbox", store);
-    ctx.effect(() => () => store.close());
+    provideAuthorityServices(ctx, store);
   },
 });

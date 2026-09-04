@@ -72,6 +72,8 @@ spec:
               value: "0.0.0.0"
             - name: REGENIC_PERSONAL_API
               value: "1"
+            - name: REGENIC_AUTHORITY_DRIVER
+              value: sqlite
             - name: REGENIC_DATABASE
               value: /data/regenic.db
             - name: REGENIC_BLOB_ROOT

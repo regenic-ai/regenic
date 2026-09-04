@@ -11,7 +11,7 @@ const {
   HTTP_KEEP_ALIVE_TIMEOUT_MS,
   HTTP_HEADERS_TIMEOUT_MS,
 } = require("../dist/http-app");
-const { SqliteAuthorityStore } = require("@regenic/authority-store");
+const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord, setKeychainStoreForTests } = require("@regenic/domain");
 const {
@@ -363,6 +363,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     },
   });
   setEnv({
+    REGENIC_AUTHORITY_DRIVER: "sqlite",
     REGENIC_DATABASE: database,
     REGENIC_BLOB_ROOT: blobRoot,
     REGENIC_ORG: "local-owner",
@@ -1740,6 +1741,7 @@ describe("personal /v1/me", () => {
       assert.equal(JSON.stringify(engine).includes("access_token"), false);
       assert.equal(health.mode, "personal");
       assert.equal(health.sqlite, "up");
+      assert.equal(health.authority, "authority-sqlite");
       assert.equal(health.status, "ok");
       assert.equal(health.postgres, undefined);
       assert.equal(health.dsh, undefined);
@@ -1771,6 +1773,7 @@ describe("personal /v1/me", () => {
       assert.ok(Date.now() - started < 500);
       assert.equal(health.mode, "personal");
       assert.equal(health.sqlite, "up");
+      assert.equal(health.authority, "authority-sqlite");
       assert.equal(health.status, "ok");
       assert.equal(health.dsh, undefined);
     } finally {
@@ -2628,6 +2631,7 @@ describe("personal /v1/me", () => {
       assert.equal(engine.status, 404);
       assert.equal(health.mode, "service");
       assert.equal(health.sqlite, "up");
+      assert.equal(health.authority, "authority-sqlite");
     } finally {
       await app.close();
     }
@@ -3214,6 +3218,7 @@ describe("personal /v1/me", () => {
 
   it("returns 503 for inbox when the personal kernel is not configured", async () => {
     setEnv({
+      REGENIC_AUTHORITY_DRIVER: undefined,
       REGENIC_DATABASE: undefined,
       REGENIC_BLOB_ROOT: undefined,
       PORT: "4370",

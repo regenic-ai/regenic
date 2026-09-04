@@ -4,7 +4,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
-const { SqliteSplitAuthorityStore } = require("@regenic/authority-store");
+const { SqliteSplitAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
 const {
   contextRegistriesPlugin,

@@ -159,6 +159,7 @@ function sidecarEnv(
   blobRoot: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
+  env.REGENIC_AUTHORITY_DRIVER = "sqlite";
   env.REGENIC_DATABASE = database;
   env.REGENIC_BLOB_ROOT = blobRoot;
   env.REGENIC_ORG = process.env.REGENIC_ORG ?? "local-owner";

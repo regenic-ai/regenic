@@ -16,7 +16,7 @@ const {
 const {
   SqliteAuthorityStore,
   SqliteSplitAuthorityStore,
-} = require("../dist");
+} = require("../dist/sqlite");
 
 const roots = [];
 

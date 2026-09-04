@@ -8,6 +8,20 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite/index.d.ts",
+      "default": "./dist/sqlite/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres/index.d.ts",
+      "default": "./dist/postgres/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "sqlite": ["./dist/sqlite/index.d.ts"],
+      "postgres": ["./dist/postgres/index.d.ts"]
     }
   },
   "scripts": {
@@ -18,12 +32,14 @@
   "dependencies": {
     "@regenic/domain": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
-    "better-sqlite3": "11.10.0"
+    "better-sqlite3": "11.10.0",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "@regenic/blob-store": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
     "typescript": "^5.7.2"
   }
 }

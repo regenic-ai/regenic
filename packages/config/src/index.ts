@@ -10,6 +10,7 @@ const envSchema = z.object({
     .default("postgres://regenic:regenic@localhost:5432/regenic"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   LISTEN_HOST: z.string().default("127.0.0.1"),
+  REGENIC_AUTHORITY_DRIVER: z.string().optional(),
   REGENIC_DATABASE: z.string().optional(),
   REGENIC_BLOB_ROOT: z.string().optional(),
   REGENIC_ORG: z.string().default("local-owner"),
@@ -54,6 +55,45 @@ const PERSONAL_EXTENSION_PROTOCOLS = new Set([
 
 export function loadEnv(env: NodeJS.ProcessEnv = process.env): AppEnv {
   return envSchema.parse(env);
+}
+
+export type AuthorityBackend =
+  | { driver: "sqlite"; path: string; blobRoot: string }
+  | { driver: "postgres"; url: string; blobRoot: string }
+  | { driver: "none" };
+
+/**
+ * Operator contract: an explicit driver plus that driver's keys.
+ * DATABASE_URL's zod default is ignored unless the driver is postgres.
+ */
+export function resolveAuthorityBackend(
+  env: AppEnv | NodeJS.ProcessEnv = process.env,
+): AuthorityBackend {
+  const parsed = isLoadedEnv(env) ? env : loadEnv(env);
+  const driver = parsed.REGENIC_AUTHORITY_DRIVER?.trim().toLowerCase() ?? "";
+  const sqlitePath = parsed.REGENIC_DATABASE?.trim() ?? "";
+  const blobRoot = parsed.REGENIC_BLOB_ROOT?.trim() ?? "";
+  const url = parsed.DATABASE_URL?.trim() ?? "";
+
+  if (driver === "postgres") {
+    if (!url || !blobRoot) {
+      return { driver: "none" };
+    }
+    return { driver: "postgres", url, blobRoot };
+  }
+  if (driver === "sqlite") {
+    if (!sqlitePath || !blobRoot) {
+      return { driver: "none" };
+    }
+    return { driver: "sqlite", path: sqlitePath, blobRoot };
+  }
+  if (driver) {
+    return { driver: "none" };
+  }
+  if (sqlitePath && blobRoot) {
+    return { driver: "sqlite", path: sqlitePath, blobRoot };
+  }
+  return { driver: "none" };
 }
 
 export function isLoopbackListenHost(host: string): boolean {

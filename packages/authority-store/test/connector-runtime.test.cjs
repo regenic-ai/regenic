@@ -4,7 +4,7 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const Database = require("better-sqlite3");
-const { SqliteAuthorityStore } = require("../dist");
+const { SqliteAuthorityStore } = require("../dist/sqlite");
 
 const roots = [];
 const installation = {

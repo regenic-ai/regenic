@@ -10,8 +10,8 @@ const {
   INGEST_SCHEMA_VERSION,
   IngestionService,
 } = require("@regenic/domain");
-const { SqliteAuthorityStore } = require("../dist");
-const { LATEST_SCHEMA_VERSION, MIGRATIONS } = require("../dist/migrations");
+const { SqliteAuthorityStore } = require("../dist/sqlite");
+const { LATEST_SCHEMA_VERSION, MIGRATIONS } = require("../dist/sqlite/migrations");
 
 const roots = [];
 
