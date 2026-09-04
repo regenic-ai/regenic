@@ -316,6 +316,95 @@ describe("inbox sort", () => {
     );
   });
 
+  it("keeps pinned threads in one section so attention headers do not clone them", () => {
+    const pinnedQuiet = {
+      ...thread({
+        id: "feishu:xiong",
+        pinned: true,
+        occurred_at: "2026-09-04T10:35:00.000Z",
+      }),
+    };
+    const pinnedUnread = {
+      ...thread({
+        id: "feishu:christy",
+        pinned: true,
+        occurred_at: "2026-09-03T19:05:00.000Z",
+      }),
+      unread: true,
+    };
+    const pinnedOlder = {
+      ...thread({
+        id: "feishu:fang",
+        pinned: true,
+        occurred_at: "2026-09-02T18:44:00.000Z",
+      }),
+      unread: true,
+    };
+    const unpinnedUnread = {
+      ...thread({
+        id: "feishu:other-unread",
+        occurred_at: "2026-09-04T09:00:00.000Z",
+      }),
+      unread: true,
+    };
+    const unpinnedQuiet = thread({
+      id: "feishu:other-quiet",
+      occurred_at: "2026-09-01T12:00:00.000Z",
+    });
+    const grouped = groupThreadsByAttention(
+      sortInboxThreads(
+        [unpinnedQuiet, pinnedQuiet, unpinnedUnread, pinnedOlder, pinnedUnread],
+        "attention",
+      ),
+    );
+    const keys = grouped.map((section) => section.key);
+    assert.equal(new Set(keys).size, keys.length);
+    const ids = grouped.flatMap((section) => section.items.map((row) => row.id));
+    assert.equal(new Set(ids).size, ids.length);
+    assert.equal(grouped[0]?.key, "pinned");
+    assert.deepEqual(
+      grouped[0]?.items.map((row) => row.id),
+      ["feishu:christy", "feishu:fang", "feishu:xiong"],
+    );
+    assert.equal(
+      grouped.flatMap((section) =>
+        section.items.filter((row) => row.id === "feishu:xiong"),
+      ).length,
+      1,
+    );
+  });
+
+  it("keeps consecutive unread threads in one attention run", () => {
+    const first = {
+      ...thread({
+        id: "feishu:a",
+        occurred_at: "2026-09-04T10:00:00.000Z",
+      }),
+      unread: true,
+    };
+    const second = {
+      ...thread({
+        id: "feishu:b",
+        occurred_at: "2026-09-04T09:00:00.000Z",
+      }),
+      unread: true,
+    };
+    const quiet = thread({
+      id: "feishu:c",
+      occurred_at: "2026-09-04T08:00:00.000Z",
+    });
+    const grouped = groupThreadsByAttention(
+      sortInboxThreads([quiet, second, first], "attention"),
+    );
+    assert.deepEqual(
+      grouped.map((section) => section.items.map((row) => row.id)),
+      [
+        ["feishu:a", "feishu:b"],
+        ["feishu:c"],
+      ],
+    );
+  });
+
   it("puts a just-opened empty conversation above older unpinned threads", () => {
     const older = thread({
       id: "dsh:old",
