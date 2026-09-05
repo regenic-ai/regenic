@@ -603,35 +603,37 @@ export function RecipesPage({
                   <p className="muted">{triggerHint(draft.trigger_kind, t)}</p>
                 </fieldset>
                 {draft.trigger_kind !== "pull" ? (
-                <fieldset className="recipe-scope">
-                  <legend>{t("recipes.watchLegend")}</legend>
-                  <div className="seg">
-                    {scopeChoices(t).map((choice) => (
-                      <button
-                        key={choice.id}
-                        type="button"
-                        className={draft.scope === choice.id ? "active" : undefined}
-                        onClick={() => {
-                          if (
-                            choice.id === "tasks" &&
-                            draft.scope !== "tasks" &&
-                            !window.confirm(t("recipes.scopeTasksConfirm"))
-                          ) {
-                            return;
-                          }
-                          setDraft((current) =>
-                            withSuggestedName({ ...current, scope: choice.id }),
-                          );
-                        }}
-                      >
-                        {choice.label}
-                      </button>
-                    ))}
+                <div className="recipe-row">
+                  <span className="recipe-row-label">{t("recipes.watchLegend")}</span>
+                  <div className="recipe-row-body">
+                    <div className="seg">
+                      {scopeChoices(t).map((choice) => (
+                        <button
+                          key={choice.id}
+                          type="button"
+                          className={draft.scope === choice.id ? "active" : undefined}
+                          onClick={() => {
+                            if (
+                              choice.id === "tasks" &&
+                              draft.scope !== "tasks" &&
+                              !window.confirm(t("recipes.scopeTasksConfirm"))
+                            ) {
+                              return;
+                            }
+                            setDraft((current) =>
+                              withSuggestedName({ ...current, scope: choice.id }),
+                            );
+                          }}
+                        >
+                          {choice.label}
+                        </button>
+                      ))}
+                    </div>
+                    {draft.scope === "tasks" ? (
+                      <p className="muted recipe-scope-warn">{t("recipes.scopeTasksWarn")}</p>
+                    ) : null}
                   </div>
-                  {draft.scope === "tasks" ? (
-                    <p className="muted recipe-scope-warn">{t("recipes.scopeTasksWarn")}</p>
-                  ) : null}
-                </fieldset>
+                </div>
                 ) : null}
 
                 {draft.scope === "source" ? (
@@ -726,14 +728,19 @@ export function RecipesPage({
                   </div>
                 ) : null}
 
-                <MatchPreview
-                  preview={matchPreview}
-                  draft={draft}
-                  t={t}
-                />
-                {priorityGroup.length > 0 ? (
-                  <PriorityPanel rows={priorityGroup} t={t} />
-                ) : null}
+                <div className="recipe-row">
+                  <span className="recipe-row-label" aria-hidden="true" />
+                  <div className="recipe-row-body">
+                    <MatchPreview
+                      preview={matchPreview}
+                      draft={draft}
+                      t={t}
+                    />
+                    {priorityGroup.length > 0 ? (
+                      <PriorityPanel rows={priorityGroup} t={t} />
+                    ) : null}
+                  </div>
+                </div>
               </section>
 
               <section className="recipe-section">
@@ -789,38 +796,53 @@ export function RecipesPage({
 
           <div className="recipe-form-foot">
             <div className="recipe-switches">
-              <fieldset className="recipe-scope">
-                <legend>{t("recipes.afterDone")}</legend>
-                <div className="seg">
-                  <button
-                    type="button"
-                    className={
-                      writeBackAvailable(draft, conversations) && draft.can_write_back
-                        ? "active"
-                        : undefined
-                    }
-                    disabled={!writeBackAvailable(draft, conversations)}
-                    onClick={() =>
-                      setDraft((current) => ({ ...current, can_write_back: true }))
-                    }
-                  >
-                    {t("recipes.writeBackYes")}
-                  </button>
-                  <button
-                    type="button"
-                    className={
-                      !draft.can_write_back || !writeBackAvailable(draft, conversations)
-                        ? "active"
-                        : undefined
-                    }
-                    onClick={() =>
-                      setDraft((current) => ({ ...current, can_write_back: false }))
-                    }
-                  >
-                    {t("recipes.writeBackNo")}
-                  </button>
+              <div className="recipe-row">
+                <span className="recipe-row-label">{t("recipes.afterDone")}</span>
+                <div className="recipe-row-body">
+                  <div className="seg">
+                    <button
+                      type="button"
+                      className={
+                        writeBackAvailable(draft, conversations) && draft.can_write_back
+                          ? "active"
+                          : undefined
+                      }
+                      disabled={!writeBackAvailable(draft, conversations)}
+                      onClick={() =>
+                        setDraft((current) => ({ ...current, can_write_back: true }))
+                      }
+                    >
+                      {t("recipes.writeBackYes")}
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        !draft.can_write_back || !writeBackAvailable(draft, conversations)
+                          ? "active"
+                          : undefined
+                      }
+                      onClick={() =>
+                        setDraft((current) => ({ ...current, can_write_back: false }))
+                      }
+                    >
+                      {t("recipes.writeBackNo")}
+                    </button>
+                  </div>
+                  {!writeBackAvailable(draft, conversations) ? (
+                    <p className="muted recipe-writeback-hint">
+                      {t("recipes.writeBackUnavailable")}
+                    </p>
+                  ) : draft.can_write_back ? (
+                    <p className="muted recipe-writeback-hint">
+                      {t(
+                        draft.trigger_kind === "pull"
+                          ? "recipes.writeBackHintPull"
+                          : "recipes.writeBackHint",
+                      )}
+                    </p>
+                  ) : null}
                 </div>
-              </fieldset>
+              </div>
               {draft.id ? (
                 <SwitchRow
                   checked={draft.enabled}
@@ -828,19 +850,6 @@ export function RecipesPage({
                 >
                   {t("recipes.enabledCheck")}
                 </SwitchRow>
-              ) : null}
-              {!writeBackAvailable(draft, conversations) ? (
-                <p className="muted recipe-writeback-hint">
-                  {t("recipes.writeBackUnavailable")}
-                </p>
-              ) : draft.can_write_back ? (
-                <p className="muted recipe-writeback-hint">
-                  {t(
-                    draft.trigger_kind === "pull"
-                      ? "recipes.writeBackHintPull"
-                      : "recipes.writeBackHint",
-                  )}
-                </p>
               ) : null}
             </div>
 

@@ -1417,18 +1417,20 @@ button {
 }
 
 .recipe-commit {
-  display: flex;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .recipe-commit .field {
-  flex: 1;
   min-width: 0;
 }
 
 .recipe-commit .install-actions {
-  padding-bottom: 1px;
+  padding-bottom: 0;
+  align-items: center;
 }
 
 .recipe-form .field {
@@ -1453,6 +1455,26 @@ button {
   color: var(--text);
   font-size: 12px;
   font-weight: 550;
+}
+
+.recipe-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.recipe-row-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  min-height: 1em;
+}
+
+.recipe-row-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
 }
 
 .seg {
@@ -1488,7 +1510,7 @@ button {
   box-shadow: none;
 }
 
-/* Lark-like: soft selected state, equal columns that fill the row */
+/* Soft selected state; equal columns that fill the control column */
 .page-recipes .seg {
   display: grid;
   width: 100%;
@@ -1536,13 +1558,15 @@ button {
 
 /* Wide: label | control rows (Feishu settings style) */
 @media (min-width: 900px) {
-  .page-recipes .recipe-form .field:has(> span:first-child) {
+  .page-recipes .recipe-form .field:has(> span:first-child),
+  .page-recipes .recipe-row {
     grid-template-columns: 7rem minmax(0, 1fr);
     column-gap: 20px;
     align-items: start;
   }
 
-  .page-recipes .recipe-form .field:has(> span:first-child) > span:first-child {
+  .page-recipes .recipe-form .field:has(> span:first-child) > span:first-child,
+  .page-recipes .recipe-row-label {
     padding-top: 8px;
     color: var(--muted);
     font-weight: 500;
@@ -1555,35 +1579,36 @@ button {
     grid-column: 2;
   }
 
-  .page-recipes .recipe-scope:has(> legend) {
-    grid-template-columns: 7rem minmax(0, 1fr);
+  /* 名称 | input | 保存 — one grid, no nested gaps */
+  .page-recipes .recipe-commit {
+    grid-template-columns: 7rem minmax(0, 1fr) auto;
     column-gap: 20px;
-    align-items: start;
+    row-gap: 8px;
+    align-items: center;
   }
 
-  .page-recipes .recipe-scope:has(> legend) > legend {
-    float: none;
-    width: auto;
-    padding-top: 8px;
+  .page-recipes .recipe-commit > .field {
+    display: contents;
+  }
+
+  .page-recipes .recipe-commit > .field > span {
+    padding-top: 0;
     color: var(--muted);
     font-weight: 500;
   }
 
-  .page-recipes .recipe-scope:has(> legend) > .seg,
-  .page-recipes .recipe-scope:has(> legend) > .muted,
-  .page-recipes .recipe-scope:has(> legend) > .recipe-scope-warn {
-    grid-column: 2;
+  .page-recipes .recipe-commit > .field > input {
+    width: 100%;
+    min-width: 0;
   }
 
-  .page-recipes .recipe-commit {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: end;
-    gap: 12px;
+  .page-recipes .recipe-commit > .install-actions {
+    justify-self: end;
   }
 
-  .page-recipes .recipe-commit .field:has(> span:first-child) {
-    grid-template-columns: 7rem minmax(0, 1fr);
+  .page-recipes .recipe-commit > .recipe-try-hint {
+    grid-column: 2 / -1;
+    margin: 0;
   }
 }
 
