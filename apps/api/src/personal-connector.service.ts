@@ -1411,7 +1411,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   private async tick(): Promise<void> {
-    if (this.maintenanceHold || this.steadyTicking || !this.runtime.isReady()) {
+    if (
+      this.maintenanceHold ||
+      this.steadyTicking ||
+      this.bootstrapTicking ||
+      this.catalogTicking ||
+      !this.runtime.isReady()
+    ) {
       return;
     }
     if (
@@ -1471,6 +1477,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (
       this.maintenanceHold ||
       this.bootstrapTicking ||
+      this.steadyTicking ||
+      this.catalogTicking ||
       !this.runtime.isReady()
     ) {
       return;
@@ -1530,6 +1538,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (
       this.maintenanceHold ||
       this.catalogTicking ||
+      this.steadyTicking ||
+      this.bootstrapTicking ||
       !this.runtime.isReady()
     ) {
       return;
@@ -1780,7 +1790,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         options?.syncPlane !== "bootstrap" &&
         humanIdle &&
         pressure.interactive_ready &&
-        !pressure.throttle_media;
+        !pressure.throttle_media &&
+        !this.kernelRuntime.shouldDeferHistorySync();
       const uncapped = work.flatMap((item) => {
         if (item.lane === "catalog") {
           return [];

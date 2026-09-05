@@ -1,4 +1,5 @@
 import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { clearAllFeishuMediaJobs } from "@regenic/feishu-connector";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -1133,6 +1134,11 @@ export class PersonalInboxService {
       await host.get("blobs").clear();
     } catch (error) {
       console.error("blob store clear leftover files", error);
+    }
+    try {
+      clearAllFeishuMediaJobs();
+    } catch (error) {
+      console.error("feishu media job clear leftover files", error);
     }
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
     this.kernelRuntime.clearInstallationSnapshots();

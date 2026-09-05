@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 25;
+export const LATEST_SCHEMA_VERSION = 26;
 
 export const MIGRATIONS = [
   {
@@ -529,13 +529,98 @@ export const MIGRATIONS = [
       INSERT INTO thread_heads (
         org_id, thread_id, face_event_id, face_occurred_at, has_current_work
       )
-      SELECT org_id, thread_id, id, occurred_at, 1
+      SELECT
+        org_id,
+        thread_id,
+        id,
+        occurred_at,
+        CASE WHEN has_work = 1 THEN 1 ELSE 0 END
       FROM (
         SELECT
           e.org_id AS org_id,
           e.thread_id AS thread_id,
           e.id AS id,
           e.occurred_at AS occurred_at,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM message_dispositions d2
+              JOIN events e2 ON e2.id = d2.event_id
+              WHERE d2.disposition = 'current_work'
+                AND e2.org_id = e.org_id
+                AND e2.thread_id = e.thread_id
+                AND EXISTS (
+                  SELECT 1 FROM source_heads h2 WHERE h2.current_event_id = e2.id
+                )
+            ) THEN 1
+            ELSE 0
+          END AS has_work,
+          ROW_NUMBER() OVER (
+            PARTITION BY e.org_id, e.thread_id
+            ORDER BY e.occurred_at DESC, e.id DESC
+          ) AS rn
+        FROM message_dispositions d
+        JOIN events e ON e.id = d.event_id
+        WHERE e.thread_id IS NOT NULL
+          AND e.thread_id != ''
+          AND e.operation != 'tombstone'
+          AND d.reason_codes_json NOT LIKE '%thread_status%'
+          AND EXISTS (
+            SELECT 1 FROM source_heads h WHERE h.current_event_id = e.id
+          )
+          AND (
+            e.thread_id IN (
+              SELECT e2.thread_id
+              FROM message_dispositions d2
+              JOIN events e2 ON e2.id = d2.event_id
+              WHERE d2.disposition = 'current_work'
+                AND e2.thread_id IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM source_heads h2 WHERE h2.current_event_id = e2.id
+                )
+            )
+            OR e.thread_id IN (
+              SELECT p.thread_id
+              FROM conversation_prefs p
+              WHERE p.org_id = e.org_id AND p.hidden = 1
+            )
+          )
+      ) ranked
+      WHERE rn = 1;
+    `,
+  },
+  {
+    version: 26,
+    sql: `
+      INSERT OR IGNORE INTO thread_heads (
+        org_id, thread_id, face_event_id, face_occurred_at, has_current_work
+      )
+      SELECT
+        org_id,
+        thread_id,
+        id,
+        occurred_at,
+        CASE WHEN has_work = 1 THEN 1 ELSE 0 END
+      FROM (
+        SELECT
+          e.org_id AS org_id,
+          e.thread_id AS thread_id,
+          e.id AS id,
+          e.occurred_at AS occurred_at,
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM message_dispositions d2
+              JOIN events e2 ON e2.id = d2.event_id
+              WHERE d2.disposition = 'current_work'
+                AND e2.org_id = e.org_id
+                AND e2.thread_id = e.thread_id
+                AND EXISTS (
+                  SELECT 1 FROM source_heads h2 WHERE h2.current_event_id = e2.id
+                )
+            ) THEN 1
+            ELSE 0
+          END AS has_work,
           ROW_NUMBER() OVER (
             PARTITION BY e.org_id, e.thread_id
             ORDER BY e.occurred_at DESC, e.id DESC
@@ -550,14 +635,9 @@ export const MIGRATIONS = [
             SELECT 1 FROM source_heads h WHERE h.current_event_id = e.id
           )
           AND e.thread_id IN (
-            SELECT e2.thread_id
-            FROM message_dispositions d2
-            JOIN events e2 ON e2.id = d2.event_id
-            WHERE d2.disposition = 'current_work'
-              AND e2.thread_id IS NOT NULL
-              AND EXISTS (
-                SELECT 1 FROM source_heads h2 WHERE h2.current_event_id = e2.id
-              )
+            SELECT p.thread_id
+            FROM conversation_prefs p
+            WHERE p.org_id = e.org_id AND p.hidden = 1
           )
       ) ranked
       WHERE rn = 1;

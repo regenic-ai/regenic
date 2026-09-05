@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { FeishuMediaJob } from "./feishu-chat-poll-connector";
 
 /**
@@ -32,11 +32,22 @@ export function clearFeishuMediaJobsForTests(): void {
   }
 }
 
+/** Drop all durable Feishu media queues (store clear / tests). */
+export function clearAllFeishuMediaJobs(): void {
+  memory.clear();
+  try {
+    rmSync(resolveRoot(), { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+}
+
 export function peekFeishuMediaJobsForTests(
   connectorId: string,
   chatId: string,
 ): FeishuMediaJob[] | undefined {
-  return loadFeishuMediaJobs(connectorId, chatId);
+  const jobs = loadFeishuMediaJobs(connectorId, chatId);
+  return jobs.length > 0 ? jobs : undefined;
 }
 
 function resolveRoot(): string {
@@ -99,7 +110,7 @@ export function saveFeishuMediaJobs(
     return;
   }
   memory.set(key, jobs);
-  mkdirSync(join(path, ".."), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(jobs));
 }
 

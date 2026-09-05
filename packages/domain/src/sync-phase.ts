@@ -19,6 +19,8 @@ export function deriveSyncPhase(input: {
   idle_until?: string | null;
   poll_hint?: SyncPollHint;
   now?: string;
+  /** Prior stored phase when poll_hint is absent (opaque non-empty cursor). */
+  fallback_phase?: SyncPhase;
 }): SyncPhase {
   if (input.poll_hint) {
     return deriveSyncPhaseFromHint(input.poll_hint, input.idle_until, input.now);
@@ -26,10 +28,20 @@ export function deriveSyncPhase(input: {
   if (streamCursorUnseeded(input.live_cursor)) {
     return "unseeded";
   }
-  if (input.idle_until && input.now && input.idle_until > input.now) {
-    return "steady";
+  if (input.fallback_phase) {
+    if (
+      input.fallback_phase !== "unseeded" &&
+      input.fallback_phase !== "history" &&
+      input.idle_until &&
+      input.now &&
+      input.idle_until > input.now
+    ) {
+      return "steady";
+    }
+    return input.fallback_phase;
   }
-  return "live";
+  // Non-empty wire cursor without a hint must not invent "live".
+  return "unseeded";
 }
 
 export function deriveSyncPhaseFromHint(
@@ -102,6 +114,7 @@ export function advanceSyncState(
         idle_until: idleUntil,
         poll_hint: outcome.poll_hint,
         now: outcome.now,
+        fallback_phase: current?.phase,
       });
   return {
     installation_id: outcome.installation_id,

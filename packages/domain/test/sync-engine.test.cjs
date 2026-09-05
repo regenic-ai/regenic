@@ -112,6 +112,13 @@ describe("sync phase", () => {
     );
     assert.equal(
       deriveSyncPhase({ live_cursor: JSON.stringify({ recent_seeded: true, history_token: "h" }) }),
+      "unseeded",
+    );
+    assert.equal(
+      deriveSyncPhase({
+        live_cursor: "opaque",
+        fallback_phase: "live",
+      }),
       "live",
     );
     assert.equal(
