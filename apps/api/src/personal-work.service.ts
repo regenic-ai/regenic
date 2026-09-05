@@ -1,4 +1,5 @@
 import { Inject, Injectable, OnModuleDestroy, forwardRef } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import {
   ChannelDriverRegistry,
   resolveExecutorCatalog,
@@ -13,7 +14,11 @@ import {
   isDeadLetter,
   normalizeInboxListView,
   normalizeInboxSort,
+  normalizeUnitKind,
   parseConversationThread,
+  projectThreadFacet,
+  recipeMatches,
+  recordClassFromType,
   shouldFlushDelivery,
   shouldRefreshActiveRun,
   type ConversationThread,
@@ -26,6 +31,7 @@ import {
   type WorkRun,
   type WorkRunStatus,
 } from "@regenic/domain";
+import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalExecutorService } from "./personal-executor.service";
@@ -64,10 +70,13 @@ export interface RecipeLastRun {
   status: WorkRunStatus;
   at: string;
   summary?: string;
+  thread_id?: string;
 }
 
 export interface RecipeView extends Recipe {
   last_run?: RecipeLastRun;
+  /** Newest first; includes last_run when present. */
+  recent_runs?: RecipeLastRun[];
 }
 
 @Injectable()
@@ -237,14 +246,27 @@ export class PersonalWorkService implements OnModuleDestroy {
   async listRecipes(): Promise<RecipeView[]> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
-    const [recipes, runs] = await Promise.all([
-      host.get("authority").listRecipes(orgId),
-      host.get("authority").listWorkRuns(orgId),
+    const authority = host.get("authority");
+    const [recipes, runs, items] = await Promise.all([
+      authority.listRecipes(orgId),
+      authority.listWorkRuns(orgId),
+      authority.listWorkItems(orgId),
     ]);
-    return recipes.map((recipe) => ({
-      ...recipe,
-      last_run: lastRunForRecipe(runs, recipe.id),
-    }));
+    const threadByWorkItem = new Map(
+      items.map((item) => [item.id, item.thread_id] as const),
+    );
+    return recipes.map((recipe) => {
+      const recent_runs = recentRunsForRecipe(
+        runs,
+        recipe.id,
+        threadByWorkItem,
+      );
+      return {
+        ...recipe,
+        ...(recent_runs[0] ? { last_run: recent_runs[0] } : {}),
+        ...(recent_runs.length ? { recent_runs } : {}),
+      };
+    });
   }
 
   async listExecutors(locale?: import("@regenic/domain").CopyLocale) {
@@ -302,6 +324,160 @@ export class PersonalWorkService implements OnModuleDestroy {
       throw new PersonalConnectorError("not_found", "Recipe not found", 404);
     }
     return { id, removed: true };
+  }
+
+  /**
+   * Manual one-shot: open/rebind a work item on a chat and start this recipe.
+   * Pass write_back: false to keep the result in Current work (default for try).
+   */
+  async tryRecipe(
+    id: string,
+    input?: { thread_id?: string; write_back?: boolean },
+  ): Promise<WorkRunView & { thread_id: string }> {
+    await this.executors.ensureMounted();
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const recipe = await host.get("authority").getRecipe(orgId, id);
+    if (!recipe) {
+      throw new PersonalConnectorError("not_found", "Recipe not found", 404);
+    }
+    if (!recipe.enabled) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "Turn the rule on before trying it",
+        400,
+      );
+    }
+    const threadId =
+      input?.thread_id?.trim() || recipe.match.thread_id?.trim() || "";
+    if (!threadId) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "Pick one chat to try this rule",
+        400,
+      );
+    }
+    try {
+      parseConversationThread(threadId);
+    } catch {
+      throw new PersonalConnectorError("invalid_config", "Invalid chat id", 400);
+    }
+    const authority = host.get("authority");
+    const existing = await authority.getWorkItemByThread(orgId, threadId);
+    if (existing) {
+      const activeRun = await authority.getActiveWorkRun(orgId, existing.id);
+      if (
+        activeRun ||
+        existing.status === "running" ||
+        existing.status === "waiting_human"
+      ) {
+        throw new PersonalConnectorError(
+          "conflict",
+          existing.recipe_id && existing.recipe_id !== recipe.id
+            ? "Another rule is already running on this chat"
+            : "This chat already has work in progress",
+          409,
+        );
+      }
+      if (
+        isActiveWorkStatus(existing.status) &&
+        existing.recipe_id &&
+        existing.recipe_id !== recipe.id
+      ) {
+        throw new PersonalConnectorError(
+          "conflict",
+          "Another rule is already bound to this chat",
+          409,
+        );
+      }
+    }
+    const heads = await authority.listInbox(orgId, {
+      heads: true,
+      thread_ids: [threadId],
+    });
+    const head = heads[0];
+    const body = head?.event.content_hash
+      ? (
+          await resolveInboxBodies(
+            authority,
+            host.get("blobs"),
+            [head.event.content_hash],
+            "meta",
+          )
+        ).get(head.event.content_hash)
+      : undefined;
+    const surface = body?.surface;
+    // Align with Current-work / Rules preview: prefer work-item class/facet, else inbox surface.
+    const record_class =
+      existing?.record_class ??
+      recordClassFromType(surface?.type) ??
+      "utterance";
+    const thread_facet =
+      existing?.thread_facet ??
+      projectThreadFacet({
+        record_class,
+        type: surface?.type,
+        prompts: false,
+        hint: surface?.thread_facet,
+      });
+    const unit_kind = normalizeUnitKind(surface?.unit_kind);
+    const subject = {
+      record_class,
+      thread_facet,
+      source: head?.event.source ?? threadId.split(":")[0] ?? "",
+      thread_id: threadId,
+      ...(unit_kind ? { unit_kind } : {}),
+    };
+    if (!recipeMatches(recipe.match, subject)) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "This rule does not match that chat",
+        400,
+      );
+    }
+    const now = new Date().toISOString();
+    const item =
+      existing &&
+      (existing.status === "open" ||
+        existing.status === "failed" ||
+        existing.status === "done" ||
+        existing.status === "skipped")
+        ? await authority.putWorkItem({
+            ...existing,
+            status: "open",
+            recipe_id: recipe.id,
+            record_class: subject.record_class,
+            thread_facet: subject.thread_facet,
+            updated_at: now,
+          })
+        : await authority.putWorkItem({
+            id: `work-${randomUUID()}`,
+            org_id: orgId,
+            thread_id: threadId,
+            unit_key: `try:${recipe.id}:${now}`,
+            record_class: subject.record_class,
+            thread_facet: subject.thread_facet,
+            status: "open",
+            recipe_id: recipe.id,
+            created_at: now,
+            updated_at: now,
+          });
+    const allowWriteBack =
+      input?.write_back === true && Boolean(recipe.can_write_back);
+    this.supervise.setWriteBackOverride(item.id, allowWriteBack);
+    const pending = await authority.getWorkDeliveryByItem(orgId, item.id);
+    if (pending && pending.status !== "acked") {
+      // Drop stale queued send-back so keep-here (and a fresh try) cannot flush it.
+      await authority.putWorkDelivery(deliveryAbandoned(pending, now));
+    }
+    try {
+      const result = await this.runWorkItem(item.id);
+      this.inbox.touchInboxDigest();
+      return { ...result, thread_id: threadId };
+    } catch (error) {
+      this.supervise.clearWriteBackOverride(item.id);
+      throw error;
+    }
   }
 
   async getPrefs(): Promise<UiPrefsView> {
@@ -549,7 +725,11 @@ export class PersonalWorkService implements OnModuleDestroy {
     const latest =
       (await host.get("authority").getWorkItem(orgId, opened.id)) ?? opened;
     const queued = await host.get("authority").getWorkDeliveryByItem(orgId, opened.id);
-    if (queued && shouldFlushDelivery(queued, new Date().toISOString())) {
+    if (
+      queued &&
+      shouldFlushDelivery(queued, new Date().toISOString()) &&
+      this.supervise.allowsWriteBack(opened.id, recipe)
+    ) {
       await this.flush.flushOne(latest, recipe, queued);
     }
     return {
@@ -593,6 +773,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       await host.get("authority").putWorkDelivery(deliveryAbandoned(delivery, now));
     }
     await foldThreadByPolicy(host.get("authority"), orgId, next.thread_id, now);
+    this.supervise.clearWriteBackOverride(item.id);
     this.inbox.touchInboxDigest();
     return {
       work_item: next,
@@ -606,11 +787,15 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 }
 
-function lastRunForRecipe(
+const RECIPE_RECENT_RUN_LIMIT = 5;
+
+function recentRunsForRecipe(
   runs: WorkRun[],
   recipeId: string,
-): RecipeLastRun | undefined {
-  const latest = runs
+  threadByWorkItem: Map<string, string>,
+  limit = RECIPE_RECENT_RUN_LIMIT,
+): RecipeLastRun[] {
+  return runs
     .filter((run) => run.recipe_id === recipeId)
     .sort((left, right) =>
       left.updated_at < right.updated_at
@@ -618,16 +803,18 @@ function lastRunForRecipe(
         : left.updated_at > right.updated_at
           ? -1
           : 0,
-    )[0];
-  if (!latest) {
-    return undefined;
-  }
-  const summary = latest.result?.summary?.trim();
-  return {
-    status: latest.status,
-    at: latest.updated_at,
-    ...(summary ? { summary } : {}),
-  };
+    )
+    .slice(0, limit)
+    .map((run) => {
+      const summary = run.result?.summary?.trim();
+      const thread_id = threadByWorkItem.get(run.work_item_id)?.trim();
+      return {
+        status: run.status,
+        at: run.updated_at,
+        ...(summary ? { summary } : {}),
+        ...(thread_id ? { thread_id } : {}),
+      };
+    });
 }
 
 function missingCatalogFields(

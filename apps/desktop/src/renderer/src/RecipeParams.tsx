@@ -6,7 +6,6 @@ export { configFromCatalog, invokeCopy } from "./recipe-params";
 export function RecipeParams({
   catalog,
   values,
-  fallbackTitle,
   onChange,
 }: {
   catalog: ExecutorCatalogEntry;
@@ -18,50 +17,45 @@ export function RecipeParams({
     return null;
   }
   return (
-    <fieldset className="recipe-params">
-      <legend>{catalog.params_label ?? fallbackTitle}</legend>
-      {catalog.description ? (
-        <p className="recipe-params-lead">{catalog.description}</p>
-      ) : null}
+    <>
       {catalog.fields.map((field) => {
         const kind = field.kind ?? (field.options?.length ? "select" : "text");
         const value = values[field.key] ?? field.default ?? "";
         return (
-          <div
-            key={field.key}
-            className={`field${kind === "textarea" ? " field-wide" : ""}`}
-          >
-            <span>
+          <div key={field.key} className="recipe-row">
+            <span className="recipe-row-label">
               {field.label}
               {field.required ? " *" : ""}
             </span>
-            {kind === "textarea" ? (
-              <textarea
-                value={value}
-                placeholder={field.placeholder}
-                required={field.required}
-                rows={5}
-                onChange={(event) => onChange(field.key, event.target.value)}
-              />
-            ) : kind === "select" ? (
-              <MenuSelect
-                value={value}
-                placeholder={field.placeholder}
-                options={field.options ?? []}
-                onChange={(next) => onChange(field.key, next)}
-              />
-            ) : (
-              <input
-                value={value}
-                placeholder={field.placeholder}
-                required={field.required}
-                onChange={(event) => onChange(field.key, event.target.value)}
-              />
-            )}
-            {field.hint ? <span className="muted">{field.hint}</span> : null}
+            <div className="recipe-row-body">
+              {kind === "textarea" ? (
+                <textarea
+                  value={value}
+                  placeholder={field.placeholder}
+                  required={field.required}
+                  rows={5}
+                  onChange={(event) => onChange(field.key, event.target.value)}
+                />
+              ) : kind === "select" ? (
+                <MenuSelect
+                  value={value}
+                  placeholder={field.placeholder}
+                  options={field.options ?? []}
+                  onChange={(next) => onChange(field.key, next)}
+                />
+              ) : (
+                <input
+                  value={value}
+                  placeholder={field.placeholder}
+                  required={field.required}
+                  onChange={(event) => onChange(field.key, event.target.value)}
+                />
+              )}
+              {field.hint ? <p className="recipe-hint">{field.hint}</p> : null}
+            </div>
           </div>
         );
       })}
-    </fieldset>
+    </>
   );
 }

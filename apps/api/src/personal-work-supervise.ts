@@ -33,6 +33,8 @@ export class PersonalWorkSupervise {
   private waits?: PersonalWorkWait;
   private readonly lastReapLog = new Map<string, number>();
   private readonly lastFollow = new Map<string, number>();
+  /** Per-work-item override for try-once / dry write-back. */
+  private readonly writeBackOverride = new Map<string, boolean>();
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -42,6 +44,26 @@ export class PersonalWorkSupervise {
 
   bindWaits(waits: PersonalWorkWait): void {
     this.waits = waits;
+  }
+
+  setWriteBackOverride(workItemId: string, value: boolean): void {
+    this.writeBackOverride.set(workItemId, value);
+  }
+
+  clearWriteBackOverride(workItemId: string): void {
+    this.writeBackOverride.delete(workItemId);
+  }
+
+  /** Respect try-once keep-here when deciding whether to flush a queued delivery. */
+  allowsWriteBack(itemId: string, recipe: Recipe): boolean {
+    return this.wantsWriteBack(itemId, recipe);
+  }
+
+  private wantsWriteBack(itemId: string, recipe: Recipe): boolean {
+    if (this.writeBackOverride.has(itemId)) {
+      return this.writeBackOverride.get(itemId) === true;
+    }
+    return recipeWantsWriteBack(recipe);
   }
 
   async refreshRuns(): Promise<void> {
@@ -236,7 +258,7 @@ export class PersonalWorkSupervise {
     }
     const status = workStatusFromHandle(handle);
     const delivery = await authority.getWorkDeliveryByItem(item.org_id, item.id);
-    if (shouldWriteBackHandle(handle, recipeWantsWriteBack(recipe))) {
+    if (shouldWriteBackHandle(handle, this.wantsWriteBack(item.id, recipe))) {
       if (await this.abandonIfSkipped(item, nextRun)) {
         return;
       }
@@ -269,6 +291,7 @@ export class PersonalWorkSupervise {
         updated_at: now,
       });
       if (!isActiveWorkStatus(status)) {
+        this.writeBackOverride.delete(item.id);
         this.waits?.drop(run.id);
         await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
         this.touchInboxDigest?.();

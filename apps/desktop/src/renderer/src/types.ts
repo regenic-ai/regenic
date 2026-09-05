@@ -305,6 +305,7 @@ export interface RecipeLastRun {
   status: string;
   at: string;
   summary?: string;
+  thread_id?: string;
 }
 
 export interface RecipeView {
@@ -321,6 +322,7 @@ export interface RecipeView {
   enabled: boolean;
   next_run_at?: string;
   last_run?: RecipeLastRun;
+  recent_runs?: RecipeLastRun[];
   created_at: string;
   updated_at: string;
 }
@@ -347,6 +349,11 @@ export interface RecipeConversationOption {
   label: string;
   source?: string;
   can_send?: boolean;
+  record_class?: RecordClass;
+  thread_facet?: ThreadFacet;
+  unit_kind?: string;
+  /** True when Current work already has an open/running work face. */
+  has_work?: boolean;
 }
 
 export interface UiPrefsView {

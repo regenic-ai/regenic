@@ -1,19 +1,32 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   deleteRecipe,
   fetchExecutors,
   fetchRecipes,
   saveRecipe,
+  tryRecipe,
 } from "./api";
-import { formatNextRunWhen } from "./format";
+import { formatNextRunWhen, formatTime } from "./format";
 import { useLocale } from "./LocaleContext";
 import { MenuSelect } from "./MenuSelect";
 import { RecipeParams } from "./RecipeParams";
 import { configFromCatalog, invokeCopy, missingRequiredField } from "./recipe-params";
+import {
+  overlappingPriorityGroup,
+  previewRecipeMatch,
+  shouldConfirmRecipeSave,
+  tryOnceThreadId,
+} from "./recipe-preview";
+import {
+  buildRecipeBundle,
+  downloadRecipeBundle,
+  parseRecipeBundle,
+  type RecipeTransferItem,
+} from "./recipe-transfer";
 import type { MessageKey } from "../../shared/i18n.ts";
 import type {
   ExecutorCatalogEntry,
   RecipeConversationOption,
+  RecipeLastRun,
   RecipeMatch,
   RecipeSeed,
   RecipeSourceOption,
@@ -21,6 +34,15 @@ import type {
   RecipeView,
   ThreadFacet,
 } from "./types";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 
 const PULL_INTERVALS = [
   { ms: 15 * 60 * 1000, label: "recipes.interval15m" as const },
@@ -36,20 +58,26 @@ export function RecipesPage({
   seed,
   onSeedConsumed,
   onBound,
+  onGoEngine,
+  onOpenThread,
 }: {
   sources: RecipeSourceOption[];
   conversations?: RecipeConversationOption[];
   seed?: RecipeSeed | null;
   onSeedConsumed?: () => void;
   onBound?: () => void;
+  onGoEngine?: () => void;
+  onOpenThread?: (threadId: string) => void;
 }) {
   const { t, locale } = useLocale();
   const formRef = useRef<HTMLElement>(null);
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
   const [executors, setExecutors] = useState<ExecutorCatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [returnToWork, setReturnToWork] = useState(() => Boolean(seed));
+  const importRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState<RecipeDraft>(() =>
     seed ? applySeed(emptyDraft(), seed, "") : emptyDraft(),
   );
@@ -94,17 +122,199 @@ export function RecipesPage({
     () => conversationChoices(conversations, draft),
     [conversations, draft.thread_id, draft.thread_title],
   );
+  const matchPreview = useMemo(
+    () =>
+      previewRecipeMatch({
+        match: draftMatch(draft),
+        draftId: draft.id,
+        conversations,
+        recipes,
+      }),
+    [conversations, draft, recipes],
+  );
+  const priorityGroup = useMemo(() => {
+    const match = draftMatch(draft);
+    if (!match || Object.keys(match).length === 0) {
+      return [];
+    }
+    const name = (draft.name.trim() || suggestedName).trim() || t("recipes.formNew");
+    return overlappingPriorityGroup(
+      {
+        id: draft.id ?? "~draft",
+        name,
+        match,
+        enabled: draft.enabled,
+      },
+      recipes,
+    );
+  }, [draft, recipes, suggestedName, t]);
+  const tryThreadId = useMemo(
+    () =>
+      tryOnceThreadId({
+        matchThreadId: draftMatch(draft).thread_id,
+        preview: matchPreview,
+      }),
+    [draft, matchPreview],
+  );
+
+  const runTryOnce = async (writeBack: boolean) => {
+    if (!draft.id || !tryThreadId) {
+      return;
+    }
+    if (
+      !window.confirm(
+        t(writeBack ? "recipes.tryConfirmSend" : "recipes.tryConfirmKeep"),
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await tryRecipe(draft.id, {
+        thread_id: tryThreadId,
+        write_back: writeBack,
+      });
+      await reload();
+      setNotice(
+        t(writeBack ? "recipes.tryStartedSend" : "recipes.tryStartedKeep"),
+      );
+      onOpenThread?.(result.thread_id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("recipes.tryError"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportRules = () => {
+    if (recipes.length === 0) {
+      return;
+    }
+    downloadRecipeBundle(buildRecipeBundle(recipes));
+    setError(null);
+    setNotice(t("recipes.exportDone", { count: recipes.length }));
+  };
+
+  const importRules = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const raw = await file.text();
+      let bundle;
+      try {
+        bundle = parseRecipeBundle(raw);
+      } catch (caught) {
+        const code = caught instanceof Error ? caught.message : "invalid_bundle";
+        setError(t(importErrorKey(code)));
+        return;
+      }
+      const available = new Set(executors.map((item) => item.executor_type));
+      const accepted: RecipeTransferItem[] = [];
+      let skipped = 0;
+      for (const item of bundle.recipes) {
+        if (!available.has(item.executor_type)) {
+          skipped += 1;
+          continue;
+        }
+        accepted.push(item);
+      }
+      if (accepted.length === 0) {
+        setError(t("recipes.importNoExecutor"));
+        return;
+      }
+      if (
+        !window.confirm(
+          t("recipes.importConfirm", {
+            count: accepted.length,
+            skipped: skipped > 0 ? t("recipes.importSkipped", { count: skipped }) : "",
+          }),
+        )
+      ) {
+        return;
+      }
+      for (const item of accepted) {
+        await saveRecipe({
+          name: item.name,
+          match: item.match,
+          trigger: item.trigger,
+          executor_type: item.executor_type,
+          executor_config: item.executor_config,
+          can_write_back: item.can_write_back,
+          include_context: item.include_context,
+          max_concurrent: item.max_concurrent ?? null,
+          enabled: item.enabled,
+        });
+      }
+      await reload();
+      setNotice(
+        t("recipes.importDone", {
+          count: accepted.length,
+          skipped: skipped > 0 ? t("recipes.importSkipped", { count: skipped }) : "",
+        }),
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("recipes.importError"));
+    } finally {
+      setBusy(false);
+      if (importRef.current) {
+        importRef.current.value = "";
+      }
+    }
+  };
 
   const resetDraft = () => {
     setReturnToWork(false);
     setError(null);
-    setDraft(emptyDraftFrom(executors));
+    setNotice(null);
+    setDraft(emptyDraftFrom(executors, sources));
   };
 
   const editRecipe = (recipe: RecipeView) => {
     setReturnToWork(false);
     setError(null);
     setDraft(draftFromRecipe(recipe, executorByType.get(recipe.executor_type)));
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  };
+
+  const toggleRecipe = async (recipe: RecipeView) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await saveRecipe(
+        {
+          name: recipe.name,
+          match: recipe.match,
+          trigger: recipe.trigger,
+          executor_type: recipe.executor_type,
+          executor_config: recipe.executor_config,
+          can_write_back: recipe.can_write_back,
+          include_context: recipe.include_context,
+          max_concurrent: recipe.max_concurrent ?? null,
+          enabled: !recipe.enabled,
+        },
+        recipe.id,
+      );
+      await reload();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("recipes.saveError"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyStarter = (kind: StarterKind) => {
+    setReturnToWork(false);
+    setError(null);
+    setDraft(
+      withSuggestedName(
+        starterDraft(kind, emptyDraftFrom(executors, sources), sources, conversations),
+      ),
+    );
     requestAnimationFrame(() => {
       formRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
@@ -124,8 +334,33 @@ export function RecipesPage({
       setError(t("recipes.errRequired", { field: required }));
       return;
     }
+    const writeBack =
+      writeBackAvailable(draft, conversations) && draft.can_write_back;
+    if (
+      shouldConfirmRecipeSave({
+        isNew: !draft.id,
+        triggerKind: draft.trigger_kind,
+        scope: draft.scope,
+        canWriteBack: writeBack,
+        preview: matchPreview,
+      })
+    ) {
+      if (
+        !window.confirm(
+          t("recipes.saveConfirm", {
+            coverage: saveCoverageCopy(matchPreview, draft, t),
+            after: writeBack
+              ? t("recipes.writeBackYes")
+              : t("recipes.writeBackNo"),
+          }),
+        )
+      ) {
+        return;
+      }
+    }
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       await saveRecipe(
         {
@@ -134,9 +369,7 @@ export function RecipesPage({
           trigger: draftTrigger(draft),
           executor_type: draft.executor_type,
           executor_config: draft.config,
-          can_write_back: writeBackAvailable(draft, conversations)
-            ? draft.can_write_back
-            : false,
+          can_write_back: writeBack,
           include_context: draft.include_context,
           max_concurrent:
             draft.trigger_kind === "pull"
@@ -147,8 +380,10 @@ export function RecipesPage({
         draft.id,
       );
       const goBack = returnToWork && !draft.id;
+      const wasEdit = Boolean(draft.id);
       resetDraft();
       await reload();
+      setNotice(t(wasEdit ? "recipes.saveUpdated" : "recipes.saveCreated"));
       if (goBack) {
         onBound?.();
       }
@@ -164,11 +399,29 @@ export function RecipesPage({
       <section className="card recipe-saved">
         <div className="card-head">
           <h2>{t("recipes.yours")}</h2>
-          {draft.id ? (
-            <button type="button" className="ghost" onClick={resetDraft}>
-              {t("recipes.new")}
+          <div className="recipe-head-actions">
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={exportRules}
+            >
+              {t("recipes.export")}
             </button>
-          ) : null}
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || executors.length === 0}
+              onClick={() => importRef.current?.click()}
+            >
+              {t("recipes.import")}
+            </button>
+            {draft.id ? (
+              <button type="button" className="ghost" onClick={resetDraft}>
+                {t("recipes.new")}
+              </button>
+            ) : null}
+          </div>
         </div>
         <ul className="recipe-list">
           {recipes.map((recipe) => {
@@ -179,10 +432,22 @@ export function RecipesPage({
             const next = nextRunCopy(recipe, t);
             const last = lastRunCopy(recipe, t);
             const conflict = conflictCopy(recipe, recipes, t);
+            const recentRuns = recipe.recent_runs?.length
+              ? recipe.recent_runs
+              : recipe.last_run
+                ? [recipe.last_run]
+                : [];
+            const runThread =
+              recipe.last_run?.thread_id?.trim() ||
+              recipe.match.thread_id?.trim() ||
+              "";
+            const isOpen = draft.id === recipe.id;
+            const priority = overlappingPriorityGroup(recipe, recipes);
+            const selfRank = priority.find((row) => row.is_self);
             return (
               <li
                 key={recipe.id}
-                className={`recipe-card${draft.id === recipe.id ? " is-open" : ""}`}
+                className={`recipe-card${isOpen ? " is-open" : ""}`}
               >
                 <button
                   type="button"
@@ -191,9 +456,17 @@ export function RecipesPage({
                 >
                   <div className="recipe-card-title">
                     <strong>{recipe.name}</strong>
-                    {recipe.enabled ? null : (
-                      <span className="recipe-pill">{t("recipes.paused")}</span>
-                    )}
+                    <span className={`recipe-pill${recipe.enabled ? " is-on" : ""}`}>
+                      {recipe.enabled ? t("recipes.on") : t("recipes.off")}
+                    </span>
+                    {selfRank && selfRank.rank > 0 ? (
+                      <span className="recipe-pill">
+                        {t("recipes.priorityRank", {
+                          rank: selfRank.rank,
+                          total: priority.filter((row) => row.enabled).length,
+                        })}
+                      </span>
+                    ) : null}
                   </div>
                   <p className="recipe-card-line">
                     {recipeCardLine(
@@ -206,11 +479,41 @@ export function RecipesPage({
                     )}
                   </p>
                   {next ? <p className="recipe-card-next">{next}</p> : null}
-                  {last ? <p className="recipe-card-next">{last}</p> : null}
+                  {last && recentRuns.length <= 1 ? (
+                    <p className="recipe-card-next">{last}</p>
+                  ) : null}
                   {conflict ? <p className="recipe-card-next">{conflict}</p> : null}
                   {invoke ? <p className="recipe-card-how">{invoke}</p> : null}
                 </button>
+                {recentRuns.length > 0 ? (
+                  <RecipeRunHistory
+                    runs={recentRuns}
+                    onOpenThread={onOpenThread}
+                    t={t}
+                  />
+                ) : null}
                 <div className="install-actions">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={recipe.enabled}
+                    className={`switch${recipe.enabled ? " is-on" : ""}`}
+                    disabled={busy}
+                    title={recipe.enabled ? t("recipes.off") : t("recipes.on")}
+                    onClick={() => {
+                      void toggleRecipe(recipe);
+                    }}
+                  />
+                  {runThread && onOpenThread && recipe.last_run ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy}
+                      onClick={() => onOpenThread(runThread)}
+                    >
+                      {t("recipes.openLastRun")}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="ghost"
@@ -250,8 +553,33 @@ export function RecipesPage({
       <header className="recipe-editor-head">
         <h2>{formTitle(draft, returnToWork, t)}</h2>
       </header>
+      {draft.id
+        ? (() => {
+            const editing = recipes.find((item) => item.id === draft.id);
+            const runs = editing?.recent_runs?.length
+              ? editing.recent_runs
+              : editing?.last_run
+                ? [editing.last_run]
+                : [];
+            return runs.length > 0 ? (
+              <RecipeRunHistory
+                runs={runs}
+                onOpenThread={onOpenThread}
+                t={t}
+                dense
+              />
+            ) : null;
+          })()
+        : null}
       {executors.length === 0 ? (
-        <p className="muted">{t("recipes.noExecutor")}</p>
+        <div className="recipe-gate">
+          <p className="muted">{t("recipes.noExecutor")}</p>
+          {onGoEngine ? (
+            <button type="button" className="primary" onClick={onGoEngine}>
+              {t("recipes.goEngine")}
+            </button>
+          ) : null}
+        </div>
       ) : (
         <form
           className="recipe-form"
@@ -262,8 +590,11 @@ export function RecipesPage({
         >
           <div className="recipe-stack">
               <section className="recipe-section">
-                <h3>{t("recipes.triggerLegend")}</h3>
-                <fieldset className="recipe-scope">
+                <header className="recipe-section-head">
+                  <h3>{t("recipes.triggerLegend")}</h3>
+                </header>
+                <div className="recipe-rows">
+                <RecipeRow label={t("recipes.triggerRow")}>
                   <div className="seg">
                     {triggerChoices(t).map((choice) => (
                       <button
@@ -280,33 +611,41 @@ export function RecipesPage({
                       </button>
                     ))}
                   </div>
-                  <p className="muted">{triggerHint(draft.trigger_kind, t)}</p>
-                </fieldset>
+                  <p className="recipe-hint">{triggerHint(draft.trigger_kind, t)}</p>
+                </RecipeRow>
                 {draft.trigger_kind !== "pull" ? (
-                <fieldset className="recipe-scope">
-                  <legend>{t("recipes.watchLegend")}</legend>
+                <RecipeRow label={t("recipes.watchLegend")}>
                   <div className="seg">
                     {scopeChoices(t).map((choice) => (
                       <button
                         key={choice.id}
                         type="button"
                         className={draft.scope === choice.id ? "active" : undefined}
-                        onClick={() =>
+                        onClick={() => {
+                          if (
+                            choice.id === "tasks" &&
+                            draft.scope !== "tasks" &&
+                            !window.confirm(t("recipes.scopeTasksConfirm"))
+                          ) {
+                            return;
+                          }
                           setDraft((current) =>
                             withSuggestedName({ ...current, scope: choice.id }),
-                          )
-                        }
+                          );
+                        }}
                       >
                         {choice.label}
                       </button>
                     ))}
                   </div>
-                </fieldset>
+                  {draft.scope === "tasks" ? (
+                    <p className="recipe-hint recipe-scope-warn">{t("recipes.scopeTasksWarn")}</p>
+                  ) : null}
+                </RecipeRow>
                 ) : null}
 
                 {draft.scope === "source" ? (
-                  <div className="field">
-                    <span>{t("recipes.source")}</span>
+                  <RecipeRow label={t("recipes.source")}>
                     <MenuSelect
                       value={draft.source}
                       placeholder={t("recipes.chooseSource")}
@@ -328,7 +667,7 @@ export function RecipesPage({
                         )
                       }
                     />
-                  </div>
+                  </RecipeRow>
                 ) : null}
 
                 {draft.trigger_kind !== "pull" && draft.scope !== "thread"
@@ -336,10 +675,17 @@ export function RecipesPage({
                   : null}
 
                 {draft.scope === "thread" || draft.trigger_kind === "pull" ? (
-                  <div className="field">
-                    <span>{t("recipes.conversation")}</span>
+                  <RecipeRow label={t("recipes.conversation")}>
                     {conversationOptions.length === 0 && !draft.thread_id ? (
-                      <p className="field-empty">{t("recipes.noConversation")}</p>
+                      <div className="recipe-gate">
+                        <p className="field-empty">{t("recipes.noConversation")}</p>
+                        <p className="recipe-hint">{t("recipes.noConversationHint")}</p>
+                        {onBound ? (
+                          <button type="button" className="ghost" onClick={onBound}>
+                            {t("recipes.goInbox")}
+                          </button>
+                        ) : null}
+                      </div>
                     ) : (
                       <MenuSelect
                         value={draft.thread_id}
@@ -365,12 +711,11 @@ export function RecipesPage({
                         }}
                       />
                     )}
-                  </div>
+                  </RecipeRow>
                 ) : null}
 
                 {draft.trigger_kind === "pull" ? (
-                  <div className="field">
-                    <span>{t("recipes.interval")}</span>
+                  <RecipeRow label={t("recipes.interval")}>
                     <div className="seg">
                       {PULL_INTERVALS.map((choice) => (
                         <button
@@ -385,39 +730,54 @@ export function RecipesPage({
                         </button>
                       ))}
                     </div>
-                  </div>
+                  </RecipeRow>
                 ) : null}
+
+                <RecipeRow label={t("recipes.previewTitle")}>
+                  <MatchPreview
+                    preview={matchPreview}
+                    draft={draft}
+                    t={t}
+                  />
+                  {priorityGroup.length > 0 ? (
+                    <PriorityPanel rows={priorityGroup} t={t} />
+                  ) : null}
+                </RecipeRow>
+                </div>
               </section>
 
               <section className="recipe-section">
-                <h3>{t("recipes.then")}</h3>
-                <div className="field">
+                <header className="recipe-section-head">
+                  <h3>{t("recipes.then")}</h3>
+                </header>
+                <div className="recipe-rows">
+                <RecipeRow label={t("recipes.runWith")}>
                   {executors.length === 1 ? (
                     <p className="recipe-chip">{executors[0].label}</p>
                   ) : (
-                    <>
-                      <span>{t("recipes.runWith")}</span>
-                      <MenuSelect
-                        value={draft.executor_type}
-                        options={executors.map((item) => ({
-                          value: item.executor_type,
-                          label: item.label,
-                        }))}
-                        onChange={(executor_type) =>
-                          setDraft((current) =>
-                            withSuggestedName({
-                              ...current,
-                              executor_type,
-                              config: configFromCatalog(
-                                executors.find((item) => item.executor_type === executor_type),
-                              ),
-                            }),
-                          )
-                        }
-                      />
-                    </>
+                    <MenuSelect
+                      value={draft.executor_type}
+                      options={executors.map((item) => ({
+                        value: item.executor_type,
+                        label: item.label,
+                      }))}
+                      onChange={(executor_type) =>
+                        setDraft((current) =>
+                          withSuggestedName({
+                            ...current,
+                            executor_type,
+                            config: configFromCatalog(
+                              executors.find((item) => item.executor_type === executor_type),
+                            ),
+                          }),
+                        )
+                      }
+                    />
                   )}
-                </div>
+                  {catalog?.description ? (
+                    <p className="recipe-hint">{catalog.description}</p>
+                  ) : null}
+                </RecipeRow>
                 {catalog?.fields.length ? (
                   <RecipeParams
                     catalog={catalog}
@@ -431,117 +791,165 @@ export function RecipesPage({
                     }
                   />
                 ) : null}
-                {draft.trigger_kind !== "pull" ? (
-                  <div className="field">
-                    <span>{t("recipes.maxConcurrent")}</span>
-                    <input
-                      type="number"
-                      min={1}
-                      inputMode="numeric"
-                      placeholder={t("recipes.maxConcurrentUnlimited")}
-                      value={draft.max_concurrent}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          max_concurrent: event.target.value,
-                        }))
-                      }
-                    />
-                    <p className="muted">{t("recipes.maxConcurrentHint")}</p>
-                  </div>
-                ) : null}
+                <MoreOptions
+                  key={draft.id ?? "new"}
+                  draft={draft}
+                  setDraft={setDraft}
+                  t={t}
+                />
+                </div>
               </section>
-              <MoreOptions
-                key={draft.id ?? "new"}
-                draft={draft}
-                setDraft={setDraft}
-                t={t}
-              />
+
+              <section className="recipe-section">
+                <header className="recipe-section-head">
+                  <h3>{t("recipes.afterDone")}</h3>
+                </header>
+                <div className="recipe-rows">
+                <RecipeRow label={t("recipes.result")}>
+                  <div className="seg">
+                    <button
+                      type="button"
+                      className={
+                        writeBackAvailable(draft, conversations) && draft.can_write_back
+                          ? "active"
+                          : undefined
+                      }
+                      disabled={!writeBackAvailable(draft, conversations)}
+                      onClick={() =>
+                        setDraft((current) => ({ ...current, can_write_back: true }))
+                      }
+                    >
+                      {t("recipes.writeBackYes")}
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        !draft.can_write_back || !writeBackAvailable(draft, conversations)
+                          ? "active"
+                          : undefined
+                      }
+                      onClick={() =>
+                        setDraft((current) => ({ ...current, can_write_back: false }))
+                      }
+                    >
+                      {t("recipes.writeBackNo")}
+                    </button>
+                  </div>
+                  {!writeBackAvailable(draft, conversations) ? (
+                    <p className="recipe-hint">{t("recipes.writeBackUnavailable")}</p>
+                  ) : draft.can_write_back ? (
+                    <p className="recipe-hint">
+                      {t(
+                        draft.trigger_kind === "pull"
+                          ? "recipes.writeBackHintPull"
+                          : "recipes.writeBackHint",
+                      )}
+                    </p>
+                  ) : null}
+                </RecipeRow>
+                {draft.id ? (
+                  <RecipeRow label={t("recipes.enabledCheck")}>
+                    <SwitchRow
+                      checked={draft.enabled}
+                      onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
+                    >
+                      {""}
+                    </SwitchRow>
+                  </RecipeRow>
+                ) : null}
+                </div>
+              </section>
           </div>
 
           <div className="recipe-form-foot">
-            <div className="recipe-switches">
-              <SwitchRow
-                checked={
-                  writeBackAvailable(draft, conversations) && draft.can_write_back
+            <label className="recipe-name">
+              <span>{t("recipes.name")}</span>
+              <input
+                value={draft.name}
+                placeholder={suggestedName}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    name: event.target.value,
+                    nameTouched: true,
+                  }))
                 }
-                disabled={!writeBackAvailable(draft, conversations)}
-                onChange={(can_write_back) =>
-                  setDraft((current) => ({ ...current, can_write_back }))
+              />
+            </label>
+            <div className="recipe-actions">
+              {draft.id || returnToWork ? (
+                <button type="button" className="ghost" onClick={resetDraft}>
+                  {t("recipes.cancel")}
+                </button>
+              ) : null}
+              {draft.id ? (
+                <>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || !draft.enabled || !tryThreadId}
+                    title={
+                      !draft.enabled
+                        ? t("recipes.tryNeedEnabled")
+                        : !tryThreadId
+                          ? t("recipes.tryNeedChat")
+                          : t("recipes.tryTitle")
+                    }
+                    onClick={() => {
+                      void runTryOnce(false);
+                    }}
+                  >
+                    {t("recipes.tryOnce")}
+                  </button>
+                  {writeBackAvailable(draft, conversations) &&
+                  draft.can_write_back ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy || !draft.enabled || !tryThreadId}
+                      title={t("recipes.trySendTitle")}
+                      onClick={() => {
+                        void runTryOnce(true);
+                      }}
+                    >
+                      {t("recipes.tryOnceSend")}
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+              <button
+                type="submit"
+                className="primary"
+                disabled={
+                  busy ||
+                  !draft.executor_type ||
+                  ((draft.scope === "thread" || draft.trigger_kind === "pull") &&
+                    !draft.thread_id)
                 }
               >
-                {t("recipes.writeBackCheck")}
-              </SwitchRow>
-              {draft.id ? (
-                <SwitchRow
-                  checked={draft.enabled}
-                  onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
-                >
-                  {t("recipes.enabledCheck")}
-                </SwitchRow>
-              ) : null}
-              {!writeBackAvailable(draft, conversations) ? (
-                <p className="muted recipe-writeback-hint">
-                  {t("recipes.writeBackUnavailable")}
-                </p>
-              ) : draft.can_write_back ? (
-                <p className="muted recipe-writeback-hint">
-                  {t(
-                    draft.trigger_kind === "pull"
-                      ? "recipes.writeBackHintPull"
-                      : "recipes.writeBackHint",
-                  )}
-                </p>
-              ) : null}
+                {busy
+                  ? t("recipes.saving")
+                  : draft.id
+                    ? t("recipes.update")
+                    : returnToWork
+                      ? t("recipes.bindBack")
+                      : t("recipes.save")}
+              </button>
             </div>
-
-            <div className="recipe-commit">
-              <label className="field">
-                <span>{t("recipes.name")}</span>
-                <input
-                  value={draft.name}
-                  placeholder={suggestedName}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      name: event.target.value,
-                      nameTouched: true,
-                    }))
-                  }
-                />
-              </label>
-              <div className="install-actions">
-                {draft.id || returnToWork ? (
-                  <button type="button" className="ghost" onClick={resetDraft}>
-                    {t("recipes.cancel")}
-                  </button>
-                ) : null}
-                <button
-                  type="submit"
-                  className="primary"
-                  disabled={
-                    busy ||
-                    !draft.executor_type ||
-                    ((draft.scope === "thread" || draft.trigger_kind === "pull") &&
-                      !draft.thread_id)
-                  }
-                >
-                  {busy
-                    ? t("recipes.saving")
-                    : draft.id
-                      ? t("recipes.update")
-                      : returnToWork
-                        ? t("recipes.bindBack")
-                        : t("recipes.save")}
-                </button>
-              </div>
-            </div>
+            {draft.id && (!draft.enabled || !tryThreadId) ? (
+              <p className="muted recipe-try-hint">
+                {!draft.enabled
+                  ? t("recipes.tryNeedEnabled")
+                  : t("recipes.tryNeedChat")}
+              </p>
+            ) : null}
           </div>
         </form>
       )}
-      {error ? <p className="action-error">{error}</p> : null}
     </section>
   );
+
+  const showGuide = recipes.length === 0 && !draft.id && !returnToWork;
 
   return (
     <div className="page page-wide page-recipes">
@@ -550,9 +958,78 @@ export function RecipesPage({
         <h1>{t("recipes.title")}</h1>
         <p className="page-lead">{t("recipes.lead")}</p>
       </header>
+      {notice ? <p className="action-ok recipe-page-notice">{notice}</p> : null}
+      {error ? <p className="action-error recipe-page-notice">{error}</p> : null}
+      {showGuide ? (
+        <section className="card recipe-guide">
+          <header className="recipe-guide-head">
+            <h2>{t("recipes.howTitle")}</h2>
+          </header>
+          <ol className="recipe-steps">
+            <li>
+              <strong>{t("recipes.step1Title")}</strong>
+              <span>{t("recipes.step1Body")}</span>
+            </li>
+            <li>
+              <strong>{t("recipes.step2Title")}</strong>
+              <span>{t("recipes.step2Body")}</span>
+            </li>
+            <li>
+              <strong>{t("recipes.step3Title")}</strong>
+              <span>{t("recipes.step3Body")}</span>
+            </li>
+          </ol>
+          {executors.length > 0 ? (
+            <div className="recipe-starters">
+              <div className="recipe-starters-head">
+                <h3>{t("recipes.startersTitle")}</h3>
+                <button
+                  type="button"
+                  className="ghost recipe-import-link"
+                  disabled={busy}
+                  onClick={() => importRef.current?.click()}
+                >
+                  {t("recipes.import")}
+                </button>
+              </div>
+              <div className="recipe-starter-grid">
+                {(
+                  [
+                    ["chat", "recipes.starterChat", "recipes.starterChatBody"],
+                    ["channel", "recipes.starterChannel", "recipes.starterChannelBody"],
+                    ["schedule", "recipes.starterSchedule", "recipes.starterScheduleBody"],
+                  ] as const
+                ).map(([kind, titleKey, bodyKey]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    className="recipe-starter"
+                    onClick={() => applyStarter(kind)}
+                  >
+                    <strong>{t(titleKey)}</strong>
+                    <span>{t(bodyKey)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       {formFirst ? formCard : null}
       {listCard}
       {formFirst ? null : formCard}
+      <input
+        ref={importRef}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) {
+            void importRules(file);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -586,6 +1063,209 @@ function SwitchRow({
       />
     </div>
   );
+}
+
+function MatchPreview({
+  preview,
+  draft,
+  t,
+}: {
+  preview: ReturnType<typeof previewRecipeMatch>;
+  draft: RecipeDraft;
+  t: Translate;
+}) {
+  let body: string;
+  if (!preview.ready) {
+    if (draft.trigger_kind === "pull" || draft.scope === "thread") {
+      body = t("recipes.previewNeedChat");
+    } else if (draft.scope === "source" && !draft.source.trim()) {
+      body = t("recipes.previewNeedSource");
+    } else {
+      body = t("recipes.previewIncomplete");
+    }
+  } else if (preview.count === 0) {
+    body = t("recipes.previewNone");
+  } else if (preview.count === 1) {
+    body = t("recipes.previewOne", { name: preview.samples[0] ?? "" });
+  } else {
+    body = t("recipes.previewMany", { count: preview.count });
+  }
+  const samples =
+    preview.ready && preview.count > 1 && preview.samples.length > 0
+      ? t("recipes.previewSamples", { names: preview.samples.join(" · ") })
+      : null;
+  return (
+    <div className="recipe-preview">
+      <p className="recipe-preview-body">{body}</p>
+      {samples ? <p className="recipe-preview-samples">{samples}</p> : null}
+      {preview.ready ? (
+        <p className="recipe-hint">{t("recipes.previewPartial")}</p>
+      ) : null}
+      {preview.preempted_by ? (
+        <p className="recipe-preview-conflict">
+          {t("recipes.previewConflict", { name: preview.preempted_by })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function PriorityPanel({
+  rows,
+  t,
+}: {
+  rows: ReturnType<typeof overlappingPriorityGroup>;
+  t: Translate;
+}) {
+  return (
+    <div className="recipe-priority">
+      <p className="recipe-preview-title">{t("recipes.priorityTitle")}</p>
+      <p className="muted recipe-preview-note">{t("recipes.priorityLead")}</p>
+      <ol className="recipe-priority-list">
+        {rows.map((row) => (
+          <li
+            key={row.id}
+            className={`recipe-priority-row${row.is_self ? " is-self" : ""}${
+              row.enabled ? "" : " is-off"
+            }`}
+          >
+            <span className="recipe-priority-rank">
+              {row.enabled
+                ? t("recipes.priorityBadge", { rank: row.rank })
+                : t("recipes.off")}
+            </span>
+            <span className="recipe-priority-name">
+              {row.is_self
+                ? t("recipes.prioritySelf", { name: row.name })
+                : row.name}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function RecipeRunHistory({
+  runs,
+  onOpenThread,
+  t,
+  dense = false,
+}: {
+  runs: RecipeLastRun[];
+  onOpenThread?: (threadId: string) => void;
+  t: Translate;
+  dense?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(dense || runs.length <= 3);
+  if (runs.length === 0) {
+    return null;
+  }
+  const visible = expanded ? runs : runs.slice(0, 2);
+  return (
+    <div className={`recipe-run-history${dense ? " is-dense" : ""}`}>
+      <div className="recipe-run-history-head">
+        <p className="recipe-run-history-title">
+          {t("recipes.runHistoryCount", { count: runs.length })}
+        </p>
+        {runs.length > 2 ? (
+          <button
+            type="button"
+            className="ghost recipe-run-history-toggle"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? t("recipes.runHistoryLess") : t("recipes.runHistoryMore")}
+          </button>
+        ) : null}
+      </div>
+      <ul>
+        {visible.map((run, index) => {
+          const status = runStatusCopy(run.status, t) ?? run.status;
+          const when = formatTime(run.at);
+          const threadId = run.thread_id?.trim();
+          const key = `${run.at}:${run.status}:${index}`;
+          const tone =
+            run.status === "failed"
+              ? "is-failed"
+              : run.status === "running" || run.status === "waiting_human"
+                ? "is-running"
+                : run.status === "completed"
+                  ? "is-done"
+                  : "";
+          const body = (
+            <>
+              <span className={`recipe-run-status ${tone}`.trim()}>{status}</span>
+              <span className="recipe-run-when">{when}</span>
+              {run.summary ? (
+                <span className="recipe-run-history-summary">{run.summary}</span>
+              ) : (
+                <span className="recipe-run-history-summary is-empty">
+                  {t("recipes.runHistoryNoSummary")}
+                </span>
+              )}
+            </>
+          );
+          if (threadId && onOpenThread) {
+            return (
+              <li key={key}>
+                <button
+                  type="button"
+                  className="recipe-run-history-item"
+                  onClick={() => onOpenThread(threadId)}
+                >
+                  {body}
+                </button>
+              </li>
+            );
+          }
+          return (
+            <li key={key}>
+              <span className="recipe-run-history-item is-static">{body}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function saveCoverageCopy(
+  preview: ReturnType<typeof previewRecipeMatch>,
+  draft: RecipeDraft,
+  t: Translate,
+): string {
+  if (!preview.ready) {
+    if (draft.scope === "tasks") {
+      return t("recipes.scopeTasks");
+    }
+    if (draft.scope === "source") {
+      return t("recipes.scopeSource");
+    }
+    return t("recipes.scopeThread");
+  }
+  if (preview.count === 0) {
+    return t("recipes.previewNone");
+  }
+  if (preview.count === 1) {
+    return t("recipes.previewOne", { name: preview.samples[0] ?? "" });
+  }
+  return t("recipes.previewMany", { count: preview.count });
+}
+
+function importErrorKey(code: string): MessageKey {
+  if (code === "invalid_json") {
+    return "recipes.importInvalidJson";
+  }
+  if (code === "unsupported_version") {
+    return "recipes.importVersion";
+  }
+  if (code === "empty_recipes") {
+    return "recipes.importEmpty";
+  }
+  if (code === "invalid_recipe") {
+    return "recipes.importInvalidRecipe";
+  }
+  return "recipes.importError";
 }
 
 function unitKindsForSource(
@@ -636,8 +1316,7 @@ function unitKindField(
     options.unshift({ value: draft.unit_kind, label: draft.unit_kind });
   }
   return (
-    <div className="field">
-      <span>{t("recipes.unitKind")}</span>
+    <RecipeRow label={t("recipes.unitKind")}>
       <MenuSelect
         value={draft.unit_kind}
         placeholder={t("recipes.unitKindAny")}
@@ -646,7 +1325,22 @@ function unitKindField(
           setDraft((current) => withSuggestedName({ ...current, unit_kind }))
         }
       />
-      <p className="muted">{t("recipes.unitKindHint")}</p>
+      <p className="recipe-hint">{t("recipes.unitKindHint")}</p>
+    </RecipeRow>
+  );
+}
+
+function RecipeRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="recipe-row">
+      <span className="recipe-row-label">{label}</span>
+      <div className="recipe-row-body">{children}</div>
     </div>
   );
 }
@@ -681,7 +1375,8 @@ function MoreOptions({
   const advancedDirty =
     Boolean(draft.thread_facet) ||
     (draft.trigger_kind === "push" && !draft.coalesce) ||
-    (draft.trigger_kind !== "pull" && draft.include_context);
+    (draft.trigger_kind !== "pull" && draft.include_context) ||
+    (draft.trigger_kind !== "pull" && Boolean(draft.max_concurrent.trim()));
   const [open, setOpen] = useState(advancedDirty);
   return (
     <div className="recipe-more">
@@ -696,8 +1391,7 @@ function MoreOptions({
       </button>
       {open ? (
       <div className="recipe-more-body">
-        <div className="field">
-          <span>{t("recipes.facet")}</span>
+        <RecipeRow label={t("recipes.facet")}>
           <MenuSelect
             value={draft.thread_facet}
             options={[
@@ -713,37 +1407,55 @@ function MoreOptions({
               }))
             }
           />
-        </div>
+        </RecipeRow>
         {draft.trigger_kind === "pull" ? (
-          <p className="muted">{t("recipes.includeContextHintPull")}</p>
+          <p className="recipe-hint">{t("recipes.includeContextHintPull")}</p>
         ) : (
-          <>
+          <RecipeRow label={t("recipes.includeContextCheck")}>
             <SwitchRow
               checked={draft.include_context}
               onChange={(include_context) =>
                 setDraft((current) => ({ ...current, include_context }))
               }
             >
-              {t("recipes.includeContextCheck")}
+              {""}
             </SwitchRow>
-            <p className="muted">{t("recipes.includeContextHint")}</p>
-          </>
+            <p className="recipe-hint">{t("recipes.includeContextHint")}</p>
+          </RecipeRow>
         )}
         {draft.trigger_kind === "push" ? (
-          <>
+          <RecipeRow label={t("recipes.coalesceCheck")}>
             <SwitchRow
               checked={draft.coalesce}
               onChange={(coalesce) =>
                 setDraft((current) => ({ ...current, coalesce }))
               }
             >
-              {t("recipes.coalesceCheck")}
+              {""}
             </SwitchRow>
-            <p className="muted">{t("recipes.coalesceHint")}</p>
-          </>
+            <p className="recipe-hint">{t("recipes.coalesceHint")}</p>
+          </RecipeRow>
+        ) : null}
+        {draft.trigger_kind !== "pull" ? (
+          <RecipeRow label={t("recipes.maxConcurrent")}>
+            <input
+              type="number"
+              min={1}
+              inputMode="numeric"
+              placeholder={t("recipes.maxConcurrentUnlimited")}
+              value={draft.max_concurrent}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  max_concurrent: event.target.value,
+                }))
+              }
+            />
+            <p className="recipe-hint">{t("recipes.maxConcurrentHint")}</p>
+          </RecipeRow>
         ) : null}
         {draft.can_write_back ? (
-          <p className="muted">{t("recipes.writeBackMatchHint")}</p>
+          <p className="recipe-hint">{t("recipes.writeBackMatchHint")}</p>
         ) : null}
       </div>
       ) : null}
@@ -796,6 +1508,8 @@ interface RecipeDraft {
   enabled: boolean;
 }
 
+type StarterKind = "chat" | "channel" | "schedule";
+
 function emptyDraft(executorType = ""): RecipeDraft {
   return {
     name: "",
@@ -803,7 +1517,7 @@ function emptyDraft(executorType = ""): RecipeDraft {
     trigger_kind: "push",
     interval_ms: 60 * 60 * 1000,
     coalesce: true,
-    scope: "tasks",
+    scope: "thread",
     source: "",
     thread_id: "",
     thread_title: "",
@@ -811,18 +1525,75 @@ function emptyDraft(executorType = ""): RecipeDraft {
     unit_kind: "",
     executor_type: executorType,
     config: {},
-    can_write_back: false,
+    can_write_back: true,
     include_context: false,
     max_concurrent: "",
     enabled: true,
   };
 }
 
-function emptyDraftFrom(executors: ExecutorCatalogEntry[]): RecipeDraft {
+function emptyDraftFrom(
+  executors: ExecutorCatalogEntry[],
+  sources: RecipeSourceOption[] = [],
+): RecipeDraft {
   const first = executors[0];
-  return {
+  const base = {
     ...emptyDraft(first?.executor_type ?? ""),
     config: configFromCatalog(first),
+  };
+  if (sources.length === 1) {
+    return {
+      ...base,
+      source: sources[0].id,
+      can_write_back: true,
+    };
+  }
+  return base;
+}
+
+function starterDraft(
+  kind: StarterKind,
+  base: RecipeDraft,
+  sources: RecipeSourceOption[],
+  conversations: RecipeConversationOption[],
+): RecipeDraft {
+  if (kind === "schedule") {
+    const first = conversations[0];
+    return applyTriggerKind(
+      {
+        ...base,
+        scope: "thread",
+        thread_id: first?.id ?? "",
+        thread_title: first?.label ?? "",
+        source: first?.source ?? base.source,
+        can_write_back: first?.can_send !== false,
+      },
+      "pull",
+    );
+  }
+  if (kind === "channel") {
+    const source = sources[0];
+    return {
+      ...base,
+      trigger_kind: "push",
+      scope: "source",
+      source: source?.id ?? "",
+      thread_id: "",
+      thread_title: "",
+      can_write_back: true,
+      include_context: false,
+    };
+  }
+  const first = conversations[0];
+  return {
+    ...base,
+    trigger_kind: "push",
+    scope: "thread",
+    thread_id: first?.id ?? "",
+    thread_title: first?.label ?? "",
+    source: first?.source ?? base.source,
+    can_write_back: first?.can_send !== false,
+    include_context: false,
   };
 }
 
@@ -1095,24 +1866,36 @@ function writeBackAvailable(
   return picked?.can_send !== false;
 }
 
+function runStatusCopy(status: string, t: Translate): string | null {
+  if (status === "failed") {
+    return t("recipes.lastRunFailed");
+  }
+  if (status === "completed") {
+    return t("recipes.lastRunDone");
+  }
+  if (status === "cancelled") {
+    return t("recipes.lastRunSkipped");
+  }
+  if (status === "running" || status === "waiting_human") {
+    return t("recipes.lastRunRunning");
+  }
+  return null;
+}
+
+function runLineCopy(run: RecipeLastRun, t: Translate): string {
+  const status = runStatusCopy(run.status, t) ?? run.status;
+  return t("recipes.lastRunAt", { status, when: formatTime(run.at) });
+}
+
 function lastRunCopy(recipe: RecipeView, t: Translate): string | null {
   const run = recipe.last_run;
   if (!run) {
     return null;
   }
-  if (run.status === "failed") {
-    return t("recipes.lastRunFailed");
+  if (!runStatusCopy(run.status, t)) {
+    return null;
   }
-  if (run.status === "completed") {
-    return t("recipes.lastRunDone");
-  }
-  if (run.status === "cancelled") {
-    return t("recipes.lastRunSkipped");
-  }
-  if (run.status === "running" || run.status === "waiting_human") {
-    return t("recipes.lastRunRunning");
-  }
-  return null;
+  return runLineCopy(run, t);
 }
 
 function conflictCopy(
