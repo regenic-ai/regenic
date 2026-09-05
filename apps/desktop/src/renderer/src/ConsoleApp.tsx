@@ -1544,10 +1544,19 @@ export function ConsoleApp() {
               label: threadTitle(thread),
               source: thread.source || thread.channel,
               can_send: thread.can_send,
+              record_class: thread.record_class,
+              thread_facet: thread.thread_facet,
+              unit_kind: thread.unit_kind ?? undefined,
+              has_work: Boolean(thread.work),
             }))}
             seed={recipeSeed}
             onSeedConsumed={consumeRecipeSeed}
             onBound={() => setNav("inbox")}
+            onGoEngine={() => setNav("engine")}
+            onOpenThread={(threadId) => {
+              setSelectedId(threadId);
+              setNav("inbox");
+            }}
           />
         ) : null}
         {nav === "engine" ? (

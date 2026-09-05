@@ -21,6 +21,14 @@ describe("desktop locale", () => {
   it("keeps English as the default catalog", () => {
     assert.equal(translate("en", "settings.language"), "Language");
     assert.equal(translate("zh", "settings.language"), "语言");
+    assert.equal(translate("en", "nav.recipes"), "Rules");
+    assert.equal(translate("zh", "nav.recipes"), "规则");
+    assert.equal(translate("en", "recipes.goEngine"), "Install an assistant");
+    assert.equal(translate("zh", "recipes.startersTitle"), "从模板开始");
+    assert.equal(translate("en", "recipes.scopeTasksConfirm"), "This watches every task across all channels. Continue?");
+    assert.equal(translate("zh", "recipes.openLastRun"), "打开上次运行");
+    assert.equal(translate("en", "recipes.previewTitle"), "Would cover now");
+    assert.equal(translate("zh", "recipes.previewMany", { count: 3 }), "当前工作里约有 3 条会命中。");
     assert.equal(translate("zh", "recipes.params"), "调用参数");
     assert.equal(translate("en", "recipes.prompt"), "Prompt");
     assert.equal(translate("zh", "recipes.includeContextCheck"), "带上最近的消息");
