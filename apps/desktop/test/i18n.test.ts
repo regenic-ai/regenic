@@ -37,6 +37,8 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "recipes.maxConcurrentUnlimited"), "No limit");
     assert.equal(translate("zh", "recipes.triggerPull"), "定时查看");
     assert.equal(translate("en", "recipes.triggerPush"), "On a new message");
+    assert.equal(translate("en", "recipes.triggerRow"), "Trigger");
+    assert.equal(translate("zh", "recipes.result"), "结果");
     assert.equal(translate("en", "work.dead"), "Not sent");
     assert.equal(translate("zh", "work.resultExpand"), "展开");
     assert.equal(translate("en", "work.resultCollapse"), "Show less");

@@ -34,7 +34,15 @@ import type {
   RecipeView,
   ThreadFacet,
 } from "./types";
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 
 const PULL_INTERVALS = [
   { ms: 15 * 60 * 1000, label: "recipes.interval15m" as const },
@@ -582,8 +590,11 @@ export function RecipesPage({
         >
           <div className="recipe-stack">
               <section className="recipe-section">
-                <h3>{t("recipes.triggerLegend")}</h3>
-                <fieldset className="recipe-scope">
+                <header className="recipe-section-head">
+                  <h3>{t("recipes.triggerLegend")}</h3>
+                </header>
+                <div className="recipe-rows">
+                <RecipeRow label={t("recipes.triggerRow")}>
                   <div className="seg">
                     {triggerChoices(t).map((choice) => (
                       <button
@@ -600,45 +611,41 @@ export function RecipesPage({
                       </button>
                     ))}
                   </div>
-                  <p className="muted">{triggerHint(draft.trigger_kind, t)}</p>
-                </fieldset>
+                  <p className="recipe-hint">{triggerHint(draft.trigger_kind, t)}</p>
+                </RecipeRow>
                 {draft.trigger_kind !== "pull" ? (
-                <div className="recipe-row">
-                  <span className="recipe-row-label">{t("recipes.watchLegend")}</span>
-                  <div className="recipe-row-body">
-                    <div className="seg">
-                      {scopeChoices(t).map((choice) => (
-                        <button
-                          key={choice.id}
-                          type="button"
-                          className={draft.scope === choice.id ? "active" : undefined}
-                          onClick={() => {
-                            if (
-                              choice.id === "tasks" &&
-                              draft.scope !== "tasks" &&
-                              !window.confirm(t("recipes.scopeTasksConfirm"))
-                            ) {
-                              return;
-                            }
-                            setDraft((current) =>
-                              withSuggestedName({ ...current, scope: choice.id }),
-                            );
-                          }}
-                        >
-                          {choice.label}
-                        </button>
-                      ))}
-                    </div>
-                    {draft.scope === "tasks" ? (
-                      <p className="muted recipe-scope-warn">{t("recipes.scopeTasksWarn")}</p>
-                    ) : null}
+                <RecipeRow label={t("recipes.watchLegend")}>
+                  <div className="seg">
+                    {scopeChoices(t).map((choice) => (
+                      <button
+                        key={choice.id}
+                        type="button"
+                        className={draft.scope === choice.id ? "active" : undefined}
+                        onClick={() => {
+                          if (
+                            choice.id === "tasks" &&
+                            draft.scope !== "tasks" &&
+                            !window.confirm(t("recipes.scopeTasksConfirm"))
+                          ) {
+                            return;
+                          }
+                          setDraft((current) =>
+                            withSuggestedName({ ...current, scope: choice.id }),
+                          );
+                        }}
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
                   </div>
-                </div>
+                  {draft.scope === "tasks" ? (
+                    <p className="recipe-hint recipe-scope-warn">{t("recipes.scopeTasksWarn")}</p>
+                  ) : null}
+                </RecipeRow>
                 ) : null}
 
                 {draft.scope === "source" ? (
-                  <div className="field">
-                    <span>{t("recipes.source")}</span>
+                  <RecipeRow label={t("recipes.source")}>
                     <MenuSelect
                       value={draft.source}
                       placeholder={t("recipes.chooseSource")}
@@ -660,7 +667,7 @@ export function RecipesPage({
                         )
                       }
                     />
-                  </div>
+                  </RecipeRow>
                 ) : null}
 
                 {draft.trigger_kind !== "pull" && draft.scope !== "thread"
@@ -668,12 +675,11 @@ export function RecipesPage({
                   : null}
 
                 {draft.scope === "thread" || draft.trigger_kind === "pull" ? (
-                  <div className="field">
-                    <span>{t("recipes.conversation")}</span>
+                  <RecipeRow label={t("recipes.conversation")}>
                     {conversationOptions.length === 0 && !draft.thread_id ? (
                       <div className="recipe-gate">
                         <p className="field-empty">{t("recipes.noConversation")}</p>
-                        <p className="muted">{t("recipes.noConversationHint")}</p>
+                        <p className="recipe-hint">{t("recipes.noConversationHint")}</p>
                         {onBound ? (
                           <button type="button" className="ghost" onClick={onBound}>
                             {t("recipes.goInbox")}
@@ -705,12 +711,11 @@ export function RecipesPage({
                         }}
                       />
                     )}
-                  </div>
+                  </RecipeRow>
                 ) : null}
 
                 {draft.trigger_kind === "pull" ? (
-                  <div className="field">
-                    <span>{t("recipes.interval")}</span>
+                  <RecipeRow label={t("recipes.interval")}>
                     <div className="seg">
                       {PULL_INTERVALS.map((choice) => (
                         <button
@@ -725,53 +730,54 @@ export function RecipesPage({
                         </button>
                       ))}
                     </div>
-                  </div>
+                  </RecipeRow>
                 ) : null}
 
-                <div className="recipe-row">
-                  <span className="recipe-row-label" aria-hidden="true" />
-                  <div className="recipe-row-body">
-                    <MatchPreview
-                      preview={matchPreview}
-                      draft={draft}
-                      t={t}
-                    />
-                    {priorityGroup.length > 0 ? (
-                      <PriorityPanel rows={priorityGroup} t={t} />
-                    ) : null}
-                  </div>
+                <RecipeRow label={t("recipes.previewTitle")}>
+                  <MatchPreview
+                    preview={matchPreview}
+                    draft={draft}
+                    t={t}
+                  />
+                  {priorityGroup.length > 0 ? (
+                    <PriorityPanel rows={priorityGroup} t={t} />
+                  ) : null}
+                </RecipeRow>
                 </div>
               </section>
 
               <section className="recipe-section">
-                <h3>{t("recipes.then")}</h3>
-                <div className="field">
+                <header className="recipe-section-head">
+                  <h3>{t("recipes.then")}</h3>
+                </header>
+                <div className="recipe-rows">
+                <RecipeRow label={t("recipes.runWith")}>
                   {executors.length === 1 ? (
                     <p className="recipe-chip">{executors[0].label}</p>
                   ) : (
-                    <>
-                      <span>{t("recipes.runWith")}</span>
-                      <MenuSelect
-                        value={draft.executor_type}
-                        options={executors.map((item) => ({
-                          value: item.executor_type,
-                          label: item.label,
-                        }))}
-                        onChange={(executor_type) =>
-                          setDraft((current) =>
-                            withSuggestedName({
-                              ...current,
-                              executor_type,
-                              config: configFromCatalog(
-                                executors.find((item) => item.executor_type === executor_type),
-                              ),
-                            }),
-                          )
-                        }
-                      />
-                    </>
+                    <MenuSelect
+                      value={draft.executor_type}
+                      options={executors.map((item) => ({
+                        value: item.executor_type,
+                        label: item.label,
+                      }))}
+                      onChange={(executor_type) =>
+                        setDraft((current) =>
+                          withSuggestedName({
+                            ...current,
+                            executor_type,
+                            config: configFromCatalog(
+                              executors.find((item) => item.executor_type === executor_type),
+                            ),
+                          }),
+                        )
+                      }
+                    />
                   )}
-                </div>
+                  {catalog?.description ? (
+                    <p className="recipe-hint">{catalog.description}</p>
+                  ) : null}
+                </RecipeRow>
                 {catalog?.fields.length ? (
                   <RecipeParams
                     catalog={catalog}
@@ -785,20 +791,21 @@ export function RecipesPage({
                     }
                   />
                 ) : null}
+                <MoreOptions
+                  key={draft.id ?? "new"}
+                  draft={draft}
+                  setDraft={setDraft}
+                  t={t}
+                />
+                </div>
               </section>
-              <MoreOptions
-                key={draft.id ?? "new"}
-                draft={draft}
-                setDraft={setDraft}
-                t={t}
-              />
-          </div>
 
-          <div className="recipe-form-foot">
-            <div className="recipe-switches">
-              <div className="recipe-row">
-                <span className="recipe-row-label">{t("recipes.afterDone")}</span>
-                <div className="recipe-row-body">
+              <section className="recipe-section">
+                <header className="recipe-section-head">
+                  <h3>{t("recipes.afterDone")}</h3>
+                </header>
+                <div className="recipe-rows">
+                <RecipeRow label={t("recipes.result")}>
                   <div className="seg">
                     <button
                       type="button"
@@ -829,11 +836,9 @@ export function RecipesPage({
                     </button>
                   </div>
                   {!writeBackAvailable(draft, conversations) ? (
-                    <p className="muted recipe-writeback-hint">
-                      {t("recipes.writeBackUnavailable")}
-                    </p>
+                    <p className="recipe-hint">{t("recipes.writeBackUnavailable")}</p>
                   ) : draft.can_write_back ? (
-                    <p className="muted recipe-writeback-hint">
+                    <p className="recipe-hint">
                       {t(
                         draft.trigger_kind === "pull"
                           ? "recipes.writeBackHintPull"
@@ -841,101 +846,103 @@ export function RecipesPage({
                       )}
                     </p>
                   ) : null}
-                </div>
-              </div>
-              {draft.id ? (
-                <SwitchRow
-                  checked={draft.enabled}
-                  onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
-                >
-                  {t("recipes.enabledCheck")}
-                </SwitchRow>
-              ) : null}
-            </div>
-
-            <div className="recipe-commit">
-              <label className="field">
-                <span>{t("recipes.name")}</span>
-                <input
-                  value={draft.name}
-                  placeholder={suggestedName}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      name: event.target.value,
-                      nameTouched: true,
-                    }))
-                  }
-                />
-              </label>
-              <div className="install-actions">
-                {draft.id || returnToWork ? (
-                  <button type="button" className="ghost" onClick={resetDraft}>
-                    {t("recipes.cancel")}
-                  </button>
-                ) : null}
+                </RecipeRow>
                 {draft.id ? (
-                  <>
+                  <RecipeRow label={t("recipes.enabledCheck")}>
+                    <SwitchRow
+                      checked={draft.enabled}
+                      onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
+                    >
+                      {""}
+                    </SwitchRow>
+                  </RecipeRow>
+                ) : null}
+                </div>
+              </section>
+          </div>
+
+          <div className="recipe-form-foot">
+            <label className="recipe-name">
+              <span>{t("recipes.name")}</span>
+              <input
+                value={draft.name}
+                placeholder={suggestedName}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    name: event.target.value,
+                    nameTouched: true,
+                  }))
+                }
+              />
+            </label>
+            <div className="recipe-actions">
+              {draft.id || returnToWork ? (
+                <button type="button" className="ghost" onClick={resetDraft}>
+                  {t("recipes.cancel")}
+                </button>
+              ) : null}
+              {draft.id ? (
+                <>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || !draft.enabled || !tryThreadId}
+                    title={
+                      !draft.enabled
+                        ? t("recipes.tryNeedEnabled")
+                        : !tryThreadId
+                          ? t("recipes.tryNeedChat")
+                          : t("recipes.tryTitle")
+                    }
+                    onClick={() => {
+                      void runTryOnce(false);
+                    }}
+                  >
+                    {t("recipes.tryOnce")}
+                  </button>
+                  {writeBackAvailable(draft, conversations) &&
+                  draft.can_write_back ? (
                     <button
                       type="button"
                       className="ghost"
                       disabled={busy || !draft.enabled || !tryThreadId}
-                      title={
-                        !draft.enabled
-                          ? t("recipes.tryNeedEnabled")
-                          : !tryThreadId
-                            ? t("recipes.tryNeedChat")
-                            : t("recipes.tryTitle")
-                      }
+                      title={t("recipes.trySendTitle")}
                       onClick={() => {
-                        void runTryOnce(false);
+                        void runTryOnce(true);
                       }}
                     >
-                      {t("recipes.tryOnce")}
+                      {t("recipes.tryOnceSend")}
                     </button>
-                    {writeBackAvailable(draft, conversations) &&
-                    draft.can_write_back ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy || !draft.enabled || !tryThreadId}
-                        title={t("recipes.trySendTitle")}
-                        onClick={() => {
-                          void runTryOnce(true);
-                        }}
-                      >
-                        {t("recipes.tryOnceSend")}
-                      </button>
-                    ) : null}
-                  </>
-                ) : null}
-                <button
-                  type="submit"
-                  className="primary"
-                  disabled={
-                    busy ||
-                    !draft.executor_type ||
-                    ((draft.scope === "thread" || draft.trigger_kind === "pull") &&
-                      !draft.thread_id)
-                  }
-                >
-                  {busy
-                    ? t("recipes.saving")
-                    : draft.id
-                      ? t("recipes.update")
-                      : returnToWork
-                        ? t("recipes.bindBack")
-                        : t("recipes.save")}
-                </button>
-              </div>
-              {draft.id && (!draft.enabled || !tryThreadId) ? (
-                <p className="muted recipe-try-hint">
-                  {!draft.enabled
-                    ? t("recipes.tryNeedEnabled")
-                    : t("recipes.tryNeedChat")}
-                </p>
+                  ) : null}
+                </>
               ) : null}
+              <button
+                type="submit"
+                className="primary"
+                disabled={
+                  busy ||
+                  !draft.executor_type ||
+                  ((draft.scope === "thread" || draft.trigger_kind === "pull") &&
+                    !draft.thread_id)
+                }
+              >
+                {busy
+                  ? t("recipes.saving")
+                  : draft.id
+                    ? t("recipes.update")
+                    : returnToWork
+                      ? t("recipes.bindBack")
+                      : t("recipes.save")}
+              </button>
             </div>
+            {draft.id && (!draft.enabled || !tryThreadId) ? (
+              <p className="muted recipe-try-hint">
+                {!draft.enabled
+                  ? t("recipes.tryNeedEnabled")
+                  : t("recipes.tryNeedChat")}
+              </p>
+            ) : null}
           </div>
         </form>
       )}
@@ -1089,11 +1096,10 @@ function MatchPreview({
       : null;
   return (
     <div className="recipe-preview">
-      <p className="recipe-preview-title">{t("recipes.previewTitle")}</p>
       <p className="recipe-preview-body">{body}</p>
       {samples ? <p className="recipe-preview-samples">{samples}</p> : null}
       {preview.ready ? (
-        <p className="muted recipe-preview-note">{t("recipes.previewPartial")}</p>
+        <p className="recipe-hint">{t("recipes.previewPartial")}</p>
       ) : null}
       {preview.preempted_by ? (
         <p className="recipe-preview-conflict">
@@ -1310,8 +1316,7 @@ function unitKindField(
     options.unshift({ value: draft.unit_kind, label: draft.unit_kind });
   }
   return (
-    <div className="field">
-      <span>{t("recipes.unitKind")}</span>
+    <RecipeRow label={t("recipes.unitKind")}>
       <MenuSelect
         value={draft.unit_kind}
         placeholder={t("recipes.unitKindAny")}
@@ -1320,7 +1325,22 @@ function unitKindField(
           setDraft((current) => withSuggestedName({ ...current, unit_kind }))
         }
       />
-      <p className="muted">{t("recipes.unitKindHint")}</p>
+      <p className="recipe-hint">{t("recipes.unitKindHint")}</p>
+    </RecipeRow>
+  );
+}
+
+function RecipeRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="recipe-row">
+      <span className="recipe-row-label">{label}</span>
+      <div className="recipe-row-body">{children}</div>
     </div>
   );
 }
@@ -1371,8 +1391,7 @@ function MoreOptions({
       </button>
       {open ? (
       <div className="recipe-more-body">
-        <div className="field">
-          <span>{t("recipes.facet")}</span>
+        <RecipeRow label={t("recipes.facet")}>
           <MenuSelect
             value={draft.thread_facet}
             options={[
@@ -1388,38 +1407,37 @@ function MoreOptions({
               }))
             }
           />
-        </div>
+        </RecipeRow>
         {draft.trigger_kind === "pull" ? (
-          <p className="muted">{t("recipes.includeContextHintPull")}</p>
+          <p className="recipe-hint">{t("recipes.includeContextHintPull")}</p>
         ) : (
-          <>
+          <RecipeRow label={t("recipes.includeContextCheck")}>
             <SwitchRow
               checked={draft.include_context}
               onChange={(include_context) =>
                 setDraft((current) => ({ ...current, include_context }))
               }
             >
-              {t("recipes.includeContextCheck")}
+              {""}
             </SwitchRow>
-            <p className="muted">{t("recipes.includeContextHint")}</p>
-          </>
+            <p className="recipe-hint">{t("recipes.includeContextHint")}</p>
+          </RecipeRow>
         )}
         {draft.trigger_kind === "push" ? (
-          <>
+          <RecipeRow label={t("recipes.coalesceCheck")}>
             <SwitchRow
               checked={draft.coalesce}
               onChange={(coalesce) =>
                 setDraft((current) => ({ ...current, coalesce }))
               }
             >
-              {t("recipes.coalesceCheck")}
+              {""}
             </SwitchRow>
-            <p className="muted">{t("recipes.coalesceHint")}</p>
-          </>
+            <p className="recipe-hint">{t("recipes.coalesceHint")}</p>
+          </RecipeRow>
         ) : null}
         {draft.trigger_kind !== "pull" ? (
-          <div className="field">
-            <span>{t("recipes.maxConcurrent")}</span>
+          <RecipeRow label={t("recipes.maxConcurrent")}>
             <input
               type="number"
               min={1}
@@ -1433,11 +1451,11 @@ function MoreOptions({
                 }))
               }
             />
-            <p className="muted">{t("recipes.maxConcurrentHint")}</p>
-          </div>
+            <p className="recipe-hint">{t("recipes.maxConcurrentHint")}</p>
+          </RecipeRow>
         ) : null}
         {draft.can_write_back ? (
-          <p className="muted">{t("recipes.writeBackMatchHint")}</p>
+          <p className="recipe-hint">{t("recipes.writeBackMatchHint")}</p>
         ) : null}
       </div>
       ) : null}
