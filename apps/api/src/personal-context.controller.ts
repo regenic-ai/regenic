@@ -34,6 +34,21 @@ export class PersonalContextController {
     return this.guard(() => this.context.getSnapshot(snapshotId));
   }
 
+  @Get("artifacts")
+  listArtifacts() {
+    return this.guard(() => this.context.listArtifacts());
+  }
+
+  @Post("artifacts/:artifactId/decision")
+  decideArtifact(@Param("artifactId") artifactId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.decideArtifact(artifactId, body));
+  }
+
+  @Post("artifacts/:artifactId/supersede")
+  supersedeArtifact(@Param("artifactId") artifactId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.supersedeArtifact(artifactId, body));
+  }
+
   @Post("replay")
   replay(@Body() body: unknown) {
     return this.guard(() => this.context.replay(body));

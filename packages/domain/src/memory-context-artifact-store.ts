@@ -1,5 +1,10 @@
 import { canonicalContextJson } from "./context-canonical";
 import type { ContextArtifact } from "./context-artifact";
+import type {
+  ContextArtifactDecision,
+  ContextArtifactState,
+  ContextArtifactSupersession,
+} from "./context-artifact-lifecycle";
 import type { ContextBundle } from "./context-bundle";
 import type {
   ContextArtifactQuery,
@@ -21,10 +26,20 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
   private readonly snapshots = new Map<string, ContextSnapshot>();
   private readonly bundles = new Map<string, ContextBundle>();
   private readonly checkpoints = new Map<string, ContextProjectionCheckpoint>();
+  private readonly artifactStates = new Map<string, ContextArtifactState>();
 
   async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
     requireValid(validateContextArtifact(artifact), "artifact");
     this.putImmutable(this.artifacts, artifactKey(artifact.org_id, artifact.id), artifact, "artifact");
+    const key = artifactKey(artifact.org_id, artifact.id);
+    if (!this.artifactStates.has(key)) {
+      this.artifactStates.set(key, {
+        org_id: artifact.org_id,
+        artifact_id: artifact.id,
+        status: artifact.status,
+        decided_at: artifact.recorded_at,
+      });
+    }
     return clone(artifact);
   }
 
@@ -40,12 +55,56 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
     const statuses = stableQuery.statuses ? new Set(stableQuery.statuses) : undefined;
     return [...this.artifacts.values()]
       .filter((artifact) => artifact.org_id === stableQuery.org_id)
+      .map((artifact) => this.withState(artifact))
       .filter((artifact) => !kinds || kinds.has(artifact.kind))
       .filter((artifact) => !statuses || statuses.has(artifact.status))
       .filter((artifact) => !stableQuery.generation || artifact.generation === stableQuery.generation)
       .sort((left, right) => compare(`${left.recorded_at}\u0000${left.id}`, `${right.recorded_at}\u0000${right.id}`))
       .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY)
       .map(clone);
+  }
+
+  async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
+    return cloneOrNull(this.artifactStates.get(artifactKey(orgId, artifactId)));
+  }
+
+  async decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState> {
+    const state = this.requireTransitionable(input.org_id, input.artifact_id);
+    if (input.status === "needs_clarify" || input.status === "accepted" || input.status === "rejected") {
+      const next = { ...state, status: input.status, decided_at: input.decided_at } as ContextArtifactState;
+      this.artifactStates.set(artifactKey(input.org_id, input.artifact_id), next);
+      return clone(next);
+    }
+    throw new Error("Invalid Context artifact decision");
+  }
+
+  async supersedeArtifact(input: ContextArtifactSupersession): Promise<{
+    superseded: ContextArtifactState;
+    accepted: ContextArtifactState;
+  }> {
+    const current = this.artifactStates.get(artifactKey(input.org_id, input.artifact_id));
+    const replacement = this.requireTransitionable(input.org_id, input.replacement_id);
+    const artifact = this.artifacts.get(artifactKey(input.org_id, input.replacement_id));
+    if (
+      !current || current.status !== "accepted" ||
+      !artifact || artifact.supersedes_id !== input.artifact_id
+    ) {
+      throw new Error("Invalid Context artifact supersession");
+    }
+    const superseded = {
+      ...current,
+      status: "superseded" as const,
+      decided_at: input.decided_at,
+      superseded_by: input.replacement_id,
+    };
+    const accepted = {
+      ...replacement,
+      status: "accepted" as const,
+      decided_at: input.decided_at,
+    };
+    this.artifactStates.set(artifactKey(input.org_id, input.artifact_id), superseded);
+    this.artifactStates.set(artifactKey(input.org_id, input.replacement_id), accepted);
+    return { superseded: clone(superseded), accepted: clone(accepted) };
   }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
@@ -112,6 +171,19 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
     if (!current) {
       store.set(key, clone(value));
     }
+  }
+
+  private withState(artifact: ContextArtifact): ContextArtifact {
+    const state = this.artifactStates.get(artifactKey(artifact.org_id, artifact.id));
+    return state ? { ...artifact, status: state.status } : artifact;
+  }
+
+  private requireTransitionable(orgId: string, artifactId: string): ContextArtifactState {
+    const state = this.artifactStates.get(artifactKey(orgId, artifactId));
+    if (!state || !["proposed", "needs_clarify"].includes(state.status)) {
+      throw new Error("Context artifact is not transitionable");
+    }
+    return state;
   }
 }
 

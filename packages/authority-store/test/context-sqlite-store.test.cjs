@@ -149,6 +149,45 @@ function bundle(snapshotValue, overrides = {}) {
 }
 
 describe("SQLite context artifact store", () => {
+  it("transitions artifact decisions and atomically supersedes an accepted artifact", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let store = new SqliteAuthorityStore(path);
+    const first = artifact({ id: "summary-1", status: "proposed" });
+    const replacement = artifact({
+      id: "summary-2",
+      status: "proposed",
+      supersedes_id: "summary-1",
+      body_hash: "c".repeat(64),
+    });
+    replacement.input_hash = hashContextArtifactInputs(replacement);
+    await store.putArtifact(first);
+    await store.putArtifact(replacement);
+    assert.equal((await store.decideArtifact({
+      org_id: "example-org", artifact_id: "summary-1", status: "accepted",
+      decided_at: "2026-08-30T00:02:00.000Z",
+    })).status, "accepted");
+    const result = await store.supersedeArtifact({
+      org_id: "example-org", artifact_id: "summary-1", replacement_id: "summary-2",
+      decided_at: "2026-08-30T00:03:00.000Z",
+    });
+    assert.equal(result.superseded.status, "superseded");
+    assert.equal(result.accepted.status, "accepted");
+    assert.deepEqual(
+      (await store.listArtifacts({ org_id: "example-org", statuses: ["accepted"] })).map((value) => value.id),
+      ["summary-2"],
+    );
+    store.close();
+    store = new SqliteAuthorityStore(path);
+    assert.equal((await store.getArtifact("example-org", "summary-1")).status, "superseded");
+    assert.equal((await store.getArtifactState("example-org", "summary-2")).status, "accepted");
+    await assert.rejects(store.decideArtifact({
+      org_id: "example-org", artifact_id: "summary-1", status: "rejected",
+      decided_at: "2026-08-30T00:04:00.000Z",
+    }), /not transitionable/);
+    store.close();
+  });
+
   it("enqueues committed events atomically and not rolled-back events", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));

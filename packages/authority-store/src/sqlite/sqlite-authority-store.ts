@@ -39,8 +39,11 @@ import type {
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
   ContextArtifact,
+  ContextArtifactDecision,
   ContextArtifactQuery,
+  ContextArtifactState,
   ContextArtifactStore,
+  ContextArtifactSupersession,
   ContextAuthorityRead,
   ContextAuthorityReader,
   ContextBundle,
@@ -637,6 +640,7 @@ export class SqliteAuthorityStore
     requireContextValue(validateContextArtifact(artifact), "artifact");
     this.assertWritable();
     const payload = canonicalContextJson(artifact);
+    this.database.transaction(() => {
     this.putImmutableContextJson(
       "context_artifacts",
       "org_id = ? AND id = ?",
@@ -658,53 +662,110 @@ export class SqliteAuthorityStore
         payload,
       ],
     );
+    this.database.prepare(
+      `INSERT OR IGNORE INTO context_artifact_states (org_id, artifact_id, status, decided_at) VALUES (?, ?, ?, ?)`,
+    ).run(artifact.org_id, artifact.id, artifact.status, artifact.recorded_at);
+    })();
     return parseContextJson<ContextArtifact>(payload);
   }
 
   async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
-    return this.getContextJson<ContextArtifact>(
+    const artifact = this.getContextJson<ContextArtifact>(
       "context_artifacts",
       "org_id = ? AND id = ?",
       [orgId, id],
     );
+    if (!artifact) return null;
+    const state = await this.getArtifactState(orgId, id);
+    return state ? { ...artifact, status: state.status } : artifact;
   }
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
     const validation = validateContextArtifactQuery(query);
     requireContextValue(validation, "artifact query");
     const stableQuery = validation.success ? validation.data : query;
-    const clauses = ["org_id = ?"];
+    const clauses = ["a.org_id = ?"];
     const params: unknown[] = [stableQuery.org_id];
     if (stableQuery.kinds) {
       if (stableQuery.kinds.length === 0) {
         return [];
       }
-      clauses.push(`kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
+      clauses.push(`a.kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
       params.push(...stableQuery.kinds);
     }
     if (stableQuery.statuses) {
       if (stableQuery.statuses.length === 0) {
         return [];
       }
-      clauses.push(`status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
+      clauses.push(`s.status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
       params.push(...stableQuery.statuses);
     }
     if (stableQuery.generation) {
-      clauses.push("generation = ?");
+      clauses.push("a.generation = ?");
       params.push(stableQuery.generation);
     }
     const rows = this.database
       .prepare(
         `
-          SELECT payload_json FROM context_artifacts
+          SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
+          JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
           WHERE ${clauses.join(" AND ")}
         `,
       )
-      .all(...params) as Array<{ payload_json: string }>;
+      .all(...params) as Array<{ payload_json: string; lifecycle_status: ContextArtifact["status"] }>;
     return rows
-      .map((row) => parseContextJson<ContextArtifact>(row.payload_json))
+      .map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status as ContextArtifact["status"] }))
       .sort((left, right) => compareContextArtifactOrder(left, right))
       .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY);
+  }
+
+  async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
+    const row = this.database.prepare(
+      `SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = ? AND artifact_id = ?`,
+    ).get(orgId, artifactId) as ArtifactStateRow | undefined;
+    return row ? artifactState(row) : null;
+  }
+
+  async decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState> {
+    assertArtifactDecision(input);
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const state = this.artifactStateForTransition(input.org_id, input.artifact_id);
+      this.database.prepare(
+        `UPDATE context_artifact_states SET status = ?, decided_at = ?, superseded_by = NULL WHERE org_id = ? AND artifact_id = ?`,
+      ).run(input.status, input.decided_at, input.org_id, input.artifact_id);
+      return { ...state, status: input.status, decided_at: input.decided_at } as ContextArtifactState;
+    })();
+  }
+
+  async supersedeArtifact(input: ContextArtifactSupersession): Promise<{ superseded: ContextArtifactState; accepted: ContextArtifactState }> {
+    assertArtifactSupersession(input);
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const current = this.getArtifactStateSync(input.org_id, input.artifact_id);
+      const replacement = this.artifactStateForTransition(input.org_id, input.replacement_id);
+      const artifact = this.getContextJson<ContextArtifact>("context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
+      if (!current || current.status !== "accepted" || !artifact || artifact.supersedes_id !== input.artifact_id) {
+        throw new Error("Invalid Context artifact supersession");
+      }
+      this.database.prepare(`UPDATE context_artifact_states SET status = 'superseded', decided_at = ?, superseded_by = ? WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.replacement_id, input.org_id, input.artifact_id);
+      this.database.prepare(`UPDATE context_artifact_states SET status = 'accepted', decided_at = ?, superseded_by = NULL WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.org_id, input.replacement_id);
+      return {
+        superseded: { ...current, status: "superseded" as const, decided_at: input.decided_at, superseded_by: input.replacement_id },
+        accepted: { ...replacement, status: "accepted" as const, decided_at: input.decided_at },
+      };
+    })();
+  }
+
+  private getArtifactStateSync(orgId: string, artifactId: string): ContextArtifactState | null {
+    const row = this.database.prepare(`SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = ? AND artifact_id = ?`).get(orgId, artifactId) as ArtifactStateRow | undefined;
+    return row ? artifactState(row) : null;
+  }
+
+  private artifactStateForTransition(orgId: string, artifactId: string): ContextArtifactState {
+    const state = this.getArtifactStateSync(orgId, artifactId);
+    if (!state || !["proposed", "needs_clarify"].includes(state.status)) throw new Error("Context artifact is not transitionable");
+    return state;
   }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
@@ -1213,6 +1274,7 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_artifact_states WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifacts WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(`DELETE FROM context_projection_checkpoints WHERE org_id = ?`)
@@ -2925,6 +2987,8 @@ export class SqliteAuthorityStore
         face.face_occurred_at,
         currentWork ? 1 : 0,
       );
+  }
+
   private enqueueContextProjection(eventId: string, orgId: string, at: string): void {
     this.database.prepare(
       `
@@ -3624,4 +3688,30 @@ function compareContextArtifactOrder(left: ContextArtifact, right: ContextArtifa
   const leftKey = `${left.recorded_at}\u0000${left.id}`;
   const rightKey = `${right.recorded_at}\u0000${right.id}`;
   return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+interface ArtifactStateRow {
+  org_id: string;
+  artifact_id: string;
+  status: ContextArtifactState["status"];
+  decided_at: string;
+  superseded_by: string | null;
+}
+
+function artifactState(row: ArtifactStateRow): ContextArtifactState {
+  return {
+    org_id: row.org_id,
+    artifact_id: row.artifact_id,
+    status: row.status,
+    decided_at: row.decided_at,
+    ...(row.superseded_by ? { superseded_by: row.superseded_by } : {}),
+  };
+}
+
+function assertArtifactDecision(input: ContextArtifactDecision): void {
+  if (!input?.org_id?.trim() || !input.artifact_id?.trim() || !["accepted", "rejected", "needs_clarify"].includes(input.status) || Number.isNaN(Date.parse(input.decided_at))) throw new Error("Invalid Context artifact decision");
+}
+
+function assertArtifactSupersession(input: ContextArtifactSupersession): void {
+  if (!input?.org_id?.trim() || !input.artifact_id?.trim() || !input.replacement_id?.trim() || input.artifact_id === input.replacement_id || Number.isNaN(Date.parse(input.decided_at))) throw new Error("Invalid Context artifact supersession");
 }
