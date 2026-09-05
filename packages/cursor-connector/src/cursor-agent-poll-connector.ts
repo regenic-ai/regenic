@@ -217,7 +217,12 @@ export class CursorAgentPollConnector {
       next_cursor: nextCursor,
       records,
     };
-    return { batch, next_cursor: nextCursor };
+    return {
+      batch,
+      next_cursor: nextCursor,
+      // Journal poll is always a seeded live tail; no history lane.
+      poll_hint: { live_seeded: true, history_pending: false },
+    };
   }
 
   private deliveryId(cursor: string | undefined, nextCursor: string | undefined): string {

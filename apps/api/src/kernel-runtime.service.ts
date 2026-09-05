@@ -5,6 +5,7 @@ import {
   kernelPressureView,
   kernelPressureThresholdsFromEnv,
   shouldDeferBackgroundSync,
+  shouldDeferHistorySync,
   type IngestAttempt,
   type KernelPressureSample,
   type KernelPressureView,
@@ -91,6 +92,13 @@ export class KernelRuntimeService implements OnModuleDestroy {
 
   shouldDeferBackgroundSync(): boolean {
     return shouldDeferBackgroundSync(
+      this.pressureSample(),
+      this.pressureThresholds,
+    );
+  }
+
+  shouldDeferHistorySync(): boolean {
+    return shouldDeferHistorySync(
       this.pressureSample(),
       this.pressureThresholds,
     );

@@ -46,12 +46,6 @@ import {
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
-  WHATSAPP_WEB_LIVE_CONNECTOR_TYPE,
-  readWhatsAppLivePairingCode,
-  resolveWhatsAppLiveKeys,
-  whatsAppLiveKeyMatches,
-} from "@regenic/whatsapp-personal";
-import {
   connectorAllowsMultiple,
   catalogFromDrivers,
   nextPickedChatNames,
@@ -74,10 +68,17 @@ import {
 } from "./personal-pull-status";
 import { isHumanIdle, noteHumanActivity } from "./personal-human-pace";
 import {
+  capSelectedStreams,
   catalogRefreshPages,
+  IDLE_STREAM_CONCURRENCY,
+  LIVE_STREAM_CONCURRENCY,
   shouldKeepCatchingUp,
   syncExecutionBudget,
 } from "./personal-stream-pace";
+import {
+  backgroundSyncReleased,
+  markBackgroundListen,
+} from "./personal-interactive-gate";
 import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import {
@@ -99,6 +100,7 @@ const LIVE_KICK_WAIT_MS = 12_000;
 const FOLLOW_TRIES = 6;
 const FOLLOW_WAIT_MS = 750;
 const DEFAULT_PULL_MS = 3_000;
+const DEFAULT_CATALOG_PULL_MS = 45_000;
 const START_PULL_DELAY_MS = 1_000;
 const LEASE_MS = 60_000;
 
@@ -174,10 +176,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly liveRing = new SyncLiveRing();
   private timer: ReturnType<typeof setInterval> | undefined;
   private bootstrapTimer: ReturnType<typeof setInterval> | undefined;
+  private catalogTimer: ReturnType<typeof setInterval> | undefined;
   private startTimer: ReturnType<typeof setTimeout> | undefined;
   private bootstrapStartTimer: ReturnType<typeof setTimeout> | undefined;
+  private catalogStartTimer: ReturnType<typeof setTimeout> | undefined;
   private steadyTicking = false;
   private bootstrapTicking = false;
+  private catalogTicking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
   private readonly quota = new InstallationQuotaBook();
@@ -199,6 +204,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return;
     }
     this.backgroundStarted = true;
+    markBackgroundListen();
     const pullMs = pullIntervalMs();
     resetPullStatus();
     pullStatus.interval_ms = pullMs;
@@ -221,6 +227,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
         void this.bootstrapTick();
       }, bootstrapMs);
     }
+    const catalogMs = catalogPullIntervalMs();
+    if (catalogMs > 0) {
+      this.catalogStartTimer = setTimeout(() => {
+        this.catalogStartTimer = undefined;
+        void this.catalogTick();
+      }, START_PULL_DELAY_MS + catalogMs);
+      this.catalogTimer = setInterval(() => {
+        void this.catalogTick();
+      }, catalogMs);
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -232,6 +248,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
       clearTimeout(this.bootstrapStartTimer);
       this.bootstrapStartTimer = undefined;
     }
+    if (this.catalogStartTimer) {
+      clearTimeout(this.catalogStartTimer);
+      this.catalogStartTimer = undefined;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
@@ -239,6 +259,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (this.bootstrapTimer) {
       clearInterval(this.bootstrapTimer);
       this.bootstrapTimer = undefined;
+    }
+    if (this.catalogTimer) {
+      clearInterval(this.catalogTimer);
+      this.catalogTimer = undefined;
     }
   }
 
@@ -1353,6 +1377,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     while (
       this.steadyTicking ||
       this.bootstrapTicking ||
+      this.catalogTicking ||
       this.inflight.size > 0 ||
       this.streamLocks.size > 0 ||
       this.focusSlot != null
@@ -1386,10 +1411,19 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   private async tick(): Promise<void> {
-    if (this.maintenanceHold || this.steadyTicking || !this.runtime.isReady()) {
+    if (
+      this.maintenanceHold ||
+      this.steadyTicking ||
+      this.bootstrapTicking ||
+      this.catalogTicking ||
+      !this.runtime.isReady()
+    ) {
       return;
     }
-    if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+    if (
+      !backgroundSyncReleased() ||
+      this.kernelRuntime.shouldDeferBackgroundSync()
+    ) {
       return;
     }
     this.steadyTicking = true;
@@ -1443,11 +1477,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (
       this.maintenanceHold ||
       this.bootstrapTicking ||
+      this.steadyTicking ||
+      this.catalogTicking ||
       !this.runtime.isReady()
     ) {
       return;
     }
-    if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+    if (
+      !backgroundSyncReleased() ||
+      !isHumanIdle() ||
+      this.kernelRuntime.shouldDeferHistorySync() ||
+      this.kernelRuntime.pressureView().throttle_history
+    ) {
       return;
     }
     this.bootstrapTicking = true;
@@ -1465,7 +1506,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       });
       const errors: unknown[] = [];
       for (const installation of eligible) {
-        if (this.kernelRuntime.shouldDeferBackgroundSync()) {
+        if (this.kernelRuntime.shouldDeferHistorySync()) {
           break;
         }
         try {
@@ -1489,6 +1530,66 @@ export class PersonalConnectorService implements OnModuleDestroy {
       await applyPullOutcome([error]);
     } finally {
       this.bootstrapTicking = false;
+    }
+  }
+
+  /** Directory census only — never shares a tick with live/history/media. */
+  private async catalogTick(): Promise<void> {
+    if (
+      this.maintenanceHold ||
+      this.catalogTicking ||
+      this.steadyTicking ||
+      this.bootstrapTicking ||
+      !this.runtime.isReady()
+    ) {
+      return;
+    }
+    if (
+      !backgroundSyncReleased() ||
+      this.kernelRuntime.shouldDeferHistorySync()
+    ) {
+      return;
+    }
+    this.catalogTicking = true;
+    try {
+      const host = this.runtime.requireHost();
+      const store = host.get("authority");
+      const installations = await store.listInstallations(this.runtime.orgId());
+      for (const installation of installations) {
+        if (this.kernelRuntime.shouldDeferHistorySync()) {
+          break;
+        }
+        const driver = this.drivers.get(installation.connector_type);
+        if (
+          installation.status !== "enabled" ||
+          !driver?.bindSyncSource ||
+          !driverPolls(driver)
+        ) {
+          continue;
+        }
+        try {
+          const source = await driver.bindSyncSource(
+            installation,
+            asConnectorHost(host),
+            process.env,
+          );
+          const engine = new SyncEngine(store);
+          await engine.refreshCatalog({
+            installation_id: installation.id,
+            source,
+            pages: catalogRefreshPages({ catalogTick: true }),
+            force: false,
+          });
+          void this.refreshSyncSnapshot(installation.id);
+        } catch (error) {
+          await applyPullOutcome([error]);
+        }
+        await yieldToEventLoop();
+      }
+    } catch (error) {
+      await applyPullOutcome([error]);
+    } finally {
+      this.catalogTicking = false;
     }
   }
 
@@ -1558,7 +1659,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       const engine = new SyncEngine(store);
       const allowHistory = options?.allowHistory !== false;
       const humanIdle = isHumanIdle();
-      if (driver.bindSyncSource) {
+      if (driver.bindSyncSource && options?.discover === true) {
         const source = await driver.bindSyncSource(
           installation,
           asConnectorHost(host),
@@ -1567,11 +1668,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         await engine.refreshCatalog({
           installation_id: installation.id,
           source,
-          pages: catalogRefreshPages({
-            discover: options?.discover,
-            humanIdle,
-          }),
-          force: options?.discover === true,
+          pages: catalogRefreshPages({ discover: true }),
+          force: true,
         });
       }
       const catalog = await engine.catalog(installation.id);
@@ -1637,19 +1735,44 @@ export class PersonalConnectorService implements OnModuleDestroy {
         fallbackMembers,
         cursorStates,
       };
+      const liveCap = humanIdle
+        ? IDLE_STREAM_CONCURRENCY
+        : LIVE_STREAM_CONCURRENCY;
       const splitPlan =
         options?.capCatchUp || options?.syncPlane
           ? await engine.planSplit({
               ...planInput,
               liveRing: this.liveRing,
-              steadyLimits: steadyLaneLimitsForCount({
-                members: planMembers,
-                states: stateByKey,
-                tickIntervalMs: pullIntervalMs(),
-                catalogIncomplete,
-                targetIdleMs: steadyEnv.targetIdleMs,
-                maxLive: steadyEnv.maxLive,
-              }),
+              bootstrapLimits: options?.discover
+                ? {
+                    interactive: 1,
+                    live: 16,
+                    catalog: 0,
+                    history: 16,
+                    media: 0,
+                  }
+                : {
+                    interactive: 1,
+                    live: humanIdle ? liveCap : 0,
+                    catalog: 0,
+                    history: 1,
+                    media: 0,
+                  },
+              steadyLimits: {
+                ...steadyLaneLimitsForCount({
+                  members: planMembers,
+                  states: stateByKey,
+                  tickIntervalMs: pullIntervalMs(),
+                  catalogIncomplete,
+                  targetIdleMs: steadyEnv.targetIdleMs,
+                  maxLive: liveCap,
+                }),
+                catalog: 0,
+                media:
+                  options?.syncPlane === "bootstrap"
+                    ? 0
+                    : 1,
+              },
             })
           : null;
       const work = splitPlan
@@ -1663,7 +1786,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
         streams.map((stream) => [stream.stream_key, stream] as const),
       );
       const pressure = this.kernelRuntime.pressureView();
-      const selected = work.flatMap((item) => {
+      const allowBackgroundMedia =
+        options?.syncPlane !== "bootstrap" &&
+        humanIdle &&
+        pressure.interactive_ready &&
+        !pressure.throttle_media &&
+        !this.kernelRuntime.shouldDeferHistorySync();
+      const uncapped = work.flatMap((item) => {
         if (item.lane === "catalog") {
           return [];
         }
@@ -1679,14 +1808,14 @@ export class PersonalConnectorService implements OnModuleDestroy {
             return [];
           }
         }
+        if ((item.media || item.lane === "media") && !allowBackgroundMedia) {
+          return [];
+        }
         if (pressure.throttle_media && item.media) {
           return [];
         }
         const key = streamPaceKey(installation.id, stream.stream_key);
         this.rememberStreamMeta(key, stream);
-        if (item.older || item.lane === "history") {
-          this.streamCatchingUp.add(key);
-        }
         const budget = syncExecutionBudget({
           humanIdle,
           capCatchUp: options?.capCatchUp,
@@ -1717,6 +1846,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
           },
         ];
       });
+      const selected = capSelectedStreams(uncapped, {
+        liveLimit: options?.discover ? 16 : liveCap,
+        historyLimit: options?.discover
+          ? 16
+          : allowHistory && !pressure.throttle_history
+            ? 1
+            : 0,
+        mediaLimit: allowBackgroundMedia ? 1 : 0,
+      });
       const olderKey = engine.lastHistoryKey(work);
       if (olderKey) {
         this.lastCatchUpCursor = olderKey;
@@ -1727,19 +1865,26 @@ export class PersonalConnectorService implements OnModuleDestroy {
       }
       for (const item of selected) {
         this.streamPulling.add(item.key);
+        if (item.older || item.lane === "history") {
+          this.streamCatchingUp.add(item.key);
+        }
         if (item.older) {
           this.streamPullingHistory.add(item.key);
         }
       }
       this.publishStreams();
       const textItems = selected.filter((item) => !item.media);
-      const mediaItems = selected.filter((item) => item.media);
       const liveTextItems = textItems.filter(
         (item) => !item.older && item.lane !== "history",
       );
       const historyTextItems = textItems.filter(
         (item) => item.older || item.lane === "history",
       );
+      // Media never shares a tick with history catch-up; focus drain covers open threads.
+      const mediaItems =
+        historyTextItems.length > 0
+          ? []
+          : selected.filter((item) => item.media);
       const liveConcurrency = syncExecutionBudget({
         humanIdle,
         capCatchUp: options?.capCatchUp,
@@ -1878,7 +2023,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   private async refreshSyncSnapshot(
     installationId: string,
-    streams: readonly ConnectorStream[],
+    _streams?: readonly ConnectorStream[],
   ): Promise<void> {
     try {
       const store = this.runtime.requireHost().get("authority");
@@ -1969,13 +2114,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
       host.get("authority"),
       installationId,
     );
-    if (installation.connector_type !== WHATSAPP_WEB_LIVE_CONNECTOR_TYPE) {
-      throw new PersonalConnectorError(
-        "not_found",
-        "Pairing code is not available",
-        404,
-      );
-    }
     const pairing_code = await this.pairingCodeOf(installation);
     if (!pairing_code) {
       throw new PersonalConnectorError(
@@ -1994,15 +2132,25 @@ export class PersonalConnectorService implements OnModuleDestroy {
       if (path === "/v1/me/engine") {
         const installations = await store.listInstallations(this.runtime.orgId());
         for (const installation of installations) {
+          if (installation.status !== "enabled") {
+            continue;
+          }
+          const driver = this.drivers.get(installation.connector_type);
           if (
-            installation.status === "enabled" &&
-            installation.connector_type === WHATSAPP_WEB_LIVE_CONNECTOR_TYPE &&
-            whatsAppLiveKeyMatches(
-              apiKey,
-              await resolveWhatsAppLiveKeys(installation, process.env),
-            )
+            !driver?.authorizeLiveAccess ||
+            !driver.capabilities(installation).browser_live
           ) {
+            continue;
+          }
+          try {
+            await driver.authorizeLiveAccess(installation, {
+              apiKey,
+              origin: "extension",
+              env: process.env,
+            });
             return true;
+          } catch {
+            continue;
           }
         }
         return false;
@@ -2012,16 +2160,26 @@ export class PersonalConnectorService implements OnModuleDestroy {
         return false;
       }
       const installation = await store.findInstallation(decodeURIComponent(match[1]));
-      return Boolean(
-        installation &&
-        installation.org_id === this.runtime.orgId() &&
-        installation.status === "enabled" &&
-        installation.connector_type === WHATSAPP_WEB_LIVE_CONNECTOR_TYPE &&
-        whatsAppLiveKeyMatches(
-          apiKey,
-          await resolveWhatsAppLiveKeys(installation, process.env),
-        ),
-      );
+      if (
+        !installation ||
+        installation.org_id !== this.runtime.orgId() ||
+        installation.status !== "enabled"
+      ) {
+        return false;
+      }
+      const driver = this.drivers.get(installation.connector_type);
+      if (
+        !driver?.authorizeLiveAccess ||
+        !driver.capabilities(installation).browser_live
+      ) {
+        return false;
+      }
+      await driver.authorizeLiveAccess(installation, {
+        apiKey,
+        origin: "extension",
+        env: process.env,
+      });
+      return true;
     } catch {
       return false;
     }
@@ -2039,37 +2197,39 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private pairingCodeOf(
     installation: ConnectorInstallation,
   ): Promise<string | undefined> {
-    if (installation.connector_type !== WHATSAPP_WEB_LIVE_CONNECTOR_TYPE) {
+    const driver = this.drivers.get(installation.connector_type);
+    if (
+      !driver?.readPairingCode ||
+      !driver.capabilities(installation).pairing_code
+    ) {
       return Promise.resolve(undefined);
     }
-    return readWhatsAppLivePairingCode(installation.id);
+    return driver.readPairingCode(installation);
   }
 
   private async assertInstallSecret(
     installation: ConnectorInstallation,
     input: { apiKey?: string; origin?: string },
   ): Promise<void> {
-    if (installation.connector_type === WHATSAPP_WEB_LIVE_CONNECTOR_TYPE) {
-      const allowed = await resolveWhatsAppLiveKeys(installation, process.env);
-      const origin = input.origin?.trim();
-      if (origin) {
-        if (!whatsAppLiveKeyMatches(input.apiKey, allowed)) {
-          throw new PersonalConnectorError(
-            "unauthorized",
-            allowed.pairingCode || allowed.envKey
-              ? "Invalid live connector API key"
-              : "Live connector API key is required for browser access",
-            401,
-          );
+    const driver = this.drivers.get(installation.connector_type);
+    if (
+      driver?.authorizeLiveAccess &&
+      driver.capabilities(installation).browser_live
+    ) {
+      try {
+        await driver.authorizeLiveAccess(installation, {
+          apiKey: input.apiKey,
+          origin: input.origin,
+          env: process.env,
+        });
+      } catch (error) {
+        if (
+          error instanceof ChannelDriverError &&
+          error.code === "missing_credentials"
+        ) {
+          throw new PersonalConnectorError("unauthorized", error.message, 401);
         }
-        return;
-      }
-      if (allowed.envKey && input.apiKey !== allowed.envKey) {
-        throw new PersonalConnectorError(
-          "unauthorized",
-          "Invalid live connector API key",
-          401,
-        );
+        throw wrapDriverError(error, "invalid_config");
       }
       return;
     }
@@ -2440,6 +2600,14 @@ function bootstrapPullIntervalMs(): number {
     return 0;
   }
   return Math.max(500, Math.min(raw, 30_000));
+}
+
+function catalogPullIntervalMs(): number {
+  const raw = Number(process.env.REGENIC_CATALOG_PULL_MS ?? DEFAULT_CATALOG_PULL_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 0;
+  }
+  return Math.max(15_000, Math.min(raw, 120_000));
 }
 
 function syncInflightKey(

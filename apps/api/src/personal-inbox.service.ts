@@ -1,4 +1,5 @@
 import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { clearAllFeishuMediaJobs } from "@regenic/feishu-connector";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -83,6 +84,7 @@ import {
   type EngineInstallationView,
 } from "./personal-connector-view";
 import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-status";
+import { noteInteractiveReadFinished } from "./personal-interactive-gate";
 import { processMemoryView } from "./process-memory";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
@@ -242,6 +244,8 @@ export interface InboxHeadsPage {
 
 export const CHANGED_INBOX_EVENT_CAP = 200;
 export const CHANGED_INBOX_THREAD_CAP = 80;
+/** Coalesce ingest-driven digest COUNT scans while sync pages land. */
+export const INBOX_DIGEST_DEBOUNCE_MS = 250;
 
 export function shouldSplitInboxHeads(query: InboxListQuery): boolean {
   return query.heads === true && query.split === true && !query.thread_id;
@@ -685,6 +689,7 @@ export interface StoreClearView {
 @Injectable()
 export class PersonalInboxService {
   private readonly catalogProbes = new CatalogProbeCache();
+  private digestPublishTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -756,13 +761,32 @@ export class PersonalInboxService {
     return inbox;
   }
 
-  /** Drop cached digest and republish from the store after inbox-affecting writes. */
-  touchInboxDigest(): void {
-    this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
-    void this.publishInboxDigest();
+  /** Coalesce digest refreshes; keep serving the last snapshot until republish. */
+  touchInboxDigest(options?: { immediate?: boolean }): void {
+    if (options?.immediate) {
+      if (this.digestPublishTimer) {
+        clearTimeout(this.digestPublishTimer);
+        this.digestPublishTimer = undefined;
+      }
+      this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
+      void this.publishInboxDigest();
+      return;
+    }
+    if (this.digestPublishTimer) {
+      clearTimeout(this.digestPublishTimer);
+    }
+    this.digestPublishTimer = setTimeout(() => {
+      this.digestPublishTimer = undefined;
+      this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
+      void this.publishInboxDigest();
+    }, INBOX_DIGEST_DEBOUNCE_MS);
   }
 
   async publishInboxDigest(): Promise<void> {
+    if (this.digestPublishTimer) {
+      clearTimeout(this.digestPublishTimer);
+      this.digestPublishTimer = undefined;
+    }
     if (!this.runtime.isReady()) {
       return;
     }
@@ -812,6 +836,7 @@ export class PersonalInboxService {
     return await this.loadThreadInbox(normalized);
     } finally {
       this.kernelRuntime.noteInteractiveWaiter(-1);
+      noteInteractiveReadFinished();
     }
   }
 
@@ -977,6 +1002,7 @@ export class PersonalInboxService {
       };
     } finally {
       this.kernelRuntime.noteInteractiveWaiter(-1);
+      noteInteractiveReadFinished();
     }
   }
 
@@ -1090,6 +1116,7 @@ export class PersonalInboxService {
     };
     } finally {
       this.kernelRuntime.noteInteractiveWaiter(-1);
+      noteInteractiveReadFinished();
     }
   }
 
@@ -1108,9 +1135,14 @@ export class PersonalInboxService {
     } catch (error) {
       console.error("blob store clear leftover files", error);
     }
+    try {
+      clearAllFeishuMediaJobs();
+    } catch (error) {
+      console.error("feishu media job clear leftover files", error);
+    }
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
     this.kernelRuntime.clearInstallationSnapshots();
-    this.touchInboxDigest();
+    this.touchInboxDigest({ immediate: true });
     return result;
   }
 
@@ -1581,7 +1613,7 @@ export class PersonalInboxService {
         : {}),
       updated_at: new Date().toISOString(),
     });
-    this.touchInboxDigest();
+    this.touchInboxDigest({ immediate: true });
     return toPrefView(pref);
   }
 
@@ -1651,7 +1683,7 @@ export class PersonalInboxService {
       host,
     );
     await this.work.ackDoneThread(threadId);
-    this.touchInboxDigest();
+    this.touchInboxDigest({ immediate: true });
     return toPrefView(pref);
   }
 

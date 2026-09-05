@@ -93,6 +93,12 @@ export async function verifyPollConnectorConformance(
   if (replay.next_cursor !== replay.batch.next_cursor) {
     throw new ConnectorConformanceError("Replay next_cursor must match batch next_cursor");
   }
+  if (first.poll_hint === undefined) {
+    throw new ConnectorConformanceError("PollResult must include poll_hint");
+  }
+  if (replay.poll_hint === undefined) {
+    throw new ConnectorConformanceError("Replay PollResult must include poll_hint");
+  }
   if (stableBatch(first.batch) !== stableBatch(replay.batch)) {
     throw new ConnectorConformanceError("Polling the same cursor must produce a stable batch");
   }
@@ -131,6 +137,16 @@ export function verifyChannelDriverConformance(input: DriverConformanceInput): v
   }
   if (enabledCaps.receipts && !input.driver.readReceipts) {
     throw new ConnectorConformanceError("capabilities.receipts requires readReceipts");
+  }
+  if (enabledCaps.pairing_code && !input.driver.readPairingCode) {
+    throw new ConnectorConformanceError(
+      "capabilities.pairing_code requires readPairingCode",
+    );
+  }
+  if (enabledCaps.browser_live && !input.driver.authorizeLiveAccess) {
+    throw new ConnectorConformanceError(
+      "capabilities.browser_live requires authorizeLiveAccess",
+    );
   }
   if (driverAcceptsWebhook(input.driver) && !input.driver.bindWebhook) {
     throw new ConnectorConformanceError(

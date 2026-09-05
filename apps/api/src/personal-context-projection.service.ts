@@ -6,13 +6,18 @@ import type {
   ContextProjectionRunner,
   EventRecord,
 } from "@regenic/domain";
-import { shouldDeferWorkForSync } from "@regenic/domain";
 import { PersonalRuntimeService } from "./personal-runtime.service";
-import { syncPhaseForThread } from "./personal-sync-phase";
+import { KernelRuntimeService } from "./kernel-runtime.service";
+import {
+  loadOrgSyncPhaseIndex,
+  shouldDeferProjectionForPhase,
+  syncPhaseFromIndex,
+} from "./personal-sync-phase";
+import { backgroundSyncReleased } from "./personal-interactive-gate";
 
 const PROJECTION_TICK_MS = 2_000;
 const PROJECTION_LEASE_MS = 30_000;
-const PROJECTION_BATCH_SIZE = 50;
+const PROJECTION_BATCH_SIZE = 5;
 const PROJECTION_GENERATION = "continuous-v1";
 const MAX_RETRY_MS = 5 * 60_000;
 
@@ -27,6 +32,8 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
   constructor(
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(KernelRuntimeService)
+    private readonly kernelRuntime: KernelRuntimeService,
   ) {}
 
   startAfterListen(): void {
@@ -50,6 +57,9 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
     if (this.running || this.stopping || !this.runtime.isReady()) {
       return;
     }
+    if (!backgroundSyncReleased() || this.kernelRuntime.shouldDeferHistorySync()) {
+      return;
+    }
     this.running = true;
     try {
       const host = this.runtime.requireHost();
@@ -65,15 +75,22 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
       const groups = await groupProjectionJobs(claimed, (orgId, eventId) =>
         authority.getEvent(orgId, eventId),
       );
+      const phaseIndexByOrg = new Map<
+        string,
+        Awaited<ReturnType<typeof loadOrgSyncPhaseIndex>>
+      >();
       for (const group of groups) {
         try {
           if (group.thread_id) {
-            const phase = await syncPhaseForThread(
-              authority,
-              group.org_id,
-              group.thread_id,
-            );
-            if (shouldDeferWorkForSync({ requires_full_sync: true, phase })) {
+            let phaseIndex = phaseIndexByOrg.get(group.org_id);
+            if (!phaseIndex) {
+              phaseIndex = await loadOrgSyncPhaseIndex(authority, group.org_id);
+              phaseIndexByOrg.set(group.org_id, phaseIndex);
+            }
+            const phase = syncPhaseFromIndex(phaseIndex, group.thread_id);
+            // History backfill may still run; project whatever is already ingested.
+            // Only unseeded streams have no durable face yet.
+            if (shouldDeferProjectionForPhase(phase)) {
               const retryAt = new Date(now.getTime() + 5_000).toISOString();
               for (const job of group.jobs) {
                 await outbox.failContextProjectionJob({

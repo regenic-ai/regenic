@@ -108,4 +108,32 @@ describe("runtime pulse", () => {
     assert.equal(next.installations[0]?.sync?.backfilling, 12);
     assert.equal(next.installations[0]?.last_attempt?.status, "succeeded");
   });
+
+  it("does not blank coverage when heartbeat has no sync snapshot yet", () => {
+    const current = {
+      ...baseEngine,
+      installations: [
+        {
+          ...baseEngine.installations[0],
+          sync: {
+            discovered: 326,
+            seeded: 326,
+            unseeded: 0,
+            backfilling: 115,
+            media_pending: 168,
+            catalog_complete: false,
+            bootstrap_pending: 115,
+            steady: 211,
+          },
+        },
+      ],
+    };
+    const emptyPulse: PersonalHeartbeatView = {
+      ...heartbeat,
+      installations: [{ id: "feishu-1", sync: null }],
+    };
+    const next = applyHeartbeatToEngine(current, emptyPulse);
+    assert.equal(next.installations[0]?.sync?.discovered, 326);
+    assert.equal(next.installations[0]?.sync?.bootstrap_pending, 115);
+  });
 });

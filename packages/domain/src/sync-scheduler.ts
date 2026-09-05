@@ -107,10 +107,10 @@ export function planBootstrapSyncWork(
       : {
           ...HUMAN_PRESENT_BOOTSTRAP_LIMITS,
           ...input.limits,
-          live: 0,
+          live: input.limits?.live ?? 0,
           history:
             input.limits?.history ?? HUMAN_PRESENT_BOOTSTRAP_LIMITS.history,
-          catalog: 0,
+          catalog: input.limits?.catalog ?? 0,
         },
   });
 }

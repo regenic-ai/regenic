@@ -73,7 +73,7 @@ export function classifyKernelPressure(
   sample: KernelPressureSample,
   thresholds: KernelPressureThresholds = DEFAULT_KERNEL_PRESSURE_THRESHOLDS,
 ): KernelPressureLevel {
-  const heap = Math.max(sample.heap_used_bytes, sample.rss_bytes);
+  const heap = sample.heap_used_bytes;
   const lag = sample.event_loop_lag_ms ?? 0;
   if (
     heap >= thresholds.critical_heap_bytes ||
@@ -83,8 +83,7 @@ export function classifyKernelPressure(
   }
   if (
     heap >= thresholds.elevated_heap_bytes ||
-    lag >= thresholds.elevated_lag_ms ||
-    (sample.sync_active === true && (sample.interactive_waiters ?? 0) > 0)
+    lag >= thresholds.elevated_lag_ms
   ) {
     return "elevated";
   }
@@ -104,12 +103,30 @@ export function kernelPressureView(
   };
 }
 
-/** Background connector ticks yield only under critical load; elevated throttles history instead. */
+/**
+ * Skip connector ticks that would contend with a critically stalled event loop.
+ * Elevated lag does not cancel live; history/catalog use shouldDeferHistorySync.
+ */
 export function shouldDeferBackgroundSync(
   sample: KernelPressureSample,
   thresholds: KernelPressureThresholds = DEFAULT_KERNEL_PRESSURE_THRESHOLDS,
 ): boolean {
   return classifyKernelPressure(sample, thresholds) === "critical";
+}
+
+/** History/catalog catch-up yields to a live UI read or elevated event-loop lag. */
+export function shouldDeferHistorySync(
+  sample: KernelPressureSample,
+  thresholds: KernelPressureThresholds = DEFAULT_KERNEL_PRESSURE_THRESHOLDS,
+): boolean {
+  if ((sample.interactive_waiters ?? 0) > 0) {
+    return true;
+  }
+  const lag = sample.event_loop_lag_ms ?? 0;
+  if (lag >= thresholds.elevated_lag_ms) {
+    return true;
+  }
+  return shouldDeferBackgroundSync(sample, thresholds);
 }
 
 /** Adjust a planned sync budget under load. History and media yield first. */

@@ -6,6 +6,7 @@ const {
   kernelPressureView,
   kernelPressureThresholdsFromEnv,
   shouldDeferBackgroundSync,
+  shouldDeferHistorySync,
 } = require("../dist/kernel-pressure.js");
 const { yieldToEventLoop } = require("../dist/sync-budget.js");
 const { classifyKernelReachability } = require("../dist/kernel-reachability.js");
@@ -24,6 +25,13 @@ describe("kernel pressure", () => {
   it("classifies heap and lag", () => {
     assert.equal(
       classifyKernelPressure({ rss_bytes: 100_000_000, heap_used_bytes: 90_000_000 }),
+      "ok",
+    );
+    assert.equal(
+      classifyKernelPressure({
+        rss_bytes: 700_000_000,
+        heap_used_bytes: 90_000_000,
+      }),
       "ok",
     );
     assert.equal(
@@ -67,10 +75,17 @@ describe("kernel pressure", () => {
     );
   });
 
-  it("marks interactive readiness from pressure", () => {
+  it("marks interactive readiness from heap, not RSS", () => {
     assert.equal(
       kernelPressureView({
         rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+      }).interactive_ready,
+      true,
+    );
+    assert.equal(
+      kernelPressureView({
+        rss_bytes: 700_000_000,
         heap_used_bytes: 90_000_000,
       }).interactive_ready,
       true,
@@ -84,7 +99,7 @@ describe("kernel pressure", () => {
     );
   });
 
-  it("keeps background sync running while interactive reads are waiting", () => {
+  it("keeps live ticks running while interactive reads are waiting", () => {
     assert.equal(
       shouldDeferBackgroundSync({
         rss_bytes: 100_000_000,
@@ -100,6 +115,32 @@ describe("kernel pressure", () => {
         interactive_waiters: 2,
       }),
       false,
+    );
+    assert.equal(
+      shouldDeferHistorySync({
+        rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+        interactive_waiters: 2,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldDeferBackgroundSync({
+        rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+        event_loop_lag_ms: 120,
+        interactive_waiters: 0,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldDeferHistorySync({
+        rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+        event_loop_lag_ms: 120,
+        interactive_waiters: 0,
+      }),
+      true,
     );
   });
 
@@ -242,7 +283,7 @@ describe("personal read tier", () => {
     assert.equal(personalInboxReadTier({ heads: true }), "heads");
     assert.equal(
       personalInboxReadTierSpec("heads").connector_prompts,
-      false,
+      true,
     );
     assert.equal(shouldQueryInboxChannelOverlays({ heads: true }), false);
     assert.equal(

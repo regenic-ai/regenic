@@ -9,10 +9,15 @@ const {
   PersonalContextProjectionService,
   retryDelay,
 } = require("../dist/personal-context-projection.service");
+const {
+  noteInteractiveReadFinished,
+  resetInteractiveGate,
+} = require("../dist/personal-interactive-gate");
 
 const roots = [];
 
 afterEach(async () => {
+  resetInteractiveGate();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -85,7 +90,12 @@ function fixture(claimed, projectThread, getEvent = async () => null) {
     isReady: () => true,
     requireHost: () => host,
   };
-  return { service: new PersonalContextProjectionService(runtime), calls };
+  const kernelRuntime = {
+    shouldDeferBackgroundSync: () => false,
+    shouldDeferHistorySync: () => false,
+  };
+  noteInteractiveReadFinished();
+  return { service: new PersonalContextProjectionService(runtime, kernelRuntime), calls };
 }
 
 function eventRecord(orgId, eventId, threadId) {
@@ -129,7 +139,12 @@ describe("PersonalContextProjectionService", () => {
       isReady: () => true,
       requireHost: () => host,
     };
-    const service = new PersonalContextProjectionService(runtime);
+    const kernelRuntime = {
+      shouldDeferBackgroundSync: () => false,
+      shouldDeferHistorySync: () => false,
+    };
+    noteInteractiveReadFinished();
+    const service = new PersonalContextProjectionService(runtime, kernelRuntime);
     t.after(async () => {
       await service.onModuleDestroy();
       await host.dispose();
@@ -165,7 +180,7 @@ describe("PersonalContextProjectionService", () => {
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
 
     assert.equal(calls.claims.length, 1);
-    assert.equal(calls.claims[0].limit, 50);
+    assert.equal(calls.claims[0].limit, 5);
     assert.deepEqual(calls.projects, [
       { orgId: "example-org", generation: "continuous-v1", threadId: "thread-1" },
       { orgId: "other-org", generation: "continuous-v1", threadId: "thread-other" },
@@ -230,5 +245,93 @@ describe("PersonalContextProjectionService", () => {
     release([]);
     await first;
     await service.onModuleDestroy();
+  });
+
+  it("projects threads still in history instead of parking bootstrap_pending", async () => {
+    const calls = { projects: [], failures: [] };
+    const outbox = {
+      async claimContextProjectionJobs() {
+        return [job()];
+      },
+      async completeContextProjectionJob() {
+        return true;
+      },
+      async failContextProjectionJob(input) {
+        calls.failures.push(input);
+        return true;
+      },
+    };
+    const runner = {
+      async projectThread(orgId, generation, threadId) {
+        calls.projects.push({ orgId, generation, threadId });
+        return [];
+      },
+    };
+    const authority = {
+      async getEvent(orgId, eventId) {
+        return eventRecord(orgId, eventId, "feishu:1");
+      },
+      async listInstallations() {
+        return [{ id: "feishu-1", status: "enabled" }];
+      },
+      async getSyncCatalog() {
+        return {
+          members: [
+            {
+              installation_id: "feishu-1",
+              stream_key: "chat:1",
+              thread_id: "feishu:1",
+              generation: 1,
+              discovered_at: "2026-08-30T00:00:00.000Z",
+              last_seen_at: "2026-08-30T00:00:00.000Z",
+            },
+          ],
+        };
+      },
+      async listSyncStates() {
+        return [
+          {
+            installation_id: "feishu-1",
+            stream_key: "chat:1",
+            phase: "history",
+            media_pending: false,
+            generation: 1,
+            updated_at: "2026-08-30T00:00:00.000Z",
+            live_cursor: "{}",
+            history_cursor: "{}",
+          },
+        ];
+      },
+    };
+    const host = {
+      get(name) {
+        if (name === "context-projection-outbox") return outbox;
+        if (name === "context-projections") return runner;
+        if (name === "authority") return authority;
+        throw new Error(`unexpected service ${name}`);
+      },
+    };
+    const {
+      noteInteractiveReadFinished: note,
+      resetInteractiveGate: reset,
+    } = require("../dist/personal-interactive-gate");
+    const { clearOrgSyncPhaseIndex } = require("../dist/personal-sync-phase");
+    clearOrgSyncPhaseIndex();
+    note();
+    const service = new PersonalContextProjectionService(
+      { isReady: () => true, requireHost: () => host },
+      {
+        shouldDeferBackgroundSync: () => false,
+        shouldDeferHistorySync: () => false,
+      },
+    );
+    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+    assert.deepEqual(calls.projects, [
+      { orgId: "example-org", generation: "continuous-v1", threadId: "feishu:1" },
+    ]);
+    assert.equal(calls.failures.length, 0);
+    await service.onModuleDestroy();
+    reset();
+    clearOrgSyncPhaseIndex();
   });
 });

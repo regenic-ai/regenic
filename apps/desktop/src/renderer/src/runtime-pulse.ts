@@ -41,9 +41,7 @@ export function applyHeartbeatToEngine(
           }
           return {
             ...installation,
-            ...(pulse.sync !== undefined
-              ? { sync: pulse.sync ?? undefined }
-              : {}),
+            ...(pulse.sync ? { sync: pulse.sync } : {}),
             ...(pulse.last_attempt !== undefined
               ? { last_attempt: pulse.last_attempt }
               : {}),

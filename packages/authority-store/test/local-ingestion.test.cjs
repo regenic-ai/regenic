@@ -565,20 +565,34 @@ describe("local ingestion persistence", () => {
       `,
     );
     const seed = db.transaction(() => {
+      let lastId = "";
+      let lastAt = occurred;
+      let lastThread = "";
       for (let index = 0; index < 2500; index += 1) {
         const id = `evt-${String(index).padStart(4, "0")}`;
         const externalId = `oc_chat:${index}`;
         const at = new Date(Date.parse(occurred) + index).toISOString();
+        const threadId = conversationId("feishu", externalId, id);
         insertEvent.run(
           id,
           externalId,
           at,
           at,
-          conversationId("feishu", externalId, id),
+          threadId,
         );
         insertHead.run(externalId, id);
         insertDisposition.run(id, at);
+        lastId = id;
+        lastAt = at;
+        lastThread = threadId;
       }
+      db.prepare(
+        `
+          INSERT INTO thread_heads (
+            org_id, thread_id, face_event_id, face_occurred_at, has_current_work
+          ) VALUES ('local-owner', ?, ?, ?, 1)
+        `,
+      ).run(lastThread, lastId, lastAt);
     });
     seed();
     const latestPlan = db
