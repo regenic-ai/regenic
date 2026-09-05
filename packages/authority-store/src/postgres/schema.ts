@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 26;
+export const PG_SCHEMA_VERSION = 27;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -148,6 +148,22 @@ FROM (
 ) ranked
 WHERE rn = 1
 ON CONFLICT (org_id, thread_id) DO NOTHING;
+`,
+  },
+  {
+    version: 27,
+    sql: `
+CREATE TABLE context_artifact_states (
+  org_id TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'accepted', 'rejected', 'needs_clarify', 'superseded')),
+  decided_at TIMESTAMPTZ NOT NULL,
+  superseded_by TEXT,
+  PRIMARY KEY (org_id, artifact_id),
+  FOREIGN KEY (org_id, artifact_id) REFERENCES context_artifacts(org_id, id)
+);
+CREATE INDEX context_artifact_states_query_idx
+  ON context_artifact_states (org_id, status, decided_at, artifact_id);
 `,
   },
 ] as const;
@@ -443,6 +459,18 @@ CREATE TABLE context_artifacts (
   payload_json JSONB NOT NULL,
   PRIMARY KEY (org_id, id)
 );
+
+CREATE TABLE context_artifact_states (
+  org_id TEXT NOT NULL,
+  artifact_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'accepted', 'rejected', 'needs_clarify', 'superseded')),
+  decided_at TIMESTAMPTZ NOT NULL,
+  superseded_by TEXT,
+  PRIMARY KEY (org_id, artifact_id),
+  FOREIGN KEY (org_id, artifact_id) REFERENCES context_artifacts(org_id, id)
+);
+CREATE INDEX context_artifact_states_query_idx
+  ON context_artifact_states (org_id, status, decided_at, artifact_id);
 
 CREATE INDEX context_artifacts_query_idx
   ON context_artifacts (org_id, kind, status, generation, recorded_at, id);

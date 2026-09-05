@@ -534,6 +534,22 @@ Projectors follow these rules:
 - an incomplete generation is never mixed into a snapshot;
 - a failed projector does not block Event ingestion or unrelated projectors.
 
+### 8.1 Artifact lifecycle authority
+
+Artifact manifests are immutable. Their effective lifecycle state is held in a
+separate authority record so a proposal can be accepted, rejected, or marked
+`needs_clarify` without rewriting its evidence, scope, or body hash. An accepted
+Artifact can be superseded only by a proposal whose `supersedes_id` names it;
+the authority transaction accepts the replacement and marks the previous
+Artifact superseded together. Terminal Artifacts cannot transition again.
+
+Only accepted `thread_summary` Artifacts are eligible for retrieval. The
+retriever loads the canonical body through `body_hash`, verifies it matches the
+immutable manifest, requires every evidence reference in the authorized source
+view, and requires an exact evidence-scope union. Failure to verify any of
+these conditions withholds the Artifact rather than falling back to a prior
+summary.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

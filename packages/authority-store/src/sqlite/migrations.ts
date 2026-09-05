@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 26;
+export const LATEST_SCHEMA_VERSION = 27;
 
 export const MIGRATIONS = [
   {
@@ -641,6 +641,22 @@ export const MIGRATIONS = [
           )
       ) ranked
       WHERE rn = 1;
+    `,
+  },
+  {
+    version: 27,
+    sql: `
+      CREATE TABLE context_artifact_states (
+        org_id TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('proposed', 'accepted', 'rejected', 'needs_clarify', 'superseded')),
+        decided_at TEXT NOT NULL,
+        superseded_by TEXT,
+        PRIMARY KEY (org_id, artifact_id),
+        FOREIGN KEY (org_id, artifact_id) REFERENCES context_artifacts(org_id, id)
+      );
+      CREATE INDEX context_artifact_states_query_idx
+        ON context_artifact_states (org_id, status, decided_at, artifact_id);
     `,
   },
 ] as const;

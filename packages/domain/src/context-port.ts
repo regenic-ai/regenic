@@ -1,5 +1,11 @@
 import type { ActorRef } from "./actor";
 import type { ContextArtifact, ContextArtifactKind, ContextArtifactStatus } from "./context-artifact";
+import type {
+  ContextArtifactDecision,
+  ContextArtifactLifecycleStore,
+  ContextArtifactState,
+  ContextArtifactSupersession,
+} from "./context-artifact-lifecycle";
 import type { ContextBundle, ContextBundleItem } from "./context-bundle";
 import type { ContextSectionKind } from "./context-budget";
 import type { ContextCandidate, ContextCandidateKind } from "./context-candidate";
@@ -49,10 +55,16 @@ export interface ContextBundleLookup {
   consumer_id: string;
 }
 
-export interface ContextArtifactStore {
+export interface ContextArtifactStore extends ContextArtifactLifecycleStore {
   putArtifact(artifact: ContextArtifact): Promise<ContextArtifact>;
   getArtifact(orgId: string, id: string): Promise<ContextArtifact | null>;
   listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]>;
+  getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null>;
+  decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState>;
+  supersedeArtifact(input: ContextArtifactSupersession): Promise<{
+    superseded: ContextArtifactState;
+    accepted: ContextArtifactState;
+  }>;
   putSnapshot(snapshot: ContextSnapshot): Promise<void>;
   getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null>;
   putBundle(bundle: ContextBundle): Promise<void>;
