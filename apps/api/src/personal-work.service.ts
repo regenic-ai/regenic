@@ -29,6 +29,7 @@ import {
   type WorkRun,
   type WorkRunStatus,
 } from "@regenic/domain";
+import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalExecutorService } from "./personal-executor.service";
@@ -361,25 +362,62 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
     const authority = host.get("authority");
     const existing = await authority.getWorkItemByThread(orgId, threadId);
-    if (
-      existing &&
-      isActiveWorkStatus(existing.status) &&
-      existing.recipe_id &&
-      existing.recipe_id !== recipe.id
-    ) {
-      throw new PersonalConnectorError(
-        "conflict",
-        "Another rule is already running on this chat",
-        409,
-      );
+    if (existing) {
+      const activeRun = await authority.getActiveWorkRun(orgId, existing.id);
+      if (
+        activeRun ||
+        existing.status === "running" ||
+        existing.status === "waiting_human"
+      ) {
+        throw new PersonalConnectorError(
+          "conflict",
+          existing.recipe_id && existing.recipe_id !== recipe.id
+            ? "Another rule is already running on this chat"
+            : "This chat already has work in progress",
+          409,
+        );
+      }
+      if (
+        isActiveWorkStatus(existing.status) &&
+        existing.recipe_id &&
+        existing.recipe_id !== recipe.id
+      ) {
+        throw new PersonalConnectorError(
+          "conflict",
+          "Another rule is already bound to this chat",
+          409,
+        );
+      }
     }
+    const heads = await authority.listInbox(orgId, {
+      heads: true,
+      thread_ids: [threadId],
+    });
+    const head = heads[0];
+    const body = head?.event.content_hash
+      ? (
+          await resolveInboxBodies(
+            authority,
+            host.get("blobs"),
+            [head.event.content_hash],
+            "meta",
+          )
+        ).get(head.event.content_hash)
+      : undefined;
+    const surface = body?.surface;
     const subject = workSubjectFromEvent({
-      type: recipe.match.record_class === "task" ? "task" : "message",
-      source: recipe.match.source ?? threadId.split(":")[0] ?? "",
+      type:
+        surface?.type ??
+        (existing?.record_class === "task" ? "task" : undefined) ??
+        "message",
+      source: head?.event.source ?? threadId.split(":")[0] ?? "",
       thread_id: threadId,
-      unit_kind: recipe.match.unit_kind,
-      hint: recipe.match.thread_facet ?? existing?.thread_facet,
-      prior_facet: existing?.thread_facet,
+      unit_kind: surface?.unit_kind,
+      hint: surface?.thread_facet ?? existing?.thread_facet,
+      prior_facet:
+        existing && isActiveWorkStatus(existing.status)
+          ? existing.thread_facet
+          : undefined,
     });
     if (!subject) {
       throw new PersonalConnectorError(
@@ -410,27 +448,26 @@ export class PersonalWorkService implements OnModuleDestroy {
             thread_facet: subject.thread_facet,
             updated_at: now,
           })
-        : existing && isActiveWorkStatus(existing.status)
-          ? await authority.putWorkItem({
-              ...existing,
-              recipe_id: recipe.id,
-              updated_at: now,
-            })
-          : await authority.putWorkItem({
-              id: `work-${randomUUID()}`,
-              org_id: orgId,
-              thread_id: threadId,
-              unit_key: `try:${recipe.id}:${now}`,
-              record_class: subject.record_class,
-              thread_facet: subject.thread_facet,
-              status: "open",
-              recipe_id: recipe.id,
-              created_at: now,
-              updated_at: now,
-            });
+        : await authority.putWorkItem({
+            id: `work-${randomUUID()}`,
+            org_id: orgId,
+            thread_id: threadId,
+            unit_key: `try:${recipe.id}:${now}`,
+            record_class: subject.record_class,
+            thread_facet: subject.thread_facet,
+            status: "open",
+            recipe_id: recipe.id,
+            created_at: now,
+            updated_at: now,
+          });
     const allowWriteBack =
       input?.write_back === true && Boolean(recipe.can_write_back);
     this.supervise.setWriteBackOverride(item.id, allowWriteBack);
+    const pending = await authority.getWorkDeliveryByItem(orgId, item.id);
+    if (pending && pending.status !== "acked") {
+      // Drop stale queued send-back so keep-here (and a fresh try) cannot flush it.
+      await authority.putWorkDelivery(deliveryAbandoned(pending, now));
+    }
     try {
       const result = await this.runWorkItem(item.id);
       this.inbox.touchInboxDigest();
@@ -686,7 +723,11 @@ export class PersonalWorkService implements OnModuleDestroy {
     const latest =
       (await host.get("authority").getWorkItem(orgId, opened.id)) ?? opened;
     const queued = await host.get("authority").getWorkDeliveryByItem(orgId, opened.id);
-    if (queued && shouldFlushDelivery(queued, new Date().toISOString())) {
+    if (
+      queued &&
+      shouldFlushDelivery(queued, new Date().toISOString()) &&
+      this.supervise.allowsWriteBack(opened.id, recipe)
+    ) {
       await this.flush.flushOne(latest, recipe, queued);
     }
     return {

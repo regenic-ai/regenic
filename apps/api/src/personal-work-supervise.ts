@@ -54,6 +54,11 @@ export class PersonalWorkSupervise {
     this.writeBackOverride.delete(workItemId);
   }
 
+  /** Respect try-once keep-here when deciding whether to flush a queued delivery. */
+  allowsWriteBack(itemId: string, recipe: Recipe): boolean {
+    return this.wantsWriteBack(itemId, recipe);
+  }
+
   private wantsWriteBack(itemId: string, recipe: Recipe): boolean {
     if (this.writeBackOverride.has(itemId)) {
       return this.writeBackOverride.get(itemId) === true;
