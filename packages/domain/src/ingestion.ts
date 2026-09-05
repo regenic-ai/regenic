@@ -151,7 +151,7 @@ export interface PollResult {
   has_more?: boolean;
   /** Remaining attachment jobs after this page. Opaque to the kernel. */
   media_pending?: boolean;
-  /** Optional lifecycle hint so core scheduling stays wire-agnostic. */
+  /** Optional lifecycle hint so core scheduling stays wire-agnostic. Required for poll connectors. */
   poll_hint?: SyncPollHint;
 }
 

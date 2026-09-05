@@ -31,6 +31,7 @@ import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalConnectorService } from "./personal-connector.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { backgroundSyncReleased } from "./personal-interactive-gate";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkDispatch } from "./personal-work-dispatch";
 import { workInboxFaces, type WorkInboxFace } from "./personal-work-faces";
@@ -160,6 +161,9 @@ export class PersonalWorkService implements OnModuleDestroy {
 
   async afterConnectorTick(): Promise<void> {
     if (this.maintenanceHold || !this.runtime.isReady()) {
+      return;
+    }
+    if (!backgroundSyncReleased()) {
       return;
     }
     await Promise.all([

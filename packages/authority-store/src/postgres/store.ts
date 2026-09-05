@@ -986,6 +986,16 @@ export class PostgresAuthorityStore
       ],
       client,
     );
+    const row = await this.queryOne<{ thread_id: string | null }>(
+      `SELECT thread_id FROM events WHERE id = $1`,
+      [decision.event_id],
+      client,
+    );
+    await this.refreshThreadHeadWithinTransaction(
+      decision.org_id,
+      row?.thread_id,
+      client,
+    );
   }
 
   async getDisposition(eventId: string): Promise<ArrangementDecision | null> {
@@ -1029,23 +1039,14 @@ export class PostgresAuthorityStore
     );
     const counted = await this.queryOne<{ count: unknown }>(
       `
-        SELECT COUNT(*)::int AS count FROM (
-          SELECT e.thread_id AS thread_id
-          FROM events e
-          JOIN message_dispositions d ON d.event_id = e.id
-          WHERE e.org_id = $1
-            AND ${isCurrentHeadSql("e")}
-            AND ${notHiddenSql("$2", "e")}
-          GROUP BY e.thread_id
-          HAVING
-            SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
-            AND SUM(
-              CASE
-                WHEN d.reason_codes ? 'thread_status' THEN 0
-                ELSE 1
-              END
-            ) > 0
-        ) counted_threads
+        SELECT COUNT(*)::int AS count
+        FROM thread_heads th
+        WHERE th.org_id = $1
+          AND th.has_current_work = TRUE
+          AND th.thread_id NOT IN (
+            SELECT p.thread_id FROM conversation_prefs p
+            WHERE p.org_id = $2 AND p.hidden = TRUE
+          )
       `,
       [orgId, orgId],
     );
@@ -1234,6 +1235,7 @@ export class PostgresAuthorityStore
         client,
       );
       await this.execute(`DELETE FROM source_heads WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM thread_heads WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM events WHERE org_id = $1`, [orgId], client);
       await this.execute(
         `
@@ -2854,7 +2856,85 @@ export class PostgresAuthorityStore
       ],
       client,
     );
+    await this.refreshThreadHeadWithinTransaction(
+      event.org_id,
+      event.thread_id,
+      client,
+    );
     return event;
+  }
+
+  private async refreshThreadHeadWithinTransaction(
+    orgId: string,
+    threadId: string | null | undefined,
+    client?: PoolClient,
+  ): Promise<void> {
+    const id = threadId?.trim();
+    if (!id) {
+      return;
+    }
+    const face = await this.queryOne<{
+      face_event_id: string;
+      face_occurred_at: unknown;
+    }>(
+      `
+        SELECT e.id AS face_event_id, e.occurred_at AS face_occurred_at
+        FROM message_dispositions d
+        JOIN events e ON e.id = d.event_id
+        WHERE e.org_id = $1
+          AND e.thread_id = $2
+          AND e.operation != 'tombstone'
+          AND NOT (d.reason_codes ? 'thread_status')
+        ORDER BY
+          CASE WHEN ${isCurrentHeadSql("e")} THEN 0 ELSE 1 END,
+          e.occurred_at DESC,
+          e.id DESC
+        LIMIT 1
+      `,
+      [orgId, id],
+      client,
+    );
+    if (!face) {
+      await this.execute(
+        `DELETE FROM thread_heads WHERE org_id = $1 AND thread_id = $2`,
+        [orgId, id],
+        client,
+      );
+      return;
+    }
+    const currentWork = await this.queryOne<{ ok: number }>(
+      `
+        SELECT 1 AS ok
+        FROM message_dispositions d2
+        JOIN events e2 ON e2.id = d2.event_id
+        WHERE e2.org_id = $1
+          AND e2.thread_id = $2
+          AND d2.disposition = 'current_work'
+          AND ${isCurrentHeadSql("e2", "h2")}
+        LIMIT 1
+      `,
+      [orgId, id],
+      client,
+    );
+    await this.execute(
+      `
+        INSERT INTO thread_heads (
+          org_id, thread_id, face_event_id, face_occurred_at, has_current_work
+        ) VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (org_id, thread_id) DO UPDATE SET
+          face_event_id = EXCLUDED.face_event_id,
+          face_occurred_at = EXCLUDED.face_occurred_at,
+          has_current_work = EXCLUDED.has_current_work
+      `,
+      [
+        orgId,
+        id,
+        face.face_event_id,
+        face.face_occurred_at,
+        Boolean(currentWork),
+      ],
+      client,
+    );
   }
 
   private inboxSql(
@@ -2877,35 +2957,15 @@ export class PostgresAuthorityStore
       if (!scoped) {
         visible.push(notHiddenSql(p(orgId), "e"));
       }
-      const current = this.inboxClauses(orgId, inner, "current_work", {
-        event: "e2",
-        disposition: "d2",
-      }, p);
-      if (!scoped) {
-        current.push(notHiddenSql(p(orgId), "e2"));
-      }
-      const page = headsPageTail(query, p);
+      const page = materialHeadsPageTail(query, p);
       return {
         sql: `
-          SELECT * FROM (
-            SELECT ${INBOX_COLUMNS},
-              ROW_NUMBER() OVER (
-                PARTITION BY e.thread_id
-                ORDER BY e.occurred_at DESC, e.id DESC
-              ) AS rn
-            FROM message_dispositions d
-            JOIN events e ON e.id = d.event_id
-            WHERE ${visible.join(" AND ")}
-              AND ${isCurrentHeadSql("e")}
-              AND NOT (d.reason_codes ? 'thread_status')
-              AND e.thread_id IN (
-                SELECT e2.thread_id
-                FROM message_dispositions d2
-                JOIN events e2 ON e2.id = d2.event_id
-                WHERE ${current.join(" AND ")}
-                  AND ${isCurrentHeadSql("e2", "h2")}
-              )
-          ) ranked
+          SELECT ${INBOX_COLUMNS}
+          FROM thread_heads th
+          JOIN events e ON e.id = th.face_event_id
+          JOIN message_dispositions d ON d.event_id = e.id
+          WHERE th.has_current_work = TRUE
+            AND ${visible.join(" AND ")}
           ${page.whereSql}
           ${page.orderSql}
         `,
@@ -2986,22 +3046,15 @@ export class PostgresAuthorityStore
   ): { sql: string; params: unknown[] } {
     const visible = this.inboxClauses(orgId, inner, "any", {}, p);
     const hidden = hiddenThreadIdSql(p(orgId));
-    const page = headsPageTail(query, p);
+    const page = materialHeadsPageTail(query, p);
     return {
       sql: `
-        SELECT * FROM (
-          SELECT ${INBOX_COLUMNS},
-            ROW_NUMBER() OVER (
-              PARTITION BY e.thread_id
-              ORDER BY e.occurred_at DESC, e.id DESC
-            ) AS rn
-          FROM message_dispositions d
-          JOIN events e ON e.id = d.event_id
-          WHERE ${visible.join(" AND ")}
-            AND NOT (d.reason_codes ? 'thread_status')
-            AND e.operation != 'tombstone'
-            AND e.thread_id IN (${hidden})
-        ) ranked
+        SELECT ${INBOX_COLUMNS}
+        FROM thread_heads th
+        JOIN events e ON e.id = th.face_event_id
+        JOIN message_dispositions d ON d.event_id = e.id
+        WHERE ${visible.join(" AND ")}
+          AND e.thread_id IN (${hidden})
         ${page.whereSql}
         ${page.orderSql}
       `,
@@ -3252,6 +3305,31 @@ function headsPageTail(
   return {
     whereSql,
     orderSql: "ORDER BY occurred_at ASC, id ASC",
+  };
+}
+
+function materialHeadsPageTail(
+  query: InboxQuery | undefined,
+  p: (value: unknown) => string,
+): {
+  whereSql: string;
+  orderSql: string;
+} {
+  let whereSql = "";
+  if (query?.before) {
+    whereSql =
+      `AND (e.occurred_at < ${p(query.before)} OR (e.occurred_at = ${p(query.before)} AND e.id < ${p(query.before_id ?? "")}))`;
+  }
+  const limit = normalizeInboxLimit(query?.limit);
+  if (limit !== undefined) {
+    return {
+      whereSql,
+      orderSql: `ORDER BY e.occurred_at DESC, e.id DESC LIMIT ${p(limit)}`,
+    };
+  }
+  return {
+    whereSql,
+    orderSql: "ORDER BY e.occurred_at ASC, e.id ASC",
   };
 }
 

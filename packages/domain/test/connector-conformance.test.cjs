@@ -41,6 +41,14 @@ function connector(results) {
   };
 }
 
+function pollPage(batchValue, nextCursor = "cursor-2") {
+  return {
+    batch: batchValue,
+    next_cursor: nextCursor,
+    poll_hint: { live_seeded: true, history_pending: false },
+  };
+}
+
 const input = {
   cursor: null,
   connector_id: "fixture-connector",
@@ -54,19 +62,33 @@ describe("verifyPollConnectorConformance", () => {
     const report = await verifyPollConnectorConformance({
       ...input,
       connector: connector([
-        { batch: first, next_cursor: "cursor-2" },
-        { batch: replay, next_cursor: "cursor-2" },
+        pollPage(first),
+        pollPage(replay),
       ]),
     });
 
     assert.deepEqual(report, { delivery_id: "page-1", record_count: 1, next_cursor: "cursor-2" });
   });
 
+  it("rejects poll results without poll_hint", async () => {
+    await assert.rejects(
+      () => verifyPollConnectorConformance({
+        ...input,
+        connector: connector([{ batch: batch(), next_cursor: "cursor-2" }]),
+      }),
+      /poll_hint/,
+    );
+  });
+
   it("rejects mismatched batch/result cursors", async () => {
     await assert.rejects(
       () => verifyPollConnectorConformance({
         ...input,
-        connector: connector([{ batch: batch(), next_cursor: "different" }]),
+        connector: connector([{
+          batch: batch(),
+          next_cursor: "different",
+          poll_hint: { live_seeded: true, history_pending: false },
+        }]),
       }),
       ConnectorConformanceError,
     );
@@ -78,7 +100,7 @@ describe("verifyPollConnectorConformance", () => {
     await assert.rejects(
       () => verifyPollConnectorConformance({
         ...input,
-        connector: connector([{ batch: duplicate, next_cursor: "cursor-2" }]),
+        connector: connector([pollPage(duplicate)]),
       }),
       ConnectorConformanceError,
     );
@@ -90,7 +112,7 @@ describe("verifyPollConnectorConformance", () => {
     await assert.rejects(
       () => verifyPollConnectorConformance({
         ...input,
-        connector: connector([{ batch: unknown, next_cursor: "cursor-2" }]),
+        connector: connector([pollPage(unknown)]),
       }),
       /unknown record type/,
     );
@@ -102,7 +124,7 @@ describe("verifyPollConnectorConformance", () => {
     await assert.rejects(
       () => verifyPollConnectorConformance({
         ...input,
-        connector: connector([{ batch: secret, next_cursor: "cursor-2" }]),
+        connector: connector([pollPage(secret)]),
       }),
       /must not contain secrets/,
     );

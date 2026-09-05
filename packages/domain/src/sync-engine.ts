@@ -124,6 +124,11 @@ export class SyncEngine {
           continue;
         }
         const runtimeCursor = input.cursorStates.get(streamKey);
+        // Only heal wiped operational cursors. Non-empty wire shapes are opaque;
+        // the next poll_hint corrects phase without core parsing encodings.
+        if (runtimeCursor?.trim()) {
+          continue;
+        }
         const derived = syncStateFromCursor({
           installation_id: input.installation_id,
           stream_key: streamKey,
@@ -131,9 +136,8 @@ export class SyncEngine {
           now,
           generation: state.generation,
         });
-        // Store clear resets poll cursors but used to leave sync_state at
-        // "live". Resume cursors can also look "seeded" while still catching up.
-        if (derived.phase !== "unseeded" && derived.phase !== "history") {
+        // Store clear resets poll cursors but used to leave sync_state at "live".
+        if (derived.phase !== "unseeded") {
           continue;
         }
         states.set(streamKey, derived);
@@ -192,6 +196,9 @@ export class SyncEngine {
           continue;
         }
         const runtimeCursor = input.cursorStates.get(streamKey);
+        if (runtimeCursor?.trim()) {
+          continue;
+        }
         const derived = syncStateFromCursor({
           installation_id: input.installation_id,
           stream_key: streamKey,
@@ -199,7 +206,7 @@ export class SyncEngine {
           now,
           generation: state.generation,
         });
-        if (derived.phase !== "unseeded" && derived.phase !== "history") {
+        if (derived.phase !== "unseeded") {
           continue;
         }
         states.set(streamKey, derived);

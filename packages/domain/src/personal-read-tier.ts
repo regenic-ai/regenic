@@ -65,7 +65,7 @@ const INBOX_TIER_SPECS: Record<InboxReadTier, InboxReadTierSpec> = {
   heads: {
     tier: "heads",
     channel_overlays: false,
-    connector_prompts: false,
+    connector_prompts: true,
     agent_prompts: false,
   },
   heads_live: {

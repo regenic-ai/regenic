@@ -89,6 +89,8 @@ export const whatsappWebLiveDriver: ChannelDriver = {
       reply: enabled,
       create: false,
       list_title: "conversation",
+      pairing_code: enabled,
+      browser_live: enabled,
     };
   },
 
@@ -103,12 +105,30 @@ export const whatsappWebLiveDriver: ChannelDriver = {
     );
   },
 
+  async readPairingCode(installation) {
+    return readWhatsAppLivePairingCode(installation.id);
+  },
+
+  async authorizeLiveAccess(installation, input) {
+    await assertWhatsAppLiveAccess({
+      origin: input.origin,
+      apiKey: input.apiKey,
+      env: input.env,
+      installation,
+    });
+  },
+
   async bindWebhook(installation, _host, env) {
     return {
       source: WHATSAPP_PERSONAL_SOURCE,
       source_mode: "webhook" as const,
       async verifyWebhook(request: WebhookRequest) {
-        await verifyLiveAccess(request.headers, env, installation);
+        await assertWhatsAppLiveAccess({
+          origin: headerValue(request.headers, "origin"),
+          apiKey: headerValue(request.headers, "x-regenic-live-key"),
+          env,
+          installation,
+        });
         return { body: request.body, verified_at: request.received_at };
       },
       async handleWebhook(webhook: VerifiedWebhook) {
@@ -306,21 +326,22 @@ export function whatsAppLiveKeyMatches(
   return key === allowed.pairingCode || key === allowed.envKey;
 }
 
-async function verifyLiveAccess(
-  headers: WebhookRequest["headers"],
-  env: NodeJS.ProcessEnv,
-  installation: ConnectorInstallation,
-): Promise<void> {
-  const listenHost = (env.LISTEN_HOST ?? "127.0.0.1").trim().toLowerCase();
+async function assertWhatsAppLiveAccess(input: {
+  origin?: string;
+  apiKey?: string;
+  env: NodeJS.ProcessEnv;
+  installation: ConnectorInstallation;
+}): Promise<void> {
+  const listenHost = (input.env.LISTEN_HOST ?? "127.0.0.1").trim().toLowerCase();
   if (!LOOPBACK_HOSTS.has(listenHost)) {
     throw new ChannelDriverError(
       "unsupported_channel",
       "WhatsApp live connector is loopback-only",
     );
   }
-  const origin = headerValue(headers, "origin");
-  const apiKey = headerValue(headers, "x-regenic-live-key");
-  const allowed = await resolveWhatsAppLiveKeys(installation, env);
+  const origin = input.origin?.trim();
+  const apiKey = input.apiKey?.trim();
+  const allowed = await resolveWhatsAppLiveKeys(input.installation, input.env);
   if (origin) {
     if (!whatsAppLiveKeyMatches(apiKey, allowed)) {
       throw new ChannelDriverError(

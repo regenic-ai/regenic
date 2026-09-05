@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
+  capSelectedStreams,
   catalogRefreshPages,
   lastCatchUpKey,
   lastHistoryKey,
@@ -132,7 +133,7 @@ describe("selectHumanPacedStreams", () => {
 });
 
 describe("streamCursorUnseeded", () => {
-  it("treats a missing cursor or a Feishu cursor before recent seed as unseen", () => {
+  it("treats only missing/blank cursors as unseen", () => {
     assert.equal(streamCursorUnseeded(undefined), true);
     assert.equal(streamCursorUnseeded(""), true);
     assert.equal(streamCursorUnseeded("{}"), false);
@@ -226,7 +227,7 @@ describe("syncExecutionBudget", () => {
         pages: 1,
         catchUpPages: 5,
       }),
-      { pages: 5, concurrency: 6 },
+      { pages: 1, concurrency: 2 },
     );
     assert.deepEqual(
       syncExecutionBudget({
@@ -236,7 +237,7 @@ describe("syncExecutionBudget", () => {
         pages: 1,
         catchUpPages: 5,
       }),
-      { pages: 1, concurrency: 2 },
+      { pages: 1, concurrency: 1 },
     );
     assert.deepEqual(
       syncExecutionBudget({
@@ -245,7 +246,7 @@ describe("syncExecutionBudget", () => {
         lane: "live",
         pages: 1,
       }),
-      { pages: 1, concurrency: 8 },
+      { pages: 1, concurrency: 2 },
     );
   });
 
@@ -256,7 +257,7 @@ describe("syncExecutionBudget", () => {
         lane: "media",
         pages: 3,
       }),
-      { pages: 1, concurrency: 2 },
+      { pages: 1, concurrency: 1 },
     );
     assert.deepEqual(
       syncExecutionBudget({
@@ -271,9 +272,30 @@ describe("syncExecutionBudget", () => {
 });
 
 describe("catalogRefreshPages", () => {
-  it("skips the census while the human is present and bursts when idle or discovering", () => {
+  it("only pages the directory on discover or the dedicated catalog tick", () => {
     assert.equal(catalogRefreshPages({ humanIdle: false }), 0);
-    assert.equal(catalogRefreshPages({ humanIdle: true }), 3);
-    assert.equal(catalogRefreshPages({ discover: true, humanIdle: false }), 10);
+    assert.equal(catalogRefreshPages({ humanIdle: true }), 0);
+    assert.equal(catalogRefreshPages({ discover: true, humanIdle: false }), 1);
+    assert.equal(catalogRefreshPages({ catalogTick: true }), 1);
+  });
+});
+
+describe("capSelectedStreams", () => {
+  it("keeps one history stream and a small live set", () => {
+    const selected = capSelectedStreams(
+      [
+        { key: "live-a", lane: "live" },
+        { key: "live-b", lane: "live" },
+        { key: "live-c", lane: "live" },
+        { key: "hist-a", lane: "history", older: true },
+        { key: "hist-b", lane: "history", older: true },
+        { key: "media-a", media: true },
+      ],
+      { liveLimit: 2, historyLimit: 1, mediaLimit: 0 },
+    );
+    assert.deepEqual(
+      selected.map((item) => item.key),
+      ["live-a", "live-b", "hist-a"],
+    );
   });
 });

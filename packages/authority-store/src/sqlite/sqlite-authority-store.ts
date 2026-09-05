@@ -273,6 +273,29 @@ interface InsertEventInput extends SourceIdentity {
 
 export interface SqliteOpenOptions {
   readonly?: boolean;
+  /** Cap OS mmap of the DB file (bytes). `0` disables. Default from env or 64 MiB. */
+  mmapSizeBytes?: number;
+  /** Run a passive WAL checkpoint after migrate. Default true for writers. */
+  checkpointOnOpen?: boolean;
+}
+
+const DEFAULT_SQLITE_MMAP_BYTES = 64 * 1024 * 1024;
+
+function sqliteMmapSizeBytes(options: SqliteOpenOptions): number {
+  if (options.mmapSizeBytes !== undefined) {
+    return Math.max(0, Math.floor(options.mmapSizeBytes));
+  }
+  const raw = process.env.REGENIC_SQLITE_MMAP_BYTES?.trim();
+  if (raw === "0") {
+    return 0;
+  }
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return DEFAULT_SQLITE_MMAP_BYTES;
 }
 
 export class SqliteAuthorityStore
@@ -301,6 +324,8 @@ export class SqliteAuthorityStore
       if (!this.readonly) {
         this.database.pragma("journal_mode = WAL");
       }
+      const mmapSize = sqliteMmapSizeBytes(options);
+      this.database.pragma(`mmap_size = ${mmapSize}`);
       this.database.function(
         "conversation_id",
         (source: string, externalId: string, fallbackId: string) =>
@@ -312,6 +337,9 @@ export class SqliteAuthorityStore
         this.database.pragma("query_only = ON");
       } else {
         this.migrate();
+        if (options.checkpointOnOpen !== false) {
+          this.database.pragma("wal_checkpoint(PASSIVE)");
+        }
       }
     } catch (error) {
       this.database.close();
@@ -910,7 +938,11 @@ export class SqliteAuthorityStore
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
     this.assertWritable();
-    this.putDispositionWithinTransaction(decision);
+    this.database
+      .transaction(() => {
+        this.putDispositionWithinTransaction(decision);
+      })
+      .immediate();
   }
 
   private putDispositionWithinTransaction(decision: ArrangementDecision): void {
@@ -938,6 +970,10 @@ export class SqliteAuthorityStore
         decision.score,
         decision.decided_at,
       );
+    const row = this.database
+      .prepare(`SELECT thread_id FROM events WHERE id = ?`)
+      .get(decision.event_id) as { thread_id: string | null } | undefined;
+    this.refreshThreadHeadWithinTransaction(decision.org_id, row?.thread_id);
   }
 
   async getDisposition(eventId: string): Promise<ArrangementDecision | null> {
@@ -984,23 +1020,14 @@ export class SqliteAuthorityStore
     const counted = this.database
       .prepare(
         `
-          SELECT COUNT(*) AS count FROM (
-            SELECT e.thread_id AS thread_id
-            FROM events e
-            JOIN message_dispositions d ON d.event_id = e.id
-            WHERE e.org_id = ?
-              AND ${isCurrentHeadSql("e")}
-              AND ${notHiddenSql("e")}
-            GROUP BY e.thread_id
-            HAVING
-              SUM(CASE WHEN d.disposition = 'current_work' THEN 1 ELSE 0 END) > 0
-              AND SUM(
-                CASE
-                  WHEN d.reason_codes_json LIKE '%thread_status%' THEN 0
-                  ELSE 1
-                END
-              ) > 0
-          )
+          SELECT COUNT(*) AS count
+          FROM thread_heads th
+          WHERE th.org_id = ?
+            AND th.has_current_work = 1
+            AND th.thread_id NOT IN (
+              SELECT p.thread_id FROM conversation_prefs p
+              WHERE p.org_id = ? AND p.hidden = 1
+            )
         `,
       )
       .get(orgId, orgId) as { count: number };
@@ -1185,6 +1212,7 @@ export class SqliteAuthorityStore
         .prepare(`DELETE FROM outbound_attempts WHERE org_id = ?`)
         .run(orgId);
       this.database.prepare(`DELETE FROM source_heads WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM thread_heads WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM events WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(
@@ -2794,7 +2822,80 @@ export class SqliteAuthorityStore
         `,
       )
       .run(`context-projection:${event.id}`, event.org_id, event.id, event.ingested_at, event.ingested_at);
+    this.refreshThreadHeadWithinTransaction(event.org_id, event.thread_id);
     return event;
+  }
+
+  /** Keep the list face in sync after ingest/disposition without a full-table scan. */
+  private refreshThreadHeadWithinTransaction(
+    orgId: string,
+    threadId: string | null | undefined,
+  ): void {
+    const id = threadId?.trim();
+    if (!id) {
+      return;
+    }
+    const face = this.database
+      .prepare(
+        `
+          SELECT e.id AS face_event_id, e.occurred_at AS face_occurred_at
+          FROM message_dispositions d
+          JOIN events e ON e.id = d.event_id
+          WHERE e.org_id = ?
+            AND e.thread_id = ?
+            AND e.operation != 'tombstone'
+            AND d.reason_codes_json NOT LIKE '%thread_status%'
+          ORDER BY
+            CASE WHEN ${isCurrentHeadSql("e")} THEN 0 ELSE 1 END,
+            e.occurred_at DESC,
+            e.id DESC
+          LIMIT 1
+        `,
+      )
+      .get(orgId, id) as
+      | { face_event_id: string; face_occurred_at: string }
+      | undefined;
+    if (!face) {
+      this.database
+        .prepare(
+          `DELETE FROM thread_heads WHERE org_id = ? AND thread_id = ?`,
+        )
+        .run(orgId, id);
+      return;
+    }
+    const currentWork = this.database
+      .prepare(
+        `
+          SELECT 1 AS ok
+          FROM message_dispositions d2
+          JOIN events e2 ON e2.id = d2.event_id
+          WHERE e2.org_id = ?
+            AND e2.thread_id = ?
+            AND d2.disposition = 'current_work'
+            AND ${isCurrentHeadSql("e2", "h2")}
+          LIMIT 1
+        `,
+      )
+      .get(orgId, id) as { ok: number } | undefined;
+    this.database
+      .prepare(
+        `
+          INSERT INTO thread_heads (
+            org_id, thread_id, face_event_id, face_occurred_at, has_current_work
+          ) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(org_id, thread_id) DO UPDATE SET
+            face_event_id = excluded.face_event_id,
+            face_occurred_at = excluded.face_occurred_at,
+            has_current_work = excluded.has_current_work
+        `,
+      )
+      .run(
+        orgId,
+        id,
+        face.face_event_id,
+        face.face_occurred_at,
+        currentWork ? 1 : 0,
+      );
   }
 
   private inboxSql(
@@ -2809,42 +2910,23 @@ export class SqliteAuthorityStore
         return this.hiddenHeadsSql(orgId, query, inner);
       }
       const visible = this.inboxClauses(orgId, inner, "any");
-      const current = this.inboxClauses(orgId, inner, "current_work", {
-        event: "e2",
-        disposition: "d2",
-      });
       if (!scoped) {
         visible.clauses.push(notHiddenSql("e"));
         visible.params.push(orgId);
-        current.clauses.push(notHiddenSql("e2"));
-        current.params.push(orgId);
       }
-      const page = headsPageTail(query);
+      const page = materialHeadsPageTail(query);
       return {
         sql: `
-          SELECT * FROM (
-            SELECT ${INBOX_COLUMNS},
-              ROW_NUMBER() OVER (
-                PARTITION BY e.thread_id
-                ORDER BY e.occurred_at DESC, e.id DESC
-              ) AS rn
-            FROM message_dispositions d
-            JOIN events e ON e.id = d.event_id
-            WHERE ${visible.clauses.join(" AND ")}
-              AND ${isCurrentHeadSql("e")}
-              AND d.reason_codes_json NOT LIKE '%thread_status%'
-              AND e.thread_id IN (
-                SELECT e2.thread_id
-                FROM message_dispositions d2
-                JOIN events e2 ON e2.id = d2.event_id
-                WHERE ${current.clauses.join(" AND ")}
-                  AND ${isCurrentHeadSql("e2", "h2")}
-              )
-          ) ranked
+          SELECT ${INBOX_COLUMNS}
+          FROM thread_heads th
+          JOIN events e ON e.id = th.face_event_id
+          JOIN message_dispositions d ON d.event_id = e.id
+          WHERE th.has_current_work = 1
+            AND ${visible.clauses.join(" AND ")}
           ${page.whereSql}
           ${page.orderSql}
         `,
-        params: [...visible.params, ...current.params, ...page.params],
+        params: [...visible.params, ...page.params],
       };
     }
     if (query?.siblings) {
@@ -2926,22 +3008,15 @@ export class SqliteAuthorityStore
   ): { sql: string; params: unknown[] } {
     const visible = this.inboxClauses(orgId, inner, "any");
     const hidden = hiddenThreadIdSql(orgId);
-    const page = headsPageTail(query);
+    const page = materialHeadsPageTail(query);
     return {
       sql: `
-        SELECT * FROM (
-          SELECT ${INBOX_COLUMNS},
-            ROW_NUMBER() OVER (
-              PARTITION BY e.thread_id
-              ORDER BY e.occurred_at DESC, e.id DESC
-            ) AS rn
-          FROM message_dispositions d
-          JOIN events e ON e.id = d.event_id
-          WHERE ${visible.clauses.join(" AND ")}
-            AND d.reason_codes_json NOT LIKE '%thread_status%'
-            AND e.operation != 'tombstone'
-            AND e.thread_id IN (${hidden.sql})
-        ) ranked
+        SELECT ${INBOX_COLUMNS}
+        FROM thread_heads th
+        JOIN events e ON e.id = th.face_event_id
+        JOIN message_dispositions d ON d.event_id = e.id
+        WHERE ${visible.clauses.join(" AND ")}
+          AND e.thread_id IN (${hidden.sql})
         ${page.whereSql}
         ${page.orderSql}
       `,
@@ -3193,6 +3268,34 @@ function headsPageTail(query?: InboxQuery): {
   return {
     whereSql,
     orderSql: "ORDER BY occurred_at ASC, id ASC",
+    params,
+  };
+}
+
+/** Page materialized thread faces without a ROW_NUMBER window. */
+function materialHeadsPageTail(query?: InboxQuery): {
+  whereSql: string;
+  orderSql: string;
+  params: unknown[];
+} {
+  const params: unknown[] = [];
+  let whereSql = "";
+  if (query?.before) {
+    whereSql =
+      "AND (e.occurred_at < ? OR (e.occurred_at = ? AND e.id < ?))";
+    params.push(query.before, query.before, query.before_id ?? "");
+  }
+  const limit = normalizeInboxLimit(query?.limit);
+  if (limit !== undefined) {
+    return {
+      whereSql,
+      orderSql: "ORDER BY e.occurred_at DESC, e.id DESC LIMIT ?",
+      params: [...params, limit],
+    };
+  }
+  return {
+    whereSql,
+    orderSql: "ORDER BY e.occurred_at ASC, e.id ASC",
     params,
   };
 }

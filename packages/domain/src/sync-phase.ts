@@ -5,48 +5,12 @@ import type {
   SyncStreamState,
 } from "./sync-contracts";
 
+/**
+ * Opaque empty check only — core must not parse wire cursor encodings.
+ * Lifecycle comes from SyncPollHint / stored phase.
+ */
 export function streamCursorUnseeded(value?: string | null): boolean {
-  if (!value?.trim()) {
-    return true;
-  }
-  // DSH bounded-history resume (`afterSeq:beforeSeq`) has not produced a
-  // first ingest page yet — treat it as still unseeded.
-  if (/^(-1|\d+):(\d+)$/.test(value.trim())) {
-    return true;
-  }
-  try {
-    const parsed = JSON.parse(value) as { recent_seeded?: unknown };
-    if (parsed && typeof parsed === "object" && "recent_seeded" in parsed) {
-      return parsed.recent_seeded !== true;
-    }
-  } catch {
-    // A non-JSON cursor still means this stream has been polled.
-  }
-  return false;
-}
-
-export function historyCursorPending(value?: string | null): boolean {
-  if (!value?.trim()) {
-    return false;
-  }
-  if (/^(-1|\d+):(\d+)$/.test(value.trim())) {
-    return true;
-  }
-  try {
-    const parsed = JSON.parse(value) as {
-      history_token?: unknown;
-      sort?: unknown;
-    };
-    if (!parsed || typeof parsed !== "object") {
-      return false;
-    }
-    if (typeof parsed.history_token === "string" && parsed.history_token.trim()) {
-      return true;
-    }
-    return parsed.sort === "desc";
-  } catch {
-    return false;
-  }
+  return !value?.trim();
 }
 
 export function deriveSyncPhase(input: {
@@ -61,9 +25,6 @@ export function deriveSyncPhase(input: {
   }
   if (streamCursorUnseeded(input.live_cursor)) {
     return "unseeded";
-  }
-  if (historyCursorPending(input.history_cursor ?? input.live_cursor)) {
-    return "history";
   }
   if (input.idle_until && input.now && input.idle_until > input.now) {
     return "steady";

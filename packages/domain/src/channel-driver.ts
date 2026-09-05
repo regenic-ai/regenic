@@ -127,6 +127,16 @@ export interface ChannelCapabilities {
    * Omit it (DSH): send is accepted immediately (the peer queues).
    */
   hold_while_working?: boolean;
+  /**
+   * Engine may reveal a pairing / install secret for this install.
+   * Requires `readPairingCode`.
+   */
+  pairing_code?: boolean;
+  /**
+   * Browser / extension Origin may authorize with a live key.
+   * Requires `authorizeLiveAccess`.
+   */
+  browser_live?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -498,6 +508,26 @@ export interface ChannelDriver
     installation: ConnectorInstallation,
     host: ConnectorHost,
   ): string;
+  /**
+   * Optional pairing / install secret for Engine reveal.
+   * Declared with `capabilities.pairing_code`.
+   */
+  readPairingCode?(
+    installation: ConnectorInstallation,
+  ): Promise<string | undefined>;
+  /**
+   * Authorize a browser / extension live request for this install.
+   * Declared with `capabilities.browser_live`. Throws `ChannelDriverError`
+   * when the presented key / origin is not allowed.
+   */
+  authorizeLiveAccess?(
+    installation: ConnectorInstallation,
+    input: {
+      apiKey?: string;
+      origin?: string;
+      env: NodeJS.ProcessEnv;
+    },
+  ): Promise<void>;
 }
 
 export function driverCanReply(

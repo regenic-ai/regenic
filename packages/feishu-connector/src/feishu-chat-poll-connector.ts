@@ -63,7 +63,26 @@ export interface FeishuCursorState {
   head_time?: string;
   recent_seeded?: boolean;
   history_token?: string;
+  /** @deprecated Migrated into process-local store; never re-encoded into cursors. */
   media_jobs?: FeishuMediaJob[];
+}
+
+/** Attachment queues stay off SyncStreamState cursors (kernel heap / listSyncStates). */
+const feishuMediaJobStore = new Map<string, FeishuMediaJob[]>();
+
+function mediaJobStoreKey(connectorId: string, chatId: string): string {
+  return `${connectorId}\u0000${chatId}`;
+}
+
+export function clearFeishuMediaJobsForTests(): void {
+  feishuMediaJobStore.clear();
+}
+
+export function peekFeishuMediaJobsForTests(
+  connectorId: string,
+  chatId: string,
+): FeishuMediaJob[] | undefined {
+  return feishuMediaJobStore.get(mediaJobStoreKey(connectorId, chatId));
 }
 
 export interface FeishuChatPollConnectorOptions {
@@ -136,11 +155,12 @@ export class FeishuChatPollConnector {
     options?: { older?: boolean; media?: boolean },
   ): Promise<PollResult> {
     const state = decodeFeishuCursor(cursor);
+    const mediaJobs = this.hydrateMediaJobs(state);
     const mediaOnly = options?.media === true;
     const wantMedia = options?.media !== false;
     const nowMs = this.clockMs();
     if (mediaOnly) {
-      return this.pollMediaOnly(state, cursor, nowMs);
+      return this.pollMediaOnly(state, mediaJobs, cursor, nowMs);
     }
     const request = planFeishuHistoryRequest(
       this.options.chat_id,
@@ -148,7 +168,8 @@ export class FeishuChatPollConnector {
       state,
       { older: options?.older === true },
     );
-    if (!request && !(wantMedia && hasDueMediaJobs(state.media_jobs, nowMs))) {
+    if (!request && !(wantMedia && hasDueMediaJobs(mediaJobs, nowMs))) {
+      this.persistMediaJobs(mediaJobs);
       const nextCursor = encodeFeishuCursor(state);
       return {
         batch: {
@@ -162,7 +183,7 @@ export class FeishuChatPollConnector {
         },
         next_cursor: nextCursor,
         has_more: false,
-        media_pending: (state.media_jobs?.length ?? 0) > 0,
+        media_pending: mediaJobs.length > 0,
         poll_hint: feishuPollHint(state),
       };
     }
@@ -181,19 +202,17 @@ export class FeishuChatPollConnector {
       }
       rememberFeishuInbound(this.options.chat_id, item.message_id, item.create_time);
     }
-    const jobs = this.enqueueFromItems(state.media_jobs, page.items, names, selfId);
+    const jobs = this.enqueueFromItems(mediaJobs, page.items, names, selfId);
     const drained = wantMedia
       ? await this.drainMediaJobs(jobs, nowMs)
       : { records: [], jobs };
     records.push(...drained.records);
+    this.persistMediaJobs(drained.jobs);
     const nextState = nextFeishuCursor(
       state,
       page,
       request?.sort_type ?? "ByCreateTimeAsc",
     );
-    if (drained.jobs.length > 0) {
-      nextState.media_jobs = drained.jobs;
-    }
     const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
@@ -218,10 +237,12 @@ export class FeishuChatPollConnector {
   /** Drain queued attachment downloads without touching the text watermark. */
   private async pollMediaOnly(
     state: FeishuCursorState,
+    mediaJobs: FeishuMediaJob[],
     cursor: ConnectorCursor | null,
     nowMs: number,
   ): Promise<PollResult> {
-    if (!hasDueMediaJobs(state.media_jobs, nowMs)) {
+    if (!hasDueMediaJobs(mediaJobs, nowMs)) {
+      this.persistMediaJobs(mediaJobs);
       const nextCursor = encodeFeishuCursor(state);
       return {
         batch: {
@@ -235,18 +256,13 @@ export class FeishuChatPollConnector {
         },
         next_cursor: nextCursor,
         has_more: false,
-        media_pending: (state.media_jobs?.length ?? 0) > 0,
+        media_pending: mediaJobs.length > 0,
         poll_hint: feishuPollHint(state),
       };
     }
-    const drained = await this.drainMediaJobs(state.media_jobs ?? [], nowMs);
-    const nextState: FeishuCursorState = { ...state };
-    if (drained.jobs.length > 0) {
-      nextState.media_jobs = drained.jobs;
-    } else {
-      delete nextState.media_jobs;
-    }
-    const nextCursor = encodeFeishuCursor(nextState);
+    const drained = await this.drainMediaJobs(mediaJobs, nowMs);
+    this.persistMediaJobs(drained.jobs);
+    const nextCursor = encodeFeishuCursor(state);
     return {
       batch: {
         schema_version: INGEST_SCHEMA_VERSION,
@@ -260,8 +276,34 @@ export class FeishuChatPollConnector {
       next_cursor: nextCursor,
       has_more: false,
       media_pending: drained.jobs.length > 0,
-      poll_hint: feishuPollHint(nextState),
+      poll_hint: feishuPollHint(state),
     };
+  }
+
+  private hydrateMediaJobs(state: FeishuCursorState): FeishuMediaJob[] {
+    const key = mediaJobStoreKey(this.options.connector_id, this.options.chat_id);
+    const stored = feishuMediaJobStore.get(key) ?? [];
+    const legacy = state.media_jobs ?? [];
+    delete state.media_jobs;
+    if (legacy.length === 0) {
+      return stored;
+    }
+    const byId = new Map(stored.map((job) => [job.message_id, job] as const));
+    for (const job of legacy) {
+      if (!byId.has(job.message_id)) {
+        byId.set(job.message_id, job);
+      }
+    }
+    return [...byId.values()];
+  }
+
+  private persistMediaJobs(jobs: FeishuMediaJob[]): void {
+    const key = mediaJobStoreKey(this.options.connector_id, this.options.chat_id);
+    if (jobs.length === 0) {
+      feishuMediaJobStore.delete(key);
+      return;
+    }
+    feishuMediaJobStore.set(key, jobs);
   }
 
   private async resolveNames(
@@ -605,8 +647,7 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
     state.sort !== "desc" &&
     !state.recent_seeded &&
     !state.head_time &&
-    !state.history_token &&
-    (!state.media_jobs || state.media_jobs.length === 0)
+    !state.history_token
   ) {
     return undefined;
   }
@@ -620,9 +661,6 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
       : {}),
     ...(state.recent_seeded ? { recent_seeded: true } : {}),
     ...(state.history_token ? { history_token: state.history_token } : {}),
-    ...(state.media_jobs && state.media_jobs.length > 0
-      ? { media_jobs: state.media_jobs }
-      : {}),
   });
 }
 

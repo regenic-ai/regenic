@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 24;
+export const LATEST_SCHEMA_VERSION = 25;
 
 export const MIGRATIONS = [
   {
@@ -509,6 +509,58 @@ export const MIGRATIONS = [
     version: 24,
     sql: `
       ALTER TABLE recipes ADD COLUMN max_concurrent INTEGER;
+    `,
+  },
+  {
+    version: 25,
+    sql: `
+      CREATE TABLE thread_heads (
+        org_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        face_event_id TEXT NOT NULL REFERENCES events(id),
+        face_occurred_at TEXT NOT NULL,
+        has_current_work INTEGER NOT NULL CHECK (has_current_work IN (0, 1)),
+        PRIMARY KEY (org_id, thread_id)
+      );
+
+      CREATE INDEX thread_heads_org_face_idx
+        ON thread_heads (org_id, has_current_work, face_occurred_at DESC, face_event_id DESC);
+
+      INSERT INTO thread_heads (
+        org_id, thread_id, face_event_id, face_occurred_at, has_current_work
+      )
+      SELECT org_id, thread_id, id, occurred_at, 1
+      FROM (
+        SELECT
+          e.org_id AS org_id,
+          e.thread_id AS thread_id,
+          e.id AS id,
+          e.occurred_at AS occurred_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY e.org_id, e.thread_id
+            ORDER BY e.occurred_at DESC, e.id DESC
+          ) AS rn
+        FROM message_dispositions d
+        JOIN events e ON e.id = d.event_id
+        WHERE e.thread_id IS NOT NULL
+          AND e.thread_id != ''
+          AND e.operation != 'tombstone'
+          AND d.reason_codes_json NOT LIKE '%thread_status%'
+          AND EXISTS (
+            SELECT 1 FROM source_heads h WHERE h.current_event_id = e.id
+          )
+          AND e.thread_id IN (
+            SELECT e2.thread_id
+            FROM message_dispositions d2
+            JOIN events e2 ON e2.id = d2.event_id
+            WHERE d2.disposition = 'current_work'
+              AND e2.thread_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM source_heads h2 WHERE h2.current_event_id = e2.id
+              )
+          )
+      ) ranked
+      WHERE rn = 1;
     `,
   },
 ] as const;

@@ -22,7 +22,15 @@ const {
   deferredHistoryToken,
   needsRecentSeed,
   resetFeishuAttention,
+  clearFeishuMediaJobsForTests,
+  peekFeishuMediaJobsForTests,
 } = require("../dist");
+
+const { beforeEach } = require("node:test");
+
+beforeEach(() => {
+  clearFeishuMediaJobsForTests();
+});
 
 function createConnector(client, extras = {}) {
   return new FeishuChatPollConnector(client, {
@@ -305,7 +313,11 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(result.has_more, true);
     assert.equal(result.media_pending, true);
     assert.match(result.next_cursor ?? "", /"recent_seeded":true/);
-    assert.match(result.next_cursor ?? "", /"media_jobs"/);
+    assert.equal(/"media_jobs"/.test(result.next_cursor ?? ""), false);
+    assert.equal(
+      (peekFeishuMediaJobsForTests("feishu-chat", "oc_1") ?? []).length,
+      1,
+    );
   });
 
   it("keeps live polling after the recent seed and only walks history when asked", async () => {
@@ -879,7 +891,11 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(attachment.source_filename, "image.png");
     assert.equal(attachment.external_locator, "feishu:image:img_shot");
     assert.equal(attachment.bytes, undefined);
-    assert.match(result.next_cursor ?? "", /"media_jobs"/);
+    assert.equal(/"media_jobs"/.test(result.next_cursor ?? ""), false);
+    assert.equal(
+      (peekFeishuMediaJobsForTests("feishu-chat", "oc_1") ?? []).length,
+      1,
+    );
   });
 
   it("keeps live polling on a seeded cursor instead of rewinding history for media", async () => {
@@ -1036,7 +1052,8 @@ describe("FeishuChatPollConnector", () => {
     });
     assert.equal(result.batch.records.length, 1);
     assert.equal(result.batch.records[0].operation, "create");
-    assert.match(result.next_cursor ?? "", /"media_jobs"/);
+    assert.equal(/"media_jobs"/.test(result.next_cursor ?? ""), false);
+    assert.equal(result.media_pending, true);
   });
 });
 

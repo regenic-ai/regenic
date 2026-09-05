@@ -227,6 +227,29 @@ describe("split sync planner", () => {
     );
   });
 
+  it("seeds unseeded streams when bootstrap live is set while the human is present", () => {
+    const members = [member("chat:new", "feishu:new")];
+    const states = new Map([["chat:new", state("chat:new", "unseeded")]]);
+    const planned = planBootstrapSyncWork({
+      members,
+      states,
+      humanIdle: false,
+      catalogIncomplete: true,
+      now: "2026-08-31T00:00:00.000Z",
+      limits: { live: 2, catalog: 1 },
+    });
+    assert.equal(
+      planned.some(
+        (item) => item.stream_key === "chat:new" && item.lane === "live",
+      ),
+      true,
+    );
+    assert.equal(
+      planned.some((item) => item.lane === "catalog"),
+      true,
+    );
+  });
+
   it("does not cap steady live fan-out while the human is present", () => {
     const members = [
       member("chat:1", "feishu:1"),

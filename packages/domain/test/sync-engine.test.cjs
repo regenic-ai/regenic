@@ -101,14 +101,23 @@ describe("sync catalog apply", () => {
 });
 
 describe("sync phase", () => {
-  it("treats a missing or unseeded Feishu cursor as unseeded", () => {
+  it("treats a missing cursor as unseeded without parsing wire encodings", () => {
     assert.equal(streamCursorUnseeded(undefined), true);
     assert.equal(streamCursorUnseeded(""), true);
     assert.equal(streamCursorUnseeded("{}"), false);
-    assert.equal(streamCursorUnseeded(JSON.stringify({ recent_seeded: true })), false);
+    assert.equal(streamCursorUnseeded("-1:2"), false);
+    assert.equal(
+      deriveSyncPhase({ live_cursor: undefined }),
+      "unseeded",
+    );
+    assert.equal(
+      deriveSyncPhase({ live_cursor: JSON.stringify({ recent_seeded: true, history_token: "h" }) }),
+      "live",
+    );
     assert.equal(
       deriveSyncPhase({
-        live_cursor: JSON.stringify({ recent_seeded: true, history_token: "h" }),
+        live_cursor: "opaque",
+        poll_hint: { live_seeded: true, history_pending: true },
       }),
       "history",
     );
@@ -122,11 +131,21 @@ describe("sync phase", () => {
     );
   });
 
-  it("treats a DSH bounded-history resume cursor as still unseeded", () => {
-    assert.equal(streamCursorUnseeded("-1:2"), true);
-    assert.equal(streamCursorUnseeded("3:10"), true);
-    assert.equal(streamCursorUnseeded("6441"), false);
-    assert.equal(deriveSyncPhase({ live_cursor: "-1:2" }), "unseeded");
+  it("uses poll_hint for DSH-style resume without peeking the cursor string", () => {
+    assert.equal(
+      deriveSyncPhase({
+        live_cursor: "-1:2",
+        poll_hint: { live_seeded: false },
+      }),
+      "unseeded",
+    );
+    assert.equal(
+      deriveSyncPhase({
+        live_cursor: "6441",
+        poll_hint: { live_seeded: true, history_pending: false },
+      }),
+      "live",
+    );
   });
 });
 
@@ -174,7 +193,8 @@ describe("sync engine heal", () => {
         .sort(),
       [
         ["session:a", "unseeded"],
-        ["session:b", "unseeded"],
+        // Non-empty wire cursor is opaque — next poll_hint corrects phase.
+        ["session:b", "live"],
       ],
     );
     assert.deepEqual(
