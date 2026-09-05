@@ -1283,7 +1283,9 @@ button {
 }
 
 .recipe-editor {
-  padding: 16px 18px;
+  padding: 18px 22px 20px;
+  width: 100%;
+  min-width: 0;
 }
 
 .recipe-editor-head {
@@ -1303,7 +1305,7 @@ button {
   display: grid;
   gap: 0;
   width: 100%;
-  max-width: 36rem;
+  max-width: none;
 }
 
 .recipe-stack {
@@ -1484,12 +1486,13 @@ button {
   box-shadow: none;
 }
 
-/* Lark-like: compact pill track, content-sized, soft selected state */
+/* Lark-like: soft selected state, equal columns that fill the row */
 .page-recipes .seg {
-  display: inline-flex;
-  width: auto;
-  max-width: 100%;
-  flex-wrap: wrap;
+  display: grid;
+  width: 100%;
+  max-width: none;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   grid-template-columns: unset;
   gap: 2px;
   padding: 2px;
@@ -1499,9 +1502,11 @@ button {
 }
 
 .page-recipes .seg button {
-  height: 28px;
-  padding: 0 12px;
-  flex: 0 0 auto;
+  height: 32px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 10px;
+  flex: unset;
   white-space: nowrap;
   border-radius: 5px;
 }
@@ -1525,6 +1530,59 @@ button {
 .page-recipes .page-lead {
   max-width: 40em;
   font-size: 12px;
+}
+
+/* Wide: label | control rows (Feishu settings style) */
+@media (min-width: 900px) {
+  .page-recipes .recipe-form .field:has(> span:first-child) {
+    grid-template-columns: 7rem minmax(0, 1fr);
+    column-gap: 20px;
+    align-items: start;
+  }
+
+  .page-recipes .recipe-form .field:has(> span:first-child) > span:first-child {
+    padding-top: 8px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .page-recipes .recipe-form .field:has(> span:first-child) > .muted,
+  .page-recipes .recipe-form .field:has(> span:first-child) > .field-empty,
+  .page-recipes .recipe-form .field:has(> span:first-child) > .recipe-gate,
+  .page-recipes .recipe-form .field:has(> span:first-child) > p {
+    grid-column: 2;
+  }
+
+  .page-recipes .recipe-scope:has(> legend) {
+    grid-template-columns: 7rem minmax(0, 1fr);
+    column-gap: 20px;
+    align-items: start;
+  }
+
+  .page-recipes .recipe-scope:has(> legend) > legend {
+    float: none;
+    width: auto;
+    padding-top: 8px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .page-recipes .recipe-scope:has(> legend) > .seg,
+  .page-recipes .recipe-scope:has(> legend) > .muted,
+  .page-recipes .recipe-scope:has(> legend) > .recipe-scope-warn {
+    grid-column: 2;
+  }
+
+  .page-recipes .recipe-commit {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 12px;
+  }
+
+  .page-recipes .recipe-commit .field:has(> span:first-child) {
+    grid-template-columns: 7rem minmax(0, 1fr);
+  }
 }
 
 .recipe-chip {
@@ -3506,10 +3564,6 @@ button {
     grid-column: 1 / -1;
   }
 
-  .page-recipes:not(:has(.recipe-saved)) > .recipe-editor .recipe-form {
-    max-width: 40rem;
-  }
-
   .recipe-starter-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -3536,13 +3590,15 @@ button {
   }
 
   .page-recipes .seg {
-    display: flex;
+    display: grid;
     width: 100%;
+    grid-auto-flow: row;
+    grid-auto-columns: unset;
+    grid-template-columns: 1fr;
   }
 
   .page-recipes .seg button {
-    flex: 1 1 0;
-    min-width: 0;
+    width: 100%;
     padding: 0 8px;
   }
 
