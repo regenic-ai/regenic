@@ -914,10 +914,12 @@ button {
   margin-top: 12px;
   padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 70%, transparent);
   display: grid;
   gap: 4px;
+  width: 100%;
+  min-width: 0;
 }
 
 .recipe-preview-title {
