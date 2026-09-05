@@ -14,11 +14,13 @@ import {
   isDeadLetter,
   normalizeInboxListView,
   normalizeInboxSort,
+  normalizeUnitKind,
   parseConversationThread,
+  projectThreadFacet,
   recipeMatches,
+  recordClassFromType,
   shouldFlushDelivery,
   shouldRefreshActiveRun,
-  workSubjectFromEvent,
   type ConversationThread,
   type InboxListView,
   type InboxSortMode,
@@ -405,27 +407,27 @@ export class PersonalWorkService implements OnModuleDestroy {
         ).get(head.event.content_hash)
       : undefined;
     const surface = body?.surface;
-    const subject = workSubjectFromEvent({
-      type:
-        surface?.type ??
-        (existing?.record_class === "task" ? "task" : undefined) ??
-        "message",
+    // Align with Current-work / Rules preview: prefer work-item class/facet, else inbox surface.
+    const record_class =
+      existing?.record_class ??
+      recordClassFromType(surface?.type) ??
+      "utterance";
+    const thread_facet =
+      existing?.thread_facet ??
+      projectThreadFacet({
+        record_class,
+        type: surface?.type,
+        prompts: false,
+        hint: surface?.thread_facet,
+      });
+    const unit_kind = normalizeUnitKind(surface?.unit_kind);
+    const subject = {
+      record_class,
+      thread_facet,
       source: head?.event.source ?? threadId.split(":")[0] ?? "",
       thread_id: threadId,
-      unit_kind: surface?.unit_kind,
-      hint: surface?.thread_facet ?? existing?.thread_facet,
-      prior_facet:
-        existing && isActiveWorkStatus(existing.status)
-          ? existing.thread_facet
-          : undefined,
-    });
-    if (!subject) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        "This chat cannot start work",
-        400,
-      );
-    }
+      ...(unit_kind ? { unit_kind } : {}),
+    };
     if (!recipeMatches(recipe.match, subject)) {
       throw new PersonalConnectorError(
         "invalid_config",

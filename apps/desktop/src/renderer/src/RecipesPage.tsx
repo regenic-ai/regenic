@@ -946,7 +946,9 @@ export function RecipesPage({
       {error ? <p className="action-error recipe-page-notice">{error}</p> : null}
       {showGuide ? (
         <section className="card recipe-guide">
-          <h2>{t("recipes.howTitle")}</h2>
+          <header className="recipe-guide-head">
+            <h2>{t("recipes.howTitle")}</h2>
+          </header>
           <ol className="recipe-steps">
             <li>
               <strong>{t("recipes.step1Title")}</strong>
@@ -963,7 +965,17 @@ export function RecipesPage({
           </ol>
           {executors.length > 0 ? (
             <div className="recipe-starters">
-              <h3>{t("recipes.startersTitle")}</h3>
+              <div className="recipe-starters-head">
+                <h3>{t("recipes.startersTitle")}</h3>
+                <button
+                  type="button"
+                  className="ghost recipe-import-link"
+                  disabled={busy}
+                  onClick={() => importRef.current?.click()}
+                >
+                  {t("recipes.import")}
+                </button>
+              </div>
               <div className="recipe-starter-grid">
                 {(
                   [
@@ -982,17 +994,6 @@ export function RecipesPage({
                     <span>{t(bodyKey)}</span>
                   </button>
                 ))}
-              </div>
-              <div className="recipe-transfer-row">
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={busy}
-                  onClick={() => importRef.current?.click()}
-                >
-                  {t("recipes.import")}
-                </button>
-                <span className="muted">{t("recipes.importHint")}</span>
               </div>
             </div>
           ) : null}
@@ -1516,7 +1517,6 @@ function emptyDraftFrom(
   if (sources.length === 1) {
     return {
       ...base,
-      scope: "source",
       source: sources[0].id,
       can_write_back: true,
     };
