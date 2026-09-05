@@ -1,5 +1,6 @@
 import {
   contextProjectionCoordinatorPlugin,
+  acceptedThreadSummaryRetrieverPlugin,
   deterministicEventRetrieverPlugin,
   deterministicThreadSummaryProjectorPlugin,
   personalContextEnginePlugin,
@@ -37,6 +38,7 @@ export async function createKernelHost<A, B>(
     await host.plugin(ingestPlugin);
     await host.plugin(contextRegistriesPlugin);
     await host.plugin(deterministicEventRetrieverPlugin);
+    await host.plugin(acceptedThreadSummaryRetrieverPlugin);
     await host.plugin(deterministicThreadSummaryProjectorPlugin);
     await host.plugin(contextProjectionCoordinatorPlugin);
     await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });

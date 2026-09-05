@@ -5,6 +5,7 @@ import {
   ModelUnavailableError,
   ModelUpstreamError,
   type ContextBundle,
+  type ContextArtifact,
   type ContextReplayRequest,
   type ContextRequest,
   type ContextSnapshot,
@@ -70,6 +71,36 @@ export class PersonalContextService {
       throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
     }
     return snapshot;
+  }
+
+  async listArtifacts(): Promise<ContextArtifact[]> {
+    return this.runtime.requireHost().get("context-artifacts").listArtifacts({
+      org_id: this.runtime.orgId(),
+    });
+  }
+
+  async decideArtifact(artifactId: string, input: unknown) {
+    const body = strictBody(input, new Set(["status"]));
+    const status = requiredString(body.status, "status");
+    if (!["accepted", "rejected", "needs_clarify"].includes(status)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid artifact status");
+    }
+    return this.runtime.requireHost().get("context-artifacts").decideArtifact({
+      org_id: this.runtime.orgId(),
+      artifact_id: requiredString(artifactId, "artifact_id"),
+      status: status as "accepted" | "rejected" | "needs_clarify",
+      decided_at: new Date().toISOString(),
+    });
+  }
+
+  async supersedeArtifact(artifactId: string, input: unknown) {
+    const body = strictBody(input, new Set(["replacement_id"]));
+    return this.runtime.requireHost().get("context-artifacts").supersedeArtifact({
+      org_id: this.runtime.orgId(),
+      artifact_id: requiredString(artifactId, "artifact_id"),
+      replacement_id: requiredString(body.replacement_id, "replacement_id"),
+      decided_at: new Date().toISOString(),
+    });
   }
 
   async replay(input: unknown): Promise<ContextBundle> {

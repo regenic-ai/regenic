@@ -7,8 +7,11 @@ import type {
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
   ContextArtifact,
+  ContextArtifactDecision,
   ContextArtifactQuery,
+  ContextArtifactState,
   ContextArtifactStore,
+  ContextArtifactSupersession,
   ContextAuthorityRead,
   ContextAuthorityReader,
   ContextBundle,
@@ -19,6 +22,7 @@ import type {
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
+  RenewContextProjectionJob,
   ContextSnapshot,
   ConversationPref,
   ConversationPrefPatch,
@@ -166,6 +170,21 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listArtifacts", [query]);
   }
 
+  async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
+    return this.reader.call("getArtifactState", [orgId, artifactId]);
+  }
+
+  async decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState> {
+    return this.writer.call("decideArtifact", [input]);
+  }
+
+  async supersedeArtifact(input: ContextArtifactSupersession): Promise<{
+    superseded: ContextArtifactState;
+    accepted: ContextArtifactState;
+  }> {
+    return this.writer.call("supersedeArtifact", [input]);
+  }
+
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
     await this.writer.call("putSnapshot", [snapshot]);
   }
@@ -204,6 +223,10 @@ export class SqliteSplitAuthorityStore
     input: CompleteContextProjectionJob,
   ): Promise<boolean> {
     return this.writer.call("completeContextProjectionJob", [input]);
+  }
+
+  async renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean> {
+    return this.writer.call("renewContextProjectionJob", [input]);
   }
 
   async failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean> {

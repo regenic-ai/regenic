@@ -489,6 +489,18 @@ Projector 遵守：
 - 未完成 generation 不能进入 snapshot；
 - 单个 projector 失败不能阻塞 Event 入库或其他 projector。
 
+### 8.1 Artifact 生命周期权威状态
+
+Artifact manifest 不可变。其有效 lifecycle state 保存在独立的 authority record 中，因此
+proposal 可以被 accepted、rejected 或标记为 `needs_clarify`，但不会改写其 evidence、scope
+或 body hash。已接受的 Artifact 只能由 `supersedes_id` 显式指向它的 proposal 替换；authority
+transaction 会同时接受 replacement 并将旧 Artifact 标为 superseded。终态 Artifact 不能再次转换。
+
+只有 accepted 的 `thread_summary` Artifact 可以进入检索。Retriever 通过 `body_hash` 加载
+canonical body，验证其与 immutable manifest 一致，要求每条 evidence reference 都存在于
+authorized source view 中，并要求 scope 恰好是 evidence scope 的并集。任一条件无法验证时，
+必须隐藏 Artifact，不能回退到旧 summary。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

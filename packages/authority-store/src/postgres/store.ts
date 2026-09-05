@@ -37,8 +37,11 @@ import type {
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
   ContextArtifact,
+  ContextArtifactDecision,
   ContextArtifactQuery,
+  ContextArtifactState,
   ContextArtifactStore,
+  ContextArtifactSupersession,
   ContextAuthorityRead,
   ContextAuthorityReader,
   ContextBundle,
@@ -49,6 +52,7 @@ import type {
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
+  RenewContextProjectionJob,
   ContextSnapshot,
   EventListQuery,
   EventRecord,
@@ -233,6 +237,14 @@ interface ContextProjectionJobRow {
   last_error: string | null;
   created_at: unknown;
   updated_at: unknown;
+}
+
+interface ArtifactStateRow {
+  org_id: string;
+  artifact_id: string;
+  status: ContextArtifactState["status"];
+  decided_at: string;
+  superseded_by: string | null;
 }
 
 interface PrefRow {
@@ -644,15 +656,19 @@ export class PostgresAuthorityStore
         payload,
       ],
     );
+    await this.execute(
+      `INSERT INTO context_artifact_states (org_id, artifact_id, status, decided_at) VALUES ($1, $2, $3, $4) ON CONFLICT (org_id, artifact_id) DO NOTHING`,
+      [artifact.org_id, artifact.id, artifact.status, artifact.recorded_at],
+    );
     return parseContextJson<ContextArtifact>(payload);
   }
 
   async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
-    return this.getContextJson<ContextArtifact>(
-      "context_artifacts",
-      "org_id = $1 AND id = $2",
+    const row = await this.queryOne<{ payload_json: unknown; lifecycle_status: ContextArtifact["status"] }>(
+      `SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id WHERE a.org_id = $1 AND a.id = $2`,
       [orgId, id],
     );
+    return row ? { ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status } : null;
   }
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
@@ -664,13 +680,13 @@ export class PostgresAuthorityStore
       params.push(value);
       return `$${params.length}`;
     };
-    const clauses = [`org_id = ${p(stableQuery.org_id)}`];
+    const clauses = [`a.org_id = ${p(stableQuery.org_id)}`];
     if (stableQuery.kinds) {
       if (stableQuery.kinds.length === 0) {
         return [];
       }
       clauses.push(
-        `kind IN (${stableQuery.kinds.map((kind) => p(kind)).join(", ")})`,
+        `a.kind IN (${stableQuery.kinds.map((kind) => p(kind)).join(", ")})`,
       );
     }
     if (stableQuery.statuses) {
@@ -678,27 +694,68 @@ export class PostgresAuthorityStore
         return [];
       }
       clauses.push(
-        `status IN (${stableQuery.statuses.map((status) => p(status)).join(", ")})`,
+        `s.status IN (${stableQuery.statuses.map((status) => p(status)).join(", ")})`,
       );
     }
     if (stableQuery.generation) {
-      clauses.push(`generation = ${p(stableQuery.generation)}`);
+      clauses.push(`a.generation = ${p(stableQuery.generation)}`);
     }
     const limit = stableQuery.limit;
     const limitSql =
       typeof limit === "number" && Number.isFinite(limit)
         ? `LIMIT ${p(limit)}`
         : "";
-    const rows = await this.query<{ payload_json: unknown }>(
+    const rows = await this.query<{ payload_json: unknown; lifecycle_status: ContextArtifact["status"] }>(
       `
-        SELECT payload_json FROM context_artifacts
+        SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
+        JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
         WHERE ${clauses.join(" AND ")}
-        ORDER BY recorded_at ASC, id ASC
+        ORDER BY a.recorded_at ASC, a.id ASC
         ${limitSql}
       `,
       params,
     );
-    return rows.map((row) => parseContextJson<ContextArtifact>(row.payload_json));
+    return rows.map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status }));
+  }
+
+  async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
+    const row = await this.queryOne<ArtifactStateRow>(
+      `SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = $1 AND artifact_id = $2`,
+      [orgId, artifactId],
+    );
+    return row ? artifactState(row) : null;
+  }
+
+  async decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState> {
+    assertArtifactDecision(input);
+    return this.withTx(async (client) => {
+      const state = await this.transitionableArtifact(input.org_id, input.artifact_id, client);
+      await this.execute(`UPDATE context_artifact_states SET status = $1, decided_at = $2, superseded_by = NULL WHERE org_id = $3 AND artifact_id = $4`, [input.status, input.decided_at, input.org_id, input.artifact_id], client);
+      return { ...state, status: input.status, decided_at: input.decided_at } as ContextArtifactState;
+    });
+  }
+
+  async supersedeArtifact(input: ContextArtifactSupersession): Promise<{ superseded: ContextArtifactState; accepted: ContextArtifactState }> {
+    assertArtifactSupersession(input);
+    return this.withTx(async (client) => {
+      const current = await this.queryOne<ArtifactStateRow>(`SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = $1 AND artifact_id = $2 FOR UPDATE`, [input.org_id, input.artifact_id], client);
+      const replacement = await this.transitionableArtifact(input.org_id, input.replacement_id, client);
+      const artifactRow = await this.queryOne<{ payload_json: unknown }>(
+        `SELECT payload_json FROM context_artifacts WHERE org_id = $1 AND id = $2`,
+        [input.org_id, input.replacement_id],
+        client,
+      );
+      const artifact = artifactRow
+        ? parseContextJson<ContextArtifact>(artifactRow.payload_json)
+        : null;
+      if (!current || current.status !== "accepted" || !artifact || artifact.supersedes_id !== input.artifact_id) throw new Error("Invalid Context artifact supersession");
+      await this.execute(`UPDATE context_artifact_states SET status = 'superseded', decided_at = $1, superseded_by = $2 WHERE org_id = $3 AND artifact_id = $4`, [input.decided_at, input.replacement_id, input.org_id, input.artifact_id], client);
+      await this.execute(`UPDATE context_artifact_states SET status = 'accepted', decided_at = $1, superseded_by = NULL WHERE org_id = $2 AND artifact_id = $3`, [input.decided_at, input.org_id, input.replacement_id], client);
+      return {
+        superseded: { ...artifactState(current), status: "superseded", decided_at: input.decided_at, superseded_by: input.replacement_id },
+        accepted: { ...replacement, status: "accepted", decided_at: input.decided_at },
+      };
+    });
   }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
@@ -917,6 +974,15 @@ export class PostgresAuthorityStore
       [input.completed_at, input.id, input.owner],
     );
     return rowCount === 1;
+  }
+
+  async renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean> {
+    assertProjectionSettle(input.id, input.owner, input.now);
+    if (!Number.isSafeInteger(input.lease_ms) || input.lease_ms < 1) throw new Error("Invalid Context projection lease renewal");
+    return await this.execute(
+      `UPDATE context_projection_outbox SET lease_expires_at = $1, updated_at = $2 WHERE id = $3 AND status = 'running' AND lease_owner = $4 AND lease_expires_at > $2::timestamptz`,
+      [new Date(Date.parse(input.now) + input.lease_ms).toISOString(), input.now, input.id, input.owner],
+    ) === 1;
   }
 
   async failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean> {
@@ -1197,6 +1263,7 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_bundles WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshots WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM context_artifact_states WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_artifacts WHERE org_id = $1`, [orgId], client);
       await this.execute(
         `DELETE FROM context_projection_checkpoints WHERE org_id = $1`,
@@ -2530,6 +2597,23 @@ export class PostgresAuthorityStore
     return { ...state };
   }
 
+  private async transitionableArtifact(
+    orgId: string,
+    artifactId: string,
+    client: PoolClient,
+  ): Promise<ContextArtifactState> {
+    const row = await this.queryOne<ArtifactStateRow>(
+      `SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = $1 AND artifact_id = $2 FOR UPDATE`,
+      [orgId, artifactId],
+      client,
+    );
+    const state = row ? artifactState(row) : null;
+    if (!state || !["proposed", "needs_clarify"].includes(state.status)) {
+      throw new Error("Context artifact is not transitionable");
+    }
+    return state;
+  }
+
   private async withTx<T>(
     fn: (client: PoolClient) => Promise<T>,
     isolation?: "REPEATABLE READ",
@@ -3261,6 +3345,24 @@ function toContextProjectionJob(row: ContextProjectionJobRow): ContextProjection
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
+}
+
+function artifactState(row: ArtifactStateRow): ContextArtifactState {
+  return {
+    org_id: row.org_id,
+    artifact_id: row.artifact_id,
+    status: row.status,
+    decided_at: row.decided_at,
+    ...(row.superseded_by ? { superseded_by: row.superseded_by } : {}),
+  };
+}
+
+function assertArtifactDecision(input: ContextArtifactDecision): void {
+  if (!input?.org_id?.trim() || !input.artifact_id?.trim() || !["accepted", "rejected", "needs_clarify"].includes(input.status) || Number.isNaN(Date.parse(input.decided_at))) throw new Error("Invalid Context artifact decision");
+}
+
+function assertArtifactSupersession(input: ContextArtifactSupersession): void {
+  if (!input?.org_id?.trim() || !input.artifact_id?.trim() || !input.replacement_id?.trim() || input.artifact_id === input.replacement_id || Number.isNaN(Date.parse(input.decided_at))) throw new Error("Invalid Context artifact supersession");
 }
 
 function assertProjectionClaim(input: ClaimContextProjectionJobs): void {

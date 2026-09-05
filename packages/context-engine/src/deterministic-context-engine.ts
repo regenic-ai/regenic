@@ -291,7 +291,10 @@ export class DeterministicContextEngine implements ContextEngine {
       if (!CONTEXT_SECTION_KINDS.includes(value.section)) {
         throw new ContextEngineError("invalid_candidate", "Retriever returned an invalid context section");
       }
-      if (value.section !== "evidence") {
+      if (
+        (value.candidate.kind === "event" && value.section !== "evidence") ||
+        (value.candidate.kind === "artifact" && value.section !== "summaries")
+      ) {
         throw new ContextEngineError(
           "invalid_candidate",
           "Deterministic Event retrievers may publish evidence sections only",
@@ -300,10 +303,10 @@ export class DeterministicContextEngine implements ContextEngine {
       if (!sourced.active.capabilities.candidate_kinds.includes(value.candidate.kind)) {
         throw new ContextEngineError("invalid_candidate", "Retriever returned an undeclared candidate kind");
       }
-      if (value.candidate.kind !== "event") {
+      if (!["event", "artifact"].includes(value.candidate.kind)) {
         throw new ContextEngineError(
           "invalid_candidate",
-          "Deterministic context engine v1 accepts Event candidates only",
+          "Deterministic context engine accepts Event and Artifact candidates only",
         );
       }
       if (request.requested_kinds && !request.requested_kinds.includes(value.candidate.kind)) {
@@ -321,7 +324,9 @@ export class DeterministicContextEngine implements ContextEngine {
       }))) {
         continue;
       }
-      value.section = protectedEventIds.has(value.candidate.resource_id) ? "policy" : "evidence";
+      if (value.candidate.kind === "event") {
+        value.section = protectedEventIds.has(value.candidate.resource_id) ? "policy" : "evidence";
+      }
       const key = candidateKey(value.candidate);
       const current = byResource.get(key);
       const score = weightedScore(value.candidate, this.retrievalProfile);
@@ -607,6 +612,13 @@ function assertCandidateEvidenceBinding(
   const evidenceScopes = uniqueSorted(evidenceSources.flatMap((source) => source.required_scope_ids));
   if (!isSubset(evidenceScopes, uniqueSorted(candidate.required_scope_ids))) {
     throw new ContextEngineError("invalid_candidate", "Candidate scopes do not cover all evidence scopes");
+  }
+  if (
+    candidate.kind === "artifact" &&
+    canonicalContextJson(uniqueSorted(candidate.required_scope_ids)) !==
+      canonicalContextJson(evidenceScopes)
+  ) {
+    throw new ContextEngineError("invalid_candidate", "Artifact candidate scopes must exactly match evidence scopes");
   }
   if (candidate.kind !== "event") {
     if (!candidate.projection) {
