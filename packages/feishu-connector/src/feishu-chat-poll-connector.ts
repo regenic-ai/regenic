@@ -17,6 +17,10 @@ import type {
 } from "./feishu-cli-client";
 import { rememberFeishuInbound } from "./feishu-attention";
 import {
+  loadFeishuMediaJobs,
+  saveFeishuMediaJobs,
+} from "./feishu-media-job-store";
+import {
   FEISHU_SOURCE,
   collectFeishuUserIds,
   extractFeishuMedia,
@@ -63,26 +67,8 @@ export interface FeishuCursorState {
   head_time?: string;
   recent_seeded?: boolean;
   history_token?: string;
-  /** @deprecated Migrated into process-local store; never re-encoded into cursors. */
+  /** @deprecated Migrated into durable store; never re-encoded into cursors. */
   media_jobs?: FeishuMediaJob[];
-}
-
-/** Attachment queues stay off SyncStreamState cursors (kernel heap / listSyncStates). */
-const feishuMediaJobStore = new Map<string, FeishuMediaJob[]>();
-
-function mediaJobStoreKey(connectorId: string, chatId: string): string {
-  return `${connectorId}\u0000${chatId}`;
-}
-
-export function clearFeishuMediaJobsForTests(): void {
-  feishuMediaJobStore.clear();
-}
-
-export function peekFeishuMediaJobsForTests(
-  connectorId: string,
-  chatId: string,
-): FeishuMediaJob[] | undefined {
-  return feishuMediaJobStore.get(mediaJobStoreKey(connectorId, chatId));
 }
 
 export interface FeishuChatPollConnectorOptions {
@@ -281,8 +267,10 @@ export class FeishuChatPollConnector {
   }
 
   private hydrateMediaJobs(state: FeishuCursorState): FeishuMediaJob[] {
-    const key = mediaJobStoreKey(this.options.connector_id, this.options.chat_id);
-    const stored = feishuMediaJobStore.get(key) ?? [];
+    const stored = loadFeishuMediaJobs(
+      this.options.connector_id,
+      this.options.chat_id,
+    );
     const legacy = state.media_jobs ?? [];
     delete state.media_jobs;
     if (legacy.length === 0) {
@@ -298,12 +286,11 @@ export class FeishuChatPollConnector {
   }
 
   private persistMediaJobs(jobs: FeishuMediaJob[]): void {
-    const key = mediaJobStoreKey(this.options.connector_id, this.options.chat_id);
-    if (jobs.length === 0) {
-      feishuMediaJobStore.delete(key);
-      return;
-    }
-    feishuMediaJobStore.set(key, jobs);
+    saveFeishuMediaJobs(
+      this.options.connector_id,
+      this.options.chat_id,
+      jobs,
+    );
   }
 
   private async resolveNames(

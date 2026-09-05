@@ -104,26 +104,26 @@ export function kernelPressureView(
 }
 
 /**
- * Skip connector/projection ticks that would contend with a stalled event loop.
- * Interactive reads do not cancel live ticks; history uses shouldDeferHistorySync.
+ * Skip connector ticks that would contend with a critically stalled event loop.
+ * Elevated lag does not cancel live; history/catalog use shouldDeferHistorySync.
  */
 export function shouldDeferBackgroundSync(
   sample: KernelPressureSample,
   thresholds: KernelPressureThresholds = DEFAULT_KERNEL_PRESSURE_THRESHOLDS,
 ): boolean {
-  const lag = sample.event_loop_lag_ms ?? 0;
-  if (lag >= thresholds.elevated_lag_ms) {
-    return true;
-  }
   return classifyKernelPressure(sample, thresholds) === "critical";
 }
 
-/** History/catalog catch-up yields to a live UI read. */
+/** History/catalog catch-up yields to a live UI read or elevated event-loop lag. */
 export function shouldDeferHistorySync(
   sample: KernelPressureSample,
   thresholds: KernelPressureThresholds = DEFAULT_KERNEL_PRESSURE_THRESHOLDS,
 ): boolean {
   if ((sample.interactive_waiters ?? 0) > 0) {
+    return true;
+  }
+  const lag = sample.event_loop_lag_ms ?? 0;
+  if (lag >= thresholds.elevated_lag_ms) {
     return true;
   }
   return shouldDeferBackgroundSync(sample, thresholds);

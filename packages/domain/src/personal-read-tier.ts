@@ -48,14 +48,18 @@ export function personalReadTierFromDetail(
   return "engine_detailed";
 }
 
-/** Inbox list / thread read paths. */
+  /** Inbox list / thread read paths. */
 export type InboxReadTier = "heads" | "heads_live" | "thread" | "thread_live";
 
 export interface InboxReadTierSpec {
   tier: InboxReadTier;
   /** Query connector for attention / outbound receipts (e.g. Feishu read_status). */
   channel_overlays: boolean;
-  /** Live connector prompts (DSH, etc.) per thread. */
+  /**
+   * Live connector prompts per thread (local/session stores).
+   * Heads enable this for install-local prompts; remote prompt drivers should
+   * keep listPrompts cheap or use heads_live.
+   */
   connector_prompts: boolean;
   /** Bound executor prompt merge for linked agent threads. */
   agent_prompts: boolean;

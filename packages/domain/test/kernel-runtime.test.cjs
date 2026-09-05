@@ -131,6 +131,15 @@ describe("kernel pressure", () => {
         event_loop_lag_ms: 120,
         interactive_waiters: 0,
       }),
+      false,
+    );
+    assert.equal(
+      shouldDeferHistorySync({
+        rss_bytes: 100_000_000,
+        heap_used_bytes: 90_000_000,
+        event_loop_lag_ms: 120,
+        interactive_waiters: 0,
+      }),
       true,
     );
   });

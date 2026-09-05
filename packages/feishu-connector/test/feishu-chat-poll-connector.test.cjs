@@ -24,12 +24,26 @@ const {
   resetFeishuAttention,
   clearFeishuMediaJobsForTests,
   peekFeishuMediaJobsForTests,
+  setFeishuMediaJobsRootForTests,
+  loadFeishuMediaJobs,
+  saveFeishuMediaJobs,
 } = require("../dist");
 
-const { beforeEach } = require("node:test");
+const { beforeEach, afterEach } = require("node:test");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+let mediaJobsRoot;
 
 beforeEach(() => {
+  mediaJobsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-media-jobs-"));
+  setFeishuMediaJobsRootForTests(mediaJobsRoot);
+});
+
+afterEach(() => {
   clearFeishuMediaJobsForTests();
+  setFeishuMediaJobsRootForTests(undefined);
 });
 
 function createConnector(client, extras = {}) {
@@ -978,6 +992,53 @@ describe("FeishuChatPollConnector", () => {
     );
     assert.match(filled.next_cursor ?? "", /"start_time":"1723600000"/);
     assert.equal(/"media_jobs"/.test(filled.next_cursor ?? ""), false);
+  });
+
+  it("keeps queued media jobs across a process-local store restart", async () => {
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [
+            {
+              message_id: "om_img",
+              msg_type: "image",
+              create_time: "1723420800000",
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: { content: JSON.stringify({ image_key: "img_shot" }) },
+            },
+          ],
+          has_more: false,
+        };
+      },
+    });
+    const opened = await connector.poll(null, { media: false });
+    assert.equal(opened.media_pending, true);
+    assert.equal(
+      (peekFeishuMediaJobsForTests("feishu-chat", "oc_1") ?? []).length,
+      1,
+    );
+
+    // Drop memory cache; durable files under the test root remain.
+    setFeishuMediaJobsRootForTests(mediaJobsRoot);
+    const reloaded = loadFeishuMediaJobs("feishu-chat", "oc_1");
+    assert.equal(reloaded.length, 1);
+    assert.equal(reloaded[0].key, "img_shot");
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const resumed = createConnector({
+      async listMessages() {
+        throw new Error("should not list");
+      },
+      async downloadResource() {
+        return { bytes: png, media_type: "image/png", filename: "shot.png" };
+      },
+    });
+    const filled = await resumed.poll(
+      { value: opened.next_cursor },
+      { media: true },
+    );
+    assert.equal(filled.media_pending, false);
+    assert.equal(filled.batch.records[0].operation, "revise");
   });
 
   it("media-only poll never calls listMessages", async () => {
