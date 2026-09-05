@@ -1140,6 +1140,7 @@ export class PersonalInboxService {
     } catch (error) {
       console.error("feishu media job clear leftover files", error);
     }
+    await host.get("context-lexical-index").clearOrganization(this.runtime.orgId());
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
     this.kernelRuntime.clearInstallationSnapshots();
     this.touchInboxDigest({ immediate: true });

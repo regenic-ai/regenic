@@ -40,6 +40,8 @@ describe("regenic-local", () => {
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
     const evidenceOutput = join(root, "context-evidence.jsonl");
+    const evaluationDataset = join(root, "context-evaluation.json");
+    const evaluationOutput = join(root, "context-evaluation-report.json");
     const authority = new SqliteAuthorityStore(database);
     const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
     await ingestion.ingest({
@@ -79,6 +81,7 @@ describe("regenic-local", () => {
       assembled.bundle.sections[0].items[0].text,
       "The release is approved for Monday.",
     );
+    assert.ok(!assembled.bundle.degradation_flags.includes("lexical_index_unbuilt"));
 
     const snapshot = await run([
       "context-snapshot",
@@ -107,6 +110,52 @@ describe("regenic-local", () => {
     assert.equal(published.published_event_count, 1);
     assert.equal(evidenceBundle.evidence[0].event_id, assembled.bundle.citations[0].event_id);
     assert.equal(JSON.stringify(evidenceBundle).includes("The release is approved"), false);
+
+    await writeFile(evaluationDataset, JSON.stringify({
+      schema_version: "1.0",
+      id: "local-cli-synthetic-v1",
+      cases: [{
+        id: "approved-release",
+        request: {
+          schema_version: "1.0",
+          id: "evaluation-request-1",
+          org_id: "local-owner",
+          principal: { actor_type: "human", actor_id: "local-owner" },
+          consumer_id: "local-cli-evaluation",
+          purpose: "evaluate synthetic approved release retrieval",
+          allowed_uses: ["display"],
+          query: "release approved",
+          temporal: { mode: "current" },
+          budget: {
+            profile: "evaluation-v1",
+            max_tokens: 100,
+            max_items: 10,
+            max_raw_evidence: 10,
+          },
+          requested_kinds: ["event"],
+        },
+        relevant_event_ids: [assembled.bundle.citations[0].event_id],
+        forbidden_event_ids: ["event-hidden"],
+        stale_event_ids: [],
+      }],
+    }), "utf8");
+    const evaluated = await run([
+      "context-evaluate",
+      ...common,
+      "--dataset", evaluationDataset,
+      "--output", evaluationOutput,
+      "--k", "5",
+    ]);
+    const evaluatedAgain = await run([
+      "context-evaluate",
+      ...common,
+      "--dataset", evaluationDataset,
+      "--k", "5",
+    ]);
+    assert.equal(evaluated.metrics.safety_passed, true);
+    assert.equal(evaluated.metrics.mean_recall_at_k, 1);
+    assert.equal(evaluated.content_hash, evaluatedAgain.content_hash);
+    assert.equal(JSON.parse(await readFile(evaluationOutput, "utf8")).content_hash, evaluated.content_hash);
 
     let modelRequest;
     const modelServer = createServer(async (request, response) => {

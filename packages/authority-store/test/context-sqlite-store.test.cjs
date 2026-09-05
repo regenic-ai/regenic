@@ -208,6 +208,18 @@ describe("SQLite context artifact store", () => {
       lease_ms: 60_000,
       limit: 10,
     })).length, 0);
+    assert.equal(await store.renewContextProjectionJob({
+      id: claimed.id,
+      owner: "worker-2",
+      now: "2026-08-30T00:01:30.000Z",
+      lease_ms: 60_000,
+    }), false);
+    assert.equal(await store.renewContextProjectionJob({
+      id: claimed.id,
+      owner: "worker-1",
+      now: "2026-08-30T00:01:30.000Z",
+      lease_ms: 60_000,
+    }), true);
     assert.equal(await store.completeContextProjectionJob({
       id: claimed.id,
       owner: "worker-2",
@@ -245,6 +257,88 @@ describe("SQLite context artifact store", () => {
     store.close();
   });
 
+  it("requeues a completed projection when compacted content changes its hash", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    const event = await store.append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "repoint-1",
+      content_hash: HASH_A,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    const [claimed] = await store.claimContextProjectionJobs({
+      owner: "worker-1",
+      now: "2026-08-30T00:01:00.000Z",
+      lease_ms: 60_000,
+      limit: 1,
+    });
+    await store.completeContextProjectionJob({
+      id: claimed.id,
+      owner: "worker-1",
+      completed_at: "2026-08-30T00:01:01.000Z",
+    });
+
+    assert.equal(await store.repointContentHash({
+      old_content_hash: HASH_A,
+      new_content_hash: HASH_B,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+    }), 1);
+
+    const [job] = await store.listContextProjectionJobs("example-org");
+    assert.equal(job.status, "pending");
+    assert.equal(job.attempts, 0);
+    assert.equal((await store.getEvent("example-org", event.id)).content_hash, HASH_B);
+    store.close();
+  });
+
+  it("does not let an expired lease settle before another worker reclaims it", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await store.append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "expired-lease-1",
+      content_hash: HASH_A,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    const [claimed] = await store.claimContextProjectionJobs({
+      owner: "worker-expired",
+      now: "2026-08-30T00:01:00.000Z",
+      lease_ms: 1_000,
+      limit: 1,
+    });
+
+    assert.equal(await store.completeContextProjectionJob({
+      id: claimed.id,
+      owner: "worker-expired",
+      completed_at: "2026-08-30T00:01:02.000Z",
+    }), false);
+    assert.equal(await store.failContextProjectionJob({
+      id: claimed.id,
+      owner: "worker-expired",
+      failed_at: "2026-08-30T00:01:02.000Z",
+      next_retry_at: "2026-08-30T00:01:03.000Z",
+      error_code: "too_late",
+    }), false);
+    const [reclaimed] = await store.claimContextProjectionJobs({
+      owner: "worker-next",
+      now: "2026-08-30T00:01:02.000Z",
+      lease_ms: 1_000,
+      limit: 1,
+    });
+    assert.equal(reclaimed.attempts, 2);
+    assert.equal(reclaimed.lease_owner, "worker-next");
+    store.close();
+  });
+
   it("serves projection outbox claims through split RPC", async () => {
     const root = await createRoot();
     const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
@@ -265,6 +359,12 @@ describe("SQLite context artifact store", () => {
       limit: 1,
     });
     assert.equal(jobs.length, 1);
+    assert.equal(await store.renewContextProjectionJob({
+      id: jobs[0].id,
+      owner: "split-worker",
+      now: "2026-08-30T00:01:30.000Z",
+      lease_ms: 60_000,
+    }), true);
     assert.equal((await store.listContextProjectionJobs("example-org"))[0].lease_owner, "split-worker");
     await store.close();
   });
@@ -389,8 +489,14 @@ describe("SQLite context artifact store", () => {
     await assert.rejects(store.putCheckpoint(first), /cannot move backwards/i);
     await assert.rejects(
       store.putCheckpoint({ ...second, watermark: "changed-at-same-sequence" }),
-      /cannot change at the same sequence/i,
+      /cannot regress at the same sequence/i,
     );
+    const compacted = {
+      ...second,
+      watermark: "authority:compacted",
+      updated_at: "2026-08-30T00:03:00.000Z",
+    };
+    await store.putCheckpoint(compacted);
     await assert.rejects(
       store.putCheckpoint({ ...second, algorithm_version: "v2", sequence: 3 }),
       /algorithm cannot change/i,
@@ -400,7 +506,7 @@ describe("SQLite context artifact store", () => {
     store = new SqliteAuthorityStore(path);
     assert.deepEqual(
       await store.getCheckpoint("example-org", "projector-1", "generation-1"),
-      second,
+      compacted,
     );
     store.close();
   });

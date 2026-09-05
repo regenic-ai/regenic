@@ -9,6 +9,8 @@ import {
   type ContextArtifactStore,
   type ContextAuthorityReader,
   type ContextAuthorityRead,
+  type ContextLexicalDocument,
+  type ContextLexicalIndex,
   type ContextProjector,
   type ContextProjectorRegistry,
   type ContextProjectionRunner,
@@ -31,6 +33,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     private readonly artifacts: ContextArtifactStore,
     private readonly projectors: ContextProjectorRegistry,
     private readonly blobs?: BlobStore,
+    private readonly lexicalIndex?: ContextLexicalIndex,
   ) {}
 
   async project(orgId: string, generation: string): Promise<ContextProjectionRun[]> {
@@ -52,23 +55,52 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     return this.projectRead(orgId, scopedGeneration, read, orgId);
   }
 
+  async syncLexicalIndex(
+    orgId: string,
+    generation: string,
+    eventIds: string[] = [],
+    threadId?: string,
+  ): Promise<void> {
+    requireProjectionNamespace(orgId, generation);
+    requireProjectionEventIds(eventIds);
+    if (threadId !== undefined && !threadId.trim()) {
+      throw new Error("Context lexical projection thread id is required");
+    }
+    if (!this.lexicalIndex) {
+      return;
+    }
+    const status = await this.lexicalIndex.getStatus(orgId);
+    if (!status.available) {
+      return;
+    }
+    if (threadId && (!status.generation || status.generation !== generation)) {
+      await this.syncLexicalIndex(orgId, generation);
+      return;
+    }
+    const read = structuredClone(
+      threadId
+        ? await this.authority.openContextReadForThread(orgId, threadId)
+        : await this.authority.openContextRead(orgId),
+    );
+    validateProjectionRead(read, orgId);
+    const sourceEvents = await toSourceEvents(read.events, this.blobs);
+    await synchronizeLexicalIndex(
+      this.lexicalIndex,
+      orgId,
+      generation,
+      read.read_epoch,
+      sourceEvents,
+      eventIds,
+    );
+  }
+
   private async projectRead(
     orgId: string,
     generation: string,
     read: ContextAuthorityRead,
     validateOrgId = orgId,
   ): Promise<ContextProjectionRun[]> {
-    if (
-      typeof read.read_epoch !== "string" ||
-      !read.read_epoch.trim() ||
-      typeof read.recorded_at !== "string" ||
-      Number.isNaN(Date.parse(read.recorded_at))
-    ) {
-      throw new Error("Context projection authority returned an invalid read boundary");
-    }
-    if (read.events.some((event) => event.org_id !== validateOrgId)) {
-      throw new Error("Context projection authority read contains an Event from another organization");
-    }
+    validateProjectionRead(read, validateOrgId);
     const evidence = read.events.map(toEvidence);
     const sourceEvents = await toSourceEvents(read.events, this.blobs);
     const eventsByEvidence = new Map(
@@ -82,7 +114,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
       if (previous && previous.sequence > sequence) {
         throw new Error("Projection checkpoint exceeds the authority read");
       }
-      if (previous?.sequence === sequence) {
+      if (previous?.sequence === sequence && previous.watermark === read.read_epoch) {
         runs.push({
           projector_id: projector.id,
           projected_events: 0,
@@ -225,4 +257,82 @@ function requireProjectionNamespace(orgId: string, generation: string): void {
   if (!orgId.trim() || !generation.trim()) {
     throw new Error("Context projection organization and generation are required");
   }
+}
+
+function requireProjectionEventIds(eventIds: string[]): void {
+  if (
+    !Array.isArray(eventIds) ||
+    eventIds.some((eventId) => typeof eventId !== "string" || !eventId.trim()) ||
+    new Set(eventIds).size !== eventIds.length
+  ) {
+    throw new Error("Context projection Event IDs are invalid");
+  }
+}
+
+function validateProjectionRead(read: ContextAuthorityRead, orgId: string): void {
+  if (
+    typeof read.read_epoch !== "string" ||
+    !read.read_epoch.trim() ||
+    typeof read.recorded_at !== "string" ||
+    Number.isNaN(Date.parse(read.recorded_at))
+  ) {
+    throw new Error("Context projection authority returned an invalid read boundary");
+  }
+  if (read.events.some((event) => event.org_id !== orgId)) {
+    throw new Error("Context projection authority read contains an Event from another organization");
+  }
+}
+
+async function synchronizeLexicalIndex(
+  index: ContextLexicalIndex | undefined,
+  orgId: string,
+  generation: string,
+  watermark: string,
+  events: ContextSourceEvent[],
+  eventIds: string[],
+): Promise<void> {
+  if (!index) {
+    return;
+  }
+  const status = await index.getStatus(orgId);
+  if (!status.available) {
+    return;
+  }
+  const documents = events.flatMap(toLexicalDocument);
+  if (!status.generation || status.generation !== generation) {
+    await index.replaceOrganization({ org_id: orgId, generation, watermark, documents });
+    return;
+  }
+  if (eventIds.length === 0) {
+    return;
+  }
+  const requested = new Set(eventIds);
+  const known = new Set(events.map((source) => source.event.event_id));
+  if (eventIds.some((eventId) => !known.has(eventId))) {
+    throw new Error("Context projection job references an Event outside the authority read");
+  }
+  await index.upsertDocuments({
+    org_id: orgId,
+    generation,
+    watermark,
+    documents: documents.filter((document) => requested.has(document.event_id)),
+  });
+}
+
+function toLexicalDocument(source: ContextSourceEvent): ContextLexicalDocument[] {
+  if (
+    source.event.operation === "tombstone" ||
+    !source.event.content_hash ||
+    source.text === undefined ||
+    !source.thread_id ||
+    !source.actor_id ||
+    source.required_scope_ids.length === 0
+  ) {
+    return [];
+  }
+  return [{
+    event_id: source.event.event_id,
+    content_hash: source.event.content_hash,
+    text: source.text,
+  }];
 }

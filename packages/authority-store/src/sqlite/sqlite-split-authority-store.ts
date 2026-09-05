@@ -19,6 +19,7 @@ import type {
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
+  RenewContextProjectionJob,
   ContextSnapshot,
   ConversationPref,
   ConversationPrefPatch,
@@ -204,6 +205,10 @@ export class SqliteSplitAuthorityStore
     input: CompleteContextProjectionJob,
   ): Promise<boolean> {
     return this.writer.call("completeContextProjectionJob", [input]);
+  }
+
+  async renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean> {
+    return this.writer.call("renewContextProjectionJob", [input]);
   }
 
   async failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean> {

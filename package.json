@@ -10,7 +10,7 @@
     "dev:api": "pnpm --filter @regenic/api start:dev",
     "dev:worker": "pnpm --filter @regenic/worker start:dev",
     "dev:desktop": "pnpm --filter @regenic/desktop dev",
-    "local": "pnpm --filter @regenic/dsh-connector --filter @regenic/local-cli build && node ./packages/local-cli/dist/main.js",
+    "local": "pnpm --filter @regenic/dsh-connector --filter @regenic/lexical-index --filter @regenic/local-cli build && node ./packages/local-cli/dist/main.js",
     "start:api": "pnpm --filter @regenic/api start",
     "start:worker": "pnpm --filter @regenic/worker start",
     "test": "pnpm -r --if-present run test",

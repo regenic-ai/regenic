@@ -108,6 +108,15 @@ describe("context ports", () => {
       }),
       /algorithm cannot change/,
     );
+    await store.putCheckpoint({
+      org_id: "example-org",
+      projector_id: "summary",
+      algorithm_version: "1",
+      generation: "generation-1",
+      sequence: 2,
+      watermark: "changed-at-same-position",
+      updated_at: "2026-08-30T00:03:00.000Z",
+    });
     await assert.rejects(
       store.putCheckpoint({
         org_id: "example-org",
@@ -115,10 +124,14 @@ describe("context ports", () => {
         algorithm_version: "1",
         generation: "generation-1",
         sequence: 2,
-        watermark: "changed-at-same-position",
-        updated_at: "2026-08-30T00:03:00.000Z",
+        watermark: "stale-concurrent-position",
+        updated_at: "2026-08-30T00:02:30.000Z",
       }),
-      /cannot change at the same sequence/,
+      /cannot regress at the same sequence/,
+    );
+    assert.equal(
+      (await store.getCheckpoint("example-org", "summary", "generation-1")).watermark,
+      "changed-at-same-position",
     );
 
     const malformed = [

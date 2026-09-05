@@ -1,10 +1,12 @@
 import { definePlugin } from "@regenic/plugin-host";
 import {
   type ContextEvidenceSource,
+  type ContextLexicalIndex,
   type ContextPolicyEvaluator,
 } from "@regenic/domain";
 import { DeterministicContextEngine } from "./deterministic-context-engine";
 import { DeterministicEventRetriever } from "./deterministic-event-retriever";
+import { IndexedEventRetriever } from "./indexed-event-retriever";
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
 import { ContextProjectionCoordinator } from "./context-projection-coordinator";
 import { DeterministicThreadSummaryProjector } from "./deterministic-thread-summary-projector";
@@ -65,15 +67,20 @@ export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePlu
   },
 });
 
-export const contextProjectionCoordinatorPlugin = definePlugin({
+export interface ContextProjectionCoordinatorPluginConfig {
+  lexical_index?: ContextLexicalIndex;
+}
+
+export const contextProjectionCoordinatorPlugin = definePlugin<ContextProjectionCoordinatorPluginConfig>({
   name: "context-projection-coordinator",
   inject: ["blobs", "context-authority", "context-artifacts", "context-projectors"],
-  apply(ctx) {
+  apply(ctx, config) {
     ctx.provide("context-projections", new ContextProjectionCoordinator(
       ctx.get("context-authority"),
       ctx.get("context-artifacts"),
       ctx.get("context-projectors"),
       ctx.get("blobs"),
+      config?.lexical_index,
     ));
   },
 });
@@ -83,5 +90,15 @@ export const deterministicThreadSummaryProjectorPlugin = definePlugin({
   inject: ["context-projectors"],
   apply(ctx) {
     return ctx.get("context-projectors").register(new DeterministicThreadSummaryProjector());
+  },
+});
+
+export const indexedEventRetrieverPlugin = definePlugin({
+  name: "context-retriever-event-lexical-indexed",
+  inject: ["context-retrievers", "context-lexical-index"],
+  apply(ctx) {
+    return ctx.get("context-retrievers").register(
+      new IndexedEventRetriever(ctx.get("context-lexical-index")),
+    );
   },
 });

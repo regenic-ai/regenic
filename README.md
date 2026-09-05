@@ -315,7 +315,10 @@ pnpm local publish-evidence-bundle --database ./regenic.db --org local-owner \
 Context assembly is deterministic and works without a model. It reads only
 committed Event/Blob evidence, applies the Personal authority boundary before
 ranking, persists an immutable snapshot and bundle, and supports replay after a
-restart.
+restart. Personal uses a rebuildable SQLite FTS5 sidecar for literal Unicode
+search. ACL and lifecycle resolution happen before the index receives exact
+Event/hash keys; unavailable or partial indexes fall back to the same local
+scoring rules.
 
 ```bash
 pnpm local context-assemble --database ./regenic.db --blob-root ./blobs \
@@ -326,6 +329,16 @@ pnpm local context-snapshot --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
+```
+
+Run a versioned synthetic evaluation dataset and optionally persist its
+deterministic report. The report includes Recall@K, MRR@K, nDCG@K, citation
+coverage, and forbidden/stale-selection safety gates, but no message bodies.
+
+```bash
+pnpm local context-evaluate --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --dataset ./context-evaluation.json --k 10 \
+	--output ./context-evaluation-report.json
 ```
 
 Project a replayed Context bundle into the existing EvidenceBundle v1 JSONL

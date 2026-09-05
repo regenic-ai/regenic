@@ -178,10 +178,16 @@ describe("authority-backed context integration", () => {
     const read = await authority.openContextRead("local-owner");
     await blobs.delete(read.events[0].content_hash);
 
+    const source = new AuthorityContextEvidenceSource(authority, blobs);
+    const metadata = await source.openRead(
+      contextRequest({ query: undefined, anchors: undefined }),
+    );
+    assert.equal(metadata.events[0].text, undefined);
     await assert.rejects(
-      new AuthorityContextEvidenceSource(authority, blobs).openRead(
-        contextRequest({ query: undefined, anchors: undefined }),
-      ),
+      source.materialize(metadata.events.map((event) => ({
+        ...event,
+        status: "current",
+      }))),
       /missing Blob/,
     );
     await authority.close();

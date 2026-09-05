@@ -43,6 +43,9 @@ importers:
       '@regenic/feishu-connector':
         specifier: workspace:*
         version: link:../../packages/feishu-connector
+      '@regenic/lexical-index':
+        specifier: workspace:*
+        version: link:../../packages/lexical-index
       '@regenic/model-provider':
         specifier: workspace:*
         version: link:../../packages/model-provider
@@ -300,6 +303,28 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/lexical-index:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+      better-sqlite3:
+        specifier: 11.10.0
+        version: 11.10.0
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/local-cli:
     dependencies:
       '@regenic/authority-store':
@@ -317,6 +342,9 @@ importers:
       '@regenic/dsh-connector':
         specifier: workspace:*
         version: link:../dsh-connector
+      '@regenic/lexical-index':
+        specifier: workspace:*
+        version: link:../lexical-index
       '@regenic/model-provider':
         specifier: workspace:*
         version: link:../model-provider

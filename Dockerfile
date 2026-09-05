@@ -18,6 +18,7 @@ COPY packages/domain/package.json packages/domain/
 COPY packages/dsh-connector/package.json packages/dsh-connector/
 COPY packages/feishu-connector/package.json packages/feishu-connector/
 COPY packages/local-cli/package.json packages/local-cli/
+COPY packages/lexical-index/package.json packages/lexical-index/
 COPY packages/model-provider/package.json packages/model-provider/
 COPY packages/plugin-host/package.json packages/plugin-host/
 COPY packages/slack-connector/package.json packages/slack-connector/
@@ -35,6 +36,7 @@ RUN pnpm --filter @regenic/plugin-host build \
   && pnpm --filter @regenic/config build \
   && pnpm --filter @regenic/blob-store build \
   && pnpm --filter @regenic/authority-store build \
+  && pnpm --filter @regenic/lexical-index build \
   && pnpm --filter @regenic/context-engine build \
   && pnpm --filter @regenic/cursor-connector build \
   && pnpm --filter @regenic/model-provider build \
@@ -42,10 +44,11 @@ RUN pnpm --filter @regenic/plugin-host build \
   && pnpm --filter @regenic/feishu-connector build \
   && pnpm --filter @regenic/slack-connector build \
   && pnpm --filter @regenic/whatsapp-personal build \
-  && ls -la packages/authority-store/dist packages/blob-store/dist packages/config/dist packages/context-engine/dist packages/cursor-connector/dist packages/domain/dist packages/model-provider/dist \
+  && ls -la packages/authority-store/dist packages/blob-store/dist packages/config/dist packages/context-engine/dist packages/cursor-connector/dist packages/domain/dist packages/lexical-index/dist packages/model-provider/dist \
   && test -f packages/config/dist/index.d.ts \
   && test -f packages/domain/dist/index.d.ts \
   && test -f packages/context-engine/dist/index.d.ts \
+  && test -f packages/lexical-index/dist/index.d.ts \
   && test -f packages/cursor-connector/dist/index.d.ts \
   && test -f packages/model-provider/dist/index.d.ts \
   && pnpm --filter @regenic/api build \

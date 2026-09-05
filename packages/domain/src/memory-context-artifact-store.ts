@@ -82,10 +82,15 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
         throw new Error("Projection checkpoint cannot move backwards");
       }
       if (current.sequence === stableCheckpoint.sequence) {
-        if (canonicalContextJson(current) !== canonicalContextJson(stableCheckpoint)) {
-          throw new Error("Projection checkpoint cannot change at the same sequence");
+        if (canonicalContextJson(current) === canonicalContextJson(stableCheckpoint)) {
+          return;
         }
-        return;
+        if (
+          current.watermark === stableCheckpoint.watermark ||
+          Date.parse(stableCheckpoint.updated_at) <= Date.parse(current.updated_at)
+        ) {
+          throw new Error("Projection checkpoint cannot regress at the same sequence");
+        }
       }
     }
     this.checkpoints.set(key, clone(stableCheckpoint));

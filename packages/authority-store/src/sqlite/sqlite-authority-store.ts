@@ -51,6 +51,7 @@ import type {
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
+  RenewContextProjectionJob,
   ContextSnapshot,
   EventListQuery,
   EventRecord,
@@ -621,7 +622,6 @@ export class SqliteAuthorityStore
         read_epoch: `authority:${hashCanonicalContext({
           org_id: orgId,
           ...(threadId ? { thread_id: threadId } : {}),
-          recorded_at: recordedAt,
           events,
           lifecycle_heads: lifecycleHeads,
         })}`,
@@ -804,10 +804,15 @@ export class SqliteAuthorityStore
           throw new Error("Projection checkpoint cannot move backwards");
         }
         if (stored.sequence === stableCheckpoint.sequence) {
-          if (current.payload_json !== canonicalContextJson(stableCheckpoint)) {
-            throw new Error("Projection checkpoint cannot change at the same sequence");
+          if (current.payload_json === canonicalContextJson(stableCheckpoint)) {
+            return;
           }
-          return;
+          if (
+            stored.watermark === stableCheckpoint.watermark ||
+            Date.parse(stableCheckpoint.updated_at) <= Date.parse(stored.updated_at)
+          ) {
+            throw new Error("Projection checkpoint cannot regress at the same sequence");
+          }
         }
       }
       const payload = canonicalContextJson(stableCheckpoint);
@@ -895,8 +900,26 @@ export class SqliteAuthorityStore
         SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
             next_retry_at = NULL, last_error = NULL, updated_at = ?
         WHERE id = ? AND status = 'running' AND lease_owner = ?
+          AND lease_expires_at > ?
       `,
-    ).run(input.completed_at, input.id, input.owner).changes === 1;
+    ).run(input.completed_at, input.id, input.owner, input.completed_at).changes === 1;
+  }
+
+  async renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean> {
+    this.assertWritable();
+    assertProjectionSettle(input.id, input.owner, input.now);
+    if (!Number.isSafeInteger(input.lease_ms) || input.lease_ms < 1) {
+      throw new Error("Invalid Context projection lease renewal");
+    }
+    const leaseExpiresAt = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
+    return this.database.prepare(
+      `
+        UPDATE context_projection_outbox
+        SET lease_expires_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'running' AND lease_owner = ?
+          AND lease_expires_at > ?
+      `,
+    ).run(leaseExpiresAt, input.now, input.id, input.owner, input.now).changes === 1;
   }
 
   async failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean> {
@@ -911,8 +934,16 @@ export class SqliteAuthorityStore
         SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
             next_retry_at = ?, last_error = ?, updated_at = ?
         WHERE id = ? AND status = 'running' AND lease_owner = ?
+          AND lease_expires_at > ?
       `,
-    ).run(input.next_retry_at, input.error_code.slice(0, 120), input.failed_at, input.id, input.owner).changes === 1;
+    ).run(
+      input.next_retry_at,
+      input.error_code.slice(0, 120),
+      input.failed_at,
+      input.id,
+      input.owner,
+      input.failed_at,
+    ).changes === 1;
   }
 
   async listContextProjectionJobs(orgId: string): Promise<ContextProjectionJob[]> {
@@ -1764,6 +1795,9 @@ export class SqliteAuthorityStore
     this.assertWritable();
     return this.database.transaction(() => {
       const now = new Date().toISOString();
+      const affectedEvents = this.database.prepare(
+        `SELECT id, org_id FROM events WHERE content_hash = ? ORDER BY sequence`,
+      ).all(input.old_content_hash) as Array<{ id: string; org_id: string }>;
       this.insertBlobRow(
         input.new_content_hash,
         input.content_media_type,
@@ -1781,6 +1815,9 @@ export class SqliteAuthorityStore
       const updated = this.database
         .prepare(`UPDATE events SET content_hash = ? WHERE content_hash = ?`)
         .run(input.new_content_hash, input.old_content_hash);
+      for (const event of affectedEvents) {
+        this.enqueueContextProjection(event.id, event.org_id, now);
+      }
       if (input.old_content_hash !== input.new_content_hash) {
         this.database
           .prepare(
@@ -2813,15 +2850,7 @@ export class SqliteAuthorityStore
     if (headUpdate.changes !== 1) {
       throw new AuthorityConflictError();
     }
-    this.database
-      .prepare(
-        `
-          INSERT INTO context_projection_outbox (
-            id, org_id, event_id, status, attempts, created_at, updated_at
-          ) VALUES (?, ?, ?, 'pending', 0, ?, ?)
-        `,
-      )
-      .run(`context-projection:${event.id}`, event.org_id, event.id, event.ingested_at, event.ingested_at);
+    this.enqueueContextProjection(event.id, event.org_id, event.ingested_at);
     this.refreshThreadHeadWithinTransaction(event.org_id, event.thread_id);
     return event;
   }
@@ -2896,6 +2925,18 @@ export class SqliteAuthorityStore
         face.face_occurred_at,
         currentWork ? 1 : 0,
       );
+  private enqueueContextProjection(eventId: string, orgId: string, at: string): void {
+    this.database.prepare(
+      `
+        INSERT INTO context_projection_outbox (
+          id, org_id, event_id, status, attempts, created_at, updated_at
+        ) VALUES (?, ?, ?, 'pending', 0, ?, ?)
+        ON CONFLICT(event_id) DO UPDATE SET
+          status = 'pending', attempts = 0, lease_owner = NULL,
+          lease_expires_at = NULL, next_retry_at = NULL, last_error = NULL,
+          updated_at = excluded.updated_at
+      `,
+    ).run(`context-projection:${eventId}`, orgId, eventId, at, at);
   }
 
   private inboxSql(

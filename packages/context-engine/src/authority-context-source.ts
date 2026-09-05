@@ -2,6 +2,7 @@ import {
   bodyTextFromStored,
   canonicalContextJson,
   type BlobStore,
+  type AuthorizedContextSourceEvent,
   type ContextAuthorityRead,
   type ContextAuthorityReader,
   type ContextEvidenceSource,
@@ -26,22 +27,6 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
     const eligibleGroups = [...groups.entries()].filter(([key, events]) =>
       hasContextMetadata(events) && isClosedLifecycle(events, heads.get(key)),
     );
-    const hashes = [
-      ...new Set(
-        eligibleGroups.flatMap(([, events]) =>
-          events.flatMap((event) =>
-            event.operation !== "tombstone" && event.content_hash
-              ? [event.content_hash]
-              : [],
-          ),
-        ),
-      ),
-    ];
-    const bodies = await this.blobs.getMany(hashes);
-    if (hashes.some((hash) => !bodies.has(hash))) {
-      throw new Error("Context authority Event references a missing Blob");
-    }
-
     const events: ContextSourceEvent[] = [];
     const lifecycleHeads: ContextLifecycleHead[] = [];
     for (const [key, lifecycle] of eligibleGroups) {
@@ -50,10 +35,6 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
       for (const source of lifecycle) {
         const tombstone = source.operation === "tombstone";
         const contentHash = tombstone ? undefined : source.content_hash;
-        const bytes = contentHash ? bodies.get(contentHash) : undefined;
-        const text = bytes && source.content_media_type
-          ? bodyTextFromStored(bytes, source.content_media_type)
-          : undefined;
         events.push({
           event: {
             event_id: source.id,
@@ -71,7 +52,9 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
           thread_id: source.thread_id!,
           actor_id: source.actor_id!,
           required_scope_ids: [...source.required_scope_ids!],
-          ...(text === undefined ? {} : { text }),
+          ...(source.content_media_type
+            ? { content_media_type: source.content_media_type }
+            : {}),
         });
       }
     }
@@ -83,6 +66,29 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
       lifecycle_heads: lifecycleHeads.sort(compareHeads),
       events,
     };
+  }
+
+  async materialize(
+    events: AuthorizedContextSourceEvent[],
+  ): Promise<AuthorizedContextSourceEvent[]> {
+    const hashes = [...new Set(events.flatMap((source) =>
+      source.event.content_hash ? [source.event.content_hash] : [],
+    ))];
+    const bodies = await this.blobs.getMany(hashes);
+    if (hashes.some((hash) => !bodies.has(hash))) {
+      throw new Error("Context authority Event references a missing Blob");
+    }
+    return events.map((source) => {
+      const contentHash = source.event.content_hash;
+      const bytes = contentHash ? bodies.get(contentHash) : undefined;
+      const text = bytes && source.content_media_type
+        ? bodyTextFromStored(bytes, source.content_media_type)
+        : undefined;
+      return {
+        ...structuredClone(source),
+        ...(text === undefined ? {} : { text }),
+      };
+    });
   }
 }
 

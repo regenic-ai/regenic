@@ -97,6 +97,7 @@ export interface ContextSourceEvent {
   thread_id?: string;
   actor_id?: string;
   required_scope_ids: string[];
+  content_media_type?: string;
   text?: string;
   estimated_tokens?: number;
   attrs?: Record<string, JsonValue>;
@@ -122,6 +123,9 @@ export interface AuthorizedContextSourceEvent extends ContextSourceEvent {
 
 export interface ContextEvidenceSource {
   openRead(request: ContextRequest): Promise<ContextSourceRead>;
+  materialize?(
+    events: AuthorizedContextSourceEvent[],
+  ): Promise<AuthorizedContextSourceEvent[]>;
 }
 
 export interface ContextAuthorityRead {
@@ -179,10 +183,17 @@ export interface RetrievedContextCandidate {
   item: ContextBundleItem;
 }
 
+export interface ContextRetrievalResult {
+  candidates: RetrievedContextCandidate[];
+  degradation_flags?: string[];
+}
+
 export interface ContextRetriever {
   readonly id: string;
   capabilities(): ContextRetrievalCapabilities;
-  retrieve(plan: AuthorizedContextRetrievalPlan): Promise<RetrievedContextCandidate[]>;
+  retrieve(
+    plan: AuthorizedContextRetrievalPlan,
+  ): Promise<RetrievedContextCandidate[] | ContextRetrievalResult>;
 }
 
 export interface ContextProjectorRegistry {
@@ -208,6 +219,12 @@ export interface ContextProjectionRunner {
     stored_artifacts: number;
     checkpoint_sequence: number;
   }>>;
+  syncLexicalIndex(
+    orgId: string,
+    generation: string,
+    eventIds?: string[],
+    threadId?: string,
+  ): Promise<void>;
 }
 
 export interface ContextRetrieverRegistry {

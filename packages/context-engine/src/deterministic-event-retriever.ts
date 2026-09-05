@@ -1,10 +1,11 @@
+import { scoreContextLexicalText } from "@regenic/domain";
 import type {
+  AuthorizedContextSourceEvent,
   AuthorizedContextRetrievalPlan,
   ContextCandidate,
   ContextRequest,
   ContextRetriever,
   ContextRetrievalCapabilities,
-  ContextSourceEvent,
   RetrievedContextCandidate,
 } from "@regenic/domain";
 
@@ -28,20 +29,31 @@ export class DeterministicEventRetriever implements ContextRetriever {
     if (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event")) {
       return [];
     }
-    const retrievalTime = plan.request.temporal.mode === "as_of"
-      ? plan.request.temporal.recorded_at
-      : plan.recorded_at;
-    return plan.events
-      .filter((source) => matchesFilters(source, plan.request))
-      .filter((source) => matchesAnchors(source, plan.request))
-      .filter((source) => withinMaxAge(source, plan.request, retrievalTime))
-      .map((source) => toRetrievedCandidate(source, source.status, plan.request, retrievalTime))
+    const retrievalTime = retrievalTimeFor(plan);
+    return eligibleEventSources(plan)
+      .map((source) => eventCandidateFor(source, plan.request, retrievalTime))
       .filter((candidate): candidate is RetrievedContextCandidate => candidate !== null)
       .sort((left, right) => compare(left.candidate.candidate_id, right.candidate.candidate_id));
   }
 }
 
-function matchesAnchors(source: ContextSourceEvent, request: ContextRequest): boolean {
+export function retrievalTimeFor(plan: AuthorizedContextRetrievalPlan): string {
+  return plan.request.temporal.mode === "as_of"
+    ? plan.request.temporal.recorded_at
+    : plan.recorded_at;
+}
+
+export function eligibleEventSources(
+  plan: AuthorizedContextRetrievalPlan,
+): AuthorizedContextSourceEvent[] {
+  const retrievalTime = retrievalTimeFor(plan);
+  return plan.events
+    .filter((source) => matchesFilters(source, plan.request))
+    .filter((source) => matchesAnchors(source, plan.request))
+    .filter((source) => withinMaxAge(source, plan.request, retrievalTime));
+}
+
+function matchesAnchors(source: AuthorizedContextSourceEvent, request: ContextRequest): boolean {
   if (!request.anchors || request.anchors.length === 0) {
     return true;
   }
@@ -57,7 +69,7 @@ function matchesAnchors(source: ContextSourceEvent, request: ContextRequest): bo
 }
 
 function withinMaxAge(
-  source: ContextSourceEvent,
+  source: AuthorizedContextSourceEvent,
   request: ContextRequest,
   recordedAt: string,
 ): boolean {
@@ -68,9 +80,8 @@ function withinMaxAge(
   return ageMs <= request.budget.max_age_days * 86_400_000;
 }
 
-function toRetrievedCandidate(
-  source: ContextSourceEvent,
-  status: NonNullable<ContextCandidate["status"]>,
+export function eventCandidateFor(
+  source: AuthorizedContextSourceEvent,
   request: ContextRequest,
   recordedAt: string,
 ): RetrievedContextCandidate | null {
@@ -78,7 +89,7 @@ function toRetrievedCandidate(
   if (!contentHash) {
     return null;
   }
-  const queryScore = lexicalScore(source.text, request.query);
+  const queryScore = scoreContextLexicalText(source.text, request.query);
   if (request.query && queryScore.lexical === 0) {
     return null;
   }
@@ -98,7 +109,7 @@ function toRetrievedCandidate(
     evidence,
     required_scope_ids: [...source.required_scope_ids],
     recorded_at: source.event.ingested_at,
-    status,
+    status: source.status,
     content_hash: contentHash,
     scores: {
       anchor: anchorScore(source, request),
@@ -115,7 +126,7 @@ function toRetrievedCandidate(
       candidate_id: candidate.candidate_id,
       resource_id: candidate.resource_id,
       kind: candidate.kind,
-      status,
+      status: candidate.status,
       ...(source.text === undefined ? {} : { text: source.text }),
       content_hash: contentHash,
       evidence,
@@ -124,36 +135,7 @@ function toRetrievedCandidate(
   };
 }
 
-function lexicalScore(text: string | undefined, query: string | undefined): {
-  lexical: number;
-  exact_match: number;
-} {
-  if (!query) {
-    return { lexical: 0, exact_match: 0 };
-  }
-  const normalizedText = normalize(text);
-  const normalizedQuery = normalize(query);
-  if (!normalizedText || !normalizedQuery) {
-    return { lexical: 0, exact_match: 0 };
-  }
-  const terms = uniqueTokens(normalizedQuery);
-  const textTokens = new Set(uniqueTokens(normalizedText));
-  const matched = terms.filter((term) => textTokens.has(term)).length;
-  return {
-    lexical: terms.length === 0 ? 0 : matched / terms.length,
-    exact_match: normalizedText.includes(normalizedQuery) ? 1 : 0,
-  };
-}
-
-function uniqueTokens(value: string): string[] {
-  return [...new Set(value.match(/[\p{L}\p{N}_-]+/gu) ?? [])];
-}
-
-function normalize(value: string | undefined): string {
-  return (value ?? "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function anchorScore(source: ContextSourceEvent, request: ContextRequest): number {
+function anchorScore(source: AuthorizedContextSourceEvent, request: ContextRequest): number {
   if (!request.anchors || request.anchors.length === 0) {
     return 0;
   }
@@ -173,7 +155,7 @@ function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function matchesFilters(source: ContextSourceEvent, request: ContextRequest): boolean {
+function matchesFilters(source: AuthorizedContextSourceEvent, request: ContextRequest): boolean {
   const filters = request.filters;
   if (!filters) {
     return true;

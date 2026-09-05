@@ -66,6 +66,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "putCheckpoint",
   "claimContextProjectionJobs",
   "completeContextProjectionJob",
+  "renewContextProjectionJob",
   "failContextProjectionJob",
   "putConversationPref",
   "clearOperationalData",

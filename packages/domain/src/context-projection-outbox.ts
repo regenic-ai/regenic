@@ -27,6 +27,13 @@ export interface CompleteContextProjectionJob {
   completed_at: string;
 }
 
+export interface RenewContextProjectionJob {
+  id: string;
+  owner: string;
+  now: string;
+  lease_ms: number;
+}
+
 export interface FailContextProjectionJob {
   id: string;
   owner: string;
@@ -40,4 +47,5 @@ export interface ContextProjectionOutboxStore {
   completeContextProjectionJob(input: CompleteContextProjectionJob): Promise<boolean>;
   failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean>;
   listContextProjectionJobs(orgId: string): Promise<ContextProjectionJob[]>;
+  renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean>;
 }
