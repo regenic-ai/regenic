@@ -1131,6 +1131,35 @@ export async function deleteRecipe(id: string): Promise<void> {
   }
 }
 
+export async function tryRecipe(
+  id: string,
+  input?: { thread_id?: string; write_back?: boolean },
+): Promise<{ thread_id: string }> {
+  const response = await fetch(`${origin()}/v1/me/recipes/${id}/try`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input ?? {}),
+  });
+  const body = (await response.json()) as
+    | { thread_id?: string; error?: { message?: string } }
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `recipe try ${response.status}`,
+    );
+  }
+  const thread_id =
+    "thread_id" in body && typeof body.thread_id === "string"
+      ? body.thread_id
+      : input?.thread_id ?? "";
+  if (!thread_id) {
+    throw new Error("recipe try returned no chat");
+  }
+  return { thread_id };
+}
+
 export async function runWorkItem(id: string): Promise<void> {
   const response = await fetch(`${origin()}/v1/me/work-items/${id}/run`, {
     method: "POST",

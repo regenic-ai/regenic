@@ -399,6 +399,15 @@ export class PersonalController {
     return this.guard(() => this.work.deleteRecipe(id));
   }
 
+  @Post("recipes/:id/try")
+  tryRecipe(
+    @Param("id") id: string,
+    @Body() body: { thread_id?: string; write_back?: boolean } | undefined,
+  ) {
+    noteHumanActivity();
+    return this.guard(() => this.work.tryRecipe(id, body ?? {}));
+  }
+
   @Get("executors")
   listExecutors(
     @Query("locale") locale?: string,
