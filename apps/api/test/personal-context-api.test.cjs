@@ -6,7 +6,13 @@ const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService } = require("@regenic/domain");
+const {
+  INGEST_SCHEMA_VERSION,
+  IngestionService,
+  canonicalContextJson,
+  hashCanonicalContext,
+  hashContextArtifactInputs,
+} = require("@regenic/domain");
 const { createHttpApp } = require("../dist/http-app");
 
 const roots = [];
@@ -157,6 +163,43 @@ async function postJson(url, body) {
 }
 
 describe("personal context API", () => {
+  it("accepts a proposed summary and retrieves it only after lifecycle approval", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestEvidence(database, blobRoot);
+    const authority = new SqliteAuthorityStore(database);
+    const blobs = new FsBlobStore(blobRoot);
+    const event = await authority.getEvent("local-owner", eventId);
+    const evidence = {
+      event_id: eventId, source: "synthetic-chat", external_id: "chat-1:message-1",
+      operation: "create", occurred_at: "2026-08-30T00:00:00.000Z",
+      content_hash: event.content_hash,
+    };
+    const body = { schema_version: "1.0", thread_id: "chat-1", messages: [{ text: "Release approved" }] };
+    const bodyHash = hashCanonicalContext(body);
+    await blobs.put(bodyHash, Buffer.from(canonicalContextJson(body)), "application/vnd.regenic.context-artifact+json");
+    await authority.putArtifact({
+      id: "summary-api-1", org_id: "local-owner", kind: "thread_summary", schema_version: "1.0",
+      algorithm_version: "summary-v1", generation: "generation-1", input_refs: [evidence],
+      input_hash: hashContextArtifactInputs({ input_refs: [evidence] }), body_hash: bodyHash,
+      status: "proposed", required_scope_ids: event.required_scope_ids, recorded_at: "2026-08-30T01:00:00.000Z", attrs: body,
+    });
+    authority.close();
+    const { origin } = await startApi(root);
+    const before = await fetch(`${origin}/v1/me/context/artifacts`);
+    assert.equal(before.status, 200);
+    assert.equal((await before.json())[0].status, "proposed");
+    const accepted = await postJson(`${origin}/v1/me/context/artifacts/summary-api-1/decision`, { status: "accepted" });
+    assert.equal(accepted.response.status, 201, accepted.text);
+    assert.equal(JSON.parse(accepted.text).status, "accepted");
+    const assembled = await postJson(`${origin}/v1/me/context/assemble`, {
+      ...assembleBody(), requested_kinds: ["artifact"], query: "release approved",
+    });
+    assert.equal(assembled.response.status, 201);
+    assert.equal(JSON.parse(assembled.text).bundle.sections.find((section) => section.kind === "summaries")?.items.length, 1);
+  });
+
   it("assembles, inspects, replays, and asks over real SQLite evidence", async () => {
     const root = await createRoot();
     const model = await startModelStub();

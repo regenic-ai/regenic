@@ -45,6 +45,7 @@ export interface FailContextProjectionJob {
 export interface ContextProjectionOutboxStore {
   claimContextProjectionJobs(input: ClaimContextProjectionJobs): Promise<ContextProjectionJob[]>;
   completeContextProjectionJob(input: CompleteContextProjectionJob): Promise<boolean>;
+  renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean>;
   failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean>;
   listContextProjectionJobs(orgId: string): Promise<ContextProjectionJob[]>;
   renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean>;

@@ -7,6 +7,7 @@ import {
 import { DeterministicContextEngine } from "./deterministic-context-engine";
 import { DeterministicEventRetriever } from "./deterministic-event-retriever";
 import { IndexedEventRetriever } from "./indexed-event-retriever";
+import { AcceptedThreadSummaryRetriever } from "./accepted-thread-summary-retriever";
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
 import { ContextProjectionCoordinator } from "./context-projection-coordinator";
 import { DeterministicThreadSummaryProjector } from "./deterministic-thread-summary-projector";
@@ -100,5 +101,16 @@ export const indexedEventRetrieverPlugin = definePlugin({
     return ctx.get("context-retrievers").register(
       new IndexedEventRetriever(ctx.get("context-lexical-index")),
     );
+  },
+});
+
+export const acceptedThreadSummaryRetrieverPlugin = definePlugin({
+  name: "context-retriever-thread-summary-accepted",
+  inject: ["blobs", "context-artifacts", "context-retrievers"],
+  apply(ctx) {
+    return ctx.get("context-retrievers").register(new AcceptedThreadSummaryRetriever(
+      ctx.get("context-artifacts"),
+      ctx.get("blobs"),
+    ));
   },
 });

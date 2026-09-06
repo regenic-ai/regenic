@@ -7,8 +7,11 @@ import type {
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
   ContextArtifact,
+  ContextArtifactDecision,
   ContextArtifactQuery,
+  ContextArtifactState,
   ContextArtifactStore,
+  ContextArtifactSupersession,
   ContextAuthorityRead,
   ContextAuthorityReader,
   ContextBundle,
@@ -165,6 +168,21 @@ export class SqliteSplitAuthorityStore
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
     return this.reader.call("listArtifacts", [query]);
+  }
+
+  async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
+    return this.reader.call("getArtifactState", [orgId, artifactId]);
+  }
+
+  async decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState> {
+    return this.writer.call("decideArtifact", [input]);
+  }
+
+  async supersedeArtifact(input: ContextArtifactSupersession): Promise<{
+    superseded: ContextArtifactState;
+    accepted: ContextArtifactState;
+  }> {
+    return this.writer.call("supersedeArtifact", [input]);
   }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
