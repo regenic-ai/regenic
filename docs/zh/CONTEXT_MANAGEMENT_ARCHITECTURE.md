@@ -521,6 +521,13 @@ lifecycle head，为每个选中 lifecycle 保留全部 Event 作为 evidence，
 `daily_digest` proposal。Canonical body 按稳定顺序列出每个 thread 的 current head，并由
 Artifact ID、input hash、scope 并集和 body hash 绑定。
 
+每个 Event 还会随 immutable lifecycle metadata 持久保存经校验、由来源提供的
+`direction_tags`、`weight_hints` 与 JSON `attrs`。它们可在 authority read epoch 中供
+确定性投影使用，重启后和经 SQLite split reader 读取时也会保留。这些值只属于投影输入：
+它们不授予 scope 访问权限，也不能覆盖 ACL、lifecycle、Artifact acceptance 或 policy
+decision。后续支持方向和权重的 D0 版本必须显式定义受控词表及解释规则，不能将来源
+metadata 当作可信 authority。
+
 投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
 返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。
 这刻意不是 RFC 0007 中带方向与评分的完整 distillation：direction tag、weight hint、组织

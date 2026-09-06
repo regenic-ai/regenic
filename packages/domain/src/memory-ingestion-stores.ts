@@ -551,6 +551,9 @@ export class MemoryAuthorityStore
           | "thread_id"
           | "actor_id"
           | "required_scope_ids"
+          | "direction_tags"
+          | "weight_hints"
+          | "attrs"
         >
       >,
   ): EventRecord {
@@ -567,6 +570,9 @@ export class MemoryAuthorityStore
       required_scope_ids: input.required_scope_ids
         ? [...input.required_scope_ids]
         : undefined,
+      direction_tags: input.direction_tags ? [...input.direction_tags] : undefined,
+      weight_hints: input.weight_hints ? structuredClone(input.weight_hints) : undefined,
+      attrs: input.attrs ? structuredClone(input.attrs) : undefined,
       occurred_at: input.occurred_at,
       ingested_at: new Date().toISOString(),
     };
@@ -591,5 +597,8 @@ function cloneEvent(event: EventRecord): EventRecord {
     ...(event.required_scope_ids
       ? { required_scope_ids: [...event.required_scope_ids] }
       : {}),
+    ...(event.direction_tags ? { direction_tags: [...event.direction_tags] } : {}),
+    ...(event.weight_hints ? { weight_hints: structuredClone(event.weight_hints) } : {}),
+    ...(event.attrs ? { attrs: structuredClone(event.attrs) } : {}),
   };
 }

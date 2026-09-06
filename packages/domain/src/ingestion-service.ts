@@ -729,13 +729,16 @@ function previewCreate(
 
 function eventContextMetadata(
   record: IngestRecord,
-): Pick<NewEvent, "thread_id" | "actor_id" | "required_scope_ids"> {
+): Pick<NewEvent, "thread_id" | "actor_id" | "required_scope_ids" | "direction_tags" | "weight_hints" | "attrs"> {
   return {
     thread_id: conversationId(record.source, record.external_id),
     actor_id: record.actor.id,
     required_scope_ids: [
       threadIdOf({ source: record.source, target: record.scope.id }),
     ],
+    ...(record.direction_tags ? { direction_tags: [...new Set(record.direction_tags)].sort() } : {}),
+    ...(record.weight_hints ? { weight_hints: structuredClone(record.weight_hints) } : {}),
+    ...(record.attrs ? { attrs: structuredClone(record.attrs) } : {}),
   };
 }
 

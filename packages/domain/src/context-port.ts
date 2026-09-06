@@ -12,7 +12,7 @@ import type { ContextCandidate, ContextCandidateKind } from "./context-candidate
 import type { EvidenceReference } from "./context-consumer";
 import type { ContextRequest } from "./context-request";
 import type { ContextSnapshot } from "./context-snapshot";
-import type { EventRecord, JsonValue } from "./ingestion";
+import type { EventRecord, JsonValue, WeightHints } from "./ingestion";
 
 export interface ContextProjectionCapabilities {
   artifact_kinds: ContextArtifactKind[];
@@ -112,6 +112,8 @@ export interface ContextSourceEvent {
   content_media_type?: string;
   text?: string;
   estimated_tokens?: number;
+  direction_tags?: string[];
+  weight_hints?: WeightHints;
   attrs?: Record<string, JsonValue>;
 }
 

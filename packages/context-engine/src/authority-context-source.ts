@@ -52,6 +52,13 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
           thread_id: source.thread_id!,
           actor_id: source.actor_id!,
           required_scope_ids: [...source.required_scope_ids!],
+          ...(source.direction_tags
+            ? { direction_tags: [...source.direction_tags] }
+            : {}),
+          ...(source.weight_hints
+            ? { weight_hints: structuredClone(source.weight_hints) }
+            : {}),
+          ...(source.attrs ? { attrs: structuredClone(source.attrs) } : {}),
           ...(source.content_media_type
             ? { content_media_type: source.content_media_type }
             : {}),

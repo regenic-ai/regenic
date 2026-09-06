@@ -111,6 +111,9 @@ interface EventRow {
   thread_id: string | null;
   actor_id: string | null;
   required_scope_ids: unknown;
+  direction_tags: unknown;
+  weight_hints: unknown;
+  attrs: unknown;
   occurred_at: unknown;
   ingested_at: unknown;
 }
@@ -289,6 +292,9 @@ interface InsertEventInput extends SourceIdentity {
   thread_id?: string;
   actor_id?: string;
   required_scope_ids?: string[];
+  direction_tags?: string[];
+  weight_hints?: NewEvent["weight_hints"];
+  attrs?: NewEvent["attrs"];
   occurred_at: string;
   expected_head_id: string | null;
 }
@@ -475,6 +481,7 @@ export class PostgresAuthorityStore
       `
         SELECT id, org_id, source, external_id, operation, content_hash,
                parent_event_id, thread_id, actor_id, required_scope_ids,
+               direction_tags, weight_hints, attrs,
                occurred_at, ingested_at
         FROM events WHERE org_id = $1 AND id = $2
       `,
@@ -557,7 +564,8 @@ export class PostgresAuthorityStore
             `
               SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                      e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                     e.required_scope_ids, e.occurred_at, e.ingested_at,
+                     e.required_scope_ids, e.direction_tags, e.weight_hints, e.attrs,
+                     e.occurred_at, e.ingested_at,
                      b.media_type AS content_media_type
               FROM events e
               LEFT JOIN blobs b ON b.content_hash = e.content_hash
@@ -571,7 +579,8 @@ export class PostgresAuthorityStore
             `
               SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                      e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                     e.required_scope_ids, e.occurred_at, e.ingested_at,
+                     e.required_scope_ids, e.direction_tags, e.weight_hints, e.attrs,
+                     e.occurred_at, e.ingested_at,
                      b.media_type AS content_media_type
               FROM events e
               LEFT JOIN blobs b ON b.content_hash = e.content_hash
@@ -2847,6 +2856,9 @@ export class PostgresAuthorityStore
       required_scope_ids: input.required_scope_ids
         ? [...input.required_scope_ids]
         : undefined,
+      direction_tags: input.direction_tags ? [...input.direction_tags] : undefined,
+      weight_hints: input.weight_hints ? structuredClone(input.weight_hints) : undefined,
+      attrs: input.attrs ? structuredClone(input.attrs) : undefined,
       occurred_at: input.occurred_at,
       ingested_at: new Date().toISOString(),
     };
@@ -2875,8 +2887,8 @@ export class PostgresAuthorityStore
         INSERT INTO events (
           id, org_id, source, external_id, operation, content_hash,
           parent_event_id, revision_id, occurred_at, ingested_at, thread_id,
-          actor_id, required_scope_ids
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          actor_id, required_scope_ids, direction_tags, weight_hints, attrs
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       `,
       [
         event.id,
@@ -2892,6 +2904,9 @@ export class PostgresAuthorityStore
         event.thread_id ?? conversationId(event.source, event.external_id, event.id),
         event.actor_id ?? null,
         jsonb(event.required_scope_ids),
+        jsonb(event.direction_tags),
+        jsonb(event.weight_hints),
+        jsonb(event.attrs),
       ],
       client,
     );
@@ -3207,6 +3222,9 @@ export class PostgresAuthorityStore
         thread_id: row.thread_id,
         actor_id: row.actor_id,
         required_scope_ids: row.required_scope_ids,
+        direction_tags: row.direction_tags,
+        weight_hints: row.weight_hints,
+        attrs: row.attrs,
         occurred_at: row.occurred_at,
         ingested_at: row.ingested_at,
       }),
@@ -3228,6 +3246,13 @@ export class PostgresAuthorityStore
       thread_id: row.thread_id ?? undefined,
       actor_id: row.actor_id ?? undefined,
       required_scope_ids: requiredScopeIds,
+      direction_tags: row.direction_tags
+        ? asJson<string[]>(row.direction_tags)
+        : undefined,
+      weight_hints: row.weight_hints
+        ? asJson<NewEvent["weight_hints"]>(row.weight_hints)
+        : undefined,
+      attrs: row.attrs ? asJson<NewEvent["attrs"]>(row.attrs) : undefined,
       occurred_at: toIso(row.occurred_at),
       ingested_at: toIso(row.ingested_at),
     };

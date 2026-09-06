@@ -220,6 +220,57 @@ describe("SQLite context artifact store", () => {
     store.close();
   });
 
+  it("persists daily digest input metadata through direct, restart, and split reads", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const metadata = {
+      direction_tags: ["outbound", "follow_up"],
+      weight_hints: { urgency: 0.8, importance: 0.6 },
+      attrs: { project: "regenic", participants: ["owner", "reviewer"] },
+    };
+    let store = new SqliteAuthorityStore(path);
+    const event = await store.append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "digest-metadata-1",
+      content_hash: HASH_A,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      thread_id: "thread-1",
+      actor_id: "actor-1",
+      required_scope_ids: ["scope-1"],
+      ...metadata,
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      expected_head_id: null,
+    });
+    assert.deepEqual(await store.getEvent("example-org", event.id), {
+      ...event,
+      ...metadata,
+    });
+    assert.deepEqual((await store.openContextRead("example-org")).events[0], {
+      ...event,
+      ...metadata,
+      content_media_type: "text/plain",
+    });
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    assert.deepEqual((await store.openContextReadForThread("example-org", "thread-1")).events[0], {
+      ...event,
+      ...metadata,
+      content_media_type: "text/plain",
+    });
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.deepEqual((await split.openContextRead("example-org")).events[0], {
+      ...event,
+      ...metadata,
+      content_media_type: "text/plain",
+    });
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
