@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 27;
+export const LATEST_SCHEMA_VERSION = 28;
 
 export const MIGRATIONS = [
   {
@@ -657,6 +657,17 @@ export const MIGRATIONS = [
       );
       CREATE INDEX context_artifact_states_query_idx
         ON context_artifact_states (org_id, status, decided_at, artifact_id);
+    `,
+  },
+  {
+    version: 28,
+    sql: `
+      ALTER TABLE events ADD COLUMN direction_tags_json TEXT
+        CHECK (direction_tags_json IS NULL OR json_valid(direction_tags_json));
+      ALTER TABLE events ADD COLUMN weight_hints_json TEXT
+        CHECK (weight_hints_json IS NULL OR json_valid(weight_hints_json));
+      ALTER TABLE events ADD COLUMN attrs_json TEXT
+        CHECK (attrs_json IS NULL OR json_valid(attrs_json));
     `,
   },
 ] as const;

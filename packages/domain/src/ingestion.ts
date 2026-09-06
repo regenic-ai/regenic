@@ -275,6 +275,9 @@ export interface EventRecord extends SourceIdentity {
   thread_id?: string;
   actor_id?: string;
   required_scope_ids?: string[];
+  direction_tags?: string[];
+  weight_hints?: WeightHints;
+  attrs?: Record<string, JsonValue>;
   occurred_at: string;
   ingested_at: string;
 }
@@ -294,6 +297,9 @@ export interface NewEvent extends SourceIdentity {
   thread_id?: string;
   actor_id?: string;
   required_scope_ids?: string[];
+  direction_tags?: string[];
+  weight_hints?: WeightHints;
+  attrs?: Record<string, JsonValue>;
   occurred_at: string;
   expected_head_id: string | null;
 }

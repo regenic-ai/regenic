@@ -124,10 +124,26 @@ interface ContextRequest {
   purpose: string;
   allowed_uses: Array<"display" | "reason" | "draft" | "execute">;
   query?: string;
+
+Each Event also preserves validated source-provided `direction_tags`,
+`weight_hints`, and JSON `attrs` alongside its immutable lifecycle metadata.
+They are available to deterministic projections at the authority read epoch,
+including after restart or through the split SQLite reader. These values are
+projection inputs only: they neither grant scope access nor override ACL,
+lifecycle, Artifact acceptance, or policy decisions. A later direction-aware
+or weighted D0 version must define its controlled vocabulary and interpretation
+explicitly rather than treating source metadata as trusted authority.
   anchors?: Array<{
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
   }>;
+
+每个 Event 还会随 immutable lifecycle metadata 持久保存经校验、由来源提供的
+`direction_tags`、`weight_hints` 与 JSON `attrs`。它们可在 authority read epoch 中供
+确定性投影使用，重启后和经 SQLite split reader 读取时也会保留。这些值只属于投影输入：
+它们不授予 scope 访问权限，也不能覆盖 ACL、lifecycle、Artifact acceptance 或 policy
+decision。后续支持方向和权重的 D0 版本必须显式定义受控词表及解释规则，不能将来源
+metadata 当作可信 authority。
   filters?: {
     sources?: string[];
     thread_ids?: string[];
@@ -575,6 +591,15 @@ implicit "today". It selects current non-tombstoned lifecycle heads whose
 lifecycle as evidence, and emits a deterministic `daily_digest` proposal. The
 canonical body lists the current head per thread in stable order and is bound by
 an Artifact ID, input hash, scope union, and body hash.
+
+Each Event also preserves validated source-provided `direction_tags`,
+`weight_hints`, and JSON `attrs` alongside its immutable lifecycle metadata.
+They are available to deterministic projections at the authority read epoch,
+including after restart or through the split SQLite reader. These values are
+projection inputs only: they neither grant scope access nor override ACL,
+lifecycle, Artifact acceptance, or policy decisions. A later direction-aware
+or weighted D0 version must define its controlled vocabulary and interpretation
+explicitly rather than treating source metadata as trusted authority.
 
 Projection creates a proposal only. The ordinary Artifact lifecycle must accept
 it before the Personal API or CLI returns it. Revision and tombstone correctness

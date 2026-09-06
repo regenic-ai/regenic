@@ -106,6 +106,9 @@ interface EventRow {
   thread_id: string | null;
   actor_id: string | null;
   required_scope_ids_json: string | null;
+  direction_tags_json?: string | null;
+  weight_hints_json?: string | null;
+  attrs_json?: string | null;
   occurred_at: string;
   ingested_at: string;
 }
@@ -256,6 +259,7 @@ const INBOX_COLUMNS = `
   d.reason_codes_json, d.score, d.decided_at,
   e.id, e.source, e.external_id, e.operation, e.content_hash,
   e.parent_event_id, e.thread_id, e.actor_id, e.required_scope_ids_json,
+  e.direction_tags_json, e.weight_hints_json, e.attrs_json,
   e.occurred_at, e.ingested_at
 `;
 
@@ -271,6 +275,9 @@ interface InsertEventInput extends SourceIdentity {
   thread_id?: string;
   actor_id?: string;
   required_scope_ids?: string[];
+  direction_tags?: string[];
+  weight_hints?: NewEvent["weight_hints"];
+  attrs?: NewEvent["attrs"];
   occurred_at: string;
   expected_head_id: string | null;
 }
@@ -488,6 +495,7 @@ export class SqliteAuthorityStore
         `
           SELECT id, org_id, source, external_id, operation, content_hash,
                parent_event_id, thread_id, actor_id, required_scope_ids_json,
+               direction_tags_json, weight_hints_json, attrs_json,
                occurred_at, ingested_at
           FROM events WHERE org_id = ? AND id = ?
         `,
@@ -531,6 +539,7 @@ export class SqliteAuthorityStore
         `
           SELECT id, org_id, source, external_id, operation, content_hash,
                parent_event_id, thread_id, actor_id, required_scope_ids_json,
+               direction_tags_json, weight_hints_json, attrs_json,
                occurred_at, ingested_at
           FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
           ${limit === undefined ? "" : "LIMIT ?"}
@@ -566,7 +575,8 @@ export class SqliteAuthorityStore
             ? `
                  SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                    e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                   e.required_scope_ids_json, e.occurred_at, e.ingested_at,
+                   e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
+                   e.occurred_at, e.ingested_at,
                    b.media_type AS content_media_type
                  FROM events e
                  LEFT JOIN blobs b ON b.content_hash = e.content_hash
@@ -576,7 +586,8 @@ export class SqliteAuthorityStore
             : `
                  SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                    e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                   e.required_scope_ids_json, e.occurred_at, e.ingested_at,
+                   e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
+                   e.occurred_at, e.ingested_at,
                    b.media_type AS content_media_type
                  FROM events e
                  LEFT JOIN blobs b ON b.content_hash = e.content_hash
@@ -2705,7 +2716,8 @@ export class SqliteAuthorityStore
         `
           SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-               e.required_scope_ids_json, e.occurred_at, e.ingested_at
+               e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
+               e.occurred_at, e.ingested_at
           FROM source_heads h
           JOIN events e ON e.id = h.current_event_id
           WHERE h.org_id = ? AND h.source = ? AND h.external_id = ?
@@ -2835,6 +2847,9 @@ export class SqliteAuthorityStore
       required_scope_ids: input.required_scope_ids
         ? [...input.required_scope_ids]
         : undefined,
+      direction_tags: input.direction_tags ? [...input.direction_tags] : undefined,
+      weight_hints: input.weight_hints ? structuredClone(input.weight_hints) : undefined,
+      attrs: input.attrs ? structuredClone(input.attrs) : undefined,
       occurred_at: input.occurred_at,
       ingested_at: new Date().toISOString(),
     };
@@ -2862,8 +2877,8 @@ export class SqliteAuthorityStore
           INSERT INTO events (
             id, org_id, source, external_id, operation, content_hash,
             parent_event_id, revision_id, occurred_at, ingested_at, thread_id,
-            actor_id, required_scope_ids_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            actor_id, required_scope_ids_json, direction_tags_json, weight_hints_json, attrs_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -2882,6 +2897,9 @@ export class SqliteAuthorityStore
         event.required_scope_ids
           ? JSON.stringify(event.required_scope_ids)
           : null,
+        input.direction_tags ? JSON.stringify(input.direction_tags) : null,
+        input.weight_hints ? JSON.stringify(input.weight_hints) : null,
+        input.attrs ? JSON.stringify(input.attrs) : null,
       );
     const headUpdate =
       input.expected_head_id === null
@@ -3195,6 +3213,9 @@ export class SqliteAuthorityStore
         thread_id: row.thread_id,
         actor_id: row.actor_id,
         required_scope_ids_json: row.required_scope_ids_json,
+        direction_tags_json: row.direction_tags_json,
+        weight_hints_json: row.weight_hints_json,
+        attrs_json: row.attrs_json,
         occurred_at: row.occurred_at,
         ingested_at: row.ingested_at,
       }),
@@ -3214,6 +3235,15 @@ export class SqliteAuthorityStore
       actor_id: row.actor_id ?? undefined,
       required_scope_ids: row.required_scope_ids_json
         ? (JSON.parse(row.required_scope_ids_json) as string[])
+        : undefined,
+      direction_tags: row.direction_tags_json
+        ? (JSON.parse(row.direction_tags_json) as string[])
+        : undefined,
+      weight_hints: row.weight_hints_json
+        ? JSON.parse(row.weight_hints_json) as NewEvent["weight_hints"]
+        : undefined,
+      attrs: row.attrs_json
+        ? JSON.parse(row.attrs_json) as NewEvent["attrs"]
         : undefined,
       occurred_at: row.occurred_at,
       ingested_at: row.ingested_at,

@@ -100,7 +100,11 @@ describe("IngestionService", () => {
 
   it("persists a create and returns its stable Event on replay", async () => {
     const { authorityStore, blobStore, service } = createHarness();
-    const batch = createBatch();
+    const batch = createBatch({
+      direction_tags: ["follow_up", "outbound", "follow_up"],
+      weight_hints: { urgency: 0.8, importance: 0.6 },
+      attrs: { project: "regenic" },
+    });
 
     const first = await service.ingest(batch);
     const replay = await service.ingest(batch);
@@ -114,11 +118,17 @@ describe("IngestionService", () => {
         thread_id: authorityStore.allEvents()[0].thread_id,
         actor_id: authorityStore.allEvents()[0].actor_id,
         required_scope_ids: authorityStore.allEvents()[0].required_scope_ids,
+        direction_tags: authorityStore.allEvents()[0].direction_tags,
+        weight_hints: authorityStore.allEvents()[0].weight_hints,
+        attrs: authorityStore.allEvents()[0].attrs,
       },
       {
         thread_id: "regenic:source-event-1",
         actor_id: "local-owner",
         required_scope_ids: ["regenic:personal"],
+        direction_tags: ["follow_up", "outbound"],
+        weight_hints: { urgency: 0.8, importance: 0.6 },
+        attrs: { project: "regenic" },
       },
     );
     assert.equal(blobStore.size, 1);
