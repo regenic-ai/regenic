@@ -53,6 +53,10 @@ export const WeightHintsSchema: z.ZodType<WeightHints> = z
   .object({
     urgency: z.number().finite().optional(),
     importance: z.number().finite().optional(),
+    evidence_class: z
+      .enum(["metric", "demo", "user_verbatim", "decision_record", "opinion"])
+      .optional(),
+    role_tier: z.number().finite().optional(),
   })
   .strict();
 

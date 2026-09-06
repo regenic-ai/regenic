@@ -1,6 +1,6 @@
 import type { ContextArtifactProposal, ContextSourceRead } from "./context-port";
 
-export const CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION = "daily-digest-d0-v1";
+export const CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION = "daily-digest-d0-v2";
 
 export interface DailyDigestProjectionInput {
   org_id: string;

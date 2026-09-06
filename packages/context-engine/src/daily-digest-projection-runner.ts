@@ -1,5 +1,6 @@
 import {
   canonicalContextJson,
+  CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION,
   hashCanonicalContext,
   hashContextArtifactInputs,
   type BlobStore,
@@ -23,7 +24,7 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
     generation?: string;
   }): Promise<{ artifact_id?: string; input_event_count: number }> {
     if (!input.org_id?.trim()) throw new Error("Daily digest organization is required");
-    const generation = input.generation?.trim() || "daily-digest-d0-v1";
+    const generation = input.generation?.trim() || CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION;
     const source = await this.source.openRead({ org_id: input.org_id } as never);
     const heads = new Set(source.lifecycle_heads.map((head) => head.head_event_id));
     const selectedIds = new Set(source.events

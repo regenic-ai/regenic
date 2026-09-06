@@ -26,6 +26,8 @@ export interface ExternalThreadRef {
 export interface WeightHints {
   urgency?: number;
   importance?: number;
+  evidence_class?: "metric" | "demo" | "user_verbatim" | "decision_record" | "opinion";
+  role_tier?: number;
 }
 
 export type ContentPartRole =

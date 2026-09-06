@@ -528,11 +528,17 @@ Artifact ID、input hash、scope 并集和 body hash 绑定。
 decision。后续支持方向和权重的 D0 版本必须显式定义受控词表及解释规则，不能将来源
 metadata 当作可信 authority。
 
+D0 v2 只路由 RFC 0007 规定的受控方向（`product`、`sales`、`customer`、`org`、
+`finance`、`risk`）；未知来源 tag 不会进入任何方向。每个方向内，它按确定性权重分数
+对 current head 做 thread 折叠，只输出 metric、bad-news 或高权重 hypothesis 信号，
+最多保留七项，并在有候选时保留一个 bad-news 席位。选中 head 的完整 lifecycle 仍是
+Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求。
+
 投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
 返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。
-这刻意不是 RFC 0007 中带方向与评分的完整 distillation：direction tag、weight hint、组织
-时区和 append-only decision history 都是独立前置条件。D0 不承诺 artifact as-of retrieval，
-也不执行自动午夜调度。
+这仍是受限的 RFC 0007 D0 子集。组织本地日界、可配置的 role/source/lexicon policy、
+冲突转 clarify、append-only decision history、artifact as-of retrieval 与持久化自动调度
+仍是后续工作。
 
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
