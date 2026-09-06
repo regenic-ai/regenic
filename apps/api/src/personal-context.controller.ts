@@ -39,6 +39,16 @@ export class PersonalContextController {
     return this.guard(() => this.context.listArtifacts());
   }
 
+  @Post("daily-digests/project")
+  projectDailyDigest(@Body() body: unknown) {
+    return this.guard(() => this.context.projectDailyDigest(body));
+  }
+
+  @Get("daily-digests/:utcDate")
+  listDailyDigests(@Param("utcDate") utcDate: string) {
+    return this.guard(() => this.context.listDailyDigests(utcDate));
+  }
+
   @Post("artifacts/:artifactId/decision")
   decideArtifact(@Param("artifactId") artifactId: string, @Body() body: unknown) {
     return this.guard(() => this.context.decideArtifact(artifactId, body));

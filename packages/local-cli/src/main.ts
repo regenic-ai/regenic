@@ -142,8 +142,14 @@ export async function runLocalCli(
     case "context-evaluate":
       await evaluateContext(commandOptions, stdout);
       return;
+    case "context-daily-digest-project":
+      await projectDailyDigest(commandOptions, stdout);
+      return;
+    case "context-daily-digest-get":
+      await getDailyDigests(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get");
   }
 }
 
@@ -1117,4 +1123,49 @@ function requirePositiveInteger(
     throw new Error(`--${name} must be a positive integer`);
   }
   return value;
+}
+
+async function projectDailyDigest(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    writeJson(stdout, await host.get("context-daily-digests").projectDailyDigest({
+      org_id: orgId,
+      utc_date: requireUtcDate(options),
+    }));
+  });
+}
+
+async function getDailyDigests(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const date = requireUtcDate(options);
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    const values = await host.get("context-artifacts").listArtifacts({
+      org_id: orgId,
+      kinds: ["daily_digest"],
+      statuses: ["accepted"],
+    });
+    writeJson(stdout, values.filter((artifact) =>
+      artifact.attrs && typeof artifact.attrs === "object" && !Array.isArray(artifact.attrs) &&
+      artifact.attrs.utc_date === date,
+    ));
+  });
+}
+
+function requireUtcDate(options: CommandOptions): string {
+  const date = requireOption(options, "utc-date");
+  const timestamp = Date.parse(`${date}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
+    throw new Error("--utc-date must be YYYY-MM-DD in UTC");
+  }
+  return date;
 }

@@ -566,6 +566,24 @@ view, and requires an exact evidence-scope union. Failure to verify any of
 these conditions withholds the Artifact rather than falling back to a prior
 summary.
 
+### 8.2 UTC daily digest D0
+
+The Personal baseline includes an explicit UTC-day D0 projector. A caller names
+the `YYYY-MM-DD` period; the system never substitutes the host timezone or an
+implicit "today". It selects current non-tombstoned lifecycle heads whose
+`occurred_at` falls in that UTC date, retains every Event in each selected
+lifecycle as evidence, and emits a deterministic `daily_digest` proposal. The
+canonical body lists the current head per thread in stable order and is bound by
+an Artifact ID, input hash, scope union, and body hash.
+
+Projection creates a proposal only. The ordinary Artifact lifecycle must accept
+it before the Personal API or CLI returns it. Revision and tombstone correctness
+therefore comes from the same lifecycle-head validation as Context retrieval.
+This is intentionally not RFC 0007's scored, direction-aware distillation:
+direction tags, weight hints, organization timezone and append-only decision
+history are separate prerequisites. D0 does not claim artifact as-of retrieval
+or automatic midnight scheduling.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

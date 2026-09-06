@@ -1,7 +1,9 @@
 import { sqliteAuthorityPlugin } from "@regenic/authority-store";
 import { fsBlobPlugin } from "@regenic/blob-store";
 import {
+  acceptedThreadSummaryRetrieverPlugin,
   contextProjectionCoordinatorPlugin,
+  dailyDigestProjectionPlugin,
   deterministicThreadSummaryProjectorPlugin,
   indexedEventRetrieverPlugin,
   personalContextEnginePlugin,
@@ -47,10 +49,12 @@ export async function createLocalHost(options: LocalHostOptions): Promise<Host> 
         path: `${options.database}.lexical.db`,
       });
       await host.plugin(indexedEventRetrieverPlugin);
+      await host.plugin(acceptedThreadSummaryRetrieverPlugin);
       await host.plugin(deterministicThreadSummaryProjectorPlugin);
       await host.plugin(contextProjectionCoordinatorPlugin, {
         lexical_index: host.get("context-lexical-index"),
       });
+      await host.plugin(dailyDigestProjectionPlugin);
       await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });
       await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
     }

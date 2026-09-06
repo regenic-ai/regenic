@@ -331,6 +331,17 @@ pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
 ```
 
+Create a deterministic UTC-day digest proposal, then accept it through the
+Artifact lifecycle before reading it. The date is explicit and uses `YYYY-MM-DD`.
+
+```bash
+pnpm local context-daily-digest-project --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --utc-date 2026-09-06
+
+pnpm local context-daily-digest-get --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --utc-date 2026-09-06
+```
+
 Run a versioned synthetic evaluation dataset and optionally persist its
 deterministic report. The report includes Recall@K, MRR@K, nDCG@K, citation
 coverage, and forbidden/stale-selection safety gates, but no message bodies.

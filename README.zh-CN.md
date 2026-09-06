@@ -329,6 +329,17 @@ pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
 ```
 
+先创建确定性的 UTC 日级 digest proposal，再经 Artifact lifecycle accepted 后读取。日期必须
+显式提供，格式为 `YYYY-MM-DD`。
+
+```bash
+pnpm local context-daily-digest-project --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --utc-date 2026-09-06
+
+pnpm local context-daily-digest-get --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --utc-date 2026-09-06
+```
+
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、
 MRR@K、nDCG@K、citation coverage 和 forbidden/stale selection 安全门，但不包含消息正文。
 

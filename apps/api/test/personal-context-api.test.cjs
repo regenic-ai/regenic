@@ -163,6 +163,51 @@ async function postJson(url, body) {
 }
 
 describe("personal context API", () => {
+  it("projects a UTC daily digest and exposes it only after artifact acceptance", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(root);
+    const proposed = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
+      utc_date: "2026-08-30",
+    });
+    assert.equal(proposed.response.status, 201);
+    const proposal = JSON.parse(proposed.text);
+    assert.ok(proposal.artifact_id);
+    const before = await fetch(`${origin}/v1/me/context/daily-digests/2026-08-30`);
+    assert.deepEqual(await before.json(), []);
+    const accepted = await postJson(
+      `${origin}/v1/me/context/artifacts/${encodeURIComponent(proposal.artifact_id)}/decision`,
+      { status: "accepted" },
+    );
+    assert.equal(accepted.response.status, 201);
+    const after = await fetch(`${origin}/v1/me/context/daily-digests/2026-08-30`);
+    assert.equal(after.status, 200);
+    assert.equal((await after.json())[0].id, proposal.artifact_id);
+    const assembled = await postJson(`${origin}/v1/me/context/assemble`, {
+      ...assembleBody(),
+      query: "release approved",
+      requested_kinds: ["artifact"],
+      budget: {
+        profile: "daily-digest-test",
+        max_tokens: 200,
+        max_items: 5,
+        max_raw_evidence: 5,
+      },
+    });
+    assert.equal(assembled.response.status, 201);
+    assert.equal(
+      JSON.parse(assembled.text).bundle.sections.find((section) => section.kind === "summaries")?.items[0]?.resource_id,
+      proposal.artifact_id,
+    );
+    const invalid = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
+      utc_date: "2026-08-30T00:00:00Z",
+    });
+    assert.equal(invalid.response.status, 400);
+    const impossible = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
+      utc_date: "2026-02-30",
+    });
+    assert.equal(impossible.response.status, 400);
+  });
+
   it("accepts a proposed summary and retrieves it only after lifecycle approval", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

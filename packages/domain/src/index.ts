@@ -54,6 +54,7 @@ export * from "./egress";
 export * from "./connector-conformance";
 export * from "./context-consumer";
 export * from "./context-budget";
+export * from "./context-daily-digest";
 export * from "./context-candidate";
 export * from "./context-request";
 export * from "./context-artifact";

@@ -79,6 +79,27 @@ export class PersonalContextService {
     });
   }
 
+  async projectDailyDigest(input: unknown) {
+    const body = strictBody(input, new Set(["utc_date"]));
+    return this.runtime.requireHost().get("context-daily-digests").projectDailyDigest({
+      org_id: this.runtime.orgId(),
+      utc_date: requiredUtcDate(body.utc_date),
+    });
+  }
+
+  async listDailyDigests(utcDate: string): Promise<ContextArtifact[]> {
+    const date = requiredUtcDate(utcDate);
+    const artifacts = await this.runtime.requireHost().get("context-artifacts").listArtifacts({
+      org_id: this.runtime.orgId(),
+      kinds: ["daily_digest"],
+      statuses: ["accepted"],
+    });
+    return artifacts.filter((artifact) =>
+      artifact.attrs && typeof artifact.attrs === "object" && !Array.isArray(artifact.attrs) &&
+      artifact.attrs.utc_date === date,
+    );
+  }
+
   async decideArtifact(artifactId: string, input: unknown) {
     const body = strictBody(input, new Set(["status"]));
     const status = requiredString(body.status, "status");
@@ -253,6 +274,15 @@ function requiredString(value: unknown, name: string): string {
     );
   }
   return value.trim();
+}
+
+function requiredUtcDate(value: unknown): string {
+  const date = requiredString(value, "utc_date");
+  const timestamp = Date.parse(`${date}T00:00:00.000Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "utc_date must be YYYY-MM-DD in UTC");
+  }
+  return date;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

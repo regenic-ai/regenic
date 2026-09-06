@@ -8,4 +8,6 @@ export * from "./context-question-answerer";
 export * from "./context-retrieval-evaluator";
 export * from "./context-projection-coordinator";
 export * from "./deterministic-thread-summary-projector";
+export * from "./deterministic-daily-digest-projector";
+export * from "./daily-digest-projection-runner";
 export * from "./plugin";
