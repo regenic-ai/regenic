@@ -38,7 +38,7 @@ export class AcceptedThreadSummaryRetriever implements ContextRetriever {
     const candidates: RetrievedContextCandidate[] = [];
     for (const artifact of await this.artifacts.listArtifacts({
       org_id: plan.request.org_id,
-      kinds: ["thread_summary"],
+      kinds: ["thread_summary", "daily_digest"],
       statuses: ["accepted"],
     })) {
       if (!artifact.body_hash || artifact.input_refs.some((reference) => !visible.has(reference.event_id))) {

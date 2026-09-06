@@ -513,6 +513,20 @@ canonical body，验证其与 immutable manifest 一致，要求每条 evidence 
 authorized source view 中，并要求 scope 恰好是 evidence scope 的并集。任一条件无法验证时，
 必须隐藏 Artifact，不能回退到旧 summary。
 
+### 8.2 UTC 日级 digest D0
+
+个人版基线提供显式 UTC 日期的 D0 projector。调用方必须指定 `YYYY-MM-DD`，系统绝不使用
+宿主时区或隐式“今天”。它选择 `occurred_at` 落在该 UTC 日期内、当前且未 tombstone 的
+lifecycle head，为每个选中 lifecycle 保留全部 Event 作为 evidence，并生成确定性的
+`daily_digest` proposal。Canonical body 按稳定顺序列出每个 thread 的 current head，并由
+Artifact ID、input hash、scope 并集和 body hash 绑定。
+
+投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
+返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。
+这刻意不是 RFC 0007 中带方向与评分的完整 distillation：direction tag、weight hint、组织
+时区和 append-only decision history 都是独立前置条件。D0 不承诺 artifact as-of retrieval，
+也不执行自动午夜调度。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

@@ -11,6 +11,7 @@ import { AcceptedThreadSummaryRetriever } from "./accepted-thread-summary-retrie
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
 import { ContextProjectionCoordinator } from "./context-projection-coordinator";
 import { DeterministicThreadSummaryProjector } from "./deterministic-thread-summary-projector";
+import { DailyDigestProjectionCoordinator } from "./daily-digest-projection-runner";
 import { PersonalContextPolicyEvaluator } from "./personal-context-policy";
 
 export const deterministicEventRetrieverPlugin = definePlugin({
@@ -109,6 +110,18 @@ export const acceptedThreadSummaryRetrieverPlugin = definePlugin({
   inject: ["blobs", "context-artifacts", "context-retrievers"],
   apply(ctx) {
     return ctx.get("context-retrievers").register(new AcceptedThreadSummaryRetriever(
+      ctx.get("context-artifacts"),
+      ctx.get("blobs"),
+    ));
+  },
+});
+
+export const dailyDigestProjectionPlugin = definePlugin({
+  name: "context-daily-digest-projection",
+  inject: ["blobs", "context-authority", "context-artifacts"],
+  apply(ctx) {
+    ctx.provide("context-daily-digests", new DailyDigestProjectionCoordinator(
+      new AuthorityContextEvidenceSource(ctx.get("context-authority"), ctx.get("blobs")),
       ctx.get("context-artifacts"),
       ctx.get("blobs"),
     ));

@@ -83,6 +83,32 @@ describe("regenic-local", () => {
     );
     assert.ok(!assembled.bundle.degradation_flags.includes("lexical_index_unbuilt"));
 
+    const digest = await run([
+      "context-daily-digest-project",
+      ...common,
+      "--utc-date", "2026-08-30",
+    ]);
+    assert.ok(digest.artifact_id);
+    assert.deepEqual(await run([
+      "context-daily-digest-get",
+      ...common,
+      "--utc-date", "2026-08-30",
+    ]), []);
+    const digestStore = new SqliteAuthorityStore(database);
+    await digestStore.decideArtifact({
+      org_id: "local-owner",
+      artifact_id: digest.artifact_id,
+      status: "accepted",
+      decided_at: "2026-08-30T02:00:00.000Z",
+    });
+    digestStore.close();
+    const acceptedDigests = await run([
+      "context-daily-digest-get",
+      ...common,
+      "--utc-date", "2026-08-30",
+    ]);
+    assert.equal(acceptedDigests[0].id, digest.artifact_id);
+
     const snapshot = await run([
       "context-snapshot",
       ...common,

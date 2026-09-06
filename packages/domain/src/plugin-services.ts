@@ -16,6 +16,7 @@ import type {
 import type { ModelProvider } from "./model-provider";
 import type { ContextProjectionOutboxStore } from "./context-projection-outbox";
 import type { ContextLexicalIndex } from "./context-lexical";
+import type { DailyDigestProjectionRunner } from "./context-daily-digest";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -29,6 +30,7 @@ declare module "@regenic/plugin-host" {
     "context-authority": ContextAuthorityReader;
     "context-artifacts": ContextArtifactStore;
     "context-projections": ContextProjectionRunner;
+    "context-daily-digests": DailyDigestProjectionRunner;
     "context-projection-outbox": ContextProjectionOutboxStore;
     "context-lexical-index": ContextLexicalIndex;
     "context-projectors": ContextProjectorRegistry;
