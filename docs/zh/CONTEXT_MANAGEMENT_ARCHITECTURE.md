@@ -542,8 +542,9 @@ Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求
 
 日级 D0 执行使用独立的持久化队列，键为 `(org_id, utc_date, generation)`，不复用 Event
 projection outbox。Personal API 开始监听后，worker 会幂等地入队当前 UTC 日期、领取带
-lease 的 job，并持久记录完成或有界重试退避。因此重启会补跑尚未完成的当天运行，且不会
-重复同一周期。这不提供按组织本地午夜的调度；该能力需要先持久化 timezone 配置。
+lease 的批次，并持久记录完成或有界重试退避。投影执行期间会续租；一旦失去 lease，worker
+不会结算该 job。因此重启会补跑尚未完成的当天运行，且不会重复同一周期。这不提供按组织本地
+午夜的调度或跨多日历史 catch-up；后者需要持久化 timezone 与 schedule-cursor 配置。
 
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
