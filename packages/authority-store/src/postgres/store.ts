@@ -49,6 +49,8 @@ import type {
   ContextProjectionCheckpoint,
   ContextProjectionJob,
   ContextProjectionOutboxStore,
+  DailyDigestJob,
+  DailyDigestJobStore,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -242,6 +244,21 @@ interface ContextProjectionJobRow {
   updated_at: unknown;
 }
 
+interface DailyDigestJobRow {
+  id: string;
+  org_id: string;
+  utc_date: string;
+  generation: string;
+  status: DailyDigestJob["status"];
+  attempts: number;
+  lease_owner: string | null;
+  lease_expires_at: unknown;
+  next_retry_at: unknown;
+  last_error: string | null;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
 interface ArtifactStateRow {
   org_id: string;
   artifact_id: string;
@@ -307,7 +324,8 @@ export class PostgresAuthorityStore
     ExecutorStore,
     ContextArtifactStore,
     ContextAuthorityReader,
-    ContextProjectionOutboxStore
+    ContextProjectionOutboxStore,
+    DailyDigestJobStore
 {
   readonly readonly = false;
 
@@ -1027,6 +1045,100 @@ export class PostgresAuthorityStore
       [orgId],
     );
     return rows.map(toContextProjectionJob);
+  }
+
+  async enqueueDailyDigestJob(input: {
+    org_id: string; utc_date: string; generation: string; created_at: string;
+  }): Promise<DailyDigestJob> {
+    assertDailyDigestEnqueue(input);
+    const id = `daily-digest-job:${hashCanonicalContext([input.org_id, input.utc_date, input.generation])}`;
+    await this.execute(
+      `INSERT INTO daily_digest_jobs (
+        id, org_id, utc_date, generation, status, attempts, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, 'pending', 0, $5, $5)
+      ON CONFLICT (org_id, utc_date, generation) DO NOTHING`,
+      [id, input.org_id, input.utc_date, input.generation, input.created_at],
+    );
+    const row = await this.queryOne<DailyDigestJobRow>(
+      `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
+       lease_expires_at, next_retry_at, last_error, created_at, updated_at
+       FROM daily_digest_jobs WHERE id = $1`, [id],
+    );
+    return toDailyDigestJob(row!);
+  }
+
+  async claimDailyDigestJobs(input: {
+    owner: string; now: string; lease_ms: number; limit: number;
+  }): Promise<DailyDigestJob[]> {
+    assertProjectionClaim(input);
+    return this.withTx(async (client) => {
+      const rows = await this.query<{ id: string }>(
+        `SELECT id FROM daily_digest_jobs
+         WHERE status = 'pending'
+            OR (status = 'failed' AND (next_retry_at IS NULL OR next_retry_at <= $1::timestamptz))
+            OR (status = 'running' AND lease_expires_at <= $1::timestamptz)
+         ORDER BY created_at, id LIMIT $2 FOR UPDATE SKIP LOCKED`,
+        [input.now, input.limit], client,
+      );
+      if (!rows.length) return [];
+      const ids = rows.map((row) => row.id);
+      const expiresAt = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
+      await this.execute(
+        `UPDATE daily_digest_jobs SET status = 'running', attempts = attempts + 1,
+         lease_owner = $1, lease_expires_at = $2, next_retry_at = NULL,
+         last_error = NULL, updated_at = $3 WHERE id = ANY($4::text[])`,
+        [input.owner, expiresAt, input.now, ids], client,
+      );
+      const claimed = await this.query<DailyDigestJobRow>(
+        `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
+         lease_expires_at, next_retry_at, last_error, created_at, updated_at
+         FROM daily_digest_jobs WHERE id = ANY($1::text[])`, [ids], client,
+      );
+      const byId = new Map(claimed.map((row) => [row.id, toDailyDigestJob(row)] as const));
+      return ids.map((id) => byId.get(id)!);
+    });
+  }
+
+  async completeDailyDigestJob(input: { id: string; owner: string; completed_at: string }): Promise<boolean> {
+    assertProjectionSettle(input.id, input.owner, input.completed_at);
+    return await this.execute(
+      `UPDATE daily_digest_jobs SET status = 'succeeded', lease_owner = NULL,
+       lease_expires_at = NULL, next_retry_at = NULL, last_error = NULL, updated_at = $1
+       WHERE id = $2 AND status = 'running' AND lease_owner = $3 AND lease_expires_at > $1::timestamptz`,
+      [input.completed_at, input.id, input.owner],
+    ) === 1;
+  }
+
+  async renewDailyDigestJob(input: { id: string; owner: string; now: string; lease_ms: number }): Promise<boolean> {
+    assertProjectionSettle(input.id, input.owner, input.now);
+    if (!Number.isSafeInteger(input.lease_ms) || input.lease_ms < 1) throw new Error("Invalid daily digest lease renewal");
+    return await this.execute(
+      `UPDATE daily_digest_jobs SET lease_expires_at = $1, updated_at = $2
+       WHERE id = $3 AND status = 'running' AND lease_owner = $4 AND lease_expires_at > $2::timestamptz`,
+      [new Date(Date.parse(input.now) + input.lease_ms).toISOString(), input.now, input.id, input.owner],
+    ) === 1;
+  }
+
+  async failDailyDigestJob(input: {
+    id: string; owner: string; failed_at: string; next_retry_at: string; error_code: string;
+  }): Promise<boolean> {
+    assertProjectionSettle(input.id, input.owner, input.failed_at);
+    if (Number.isNaN(Date.parse(input.next_retry_at)) || !input.error_code.trim()) throw new Error("Invalid daily digest failure");
+    return await this.execute(
+      `UPDATE daily_digest_jobs SET status = 'failed', lease_owner = NULL,
+       lease_expires_at = NULL, next_retry_at = $1, last_error = $2, updated_at = $3
+       WHERE id = $4 AND status = 'running' AND lease_owner = $5 AND lease_expires_at > $3::timestamptz`,
+      [input.next_retry_at, input.error_code.slice(0, 120), input.failed_at, input.id, input.owner],
+    ) === 1;
+  }
+
+  async listDailyDigestJobs(orgId: string): Promise<DailyDigestJob[]> {
+    const rows = await this.query<DailyDigestJobRow>(
+      `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
+       lease_expires_at, next_retry_at, last_error, created_at, updated_at
+       FROM daily_digest_jobs WHERE org_id = $1 ORDER BY created_at, id`, [orgId],
+    );
+    return rows.map(toDailyDigestJob);
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
@@ -3370,6 +3482,39 @@ function toContextProjectionJob(row: ContextProjectionJobRow): ContextProjection
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
+}
+
+function toDailyDigestJob(row: DailyDigestJobRow): DailyDigestJob {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    utc_date: row.utc_date,
+    generation: row.generation,
+    status: row.status,
+    attempts: asNumber(row.attempts),
+    ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
+    ...(row.lease_expires_at ? { lease_expires_at: toIso(row.lease_expires_at) } : {}),
+    ...(row.next_retry_at ? { next_retry_at: toIso(row.next_retry_at) } : {}),
+    ...(row.last_error ? { last_error: row.last_error } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  };
+}
+
+function assertDailyDigestEnqueue(input: {
+  org_id: string;
+  utc_date: string;
+  generation: string;
+  created_at: string;
+}): void {
+  if (
+    !input.org_id?.trim()
+    || !/^\d{4}-\d{2}-\d{2}$/.test(input.utc_date)
+    || !input.generation?.trim()
+    || Number.isNaN(Date.parse(input.created_at))
+  ) {
+    throw new Error("Invalid daily digest job");
+  }
 }
 
 function artifactState(row: ArtifactStateRow): ContextArtifactState {

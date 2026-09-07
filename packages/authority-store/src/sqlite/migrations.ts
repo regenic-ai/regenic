@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 28;
+export const LATEST_SCHEMA_VERSION = 29;
 
 export const MIGRATIONS = [
   {
@@ -668,6 +668,30 @@ export const MIGRATIONS = [
         CHECK (weight_hints_json IS NULL OR json_valid(weight_hints_json));
       ALTER TABLE events ADD COLUMN attrs_json TEXT
         CHECK (attrs_json IS NULL OR json_valid(attrs_json));
+    `,
+  },
+  {
+    version: 29,
+    sql: `
+      CREATE TABLE daily_digest_jobs (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        utc_date TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        next_retry_at TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (org_id, utc_date, generation)
+      );
+      CREATE INDEX daily_digest_jobs_due_idx
+        ON daily_digest_jobs (status, next_retry_at, lease_expires_at, created_at);
+      CREATE INDEX daily_digest_jobs_org_idx
+        ON daily_digest_jobs (org_id, created_at, id);
     `,
   },
 ] as const;

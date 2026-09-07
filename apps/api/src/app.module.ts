@@ -18,6 +18,7 @@ import { PersonalPairingService } from "./personal-pairing.service";
 import { PersonalContextController } from "./personal-context.controller";
 import { PersonalContextService } from "./personal-context.service";
 import { PersonalContextProjectionService } from "./personal-context-projection.service";
+import { PersonalDailyDigestService } from "./personal-daily-digest.service";
 import { PersonalController } from "./personal.controller";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalForwardService } from "./personal-forward.service";
@@ -47,6 +48,7 @@ import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.se
     PersonalRuntimeService,
     PersonalContextService,
     PersonalContextProjectionService,
+    PersonalDailyDigestService,
     PersonalInboxService,
     PersonalReplyService,
     PersonalForwardService,

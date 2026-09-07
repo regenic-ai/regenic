@@ -19,6 +19,8 @@ import type {
   ContextProjectionCheckpoint,
   ContextProjectionJob,
   ContextProjectionOutboxStore,
+  DailyDigestJob,
+  DailyDigestJobStore,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -77,7 +79,8 @@ export class SqliteSplitAuthorityStore
     ExecutorStore,
     ContextArtifactStore,
     ContextAuthorityReader,
-    ContextProjectionOutboxStore
+    ContextProjectionOutboxStore,
+    DailyDigestJobStore
 {
   private constructor(
     private readonly reader: SqliteWriteClient,
@@ -235,6 +238,36 @@ export class SqliteSplitAuthorityStore
 
   async listContextProjectionJobs(orgId: string): Promise<ContextProjectionJob[]> {
     return this.reader.call("listContextProjectionJobs", [orgId]);
+  }
+
+  async enqueueDailyDigestJob(input: {
+    org_id: string; utc_date: string; generation: string; created_at: string;
+  }): Promise<DailyDigestJob> {
+    return this.writer.call("enqueueDailyDigestJob", [input]);
+  }
+
+  async claimDailyDigestJobs(input: {
+    owner: string; now: string; lease_ms: number; limit: number;
+  }): Promise<DailyDigestJob[]> {
+    return this.writer.call("claimDailyDigestJobs", [input]);
+  }
+
+  async completeDailyDigestJob(input: { id: string; owner: string; completed_at: string }): Promise<boolean> {
+    return this.writer.call("completeDailyDigestJob", [input]);
+  }
+
+  async renewDailyDigestJob(input: { id: string; owner: string; now: string; lease_ms: number }): Promise<boolean> {
+    return this.writer.call("renewDailyDigestJob", [input]);
+  }
+
+  async failDailyDigestJob(input: {
+    id: string; owner: string; failed_at: string; next_retry_at: string; error_code: string;
+  }): Promise<boolean> {
+    return this.writer.call("failDailyDigestJob", [input]);
+  }
+
+  async listDailyDigestJobs(orgId: string): Promise<DailyDigestJob[]> {
+    return this.reader.call("listDailyDigestJobs", [orgId]);
   }
 
   async getDisposition(
