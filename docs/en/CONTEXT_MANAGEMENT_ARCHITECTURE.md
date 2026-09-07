@@ -133,6 +133,14 @@ projection inputs only: they neither grant scope access nor override ACL,
 lifecycle, Artifact acceptance, or policy decisions. A later direction-aware
 or weighted D0 version must define its controlled vocabulary and interpretation
 explicitly rather than treating source metadata as trusted authority.
+
+D0 v2 routes only the RFC 0007 controlled directions (`product`, `sales`,
+`customer`, `org`, `finance`, and `risk`); unknown source tags are not routed.
+Within each direction it folds current heads by thread using a deterministic
+weight score, emits only metric, bad-news, or high-weight hypothesis signals,
+caps the result at seven items, and reserves one bad-news seat when available.
+The selected head's complete lifecycle remains Artifact evidence, so scoring
+never weakens revision, tombstone, or ACL requirements.
   anchors?: Array<{
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
@@ -604,10 +612,10 @@ explicitly rather than treating source metadata as trusted authority.
 Projection creates a proposal only. The ordinary Artifact lifecycle must accept
 it before the Personal API or CLI returns it. Revision and tombstone correctness
 therefore comes from the same lifecycle-head validation as Context retrieval.
-This is intentionally not RFC 0007's scored, direction-aware distillation:
-direction tags, weight hints, organization timezone and append-only decision
-history are separate prerequisites. D0 does not claim artifact as-of retrieval
-or automatic midnight scheduling.
+This remains a bounded RFC 0007 D0 subset. Organization-local time windows,
+configurable role/source/lexicon policy, conflict-to-clarify handling,
+append-only decision history, artifact as-of retrieval, and durable automatic
+scheduling remain separate work.
 
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.

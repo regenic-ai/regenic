@@ -102,7 +102,9 @@ describe("IngestionService", () => {
     const { authorityStore, blobStore, service } = createHarness();
     const batch = createBatch({
       direction_tags: ["follow_up", "outbound", "follow_up"],
-      weight_hints: { urgency: 0.8, importance: 0.6 },
+      weight_hints: {
+        urgency: 0.8, importance: 0.6, evidence_class: "metric", role_tier: 4,
+      },
       attrs: { project: "regenic" },
     });
 
@@ -127,7 +129,9 @@ describe("IngestionService", () => {
         actor_id: "local-owner",
         required_scope_ids: ["regenic:personal"],
         direction_tags: ["follow_up", "outbound"],
-        weight_hints: { urgency: 0.8, importance: 0.6 },
+        weight_hints: {
+          urgency: 0.8, importance: 0.6, evidence_class: "metric", role_tier: 4,
+        },
         attrs: { project: "regenic" },
       },
     );

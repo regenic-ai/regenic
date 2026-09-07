@@ -20,6 +20,8 @@ function sourceEvent(overrides = {}) {
     thread_id: "thread-1",
     actor_id: "actor-1",
     required_scope_ids: ["scope-1"],
+    direction_tags: ["product"],
+    weight_hints: { urgency: 0.8, importance: 0.8 },
     text: "Original update",
     ...overrides,
   };
@@ -68,9 +70,13 @@ describe("deterministic daily digest projector", () => {
     ]));
 
     assert.equal(value.kind, "daily_digest");
-    assert.deepEqual(value.attrs.items, [{
-      event_id: "event-2", thread_id: "thread-1", actor_id: "actor-1",
-      occurred_at: "2026-09-05T08:00:00.000Z", text: "Revised update",
+    assert.deepEqual(value.attrs.directions, [{
+      direction: "product",
+      items: [{
+        item_kind: "hypothesis", score: 1.6,
+        event_id: "event-2", thread_id: "thread-1", actor_id: "actor-1",
+        occurred_at: "2026-09-05T08:00:00.000Z", text: "Revised update",
+      }],
     }]);
     assert.deepEqual(value.required_scope_ids, ["scope-1", "scope-2"]);
     assert.deepEqual(value.input_refs.map((reference) => reference.event_id), ["event-1", "event-2"]);
@@ -87,5 +93,72 @@ describe("deterministic daily digest projector", () => {
     assert.equal(values[0].id, values[1].id);
     assert.equal(values[0].body_hash, values[1].body_hash);
     assert.equal(values[2], null);
+  });
+
+  it("uses controlled directions, folds threads by score, and reserves a bad-news seat", async () => {
+    const lowerThreadUpdate = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-low", external_id: "thread-update" },
+      weight_hints: { urgency: 0.7, importance: 0.8 },
+    });
+    const higherThreadUpdate = sourceEvent({
+      event: {
+        ...lowerThreadUpdate.event, event_id: "event-high", parent_event_id: "event-low",
+        operation: "revise", ingested_at: "2026-09-05T08:02:00.000Z",
+      },
+      weight_hints: { urgency: 0.9, importance: 0.9 }, text: "Higher signal",
+    });
+    const metric = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-metric", external_id: "metric-1" },
+      thread_id: "thread-metric", direction_tags: ["sales"],
+      weight_hints: { evidence_class: "metric" }, text: "Revenue rose",
+    });
+    const badNews = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-risk", external_id: "risk-1" },
+      thread_id: "thread-risk", direction_tags: ["sales"], weight_hints: {},
+      attrs: { severity: "critical" }, text: "Customer outage",
+    });
+    const unknown = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-unknown", external_id: "unknown-1" },
+      direction_tags: ["free-form"], weight_hints: { urgency: 1, importance: 1 },
+    });
+    const projector = new DeterministicDailyDigestProjector();
+    const value = await projector.project(input(
+      [lowerThreadUpdate, higherThreadUpdate, metric, badNews, unknown],
+      [
+        { source: "synthetic", external_id: "thread-update", head_event_id: "event-high" },
+        { source: "synthetic", external_id: "metric-1", head_event_id: "event-metric" },
+        { source: "synthetic", external_id: "risk-1", head_event_id: "event-risk" },
+        { source: "synthetic", external_id: "unknown-1", head_event_id: "event-unknown" },
+      ],
+    ));
+
+    assert.deepEqual(value.attrs.directions, [
+      {
+        direction: "product",
+        items: [{
+          item_kind: "hypothesis", score: 1.8,
+          event_id: "event-high", thread_id: "thread-1", actor_id: "actor-1",
+          occurred_at: "2026-09-05T08:00:00.000Z", text: "Higher signal",
+        }],
+      },
+      {
+        direction: "sales",
+        items: [
+          {
+            item_kind: "metric_signal", score: 0,
+            event_id: "event-metric", thread_id: "thread-metric", actor_id: "actor-1",
+            occurred_at: "2026-09-05T08:00:00.000Z", text: "Revenue rose",
+          },
+          {
+            item_kind: "bad_news", score: 0,
+            event_id: "event-risk", thread_id: "thread-risk", actor_id: "actor-1",
+            occurred_at: "2026-09-05T08:00:00.000Z", text: "Customer outage",
+          },
+        ],
+      },
+    ]);
+    assert.deepEqual(value.input_refs.map((reference) => reference.event_id), [
+      "event-low", "event-metric", "event-risk", "event-high",
+    ]);
   });
 });
