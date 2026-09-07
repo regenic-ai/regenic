@@ -22,11 +22,22 @@ export interface ContextArtifactSupersession {
   decided_at: string;
 }
 
+export interface ContextArtifactProposedSupersession {
+  org_id: string;
+  artifact_id: string;
+  replacement_id: string;
+  decided_at: string;
+}
+
 export interface ContextArtifactLifecycleStore {
   getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null>;
   decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState>;
   supersedeArtifact(input: ContextArtifactSupersession): Promise<{
     superseded: ContextArtifactState;
     accepted: ContextArtifactState;
+  }>;
+  supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{
+    superseded: ContextArtifactState;
+    replacement: ContextArtifactState;
   }>;
 }

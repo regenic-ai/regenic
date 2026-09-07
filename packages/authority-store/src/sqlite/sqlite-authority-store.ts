@@ -44,6 +44,7 @@ import type {
   ContextArtifactState,
   ContextArtifactStore,
   ContextArtifactSupersession,
+  ContextArtifactProposedSupersession,
   ContextAuthorityRead,
   ContextAuthorityReader,
   ContextBundle,
@@ -782,6 +783,25 @@ export class SqliteAuthorityStore
       return {
         superseded: { ...current, status: "superseded" as const, decided_at: input.decided_at, superseded_by: input.replacement_id },
         accepted: { ...replacement, status: "accepted" as const, decided_at: input.decided_at },
+      };
+    })();
+  }
+
+  async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{ superseded: ContextArtifactState; replacement: ContextArtifactState }> {
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const current = this.getArtifactStateSync(input.org_id, input.artifact_id);
+      const replacement = this.artifactStateForTransition(input.org_id, input.replacement_id);
+      const currentArtifact = this.getContextJson<ContextArtifact>("context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.artifact_id]);
+      const replacementArtifact = this.getContextJson<ContextArtifact>("context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
+      if (!current || current.status !== "proposed" || !currentArtifact || !replacementArtifact || currentArtifact.kind !== "daily_digest" || replacementArtifact.kind !== "daily_digest" || replacementArtifact.supersedes_id !== input.artifact_id) {
+        throw new Error("Invalid proposed daily digest supersession");
+      }
+      this.database.prepare(`UPDATE context_artifact_states SET status = 'superseded', decided_at = ?, superseded_by = ? WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.replacement_id, input.org_id, input.artifact_id);
+      this.database.prepare(`UPDATE context_artifact_states SET status = 'proposed', decided_at = ?, superseded_by = NULL WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.org_id, input.replacement_id);
+      return {
+        superseded: { ...current, status: "superseded" as const, decided_at: input.decided_at, superseded_by: input.replacement_id },
+        replacement: { ...replacement, status: "proposed" as const, decided_at: input.decided_at },
       };
     })();
   }

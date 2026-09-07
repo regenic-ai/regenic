@@ -65,6 +65,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "putArtifact",
   "decideArtifact",
   "supersedeArtifact",
+  "supersedeProposedArtifact",
   "putSnapshot",
   "putBundle",
   "putCheckpoint",
