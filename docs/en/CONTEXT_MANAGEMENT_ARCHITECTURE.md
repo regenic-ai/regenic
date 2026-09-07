@@ -617,6 +617,14 @@ configurable role/source/lexicon policy, conflict-to-clarify handling,
 append-only decision history, artifact as-of retrieval, and durable automatic
 scheduling remain separate work.
 
+Daily D0 execution uses a separate durable queue keyed by `(org_id, utc_date,
+generation)`, not the Event projection outbox. After the Personal API begins
+listening, its worker idempotently enqueues the current UTC date, claims a
+leased job, and persists completion or bounded retry backoff. A restart thus
+catches up an unfinished current-day run without duplicating the period. This
+does not provide organization-local midnight scheduling; that requires persisted
+timezone configuration.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

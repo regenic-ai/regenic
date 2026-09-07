@@ -347,6 +347,43 @@ describe("SQLite context artifact store", () => {
     store.close();
   });
 
+  it("persists idempotent daily digest jobs across retry, restart, and split reads", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let store = new SqliteAuthorityStore(path);
+    const input = {
+      org_id: "example-org", utc_date: "2026-08-30", generation: "daily-digest-d0-v1",
+      created_at: "2026-08-30T00:00:00.000Z",
+    };
+    const first = await store.enqueueDailyDigestJob(input);
+    const second = await store.enqueueDailyDigestJob({ ...input, created_at: "2026-08-30T00:00:01.000Z" });
+    assert.equal(first.id, second.id);
+    const [claimed] = await store.claimDailyDigestJobs({
+      owner: "worker-1", now: "2026-08-30T00:01:00.000Z", lease_ms: 1_000, limit: 1,
+    });
+    assert.equal(claimed.attempts, 1);
+    assert.equal(await store.failDailyDigestJob({
+      id: claimed.id, owner: "worker-1", failed_at: "2026-08-30T00:01:00.500Z",
+      next_retry_at: "2026-08-30T00:01:01.000Z", error_code: "transient",
+    }), true);
+    const [retried] = await store.claimDailyDigestJobs({
+      owner: "worker-2", now: "2026-08-30T00:01:01.000Z", lease_ms: 1_000, limit: 1,
+    });
+    assert.equal(retried.attempts, 2);
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    assert.equal((await store.listDailyDigestJobs("example-org"))[0].lease_owner, "worker-2");
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.equal(await split.completeDailyDigestJob({
+      id: retried.id, owner: "worker-2", completed_at: "2026-08-30T00:01:01.500Z",
+    }), true);
+    assert.equal((await split.listDailyDigestJobs("example-org"))[0].status, "succeeded");
+    await split.close();
+  });
+
   it("requeues a completed projection when compacted content changes its hash", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));

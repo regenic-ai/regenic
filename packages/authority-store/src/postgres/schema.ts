@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 29;
+export const PG_SCHEMA_VERSION = 30;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -172,6 +172,30 @@ ON CONFLICT (org_id, thread_id) DO NOTHING;
 ALTER TABLE events ADD COLUMN direction_tags JSONB;
 ALTER TABLE events ADD COLUMN weight_hints JSONB;
 ALTER TABLE events ADD COLUMN attrs JSONB;
+`,
+  },
+  {
+    version: 30,
+    sql: `
+CREATE TABLE daily_digest_jobs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  utc_date TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  next_retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, utc_date, generation)
+);
+CREATE INDEX daily_digest_jobs_due_idx
+  ON daily_digest_jobs (status, next_retry_at, lease_expires_at, created_at);
+CREATE INDEX daily_digest_jobs_org_idx
+  ON daily_digest_jobs (org_id, created_at, id);
 `,
   },
 ] as const;
@@ -547,6 +571,26 @@ CREATE INDEX context_projection_outbox_running_expired_idx
   WHERE status = 'running';
 CREATE INDEX context_projection_outbox_org_idx
   ON context_projection_outbox (org_id, created_at, id);
+
+CREATE TABLE daily_digest_jobs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  utc_date TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  next_retry_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, utc_date, generation)
+);
+CREATE INDEX daily_digest_jobs_due_idx
+  ON daily_digest_jobs (status, next_retry_at, lease_expires_at, created_at);
+CREATE INDEX daily_digest_jobs_org_idx
+  ON daily_digest_jobs (org_id, created_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,
