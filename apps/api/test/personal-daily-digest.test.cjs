@@ -7,7 +7,7 @@ const {
 } = require("../dist/personal-interactive-gate");
 
 function fixture(projectDailyDigest, claimedJobs) {
-  const calls = { enqueue: [], project: [], complete: [], fail: [] };
+  const calls = { catchUp: [], project: [], complete: [], fail: [] };
   const job = {
     id: "daily-job-1", org_id: "example-org", utc_date: "2026-09-07",
     generation: "daily-digest-d0-v3", attempts: 1,
@@ -15,7 +15,7 @@ function fixture(projectDailyDigest, claimedJobs) {
   const jobsToClaim = claimedJobs ?? [job];
   let claimed = false;
   const jobs = {
-    async enqueueDailyDigestJob(input) { calls.enqueue.push(input); return job; },
+    async enqueueDailyDigestCatchUp(input) { calls.catchUp.push(input); return jobsToClaim; },
     async claimDailyDigestJobs() { return claimed ? [] : (claimed = true, jobsToClaim); },
     async completeDailyDigestJob(input) { calls.complete.push(input); return true; },
     async renewDailyDigestJob() { return true; },
@@ -42,9 +42,9 @@ describe("PersonalDailyDigestService", () => {
   it("enqueues the UTC day once and completes the durable job", async () => {
     const { service, calls } = fixture(async () => ({ input_event_count: 1 }));
     await service.runOnce(new Date("2026-09-07T12:00:00.000Z"));
-    assert.deepEqual(calls.enqueue, [{
-      org_id: "example-org", utc_date: "2026-09-07", generation: "daily-digest-d0-v3",
-      created_at: "2026-09-07T12:00:00.000Z",
+    assert.deepEqual(calls.catchUp, [{
+  org_id: "example-org", through_utc_date: "2026-09-07", generation: "daily-digest-d0-v3",
+      created_at: "2026-09-07T12:00:00.000Z", max_days: 7,
     }]);
     assert.equal(calls.project.length, 1);
     assert.equal(calls.complete.length, 1);

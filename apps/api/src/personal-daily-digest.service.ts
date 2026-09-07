@@ -12,6 +12,7 @@ const TICK_MS = 60_000;
 const LEASE_MS = 30_000;
 const HEARTBEAT_MS = 10_000;
 const BATCH_SIZE = 5;
+const CATCH_UP_DAYS = 7;
 const MAX_RETRY_MS = 5 * 60_000;
 
 @Injectable()
@@ -46,11 +47,12 @@ export class PersonalDailyDigestService implements OnModuleDestroy {
       const host = this.runtime.requireHost();
       const jobs = host.get("daily-digest-jobs") as DailyDigestJobStore;
       const at = now.toISOString();
-      await jobs.enqueueDailyDigestJob({
+      await jobs.enqueueDailyDigestCatchUp({
         org_id: this.runtime.orgId(),
-        utc_date: at.slice(0, 10),
+        through_utc_date: at.slice(0, 10),
         generation: CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION,
         created_at: at,
+        max_days: CATCH_UP_DAYS,
       });
       const claimed = await jobs.claimDailyDigestJobs({
         owner: this.owner, now: at, lease_ms: LEASE_MS, limit: BATCH_SIZE,

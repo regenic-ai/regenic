@@ -73,6 +73,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "completeContextProjectionJob",
   "renewContextProjectionJob",
   "failContextProjectionJob",
+  "enqueueDailyDigestCatchUp",
   "enqueueDailyDigestJob",
   "claimDailyDigestJobs",
   "completeDailyDigestJob",

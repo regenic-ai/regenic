@@ -556,7 +556,9 @@ append-only decision history、artifact as-of retrieval 与持久化自动调度
 projection outbox。Personal API 开始监听后，worker 会幂等地入队当前 UTC 日期、领取带
 lease 的批次，并持久记录完成或有界重试退避。投影执行期间会续租；一旦失去 lease，worker
 不会结算该 job。因此重启会补跑尚未完成的当天运行，且不会重复同一周期。这不提供按组织本地
-午夜的调度或跨多日历史 catch-up；后者需要持久化 timezone 与 schedule-cursor 配置。
+午夜的调度。持久化的 schedule cursor 每个 tick 最多推进七个 UTC 日期，因此有限的离线缺口
+会按日期顺序入队，且不会重新发现或重复既有周期。组织本地午夜调度仍需要持久化 timezone
+配置。
 
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。

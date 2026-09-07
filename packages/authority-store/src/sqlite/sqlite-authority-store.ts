@@ -1066,6 +1066,45 @@ export class SqliteAuthorityStore
     ).all(orgId) as ContextProjectionJobRow[]).map(toContextProjectionJob);
   }
 
+  async enqueueDailyDigestCatchUp(input: {
+    org_id: string;
+    through_utc_date: string;
+    generation: string;
+    created_at: string;
+    max_days: number;
+  }): Promise<DailyDigestJob[]> {
+    this.assertWritable();
+    assertDailyDigestCatchUp(input);
+    return this.database.transaction(() => {
+      const cursor = this.database.prepare(
+        `SELECT last_scheduled_utc_date FROM daily_digest_schedule_cursors
+         WHERE org_id = ? AND generation = ?`,
+      ).get(input.org_id, input.generation) as { last_scheduled_utc_date: string } | undefined;
+      const dates = catchUpDates(cursor?.last_scheduled_utc_date, input.through_utc_date, input.max_days);
+      const jobs = dates.map((utcDate) => {
+        const id = `daily-digest-job:${hashCanonicalContext([input.org_id, utcDate, input.generation])}`;
+        this.database.prepare(
+          `INSERT INTO daily_digest_jobs (
+            id, org_id, utc_date, generation, status, attempts, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
+          ON CONFLICT (org_id, utc_date, generation) DO NOTHING`,
+        ).run(id, input.org_id, utcDate, input.generation, input.created_at, input.created_at);
+        return this.getDailyDigestJob(id)!;
+      });
+      const lastScheduled = dates.at(-1);
+      if (lastScheduled) {
+        this.database.prepare(
+          `INSERT INTO daily_digest_schedule_cursors (org_id, generation, last_scheduled_utc_date, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT (org_id, generation) DO UPDATE SET
+             last_scheduled_utc_date = excluded.last_scheduled_utc_date,
+             updated_at = excluded.updated_at`,
+        ).run(input.org_id, input.generation, lastScheduled, input.created_at);
+      }
+      return jobs;
+    }).immediate();
+  }
+
   async enqueueDailyDigestJob(input: {
     org_id: string;
     utc_date: string;
@@ -1147,7 +1186,7 @@ export class SqliteAuthorityStore
     return (this.database.prepare(
       `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
        lease_expires_at, next_retry_at, last_error, created_at, updated_at
-       FROM daily_digest_jobs WHERE org_id = ? ORDER BY created_at, id`,
+      FROM daily_digest_jobs WHERE org_id = ? ORDER BY utc_date, generation, id`,
     ).all(orgId) as DailyDigestJobRow[]).map(toDailyDigestJob);
   }
 
@@ -3537,6 +3576,36 @@ function assertDailyDigestEnqueue(input: {
   ) {
     throw new Error("Invalid daily digest job");
   }
+}
+
+function assertDailyDigestCatchUp(input: {
+  org_id: string;
+  through_utc_date: string;
+  generation: string;
+  created_at: string;
+  max_days: number;
+}): void {
+  assertDailyDigestEnqueue({
+    org_id: input.org_id,
+    utc_date: input.through_utc_date,
+    generation: input.generation,
+    created_at: input.created_at,
+  });
+  if (!Number.isSafeInteger(input.max_days) || input.max_days < 1 || input.max_days > 31) {
+    throw new Error("Invalid daily digest catch-up limit");
+  }
+}
+
+function catchUpDates(lastScheduled: string | undefined, throughDate: string, maxDays: number): string[] {
+  const start = lastScheduled
+    ? new Date(`${lastScheduled}T00:00:00.000Z`).getTime() + 86_400_000
+    : new Date(`${throughDate}T00:00:00.000Z`).getTime();
+  const end = new Date(`${throughDate}T00:00:00.000Z`).getTime();
+  const dates: string[] = [];
+  for (let timestamp = start; timestamp <= end && dates.length < maxDays; timestamp += 86_400_000) {
+    dates.push(new Date(timestamp).toISOString().slice(0, 10));
+  }
+  return dates;
 }
 
 function assertProjectionClaim(input: ClaimContextProjectionJobs): void {

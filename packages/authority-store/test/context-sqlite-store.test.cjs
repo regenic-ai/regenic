@@ -384,6 +384,33 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("persists bounded daily digest catch-up cursors across restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const input = {
+      org_id: "example-org", generation: "daily-digest-d0-v2",
+      created_at: "2026-08-30T00:00:00.000Z", max_days: 2,
+    };
+    let store = new SqliteAuthorityStore(path);
+    assert.deepEqual((await store.enqueueDailyDigestCatchUp({
+      ...input, through_utc_date: "2026-08-30",
+    })).map((job) => job.utc_date), ["2026-08-30"]);
+    assert.deepEqual((await store.enqueueDailyDigestCatchUp({
+      ...input, through_utc_date: "2026-09-03",
+    })).map((job) => job.utc_date), ["2026-08-31", "2026-09-01"]);
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    assert.deepEqual((await store.enqueueDailyDigestCatchUp({
+      ...input, through_utc_date: "2026-09-03",
+    })).map((job) => job.utc_date), ["2026-09-02", "2026-09-03"]);
+
+    assert.deepEqual((await store.listDailyDigestJobs("example-org")).map((job) => job.utc_date), [
+      "2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03",
+    ]);
+    store.close();
+  });
+
   it("requeues a completed projection when compacted content changes its hash", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));

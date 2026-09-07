@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 30;
+export const PG_SCHEMA_VERSION = 31;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -196,6 +196,18 @@ CREATE INDEX daily_digest_jobs_due_idx
   ON daily_digest_jobs (status, next_retry_at, lease_expires_at, created_at);
 CREATE INDEX daily_digest_jobs_org_idx
   ON daily_digest_jobs (org_id, created_at, id);
+`,
+  },
+  {
+    version: 31,
+    sql: `
+CREATE TABLE daily_digest_schedule_cursors (
+  org_id TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  last_scheduled_utc_date TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (org_id, generation)
+);
 `,
   },
 ] as const;
@@ -591,6 +603,14 @@ CREATE INDEX daily_digest_jobs_due_idx
   ON daily_digest_jobs (status, next_retry_at, lease_expires_at, created_at);
 CREATE INDEX daily_digest_jobs_org_idx
   ON daily_digest_jobs (org_id, created_at, id);
+
+CREATE TABLE daily_digest_schedule_cursors (
+  org_id TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  last_scheduled_utc_date TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (org_id, generation)
+);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,
