@@ -180,4 +180,25 @@ describe("deterministic daily digest projector", () => {
       ["event-demo", 4.8], ["event-opinion", 1.6],
     ]);
   });
+
+  it("retains a high role-tier signal even without urgency or importance hints", async () => {
+    const executive = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-executive", external_id: "executive-1" },
+      thread_id: "thread-executive", weight_hints: { role_tier: 3.5 },
+      text: "Review the launch position.",
+    });
+    const projector = new DeterministicDailyDigestProjector();
+    const value = await projector.project(input([executive], [
+      { source: "synthetic", external_id: "executive-1", head_event_id: "event-executive" },
+    ]));
+
+    assert.deepEqual(value.attrs.directions, [{
+      direction: "product",
+      items: [{
+        item_kind: "hypothesis", score: 0,
+        event_id: "event-executive", thread_id: "thread-executive", actor_id: "actor-1",
+        occurred_at: "2026-09-05T08:00:00.000Z", text: "Review the launch position.",
+      }],
+    }]);
+  });
 });
