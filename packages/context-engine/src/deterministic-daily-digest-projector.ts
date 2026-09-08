@@ -6,6 +6,7 @@ import {
   type DailyDigestProjectionInput,
   type DailyDigestProjector,
   type ContextSourceEvent,
+  type WeightHints,
 } from "@regenic/domain";
 
 export class DeterministicDailyDigestProjector implements DailyDigestProjector {
@@ -126,7 +127,21 @@ function score(event: ContextSourceEvent): number {
   const urgency = event.weight_hints?.urgency ?? 0;
   const importance = event.weight_hints?.importance ?? 0;
   const roleTier = event.weight_hints?.role_tier ?? 1;
-  return urgency + importance * roleTier;
+  return Number(((urgency + importance * roleTier) * evidenceWeight(
+    event.weight_hints?.evidence_class,
+  )).toFixed(6));
+}
+
+const EVIDENCE_WEIGHTS: Record<NonNullable<WeightHints["evidence_class"]>, number> = {
+  metric: 4,
+  demo: 3,
+  user_verbatim: 2.5,
+  decision_record: 2.5,
+  opinion: 1,
+};
+
+function evidenceWeight(evidenceClass: WeightHints["evidence_class"]): number {
+  return evidenceClass ? EVIDENCE_WEIGHTS[evidenceClass] : 1;
 }
 
 function compareCandidates(left: DigestCandidate, right: DigestCandidate): number {
