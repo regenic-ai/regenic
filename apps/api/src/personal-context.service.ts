@@ -9,6 +9,7 @@ import {
   type ContextReplayRequest,
   type ContextRequest,
   type ContextSnapshot,
+  type DailyDigestJob,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -98,6 +99,23 @@ export class PersonalContextService {
       artifact.attrs && typeof artifact.attrs === "object" && !Array.isArray(artifact.attrs) &&
       artifact.attrs.utc_date === date,
     );
+  }
+
+  async listDailyDigestJobs(): Promise<Array<Pick<DailyDigestJob,
+    "utc_date" | "generation" | "status" | "attempts" | "lease_expires_at" | "next_retry_at" | "created_at" | "updated_at"
+  >>> {
+    return (await this.runtime.requireHost().get("daily-digest-jobs")
+      .listDailyDigestJobs(this.runtime.orgId()))
+      .map((job) => ({
+        utc_date: job.utc_date,
+        generation: job.generation,
+        status: job.status,
+        attempts: job.attempts,
+        ...(job.lease_expires_at ? { lease_expires_at: job.lease_expires_at } : {}),
+        ...(job.next_retry_at ? { next_retry_at: job.next_retry_at } : {}),
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+      }));
   }
 
   async decideArtifact(artifactId: string, input: unknown) {

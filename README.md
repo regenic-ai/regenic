@@ -340,6 +340,9 @@ pnpm local context-daily-digest-project --database ./regenic.db --blob-root ./bl
 
 pnpm local context-daily-digest-get --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --utc-date 2026-09-06
+
+pnpm local context-daily-digest-jobs --database ./regenic.db --blob-root ./blobs \
+	--org local-owner
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its

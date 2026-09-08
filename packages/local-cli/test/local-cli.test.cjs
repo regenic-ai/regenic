@@ -58,6 +58,8 @@ describe("regenic-local", () => {
         actor: { id: "person-1" },
         scope: { id: "chat-1" },
         type: "message",
+        direction_tags: ["product"],
+        weight_hints: { urgency: 1, importance: 1 },
         content: [{
           role: "body",
           media_type: "text/plain",
@@ -108,6 +110,18 @@ describe("regenic-local", () => {
       "--utc-date", "2026-08-30",
     ]);
     assert.equal(acceptedDigests[0].id, digest.artifact_id);
+    const jobStore = new SqliteAuthorityStore(database);
+    await jobStore.enqueueDailyDigestJob({
+      org_id: "local-owner",
+      utc_date: "2026-08-31",
+      generation: "daily-digest-d0-v3",
+      created_at: "2026-08-31T00:00:00.000Z",
+    });
+    jobStore.close();
+    const dailyJobs = await run(["context-daily-digest-jobs", ...common]);
+    assert.equal(dailyJobs[0].utc_date, "2026-08-31");
+    assert.equal("lease_owner" in dailyJobs[0], false);
+    assert.equal("last_error" in dailyJobs[0], false);
 
     const snapshot = await run([
       "context-snapshot",

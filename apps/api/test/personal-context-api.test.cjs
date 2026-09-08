@@ -50,6 +50,8 @@ async function ingestEvidence(database, blobRoot) {
       actor: { id: "person-1" },
       scope: { id: "chat-1" },
       type: "message",
+      direction_tags: ["product"],
+      weight_hints: { urgency: 1, importance: 1 },
       content: [{
         role: "body",
         media_type: "text/plain",
@@ -163,6 +165,19 @@ async function postJson(url, body) {
 }
 
 describe("personal context API", () => {
+  it("lists safe daily digest job status without matching the date route", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(root);
+    const response = await fetch(`${origin}/v1/me/context/daily-digests/jobs`);
+    assert.equal(response.status, 200);
+    const jobs = await response.json();
+    assert.ok(Array.isArray(jobs));
+    for (const job of jobs) {
+      assert.equal("lease_owner" in job, false);
+      assert.equal("last_error" in job, false);
+    }
+  });
+
   it("projects a UTC daily digest and exposes it only after artifact acceptance", async () => {
     const root = await createRoot();
     const { origin } = await startApi(root);

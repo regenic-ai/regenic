@@ -44,6 +44,11 @@ export class PersonalContextController {
     return this.guard(() => this.context.projectDailyDigest(body));
   }
 
+  @Get("daily-digests/jobs")
+  listDailyDigestJobs() {
+    return this.guard(() => this.context.listDailyDigestJobs());
+  }
+
   @Get("daily-digests/:utcDate")
   listDailyDigests(@Param("utcDate") utcDate: string) {
     return this.guard(() => this.context.listDailyDigests(utcDate));
