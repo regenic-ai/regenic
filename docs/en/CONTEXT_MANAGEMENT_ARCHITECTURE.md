@@ -134,7 +134,7 @@ lifecycle, Artifact acceptance, or policy decisions. A later direction-aware
 or weighted D0 version must define its controlled vocabulary and interpretation
 explicitly rather than treating source metadata as trusted authority.
 
-D0 v2 routes only the RFC 0007 controlled directions (`product`, `sales`,
+D0 v3 routes only the RFC 0007 controlled directions (`product`, `sales`,
 `customer`, `org`, `finance`, and `risk`); unknown source tags are not routed.
 Within each direction it folds current heads by thread using a deterministic
 weight score, emits only metric, bad-news, or high-weight hypothesis signals,
@@ -145,7 +145,9 @@ places before ordering or hashing.
 An explicit `role_tier` of at least 3.5 is also sufficient for a hypothesis,
 even when urgency and importance hints are absent.
 The selected head's complete lifecycle remains Artifact evidence, so scoring
-never weakens revision, tombstone, or ACL requirements.
+never weakens revision, tombstone, or ACL requirements. Opposing high-tier
+`support`/`oppose` or `positive`/`negative` stance pairs in one direction are
+replaced with one `clarify_request` that retains both sides as evidence.
 A conservative starter lexicon (`outage`, `incident`, `breach`, `rollback`,
 and `blocked`) also classifies authorized materialized text as `bad_news`.
 It is a deterministic fallback, not a policy override; organization-configured
@@ -626,7 +628,7 @@ that explicitly supersedes the prior `proposed` daily digest, then atomically
 marks the prior proposal `superseded`. Accepted Artifacts are never changed by
 automatic reruns.
 This remains a bounded RFC 0007 D0 subset. Organization-local time windows,
-configurable role/source/lexicon policy, conflict-to-clarify handling,
+configurable role/source/lexicon policy,
 append-only decision history, artifact as-of retrieval, and durable automatic
 scheduling remain separate work.
 

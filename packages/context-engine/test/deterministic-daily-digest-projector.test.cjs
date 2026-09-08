@@ -221,4 +221,36 @@ describe("deterministic daily digest projector", () => {
       }],
     }]);
   });
+
+  it("replaces opposing high-tier direction signals with one clarify request", async () => {
+    const support = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-support", external_id: "support-1" },
+      thread_id: "thread-support", weight_hints: { urgency: 1, importance: 1, role_tier: 4 },
+      attrs: { stance: "support" }, text: "Proceed with the launch",
+    });
+    const oppose = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-oppose", external_id: "oppose-1" },
+      thread_id: "thread-oppose", weight_hints: { urgency: 1, importance: 1, role_tier: 4 },
+      attrs: { stance: "oppose" }, text: "Delay the launch",
+    });
+    const projector = new DeterministicDailyDigestProjector();
+    const value = await projector.project(input([support, oppose], [
+      { source: "synthetic", external_id: "support-1", head_event_id: "event-support" },
+      { source: "synthetic", external_id: "oppose-1", head_event_id: "event-oppose" },
+    ]));
+
+    assert.deepEqual(value.attrs.directions, [{
+      direction: "product",
+      items: [{
+        item_kind: "clarify_request", score: 5,
+        event_id: "event-oppose", thread_id: "thread-oppose", actor_id: "actor-1",
+        occurred_at: "2026-09-05T08:00:00.000Z", text: "Delay the launch",
+        conflicts: ["event-oppose", "event-support"],
+      }],
+    }]);
+    assert.deepEqual(value.input_refs.map((reference) => reference.event_id), [
+      "event-oppose", "event-support",
+    ]);
+    assert.deepEqual(value.required_scope_ids, ["scope-1"]);
+  });
 });

@@ -10,7 +10,7 @@ function fixture(projectDailyDigest, claimedJobs) {
   const calls = { enqueue: [], project: [], complete: [], fail: [] };
   const job = {
     id: "daily-job-1", org_id: "example-org", utc_date: "2026-09-07",
-    generation: "daily-digest-d0-v2", attempts: 1,
+    generation: "daily-digest-d0-v3", attempts: 1,
   };
   const jobsToClaim = claimedJobs ?? [job];
   let claimed = false;
@@ -43,7 +43,7 @@ describe("PersonalDailyDigestService", () => {
     const { service, calls } = fixture(async () => ({ input_event_count: 1 }));
     await service.runOnce(new Date("2026-09-07T12:00:00.000Z"));
     assert.deepEqual(calls.enqueue, [{
-      org_id: "example-org", utc_date: "2026-09-07", generation: "daily-digest-d0-v2",
+      org_id: "example-org", utc_date: "2026-09-07", generation: "daily-digest-d0-v3",
       created_at: "2026-09-07T12:00:00.000Z",
     }]);
     assert.equal(calls.project.length, 1);
@@ -68,7 +68,7 @@ describe("PersonalDailyDigestService", () => {
   it("drains all claimed daily jobs in one tick", async () => {
     const first = {
       id: "daily-job-1", org_id: "example-org", utc_date: "2026-09-06",
-      generation: "daily-digest-d0-v2", attempts: 1,
+      generation: "daily-digest-d0-v3", attempts: 1,
     };
     const second = { ...first, id: "daily-job-2", utc_date: "2026-09-07" };
     const { service, calls } = fixture(async () => ({ input_event_count: 1 }), [first, second]);
