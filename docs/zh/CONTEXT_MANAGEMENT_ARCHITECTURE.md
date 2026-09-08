@@ -536,6 +536,9 @@ Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求
 
 投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
 返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。
+当后续运行改变同一 UTC period 时，它会写入一个显式 supersede 原有 `proposed` daily digest 的
+replacement proposal，然后原子地将旧 proposal 标记为 `superseded`。自动重跑绝不会改写已
+accepted 的 Artifact。
 这仍是受限的 RFC 0007 D0 子集。组织本地日界、可配置的 role/source/lexicon policy、
 冲突转 clarify、append-only decision history、artifact as-of retrieval 与持久化自动调度
 仍是后续工作。

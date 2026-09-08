@@ -4,6 +4,7 @@ import type {
   ContextArtifactDecision,
   ContextArtifactState,
   ContextArtifactSupersession,
+  ContextArtifactProposedSupersession,
 } from "./context-artifact-lifecycle";
 import type { ContextBundle } from "./context-bundle";
 import type {
@@ -105,6 +106,31 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
     this.artifactStates.set(artifactKey(input.org_id, input.artifact_id), superseded);
     this.artifactStates.set(artifactKey(input.org_id, input.replacement_id), accepted);
     return { superseded: clone(superseded), accepted: clone(accepted) };
+  }
+
+  async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{
+    superseded: ContextArtifactState;
+    replacement: ContextArtifactState;
+  }> {
+    const current = this.artifactStates.get(artifactKey(input.org_id, input.artifact_id));
+    const replacement = this.requireTransitionable(input.org_id, input.replacement_id);
+    const currentArtifact = this.artifacts.get(artifactKey(input.org_id, input.artifact_id));
+    const replacementArtifact = this.artifacts.get(artifactKey(input.org_id, input.replacement_id));
+    if (
+      !current || current.status !== "proposed" || !currentArtifact || !replacementArtifact
+      || currentArtifact.kind !== "daily_digest" || replacementArtifact.kind !== "daily_digest"
+      || replacementArtifact.supersedes_id !== input.artifact_id
+    ) {
+      throw new Error("Invalid proposed daily digest supersession");
+    }
+    const superseded = {
+      ...current, status: "superseded" as const, decided_at: input.decided_at,
+      superseded_by: input.replacement_id,
+    };
+    const next = { ...replacement, status: "proposed" as const, decided_at: input.decided_at };
+    this.artifactStates.set(artifactKey(input.org_id, input.artifact_id), superseded);
+    this.artifactStates.set(artifactKey(input.org_id, input.replacement_id), next);
+    return { superseded: clone(superseded), replacement: clone(next) };
   }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {

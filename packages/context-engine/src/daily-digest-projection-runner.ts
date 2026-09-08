@@ -35,13 +35,22 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
     const materialized = await this.source.materialize(source.events
       .filter((event) => selectedIds.has(identity(event.event.source, event.event.external_id)))
       .map((event) => ({ ...event, status: "current" as const })));
-    const proposal = await this.projector.project({
+    const projected = await this.projector.project({
       org_id: input.org_id,
       utc_date: input.utc_date,
       generation,
       source: { ...source, events: materialized },
     });
-    if (!proposal) return { input_event_count: 0 };
+    if (!projected) return { input_event_count: 0 };
+    const previous = (await this.artifacts.listArtifacts({
+      org_id: input.org_id,
+      kinds: ["daily_digest"],
+      statuses: ["proposed"],
+      generation,
+    })).find((artifact) => isDigestForUtcDate(artifact.attrs, input.utc_date));
+    const proposal = previous && previous.id !== projected.id
+      ? { ...projected, supersedes_id: previous.id }
+      : projected;
     if (
       proposal.input_hash !== hashContextArtifactInputs(proposal) ||
       proposal.body_hash !== hashCanonicalContext(proposal.attrs) ||
@@ -55,10 +64,23 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
       "application/vnd.regenic.context-artifact+json",
     );
     await this.artifacts.putArtifact(proposal);
+    if (previous && previous.id !== proposal.id) {
+      await this.artifacts.supersedeProposedArtifact({
+        org_id: input.org_id,
+        artifact_id: previous.id,
+        replacement_id: proposal.id,
+        decided_at: source.recorded_at,
+      });
+    }
     return { artifact_id: proposal.id, input_event_count: proposal.input_refs.length };
   }
 }
 
 function identity(source: string, externalId: string): string {
   return canonicalContextJson([source, externalId]);
+}
+
+function isDigestForUtcDate(attrs: unknown, utcDate: string): boolean {
+  return Boolean(attrs && typeof attrs === "object" && !Array.isArray(attrs)
+    && (attrs as { utc_date?: unknown }).utc_date === utcDate);
 }

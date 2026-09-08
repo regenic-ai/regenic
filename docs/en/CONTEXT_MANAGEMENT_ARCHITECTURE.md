@@ -612,6 +612,10 @@ explicitly rather than treating source metadata as trusted authority.
 Projection creates a proposal only. The ordinary Artifact lifecycle must accept
 it before the Personal API or CLI returns it. Revision and tombstone correctness
 therefore comes from the same lifecycle-head validation as Context retrieval.
+When a later run changes the same UTC period, it writes a replacement proposal
+that explicitly supersedes the prior `proposed` daily digest, then atomically
+marks the prior proposal `superseded`. Accepted Artifacts are never changed by
+automatic reruns.
 This remains a bounded RFC 0007 D0 subset. Organization-local time windows,
 configurable role/source/lexicon policy, conflict-to-clarify handling,
 append-only decision history, artifact as-of retrieval, and durable automatic

@@ -42,6 +42,7 @@ import type {
   ContextArtifactState,
   ContextArtifactStore,
   ContextArtifactSupersession,
+  ContextArtifactProposedSupersession,
   ContextAuthorityRead,
   ContextAuthorityReader,
   ContextBundle,
@@ -781,6 +782,28 @@ export class PostgresAuthorityStore
       return {
         superseded: { ...artifactState(current), status: "superseded", decided_at: input.decided_at, superseded_by: input.replacement_id },
         accepted: { ...replacement, status: "accepted", decided_at: input.decided_at },
+      };
+    });
+  }
+
+  async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{ superseded: ContextArtifactState; replacement: ContextArtifactState }> {
+    return this.withTx(async (client) => {
+      const current = await this.queryOne<ArtifactStateRow>(`SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = $1 AND artifact_id = $2 FOR UPDATE`, [input.org_id, input.artifact_id], client);
+      const replacement = await this.transitionableArtifact(input.org_id, input.replacement_id, client);
+      const artifacts = await this.query<{ id: string; payload_json: unknown }>(
+        `SELECT id, payload_json FROM context_artifacts WHERE org_id = $1 AND id = ANY($2::text[])`,
+        [input.org_id, [input.artifact_id, input.replacement_id]],
+        client,
+      );
+      const byId = new Map(artifacts.map((row) => [row.id, parseContextJson<ContextArtifact>(row.payload_json)] as const));
+      const currentArtifact = byId.get(input.artifact_id);
+      const replacementArtifact = byId.get(input.replacement_id);
+      if (!current || current.status !== "proposed" || !currentArtifact || !replacementArtifact || currentArtifact.kind !== "daily_digest" || replacementArtifact.kind !== "daily_digest" || replacementArtifact.supersedes_id !== input.artifact_id) throw new Error("Invalid proposed daily digest supersession");
+      await this.execute(`UPDATE context_artifact_states SET status = 'superseded', decided_at = $1, superseded_by = $2 WHERE org_id = $3 AND artifact_id = $4`, [input.decided_at, input.replacement_id, input.org_id, input.artifact_id], client);
+      await this.execute(`UPDATE context_artifact_states SET status = 'proposed', decided_at = $1, superseded_by = NULL WHERE org_id = $2 AND artifact_id = $3`, [input.decided_at, input.org_id, input.replacement_id], client);
+      return {
+        superseded: { ...artifactState(current), status: "superseded", decided_at: input.decided_at, superseded_by: input.replacement_id },
+        replacement: { ...replacement, status: "proposed", decided_at: input.decided_at },
       };
     });
   }
