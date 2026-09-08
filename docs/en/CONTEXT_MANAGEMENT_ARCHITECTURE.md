@@ -146,6 +146,10 @@ An explicit `role_tier` of at least 3.5 is also sufficient for a hypothesis,
 even when urgency and importance hints are absent.
 The selected head's complete lifecycle remains Artifact evidence, so scoring
 never weakens revision, tombstone, or ACL requirements.
+A conservative starter lexicon (`outage`, `incident`, `breach`, `rollback`,
+and `blocked`) also classifies authorized materialized text as `bad_news`.
+It is a deterministic fallback, not a policy override; organization-configured
+lexicons remain separate work.
   anchors?: Array<{
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;

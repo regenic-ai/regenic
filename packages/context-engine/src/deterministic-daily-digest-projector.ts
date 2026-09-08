@@ -114,6 +114,8 @@ function directionsFor(event: ContextSourceEvent): DailyDigestDirection[] {
     .sort();
 }
 
+const BAD_NEWS_PATTERN = /\b(outage|incident|breach|rollback|blocked)\b/i;
+
 function classify(event: ContextSourceEvent): DigestCandidate["item_kind"] | null {
   if (event.weight_hints?.evidence_class === "metric") return "metric_signal";
   const severity = event.attrs?.severity;
@@ -121,6 +123,7 @@ function classify(event: ContextSourceEvent): DigestCandidate["item_kind"] | nul
     return "bad_news";
   }
   if ((event.weight_hints?.role_tier ?? 0) >= 3.5) return "hypothesis";
+  if (event.text && BAD_NEWS_PATTERN.test(event.text)) return "bad_news";
   return score(event) >= 1.5 ? "hypothesis" : null;
 }
 
