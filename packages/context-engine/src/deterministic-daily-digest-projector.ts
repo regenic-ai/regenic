@@ -120,6 +120,7 @@ function classify(event: ContextSourceEvent): DigestCandidate["item_kind"] | nul
   if (severity === "high" || severity === "critical" || event.attrs?.bad_news === true) {
     return "bad_news";
   }
+  if ((event.weight_hints?.role_tier ?? 0) >= 3.5) return "hypothesis";
   return score(event) >= 1.5 ? "hypothesis" : null;
 }
 

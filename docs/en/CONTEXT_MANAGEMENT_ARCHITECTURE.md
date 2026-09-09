@@ -142,6 +142,8 @@ caps the result at seven items, and reserves one bad-news seat when available.
 Its fixed evidence multipliers are metric $4$, demo $3$, user-verbatim and
 decision-record $2.5$, and opinion $1$; scores are normalized to six decimal
 places before ordering or hashing.
+An explicit `role_tier` of at least 3.5 is also sufficient for a hypothesis,
+even when urgency and importance hints are absent.
 The selected head's complete lifecycle remains Artifact evidence, so scoring
 never weakens revision, tombstone, or ACL requirements.
   anchors?: Array<{
