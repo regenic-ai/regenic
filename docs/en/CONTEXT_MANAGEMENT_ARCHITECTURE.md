@@ -139,6 +139,9 @@ D0 v2 routes only the RFC 0007 controlled directions (`product`, `sales`,
 Within each direction it folds current heads by thread using a deterministic
 weight score, emits only metric, bad-news, or high-weight hypothesis signals,
 caps the result at seven items, and reserves one bad-news seat when available.
+Its fixed evidence multipliers are metric $4$, demo $3$, user-verbatim and
+decision-record $2.5$, and opinion $1$; scores are normalized to six decimal
+places before ordering or hashing.
 The selected head's complete lifecycle remains Artifact evidence, so scoring
 never weakens revision, tombstone, or ACL requirements.
   anchors?: Array<{

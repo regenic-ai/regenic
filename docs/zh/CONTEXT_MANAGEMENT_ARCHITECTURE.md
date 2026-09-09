@@ -533,6 +533,8 @@ D0 v2 只路由 RFC 0007 规定的受控方向（`product`、`sales`、`customer
 对 current head 做 thread 折叠，只输出 metric、bad-news 或高权重 hypothesis 信号，
 最多保留七项，并在有候选时保留一个 bad-news 席位。选中 head 的完整 lifecycle 仍是
 Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求。
+固定的 evidence multiplier 为 metric $4$、demo $3$、user-verbatim 与 decision-record
+$2.5$、opinion $1$；在排序或 hash 前，分数统一归一化到小数点后六位。
 
 投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
 返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。

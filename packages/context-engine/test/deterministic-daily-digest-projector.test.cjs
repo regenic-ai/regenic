@@ -161,4 +161,23 @@ describe("deterministic daily digest projector", () => {
       "event-low", "event-metric", "event-risk", "event-high",
     ]);
   });
+
+  it("weights higher-evidence classes before otherwise equal hypotheses", async () => {
+    const opinion = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-opinion", external_id: "opinion-1" },
+      thread_id: "thread-opinion", weight_hints: { urgency: 0.8, importance: 0.8, evidence_class: "opinion" },
+    });
+    const demo = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-demo", external_id: "demo-1" },
+      thread_id: "thread-demo", weight_hints: { urgency: 0.8, importance: 0.8, evidence_class: "demo" },
+    });
+    const projector = new DeterministicDailyDigestProjector();
+    const value = await projector.project(input([opinion, demo], [
+      { source: "synthetic", external_id: "opinion-1", head_event_id: "event-opinion" },
+      { source: "synthetic", external_id: "demo-1", head_event_id: "event-demo" },
+    ]));
+    assert.deepEqual(value.attrs.directions[0].items.map((item) => [item.event_id, item.score]), [
+      ["event-demo", 4.8], ["event-opinion", 1.6],
+    ]);
+  });
 });
