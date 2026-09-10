@@ -43,6 +43,15 @@ export interface InboxThread {
 }
 
 export type PinFilter = "all" | "pinned" | "unpinned";
+export type StatusFilter =
+  | "all"
+  | "needs_you"
+  | "running"
+  | "waiting"
+  | "failed"
+  | "none";
+/** `all` | `none` (unbound) | recipe id */
+export type RuleFilter = "all" | "none" | (string & {});
 
 export const MAX_CACHED_THREADS = 8;
 
@@ -164,6 +173,8 @@ export function filterInboxThreads(
   threads: InboxThread[],
   pin: PinFilter,
   channel: string,
+  status: StatusFilter = "all",
+  rule: RuleFilter = "all",
 ): InboxThread[] {
   return threads.filter((thread) => {
     if (pin === "pinned" && !thread.pinned) {
@@ -175,8 +186,66 @@ export function filterInboxThreads(
     if (channel !== "all" && thread.channel !== channel) {
       return false;
     }
+    if (status !== "all" && threadStatusFilterKey(thread) !== status) {
+      return false;
+    }
+    if (rule !== "all" && threadRuleFilterKey(thread) !== rule) {
+      return false;
+    }
     return true;
   });
+}
+
+/** Primary status bucket for inbox Status filter (one key per thread). */
+export function threadStatusFilterKey(
+  thread: InboxThread,
+): Exclude<StatusFilter, "all"> {
+  if (
+    thread.work?.status === "failed" ||
+    thread.work?.delivery?.status === "dead" ||
+    thread.work?.delivery?.write_back === "failed"
+  ) {
+    return "failed";
+  }
+  if (
+    thread.work?.status === "waiting_human" ||
+    (thread.prompts?.length ?? 0) > 0
+  ) {
+    return "waiting";
+  }
+  const attention = resolveThreadAttention(thread);
+  if (attention === "waiting_you" || attention === "needs_ack") {
+    return "needs_you";
+  }
+  if (attention === "running" || thread.work?.status === "running") {
+    return "running";
+  }
+  return "none";
+}
+
+export function threadRuleFilterKey(thread: InboxThread): RuleFilter {
+  const recipeId = thread.work?.recipe_id?.trim();
+  return recipeId ? recipeId : "none";
+}
+
+export function inboxRuleOptions(
+  threads: readonly InboxThread[],
+  recipeNames: ReadonlyMap<string, string> | Record<string, string> = {},
+): Array<{ id: string; label: string }> {
+  const names =
+    recipeNames instanceof Map
+      ? recipeNames
+      : new Map(Object.entries(recipeNames));
+  const ids = new Set<string>();
+  for (const thread of threads) {
+    const id = thread.work?.recipe_id?.trim();
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return [...ids]
+    .map((id) => ({ id, label: names.get(id)?.trim() || id }))
+    .sort((left, right) => left.label.localeCompare(right.label));
 }
 
 export function mergeInboxThreadLists(

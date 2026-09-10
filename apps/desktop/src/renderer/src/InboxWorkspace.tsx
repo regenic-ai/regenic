@@ -4,6 +4,7 @@ import {
   filterInboxThreads,
   filterInboxThreadsByTitle,
   groupThreadsByAttention,
+  inboxRuleOptions,
   latestMessage,
   mergeInboxThreadLists,
   adjacentInboxThreadId,
@@ -11,6 +12,8 @@ import {
   threadChannels,
   type InboxThread,
   type PinFilter,
+  type RuleFilter,
+  type StatusFilter,
 } from "./inbox";
 import type { CreateTarget } from "./inbox-drafts";
 import {
@@ -36,6 +39,7 @@ import {
   shouldRearmLoadMoreHeads,
 } from "./thread-window";
 import type { ComposerDraft } from "./Composer";
+import { fetchRecipes } from "./api";
 import type {
   CreatedConversation,
   ForwardView,
@@ -127,16 +131,43 @@ export function InboxWorkspace({
   const { t } = useLocale();
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
   const [channelFilter, setChannelFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [ruleFilter, setRuleFilter] = useState<RuleFilter>("all");
   const [titleQuery, setTitleQuery] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [recipeNames, setRecipeNames] = useState<Record<string, string>>({});
   const searching = titleQuery.trim().length > 0;
   const pool = searching ? mergeInboxThreadLists(threads, otherThreads) : threads;
   const channels = threadChannels(pool);
   const visible = filterInboxThreadsByTitle(
-    filterInboxThreads(pool, pinFilter, channelFilter),
+    filterInboxThreads(pool, pinFilter, channelFilter, statusFilter, ruleFilter),
     titleQuery,
     threadTitle,
   );
+  const ruleChoices = inboxRuleOptions(pool, recipeNames);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchRecipes()
+      .then((recipes) => {
+        if (cancelled) {
+          return;
+        }
+        const next: Record<string, string> = {};
+        for (const recipe of recipes) {
+          next[recipe.id] = recipe.name;
+        }
+        setRecipeNames(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const resetRefine = () => {
+    setChannelFilter("all");
+    setStatusFilter("all");
+    setRuleFilter("all");
+  };
   const canCreate = createTargets.length > 0;
   const selectedMatches = Boolean(
     selected && visible.some((thread) => thread.id === selected.id),
@@ -208,7 +239,7 @@ export function InboxWorkspace({
                   if (listView === "shown") {
                     return;
                   }
-                  setChannelFilter("all");
+                  resetRefine();
                   onListView("shown");
                 }}
               >
@@ -223,7 +254,7 @@ export function InboxWorkspace({
                   if (listView === "hidden") {
                     return;
                   }
-                  setChannelFilter("all");
+                  resetRefine();
                   onListView("hidden");
                 }}
               >
@@ -276,13 +307,57 @@ export function InboxWorkspace({
                   {t("inbox.normal")}
                 </button>
               </div>
-              {channels.length > 1 ? (
+              <LabeledFilter
+                label={t("inbox.channel")}
+                filtered={channelFilter !== "all"}
+              >
                 <ChannelFilter
                   channels={channels}
                   value={channelFilter}
                   onChange={setChannelFilter}
                 />
-              ) : null}
+              </LabeledFilter>
+              <LabeledFilter
+                label={t("inbox.status")}
+                filtered={statusFilter !== "all"}
+              >
+                <MenuSelect
+                  className={`list-refine-select${statusFilter !== "all" ? " is-filtered" : ""}`}
+                  ariaLabel={t("inbox.status")}
+                  value={statusFilter}
+                  options={[
+                    { value: "all", label: t("inbox.all") },
+                    { value: "needs_you", label: t("inbox.needsYou") },
+                    { value: "running", label: t("work.running") },
+                    { value: "waiting", label: t("work.waiting") },
+                    { value: "failed", label: t("work.failed") },
+                    { value: "none", label: t("inbox.statusNone") },
+                  ]}
+                  placeholder={t("inbox.all")}
+                  onChange={(value) => setStatusFilter(value as StatusFilter)}
+                />
+              </LabeledFilter>
+              <LabeledFilter
+                label={t("inbox.rule")}
+                filtered={ruleFilter !== "all"}
+              >
+                <MenuSelect
+                  className={`list-refine-select${ruleFilter !== "all" ? " is-filtered" : ""}`}
+                  ariaLabel={t("inbox.rule")}
+                  value={ruleFilter}
+                  options={[
+                    { value: "all", label: t("inbox.all") },
+                    { value: "none", label: t("inbox.ruleNone") },
+                    ...ruleChoices.map((item) => ({
+                      value: item.id,
+                      label: item.label,
+                    })),
+                  ]}
+                  placeholder={t("inbox.all")}
+                  searchable={ruleChoices.length > 6}
+                  onChange={setRuleFilter}
+                />
+              </LabeledFilter>
               <button
                 type="button"
                 className={`item-tool list-pin${pinFilter === "pinned" ? " is-on" : ""}`}
@@ -706,6 +781,23 @@ function NewConversationButton({
 
 const CHANNEL_CHIP_MAX = 2;
 
+function LabeledFilter({
+  label,
+  filtered,
+  children,
+}: {
+  label: string;
+  filtered?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`list-refine-field${filtered ? " is-filtered" : ""}`}>
+      <span className="list-refine-label">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 function ChannelFilter({
   channels,
   value,
@@ -720,7 +812,7 @@ function ChannelFilter({
   if (channels.length > CHANNEL_CHIP_MAX) {
     return (
       <MenuSelect
-        className={`list-channel-select${value !== "all" ? " is-filtered" : ""}`}
+        className={`list-refine-select list-channel-select${value !== "all" ? " is-filtered" : ""}`}
         ariaLabel={t("inbox.channel")}
         value={value}
         options={options.map((item) => ({ value: item.id, label: item.label }))}
