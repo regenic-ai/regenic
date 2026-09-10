@@ -537,6 +537,9 @@ Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求
 $2.5$、opinion $1$；在排序或 hash 前，分数统一归一化到小数点后六位。
 显式 `role_tier` 至少为 3.5 时，即使未提供 urgency 与 importance hint，也足以产生一条
 hypothesis。
+保守的 starter lexicon（`outage`、`incident`、`breach`、`rollback`、`blocked`）也会将
+已授权且已物化正文归类为 `bad_news`。它是确定性 fallback，不会覆盖 policy；按组织配置
+词表仍是后续工作。
 
 投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
 返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。

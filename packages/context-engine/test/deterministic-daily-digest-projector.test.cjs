@@ -201,4 +201,24 @@ describe("deterministic daily digest projector", () => {
       }],
     }]);
   });
+
+  it("classifies a starter lexicon signal as bad news without trusted attrs", async () => {
+    const outage = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-outage", external_id: "outage-1" },
+      thread_id: "thread-outage", weight_hints: {}, text: "Production outage is blocking checkout.",
+    });
+    const projector = new DeterministicDailyDigestProjector();
+    const value = await projector.project(input([outage], [
+      { source: "synthetic", external_id: "outage-1", head_event_id: "event-outage" },
+    ]));
+
+    assert.deepEqual(value.attrs.directions, [{
+      direction: "product",
+      items: [{
+        item_kind: "bad_news", score: 0,
+        event_id: "event-outage", thread_id: "thread-outage", actor_id: "actor-1",
+        occurred_at: "2026-09-05T08:00:00.000Z", text: "Production outage is blocking checkout.",
+      }],
+    }]);
+  });
 });
