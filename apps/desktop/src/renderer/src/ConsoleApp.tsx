@@ -1248,7 +1248,7 @@ export function ConsoleApp() {
       const previous = listStoreRef.current.prefOverlay(thread.id);
       const base = currentItem ?? thread;
       const optimistic = {
-        title: patch.title !== undefined ? patch.title : base.title,
+        title: patch.title !== undefined ? patch.title : (base.title ?? null),
         pinned: patch.pinned !== undefined ? patch.pinned : Boolean(base.pinned),
         hidden: patch.hidden !== undefined ? patch.hidden : Boolean(base.hidden),
         updated_at: new Date().toISOString(),
