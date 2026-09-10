@@ -4,6 +4,7 @@ import {
   PROMPT_PANEL_HEIGHT_KEY,
   PROMPT_PANEL_MIN_HEIGHT,
   clampPromptPanelHeight,
+  promptPanelAvailableHeight,
   readPromptPanelHeight,
   writePromptPanelHeight,
   type PromptHeightStore,
@@ -27,6 +28,11 @@ describe("prompt panel height", () => {
     assert.equal(clampPromptPanelHeight(40, 800), PROMPT_PANEL_MIN_HEIGHT);
     assert.equal(clampPromptPanelHeight(900, 800), 680);
     assert.equal(clampPromptPanelHeight(300, 800), 300);
+  });
+
+  it("subtracts the thread head from available room", () => {
+    assert.equal(promptPanelAvailableHeight(800, 200), 600);
+    assert.equal(clampPromptPanelHeight(900, promptPanelAvailableHeight(800, 200)), 480);
   });
 
   it("round-trips through a store", () => {

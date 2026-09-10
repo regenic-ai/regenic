@@ -8,15 +8,27 @@ export const PROMPT_PANEL_MIN_TRANSCRIPT = 120;
 
 export type PromptHeightStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
+/**
+ * Clamp a user-chosen panel height.
+ * `availableHeight` is the space below `.thread-head` (message list + dock).
+ */
 export function clampPromptPanelHeight(
   height: number,
-  paneHeight: number,
+  availableHeight: number,
 ): number {
   const max = Math.max(
     PROMPT_PANEL_MIN_HEIGHT,
-    Math.floor(paneHeight - PROMPT_PANEL_MIN_TRANSCRIPT),
+    Math.floor(availableHeight - PROMPT_PANEL_MIN_TRANSCRIPT),
   );
   return Math.min(max, Math.max(PROMPT_PANEL_MIN_HEIGHT, Math.round(height)));
+}
+
+/** Room below the thread head for scroll + dock. */
+export function promptPanelAvailableHeight(
+  paneHeight: number,
+  headHeight: number,
+): number {
+  return Math.max(0, Math.floor(paneHeight - headHeight));
 }
 
 function defaultStore(): PromptHeightStore | null {
