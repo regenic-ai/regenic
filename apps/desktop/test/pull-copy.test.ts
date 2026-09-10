@@ -8,6 +8,7 @@ const baseEngine: PersonalEngineView = {
   org_id: "org-1",
   database_path: "/tmp/regenic.db",
   inbox_count: 1,
+  inbox_hidden_count: 0,
   installations: [],
   catalog: [],
   executor_installations: [],

@@ -1526,6 +1526,11 @@ export function ConsoleApp() {
             listView={listView}
             onListView={changeListView}
             listPending={listPending}
+            shownCount={engine?.inbox_count ?? catalogThreads.filter((thread) => !thread.hidden).length}
+            hiddenCount={
+              engine?.inbox_hidden_count ??
+              catalogThreads.filter((thread) => thread.hidden).length
+            }
             otherThreads={otherThreads}
             onNeedSearchCatalog={() => {
               void ensureOtherListHeads();

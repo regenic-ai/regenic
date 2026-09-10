@@ -300,11 +300,13 @@ describe("inbox summary snapshot", () => {
     store.publish({
       org_id: "org-1",
       count: 12,
+      hidden_count: 2,
       digest: "12:2026:evt",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     assert.deepEqual(store.summary("org-1"), {
       count: 12,
+      hidden_count: 2,
       digest: "12:2026:evt",
     });
     assert.equal(store.summary("org-2"), null);

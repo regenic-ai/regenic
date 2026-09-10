@@ -46,6 +46,7 @@ function engine(overrides: Partial<PersonalEngineView> = {}): PersonalEngineView
     org_id: "local-owner",
     database_path: null,
     inbox_count: 1,
+    inbox_hidden_count: 0,
     installations: [],
     catalog: [],
     pull: pull(),

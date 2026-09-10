@@ -74,6 +74,8 @@ export function InboxWorkspace({
   listView,
   onListView,
   listPending = false,
+  shownCount,
+  hiddenCount,
   otherThreads = [],
   onNeedSearchCatalog,
   onRunWork,
@@ -113,6 +115,8 @@ export function InboxWorkspace({
   listView: InboxListView;
   onListView: (list: InboxListView) => void;
   listPending?: boolean;
+  shownCount: number;
+  hiddenCount: number;
   otherThreads?: InboxThread[];
   onNeedSearchCatalog?: () => void;
   onRunWork: (thread: InboxThread) => Promise<void>;
@@ -208,7 +212,7 @@ export function InboxWorkspace({
                   onListView("shown");
                 }}
               >
-                {t("inbox.shown")}
+                {t("inbox.shownCount", { count: shownCount })}
               </button>
               <button
                 type="button"
@@ -223,7 +227,7 @@ export function InboxWorkspace({
                   onListView("hidden");
                 }}
               >
-                {t("inbox.hidden")}
+                {t("inbox.hiddenCount", { count: hiddenCount })}
               </button>
             </div>
             <NewConversationButton

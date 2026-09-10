@@ -11,6 +11,7 @@ const baseEngine: PersonalEngineView = {
   org_id: "org-1",
   database_path: "/tmp/regenic.db",
   inbox_count: 3,
+  inbox_hidden_count: 0,
   inbox_digest: "3:old",
   installations: [
     {
@@ -49,6 +50,7 @@ const heartbeat: PersonalHeartbeatView = {
   kernel: "running",
   org_id: "org-1",
   inbox_count: 913,
+  inbox_hidden_count: 0,
   inbox_digest: "913:new",
   memory: { rss_bytes: 100, heap_used_bytes: 200 },
   pressure: {
@@ -99,6 +101,7 @@ describe("runtime pulse", () => {
   it("updates counts and pull without dropping installations", () => {
     const next = applyHeartbeatToEngine(baseEngine, heartbeat);
     assert.equal(next.inbox_count, 913);
+    assert.equal(next.inbox_hidden_count, 0);
     assert.equal(next.inbox_digest, "913:new");
     assert.equal(next.installations.length, 1);
     assert.equal(next.pull?.phase, "pulling");

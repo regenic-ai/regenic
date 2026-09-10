@@ -37,7 +37,7 @@ export function engineRevision(
         .join("/"),
     )
     .join(",");
-  return `${engine.kernel}|${engine.inbox_count}|${engine.pull?.phase ?? ""}|${engine.pull?.catching_up_count ?? 0}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${pullStreamRevision(engine)}|${installs}|${catalog}|${executors}|${executorCatalog}${
+  return `${engine.kernel}|${engine.inbox_count}|${engine.inbox_hidden_count ?? 0}|${engine.pull?.phase ?? ""}|${engine.pull?.catching_up_count ?? 0}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${pullStreamRevision(engine)}|${installs}|${catalog}|${executors}|${executorCatalog}${
     detailed ? `|${engine.pull?.last_tick_at ?? ""}` : ""
   }`;
 }

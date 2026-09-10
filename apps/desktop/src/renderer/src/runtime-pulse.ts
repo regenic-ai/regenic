@@ -52,6 +52,7 @@ export function applyHeartbeatToEngine(
     kernel: heartbeat.kernel,
     org_id: heartbeat.org_id,
     inbox_count: heartbeat.inbox_count,
+    inbox_hidden_count: heartbeat.inbox_hidden_count ?? current.inbox_hidden_count ?? 0,
     inbox_digest: heartbeat.inbox_digest,
     memory: heartbeat.memory,
     pressure: heartbeat.pressure,

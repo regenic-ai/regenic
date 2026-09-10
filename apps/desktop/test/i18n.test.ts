@@ -65,6 +65,8 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "inbox.shown"), "显示");
     assert.equal(translate("zh", "inbox.hidden"), "不显示");
     assert.equal(translate("en", "inbox.shown"), "Showing");
+    assert.equal(translate("en", "inbox.shownCount", { count: 12 }), "Showing (12)");
+    assert.equal(translate("zh", "inbox.hiddenCount", { count: 4 }), "不显示 (4)");
     assert.equal(translate("en", "inbox.loadingList"), "Loading conversations…");
     assert.equal(translate("zh", "inbox.loadingList"), "正在加载会话…");
     assert.equal(translate("en", "inbox.searchPlaceholder"), "Search conversations");

@@ -1266,6 +1266,19 @@ export class SqliteAuthorityStore
         `,
       )
       .get(orgId, orgId) as { count: number };
+    const hiddenCounted = this.database
+      .prepare(
+        `
+          SELECT COUNT(*) AS count
+          FROM thread_heads th
+          WHERE th.org_id = ?
+            AND th.thread_id IN (
+              SELECT p.thread_id FROM conversation_prefs p
+              WHERE p.org_id = ? AND p.hidden = 1
+            )
+        `,
+      )
+      .get(orgId, orgId) as { count: number };
     const prefs = this.database
       .prepare(
         `
@@ -1288,6 +1301,7 @@ export class SqliteAuthorityStore
       .get(orgId, orgId) as { work_updated_at: string };
     return {
       count: counted.count,
+      hidden_count: hiddenCounted.count,
       digest: formatInboxDigest({
         count: counted.count,
         latest_at: latest?.latest_at ?? "",

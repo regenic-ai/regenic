@@ -575,6 +575,7 @@ export interface PersonalHeartbeatView {
   kernel: "running" | "stopped";
   org_id: string;
   inbox_count: number;
+  inbox_hidden_count: number;
   inbox_digest: string;
   memory: ProcessMemoryView;
   pressure: {
@@ -596,6 +597,7 @@ export interface PersonalEngineView {
   org_id: string;
   database_path: string | null;
   inbox_count: number;
+  inbox_hidden_count: number;
   inbox_digest?: string;
   memory?: ProcessMemoryView;
   pressure?: PersonalHeartbeatView["pressure"];

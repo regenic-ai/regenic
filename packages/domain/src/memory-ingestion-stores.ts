@@ -242,10 +242,32 @@ export class MemoryAuthorityStore
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
-    return summarizeInboxItems(
-      this.currentWorkInbox(orgId),
-      [...this.prefs.values()].filter((pref) => pref.org_id === orgId),
-    );
+    const prefs = [...this.prefs.values()].filter((pref) => pref.org_id === orgId);
+    return {
+      ...summarizeInboxItems(this.currentWorkInbox(orgId), prefs),
+      hidden_count: this.hiddenInboxCount(orgId),
+    };
+  }
+
+  private hiddenInboxCount(orgId: string): number {
+    const hidden = this.hiddenThreadIds(orgId);
+    if (hidden.size === 0) {
+      return 0;
+    }
+    const withFace = new Set<string>();
+    for (const event of this.events) {
+      if (event.org_id !== orgId || !this.dispositions.has(event.id)) {
+        continue;
+      }
+      if (event.operation === "tombstone") {
+        continue;
+      }
+      const id = eventThreadId(event);
+      if (hidden.has(id)) {
+        withFace.add(id);
+      }
+    }
+    return withFace.size;
   }
 
   private currentWorkInbox(orgId: string): InboxItem[] {
