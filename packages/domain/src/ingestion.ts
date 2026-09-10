@@ -377,6 +377,8 @@ export interface InboxQuery extends EventListQuery {
 
 export interface InboxSummary {
   count: number;
+  /** Conversations on the Hidden list (prefs.hidden with a thread head). */
+  hidden_count: number;
   digest: string;
 }
 

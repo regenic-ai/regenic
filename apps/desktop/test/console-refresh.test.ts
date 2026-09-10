@@ -23,6 +23,7 @@ function engineWithCatalog(title: string, step: string): PersonalEngineView {
     org_id: "local-owner",
     database_path: null,
     inbox_count: 0,
+    inbox_hidden_count: 0,
     installations: [],
     catalog: [catalog],
     executor_installations: [],

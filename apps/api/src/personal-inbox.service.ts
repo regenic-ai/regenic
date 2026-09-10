@@ -180,6 +180,7 @@ export interface PersonalEngineView {
   org_id: string;
   database_path: string | null;
   inbox_count: number;
+  inbox_hidden_count: number;
   inbox_digest: string;
   memory: { rss_bytes: number; heap_used_bytes: number };
   pressure: KernelPressureView;
@@ -202,6 +203,7 @@ export interface PersonalHeartbeatView {
   kernel: "running" | "stopped";
   org_id: string;
   inbox_count: number;
+  inbox_hidden_count: number;
   inbox_digest: string;
   memory: { rss_bytes: number; heap_used_bytes: number };
   pressure: KernelPressureView;
@@ -746,7 +748,7 @@ export class PersonalInboxService {
   private async summarizeInboxCached(
     orgId: string,
     authority: Pick<AuthorityStore, "summarizeInbox">,
-  ): Promise<{ count: number; digest: string }> {
+  ): Promise<{ count: number; hidden_count: number; digest: string }> {
     const cached = this.kernelRuntime.inboxSummary.summary(orgId);
     if (cached) {
       return cached;
@@ -755,6 +757,7 @@ export class PersonalInboxService {
     this.kernelRuntime.inboxSummary.publish({
       org_id: orgId,
       count: inbox.count,
+      hidden_count: inbox.hidden_count,
       digest: inbox.digest,
       updated_at: new Date().toISOString(),
     });
@@ -798,6 +801,7 @@ export class PersonalInboxService {
         this.kernelRuntime.inboxSummary.publish({
           org_id: orgId,
           count: summary.count,
+          hidden_count: summary.hidden_count,
           digest: summary.digest,
           updated_at: new Date().toISOString(),
         });
@@ -946,6 +950,7 @@ export class PersonalInboxService {
           kernel: "stopped",
           org_id: orgId,
           inbox_count: 0,
+          inbox_hidden_count: 0,
           inbox_digest: withSurfaceGeneration(inboxDigest([]), ""),
           memory: processMemoryView(),
           pressure: this.kernelRuntime.pressureView(),
@@ -970,6 +975,7 @@ export class PersonalInboxService {
         kernel: "running",
         org_id: orgId,
         inbox_count: inbox.count,
+        inbox_hidden_count: inbox.hidden_count,
         inbox_digest: withSurfaceGeneration(
           inbox.digest,
           this.drivers.surfaceGeneration(installations, host),
@@ -1039,6 +1045,7 @@ export class PersonalInboxService {
         org_id: orgId,
         database_path: options?.database ?? null,
         inbox_count: 0,
+        inbox_hidden_count: 0,
         inbox_digest: withSurfaceGeneration(inboxDigest([]), ""),
         memory: processMemoryView(),
         pressure: this.kernelRuntime.pressureView(),
@@ -1095,6 +1102,7 @@ export class PersonalInboxService {
       org_id: orgId,
       database_path: options?.database ?? null,
       inbox_count: inbox.count,
+      inbox_hidden_count: inbox.hidden_count,
       inbox_digest: withSurfaceGeneration(
         inbox.digest,
         this.drivers.surfaceGeneration(installations, host),

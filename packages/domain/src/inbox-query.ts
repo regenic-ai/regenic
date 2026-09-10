@@ -387,6 +387,7 @@ export function summarizeInboxItems(
   );
   return {
     count: withFace.size,
+    hidden_count: 0,
     digest: inboxDigest(listable, prefs),
   };
 }

@@ -1260,6 +1260,18 @@ export class PostgresAuthorityStore
       `,
       [orgId, orgId],
     );
+    const hiddenCounted = await this.queryOne<{ count: unknown }>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM thread_heads th
+        WHERE th.org_id = $1
+          AND th.thread_id IN (
+            SELECT p.thread_id FROM conversation_prefs p
+            WHERE p.org_id = $2 AND p.hidden = TRUE
+          )
+      `,
+      [orgId, orgId],
+    );
     const prefs = await this.queryOne<{
       pref_count: unknown;
       pref_updated_at: unknown;
@@ -1284,6 +1296,7 @@ export class PostgresAuthorityStore
     const count = asNumber(counted?.count ?? 0);
     return {
       count,
+      hidden_count: asNumber(hiddenCounted?.count ?? 0),
       digest: formatInboxDigest({
         count,
         latest_at: latest ? toIso(latest.latest_at) : "",

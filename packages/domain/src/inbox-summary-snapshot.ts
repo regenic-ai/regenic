@@ -26,7 +26,11 @@ export class InboxSummarySnapshotStore {
     if (!hit) {
       return null;
     }
-    return { count: hit.count, digest: hit.digest };
+    return {
+      count: hit.count,
+      hidden_count: hit.hidden_count,
+      digest: hit.digest,
+    };
   }
 
   clear(orgId?: string): void {
