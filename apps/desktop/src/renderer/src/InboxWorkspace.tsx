@@ -347,6 +347,7 @@ export function InboxWorkspace({
                   value={ruleFilter}
                   options={[
                     { value: "all", label: t("inbox.all") },
+                    { value: "bound", label: t("inbox.ruleBound") },
                     { value: "none", label: t("inbox.ruleNone") },
                     ...ruleChoices.map((item) => ({
                       value: item.id,
