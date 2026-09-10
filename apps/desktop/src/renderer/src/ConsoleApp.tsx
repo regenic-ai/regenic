@@ -26,6 +26,7 @@ import {
 } from "../../shared/connection-state.ts";
 import { BrandBadge } from "./Brand";
 import { EngineChip, RailButton } from "./console-chrome";
+import { connectorAlerts } from "./connector-alerts";
 import { engineRevision } from "./console-refresh";
 import { EnginePage } from "./EnginePage";
 import { engineChip, memoryWatchCopy, pullProgressChip } from "./format";
@@ -1099,6 +1100,8 @@ export function ConsoleApp() {
     return opened;
   }, [catalogThreads, selectedId, messagesByThread]);
   const chip = engineChip(engine, reachability);
+  const alerts = connectorAlerts(engine);
+  const alert = alerts[0];
   const pullProgress = pullProgressChip(engine?.pull);
   const createTargets = createConversationTargets(engine);
 
@@ -1485,6 +1488,23 @@ export function ConsoleApp() {
         </div>
       </nav>
       <div className="workspace">
+        {alert ? (
+          <div className="connector-alert" role="alert">
+            <div className="connector-alert-body">
+              <strong>{t("chrome.connectorAlertTitle", { name: alert.name })}</strong>
+              <span className="connector-alert-message">
+                {alert.message}
+                {alert.hint ? ` — ${alert.hint}` : ""}
+                {alerts.length > 1
+                  ? ` · ${t("chrome.connectorAlertMore", { count: alerts.length - 1 })}`
+                  : ""}
+              </span>
+            </div>
+            <button type="button" className="ghost" onClick={() => setNav("engine")}>
+              {t("chrome.connectorAlertAction")}
+            </button>
+          </div>
+        ) : null}
         {nav === "inbox" ? (
           <InboxWorkspace
             threads={listThreads}

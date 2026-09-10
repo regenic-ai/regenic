@@ -75,6 +75,28 @@ describe("engineChip", () => {
     assert.equal(chip, "running");
   });
 
+  it("shows error when a pull stream is failing", () => {
+    const chip = engineChip(
+      {
+        ...baseEngine,
+        pull: {
+          ...baseEngine.pull!,
+          streams: [
+            {
+              stream_key: "feishu-1:chat:oc_1",
+              thread_id: "feishu:oc_1",
+              label: "Feishu",
+              phase: "error",
+              last_error: "token expired",
+            },
+          ],
+        },
+      },
+      "live",
+    );
+    assert.equal(chip, "error");
+  });
+
   it("keeps running for a live watermark pull with stream detail", () => {
     const chip = engineChip(
       {

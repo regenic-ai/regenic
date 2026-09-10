@@ -640,7 +640,7 @@ export interface StoreClearView {
   };
 }
 
-export type EngineChipState = "running" | "syncing" | "degraded" | "stopped";
+export type EngineChipState = "running" | "syncing" | "degraded" | "error" | "stopped";
 
 export interface ReplyAttachmentInput {
   filename: string;
