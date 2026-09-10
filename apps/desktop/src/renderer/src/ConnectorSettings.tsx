@@ -669,7 +669,7 @@ function SetupStepList({
     );
   }
   return (
-    <details className="setup-steps" defaultOpen>
+    <details className="setup-steps" open>
       <summary>{t("connector.setupSteps")}</summary>
       {list}
     </details>
