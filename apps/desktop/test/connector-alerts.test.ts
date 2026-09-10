@@ -113,6 +113,45 @@ describe("connector alerts", () => {
     assert.equal(hasConnectorFailure(null), false);
   });
 
+  it("ignores a failed attempt on a disabled connector", () => {
+    const view = engine({
+      installations: [
+        installation({
+          status: "disabled",
+          last_attempt: {
+            id: "a1",
+            status: "failed",
+            accepted_count: 0,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 0,
+            started_at: "2026-09-10T00:00:00Z",
+            error_code: "missing_credentials",
+          },
+        }),
+      ],
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+  });
+
+  it("keeps pull.last_error generic when no stream names a connector", () => {
+    const view = engine({
+      installations: [
+        installation({ id: "slack-1", label: "Slack", connector_type: "slack" }),
+        installation({ id: "feishu-1", label: "Feishu" }),
+      ],
+      pull: pull({
+        last_error: "network down",
+        last_error_hint: "check proxy",
+      }),
+    });
+    const alerts = connectorAlerts(view);
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].name, "connector");
+    assert.equal(alerts[0].message, "network down");
+    assert.equal(alerts[0].installationId, null);
+  });
+
   it("prefers channel_label for display names", () => {
     assert.equal(
       connectorDisplayName(installation({ channel_label: "Feishu 飞书" })),

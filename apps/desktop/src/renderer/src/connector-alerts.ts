@@ -12,6 +12,10 @@ export type ConnectorAlert = {
   hint: string | null;
 };
 
+function isActiveInstallation(item: EngineInstallationView): boolean {
+  return item.status === "enabled" || item.status === "needs_attention";
+}
+
 /** Failures that should surface in the header chip + persistent banner. */
 export function connectorAlerts(
   engine: PersonalEngineView | null,
@@ -30,12 +34,10 @@ export function connectorAlerts(
     alerts.push(alert);
   };
 
-  const enabled = engine.installations.filter(
-    (item) => item.status === "enabled" || item.status === "needs_attention",
-  );
+  const active = engine.installations.filter(isActiveInstallation);
 
-  if (engine.kernel === "stopped" && enabled.length > 0) {
-    for (const installation of enabled) {
+  if (engine.kernel === "stopped" && active.length > 0) {
+    for (const installation of active) {
       push({
         installationId: installation.id,
         name: connectorDisplayName(installation),
@@ -45,7 +47,7 @@ export function connectorAlerts(
     }
   }
 
-  for (const installation of engine.installations) {
+  for (const installation of active) {
     if (installation.status === "needs_attention") {
       push({
         installationId: installation.id,
@@ -66,7 +68,7 @@ export function connectorAlerts(
     }
   }
 
-  for (const alert of pullConnectorAlerts(engine.pull, engine.installations)) {
+  for (const alert of pullConnectorAlerts(engine.pull, active)) {
     push(alert);
   }
 
@@ -89,14 +91,17 @@ export function connectorDisplayName(
 
 function pullConnectorAlerts(
   pull: PullStatusView | undefined,
-  installations: EngineInstallationView[],
+  activeInstallations: EngineInstallationView[],
 ): ConnectorAlert[] {
   if (!pull) {
     return [];
   }
   const alerts: ConnectorAlert[] = [];
   const byLabel = new Map(
-    installations.map((item) => [connectorDisplayName(item).toLowerCase(), item]),
+    activeInstallations.map((item) => [
+      connectorDisplayName(item).toLowerCase(),
+      item,
+    ]),
   );
 
   for (const stream of pull.streams) {
@@ -116,17 +121,12 @@ function pullConnectorAlerts(
   }
 
   if (pull.last_error?.trim()) {
-    const named =
-      alerts[0] ??
-      (installations[0]
-        ? {
-            installationId: installations[0].id,
-            name: connectorDisplayName(installations[0]),
-          }
-        : {
-            installationId: null,
-            name: t("chrome.connectorUnknown"),
-          });
+    // Prefer a failing stream's identity; otherwise stay generic — do not
+    // guess installations[0], which may be unrelated or disabled.
+    const named = alerts[0] ?? {
+      installationId: null,
+      name: t("chrome.connectorUnknown"),
+    };
     alerts.unshift({
       installationId: named.installationId,
       name: named.name,
