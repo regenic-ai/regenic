@@ -528,11 +528,13 @@ Artifact ID、input hash、scope 并集和 body hash 绑定。
 decision。后续支持方向和权重的 D0 版本必须显式定义受控词表及解释规则，不能将来源
 metadata 当作可信 authority。
 
-D0 v2 只路由 RFC 0007 规定的受控方向（`product`、`sales`、`customer`、`org`、
+D0 v3 只路由 RFC 0007 规定的受控方向（`product`、`sales`、`customer`、`org`、
 `finance`、`risk`）；未知来源 tag 不会进入任何方向。每个方向内，它按确定性权重分数
 对 current head 做 thread 折叠，只输出 metric、bad-news 或高权重 hypothesis 信号，
 最多保留七项，并在有候选时保留一个 bad-news 席位。选中 head 的完整 lifecycle 仍是
-Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求。
+Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求。同一方向中，高
+role-tier 的 `support`/`oppose` 或 `positive`/`negative` stance 对会替换为一条
+`clarify_request`，并保留双方 evidence。
 固定的 evidence multiplier 为 metric $4$、demo $3$、user-verbatim 与 decision-record
 $2.5$、opinion $1$；在排序或 hash 前，分数统一归一化到小数点后六位。
 显式 `role_tier` 至少为 3.5 时，即使未提供 urgency 与 importance hint，也足以产生一条
@@ -547,7 +549,7 @@ hypothesis。
 replacement proposal，然后原子地将旧 proposal 标记为 `superseded`。自动重跑绝不会改写已
 accepted 的 Artifact。
 这仍是受限的 RFC 0007 D0 子集。组织本地日界、可配置的 role/source/lexicon policy、
-冲突转 clarify、append-only decision history、artifact as-of retrieval 与持久化自动调度
+append-only decision history、artifact as-of retrieval 与持久化自动调度
 仍是后续工作。
 
 日级 D0 执行使用独立的持久化队列，键为 `(org_id, utc_date, generation)`，不复用 Event

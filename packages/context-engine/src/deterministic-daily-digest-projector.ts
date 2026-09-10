@@ -11,7 +11,7 @@ import {
 
 export class DeterministicDailyDigestProjector implements DailyDigestProjector {
   readonly id = "daily-digest-deterministic";
-  readonly algorithm_version = "daily-digest-d0-v2";
+  readonly algorithm_version = "daily-digest-d0-v3";
 
   async project(input: DailyDigestProjectionInput): Promise<ContextArtifactProposal | null> {
     assertUtcDate(input.utc_date);
@@ -23,12 +23,15 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
       .filter((event) => directionsFor(event).length > 0);
     const directions = DAILY_DIGEST_DIRECTIONS.map((direction) => ({
       direction,
-      items: selectDirectionItems(selected, direction),
+      items: resolveDirectionConflicts(selectDirectionItems(selected, direction)),
     })).filter((bucket) => bucket.items.length > 0);
     if (directions.length === 0) return null;
-    const identities = new Set(directions.flatMap((bucket) =>
-      bucket.items.map((item) => identity(item.event)),
+    const selectedEventIds = new Set(directions.flatMap((bucket) =>
+      bucket.items.flatMap((item) => [item.event.event.event_id, ...(item.conflicts ?? [])]),
     ));
+    const identities = new Set(input.source.events
+      .filter((event) => selectedEventIds.has(event.event.event_id))
+      .map(identity));
     const evidenceEvents = input.source.events
       .filter((event) => identities.has(identity(event)))
       .sort(compareEvents);
@@ -83,7 +86,8 @@ type DailyDigestDirection = (typeof DAILY_DIGEST_DIRECTIONS)[number];
 interface DigestCandidate {
   event: ContextSourceEvent;
   score: number;
-  item_kind: "metric_signal" | "bad_news" | "hypothesis";
+  item_kind: "metric_signal" | "bad_news" | "hypothesis" | "clarify_request";
+  conflicts?: string[];
 }
 
 function selectDirectionItems(
@@ -105,6 +109,48 @@ function selectDirectionItems(
   const badNews = folded.filter((item) => item.item_kind === "bad_news");
   const rest = folded.filter((item) => item.item_kind !== "bad_news");
   return [...badNews.slice(0, 1), ...rest].slice(0, 7).sort(compareCandidates);
+}
+
+function resolveDirectionConflicts(candidates: DigestCandidate[]): DigestCandidate[] {
+  const byStance = new Map<string, DigestCandidate[]>();
+  for (const candidate of candidates) {
+    const stance = stanceOf(candidate.event);
+    if (!stance || (candidate.event.weight_hints?.role_tier ?? 0) < 3.5) continue;
+    const group = byStance.get(stance) ?? [];
+    group.push(candidate);
+    byStance.set(stance, group);
+  }
+  const replacements = new Map<string, DigestCandidate>();
+  const suppressed = new Set<string>();
+  for (const [stance, candidatesForStance] of byStance) {
+    const opposite = OPPOSITE_STANCES[stance];
+    if (!opposite || !byStance.has(opposite) || stance > opposite) continue;
+    const pair = [candidatesForStance[0], byStance.get(opposite)![0]].sort(compareCandidates);
+    const [first, second] = pair;
+    replacements.set(first.event.event.event_id, {
+      event: first.event,
+      score: Math.max(first.score, second.score),
+      item_kind: "clarify_request",
+      conflicts: [first.event.event.event_id, second.event.event.event_id].sort(),
+    });
+    suppressed.add(second.event.event.event_id);
+  }
+  return candidates
+    .filter((candidate) => !suppressed.has(candidate.event.event.event_id))
+    .map((candidate) => replacements.get(candidate.event.event.event_id) ?? candidate)
+    .sort(compareCandidates);
+}
+
+const OPPOSITE_STANCES: Record<string, string | undefined> = {
+  support: "oppose",
+  oppose: "support",
+  positive: "negative",
+  negative: "positive",
+};
+
+function stanceOf(event: ContextSourceEvent): string | undefined {
+  const stance = event.attrs?.stance;
+  return typeof stance === "string" ? stance.trim().toLowerCase() || undefined : undefined;
 }
 
 function directionsFor(event: ContextSourceEvent): DailyDigestDirection[] {
@@ -162,6 +208,7 @@ function toDigestItem(candidate: DigestCandidate) {
     ...(event.actor_id ? { actor_id: event.actor_id } : {}),
     occurred_at: event.event.occurred_at,
     ...(event.text === undefined ? {} : { text: event.text }),
+    ...(candidate.conflicts ? { conflicts: candidate.conflicts } : {}),
   };
 }
 
