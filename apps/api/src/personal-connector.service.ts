@@ -8,6 +8,7 @@ import {
   ConnectorRunner,
   readEnvCredential,
   DeadlineExceededError,
+  isDeadlineExceeded,
   INGEST_SCHEMA_VERSION,
   InstallationQuotaBook,
   asConnectorHost,
@@ -31,6 +32,8 @@ import {
   SyncLiveRing,
   steadyCapacityFromEnv,
   steadyLaneLimitsForCount,
+  pacedStreamIdleMs,
+  streamIdleTiersFromEnv,
   syncPageOutcomeFromPollRuns,
   withDeadline,
   yieldToEventLoop,
@@ -99,7 +102,7 @@ const LIVE_KICK_COOLDOWN_MS = 3_000;
 const LIVE_KICK_WAIT_MS = 12_000;
 const FOLLOW_TRIES = 6;
 const FOLLOW_WAIT_MS = 750;
-const DEFAULT_PULL_MS = 3_000;
+const DEFAULT_PULL_MS = 10_000;
 const DEFAULT_CATALOG_PULL_MS = 45_000;
 const START_PULL_DELAY_MS = 1_000;
 const LEASE_MS = 60_000;
@@ -2373,15 +2376,27 @@ export class PersonalConnectorService implements OnModuleDestroy {
     idleMs?: number;
     error?: unknown;
   }): void {
-    if (input.error) {
+    const softMiss = input.error != null && isDeadlineExceeded(input.error);
+    if (input.error && !softMiss) {
       this.streamErrors.set(input.key, errorMessage(input.error));
     } else {
+      // Success or poll deadline: never sticky-alert a soft miss.
       this.streamErrors.delete(input.key);
     }
     if (input.pages.length === 0 && !input.error) {
       return;
     }
     this.streamSeeded.add(input.key);
+    if (softMiss && input.pages.length === 0) {
+      // Empty deadline: back off instead of sticky catch-up + error banner.
+      this.streamCatchingUp.delete(input.key);
+      if (input.idleMs !== undefined) {
+        this.streamIdleUntil.set(input.key, Date.now() + input.idleMs);
+      } else {
+        this.streamIdleUntil.delete(input.key);
+      }
+      return;
+    }
     const summary = summarizeRuns(input.pages);
     if (
       shouldKeepCatchingUp({
@@ -2389,7 +2404,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         pagesBudget: input.pagesBudget,
         acceptedCount: summary.accepted_count,
         quarantinedCount: summary.quarantined_count,
-        error: input.error,
+        error: softMiss ? undefined : input.error,
       })
     ) {
       this.streamCatchingUp.add(input.key);
@@ -2633,12 +2648,28 @@ function streamPaceKey(installationId: string, streamKey: string): string {
   return `${installationId}:${streamKey}`;
 }
 
+/** Prefer connector pace when present; omit idle when the connector declares none (DSH). */
 function streamIdleMs(stream: ConnectorStream): number | undefined {
   const value = stream.pace?.idle_ms;
-  if (!Number.isInteger(value) || value === undefined || value < 1) {
+  const hintMs =
+    Number.isInteger(value) && value !== undefined && value >= 1
+      ? value
+      : undefined;
+  // No pace.idle_ms → every tick (unchanged for DSH and other unpaced streams).
+  if (hintMs === undefined) {
     return undefined;
   }
-  return value;
+  const preferred = preferredThreadId();
+  const active = Boolean(
+    preferred && stream.thread_id && stream.thread_id === preferred,
+  );
+  const tiers = streamIdleTiersFromEnv();
+  return pacedStreamIdleMs({
+    active,
+    hintMs,
+    activeIdleMs: tiers.activeIdleMs,
+    inactiveIdleMs: tiers.inactiveIdleMs,
+  });
 }
 
 function streamCatchUpPages(

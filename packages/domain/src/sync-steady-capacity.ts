@@ -1,13 +1,13 @@
 import type { SyncCatalogMember, SyncLaneLimits, SyncStreamState } from "./sync-contracts";
 import { partitionMembersByLifecycle } from "./sync-lifecycle";
 
-export const DEFAULT_STEADY_TARGET_IDLE_MS = 15_000;
-export const MIN_STEADY_LIVE_PER_TICK = 32;
-export const MAX_STEADY_LIVE_PER_TICK = 128;
+export const DEFAULT_STEADY_TARGET_IDLE_MS = 180_000;
+export const MIN_STEADY_LIVE_PER_TICK = 8;
+export const MAX_STEADY_LIVE_PER_TICK = 48;
 
 export const DEFAULT_STEADY_LANE_LIMITS: SyncLaneLimits = {
   interactive: 1,
-  live: 32,
+  live: 8,
   catalog: 0,
   history: 0,
   media: 4,
@@ -50,9 +50,9 @@ export function steadyTargetIdleMs(
     return baseIdleMs;
   }
   if (steadyCount <= 256) {
-    return baseIdleMs * 2;
+    return Math.floor(baseIdleMs * 1.5);
   }
-  return baseIdleMs * 4;
+  return baseIdleMs * 2;
 }
 
 export function steadyLaneLimitsForCount(input: {

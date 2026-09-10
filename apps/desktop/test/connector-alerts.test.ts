@@ -57,7 +57,26 @@ function engine(over: Partial<PersonalEngineView> = {}): PersonalEngineView {
 }
 
 describe("connector alerts", () => {
-  it("flags a stream in error phase with the connector name", () => {
+  it("does not sticky-banner a poll deadline soft miss", () => {
+    const view = engine({
+      pull: pull({
+        streams: [
+          {
+            stream_key: "inst-1:chat:oc_1",
+            thread_id: null,
+            label: "李必琪",
+            phase: "error",
+            last_error:
+              "poll inst-1:chat:oc_1 timed out after 20000ms",
+          },
+        ],
+      }),
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+    assert.equal(hasConnectorFailure(view), false);
+  });
+
+  it("flags a durable stream error with the connector name", () => {
     const view = engine({
       pull: pull({
         streams: [
@@ -66,7 +85,7 @@ describe("connector alerts", () => {
             thread_id: null,
             label: "陈静",
             phase: "error",
-            last_error: "poll abc timed out after 20000ms",
+            last_error: "token expired",
           },
         ],
       }),
@@ -75,7 +94,7 @@ describe("connector alerts", () => {
     assert.equal(alerts.length, 1);
     assert.equal(alerts[0].name, "Feishu");
     assert.equal(alerts[0].installationId, "inst-1");
-    assert.equal(alerts[0].message, "陈静: poll abc timed out after 20000ms");
+    assert.equal(alerts[0].message, "陈静: token expired");
     assert.equal(hasConnectorFailure(view), true);
   });
 

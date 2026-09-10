@@ -502,7 +502,7 @@ export function feishuSelection(
   if (selection === "all" || selection === "pick" || selection === "recent") {
     return selection;
   }
-  return configString(config, "chat_id") ? "pick" : "all";
+  return configString(config, "chat_id") ? "pick" : "recent";
 }
 
 export function feishuStreamDiscover(

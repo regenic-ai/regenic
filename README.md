@@ -105,7 +105,7 @@ DSH: confirm `dsh` works in the terminal, then `dsh web --port 3080`.
 
 **Step 3 — Have the user click Install in the app**
 
-**Engine** → the one you just prepared → **Install**. Feishu: all groups and direct messages by default, or tick the ones to sync. You can change that later with **Edit sync**. DSH Session ID can stay empty.
+**Engine** → the one you just prepared → **Install**. Feishu defaults to **recently active** conversations (recommended); switch to **All** or **Choose conversations** if you need a wider set. Change later with **Edit sync**. DSH Session ID can stay empty.
 
 ## Add Feishu, Slack, or DSH
 
@@ -146,7 +146,7 @@ lark-cli auth status
 
 **Add conversations in the app**
 
-In the app: **Engine** → **Feishu** → **Install**. Default is **All groups** and **All direct messages**. Switch to **Choose conversations** to tick specific ones. After install, **Edit sync** changes the same set. The form loads groups and p2p chats from `lark-cli`. You do not paste `oc_…`.
+In the app: **Engine** → **Feishu** → **Install**. Default is **Recently active (recommended)**. Use **All conversations** only when you need a full census, or **Choose conversations** to tick specific ones. After install, **Edit sync** changes the same set. The form loads groups and p2p chats from `lark-cli`. You do not paste `oc_…`.
 
 The Engine page checks whether `lark-cli` is installed and whether you are signed in. The two cases show different hints. The app will not install it for you.
 

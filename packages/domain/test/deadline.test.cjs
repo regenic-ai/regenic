@@ -32,6 +32,28 @@ describe("deadline", () => {
     );
   });
 
+  it("recognizes soft deadline misses by instance, code, or message", () => {
+    const {
+      isDeadlineExceeded,
+      looksLikeDeadlineExceededMessage,
+    } = require("../dist");
+    assert.equal(
+      isDeadlineExceeded(new DeadlineExceededError("poll x", 20)),
+      true,
+    );
+    assert.equal(isDeadlineExceeded({ code: "deadline_exceeded" }), true);
+    assert.equal(isDeadlineExceeded(new Error("other")), false);
+    assert.equal(
+      looksLikeDeadlineExceededMessage("poll x timed out after 20000ms"),
+      true,
+    );
+    assert.equal(
+      looksLikeDeadlineExceededMessage("lark-cli timed out after 60000ms"),
+      true,
+    );
+    assert.equal(looksLikeDeadlineExceededMessage("token expired"), false);
+  });
+
   it("lets a fast install finish while another hangs", async () => {
     const seen = [];
     const started = Date.now();

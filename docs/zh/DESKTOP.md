@@ -97,7 +97,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | POST | `/v1/me/plugins/reload` | 扫描 extra 插件目录，只注册尚未存在的 `connector_type` / executor source。不替换已加载驱动。 |
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |
 
-不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 3 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。人在操作时同 tick 串行、只跟少量会话的新消息；空闲时再补一页历史。流上的 `pace` 由连接器声明：飞书追上后约 15 秒再扫，DSH 不写 `pace`，仍每 tick 跟。对话窗发送后会更快跟当前 DSH session。引擎 Sync 只是漏了再追平。凭证只读环境变量。
+不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 10 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。声明了 `pace.idle_ms` 的流（飞书）按活跃面 / 非活跃面分层：打开中的会话更勤，其余默认约 180 秒再扫。未声明 `pace` 的流（DSH）仍每 tick 跟，行为与改前一致。单次 poll 触达内核 deadline（默认 20s）视为软失败：退避重试，不进「需要处理」横幅；缺凭证等硬错误仍会告警。人在操作时同 tick 串行、优先跟打开中的会话；空闲时再补一页历史。`pace.idle_ms` 只是连接器通用提示，活跃/非活跃分层由内核决定。飞书追上后提示约 15 秒。对话窗发送后会更快跟当前会话。引擎 Sync 只是漏了再追平。凭证只读环境变量。
 
 ### inbox 读请求的副作用
 
@@ -112,7 +112,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | 人在看（connector pacing） | `POST …/focus`（默认 `present: true`） |
 | 列表 heads / patch | `GET …&heads=1` 或 `changed=1` — 无 connector 副作用；默认不调渠道 `read_status` |
 
-渠道入站仍是 **poll**（约 3s tick），不是 Feishu/Slack webhook。SSE 只在内核与桌面之间推送 digest / thread 变更；桌面连上 SSE 后跳过对已打开线程的重复 poll，改由 `thread.updated` 驱动增量。
+渠道入站仍是 **poll**（约 10s tick；打开中的会话更勤，背景会话更疏），不是 Feishu/Slack webhook。SSE 只在内核与桌面之间推送 digest / thread 变更；桌面连上 SSE 后跳过对已打开线程的重复 poll，改由 `thread.updated` 驱动增量。
 
 ## 连接器：同步范围与前置步骤
 
