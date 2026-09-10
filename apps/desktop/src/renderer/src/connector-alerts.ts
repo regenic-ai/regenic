@@ -97,25 +97,27 @@ function pullConnectorAlerts(
     return [];
   }
   const alerts: ConnectorAlert[] = [];
-  const byLabel = new Map(
-    activeInstallations.map((item) => [
-      connectorDisplayName(item).toLowerCase(),
-      item,
-    ]),
-  );
 
   for (const stream of pull.streams) {
     if (stream.phase !== "error") {
       continue;
     }
-    const label = stream.label?.trim() || t("chrome.connectorUnknown");
-    const matched = stream.label
-      ? byLabel.get(stream.label.trim().toLowerCase())
-      : undefined;
+    const matched = matchStreamInstallation(stream, activeInstallations);
+    const streamLabel = stream.label?.trim() || null;
+    const error =
+      stream.last_error?.trim() || t("chrome.connectorStreamError");
+    // stream.label is usually a conversation title (e.g. 陈静), not the
+    // connector — keep it in the message, name the connector instead.
+    const message =
+      streamLabel && matched
+        ? `${streamLabel}: ${error}`
+        : error;
     alerts.push({
       installationId: matched?.id ?? null,
-      name: matched ? connectorDisplayName(matched) : label,
-      message: stream.last_error?.trim() || t("chrome.connectorStreamError"),
+      name: matched
+        ? connectorDisplayName(matched)
+        : t("chrome.connectorUnknown"),
+      message,
       hint: pull.last_error_hint,
     });
   }
@@ -136,4 +138,27 @@ function pullConnectorAlerts(
   }
 
   return alerts;
+}
+
+/** Prefer stream_key → installation id; label is often a thread title. */
+function matchStreamInstallation(
+  stream: Pick<PullStatusView["streams"][number], "stream_key" | "label">,
+  installations: EngineInstallationView[],
+): EngineInstallationView | undefined {
+  const key = stream.stream_key.trim();
+  if (key) {
+    const byKey = installations.find(
+      (item) => key === item.id || key.startsWith(`${item.id}:`),
+    );
+    if (byKey) {
+      return byKey;
+    }
+  }
+  const label = stream.label?.trim().toLowerCase();
+  if (!label) {
+    return undefined;
+  }
+  return installations.find(
+    (item) => connectorDisplayName(item).toLowerCase() === label,
+  );
 }
