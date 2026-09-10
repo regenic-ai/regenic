@@ -334,10 +334,42 @@ button {
 .list-chrome-refine {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
   padding: 8px 12px 10px 16px;
   border-top: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
+}
+
+.list-refine-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.list-refine-label {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.list-refine-select {
+  min-width: 0;
+}
+
+.list-refine-select .menu-select-btn {
+  height: 26px;
+  max-width: 140px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.list-refine-select.is-filtered .menu-select-btn,
+.list-refine-field.is-filtered .list-refine-label {
+  color: var(--text);
 }
 
 .sort-toggle {

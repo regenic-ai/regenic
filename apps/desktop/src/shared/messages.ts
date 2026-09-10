@@ -27,6 +27,10 @@ export const en = {
   "inbox.hideTitle": "Hide this conversation",
   "inbox.showTitle": "Show this conversation",
   "inbox.channel": "Channel",
+  "inbox.status": "Status",
+  "inbox.statusNone": "Idle",
+  "inbox.rule": "Rule",
+  "inbox.ruleNone": "No rule",
   "inbox.all": "All",
   "inbox.emptyCreate":
     "Nothing showing. Start a conversation, or set a rule for the work an executor should run.",
@@ -726,6 +730,10 @@ export const zh: Record<MessageKey, string> = {
   "inbox.hideTitle": "不显示这条会话",
   "inbox.showTitle": "重新显示这条会话",
   "inbox.channel": "渠道",
+  "inbox.status": "状态",
+  "inbox.statusNone": "空闲",
+  "inbox.rule": "规则",
+  "inbox.ruleNone": "未绑定",
   "inbox.all": "全部",
   "inbox.emptyCreate":
     "没有显示的会话。新建一个，或设一条规则。",

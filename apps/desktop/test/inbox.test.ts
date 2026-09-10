@@ -12,7 +12,9 @@ import {
   openedThreadView,
   overlayThreadMessages,
   holdOpenedThread,
+  filterInboxThreads,
   filterInboxThreadsByTitle,
+  inboxRuleOptions,
   mergeInboxThreadLists,
   adjacentInboxThreadId,
   canMoveInboxThread,
@@ -21,6 +23,7 @@ import {
   resolveSelectedThread,
   resolveThreadAttention,
   sortInboxThreads,
+  threadStatusFilterKey,
   workThreadId,
   type InboxThread,
 } from "../src/renderer/src/inbox.ts";
@@ -228,6 +231,62 @@ describe("inbox title search", () => {
       inboxListNavDelta({ key: "j", altKey: false, metaKey: true, ctrlKey: false, defaultPrevented: false }),
       null,
     );
+  });
+});
+
+describe("inbox status and rule filters", () => {
+  it("buckets threads by the status labels used on rows", () => {
+    const running = {
+      ...thread({ id: "dsh:run" }),
+      work: { id: "w1", status: "running" as const },
+    };
+    const waiting = {
+      ...thread({ id: "dsh:wait" }),
+      work: { id: "w2", status: "waiting_human" as const },
+    };
+    const failed = {
+      ...thread({ id: "dsh:fail" }),
+      work: { id: "w3", status: "failed" as const },
+    };
+    const idle = thread({ id: "dsh:idle" });
+    assert.equal(threadStatusFilterKey(running), "running");
+    assert.equal(threadStatusFilterKey(waiting), "waiting");
+    assert.equal(threadStatusFilterKey(failed), "failed");
+    assert.equal(threadStatusFilterKey(idle), "none");
+    assert.deepEqual(
+      filterInboxThreads([running, waiting, failed, idle], "all", "all", "waiting").map(
+        (item) => item.id,
+      ),
+      ["dsh:wait"],
+    );
+  });
+
+  it("filters by bound rule and lists rule options with names", () => {
+    const bound = {
+      ...thread({ id: "dsh:bound" }),
+      work: { id: "w1", status: "open" as const, recipe_id: "recipe-a" },
+    };
+    const other = {
+      ...thread({ id: "dsh:other" }),
+      work: { id: "w2", status: "open" as const, recipe_id: "recipe-b" },
+    };
+    const unbound = thread({ id: "dsh:free" });
+    assert.deepEqual(
+      filterInboxThreads([bound, other, unbound], "all", "all", "all", "recipe-a").map(
+        (item) => item.id,
+      ),
+      ["dsh:bound"],
+    );
+    assert.deepEqual(
+      filterInboxThreads([bound, other, unbound], "all", "all", "all", "none").map(
+        (item) => item.id,
+      ),
+      ["dsh:free"],
+    );
+    assert.deepEqual(inboxRuleOptions([bound, other, unbound], { "recipe-a": "Triage" }), [
+      { id: "recipe-b", label: "recipe-b" },
+      { id: "recipe-a", label: "Triage" },
+    ]);
   });
 });
 
