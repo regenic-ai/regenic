@@ -597,6 +597,8 @@ function SetupStepList({
 }) {
   const { t } = useLocale();
   const [copied, setCopied] = useState<string | null>(null);
+  // React 19 DetailsHTMLAttributes only has `open` (no defaultOpen).
+  const [stepsOpen, setStepsOpen] = useState(true);
   const visible = steps.filter((step) =>
     matchesCatalogFieldWhen(step.visible_when, values),
   );
@@ -669,7 +671,11 @@ function SetupStepList({
     );
   }
   return (
-    <details className="setup-steps" open>
+    <details
+      className="setup-steps"
+      open={stepsOpen}
+      onToggle={(event) => setStepsOpen(event.currentTarget.open)}
+    >
       <summary>{t("connector.setupSteps")}</summary>
       {list}
     </details>
