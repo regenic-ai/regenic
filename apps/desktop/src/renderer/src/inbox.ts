@@ -51,7 +51,7 @@ export type StatusFilter =
   | "failed"
   | "none";
 /** `all` | `none` (unbound) | recipe id */
-export type RuleFilter = "all" | "none" | (string & {});
+export type RuleFilter = "all" | "none" | "bound" | (string & {});
 
 export const MAX_CACHED_THREADS = 8;
 
@@ -189,8 +189,15 @@ export function filterInboxThreads(
     if (status !== "all" && threadStatusFilterKey(thread) !== status) {
       return false;
     }
-    if (rule !== "all" && threadRuleFilterKey(thread) !== rule) {
-      return false;
+    if (rule !== "all") {
+      const key = threadRuleFilterKey(thread);
+      if (rule === "bound") {
+        if (key === "none") {
+          return false;
+        }
+      } else if (key !== rule) {
+        return false;
+      }
     }
     return true;
   });

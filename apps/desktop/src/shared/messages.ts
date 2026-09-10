@@ -40,6 +40,7 @@ export const en = {
   "inbox.status": "Status",
   "inbox.statusNone": "Idle",
   "inbox.rule": "Rule",
+  "inbox.ruleBound": "Bound",
   "inbox.ruleNone": "No rule",
   "inbox.all": "All",
   "inbox.emptyCreate":
@@ -755,6 +756,7 @@ export const zh: Record<MessageKey, string> = {
   "inbox.status": "状态",
   "inbox.statusNone": "空闲",
   "inbox.rule": "规则",
+  "inbox.ruleBound": "已绑定",
   "inbox.ruleNone": "未绑定",
   "inbox.all": "全部",
   "inbox.emptyCreate":

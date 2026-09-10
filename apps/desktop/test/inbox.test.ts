@@ -283,6 +283,12 @@ describe("inbox status and rule filters", () => {
       ),
       ["dsh:free"],
     );
+    assert.deepEqual(
+      filterInboxThreads([bound, other, unbound], "all", "all", "all", "bound").map(
+        (item) => item.id,
+      ),
+      ["dsh:bound", "dsh:other"],
+    );
     assert.deepEqual(inboxRuleOptions([bound, other, unbound], { "recipe-a": "Triage" }), [
       { id: "recipe-b", label: "recipe-b" },
       { id: "recipe-a", label: "Triage" },
