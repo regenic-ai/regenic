@@ -659,6 +659,7 @@ export const en = {
   "prompt.showChoices": "Choose",
   "prompt.hideChoices": "Collapse",
   "prompt.pickToContinue": "Pick an option to continue",
+  "prompt.resize": "Resize prompt panel",
 
   "composer.message": "Message",
   "composer.sendMessage": "Send a message",
@@ -1323,6 +1324,7 @@ export const zh: Record<MessageKey, string> = {
   "prompt.showChoices": "去选择",
   "prompt.hideChoices": "收起",
   "prompt.pickToContinue": "选一项后继续",
+  "prompt.resize": "调整提问面板高度",
 
   "composer.message": "消息",
   "composer.sendMessage": "发消息",

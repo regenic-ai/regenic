@@ -21,6 +21,7 @@ import { nextMessageSelection, selectedInOrder } from "./message-selection";
 import type { CreateTarget } from "./inbox-drafts";
 import { WorkContextStrip } from "./WorkContextStrip";
 import { WorkResultCard } from "./WorkResultCard";
+import { PromptHandoffDock } from "./PromptHandoffDock";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
 import { inboxListNavDelta, isTypingShortcutTarget, latestMessage, type InboxThread } from "./inbox";
@@ -687,7 +688,7 @@ export const ThreadPane = memo(function ThreadPane({
             <p className="thread-activity">{activityNote}</p>
           ) : null}
           {awaitingPrompt ? (
-            <div className="handoff-dock">
+            <PromptHandoffDock>
               {resultSummary ? (
                 <WorkContextStrip
                   key={`${thread.id}:context`}
@@ -701,7 +702,7 @@ export const ThreadPane = memo(function ThreadPane({
                 error={sendError}
                 onAnswer={answerPrompt}
               />
-            </div>
+            </PromptHandoffDock>
           ) : canReply ? (
             <Composer
               key={thread.id}

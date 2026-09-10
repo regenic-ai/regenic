@@ -2891,6 +2891,42 @@ button {
   gap: 8px;
 }
 
+.prompt-resize-handle {
+  height: 10px;
+  margin: -4px 0 -2px;
+  cursor: ns-resize;
+  touch-action: none;
+  position: relative;
+}
+
+.prompt-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 36px;
+  height: 3px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.prompt-resize-handle:hover::before,
+.prompt-resize-handle:focus-visible::before {
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.prompt-panel-shell {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+}
+
+.prompt-panel-shell.is-sized {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
 .work-context {
   margin: 0;
   border: 1px solid var(--line);
