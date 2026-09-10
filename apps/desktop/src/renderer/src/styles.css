@@ -399,9 +399,21 @@ button {
 
 .list-refine-select .menu-select-btn {
   height: 26px;
+  min-width: 72px;
   max-width: 140px;
   padding: 0 8px;
   font-size: 11px;
+}
+
+.list-refine-select .menu-select-pop {
+  min-width: max(100%, 10.5rem);
+  width: max-content;
+  max-width: min(240px, 70vw);
+  right: auto;
+}
+
+.list-refine-select .menu-select-option {
+  white-space: nowrap;
 }
 
 .list-refine-select.is-filtered .menu-select-btn,
