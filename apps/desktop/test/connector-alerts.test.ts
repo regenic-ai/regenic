@@ -62,11 +62,11 @@ describe("connector alerts", () => {
       pull: pull({
         streams: [
           {
-            stream_key: "s1",
+            stream_key: "inst-1:chat:oc_1",
             thread_id: null,
-            label: "Feishu",
+            label: "陈静",
             phase: "error",
-            last_error: "token expired",
+            last_error: "poll abc timed out after 20000ms",
           },
         ],
       }),
@@ -74,7 +74,8 @@ describe("connector alerts", () => {
     const alerts = connectorAlerts(view);
     assert.equal(alerts.length, 1);
     assert.equal(alerts[0].name, "Feishu");
-    assert.equal(alerts[0].message, "token expired");
+    assert.equal(alerts[0].installationId, "inst-1");
+    assert.equal(alerts[0].message, "陈静: poll abc timed out after 20000ms");
     assert.equal(hasConnectorFailure(view), true);
   });
 
