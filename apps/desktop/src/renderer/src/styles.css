@@ -207,6 +207,12 @@ button {
   border-color: transparent;
 }
 
+.chip.error {
+  color: var(--risk);
+  background: var(--danger-soft);
+  border-color: transparent;
+}
+
 .chip.data {
   color: var(--data);
   border-color: transparent;
@@ -218,6 +224,37 @@ button {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+
+.connector-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--line);
+  color: var(--risk);
+  flex-shrink: 0;
+}
+
+.connector-alert-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.connector-alert-message {
+  font-size: 13px;
+  color: color-mix(in srgb, var(--risk) 85%, var(--text));
+}
+
+.connector-alert .ghost {
+  flex-shrink: 0;
+  border-color: currentColor;
+  color: inherit;
 }
 
 .columns {

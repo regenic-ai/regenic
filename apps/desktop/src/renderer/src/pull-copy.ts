@@ -1,5 +1,6 @@
 import { t } from "../../shared/i18n.ts";
 import type { KernelReachability } from "../../shared/connection-state.ts";
+import { hasConnectorFailure } from "./connector-alerts.ts";
 import type { EngineChipState, PersonalEngineView, PullStatusView } from "./types.ts";
 
 export function engineChip(
@@ -8,6 +9,9 @@ export function engineChip(
 ): EngineChipState {
   if (!engine || engine.kernel === "stopped") {
     return "stopped";
+  }
+  if (hasConnectorFailure(engine)) {
+    return "error";
   }
   if (reachability === "degraded") {
     return "degraded";

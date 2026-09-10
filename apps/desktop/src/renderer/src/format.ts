@@ -99,6 +99,9 @@ export function chipLabel(state: EngineChipState): string {
   if (state === "degraded") {
     return t("chip.degraded");
   }
+  if (state === "error") {
+    return t("chip.error");
+  }
   return t("chip.stopped");
 }
 
