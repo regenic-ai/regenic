@@ -41,6 +41,7 @@ export * from "./sync-orchestrator";
 export * from "./sync-outcome";
 export * from "./sync-phase";
 export * from "./sync-scheduler";
+export * from "./sync-idle";
 export * from "./sync-steady-capacity";
 export * from "./sync-engine";
 export * from "./sync-progress";

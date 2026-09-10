@@ -35,23 +35,23 @@ function state(streamKey, phase, idleUntil) {
 describe("sync steady capacity", () => {
   it("scales live limit with steady fan-out", () => {
     assert.equal(
-      steadyLiveLimit({ steadyCount: 913, tickIntervalMs: 3_000, targetIdleMs: 15_000 }),
-      128,
+      steadyLiveLimit({ steadyCount: 913, tickIntervalMs: 10_000, targetIdleMs: 180_000 }),
+      48,
     );
     assert.equal(
-      steadyLiveLimit({ steadyCount: 64, tickIntervalMs: 3_000, targetIdleMs: 15_000 }),
-      32,
+      steadyLiveLimit({ steadyCount: 64, tickIntervalMs: 10_000, targetIdleMs: 180_000 }),
+      8,
     );
     assert.equal(
-      steadyLiveLimit({ steadyCount: 913, tickIntervalMs: 3_000, targetIdleMs: 60_000 }),
-      46,
+      steadyLiveLimit({ steadyCount: 913, tickIntervalMs: 10_000, targetIdleMs: 360_000 }),
+      26,
     );
   });
 
   it("stretches target idle for large steady pools", () => {
-    assert.equal(steadyTargetIdleMs(32), 15_000);
-    assert.equal(steadyTargetIdleMs(128), 30_000);
-    assert.equal(steadyTargetIdleMs(913), 60_000);
+    assert.equal(steadyTargetIdleMs(32), 180_000);
+    assert.equal(steadyTargetIdleMs(128), 270_000);
+    assert.equal(steadyTargetIdleMs(913), 360_000);
   });
 
   it("derives steady lane limits from lifecycle partition", () => {
@@ -64,19 +64,20 @@ describe("sync steady capacity", () => {
     const limits = steadyLaneLimitsForCount({
       members,
       states,
-      tickIntervalMs: 3_000,
+      tickIntervalMs: 10_000,
       catalogIncomplete: false,
     });
-    assert.ok(limits.live >= 32);
+    assert.ok(limits.live >= 8);
+    assert.ok(limits.live <= 48);
     assert.equal(limits.history, 0);
   });
 
   it("reads steady capacity overrides from env", () => {
     const parsed = steadyCapacityFromEnv({
       REGENIC_STEADY_TARGET_IDLE_MS: "45000",
-      REGENIC_STEADY_LIVE_MAX: "96",
+      REGENIC_STEADY_LIVE_MAX: "40",
     });
     assert.equal(parsed.targetIdleMs, 45_000);
-    assert.equal(parsed.maxLive, 96);
+    assert.equal(parsed.maxLive, 40);
   });
 });

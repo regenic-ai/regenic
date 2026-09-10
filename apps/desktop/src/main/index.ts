@@ -171,7 +171,7 @@ function sidecarEnv(
     delete env.REGENIC_PERSONAL_API_KEY;
   }
   if (!Number(env.REGENIC_CONNECTOR_PULL_MS)) {
-    env.REGENIC_CONNECTOR_PULL_MS = "3000";
+    env.REGENIC_CONNECTOR_PULL_MS = "10000";
   }
   delete env.REGENIC_PERSONAL_API;
   const noProxy = [

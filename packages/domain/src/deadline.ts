@@ -9,6 +9,27 @@ export class DeadlineExceededError extends Error {
   }
 }
 
+/** Soft miss for personal sync — retry later; do not sticky-alert. */
+export function isDeadlineExceeded(error: unknown): boolean {
+  if (error instanceof DeadlineExceededError) {
+    return true;
+  }
+  if (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "deadline_exceeded"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** UI defense when only the message survived across the wire. */
+export function looksLikeDeadlineExceededMessage(message: string): boolean {
+  return /\btimed out after \d+ms\b/i.test(message.trim());
+}
+
 export const DEFAULT_POLL_TIMEOUT_MS = 20_000;
 export const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
 /** Ceiling for `probeCatalog` (local CLI / HTTP readiness). */

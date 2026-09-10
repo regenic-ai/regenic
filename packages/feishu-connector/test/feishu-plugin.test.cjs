@@ -16,6 +16,7 @@ const {
   FEISHU_STREAM_PACE,
   createFeishuStreams,
   feishuChatDriver,
+  feishuSelection,
   feishuWriteBackLabels,
   resolveFeishuChatTargets,
 } = require("../dist/feishu-chat-driver");
@@ -740,6 +741,8 @@ describe("feishuChatDriver", () => {
   });
 
   it("requires a picked conversation and cannot create a conversation", async () => {
+    assert.equal(feishuSelection({}), "recent");
+    assert.equal(feishuSelection({ chat_id: "oc_1" }), "pick");
     const recent = feishuChatDriver.install({
       id: "feishu-recent",
       org_id: "local-owner",

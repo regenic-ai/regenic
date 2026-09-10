@@ -12,6 +12,11 @@ export type ConnectorAlert = {
   hint: string | null;
 };
 
+/** Soft poll miss — keep in sync with domain `looksLikeDeadlineExceededMessage`. */
+function looksLikeDeadlineExceededMessage(message: string): boolean {
+  return /\btimed out after \d+ms\b/i.test(message.trim());
+}
+
 function isActiveInstallation(item: EngineInstallationView): boolean {
   return item.status === "enabled" || item.status === "needs_attention";
 }
@@ -102,10 +107,14 @@ function pullConnectorAlerts(
     if (stream.phase !== "error") {
       continue;
     }
-    const matched = matchStreamInstallation(stream, activeInstallations);
-    const streamLabel = stream.label?.trim() || null;
     const error =
       stream.last_error?.trim() || t("chrome.connectorStreamError");
+    // Poll deadlines are soft misses (retry next idle); do not sticky-banner.
+    if (looksLikeDeadlineExceededMessage(error)) {
+      continue;
+    }
+    const matched = matchStreamInstallation(stream, activeInstallations);
+    const streamLabel = stream.label?.trim() || null;
     // stream.label is usually a conversation title (e.g. 陈静), not the
     // connector — keep it in the message, name the connector instead.
     const message =
@@ -123,6 +132,10 @@ function pullConnectorAlerts(
   }
 
   if (pull.last_error?.trim()) {
+    const top = pull.last_error.trim();
+    if (looksLikeDeadlineExceededMessage(top)) {
+      return alerts;
+    }
     // Prefer a failing stream's identity; otherwise stay generic — do not
     // guess installations[0], which may be unrelated or disabled.
     const named = alerts[0] ?? {
@@ -132,7 +145,7 @@ function pullConnectorAlerts(
     alerts.unshift({
       installationId: named.installationId,
       name: named.name,
-      message: pull.last_error.trim(),
+      message: top,
       hint: pull.last_error_hint ?? pull.network?.hint ?? null,
     });
   }
