@@ -255,7 +255,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `readAttention` / `ackAttention` | 可选。来源已读覆盖（我看对方）。飞书对最新 inbound `om_` 调用户态 `read_status`；失败或官方已读都不消本机未读。ack 先写本地游标。 |
 | `readReceipts` | 可选。对端是否已读我的出站。飞书对 `:out:om_` 调用户态 `read_users`。空 items 是 Sent。不得用来源会话未读。 |
 | `surfaceGeneration` | 可选。活 surface 世代，拼进 `inbox_digest` 的 `&s=`，审批弹出时桌面轮询能看见。 |
-| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：勾选的 `chat:<id>`；`selection=recent` 或 `selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。`selection=recent` 的目录只列最近活跃一页；`selection=all` 才分页 census 全部会话。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转提示）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页。内核只读声明，不按渠道名分支；活跃面（打开中的会话）与非活跃面的实际 idle 由内核分层（`pacedStreamIdleMs`），连接器不得编码 active/inactive。 |
+| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：勾选的 `chat:<id>`；`selection=recent` 或 `selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。`selection=recent` 的目录只列最近活跃一页；`selection=all` 才分页 census 全部会话。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转提示）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页（DSH 不写 `pace`，保持每 tick）。内核只读声明，不按渠道名分支；仅当流声明了 `idle_ms` 时，内核才套用活跃面 / 非活跃面 idle（`pacedStreamIdleMs`），连接器不得自行编码 active/inactive。 |
 | `createThread` | 可选。`create` 为 true 时必须实现。未声明则内核 501。声明了 `create_with_task` 时收 `options.text` 并开工；未声明则只建空会话，第一条用户文本走普通 send。 |
 | `bindEgress` | 可选。`reply` 为 true 时必须实现。未声明则内核 501。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |

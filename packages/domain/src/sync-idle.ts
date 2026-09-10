@@ -1,6 +1,9 @@
 /**
  * Core-owned stream idle tiers. Connectors may hint via `pace.idle_ms`;
  * they must not encode active/inactive — Core classifies from thread focus.
+ *
+ * No hint ⇒ caller should leave idle unset (every tick). DSH omits `pace`;
+ * Feishu declares `idle_ms` and gets active/inactive floors.
  */
 
 /** After an empty poll on the open / preferred thread. */

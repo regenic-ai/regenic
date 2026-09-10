@@ -2648,12 +2648,17 @@ function streamPaceKey(installationId: string, streamKey: string): string {
   return `${installationId}:${streamKey}`;
 }
 
-function streamIdleMs(stream: ConnectorStream): number {
+/** Prefer connector pace when present; omit idle when the connector declares none (DSH). */
+function streamIdleMs(stream: ConnectorStream): number | undefined {
   const value = stream.pace?.idle_ms;
   const hintMs =
     Number.isInteger(value) && value !== undefined && value >= 1
       ? value
       : undefined;
+  // No pace.idle_ms → every tick (unchanged for DSH and other unpaced streams).
+  if (hintMs === undefined) {
+    return undefined;
+  }
   const preferred = preferredThreadId();
   const active = Boolean(
     preferred && stream.thread_id && stream.thread_id === preferred,

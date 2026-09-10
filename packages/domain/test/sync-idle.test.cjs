@@ -30,6 +30,13 @@ describe("sync idle tiers", () => {
     );
   });
 
+  it("still computes a floor when callers pass no hint (Core gate omits idle instead)", () => {
+    assert.equal(
+      pacedStreamIdleMs({ active: false }),
+      DEFAULT_INACTIVE_STREAM_IDLE_MS,
+    );
+  });
+
   it("reads idle tier overrides from env", () => {
     const tiers = streamIdleTiersFromEnv({
       REGENIC_ACTIVE_STREAM_IDLE_MS: "12000",
