@@ -97,7 +97,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | POST | `/v1/me/plugins/reload` | 扫描 extra 插件目录，只注册尚未存在的 `connector_type` / executor source。不替换已加载驱动。 |
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |
 
-不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 10 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。声明了 `pace.idle_ms` 的流（飞书）按活跃面 / 非活跃面分层：打开中的会话更勤，其余默认约 180 秒再扫。未声明 `pace` 的流（DSH）仍每 tick 跟，行为与改前一致。单次 poll 触达内核 deadline（默认 20s）视为软失败：退避重试，不进「需要处理」横幅；缺凭证等硬错误仍会告警。人在操作时同 tick 串行、优先跟打开中的会话；空闲时再补一页历史。`pace.idle_ms` 只是连接器通用提示，活跃/非活跃分层由内核决定。飞书追上后提示约 15 秒。对话窗发送后会更快跟当前会话。引擎 Sync 只是漏了再追平。凭证只读环境变量。
+不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 10 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。声明了 `pace.idle_ms` 或安装配置了通用 `sync_mode` 的流，按 Core 意图预设分层 idle：`conversation`（对话优先，新装飞书默认）/ `balanced`（均衡）/ `context`（上下文 / 自动化）。未声明 `pace` 且无 `sync_mode` 的流（DSH）仍每 tick 跟。单次 poll 触达内核 deadline（默认 20s）视为软失败：退避重试，不进「需要处理」横幅；缺凭证等硬错误仍会告警。人在操作时同 tick 串行、优先跟打开中的会话；空闲时再补一页历史。`pace.idle_ms` 与 `sync_mode` 都是通用键，内核不按渠道名分支；飞书 catalog 暴露同步模式，收取范围（selection）与模式独立。对话窗发送后会更快跟当前会话。引擎 Sync 只是漏了再追平。凭证只读环境变量。
 
 ### inbox 读请求的副作用
 

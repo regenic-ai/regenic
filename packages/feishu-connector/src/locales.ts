@@ -7,6 +7,10 @@ export const feishuLocaleTables = defineLocaleTables({
     "catalog.description":
       "Install once. Default is recently active conversations plus current work. You can pick specific chats or sync every conversation later. Replies go back through lark-cli.",
     "catalog.credentialHint": "lark-cli (user login)",
+    "field.syncMode": "Sync mode",
+    "option.syncMode.conversation": "Conversation first (recommended)",
+    "option.syncMode.balanced": "Balanced",
+    "option.syncMode.context": "Context / automation",
     "field.selection": "Sync set",
     "option.selection.recent": "Recently active (recommended)",
     "option.selection.all": "All conversations of the kinds below",
@@ -49,6 +53,10 @@ export const feishuLocaleTables = defineLocaleTables({
     "catalog.description":
       "装一次即可。默认跟最近活跃的会话和当前工作。也可自选，或以后改成全部群和单聊。回复经 lark-cli 发回。",
     "catalog.credentialHint": "lark-cli（用户登录）",
+    "field.syncMode": "同步模式",
+    "option.syncMode.conversation": "对话优先（推荐）",
+    "option.syncMode.balanced": "均衡",
+    "option.syncMode.context": "上下文 / 自动化",
     "field.selection": "同步范围",
     "option.selection.recent": "最近活跃（推荐）",
     "option.selection.all": "下面这些类型的全部会话",

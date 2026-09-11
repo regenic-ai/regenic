@@ -111,7 +111,8 @@ describe("connector catalog hints", () => {
     const feishu = catalog.find((item) => item.connector_type === "feishu-chat");
     const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
     assert.equal(feishu.title, "飞书");
-    assert.equal(feishu.fields[0].label, "同步范围");
+    assert.equal(feishu.fields[0].label, "同步模式");
+    assert.equal(feishu.fields[1].label, "同步范围");
     assert.equal(whatsapp.setup_steps[0].title, "安装这个连接器");
     assert.match(whatsapp.import_files.description, /只读/);
     assert.equal(
@@ -236,11 +237,13 @@ describe("connector catalog hints", () => {
       },
     });
     const feishu = catalog.find((item) => item.connector_type === "feishu-chat");
-    assert.equal(feishu.fields[0].key, "selection");
-    assert.equal(feishu.fields[1].key, "kinds");
-    assert.equal(feishu.fields[1].default, "group,p2p");
-    assert.equal(feishu.fields[2].multiple, true);
-    assert.deepEqual(feishu.fields[2].options, [
+    assert.equal(feishu.fields[0].key, "sync_mode");
+    assert.equal(feishu.fields[0].default, "conversation");
+    assert.equal(feishu.fields[1].key, "selection");
+    assert.equal(feishu.fields[2].key, "kinds");
+    assert.equal(feishu.fields[2].default, "group,p2p");
+    assert.equal(feishu.fields[3].multiple, true);
+    assert.deepEqual(feishu.fields[3].options, [
       { value: "oc_1", label: "Group · Bioby.ai" },
     ]);
   });
