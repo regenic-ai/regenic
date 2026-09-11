@@ -57,6 +57,7 @@ import type {
   DailyDigestJobStore,
   DailyDigestPolicy,
   DailyDigestPolicyStore,
+  DailyDigestCoverageAlert,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1192,6 +1193,24 @@ export class SqliteAuthorityStore
        lease_expires_at, next_retry_at, last_error, created_at, updated_at
       FROM daily_digest_jobs WHERE org_id = ? ORDER BY utc_date, generation, id`,
     ).all(orgId) as DailyDigestJobRow[]).map(toDailyDigestJob);
+  }
+
+  async putDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): Promise<DailyDigestCoverageAlert> {
+    this.assertWritable();
+    this.database.prepare(`INSERT INTO daily_digest_coverage_alerts (id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (org_id, local_date, generation, event_id, reason_code) DO NOTHING`).run(alert.id, alert.org_id, alert.local_date, alert.generation, alert.event_id, alert.reason_code, alert.status, alert.created_at, alert.resolved_at ?? null);
+    return toDailyDigestCoverageAlert(this.database.prepare(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = ? AND local_date = ? AND generation = ? AND event_id = ? AND reason_code = ?`).get(alert.org_id, alert.local_date, alert.generation, alert.event_id, alert.reason_code) as DailyDigestCoverageAlert);
+  }
+
+  async listDailyDigestCoverageAlerts(input: { org_id: string; status?: "open" | "resolved"; limit?: number }): Promise<DailyDigestCoverageAlert[]> {
+    const limit = input.limit ?? 100;
+    return (this.database.prepare(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY local_date, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, limit] : [input.org_id, limit])) as DailyDigestCoverageAlert[]).map(toDailyDigestCoverageAlert);
+  }
+
+  async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
+    this.assertWritable();
+    this.database.prepare(`UPDATE daily_digest_coverage_alerts SET status = 'resolved', resolved_at = ? WHERE org_id = ? AND id = ? AND status = 'open'`).run(input.resolved_at, input.org_id, input.alert_id);
+    const alert = this.database.prepare(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = ? AND id = ?`).get(input.org_id, input.alert_id) as DailyDigestCoverageAlert | undefined;
+    return alert ? toDailyDigestCoverageAlert(alert) : null;
   }
 
   private getDailyDigestJob(id: string): DailyDigestJob | null {
@@ -3576,6 +3595,11 @@ function toDailyDigestJob(row: DailyDigestJobRow): DailyDigestJob {
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+function toDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): DailyDigestCoverageAlert {
+  const { resolved_at: resolvedAt, ...rest } = alert;
+  return { ...rest, ...(resolvedAt ? { resolved_at: resolvedAt } : {}) };
 }
 
 function assertDailyDigestEnqueue(input: {

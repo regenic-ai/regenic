@@ -304,6 +304,34 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("persists and resolves idempotent daily digest coverage alerts", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let store = new SqliteAuthorityStore(path);
+    const event = await store.append({
+      org_id: "example-org", source: "synthetic", external_id: "coverage-1",
+      content_hash: HASH_A, content_media_type: "text/plain", content_byte_size: 1,
+      occurred_at: "2026-08-30T00:00:00.000Z", expected_head_id: null,
+    });
+    const alert = {
+      id: "coverage-alert-1", org_id: "example-org", local_date: "2026-08-30",
+      generation: "daily-digest-d0-v3", event_id: event.id,
+      reason_code: "omitted_high_signal", status: "open", created_at: "2026-08-30T01:00:00.000Z",
+    };
+    assert.deepEqual(await store.putDailyDigestCoverageAlert(alert), alert);
+    assert.equal((await store.putDailyDigestCoverageAlert({ ...alert, id: "different-id" })).id, alert.id);
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.equal((await split.listDailyDigestCoverageAlerts({ org_id: "example-org", status: "open" }))[0].id, alert.id);
+    const resolved = await split.resolveDailyDigestCoverageAlert({
+      org_id: "example-org", alert_id: alert.id, resolved_at: "2026-08-30T02:00:00.000Z",
+    });
+    assert.equal(resolved.status, "resolved");
+    assert.equal((await split.listDailyDigestCoverageAlerts({ org_id: "example-org", status: "open" })).length, 0);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
