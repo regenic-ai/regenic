@@ -271,6 +271,39 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("persists a validated daily digest policy through restart and split reads", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const policy = {
+      version: 1,
+      enabled_directions: ["product", "risk"],
+      max_items_per_direction: 3,
+      bad_news_terms: ["blocked", "outage"],
+      hypothesis_min_score: 2,
+      role_tier_threshold: 4,
+      evidence_weights: {
+        metric: 4, demo: 3, user_verbatim: 2.5, decision_record: 2.5, opinion: 1,
+      },
+    };
+    let store = new SqliteAuthorityStore(path);
+    assert.deepEqual(await store.putDailyDigestPolicy({
+      org_id: "example-org", policy, updated_at: "2026-08-30T00:00:00.000Z",
+    }), policy);
+    await assert.rejects(store.putDailyDigestPolicy({
+      org_id: "example-org", policy: { ...policy, enabled_directions: ["free-form"] },
+      updated_at: "2026-08-30T00:00:00.000Z",
+    }), /Invalid daily digest policy directions/);
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    assert.deepEqual(await store.getDailyDigestPolicy("example-org"), policy);
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.deepEqual(await split.getDailyDigestPolicy("example-org"), policy);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

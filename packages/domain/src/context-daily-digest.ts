@@ -1,4 +1,5 @@
 import type { ContextArtifactProposal, ContextSourceRead } from "./context-port";
+import type { DailyDigestPolicy } from "./daily-digest-policy";
 
 export const CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION = "daily-digest-d0-v3";
 
@@ -7,6 +8,7 @@ export interface DailyDigestProjectionInput {
   utc_date: string;
   generation: string;
   source: ContextSourceRead;
+  policy?: DailyDigestPolicy;
 }
 
 export interface DailyDigestProjector {

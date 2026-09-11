@@ -57,6 +57,7 @@ export * from "./context-consumer";
 export * from "./context-budget";
 export * from "./context-daily-digest";
 export * from "./daily-digest-jobs";
+export * from "./daily-digest-policy";
 export * from "./context-candidate";
 export * from "./context-request";
 export * from "./context-artifact";

@@ -6,7 +6,10 @@ import {
   type DailyDigestProjectionInput,
   type DailyDigestProjector,
   type ContextSourceEvent,
-  type WeightHints,
+  DEFAULT_DAILY_DIGEST_POLICY,
+  validateDailyDigestPolicy,
+  type DailyDigestDirection,
+  type DailyDigestPolicy,
 } from "@regenic/domain";
 
 export class DeterministicDailyDigestProjector implements DailyDigestProjector {
@@ -15,15 +18,16 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
 
   async project(input: DailyDigestProjectionInput): Promise<ContextArtifactProposal | null> {
     assertUtcDate(input.utc_date);
+    const policy = validateDailyDigestPolicy(input.policy ?? DEFAULT_DAILY_DIGEST_POLICY);
     const heads = new Set(input.source.lifecycle_heads.map((head) => head.head_event_id));
     const selected = input.source.events
       .filter((event) => heads.has(event.event.event_id))
       .filter((event) => event.event.operation !== "tombstone")
       .filter((event) => event.event.occurred_at.slice(0, 10) === input.utc_date)
-      .filter((event) => directionsFor(event).length > 0);
-    const directions = DAILY_DIGEST_DIRECTIONS.map((direction) => ({
+      .filter((event) => directionsFor(event, policy).length > 0);
+    const directions = policy.enabled_directions.map((direction) => ({
       direction,
-      items: resolveDirectionConflicts(selectDirectionItems(selected, direction)),
+      items: resolveDirectionConflicts(selectDirectionItems(selected, direction, policy), policy),
     })).filter((bucket) => bucket.items.length > 0);
     if (directions.length === 0) return null;
     const selectedEventIds = new Set(directions.flatMap((bucket) =>
@@ -41,6 +45,8 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
       utc_date: input.utc_date,
       source_read_epoch: input.source.read_epoch,
       rules_version: this.algorithm_version,
+      policy_version: policy.version,
+      policy_hash: sha256(canonicalContextJson(policy)),
       item_count: directions.reduce((count, bucket) => count + bucket.items.length, 0),
       directions: directions.map((bucket) => ({
         direction: bucket.direction,
@@ -54,6 +60,7 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
         input.utc_date,
         input.generation,
         this.algorithm_version,
+        policy,
         inputHash,
       ]))}`,
       org_id: input.org_id,
@@ -72,17 +79,6 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
   }
 }
 
-export const DAILY_DIGEST_DIRECTIONS = [
-  "product",
-  "sales",
-  "customer",
-  "org",
-  "finance",
-  "risk",
-] as const;
-
-type DailyDigestDirection = (typeof DAILY_DIGEST_DIRECTIONS)[number];
-
 interface DigestCandidate {
   event: ContextSourceEvent;
   score: number;
@@ -93,12 +89,13 @@ interface DigestCandidate {
 function selectDirectionItems(
   events: ContextSourceEvent[],
   direction: DailyDigestDirection,
+  policy: DailyDigestPolicy,
 ): DigestCandidate[] {
   const candidates = events
-    .filter((event) => directionsFor(event).includes(direction))
+    .filter((event) => directionsFor(event, policy).includes(direction))
     .flatMap((event) => {
-      const itemKind = classify(event);
-      return itemKind ? [{ event, score: score(event), item_kind: itemKind }] : [];
+      const itemKind = classify(event, policy);
+      return itemKind ? [{ event, score: score(event, policy), item_kind: itemKind }] : [];
     });
   const byThread = new Map<string, DigestCandidate>();
   for (const candidate of candidates.sort(compareCandidates)) {
@@ -108,14 +105,14 @@ function selectDirectionItems(
   const folded = [...byThread.values()].sort(compareCandidates);
   const badNews = folded.filter((item) => item.item_kind === "bad_news");
   const rest = folded.filter((item) => item.item_kind !== "bad_news");
-  return [...badNews.slice(0, 1), ...rest].slice(0, 7).sort(compareCandidates);
+  return [...badNews.slice(0, 1), ...rest].slice(0, policy.max_items_per_direction).sort(compareCandidates);
 }
 
-function resolveDirectionConflicts(candidates: DigestCandidate[]): DigestCandidate[] {
+function resolveDirectionConflicts(candidates: DigestCandidate[], policy: DailyDigestPolicy): DigestCandidate[] {
   const byStance = new Map<string, DigestCandidate[]>();
   for (const candidate of candidates) {
     const stance = stanceOf(candidate.event);
-    if (!stance || (candidate.event.weight_hints?.role_tier ?? 0) < 3.5) continue;
+    if (!stance || (candidate.event.weight_hints?.role_tier ?? 0) < policy.role_tier_threshold) continue;
     const group = byStance.get(stance) ?? [];
     group.push(candidate);
     byStance.set(stance, group);
@@ -153,45 +150,39 @@ function stanceOf(event: ContextSourceEvent): string | undefined {
   return typeof stance === "string" ? stance.trim().toLowerCase() || undefined : undefined;
 }
 
-function directionsFor(event: ContextSourceEvent): DailyDigestDirection[] {
-  const allowed = new Set<string>(DAILY_DIGEST_DIRECTIONS);
+function directionsFor(event: ContextSourceEvent, policy: DailyDigestPolicy): DailyDigestDirection[] {
+  const allowed = new Set<string>(policy.enabled_directions);
   return [...new Set((event.direction_tags ?? []).map((tag) => tag.trim().toLowerCase()))]
     .filter((tag): tag is DailyDigestDirection => allowed.has(tag))
     .sort();
 }
 
-const BAD_NEWS_PATTERN = /\b(outage|incident|breach|rollback|blocked)\b/i;
-
-function classify(event: ContextSourceEvent): DigestCandidate["item_kind"] | null {
+function classify(event: ContextSourceEvent, policy: DailyDigestPolicy): DigestCandidate["item_kind"] | null {
   if (event.weight_hints?.evidence_class === "metric") return "metric_signal";
   const severity = event.attrs?.severity;
   if (severity === "high" || severity === "critical" || event.attrs?.bad_news === true) {
     return "bad_news";
   }
-  if ((event.weight_hints?.role_tier ?? 0) >= 3.5) return "hypothesis";
-  if (event.text && BAD_NEWS_PATTERN.test(event.text)) return "bad_news";
-  return score(event) >= 1.5 ? "hypothesis" : null;
+  if ((event.weight_hints?.role_tier ?? 0) >= policy.role_tier_threshold) return "hypothesis";
+  if (event.text && policy.bad_news_terms.some((term) => event.text!.toLowerCase().includes(term))) return "bad_news";
+  return score(event, policy) >= policy.hypothesis_min_score ? "hypothesis" : null;
 }
 
-function score(event: ContextSourceEvent): number {
+function score(event: ContextSourceEvent, policy: DailyDigestPolicy): number {
   const urgency = event.weight_hints?.urgency ?? 0;
   const importance = event.weight_hints?.importance ?? 0;
   const roleTier = event.weight_hints?.role_tier ?? 1;
   return Number(((urgency + importance * roleTier) * evidenceWeight(
     event.weight_hints?.evidence_class,
+    policy,
   )).toFixed(6));
 }
 
-const EVIDENCE_WEIGHTS: Record<NonNullable<WeightHints["evidence_class"]>, number> = {
-  metric: 4,
-  demo: 3,
-  user_verbatim: 2.5,
-  decision_record: 2.5,
-  opinion: 1,
-};
-
-function evidenceWeight(evidenceClass: WeightHints["evidence_class"]): number {
-  return evidenceClass ? EVIDENCE_WEIGHTS[evidenceClass] : 1;
+function evidenceWeight(
+  evidenceClass: keyof DailyDigestPolicy["evidence_weights"] | undefined,
+  policy: DailyDigestPolicy,
+): number {
+  return evidenceClass ? policy.evidence_weights[evidenceClass] : 1;
 }
 
 function compareCandidates(left: DigestCandidate, right: DigestCandidate): number {

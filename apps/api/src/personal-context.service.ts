@@ -10,6 +10,8 @@ import {
   type ContextRequest,
   type ContextSnapshot,
   type DailyDigestJob,
+  DEFAULT_DAILY_DIGEST_POLICY,
+  validateDailyDigestPolicy,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -116,6 +118,27 @@ export class PersonalContextService {
         created_at: job.created_at,
         updated_at: job.updated_at,
       }));
+  }
+
+  async getDailyDigestPolicy() {
+    return (await this.runtime.requireHost().get("daily-digest-policy")
+      .getDailyDigestPolicy(this.runtime.orgId())) ?? DEFAULT_DAILY_DIGEST_POLICY;
+  }
+
+  async putDailyDigestPolicy(input: unknown) {
+    const body = strictBody(input, new Set(["policy"]));
+    try {
+      return await this.runtime.requireHost().get("daily-digest-policy").putDailyDigestPolicy({
+        org_id: this.runtime.orgId(),
+        policy: validateDailyDigestPolicy(body.policy as never),
+        updated_at: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("daily digest policy")) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, error.message);
+      }
+      throw error;
+    }
   }
 
   async decideArtifact(artifactId: string, input: unknown) {

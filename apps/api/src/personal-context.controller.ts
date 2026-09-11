@@ -49,6 +49,16 @@ export class PersonalContextController {
     return this.guard(() => this.context.listDailyDigestJobs());
   }
 
+  @Get("daily-digests/policy")
+  getDailyDigestPolicy() {
+    return this.guard(() => this.context.getDailyDigestPolicy());
+  }
+
+  @Post("daily-digests/policy")
+  putDailyDigestPolicy(@Body() body: unknown) {
+    return this.guard(() => this.context.putDailyDigestPolicy(body));
+  }
+
   @Get("daily-digests/:utcDate")
   listDailyDigests(@Param("utcDate") utcDate: string) {
     return this.guard(() => this.context.listDailyDigests(utcDate));

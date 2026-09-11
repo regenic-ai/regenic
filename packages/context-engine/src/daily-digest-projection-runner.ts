@@ -6,6 +6,8 @@ import {
   type BlobStore,
   type ContextArtifactStore,
   type DailyDigestProjectionRunner,
+  DEFAULT_DAILY_DIGEST_POLICY,
+  type DailyDigestPolicyStore,
 } from "@regenic/domain";
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
 import { DeterministicDailyDigestProjector } from "./deterministic-daily-digest-projector";
@@ -16,6 +18,7 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
     private readonly artifacts: ContextArtifactStore,
     private readonly blobs: BlobStore,
     private readonly projector = new DeterministicDailyDigestProjector(),
+    private readonly policies?: DailyDigestPolicyStore,
   ) {}
 
   async projectDailyDigest(input: {
@@ -25,6 +28,8 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
   }): Promise<{ artifact_id?: string; input_event_count: number }> {
     if (!input.org_id?.trim()) throw new Error("Daily digest organization is required");
     const generation = input.generation?.trim() || CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION;
+    const policy = await this.policies?.getDailyDigestPolicy(input.org_id)
+      ?? DEFAULT_DAILY_DIGEST_POLICY;
     const source = await this.source.openRead({ org_id: input.org_id } as never);
     const heads = new Set(source.lifecycle_heads.map((head) => head.head_event_id));
     const selectedIds = new Set(source.events
@@ -40,6 +45,7 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
       utc_date: input.utc_date,
       generation,
       source: { ...source, events: materialized },
+      policy,
     });
     if (!projected) return { input_event_count: 0 };
     const previous = (await this.artifacts.listArtifacts({

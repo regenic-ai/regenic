@@ -152,6 +152,12 @@ A conservative starter lexicon (`outage`, `incident`, `breach`, `rollback`,
 and `blocked`) also classifies authorized materialized text as `bad_news`.
 It is a deterministic fallback, not a policy override; organization-configured
 lexicons remain separate work.
+
+Each organization may persist a versioned D0 policy that configures enabled
+controlled directions, per-direction limits, bad-news terms, evidence weights,
+and hypothesis thresholds. An absent record uses the compatible default. The
+normalized policy participates in digest identity; Artifact attrs retain only
+its version and stable hash, rather than expanding the retrievable body.
   anchors?: Array<{
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
