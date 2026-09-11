@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const { DeterministicDailyDigestProjector } = require("../dist");
+const { DEFAULT_DAILY_DIGEST_POLICY } = require("@regenic/domain");
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -252,5 +253,38 @@ describe("deterministic daily digest projector", () => {
       "event-oppose", "event-support",
     ]);
     assert.deepEqual(value.required_scope_ids, ["scope-1"]);
+  });
+
+  it("applies a custom policy to directions, quotas, and bad-news terms", async () => {
+    const watchlist = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-watch", external_id: "watch-1" },
+      thread_id: "thread-watch", weight_hints: {}, text: "Watchlist issue requires attention.",
+    });
+    const sales = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-sales", external_id: "sales-1" },
+      thread_id: "thread-sales", direction_tags: ["sales"], weight_hints: { evidence_class: "metric" },
+    });
+    const policy = {
+      ...DEFAULT_DAILY_DIGEST_POLICY,
+      enabled_directions: ["product"],
+      max_items_per_direction: 1,
+      bad_news_terms: ["watchlist"],
+    };
+    const projector = new DeterministicDailyDigestProjector();
+    const value = await projector.project({
+      ...input([watchlist, sales], [
+        { source: "synthetic", external_id: "watch-1", head_event_id: "event-watch" },
+        { source: "synthetic", external_id: "sales-1", head_event_id: "event-sales" },
+      ]),
+      policy,
+    });
+    assert.deepEqual(value.attrs.directions, [{
+      direction: "product",
+      items: [{
+        item_kind: "bad_news", score: 0,
+        event_id: "event-watch", thread_id: "thread-watch", actor_id: "actor-1",
+        occurred_at: "2026-09-05T08:00:00.000Z", text: "Watchlist issue requires attention.",
+      }],
+    }]);
   });
 });

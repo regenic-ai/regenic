@@ -22,6 +22,8 @@ import type {
   ContextProjectionOutboxStore,
   DailyDigestJob,
   DailyDigestJobStore,
+  DailyDigestPolicy,
+  DailyDigestPolicyStore,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -81,7 +83,8 @@ export class SqliteSplitAuthorityStore
     ContextArtifactStore,
     ContextAuthorityReader,
     ContextProjectionOutboxStore,
-    DailyDigestJobStore
+    DailyDigestJobStore,
+    DailyDigestPolicyStore
 {
   private constructor(
     private readonly reader: SqliteWriteClient,
@@ -488,6 +491,14 @@ export class SqliteSplitAuthorityStore
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {
     return this.reader.call("getUiPref", [orgId, key]);
+  }
+
+  async getDailyDigestPolicy(orgId: string): Promise<DailyDigestPolicy | null> {
+    return this.reader.call("getDailyDigestPolicy", [orgId]);
+  }
+
+  async putDailyDigestPolicy(input: { org_id: string; policy: DailyDigestPolicy; updated_at: string }): Promise<DailyDigestPolicy> {
+    return this.writer.call("putDailyDigestPolicy", [input]);
   }
 
   async putUiPref(

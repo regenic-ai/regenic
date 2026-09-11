@@ -178,6 +178,36 @@ describe("personal context API", () => {
     }
   });
 
+  it("reads and updates only the current organization's validated daily digest policy", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(root);
+    const initial = await fetch(`${origin}/v1/me/context/daily-digests/policy`);
+    assert.equal(initial.status, 200);
+    assert.deepEqual((await initial.json()).enabled_directions, [
+      "product", "sales", "customer", "org", "finance", "risk",
+    ]);
+    const policy = {
+      version: 1,
+      enabled_directions: ["product"],
+      max_items_per_direction: 2,
+      bad_news_terms: ["watchlist"],
+      hypothesis_min_score: 2,
+      role_tier_threshold: 4,
+      evidence_weights: {
+        metric: 4, demo: 3, user_verbatim: 2.5, decision_record: 2.5, opinion: 1,
+      },
+    };
+    const updated = await postJson(`${origin}/v1/me/context/daily-digests/policy`, { policy });
+    assert.equal(updated.response.status, 201);
+    assert.deepEqual(JSON.parse(updated.text), policy);
+    const fetched = await fetch(`${origin}/v1/me/context/daily-digests/policy`);
+    assert.deepEqual(await fetched.json(), policy);
+    const invalid = await postJson(`${origin}/v1/me/context/daily-digests/policy`, {
+      policy: { ...policy, enabled_directions: ["untrusted"] },
+    });
+    assert.equal(invalid.response.status, 400);
+  });
+
   it("projects a UTC daily digest and exposes it only after artifact acceptance", async () => {
     const root = await createRoot();
     const { origin } = await startApi(root);

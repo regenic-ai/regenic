@@ -6,6 +6,7 @@ import type {
   ContextAuthorityReader,
   ContextProjectionOutboxStore,
   DailyDigestJobStore,
+  DailyDigestPolicyStore,
   ExecutorStore,
   WorkStore,
 } from "@regenic/domain";
@@ -19,6 +20,7 @@ export type AuthorityServicesStore = AuthorityStore &
   ContextAuthorityReader &
   ContextProjectionOutboxStore &
   DailyDigestJobStore & {
+  } & DailyDigestPolicyStore & {
     close(): void | Promise<void>;
   };
 
@@ -31,5 +33,6 @@ export function provideAuthorityServices(
   ctx.provide("context-artifacts", store);
   ctx.provide("context-projection-outbox", store);
   ctx.provide("daily-digest-jobs", store);
+  ctx.provide("daily-digest-policy", store);
   ctx.effect(() => () => store.close());
 }

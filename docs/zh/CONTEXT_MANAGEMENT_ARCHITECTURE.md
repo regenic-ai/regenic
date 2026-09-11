@@ -543,6 +543,10 @@ hypothesis。
 已授权且已物化正文归类为 `bad_news`。它是确定性 fallback，不会覆盖 policy；按组织配置
 词表仍是后续工作。
 
+每个组织可持久化版本化 D0 policy，用于配置已启用的受控 direction、每方向上限、
+bad-news term、evidence weight 和 hypothesis threshold。没有记录时使用兼容默认值。规范化
+policy 会参与 digest identity；Artifact attrs 仅保留其版本与稳定 hash，不会膨胀可检索正文。
+
 投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
 返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。
 当后续运行改变同一 UTC period 时，它会写入一个显式 supersede 原有 `proposed` daily digest 的

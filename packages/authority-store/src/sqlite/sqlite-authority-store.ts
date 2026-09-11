@@ -24,6 +24,7 @@ import {
   validateContextBundle,
   validateContextProjectionCheckpoint,
   validateContextSnapshot,
+  validateDailyDigestPolicy,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -54,6 +55,8 @@ import type {
   ContextProjectionOutboxStore,
   DailyDigestJob,
   DailyDigestJobStore,
+  DailyDigestPolicy,
+  DailyDigestPolicyStore,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -337,6 +340,7 @@ export class SqliteAuthorityStore
     ContextAuthorityReader,
     ContextProjectionOutboxStore,
     DailyDigestJobStore
+      , DailyDigestPolicyStore
 {
   private readonly database: Database.Database;
   readonly readonly: boolean;
@@ -1930,6 +1934,18 @@ export class SqliteAuthorityStore
       .prepare(`SELECT value FROM ui_prefs WHERE org_id = ? AND key = ?`)
       .get(orgId, key) as { value: string } | undefined;
     return row?.value ?? null;
+  }
+
+  async getDailyDigestPolicy(orgId: string): Promise<DailyDigestPolicy | null> {
+    const value = await this.getUiPref(orgId, "daily_digest_policy_v1");
+    return value ? validateDailyDigestPolicy(JSON.parse(value) as DailyDigestPolicy) : null;
+  }
+
+  async putDailyDigestPolicy(input: { org_id: string; policy: DailyDigestPolicy; updated_at: string }): Promise<DailyDigestPolicy> {
+    const policy = validateDailyDigestPolicy(input.policy);
+    if (!input.org_id.trim() || Number.isNaN(Date.parse(input.updated_at))) throw new Error("Invalid daily digest policy update");
+    await this.putUiPref(input.org_id, "daily_digest_policy_v1", canonicalContextJson(policy), input.updated_at);
+    return policy;
   }
 
   async putUiPref(

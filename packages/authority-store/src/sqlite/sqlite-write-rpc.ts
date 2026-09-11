@@ -44,6 +44,7 @@ export const AUTHORITY_READ_METHODS = [
   "getWorkDelivery",
   "getWorkDeliveryByItem",
   "getUiPref",
+  "getDailyDigestPolicy",
   "listExecutorInstallations",
   "getExecutorInstallation",
 ] as const;
@@ -87,6 +88,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "putWorkRun",
   "putWorkDelivery",
   "putUiPref",
+  "putDailyDigestPolicy",
   "putExecutorInstallation",
   "deleteExecutorInstallation",
   "createInstallation",
