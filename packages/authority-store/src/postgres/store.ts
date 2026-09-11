@@ -1070,6 +1070,66 @@ export class PostgresAuthorityStore
     return rows.map(toContextProjectionJob);
   }
 
+  async enqueueDailyDigestCatchUp(input: {
+    org_id: string;
+    through_utc_date: string;
+    generation: string;
+    created_at: string;
+    max_days: number;
+  }): Promise<DailyDigestJob[]> {
+    assertDailyDigestCatchUp(input);
+    return this.withTx(async (client) => {
+      await this.query(
+        `SELECT pg_advisory_xact_lock(hashtext($1))`,
+        [`daily-digest:${input.org_id}:${input.generation}`],
+        client,
+      );
+      const cursor = await this.queryOne<{ last_scheduled_utc_date: string }>(
+        `SELECT last_scheduled_utc_date FROM daily_digest_schedule_cursors
+         WHERE org_id = $1 AND generation = $2`,
+        [input.org_id, input.generation],
+        client,
+      );
+      const dates = catchUpDates(cursor?.last_scheduled_utc_date, input.through_utc_date, input.max_days);
+      const ids: string[] = [];
+      for (const utcDate of dates) {
+        const id = `daily-digest-job:${hashCanonicalContext([input.org_id, utcDate, input.generation])}`;
+        await this.execute(
+          `INSERT INTO daily_digest_jobs (
+            id, org_id, utc_date, generation, status, attempts, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, 'pending', 0, $5, $5)
+          ON CONFLICT (org_id, utc_date, generation) DO NOTHING`,
+          [id, input.org_id, utcDate, input.generation, input.created_at],
+          client,
+        );
+        ids.push(id);
+      }
+      const lastScheduled = dates.at(-1);
+      if (lastScheduled) {
+        await this.execute(
+          `INSERT INTO daily_digest_schedule_cursors (
+            org_id, generation, last_scheduled_utc_date, updated_at
+          ) VALUES ($1, $2, $3, $4)
+          ON CONFLICT (org_id, generation) DO UPDATE SET
+            last_scheduled_utc_date = excluded.last_scheduled_utc_date,
+            updated_at = excluded.updated_at`,
+          [input.org_id, input.generation, lastScheduled, input.created_at],
+          client,
+        );
+      }
+      if (!ids.length) return [];
+      const rows = await this.query<DailyDigestJobRow>(
+        `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
+         lease_expires_at, next_retry_at, last_error, created_at, updated_at
+         FROM daily_digest_jobs WHERE id = ANY($1::text[])`,
+        [ids],
+        client,
+      );
+      const byId = new Map(rows.map((row) => [row.id, toDailyDigestJob(row)] as const));
+      return ids.map((id) => byId.get(id)!);
+    });
+  }
+
   async enqueueDailyDigestJob(input: {
     org_id: string; utc_date: string; generation: string; created_at: string;
   }): Promise<DailyDigestJob> {
@@ -1159,7 +1219,7 @@ export class PostgresAuthorityStore
     const rows = await this.query<DailyDigestJobRow>(
       `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
        lease_expires_at, next_retry_at, last_error, created_at, updated_at
-       FROM daily_digest_jobs WHERE org_id = $1 ORDER BY created_at, id`, [orgId],
+      FROM daily_digest_jobs WHERE org_id = $1 ORDER BY utc_date, generation, id`, [orgId],
     );
     return rows.map(toDailyDigestJob);
   }
@@ -3551,6 +3611,36 @@ function assertDailyDigestEnqueue(input: {
   ) {
     throw new Error("Invalid daily digest job");
   }
+}
+
+function assertDailyDigestCatchUp(input: {
+  org_id: string;
+  through_utc_date: string;
+  generation: string;
+  created_at: string;
+  max_days: number;
+}): void {
+  assertDailyDigestEnqueue({
+    org_id: input.org_id,
+    utc_date: input.through_utc_date,
+    generation: input.generation,
+    created_at: input.created_at,
+  });
+  if (!Number.isSafeInteger(input.max_days) || input.max_days < 1 || input.max_days > 31) {
+    throw new Error("Invalid daily digest catch-up limit");
+  }
+}
+
+function catchUpDates(lastScheduled: string | undefined, throughDate: string, maxDays: number): string[] {
+  const start = lastScheduled
+    ? new Date(`${lastScheduled}T00:00:00.000Z`).getTime() + 86_400_000
+    : new Date(`${throughDate}T00:00:00.000Z`).getTime();
+  const end = new Date(`${throughDate}T00:00:00.000Z`).getTime();
+  const dates: string[] = [];
+  for (let timestamp = start; timestamp <= end && dates.length < maxDays; timestamp += 86_400_000) {
+    dates.push(new Date(timestamp).toISOString().slice(0, 10));
+  }
+  return dates;
 }
 
 function artifactState(row: ArtifactStateRow): ContextArtifactState {

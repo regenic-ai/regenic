@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 29;
+export const LATEST_SCHEMA_VERSION = 30;
 
 export const MIGRATIONS = [
   {
@@ -692,6 +692,18 @@ export const MIGRATIONS = [
         ON daily_digest_jobs (status, next_retry_at, lease_expires_at, created_at);
       CREATE INDEX daily_digest_jobs_org_idx
         ON daily_digest_jobs (org_id, created_at, id);
+    `,
+  },
+  {
+    version: 30,
+    sql: `
+      CREATE TABLE daily_digest_schedule_cursors (
+        org_id TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        last_scheduled_utc_date TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (org_id, generation)
+      );
     `,
   },
 ] as const;

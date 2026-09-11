@@ -16,6 +16,13 @@ export interface DailyDigestJob {
 }
 
 export interface DailyDigestJobStore {
+  enqueueDailyDigestCatchUp(input: {
+    org_id: string;
+    through_utc_date: string;
+    generation: string;
+    created_at: string;
+    max_days: number;
+  }): Promise<DailyDigestJob[]>;
   enqueueDailyDigestJob(input: {
     org_id: string;
     utc_date: string;

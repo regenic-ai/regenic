@@ -248,6 +248,16 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listContextProjectionJobs", [orgId]);
   }
 
+  async enqueueDailyDigestCatchUp(input: {
+    org_id: string;
+    through_utc_date: string;
+    generation: string;
+    created_at: string;
+    max_days: number;
+  }): Promise<DailyDigestJob[]> {
+    return this.writer.call("enqueueDailyDigestCatchUp", [input]);
+  }
+
   async enqueueDailyDigestJob(input: {
     org_id: string; utc_date: string; generation: string; created_at: string;
   }): Promise<DailyDigestJob> {

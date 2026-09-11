@@ -638,9 +638,11 @@ listening, its worker idempotently enqueues the current UTC date, claims a
 leased batch, and persists completion or bounded retry backoff. The worker
 renews each lease while projection runs; if it loses the lease, it does not
 settle that job. A restart thus catches up an unfinished current-day run without
-duplicating the period. This does not provide organization-local midnight
-scheduling or multi-day historical catch-up; those require persisted timezone
-and schedule-cursor configuration.
+duplicating the period. A persisted schedule cursor advances up to seven UTC
+days per tick, so a bounded offline gap is enqueued in chronological order
+without rediscovering or duplicating prior periods. This does not provide
+organization-local midnight scheduling; that requires persisted timezone
+configuration.
 
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
