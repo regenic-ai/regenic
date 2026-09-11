@@ -1,7 +1,9 @@
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  DEFAULT_SYNC_MODE,
   keychainCredentialsRef,
+  parseSyncMode,
   requireConnectorStream,
   runInSyncLane,
   type ChannelDriver,
@@ -97,6 +99,17 @@ export const feishuChatDriver: ChannelDriver = {
       description: "catalog.description",
       credential_hint: "catalog.credentialHint",
       fields: [
+        {
+          key: "sync_mode",
+          label: "field.syncMode",
+          required: true,
+          default: "conversation",
+          options: [
+            { value: "conversation", label: "option.syncMode.conversation" },
+            { value: "balanced", label: "option.syncMode.balanced" },
+            { value: "context", label: "option.syncMode.context" },
+          ],
+        },
         {
           key: "selection",
           label: "field.selection",
@@ -564,6 +577,7 @@ function feishuAllLabel(config: Record<string, unknown>): string {
 export function feishuInstallConfig(
   input: Record<string, unknown>,
 ): Record<string, JsonValue> {
+  const syncMode = parseSyncMode(input.sync_mode) ?? DEFAULT_SYNC_MODE;
   const rawSelection = configString(input, "selection") ?? "";
   const selection =
     rawSelection.length > 0
@@ -579,7 +593,7 @@ export function feishuInstallConfig(
         "Feishu install requires groups, direct messages, or both",
       );
     }
-    return { selection: "recent", kinds };
+    return { sync_mode: syncMode, selection: "recent", kinds };
   }
   if (selection === "all") {
     const kinds = feishuKinds(input);
@@ -589,7 +603,7 @@ export function feishuInstallConfig(
         "Feishu install requires groups, direct messages, or both",
       );
     }
-    return { selection: "all", kinds };
+    return { sync_mode: syncMode, selection: "all", kinds };
   }
   const chatIds = feishuPickedChatIds(input);
   if (chatIds.length === 0) {
@@ -600,6 +614,7 @@ export function feishuInstallConfig(
   }
   const names = pickedChatNames(input, chatIds);
   const config: Record<string, JsonValue> = {
+    sync_mode: syncMode,
     selection: "pick",
     chat_ids: chatIds,
   };

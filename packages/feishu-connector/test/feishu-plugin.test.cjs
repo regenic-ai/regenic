@@ -200,7 +200,11 @@ describe("feishuChatDriver", () => {
       config: { selection: "all" },
       now: "2026-08-22T00:00:00.000Z",
     });
-    assert.deepEqual(all.config, { selection: "all", kinds: ["group", "p2p"] });
+    assert.deepEqual(all.config, {
+      sync_mode: "conversation",
+      selection: "all",
+      kinds: ["group", "p2p"],
+    });
     assert.equal(all.credentials_ref, "keychain:lark-cli");
     assert.equal(feishuChatDriver.connector_protocol, "1.0");
     assert.equal(
@@ -218,7 +222,11 @@ describe("feishuChatDriver", () => {
       config: { selection: "pick", chat_ids: "oc_1,oc_2" },
       now: "2026-08-22T00:00:00.000Z",
     });
-    assert.deepEqual(picked.config, { selection: "pick", chat_ids: ["oc_1", "oc_2"] });
+    assert.deepEqual(picked.config, {
+      sync_mode: "conversation",
+      selection: "pick",
+      chat_ids: ["oc_1", "oc_2"],
+    });
     assert.equal(
       feishuChatDriver.matchesThread(picked, { source: "feishu", target: "oc_2" }),
       true,
@@ -241,6 +249,7 @@ describe("feishuChatDriver", () => {
       now: "2026-08-22T00:00:00.000Z",
     });
     assert.deepEqual(created.config, {
+      sync_mode: "conversation",
       selection: "pick",
       chat_ids: ["oc_1"],
       chat_names: ["engineering"],
@@ -349,7 +358,11 @@ describe("feishuChatDriver", () => {
       config: { selection: "all", kinds: "p2p" },
       now: "2026-08-22T00:00:00.000Z",
     });
-    assert.deepEqual(created.config, { selection: "all", kinds: ["p2p"] });
+    assert.deepEqual(created.config, {
+      sync_mode: "conversation",
+      selection: "all",
+      kinds: ["p2p"],
+    });
   });
 
   it("mounts resolved chats through the host connector registry", async () => {
@@ -750,9 +763,21 @@ describe("feishuChatDriver", () => {
       now: "2026-08-22T00:00:00.000Z",
     });
     assert.deepEqual(recent.config, {
+      sync_mode: "conversation",
       selection: "recent",
       kinds: ["group", "p2p"],
     });
+    const context = feishuChatDriver.install({
+      id: "feishu-context",
+      org_id: "local-owner",
+      config: {
+        sync_mode: "context",
+        selection: "recent",
+        kinds: ["group", "p2p"],
+      },
+      now: "2026-08-22T00:00:00.000Z",
+    });
+    assert.equal(context.config.sync_mode, "context");
     const bare = feishuChatDriver.install({
       id: "feishu-default",
       org_id: "local-owner",
@@ -760,6 +785,7 @@ describe("feishuChatDriver", () => {
       now: "2026-08-22T00:00:00.000Z",
     });
     assert.deepEqual(bare.config, {
+      sync_mode: "conversation",
       selection: "recent",
       kinds: ["group"],
     });
@@ -792,7 +818,10 @@ describe("feishuChatDriver", () => {
 
   it("advertises Feishu setup steps on the Engine catalog", () => {
     const catalog = feishuChatDriver.installCatalog();
-    assert.equal(catalog.fields[0].default, "recent");
+    assert.equal(catalog.fields[0].key, "sync_mode");
+    assert.equal(catalog.fields[0].default, "conversation");
+    assert.equal(catalog.fields[1].key, "selection");
+    assert.equal(catalog.fields[1].default, "recent");
     const kinds = catalog.fields.find((field) => field.key === "kinds");
     assert.deepEqual(kinds?.visible_when, {
       field: "selection",

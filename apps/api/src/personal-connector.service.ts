@@ -34,6 +34,8 @@ import {
   steadyLaneLimitsForCount,
   pacedStreamIdleMs,
   streamIdleTiersFromEnv,
+  syncModeFromConfig,
+  syncModePreset,
   syncPageOutcomeFromPollRuns,
   withDeadline,
   yieldToEventLoop,
@@ -751,14 +753,14 @@ export class PersonalConnectorService implements OnModuleDestroy {
           key,
           pages,
           pagesBudget: 1,
-          idleMs: streamIdleMs(stream),
+          idleMs: streamIdleMs(stream, installation.config),
         });
       } catch (error) {
         this.rememberStreamPace({
           key,
           pages: [],
           pagesBudget: 1,
-          idleMs: streamIdleMs(stream),
+          idleMs: streamIdleMs(stream, installation.config),
           error,
         });
         throw error;
@@ -865,7 +867,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
           key,
           pages,
           pagesBudget: 1,
-          idleMs: streamIdleMs(stream),
+          idleMs: streamIdleMs(stream, installation.config),
         });
         if (pages.some((page) => page.status === "completed")) {
           this.hydrateCooldown.set(threadId, Date.now() + options.cooldownMs);
@@ -878,7 +880,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
           key,
           pages: [],
           pagesBudget: 1,
-          idleMs: streamIdleMs(stream),
+          idleMs: streamIdleMs(stream, installation.config),
           error,
         });
         throw error;
@@ -958,7 +960,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
           key,
           pages,
           pagesBudget: 3,
-          idleMs: streamIdleMs(stream),
+          idleMs: streamIdleMs(stream, installation.config),
         });
         if (accepted > 0) {
           this.inbox.publishThreadUpdated(threadId);
@@ -969,7 +971,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
           key,
           pages: [],
           pagesBudget: 3,
-          idleMs: streamIdleMs(stream),
+          idleMs: streamIdleMs(stream, installation.config),
           error,
         });
         throw error;
@@ -1841,7 +1843,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
           {
             stream,
             key,
-            idleMs: streamIdleMs(stream),
+            idleMs: streamIdleMs(stream, installation.config),
             older: item.older,
             pages: throttled.pages,
             lane: item.lane,
@@ -2648,22 +2650,27 @@ function streamPaceKey(installationId: string, streamKey: string): string {
   return `${installationId}:${streamKey}`;
 }
 
-/** Prefer connector pace when present; omit idle when the connector declares none (DSH). */
-function streamIdleMs(stream: ConnectorStream): number | undefined {
+/** Prefer connector pace or sync_mode; omit idle when neither is set (DSH). */
+function streamIdleMs(
+  stream: ConnectorStream,
+  config?: Record<string, unknown>,
+): number | undefined {
   const value = stream.pace?.idle_ms;
   const hintMs =
     Number.isInteger(value) && value !== undefined && value >= 1
       ? value
       : undefined;
-  // No pace.idle_ms → every tick (unchanged for DSH and other unpaced streams).
-  if (hintMs === undefined) {
+  const mode = syncModeFromConfig(config);
+  // No pace.idle_ms and no sync_mode → every tick (unchanged for DSH).
+  if (hintMs === undefined && mode == null) {
     return undefined;
   }
   const preferred = preferredThreadId();
   const active = Boolean(
     preferred && stream.thread_id && stream.thread_id === preferred,
   );
-  const tiers = streamIdleTiersFromEnv();
+  const tiers =
+    mode != null ? syncModePreset(mode) : streamIdleTiersFromEnv();
   return pacedStreamIdleMs({
     active,
     hintMs,
