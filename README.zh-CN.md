@@ -338,6 +338,9 @@ pnpm local context-daily-digest-project --database ./regenic.db --blob-root ./bl
 
 pnpm local context-daily-digest-get --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --utc-date 2026-09-06
+
+pnpm local context-daily-digest-jobs --database ./regenic.db --blob-root ./blobs \
+	--org local-owner
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

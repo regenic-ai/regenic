@@ -148,8 +148,11 @@ export async function runLocalCli(
     case "context-daily-digest-get":
       await getDailyDigests(commandOptions, stdout);
       return;
+    case "context-daily-digest-jobs":
+      await getDailyDigestJobs(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs");
   }
 }
 
@@ -1158,6 +1161,19 @@ async function getDailyDigests(options: CommandOptions, stdout: CliOutput): Prom
       artifact.attrs && typeof artifact.attrs === "object" && !Array.isArray(artifact.attrs) &&
       artifact.attrs.utc_date === date,
     ));
+  });
+}
+
+async function getDailyDigestJobs(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    const jobs = await host.get("daily-digest-jobs").listDailyDigestJobs(orgId);
+    writeJson(stdout, jobs.map(({ lease_owner, last_error, ...job }) => job));
   });
 }
 
