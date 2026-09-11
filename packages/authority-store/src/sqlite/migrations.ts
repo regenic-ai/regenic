@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 30;
+export const LATEST_SCHEMA_VERSION = 31;
 
 export const MIGRATIONS = [
   {
@@ -704,6 +704,25 @@ export const MIGRATIONS = [
         updated_at TEXT NOT NULL,
         PRIMARY KEY (org_id, generation)
       );
+    `,
+  },
+  {
+    version: 31,
+    sql: `
+      CREATE TABLE daily_digest_coverage_alerts (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        local_date TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        event_id TEXT NOT NULL REFERENCES events(id),
+        reason_code TEXT NOT NULL CHECK (reason_code = 'omitted_high_signal'),
+        status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+        created_at TEXT NOT NULL,
+        resolved_at TEXT,
+        UNIQUE (org_id, local_date, generation, event_id, reason_code)
+      );
+      CREATE INDEX daily_digest_coverage_alerts_query_idx
+        ON daily_digest_coverage_alerts (org_id, status, local_date, id);
     `,
   },
 ] as const;

@@ -24,6 +24,7 @@ import type {
   DailyDigestJobStore,
   DailyDigestPolicy,
   DailyDigestPolicyStore,
+  DailyDigestCoverageAlert,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -289,6 +290,18 @@ export class SqliteSplitAuthorityStore
 
   async listDailyDigestJobs(orgId: string): Promise<DailyDigestJob[]> {
     return this.reader.call("listDailyDigestJobs", [orgId]);
+  }
+
+  async putDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): Promise<DailyDigestCoverageAlert> {
+    return this.writer.call("putDailyDigestCoverageAlert", [alert]);
+  }
+
+  async listDailyDigestCoverageAlerts(input: { org_id: string; status?: "open" | "resolved"; limit?: number }): Promise<DailyDigestCoverageAlert[]> {
+    return this.reader.call("listDailyDigestCoverageAlerts", [input]);
+  }
+
+  async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
+    return this.writer.call("resolveDailyDigestCoverageAlert", [input]);
   }
 
   async getDisposition(

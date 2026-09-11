@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 31;
+export const PG_SCHEMA_VERSION = 32;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -208,6 +208,25 @@ CREATE TABLE daily_digest_schedule_cursors (
   updated_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (org_id, generation)
 );
+`,
+  },
+  {
+    version: 32,
+    sql: `
+CREATE TABLE daily_digest_coverage_alerts (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  local_date TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  event_id TEXT NOT NULL REFERENCES events(id),
+  reason_code TEXT NOT NULL CHECK (reason_code = 'omitted_high_signal'),
+  status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+  created_at TIMESTAMPTZ NOT NULL,
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (org_id, local_date, generation, event_id, reason_code)
+);
+CREATE INDEX daily_digest_coverage_alerts_query_idx
+  ON daily_digest_coverage_alerts (org_id, status, local_date, id);
 `,
   },
 ] as const;
@@ -611,6 +630,21 @@ CREATE TABLE daily_digest_schedule_cursors (
   updated_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (org_id, generation)
 );
+
+CREATE TABLE daily_digest_coverage_alerts (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  local_date TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  event_id TEXT NOT NULL REFERENCES events(id),
+  reason_code TEXT NOT NULL CHECK (reason_code = 'omitted_high_signal'),
+  status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+  created_at TIMESTAMPTZ NOT NULL,
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (org_id, local_date, generation, event_id, reason_code)
+);
+CREATE INDEX daily_digest_coverage_alerts_query_idx
+  ON daily_digest_coverage_alerts (org_id, status, local_date, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,

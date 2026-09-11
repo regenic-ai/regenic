@@ -55,6 +55,7 @@ import type {
   DailyDigestJobStore,
   DailyDigestPolicy,
   DailyDigestPolicyStore,
+  DailyDigestCoverageAlert,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1226,6 +1227,22 @@ export class PostgresAuthorityStore
       FROM daily_digest_jobs WHERE org_id = $1 ORDER BY utc_date, generation, id`, [orgId],
     );
     return rows.map(toDailyDigestJob);
+  }
+
+  async putDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): Promise<DailyDigestCoverageAlert> {
+    await this.execute(`INSERT INTO daily_digest_coverage_alerts (id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (org_id, local_date, generation, event_id, reason_code) DO NOTHING`, [alert.id, alert.org_id, alert.local_date, alert.generation, alert.event_id, alert.reason_code, alert.status, alert.created_at, alert.resolved_at ?? null]);
+    const row = await this.queryOne<DailyDigestCoverageAlert>(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = $1 AND local_date = $2 AND generation = $3 AND event_id = $4 AND reason_code = $5`, [alert.org_id, alert.local_date, alert.generation, alert.event_id, alert.reason_code]);
+    return row!;
+  }
+
+  async listDailyDigestCoverageAlerts(input: { org_id: string; status?: "open" | "resolved"; limit?: number }): Promise<DailyDigestCoverageAlert[]> {
+    const limit = input.limit ?? 100;
+    return this.query<DailyDigestCoverageAlert>(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = $1 ${input.status ? "AND status = $2" : ""} ORDER BY local_date, id LIMIT $${input.status ? 3 : 2}`, input.status ? [input.org_id, input.status, limit] : [input.org_id, limit]);
+  }
+
+  async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
+    await this.execute(`UPDATE daily_digest_coverage_alerts SET status = 'resolved', resolved_at = $1 WHERE org_id = $2 AND id = $3 AND status = 'open'`, [input.resolved_at, input.org_id, input.alert_id]);
+    return await this.queryOne<DailyDigestCoverageAlert>(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = $1 AND id = $2`, [input.org_id, input.alert_id]);
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
