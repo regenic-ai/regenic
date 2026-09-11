@@ -83,10 +83,13 @@ export class PersonalContextService {
   }
 
   async projectDailyDigest(input: unknown) {
-    const body = strictBody(input, new Set(["utc_date"]));
+    const body = strictBody(input, new Set(["utc_date", "local_date"]));
+    if ((body.utc_date === undefined) === (body.local_date === undefined)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Provide exactly one of utc_date or local_date");
+    }
     return this.runtime.requireHost().get("context-daily-digests").projectDailyDigest({
       org_id: this.runtime.orgId(),
-      utc_date: requiredUtcDate(body.utc_date),
+      utc_date: requiredUtcDate(body.local_date ?? body.utc_date),
     });
   }
 

@@ -308,4 +308,26 @@ describe("deterministic daily digest projector", () => {
     assert.equal(result.proposal.attrs.directions[0].items[0].event_id, "event-selected");
     assert.deepEqual(result.omitted_event_ids, ["event-omitted"]);
   });
+
+  it("selects events by the organization's local date and records UTC bounds", async () => {
+    const lateUtc = sourceEvent({
+      event: {
+        ...sourceEvent().event,
+        event_id: "event-shanghai",
+        external_id: "shanghai-1",
+        occurred_at: "2026-09-07T16:30:00.000Z",
+      },
+      weight_hints: { urgency: 1, importance: 1 },
+    });
+    const projector = new DeterministicDailyDigestProjector();
+    const value = await projector.project({
+      ...input([lateUtc], [{ source: "synthetic", external_id: "shanghai-1", head_event_id: "event-shanghai" }]),
+      utc_date: "2026-09-08",
+      policy: { ...DEFAULT_DAILY_DIGEST_POLICY, time_zone: "Asia/Shanghai" },
+    });
+    assert.equal(value.attrs.time_zone, "Asia/Shanghai");
+    assert.equal(value.attrs.utc_start, "2026-09-07T16:00:00.000Z");
+    assert.equal(value.attrs.utc_end, "2026-09-08T16:00:00.000Z");
+    assert.equal(value.attrs.directions[0].items[0].event_id, "event-shanghai");
+  });
 });

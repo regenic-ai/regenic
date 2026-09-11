@@ -215,6 +215,7 @@ describe("personal context API", () => {
     ]);
     const policy = {
       version: 1,
+      time_zone: "UTC",
       enabled_directions: ["product"],
       max_items_per_direction: 2,
       bad_news_terms: ["watchlist"],
@@ -274,6 +275,14 @@ describe("personal context API", () => {
       utc_date: "2026-08-30T00:00:00Z",
     });
     assert.equal(invalid.response.status, 400);
+    const local = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
+      local_date: "2026-08-30",
+    });
+    assert.equal(local.response.status, 201);
+    const ambiguous = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
+      utc_date: "2026-08-30", local_date: "2026-08-30",
+    });
+    assert.equal(ambiguous.response.status, 400);
     const impossible = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
       utc_date: "2026-02-30",
     });

@@ -20,6 +20,7 @@ export type DailyDigestEvidenceClass =
 
 export interface DailyDigestPolicy {
   version: typeof DAILY_DIGEST_POLICY_VERSION;
+  time_zone: string;
   enabled_directions: DailyDigestDirection[];
   max_items_per_direction: number;
   bad_news_terms: string[];
@@ -30,6 +31,7 @@ export interface DailyDigestPolicy {
 
 export const DEFAULT_DAILY_DIGEST_POLICY: DailyDigestPolicy = {
   version: DAILY_DIGEST_POLICY_VERSION,
+  time_zone: "UTC",
   enabled_directions: [...DAILY_DIGEST_DIRECTIONS],
   max_items_per_direction: 7,
   bad_news_terms: ["outage", "incident", "breach", "rollback", "blocked"],
@@ -58,6 +60,12 @@ export function validateDailyDigestPolicy(policy: DailyDigestPolicy): DailyDiges
     throw new Error("Unsupported daily digest policy version");
   }
   const enabledDirections = [...new Set(policy.enabled_directions)].sort();
+  const timeZone = policy.time_zone?.trim() || "UTC";
+  try {
+    new Intl.DateTimeFormat("en", { timeZone }).format();
+  } catch {
+    throw new Error("Invalid daily digest policy time zone");
+  }
   if (!enabledDirections.length || enabledDirections.some((direction) =>
     !(DAILY_DIGEST_DIRECTIONS as readonly string[]).includes(direction),
   )) {
@@ -86,6 +94,7 @@ export function validateDailyDigestPolicy(policy: DailyDigestPolicy): DailyDiges
   }
   return {
     version: DAILY_DIGEST_POLICY_VERSION,
+    time_zone: timeZone,
     enabled_directions: enabledDirections as DailyDigestDirection[],
     max_items_per_direction: maxItems,
     bad_news_terms: terms,

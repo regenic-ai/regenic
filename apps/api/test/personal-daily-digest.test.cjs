@@ -23,6 +23,7 @@ function fixture(projectDailyDigest, claimedJobs) {
   };
   const host = { get(name) {
     if (name === "daily-digest-jobs") return jobs;
+    if (name === "daily-digest-policy") return { async getDailyDigestPolicy() { return null; } };
     if (name === "context-daily-digests") return { async projectDailyDigest(input) {
       calls.project.push(input);
       return projectDailyDigest(input);

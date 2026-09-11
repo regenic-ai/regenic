@@ -60,6 +60,7 @@ export * from "./context-daily-digest";
 export * from "./daily-digest-jobs";
 export * from "./daily-digest-policy";
 export * from "./daily-digest-coverage-alerts";
+export * from "./daily-digest-period";
 export * from "./context-candidate";
 export * from "./context-request";
 export * from "./context-artifact";

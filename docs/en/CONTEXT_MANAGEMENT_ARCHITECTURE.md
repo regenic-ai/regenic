@@ -607,15 +607,21 @@ view, and requires an exact evidence-scope union. Failure to verify any of
 these conditions withholds the Artifact rather than falling back to a prior
 summary.
 
-### 8.2 UTC daily digest D0
+### 8.2 Local-day daily digest D0
 
-The Personal baseline includes an explicit UTC-day D0 projector. A caller names
+The Personal baseline includes an explicit calendar-day D0 projector. A caller names
 the `YYYY-MM-DD` period; the system never substitutes the host timezone or an
-implicit "today". It selects current non-tombstoned lifecycle heads whose
-`occurred_at` falls in that UTC date, retains every Event in each selected
-lifecycle as evidence, and emits a deterministic `daily_digest` proposal. The
+implicit "today". A versioned organization policy supplies an IANA time zone,
+defaulting to `UTC`, and selects current non-tombstoned lifecycle heads whose
+`occurred_at` falls in that local date. It retains every Event in each selected
+lifecycle as evidence and emits a deterministic `daily_digest` proposal. The
 canonical body lists the current head per thread in stable order and is bound by
 an Artifact ID, input hash, scope union, and body hash.
+
+Events remain stored in UTC. Each digest records its local date, time zone, and
+resolved `[utc_start, utc_end)` period, including DST transition days. The
+legacy `utc_date` API/CLI label remains an explicit compatible date label;
+`local_date` is accepted by the Personal API for non-UTC policies.
 
 Each Event also preserves validated source-provided `direction_tags`,
 `weight_hints`, and JSON `attrs` alongside its immutable lifecycle metadata.

@@ -513,13 +513,18 @@ canonical body，验证其与 immutable manifest 一致，要求每条 evidence 
 authorized source view 中，并要求 scope 恰好是 evidence scope 的并集。任一条件无法验证时，
 必须隐藏 Artifact，不能回退到旧 summary。
 
-### 8.2 UTC 日级 digest D0
+### 8.2 本地日级 digest D0
 
-个人版基线提供显式 UTC 日期的 D0 projector。调用方必须指定 `YYYY-MM-DD`，系统绝不使用
-宿主时区或隐式“今天”。它选择 `occurred_at` 落在该 UTC 日期内、当前且未 tombstone 的
-lifecycle head，为每个选中 lifecycle 保留全部 Event 作为 evidence，并生成确定性的
-`daily_digest` proposal。Canonical body 按稳定顺序列出每个 thread 的 current head，并由
+个人版基线提供显式日历日期的 D0 projector。调用方必须指定 `YYYY-MM-DD`，系统绝不使用
+宿主时区或隐式“今天”。版本化 organization policy 提供 IANA time zone，默认 `UTC`；它选择
+`occurred_at` 落在该本地日期内、当前且未 tombstone 的 lifecycle head，为每个选中 lifecycle
+保留全部 Event 作为 evidence，并生成确定性的 `daily_digest` proposal。Canonical body 按稳定顺序
+列出每个 thread 的 current head，并由
 Artifact ID、input hash、scope 并集和 body hash 绑定。
+
+Event 仍以 UTC 存储。每个 digest 记录 local date、time zone 以及解析后的 `[utc_start, utc_end)`
+period，包含 DST 切换日。旧 `utc_date` API/CLI 名称仍表示显式兼容 date label；针对非 UTC policy，
+Personal API 还接受 `local_date`。
 
 每个 Event 还会随 immutable lifecycle metadata 持久保存经校验、由来源提供的
 `direction_tags`、`weight_hints` 与 JSON `attrs`。它们可在 authority read epoch 中供
