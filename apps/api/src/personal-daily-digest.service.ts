@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION,
+  DEFAULT_DAILY_DIGEST_POLICY,
+  localDateAt,
+  type DailyDigestPolicyStore,
   type DailyDigestJobStore,
   type DailyDigestProjectionRunner,
 } from "@regenic/domain";
@@ -46,10 +49,12 @@ export class PersonalDailyDigestService implements OnModuleDestroy {
     try {
       const host = this.runtime.requireHost();
       const jobs = host.get("daily-digest-jobs") as DailyDigestJobStore;
+      const policy = await (host.get("daily-digest-policy") as DailyDigestPolicyStore)
+        .getDailyDigestPolicy(this.runtime.orgId()) ?? DEFAULT_DAILY_DIGEST_POLICY;
       const at = now.toISOString();
       await jobs.enqueueDailyDigestCatchUp({
         org_id: this.runtime.orgId(),
-        through_utc_date: at.slice(0, 10),
+        through_utc_date: localDateAt(now, policy.time_zone),
         generation: CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION,
         created_at: at,
         max_days: CATCH_UP_DAYS,

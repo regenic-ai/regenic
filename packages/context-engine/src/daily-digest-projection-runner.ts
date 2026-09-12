@@ -7,6 +7,7 @@ import {
   type ContextArtifactStore,
   type DailyDigestProjectionRunner,
   DEFAULT_DAILY_DIGEST_POLICY,
+  localDateAt,
   type DailyDigestPolicyStore,
   type DailyDigestCoverageAlertStore,
 } from "@regenic/domain";
@@ -37,7 +38,7 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
     const selectedIds = new Set(source.events
       .filter((event) => heads.has(event.event.event_id))
       .filter((event) => event.event.operation !== "tombstone")
-      .filter((event) => event.event.occurred_at.slice(0, 10) === input.utc_date)
+      .filter((event) => localDateAt(event.event.occurred_at, policy.time_zone) === input.utc_date)
       .map((event) => identity(event.event.source, event.event.external_id)));
     const materialized = await this.source.materialize(source.events
       .filter((event) => selectedIds.has(identity(event.event.source, event.event.external_id)))
@@ -80,6 +81,9 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
       !proposal.required_scope_ids.length
     ) {
       throw new Error("Daily digest projector returned an invalid artifact");
+    }
+    if (await this.artifacts.getArtifact(input.org_id, proposal.id)) {
+      return { artifact_id: proposal.id, input_event_count: proposal.input_refs.length };
     }
     await this.blobs.put(
       proposal.body_hash,

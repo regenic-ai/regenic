@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import {
   canonicalContextJson,
+  dailyDigestPeriod,
+  localDateAt,
   hashContextArtifactInputs,
   type ContextArtifactProposal,
   type DailyDigestProjectionInput,
@@ -30,7 +32,7 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
     const selected = input.source.events
       .filter((event) => heads.has(event.event.event_id))
       .filter((event) => event.event.operation !== "tombstone")
-      .filter((event) => event.event.occurred_at.slice(0, 10) === input.utc_date)
+      .filter((event) => localDateAt(event.event.occurred_at, policy.time_zone) === input.utc_date)
       .filter((event) => directionsFor(event, policy).length > 0);
     const eligibleEventIds = new Set(policy.enabled_directions.flatMap((direction) =>
       selected
@@ -53,6 +55,7 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
       .filter((event) => identities.has(identity(event)))
       .sort(compareEvents);
     const inputRefs = evidenceEvents.map(referenceFor);
+    const period = dailyDigestPeriod(input.utc_date, policy.time_zone);
     const body = {
       schema_version: "1.0",
       utc_date: input.utc_date,
@@ -60,6 +63,9 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
       rules_version: this.algorithm_version,
       policy_version: policy.version,
       policy_hash: sha256(canonicalContextJson(policy)),
+      time_zone: period.time_zone,
+      utc_start: period.utc_start,
+      utc_end: period.utc_end,
       item_count: directions.reduce((count, bucket) => count + bucket.items.length, 0),
       directions: directions.map((bucket) => ({
         direction: bucket.direction,
