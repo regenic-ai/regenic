@@ -23,6 +23,7 @@ import {
   validateContextProjectionCheckpoint,
   validateContextSnapshot,
   validateDailyDigestPolicy,
+  validateProposal,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -56,6 +57,8 @@ import type {
   DailyDigestPolicy,
   DailyDigestPolicyStore,
   DailyDigestCoverageAlert,
+  ProposalRecord,
+  ProposalStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1243,6 +1246,40 @@ export class PostgresAuthorityStore
   async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
     await this.execute(`UPDATE daily_digest_coverage_alerts SET status = 'resolved', resolved_at = $1 WHERE org_id = $2 AND id = $3 AND status = 'open'`, [input.resolved_at, input.org_id, input.alert_id]);
     return await this.queryOne<DailyDigestCoverageAlert>(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = $1 AND id = $2`, [input.org_id, input.alert_id]);
+  }
+
+  async putProposal(input: ProposalRecord): Promise<ProposalRecord> {
+    const proposal = validateProposal(input);
+    if (proposal.status !== "draft") throw new Error("New Proposal must be draft");
+    await this.execute(`INSERT INTO proposals (id, org_id, status, source_digest_id, source_item_event_id, payload_json, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING`, [proposal.id, proposal.org_id, proposal.status, proposal.source_digest_id ?? null, proposal.source_item_event_id ?? null, jsonb(proposal), proposal.created_at, proposal.updated_at]);
+    const row = proposal.source_digest_id && proposal.source_item_event_id
+      ? await this.queryOne<{ status: ProposalStatus; payload_json: unknown; updated_at: unknown }>(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = $1 AND source_digest_id = $2 AND source_item_event_id = $3`, [proposal.org_id, proposal.source_digest_id, proposal.source_item_event_id])
+      : await this.queryOne<{ status: ProposalStatus; payload_json: unknown; updated_at: unknown }>(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = $1 AND id = $2`, [proposal.org_id, proposal.id]);
+    return toProposal(row!);
+  }
+
+  async getProposal(orgId: string, proposalId: string): Promise<ProposalRecord | null> {
+    const row = await this.queryOne<{ status: ProposalStatus; payload_json: unknown; updated_at: unknown }>(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = $1 AND id = $2`, [orgId, proposalId]);
+    return row ? toProposal(row) : null;
+  }
+
+  async listProposals(input: { org_id: string; status?: ProposalStatus; limit?: number }): Promise<ProposalRecord[]> {
+    const limit = input.limit ?? 100;
+    const rows = await this.query<{ status: ProposalStatus; payload_json: unknown; updated_at: unknown }>(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = $1 ${input.status ? "AND status = $2" : ""} ORDER BY created_at, id LIMIT $${input.status ? 3 : 2}`, input.status ? [input.org_id, input.status, limit] : [input.org_id, limit]);
+    return rows.map(toProposal);
+  }
+
+  async transitionProposal(input: { org_id: string; proposal_id: string; status: "submitted" | "withdrawn"; updated_at: string }): Promise<ProposalRecord | null> {
+    return this.withTx(async (client) => {
+      const row = await this.queryOne<{ status: ProposalStatus; payload_json: unknown; updated_at: unknown }>(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = $1 AND id = $2 FOR UPDATE`, [input.org_id, input.proposal_id], client);
+      if (!row) return null;
+      const proposal = toProposal(row);
+      const allowed = proposal.status === "draft" || (proposal.status === "submitted" && input.status === "withdrawn");
+      if (!allowed) throw new Error("Invalid Proposal transition");
+      const next = validateProposal({ ...proposal, status: input.status, updated_at: input.updated_at });
+      await this.execute(`UPDATE proposals SET status = $1, updated_at = $2 WHERE org_id = $3 AND id = $4 AND status = $5`, [next.status, next.updated_at, input.org_id, input.proposal_id, proposal.status], client);
+      return next;
+    });
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
@@ -4022,6 +4059,14 @@ function parseDeliveryPayload(
 
 function parseContextJson<T>(value: unknown): T {
   return asJson<T>(value);
+}
+
+function toProposal(row: { status: ProposalStatus; payload_json: unknown; updated_at: unknown }): ProposalRecord {
+  return validateProposal({
+    ...parseContextJson<ProposalRecord>(row.payload_json),
+    status: row.status,
+    updated_at: toIso(row.updated_at),
+  });
 }
 
 /** node-pg encodes JS arrays as PG arrays; JSONB columns need JSON text. */

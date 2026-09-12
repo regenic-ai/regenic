@@ -576,6 +576,18 @@ lease 的批次，并持久记录完成或有界重试退避。投影执行期�
 会按日期顺序入队，且不会重新发现或重复既有周期。组织本地午夜调度仍需要持久化 timezone
 配置。
 
+### 8.3 Digest 到 Proposal intake
+
+个人版提供最小 RFC 0003 Proposal vertical slice。人可以把 accepted 且 hash 有效的 daily
+Digest item 转为一个幂等 draft Proposal。Proposal 将 Digest 和该 item 的 source lifecycle
+固定为非 `other` evidence。`hypothesis` 映射为 hypothesis Proposal；未来的 `new_judgment`
+与 `standard_amendment` item 分别映射为新建/修订 Standard Proposal。Metric、bad-news 与
+clarify item 不能自动晋升。
+
+当前 lifecycle 刻意限制为 draft、submitted 与 withdrawn。Submit 会重新校验 evidence gate；
+Standard Proposal 还必须绑定 ContextSnapshot 与 single uncertainty。任何 intake 或 transition
+都不会创建 Decision、StandardVersion 或 active Standard。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

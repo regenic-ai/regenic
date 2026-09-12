@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 31;
+export const LATEST_SCHEMA_VERSION = 32;
 
 export const MIGRATIONS = [
   {
@@ -723,6 +723,23 @@ export const MIGRATIONS = [
       );
       CREATE INDEX daily_digest_coverage_alerts_query_idx
         ON daily_digest_coverage_alerts (org_id, status, local_date, id);
+    `,
+  },
+  {
+    version: 32,
+    sql: `
+      CREATE TABLE proposals (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('draft', 'submitted', 'in_review', 'accepted', 'rejected', 'withdrawn')),
+        source_digest_id TEXT,
+        source_item_event_id TEXT,
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (org_id, source_digest_id, source_item_event_id)
+      );
+      CREATE INDEX proposals_query_idx ON proposals (org_id, status, created_at, id);
     `,
   },
 ] as const;

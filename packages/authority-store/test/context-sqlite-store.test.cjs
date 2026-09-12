@@ -332,6 +332,42 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("persists idempotent digest proposals and enforces submission transitions", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const proposal = {
+      schema_version: "1.0", id: "proposal-1", org_id: "example-org", kind: "hypothesis",
+      title: "Review launch timing", summary: "The launch timing needs review.", status: "draft",
+      author: { actor_type: "human", actor_id: "person-1" }, rights_level: "coach",
+      boundary: "product direction for 2026-08-30", standard_bindings: [],
+      single_uncertainty: "Should the launch proceed?",
+      evidence: [{ kind: "document", uri_or_ref: "event:event-1" }],
+      source_digest_id: "digest-1", source_item_event_id: "event-1",
+      created_at: "2026-08-30T01:00:00.000Z", updated_at: "2026-08-30T01:00:00.000Z",
+    };
+    let store = new SqliteAuthorityStore(path);
+    assert.deepEqual(await store.putProposal(proposal), proposal);
+    assert.equal((await store.putProposal({ ...proposal, id: "different-id" })).id, proposal.id);
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    const submitted = await split.transitionProposal({
+      org_id: "example-org", proposal_id: proposal.id, status: "submitted",
+      updated_at: "2026-08-30T02:00:00.000Z",
+    });
+    assert.equal(submitted.status, "submitted");
+    await assert.rejects(split.transitionProposal({
+      org_id: "example-org", proposal_id: proposal.id, status: "submitted",
+      updated_at: "2026-08-30T03:00:00.000Z",
+    }), /Invalid Proposal transition/);
+    assert.equal((await split.transitionProposal({
+      org_id: "example-org", proposal_id: proposal.id, status: "withdrawn",
+      updated_at: "2026-08-30T03:00:00.000Z",
+    })).status, "withdrawn");
+    assert.equal((await split.listProposals({ org_id: "example-org", status: "withdrawn" }))[0].id, proposal.id);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

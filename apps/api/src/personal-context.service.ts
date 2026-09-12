@@ -4,6 +4,8 @@ import {
   ModelTimeoutError,
   ModelUnavailableError,
   ModelUpstreamError,
+  PROPOSAL_SCHEMA_VERSION,
+  hashCanonicalContext,
   type ContextBundle,
   type ContextArtifact,
   type ContextReplayRequest,
@@ -12,6 +14,8 @@ import {
   type DailyDigestJob,
   DEFAULT_DAILY_DIGEST_POLICY,
   validateDailyDigestPolicy,
+  type ProposalKind,
+  type ProposalRecord,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -158,6 +162,70 @@ export class PersonalContextService {
         throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, error.message);
       }
       throw error;
+    }
+  }
+
+  async createProposalFromDailyDigest(artifactId: string, input: unknown): Promise<ProposalRecord> {
+    const body = strictBody(input, new Set([
+      "direction", "item_event_id", "rights_level", "boundary", "context_snapshot_id", "single_uncertainty",
+    ]));
+    const direction = requiredString(body.direction, "direction");
+    const itemEventId = requiredString(body.item_event_id, "item_event_id");
+    const artifacts = this.runtime.requireHost().get("context-artifacts");
+    const artifact = await artifacts.getArtifact(this.runtime.orgId(), requiredString(artifactId, "artifact_id"));
+    const state = artifact ? await artifacts.getArtifactState(this.runtime.orgId(), artifact.id) : null;
+    if (!artifact || artifact.kind !== "daily_digest" || state?.status !== "accepted"
+      || !artifact.body_hash || hashCanonicalContext(artifact.attrs) !== artifact.body_hash) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Proposal intake requires an accepted valid daily digest");
+    }
+    const item = digestItem(artifact.attrs, direction, itemEventId);
+    const kind = proposalKindForItem(item.item_kind);
+    const head = artifact.input_refs.find((reference) => reference.event_id === itemEventId);
+    if (!head) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Digest item is not bound to artifact evidence");
+    const evidence = artifact.input_refs
+      .filter((reference) => reference.source === head.source && reference.external_id === head.external_id)
+      .map((reference) => ({ kind: "document" as const, uri_or_ref: `event:${reference.event_id}` }));
+    evidence.unshift({ kind: "document", uri_or_ref: `artifact:${artifact.id}` });
+    const now = new Date().toISOString();
+    const summary = requiredString(item.text, "digest item text");
+    const contextSnapshotId = optionalString(body.context_snapshot_id);
+    const singleUncertainty = optionalString(body.single_uncertainty);
+    return this.runtime.requireHost().get("proposals").putProposal({
+      schema_version: PROPOSAL_SCHEMA_VERSION,
+      id: `proposal:${hashCanonicalContext([this.runtime.orgId(), artifact.id, direction, itemEventId])}`,
+      org_id: this.runtime.orgId(), kind, title: summary.split(/\r?\n/, 1)[0].slice(0, 120), summary,
+      status: "draft", author: { actor_type: "human", actor_id: this.runtime.orgId() },
+      rights_level: optionalRightsLevel(body.rights_level),
+      boundary: optionalString(body.boundary) ?? `${direction} daily digest item`,
+      ...(contextSnapshotId ? { context_snapshot_id: contextSnapshotId } : {}),
+      standard_bindings: [],
+      ...(singleUncertainty ? { single_uncertainty: singleUncertainty } : {}),
+      evidence, source_digest_id: artifact.id, source_item_event_id: itemEventId,
+      created_at: now, updated_at: now,
+    });
+  }
+
+  async listProposals() {
+    return this.runtime.requireHost().get("proposals").listProposals({ org_id: this.runtime.orgId(), limit: 100 });
+  }
+
+  async getProposal(proposalId: string) {
+    const proposal = await this.runtime.requireHost().get("proposals").getProposal(this.runtime.orgId(), requiredString(proposalId, "proposal_id"));
+    if (!proposal) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Proposal was not found");
+    return proposal;
+  }
+
+  async transitionProposal(proposalId: string, status: "submitted" | "withdrawn") {
+    try {
+      const proposal = await this.runtime.requireHost().get("proposals").transitionProposal({
+        org_id: this.runtime.orgId(), proposal_id: requiredString(proposalId, "proposal_id"),
+        status, updated_at: new Date().toISOString(),
+      });
+      if (!proposal) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Proposal was not found");
+      return proposal;
+    } catch (error) {
+      if (error instanceof PersonalContextError) throw error;
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid Proposal transition");
     }
   }
 
@@ -359,6 +427,35 @@ function safeCoverageAlert(alert: {
     created_at: alert.created_at,
     ...(alert.resolved_at ? { resolved_at: alert.resolved_at } : {}),
   };
+}
+
+function digestItem(attrs: unknown, direction: string, eventId: string): { item_kind: string; text: unknown } {
+  if (!attrs || typeof attrs !== "object" || Array.isArray(attrs)) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid daily digest body");
+  const directions = (attrs as { directions?: unknown }).directions;
+  if (!Array.isArray(directions)) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid daily digest directions");
+  const bucket = directions.find((value) => value && typeof value === "object" && !Array.isArray(value) && (value as { direction?: unknown }).direction === direction) as { items?: unknown } | undefined;
+  const item = Array.isArray(bucket?.items) ? bucket.items.find((value) => value && typeof value === "object" && !Array.isArray(value) && (value as { event_id?: unknown }).event_id === eventId) : undefined;
+  if (!item) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Daily digest item was not found");
+  return item as { item_kind: string; text: unknown };
+}
+
+function proposalKindForItem(itemKind: string): ProposalKind {
+  if (itemKind === "hypothesis") return "hypothesis";
+  if (itemKind === "new_judgment") return "new_standard";
+  if (itemKind === "standard_amendment") return "revise_standard";
+  throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Digest item kind cannot create a Proposal");
+}
+
+function optionalRightsLevel(value: unknown): ProposalRecord["rights_level"] {
+  const level = value === undefined ? "coach" : requiredString(value, "rights_level");
+  if (!["direct", "coach", "negotiate", "authorize", "delegate"].includes(level)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid rights_level");
+  }
+  return level as ProposalRecord["rights_level"];
+}
+
+function optionalString(value: unknown): string | undefined {
+  return value === undefined ? undefined : requiredString(value, "value");
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
