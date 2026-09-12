@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 32;
+export const PG_SCHEMA_VERSION = 33;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -227,6 +227,23 @@ CREATE TABLE daily_digest_coverage_alerts (
 );
 CREATE INDEX daily_digest_coverage_alerts_query_idx
   ON daily_digest_coverage_alerts (org_id, status, local_date, id);
+`,
+  },
+  {
+    version: 33,
+    sql: `
+CREATE TABLE proposals (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('draft', 'submitted', 'in_review', 'accepted', 'rejected', 'withdrawn')),
+  source_digest_id TEXT,
+  source_item_event_id TEXT,
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, source_digest_id, source_item_event_id)
+);
+CREATE INDEX proposals_query_idx ON proposals (org_id, status, created_at, id);
 `,
   },
 ] as const;
@@ -645,6 +662,19 @@ CREATE TABLE daily_digest_coverage_alerts (
 );
 CREATE INDEX daily_digest_coverage_alerts_query_idx
   ON daily_digest_coverage_alerts (org_id, status, local_date, id);
+
+CREATE TABLE proposals (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('draft', 'submitted', 'in_review', 'accepted', 'rejected', 'withdrawn')),
+  source_digest_id TEXT,
+  source_item_event_id TEXT,
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, source_digest_id, source_item_event_id)
+);
+CREATE INDEX proposals_query_idx ON proposals (org_id, status, created_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,

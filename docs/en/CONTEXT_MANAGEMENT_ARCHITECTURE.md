@@ -665,6 +665,20 @@ without rediscovering or duplicating prior periods. This does not provide
 organization-local midnight scheduling; that requires persisted timezone
 configuration.
 
+### 8.3 Digest-to-Proposal intake
+
+Personal provides a minimal RFC 0003 Proposal vertical slice. A human may turn
+an item in an accepted, hash-valid daily Digest into one idempotent draft
+Proposal. The Proposal pins the Digest and the item's source lifecycle as
+non-`other` evidence. `hypothesis` maps to a hypothesis Proposal; future
+`new_judgment` and `standard_amendment` items map to new/revised-standard
+Proposals. Metric, bad-news, and clarify items cannot auto-promote.
+
+The implemented lifecycle is deliberately bounded to draft, submitted, and
+withdrawn. Submission revalidates the evidence gate; standard Proposals also
+require a ContextSnapshot and one uncertainty. No intake or transition creates
+a Decision, StandardVersion, or active Standard.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

@@ -347,6 +347,12 @@ pnpm local context-daily-digest-alerts --database ./regenic.db --blob-root ./blo
 
 pnpm local context-daily-digest-alert-resolve --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --alert <alert-id>
+
+pnpm local context-proposal-create --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --digest <digest-id> --direction product --event <event-id>
+
+pnpm local context-proposals --database ./regenic.db --blob-root ./blobs \
+	--org local-owner
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

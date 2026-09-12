@@ -69,9 +69,34 @@ export class PersonalContextController {
     return this.guard(() => this.context.resolveDailyDigestCoverageAlert(alertId));
   }
 
+  @Post("daily-digests/:artifactId/proposals")
+  createProposalFromDailyDigest(@Param("artifactId") artifactId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.createProposalFromDailyDigest(artifactId, body));
+  }
+
   @Get("daily-digests/:utcDate")
   listDailyDigests(@Param("utcDate") utcDate: string) {
     return this.guard(() => this.context.listDailyDigests(utcDate));
+  }
+
+  @Get("proposals")
+  listProposals() {
+    return this.guard(() => this.context.listProposals());
+  }
+
+  @Get("proposals/:proposalId")
+  getProposal(@Param("proposalId") proposalId: string) {
+    return this.guard(() => this.context.getProposal(proposalId));
+  }
+
+  @Post("proposals/:proposalId/submit")
+  submitProposal(@Param("proposalId") proposalId: string) {
+    return this.guard(() => this.context.transitionProposal(proposalId, "submitted"));
+  }
+
+  @Post("proposals/:proposalId/withdraw")
+  withdrawProposal(@Param("proposalId") proposalId: string) {
+    return this.guard(() => this.context.transitionProposal(proposalId, "withdrawn"));
   }
 
   @Post("artifacts/:artifactId/decision")

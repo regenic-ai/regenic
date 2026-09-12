@@ -349,6 +349,12 @@ pnpm local context-daily-digest-alerts --database ./regenic.db --blob-root ./blo
 
 pnpm local context-daily-digest-alert-resolve --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --alert <alert-id>
+
+pnpm local context-proposal-create --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --digest <digest-id> --direction product --event <event-id>
+
+pnpm local context-proposals --database ./regenic.db --blob-root ./blobs \
+	--org local-owner
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its

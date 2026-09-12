@@ -25,6 +25,8 @@ import type {
   DailyDigestPolicy,
   DailyDigestPolicyStore,
   DailyDigestCoverageAlert,
+  ProposalRecord,
+  ProposalStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -302,6 +304,22 @@ export class SqliteSplitAuthorityStore
 
   async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
     return this.writer.call("resolveDailyDigestCoverageAlert", [input]);
+  }
+
+  async putProposal(proposal: ProposalRecord): Promise<ProposalRecord> {
+    return this.writer.call("putProposal", [proposal]);
+  }
+
+  async getProposal(orgId: string, proposalId: string): Promise<ProposalRecord | null> {
+    return this.reader.call("getProposal", [orgId, proposalId]);
+  }
+
+  async listProposals(input: { org_id: string; status?: ProposalStatus; limit?: number }): Promise<ProposalRecord[]> {
+    return this.reader.call("listProposals", [input]);
+  }
+
+  async transitionProposal(input: { org_id: string; proposal_id: string; status: "submitted" | "withdrawn"; updated_at: string }): Promise<ProposalRecord | null> {
+    return this.writer.call("transitionProposal", [input]);
   }
 
   async getDisposition(

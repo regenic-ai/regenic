@@ -131,11 +131,11 @@ async function startApi(root, model = { driver: "none" }) {
     CONTEXT_API_MODEL_KEY: model.driver === "none" ? undefined : "context-api-test-secret",
   };
   setEnv(env);
-  await ingestEvidence(database, blobRoot);
+  const eventId = await ingestEvidence(database, blobRoot);
   const app = await createHttpApp({ logger: false });
   await app.listen(0, "127.0.0.1");
   apps.push(app);
-  return { origin: await app.getUrl() };
+  return { origin: await app.getUrl(), eventId };
 }
 
 function assembleBody() {
@@ -238,13 +238,18 @@ describe("personal context API", () => {
 
   it("projects a UTC daily digest and exposes it only after artifact acceptance", async () => {
     const root = await createRoot();
-    const { origin } = await startApi(root);
+    const { origin, eventId } = await startApi(root);
     const proposed = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
       utc_date: "2026-08-30",
     });
-    assert.equal(proposed.response.status, 201);
+    assert.equal(proposed.response.status, 201, proposed.text);
     const proposal = JSON.parse(proposed.text);
     assert.ok(proposal.artifact_id);
+    const beforeAcceptance = await postJson(
+      `${origin}/v1/me/context/daily-digests/${encodeURIComponent(proposal.artifact_id)}/proposals`,
+      { direction: "product", item_event_id: eventId },
+    );
+    assert.equal(beforeAcceptance.response.status, 409);
     const before = await fetch(`${origin}/v1/me/context/daily-digests/2026-08-30`);
     assert.deepEqual(await before.json(), []);
     const accepted = await postJson(
@@ -255,6 +260,29 @@ describe("personal context API", () => {
     const after = await fetch(`${origin}/v1/me/context/daily-digests/2026-08-30`);
     assert.equal(after.status, 200);
     assert.equal((await after.json())[0].id, proposal.artifact_id);
+    const intake = await postJson(
+      `${origin}/v1/me/context/daily-digests/${encodeURIComponent(proposal.artifact_id)}/proposals`,
+      { direction: "product", item_event_id: eventId, single_uncertainty: "Should the release proceed?" },
+    );
+    assert.equal(intake.response.status, 201);
+    const draft = JSON.parse(intake.text);
+    assert.equal(draft.kind, "hypothesis");
+    assert.equal(draft.status, "draft");
+    assert.equal(draft.source_digest_id, proposal.artifact_id);
+    assert.ok(draft.evidence.some((value) => value.uri_or_ref === `event:${eventId}`));
+    const replayedIntake = await postJson(
+      `${origin}/v1/me/context/daily-digests/${encodeURIComponent(proposal.artifact_id)}/proposals`,
+      { direction: "product", item_event_id: eventId },
+    );
+    assert.equal(JSON.parse(replayedIntake.text).id, draft.id);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/proposals`)).json()).length, 1);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}`)).json()).id, draft.id);
+    const submitted = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}/submit`, {});
+    assert.equal(JSON.parse(submitted.text).status, "submitted");
+    const duplicateSubmit = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}/submit`, {});
+    assert.equal(duplicateSubmit.response.status, 409);
+    const withdrawn = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}/withdraw`, {});
+    assert.equal(JSON.parse(withdrawn.text).status, "withdrawn");
     const assembled = await postJson(`${origin}/v1/me/context/assemble`, {
       ...assembleBody(),
       query: "release approved",

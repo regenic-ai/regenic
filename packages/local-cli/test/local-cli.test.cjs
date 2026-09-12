@@ -110,6 +110,21 @@ describe("regenic-local", () => {
       "--utc-date", "2026-08-30",
     ]);
     assert.equal(acceptedDigests[0].id, digest.artifact_id);
+    const proposalArgs = [
+      "context-proposal-create", ...common,
+      "--digest", digest.artifact_id,
+      "--direction", "product",
+      "--event", ingested.records[0].event_id,
+      "--uncertainty", "Should the release proceed?",
+    ];
+    const proposal = await run(proposalArgs);
+    assert.equal(proposal.status, "draft");
+    assert.equal(proposal.kind, "hypothesis");
+    assert.equal((await run(proposalArgs)).id, proposal.id);
+    assert.equal((await run(["context-proposals", ...common]))[0].id, proposal.id);
+    assert.equal((await run(["context-proposal-get", ...common, "--proposal", proposal.id])).id, proposal.id);
+    assert.equal((await run(["context-proposal-submit", ...common, "--proposal", proposal.id])).status, "submitted");
+    assert.equal((await run(["context-proposal-withdraw", ...common, "--proposal", proposal.id])).status, "withdrawn");
     const jobStore = new SqliteAuthorityStore(database);
     await jobStore.enqueueDailyDigestJob({
       org_id: "local-owner",
