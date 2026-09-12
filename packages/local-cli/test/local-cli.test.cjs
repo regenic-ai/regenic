@@ -44,7 +44,7 @@ describe("regenic-local", () => {
     const evaluationOutput = join(root, "context-evaluation-report.json");
     const authority = new SqliteAuthorityStore(database);
     const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
-    await ingestion.ingest({
+    const ingested = await ingestion.ingest({
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: "synthetic-chat",
       org_id: "local-owner",
@@ -117,11 +117,25 @@ describe("regenic-local", () => {
       generation: "daily-digest-d0-v3",
       created_at: "2026-08-31T00:00:00.000Z",
     });
+    await jobStore.putDailyDigestCoverageAlert({
+      id: "coverage-alert-cli", org_id: "local-owner", local_date: "2026-08-30",
+      generation: "daily-digest-d0-v3", event_id: ingested.records[0].event_id,
+      reason_code: "omitted_high_signal", status: "open", created_at: "2026-08-12T00:00:00.000Z",
+    });
     jobStore.close();
     const dailyJobs = await run(["context-daily-digest-jobs", ...common]);
     assert.equal(dailyJobs[0].utc_date, "2026-08-31");
     assert.equal("lease_owner" in dailyJobs[0], false);
     assert.equal("last_error" in dailyJobs[0], false);
+    const alerts = await run(["context-daily-digest-alerts", ...common]);
+    assert.equal(alerts[0].id, "coverage-alert-cli");
+    assert.equal("event_id" in alerts[0], false);
+    assert.equal("org_id" in alerts[0], false);
+    const resolvedAlert = await run([
+      "context-daily-digest-alert-resolve", ...common, "--alert", "coverage-alert-cli",
+    ]);
+    assert.equal(resolvedAlert.status, "resolved");
+    assert.deepEqual(await run(["context-daily-digest-alerts", ...common]), []);
 
     const snapshot = await run([
       "context-snapshot",

@@ -552,6 +552,13 @@ policy 会参与 digest identity；Artifact attrs 仅保留其版本与稳定 ha
 当后续运行改变同一 UTC period 时，它会写入一个显式 supersede 原有 `proposed` daily digest 的
 replacement proposal，然后原子地将旧 proposal 标记为 `superseded`。自动重跑绝不会改写已
 accepted 的 Artifact。
+
+D4 coverage 会比较全部 eligible current high-signal head 与最终 item 及
+`clarify_request` conflict evidence 所代表的 Event ID。因 thread folding 或每方向配额而
+未被纳入的 head，会生成一条按 generation 隔离、幂等的 `omitted_high_signal` alert。Alert
+API 与 CLI 只暴露 alert identity、日期、generation、reason、状态和时间戳；source Event ID
+与正文仍留在 authority 边界内。Resolve 必须由人显式执行，且不会改变 source Event 或 Digest。
+
 这仍是受限的 RFC 0007 D0 子集。组织本地日界、可配置的 role/source/lexicon policy、
 append-only decision history、artifact as-of retrieval 与持久化自动调度
 仍是后续工作。

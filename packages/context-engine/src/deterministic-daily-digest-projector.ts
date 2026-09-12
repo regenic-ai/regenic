@@ -17,6 +17,13 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
   readonly algorithm_version = "daily-digest-d0-v3";
 
   async project(input: DailyDigestProjectionInput): Promise<ContextArtifactProposal | null> {
+    return (await this.projectWithCoverage(input)).proposal;
+  }
+
+  async projectWithCoverage(input: DailyDigestProjectionInput): Promise<{
+    proposal: ContextArtifactProposal | null;
+    omitted_event_ids: string[];
+  }> {
     assertUtcDate(input.utc_date);
     const policy = validateDailyDigestPolicy(input.policy ?? DEFAULT_DAILY_DIGEST_POLICY);
     const heads = new Set(input.source.lifecycle_heads.map((head) => head.head_event_id));
@@ -25,11 +32,17 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
       .filter((event) => event.event.operation !== "tombstone")
       .filter((event) => event.event.occurred_at.slice(0, 10) === input.utc_date)
       .filter((event) => directionsFor(event, policy).length > 0);
+    const eligibleEventIds = new Set(policy.enabled_directions.flatMap((direction) =>
+      selected
+        .filter((event) => directionsFor(event, policy).includes(direction))
+        .filter((event) => classify(event, policy) !== null)
+        .map((event) => event.event.event_id),
+    ));
     const directions = policy.enabled_directions.map((direction) => ({
       direction,
       items: resolveDirectionConflicts(selectDirectionItems(selected, direction, policy), policy),
     })).filter((bucket) => bucket.items.length > 0);
-    if (directions.length === 0) return null;
+    if (directions.length === 0) return { proposal: null, omitted_event_ids: [] };
     const selectedEventIds = new Set(directions.flatMap((bucket) =>
       bucket.items.flatMap((item) => [item.event.event.event_id, ...(item.conflicts ?? [])]),
     ));
@@ -54,7 +67,7 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
       })),
     };
     const inputHash = hashContextArtifactInputs({ input_refs: inputRefs });
-    return {
+    const proposal: ContextArtifactProposal = {
       id: `daily-digest:${sha256(canonicalContextJson([
         input.org_id,
         input.utc_date,
@@ -75,6 +88,12 @@ export class DeterministicDailyDigestProjector implements DailyDigestProjector {
       required_scope_ids: [...new Set(evidenceEvents.flatMap((event) => event.required_scope_ids))].sort(),
       recorded_at: input.source.recorded_at,
       attrs: body,
+    };
+    return {
+      proposal,
+      omitted_event_ids: [...eligibleEventIds]
+        .filter((eventId) => !selectedEventIds.has(eventId))
+        .sort(),
     };
   }
 }

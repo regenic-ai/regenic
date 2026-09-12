@@ -633,6 +633,15 @@ When a later run changes the same UTC period, it writes a replacement proposal
 that explicitly supersedes the prior `proposed` daily digest, then atomically
 marks the prior proposal `superseded`. Accepted Artifacts are never changed by
 automatic reruns.
+
+D4 coverage compares every eligible current high-signal head with the Event IDs
+represented by final items and `clarify_request` conflict evidence. A head lost
+to thread folding or the per-direction quota creates one generation-scoped,
+idempotent `omitted_high_signal` alert. Alert APIs and CLI output expose only
+the alert identity, date, generation, reason, status, and timestamps; source
+Event IDs and bodies remain inside the authority boundary. Resolution is an
+explicit human action and never changes the source Event or Digest.
+
 This remains a bounded RFC 0007 D0 subset. Organization-local time windows,
 configurable role/source/lexicon policy,
 append-only decision history, artifact as-of retrieval, and durable automatic
