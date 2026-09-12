@@ -287,4 +287,25 @@ describe("deterministic daily digest projector", () => {
       }],
     }]);
   });
+
+  it("reports eligible high-signal heads omitted by the direction quota", async () => {
+    const selected = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-selected", external_id: "selected-1" },
+      thread_id: "thread-selected", weight_hints: { urgency: 1, importance: 1 },
+    });
+    const omitted = sourceEvent({
+      event: { ...sourceEvent().event, event_id: "event-omitted", external_id: "omitted-1" },
+      thread_id: "thread-omitted", weight_hints: { urgency: 0.8, importance: 0.8 },
+    });
+    const projector = new DeterministicDailyDigestProjector();
+    const result = await projector.projectWithCoverage({
+      ...input([omitted, selected], [
+        { source: "synthetic", external_id: "selected-1", head_event_id: "event-selected" },
+        { source: "synthetic", external_id: "omitted-1", head_event_id: "event-omitted" },
+      ]),
+      policy: { ...DEFAULT_DAILY_DIGEST_POLICY, max_items_per_direction: 1 },
+    });
+    assert.equal(result.proposal.attrs.directions[0].items[0].event_id, "event-selected");
+    assert.deepEqual(result.omitted_event_ids, ["event-omitted"]);
+  });
 });

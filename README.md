@@ -343,6 +343,12 @@ pnpm local context-daily-digest-get --database ./regenic.db --blob-root ./blobs 
 
 pnpm local context-daily-digest-jobs --database ./regenic.db --blob-root ./blobs \
 	--org local-owner
+
+pnpm local context-daily-digest-alerts --database ./regenic.db --blob-root ./blobs \
+	--org local-owner
+
+pnpm local context-daily-digest-alert-resolve --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --alert <alert-id>
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its

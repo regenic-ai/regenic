@@ -8,6 +8,7 @@ import {
   type DailyDigestProjectionRunner,
   DEFAULT_DAILY_DIGEST_POLICY,
   type DailyDigestPolicyStore,
+  type DailyDigestCoverageAlertStore,
 } from "@regenic/domain";
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
 import { DeterministicDailyDigestProjector } from "./deterministic-daily-digest-projector";
@@ -19,6 +20,7 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
     private readonly blobs: BlobStore,
     private readonly projector = new DeterministicDailyDigestProjector(),
     private readonly policies?: DailyDigestPolicyStore,
+    private readonly coverageAlerts?: DailyDigestCoverageAlertStore,
   ) {}
 
   async projectDailyDigest(input: {
@@ -40,13 +42,28 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
     const materialized = await this.source.materialize(source.events
       .filter((event) => selectedIds.has(identity(event.event.source, event.event.external_id)))
       .map((event) => ({ ...event, status: "current" as const })));
-    const projected = await this.projector.project({
+    const projection = await this.projector.projectWithCoverage({
       org_id: input.org_id,
       utc_date: input.utc_date,
       generation,
       source: { ...source, events: materialized },
       policy,
     });
+    for (const eventId of projection.omitted_event_ids) {
+      await this.coverageAlerts?.putDailyDigestCoverageAlert({
+        id: `daily-digest-coverage:${hashCanonicalContext([
+          input.org_id, input.utc_date, generation, eventId, "omitted_high_signal",
+        ])}`,
+        org_id: input.org_id,
+        local_date: input.utc_date,
+        generation,
+        event_id: eventId,
+        reason_code: "omitted_high_signal",
+        status: "open",
+        created_at: source.recorded_at,
+      });
+    }
+    const projected = projection.proposal;
     if (!projected) return { input_event_count: 0 };
     const previous = (await this.artifacts.listArtifacts({
       org_id: input.org_id,

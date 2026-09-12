@@ -151,8 +151,14 @@ export async function runLocalCli(
     case "context-daily-digest-jobs":
       await getDailyDigestJobs(commandOptions, stdout);
       return;
+    case "context-daily-digest-alerts":
+      await getDailyDigestCoverageAlerts(commandOptions, stdout);
+      return;
+    case "context-daily-digest-alert-resolve":
+      await resolveDailyDigestCoverageAlert(commandOptions, stdout, now);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve");
   }
 }
 
@@ -1184,4 +1190,22 @@ function requireUtcDate(options: CommandOptions): string {
     throw new Error("--utc-date must be YYYY-MM-DD in UTC");
   }
   return date;
+}
+
+async function getDailyDigestCoverageAlerts(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const alerts = await host.get("daily-digest-coverage-alerts").listDailyDigestCoverageAlerts({ org_id: orgId, status: "open", limit: 100 });
+    writeJson(stdout, alerts.map(({ event_id, org_id, ...alert }) => alert));
+  });
+}
+
+async function resolveDailyDigestCoverageAlert(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const value = await host.get("daily-digest-coverage-alerts").resolveDailyDigestCoverageAlert({ org_id: orgId, alert_id: requireOption(options, "alert"), resolved_at: now() });
+    if (!value) throw new Error("Coverage alert was not found");
+    const { event_id, org_id, ...alert } = value;
+    writeJson(stdout, alert);
+  });
 }

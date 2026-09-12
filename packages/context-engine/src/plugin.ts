@@ -118,7 +118,7 @@ export const acceptedThreadSummaryRetrieverPlugin = definePlugin({
 
 export const dailyDigestProjectionPlugin = definePlugin({
   name: "context-daily-digest-projection",
-  inject: ["blobs", "context-authority", "context-artifacts", "daily-digest-policy"],
+  inject: ["blobs", "context-authority", "context-artifacts", "daily-digest-policy", "daily-digest-coverage-alerts"],
   apply(ctx) {
     ctx.provide("context-daily-digests", new DailyDigestProjectionCoordinator(
       new AuthorityContextEvidenceSource(ctx.get("context-authority"), ctx.get("blobs")),
@@ -126,6 +126,7 @@ export const dailyDigestProjectionPlugin = definePlugin({
       ctx.get("blobs"),
       undefined,
       ctx.get("daily-digest-policy"),
+      ctx.get("daily-digest-coverage-alerts"),
     ));
   },
 });

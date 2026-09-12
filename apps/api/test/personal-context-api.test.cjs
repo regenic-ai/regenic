@@ -165,6 +165,33 @@ async function postJson(url, body) {
 }
 
 describe("personal context API", () => {
+  it("lists and resolves coverage alerts without exposing source event identity", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestEvidence(database, blobRoot);
+    const store = new SqliteAuthorityStore(database);
+    await store.putDailyDigestCoverageAlert({
+      id: "coverage-alert-api", org_id: "local-owner", local_date: "2026-08-30",
+      generation: "daily-digest-d0-v3", event_id: eventId,
+      reason_code: "omitted_high_signal", status: "open", created_at: "2026-08-30T01:00:00.000Z",
+    });
+    store.close();
+    const { origin } = await startApi(root);
+    const response = await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts`);
+    assert.equal(response.status, 200);
+    const [alert] = await response.json();
+    assert.equal(alert.id, "coverage-alert-api");
+    assert.equal("event_id" in alert, false);
+    assert.equal("org_id" in alert, false);
+    const resolved = await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts/coverage-alert-api/resolve`, { method: "POST" });
+    assert.equal(resolved.status, 201);
+    assert.equal((await resolved.json()).status, "resolved");
+    assert.deepEqual(await (await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts`)).json(), []);
+    const missing = await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts/missing/resolve`, { method: "POST" });
+    assert.equal(missing.status, 404);
+  });
+
   it("lists safe daily digest job status without matching the date route", async () => {
     const root = await createRoot();
     const { origin } = await startApi(root);

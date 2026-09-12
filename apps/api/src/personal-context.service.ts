@@ -120,6 +120,23 @@ export class PersonalContextService {
       }));
   }
 
+  async listDailyDigestCoverageAlerts() {
+    const alerts = await this.runtime.requireHost().get("daily-digest-coverage-alerts")
+      .listDailyDigestCoverageAlerts({ org_id: this.runtime.orgId(), status: "open", limit: 100 });
+    return alerts.map(safeCoverageAlert);
+  }
+
+  async resolveDailyDigestCoverageAlert(alertId: string) {
+    const alert = await this.runtime.requireHost().get("daily-digest-coverage-alerts")
+      .resolveDailyDigestCoverageAlert({
+        org_id: this.runtime.orgId(),
+        alert_id: requiredString(alertId, "alert_id"),
+        resolved_at: new Date().toISOString(),
+      });
+    if (!alert) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Coverage alert was not found");
+    return safeCoverageAlert(alert);
+  }
+
   async getDailyDigestPolicy() {
     return (await this.runtime.requireHost().get("daily-digest-policy")
       .getDailyDigestPolicy(this.runtime.orgId())) ?? DEFAULT_DAILY_DIGEST_POLICY;
@@ -324,6 +341,21 @@ function requiredUtcDate(value: unknown): string {
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "utc_date must be YYYY-MM-DD in UTC");
   }
   return date;
+}
+
+function safeCoverageAlert(alert: {
+  id: string; local_date: string; generation: string; reason_code: string;
+  status: string; created_at: string; resolved_at?: string;
+}) {
+  return {
+    id: alert.id,
+    local_date: alert.local_date,
+    generation: alert.generation,
+    reason_code: alert.reason_code,
+    status: alert.status,
+    created_at: alert.created_at,
+    ...(alert.resolved_at ? { resolved_at: alert.resolved_at } : {}),
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

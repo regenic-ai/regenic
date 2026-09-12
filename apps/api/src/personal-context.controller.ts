@@ -59,6 +59,16 @@ export class PersonalContextController {
     return this.guard(() => this.context.putDailyDigestPolicy(body));
   }
 
+  @Get("daily-digests/coverage-alerts")
+  listDailyDigestCoverageAlerts() {
+    return this.guard(() => this.context.listDailyDigestCoverageAlerts());
+  }
+
+  @Post("daily-digests/coverage-alerts/:alertId/resolve")
+  resolveDailyDigestCoverageAlert(@Param("alertId") alertId: string) {
+    return this.guard(() => this.context.resolveDailyDigestCoverageAlert(alertId));
+  }
+
   @Get("daily-digests/:utcDate")
   listDailyDigests(@Param("utcDate") utcDate: string) {
     return this.guard(() => this.context.listDailyDigests(utcDate));
