@@ -609,6 +609,19 @@ ContextSnapshot，不接受调用方自行绑定这些字段。
 Decision 或 Proposal，也不会创建或激活 StandardVersion；后续治理 workflow 必须显式评估该
 推荐。
 
+### 8.5 人机 Handoff
+
+Handoff 是一名 human 与一个 agent 之间显式、绑定 snapshot 的移交对象。Direction 与 reason
+必须成对校验：agent-to-human 用于标准缺失、evidence 冲突、权限或 acceptance 失败及升级边界；
+human-to-agent 用于执行已批准事项、修订标准、补充上下文、在显式边界内执行及绑定版本重试。
+结构化 payload 必须是非空 JSON object；可选 Proposal 与 Decision 引用必须在同一组织内存在，
+且二者同时出现时，Decision 必须是该 Proposal 的 outcome。
+
+Handoff 内容不可变，稳定 request identity 使创建操作在状态推进后仍可幂等重试。合法 lifecycle
+仅有 `open -> acked -> resolved`、`open -> cancelled` 与 `acked -> cancelled`。Resolve 会记录
+时间，终态不能重新打开。状态只能由专用 acknowledge、resolve 或 cancel 操作推进；聊天消息与
+ingested Event 均不会隐式触发状态变化。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

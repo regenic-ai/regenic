@@ -167,6 +167,37 @@ describe("regenic-local", () => {
     ]), /Cannot replace immutable Review/);
     assert.equal((await run(["context-decision-reviews", ...common, "--decision", committed.decision.id]))[0].id, review.id);
     assert.equal((await run(["context-review-get", ...common, "--review", review.id])).result, "falsified");
+    const handoffArgs = [
+      "context-handoff-create", ...common,
+      "--request", "handoff-request-1",
+      "--direction", "agent_to_human",
+      "--agent", "agent-1",
+      "--reason", "evidence_conflict",
+      "--proposal", decisionProposal.id,
+      "--decision", committed.decision.id,
+      "--snapshot", assembled.snapshot.id,
+      "--bindings", "standard-1@v1",
+      "--payload", JSON.stringify({ summary: "Two cited claims disagree." }),
+    ];
+    const handoff = await run(handoffArgs);
+    assert.equal(handoff.status, "open");
+    assert.deepEqual(handoff.standard_bindings, [{ standard_id: "standard-1", version_id: "v1" }]);
+    assert.equal((await run(handoffArgs)).id, handoff.id);
+    const changedHandoffArgs = [...handoffArgs];
+    changedHandoffArgs[changedHandoffArgs.indexOf("--payload") + 1] = JSON.stringify({ summary: "Changed after creation." });
+    await assert.rejects(run(changedHandoffArgs), /Cannot replace immutable Handoff/);
+    const mismatchedHandoffArgs = [...handoffArgs];
+    mismatchedHandoffArgs[mismatchedHandoffArgs.indexOf("--request") + 1] = "handoff-request-mismatch";
+    mismatchedHandoffArgs[mismatchedHandoffArgs.indexOf("--proposal") + 1] = proposal.id;
+    await assert.rejects(run(mismatchedHandoffArgs), /do not refer to the same outcome/);
+    assert.equal((await run(["context-handoff-get", ...common, "--handoff", handoff.id])).status, "open");
+    assert.equal((await run(["context-handoffs", ...common, "--status", "open", "--direction", "agent_to_human"]))[0].id, handoff.id);
+    await assert.rejects(run(["context-handoff-resolve", ...common, "--handoff", handoff.id]), /Invalid Handoff transition/);
+    assert.equal((await run(["context-handoff-ack", ...common, "--handoff", handoff.id])).status, "acked");
+    const resolvedHandoff = await run(["context-handoff-resolve", ...common, "--handoff", handoff.id]);
+    assert.equal(resolvedHandoff.status, "resolved");
+    assert.equal((await run(handoffArgs)).status, "resolved");
+    await assert.rejects(run(["context-handoff-cancel", ...common, "--handoff", handoff.id]), /Invalid Handoff transition/);
     const jobStore = new SqliteAuthorityStore(database);
     await jobStore.enqueueDailyDigestJob({
       org_id: "local-owner",

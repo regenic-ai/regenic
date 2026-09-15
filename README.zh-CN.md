@@ -369,6 +369,20 @@ pnpm local context-decision-reviews --database ./regenic.db --blob-root ./blobs 
 
 pnpm local context-review-get --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --review <review-id>
+
+pnpm local context-handoff-create --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --request handoff-1 --direction agent_to_human \
+	--agent agent-1 --reason evidence_conflict --snapshot <snapshot-id> \
+	--payload '{"summary":"Two cited claims disagree."}'
+
+pnpm local context-handoffs --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --status open --direction agent_to_human
+
+pnpm local context-handoff-ack --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --handoff <handoff-id>
+
+pnpm local context-handoff-resolve --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --handoff <handoff-id>
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

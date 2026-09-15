@@ -29,6 +29,9 @@ import type {
   ProposalStatus,
   DecisionRecord,
   ReviewRecord,
+  HandoffDirection,
+  HandoffRecord,
+  HandoffStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -346,6 +349,22 @@ export class SqliteSplitAuthorityStore
 
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
     return this.reader.call("listReviews", [input]);
+  }
+
+  async putHandoff(handoff: HandoffRecord): Promise<HandoffRecord> {
+    return this.writer.call("putHandoff", [handoff]);
+  }
+
+  async getHandoff(orgId: string, handoffId: string): Promise<HandoffRecord | null> {
+    return this.reader.call("getHandoff", [orgId, handoffId]);
+  }
+
+  async listHandoffs(input: { org_id: string; status?: HandoffStatus; direction?: HandoffDirection; limit?: number }): Promise<HandoffRecord[]> {
+    return this.reader.call("listHandoffs", [input]);
+  }
+
+  async transitionHandoff(input: { org_id: string; handoff_id: string; status: Exclude<HandoffStatus, "open">; transitioned_at: string }): Promise<HandoffRecord | null> {
+    return this.writer.call("transitionHandoff", [input]);
   }
 
   async getDisposition(

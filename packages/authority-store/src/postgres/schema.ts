@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 35;
+export const PG_SCHEMA_VERSION = 36;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -276,6 +276,21 @@ CREATE TABLE reviews (
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX reviews_query_idx ON reviews (org_id, subject_id, created_at, id);
+`,
+  },
+  {
+    version: 36,
+    sql: `
+CREATE TABLE handoffs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('agent_to_human', 'human_to_agent')),
+  status TEXT NOT NULL CHECK (status IN ('open', 'acked', 'resolved', 'cancelled')),
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX handoffs_query_idx ON handoffs (org_id, status, direction, created_at, id);
 `,
   },
 ] as const;
@@ -730,6 +745,17 @@ CREATE TABLE reviews (
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX reviews_query_idx ON reviews (org_id, subject_id, created_at, id);
+
+CREATE TABLE handoffs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('agent_to_human', 'human_to_agent')),
+  status TEXT NOT NULL CHECK (status IN ('open', 'acked', 'resolved', 'cancelled')),
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX handoffs_query_idx ON handoffs (org_id, status, direction, created_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,

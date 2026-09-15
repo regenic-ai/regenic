@@ -446,6 +446,57 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("persists explicit Handoff lifecycle transitions across restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const handoff = {
+      schema_version: "1.0", id: "handoff-1", org_id: "example-org",
+      direction: "human_to_agent",
+      from: { actor_type: "human", actor_id: "person-1" },
+      to: { actor_type: "agent", actor_id: "agent-1" },
+      reason: "set_boundary", decision_id: "decision-1",
+      context_snapshot_id: "snapshot-1", standard_bindings: [],
+      payload: { boundary: "Release only" }, status: "open",
+      created_at: "2026-09-17T00:00:00.000Z",
+    };
+    const store = new SqliteAuthorityStore(path);
+    assert.deepEqual(await store.putHandoff(handoff), handoff);
+    assert.deepEqual(await store.putHandoff(handoff), handoff);
+    assert.deepEqual(await store.putHandoff({
+      ...handoff, created_at: "2026-09-17T00:00:01.000Z",
+    }), handoff);
+    await assert.rejects(store.putHandoff({
+      ...handoff, payload: { boundary: "Changed after creation" },
+    }), /Cannot replace immutable Handoff/);
+    await assert.rejects(store.transitionHandoff({
+      org_id: "example-org", handoff_id: handoff.id, status: "resolved",
+      transitioned_at: "2026-09-17T01:00:00.000Z",
+    }), /Invalid Handoff transition/);
+    assert.equal((await store.transitionHandoff({
+      org_id: "example-org", handoff_id: handoff.id, status: "acked",
+      transitioned_at: "2026-09-17T01:00:00.000Z",
+    })).status, "acked");
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.equal((await split.getHandoff("example-org", handoff.id)).status, "acked");
+    const resolved = await split.transitionHandoff({
+      org_id: "example-org", handoff_id: handoff.id, status: "resolved",
+      transitioned_at: "2026-09-17T02:00:00.000Z",
+    });
+    assert.equal(resolved.resolved_at, "2026-09-17T02:00:00.000Z");
+    assert.equal((await split.putHandoff(handoff)).status, "resolved");
+    assert.equal((await split.listHandoffs({
+      org_id: "example-org", status: "resolved", direction: "human_to_agent",
+    })).length, 1);
+    assert.equal((await split.listHandoffs({ org_id: "other-org" })).length, 0);
+    await assert.rejects(split.transitionHandoff({
+      org_id: "example-org", handoff_id: handoff.id, status: "cancelled",
+      transitioned_at: "2026-09-17T03:00:00.000Z",
+    }), /Invalid Handoff transition/);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
@@ -912,6 +963,7 @@ describe("SQLite context artifact store", () => {
     const handle = await host.plugin(sqliteAuthorityPlugin, { path });
     assert.equal(host.get("authority"), host.get("context-artifacts"));
     assert.equal(host.get("authority"), host.get("reviews"));
+    assert.equal(host.get("authority"), host.get("handoffs"));
     assert.deepEqual(
       await host.get("context-artifacts").getArtifact("example-org", "artifact-1"),
       artifactValue,
@@ -920,6 +972,7 @@ describe("SQLite context artifact store", () => {
     assert.throws(() => host.get("authority"), /Service is not available/);
     assert.throws(() => host.get("context-artifacts"), /Service is not available/);
     assert.throws(() => host.get("reviews"), /Service is not available/);
+    assert.throws(() => host.get("handoffs"), /Service is not available/);
     await host.dispose();
   });
 

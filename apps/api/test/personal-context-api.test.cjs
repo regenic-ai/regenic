@@ -244,10 +244,78 @@ describe("personal context API", () => {
       ...proposalBody, client_request_id: "decision-request-rejected", title: "Reject another release",
     });
     const rejectedId = JSON.parse(rejectedCreated.text).id;
+    const mismatchedHandoff = await postJson(`${origin}/v1/me/context/handoffs`, {
+      client_request_id: "mismatched-handoff",
+      direction: "human_to_agent",
+      agent_id: "agent-1",
+      reason: "set_boundary",
+      proposal_id: rejectedId,
+      decision_id: result.decision.id,
+      context_snapshot_id: snapshotId,
+      payload: { boundary: "Release only" },
+    });
+    assert.equal(mismatchedHandoff.response.status, 400);
     await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(rejectedId)}/submit`, {});
     await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(rejectedId)}/review`, {});
     const rejected = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(rejectedId)}/reject`, {});
     assert.equal(JSON.parse(rejected.text).status, "rejected");
+  });
+
+  it("moves explicit human-agent Handoffs through acknowledgement", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(root);
+    const assembled = await postJson(`${origin}/v1/me/context/assemble`, assembleBody());
+    const snapshotId = JSON.parse(assembled.text).snapshot.id;
+    const inboundBody = {
+      client_request_id: "handoff-inbound-1",
+      direction: "agent_to_human",
+      agent_id: "agent-1",
+      reason: "evidence_conflict",
+      context_snapshot_id: snapshotId,
+      standard_bindings: [],
+      payload: { summary: "Two cited claims disagree." },
+    };
+    const created = await postJson(`${origin}/v1/me/context/handoffs`, inboundBody);
+    assert.equal(created.response.status, 201);
+    const handoff = JSON.parse(created.text);
+    assert.equal(handoff.status, "open");
+    assert.equal(handoff.from.actor_type, "agent");
+    assert.equal(handoff.to.actor_type, "human");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/handoffs`, inboundBody)).text).id, handoff.id);
+    const changed = await postJson(`${origin}/v1/me/context/handoffs`, {
+      ...inboundBody, payload: { summary: "Changed after creation." },
+    });
+    assert.equal(changed.response.status, 409);
+    const invalidReason = await postJson(`${origin}/v1/me/context/handoffs`, {
+      ...inboundBody, client_request_id: "handoff-invalid-reason", reason: "set_boundary",
+    });
+    assert.equal(invalidReason.response.status, 400);
+    const missingSnapshot = await postJson(`${origin}/v1/me/context/handoffs`, {
+      ...inboundBody, client_request_id: "handoff-missing-snapshot", context_snapshot_id: "missing",
+    });
+    assert.equal(missingSnapshot.response.status, 404);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/handoffs?status=open&direction=agent_to_human`)).json())[0].id, handoff.id);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/handoffs/${encodeURIComponent(handoff.id)}`)).json()).status, "open");
+    const prematureResolve = await postJson(`${origin}/v1/me/context/handoffs/${encodeURIComponent(handoff.id)}/resolve`, {});
+    assert.equal(prematureResolve.response.status, 409);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/handoffs/${encodeURIComponent(handoff.id)}/ack`, {})).text).status, "acked");
+    const resolved = JSON.parse((await postJson(`${origin}/v1/me/context/handoffs/${encodeURIComponent(handoff.id)}/resolve`, {})).text);
+    assert.equal(resolved.status, "resolved");
+    assert.ok(resolved.resolved_at);
+    assert.equal((await postJson(`${origin}/v1/me/context/handoffs/${encodeURIComponent(handoff.id)}/cancel`, {})).response.status, 409);
+
+    const outbound = JSON.parse((await postJson(`${origin}/v1/me/context/handoffs`, {
+      client_request_id: "handoff-outbound-1",
+      direction: "human_to_agent",
+      agent_id: "agent-1",
+      reason: "set_boundary",
+      context_snapshot_id: snapshotId,
+      payload: { boundary: "Release only" },
+    })).text);
+    assert.equal(outbound.from.actor_type, "human");
+    assert.equal(outbound.to.actor_type, "agent");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/handoffs/${encodeURIComponent(outbound.id)}/cancel`, {})).text).status, "cancelled");
+    assert.equal((await (await fetch(`${origin}/v1/me/context/handoffs?status=cancelled&direction=human_to_agent`)).json())[0].id, outbound.id);
   });
 
   it("lists and resolves coverage alerts without exposing source event identity", async () => {

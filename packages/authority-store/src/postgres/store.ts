@@ -26,6 +26,8 @@ import {
   validateProposal,
   validateDecision,
   validateReview,
+  validateHandoff,
+  assertHandoffTransition,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -63,6 +65,9 @@ import type {
   ProposalStatus,
   DecisionRecord,
   ReviewRecord,
+  HandoffDirection,
+  HandoffRecord,
+  HandoffStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1341,6 +1346,53 @@ export class PostgresAuthorityStore
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
     const rows = await this.query<{ payload_json: unknown }>(`SELECT payload_json FROM reviews WHERE org_id = $1 ${input.subject_id ? "AND subject_id = $2" : ""} ORDER BY created_at, id LIMIT $${input.subject_id ? 3 : 2}`, input.subject_id ? [input.org_id, input.subject_id, input.limit ?? 100] : [input.org_id, input.limit ?? 100]);
     return rows.map((row) => validateReview(parseContextJson<ReviewRecord>(row.payload_json)));
+  }
+
+  async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
+    const handoff = validateHandoff(input);
+    if (handoff.status !== "open") throw new Error("New Handoff must be open");
+    await this.execute(`INSERT INTO handoffs (id, org_id, direction, status, payload_json, created_at, resolved_at) VALUES ($1, $2, $3, $4, $5, $6, NULL) ON CONFLICT (id) DO NOTHING`, [handoff.id, handoff.org_id, handoff.direction, handoff.status, jsonb(handoff), handoff.created_at]);
+    const row = await this.queryOne<HandoffRow>(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = $1 AND id = $2`, [handoff.org_id, handoff.id]);
+    if (!row) throw new Error("Cannot replace immutable Handoff");
+    const storedCreation = validateHandoff(parseContextJson<HandoffRecord>(row.payload_json));
+    if (canonicalContextJson(storedCreation) !== canonicalContextJson({
+      ...handoff, created_at: storedCreation.created_at,
+    })) {
+      throw new Error("Cannot replace immutable Handoff");
+    }
+    return toHandoff(row);
+  }
+
+  async getHandoff(orgId: string, handoffId: string): Promise<HandoffRecord | null> {
+    const row = await this.queryOne<HandoffRow>(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = $1 AND id = $2`, [orgId, handoffId]);
+    return row ? toHandoff(row) : null;
+  }
+
+  async listHandoffs(input: { org_id: string; status?: HandoffStatus; direction?: HandoffDirection; limit?: number }): Promise<HandoffRecord[]> {
+    const conditions = ["org_id = $1"];
+    const values: unknown[] = [input.org_id];
+    if (input.status) { values.push(input.status); conditions.push(`status = $${values.length}`); }
+    if (input.direction) { values.push(input.direction); conditions.push(`direction = $${values.length}`); }
+    values.push(input.limit ?? 100);
+    const rows = await this.query<HandoffRow>(`SELECT status, payload_json, resolved_at FROM handoffs WHERE ${conditions.join(" AND ")} ORDER BY created_at, id LIMIT $${values.length}`, values);
+    return rows.map(toHandoff);
+  }
+
+  async transitionHandoff(input: { org_id: string; handoff_id: string; status: Exclude<HandoffStatus, "open">; transitioned_at: string }): Promise<HandoffRecord | null> {
+    if (!input.org_id?.trim() || !input.handoff_id?.trim() || Number.isNaN(Date.parse(input.transitioned_at))) throw new Error("Invalid Handoff transition");
+    return this.withTx(async (client) => {
+      const row = await this.queryOne<HandoffRow>(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = $1 AND id = $2 FOR UPDATE`, [input.org_id, input.handoff_id], client);
+      if (!row) return null;
+      const current = toHandoff(row);
+      assertHandoffTransition(current.status, input.status);
+      const next = validateHandoff({
+        ...current,
+        status: input.status,
+        ...(input.status === "resolved" ? { resolved_at: input.transitioned_at } : {}),
+      });
+      await this.execute(`UPDATE handoffs SET status = $1, resolved_at = $2 WHERE org_id = $3 AND id = $4 AND status = $5`, [next.status, next.resolved_at ?? null, input.org_id, input.handoff_id, current.status], client);
+      return next;
+    });
   }
 
   private async getProposalWithinTransaction(orgId: string, proposalId: string, client: PoolClient, lock = false): Promise<ProposalRecord | null> {
@@ -4133,6 +4185,21 @@ interface ProposalRow {
   updated_at: unknown;
   outcome_kind: "standard_version" | "decision" | "claim" | "none" | null;
   outcome_ref_id: string | null;
+}
+
+interface HandoffRow {
+  status: HandoffStatus;
+  payload_json: unknown;
+  resolved_at: unknown;
+}
+
+function toHandoff(row: HandoffRow): HandoffRecord {
+  const resolvedAt = toIsoOrNull(row.resolved_at);
+  return validateHandoff({
+    ...parseContextJson<HandoffRecord>(row.payload_json),
+    status: row.status,
+    ...(resolvedAt ? { resolved_at: resolvedAt } : {}),
+  });
 }
 
 function toProposal(row: ProposalRow): ProposalRecord {
