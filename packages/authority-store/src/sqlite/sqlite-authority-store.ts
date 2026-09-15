@@ -27,6 +27,7 @@ import {
   validateDailyDigestPolicy,
   validateProposal,
   validateDecision,
+  validateReview,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -63,6 +64,7 @@ import type {
   ProposalRecord,
   ProposalStatus,
   DecisionRecord,
+  ReviewRecord,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1287,6 +1289,25 @@ export class SqliteAuthorityStore
   async listDecisions(input: { org_id: string; limit?: number }): Promise<DecisionRecord[]> {
     const rows = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? ORDER BY committed_at, id LIMIT ?`).all(input.org_id, input.limit ?? 100) as Array<{ payload_json: string }>;
     return rows.map((row) => validateDecision(JSON.parse(row.payload_json) as DecisionRecord));
+  }
+
+  async putReview(input: ReviewRecord): Promise<ReviewRecord> {
+    this.assertWritable();
+    const review = validateReview(input);
+    this.database.prepare(`INSERT INTO reviews (id, org_id, subject_kind, subject_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`).run(review.id, review.org_id, review.subject_kind, review.subject_id, canonicalContextJson(review), review.created_at);
+    const stored = await this.getReview(review.org_id, review.id);
+    if (!stored || canonicalContextJson(stored) !== canonicalContextJson(review)) throw new Error("Cannot replace immutable Review");
+    return stored;
+  }
+
+  async getReview(orgId: string, reviewId: string): Promise<ReviewRecord | null> {
+    const row = this.database.prepare(`SELECT payload_json FROM reviews WHERE org_id = ? AND id = ?`).get(orgId, reviewId) as { payload_json: string } | undefined;
+    return row ? validateReview(JSON.parse(row.payload_json) as ReviewRecord) : null;
+  }
+
+  async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
+    const rows = this.database.prepare(`SELECT payload_json FROM reviews WHERE org_id = ? ${input.subject_id ? "AND subject_id = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.subject_id ? [input.org_id, input.subject_id, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as Array<{ payload_json: string }>;
+    return rows.map((row) => validateReview(JSON.parse(row.payload_json) as ReviewRecord));
   }
 
   private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {

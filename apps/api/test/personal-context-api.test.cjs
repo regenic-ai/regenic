@@ -211,6 +211,35 @@ describe("personal context API", () => {
     assert.equal(changed.response.status, 409);
     assert.equal((await (await fetch(`${origin}/v1/me/context/decisions`)).json())[0].id, result.decision.id);
     assert.equal((await (await fetch(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}`)).json()).proposal_id, proposal.id);
+    const reviewBody = {
+      client_request_id: "decision-review-1",
+      result: "falsified",
+      severity: "bad_news",
+      evidence: [{ kind: "data", uri_or_ref: `event:${eventId}` }],
+      recommended_action: "revise_standard",
+    };
+    const reviewed = await postJson(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}/reviews`, reviewBody);
+    assert.equal(reviewed.response.status, 201);
+    const review = JSON.parse(reviewed.text);
+    assert.equal(review.subject_id, result.decision.id);
+    assert.equal(review.context_snapshot_id, snapshotId);
+    assert.equal(review.recommended_action, "revise_standard");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}/reviews`, reviewBody)).text).id, review.id);
+    const changedReview = await postJson(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}/reviews`, {
+      ...reviewBody, result: "inconclusive",
+    });
+    assert.equal(changedReview.response.status, 409);
+    const missingReviewEvidence = await postJson(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}/reviews`, {
+      ...reviewBody, client_request_id: "missing-review-evidence",
+      evidence: [{ kind: "data", uri_or_ref: "event:missing" }],
+    });
+    assert.equal(missingReviewEvidence.response.status, 400);
+    const invalidReview = await postJson(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}/reviews`, {
+      ...reviewBody, client_request_id: "invalid-review", recommended_action: "solidify",
+    });
+    assert.equal(invalidReview.response.status, 400);
+    assert.deepEqual((await (await fetch(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}/reviews`)).json()).map(({ id }) => id), [review.id]);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/reviews/${encodeURIComponent(review.id)}`)).json()).result, "falsified");
     const rejectedCreated = await postJson(`${origin}/v1/me/context/proposals`, {
       ...proposalBody, client_request_id: "decision-request-rejected", title: "Reject another release",
     });

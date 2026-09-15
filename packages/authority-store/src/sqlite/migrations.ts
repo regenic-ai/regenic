@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 33;
+export const LATEST_SCHEMA_VERSION = 34;
 
 export const MIGRATIONS = [
   {
@@ -758,6 +758,20 @@ export const MIGRATIONS = [
         UNIQUE (org_id, proposal_id)
       );
       CREATE INDEX decisions_query_idx ON decisions (org_id, committed_at, id);
+    `,
+  },
+  {
+    version: 34,
+    sql: `
+      CREATE TABLE reviews (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        subject_kind TEXT NOT NULL CHECK (subject_kind IN ('standard_version', 'decision', 'hypothesis_claim', 'agent_run')),
+        subject_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX reviews_query_idx ON reviews (org_id, subject_id, created_at, id);
     `,
   },
 ] as const;

@@ -594,6 +594,21 @@ Decision 插入与 Proposal 的 `accepted` 状态及 `outcome_ref` 更新处于�
 重试保持幂等，不同 payload 不能替换已 committed Decision。该流程只记录判断，不会执行工作，
 也不会创建、发布或激活 StandardVersion。
 
+### 8.4 Decision Review
+
+immutable Review 用于记录对治理对象的反馈。共享 contract 预留 `standard_version`、`decision`、
+`hypothesis_claim` 与 `agent_run` 四类 subject；当前 Personal vertical slice 只允许为已 committed
+Decision 创建 Review。服务端从 authority record 固定 subject、author、organization 与
+ContextSnapshot，不接受调用方自行绑定这些字段。
+
+结论为 `validated` 或 `falsified` 的 Review 至少需要一条非 `other` evidence。持久化前会校验
+本地 Event 引用，且 falsified Review 不能推荐 `solidify`。稳定 request identity 使相同重试保持
+幂等，不同 payload 不能替换已写入的 Review。
+
+`solidify`、`revise_standard` 与 `open_gap` 目前仅为推荐动作。创建 Review 不会修改对应的
+Decision 或 Proposal，也不会创建或激活 StandardVersion；后续治理 workflow 必须显式评估该
+推荐。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

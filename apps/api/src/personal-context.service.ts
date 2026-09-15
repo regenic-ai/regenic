@@ -6,6 +6,7 @@ import {
   ModelUpstreamError,
   PROPOSAL_SCHEMA_VERSION,
   DECISION_SCHEMA_VERSION,
+  REVIEW_SCHEMA_VERSION,
   hashCanonicalContext,
   type ContextBundle,
   type ContextArtifact,
@@ -18,6 +19,7 @@ import {
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
+  type ReviewRecord,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -326,6 +328,59 @@ export class PersonalContextService {
     return decision;
   }
 
+  async createDecisionReview(decisionId: string, input: unknown): Promise<ReviewRecord> {
+    const body = strictBody(input, new Set([
+      "client_request_id", "result", "severity", "evidence", "recommended_action",
+    ]));
+    const decision = await this.getDecision(decisionId);
+    const clientRequestId = requiredString(body.client_request_id, "client_request_id");
+    const evidence = proposalEvidence(body.evidence);
+    for (const item of evidence) {
+      if (!item.uri_or_ref.startsWith("event:")) continue;
+      const eventId = item.uri_or_ref.slice("event:".length);
+      if (!eventId || !await this.runtime.requireHost().get("authority").getEvent(this.runtime.orgId(), eventId)) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Review evidence Event was not found");
+      }
+    }
+    const reviews = this.runtime.requireHost().get("reviews");
+    const id = `review:${hashCanonicalContext([this.runtime.orgId(), decision.id, clientRequestId])}`;
+    const existing = await reviews.getReview(this.runtime.orgId(), id);
+    const review: ReviewRecord = {
+      schema_version: REVIEW_SCHEMA_VERSION,
+      id,
+      org_id: this.runtime.orgId(),
+      subject_kind: "decision",
+      subject_id: decision.id,
+      result: reviewResult(body.result),
+      severity: reviewSeverity(body.severity),
+      evidence,
+      context_snapshot_id: decision.context_snapshot_id,
+      recommended_action: reviewRecommendedAction(body.recommended_action),
+      author: { actor_type: "human", actor_id: this.runtime.orgId() },
+      created_at: existing?.created_at ?? new Date().toISOString(),
+    };
+    try {
+      return await reviews.putReview(review);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid Review";
+      const status = message.includes("Cannot replace") ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
+      throw new PersonalContextError("invalid_request", status, message);
+    }
+  }
+
+  async listDecisionReviews(decisionId: string) {
+    const decision = await this.getDecision(decisionId);
+    return this.runtime.requireHost().get("reviews").listReviews({
+      org_id: this.runtime.orgId(), subject_id: decision.id, limit: 100,
+    });
+  }
+
+  async getReview(reviewId: string) {
+    const review = await this.runtime.requireHost().get("reviews").getReview(this.runtime.orgId(), requiredString(reviewId, "review_id"));
+    if (!review) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Review was not found");
+    return review;
+  }
+
   async decideArtifact(artifactId: string, input: unknown) {
     const body = strictBody(input, new Set(["status"]));
     const status = requiredString(body.status, "status");
@@ -600,6 +655,30 @@ function coDeciders(value: unknown): DecisionRecord["co_deciders"] {
   if (value === undefined) return [];
   return [...new Set(stringArray(value, "co_decider_ids"))]
     .map((actorId) => ({ actor_type: "human" as const, actor_id: actorId }));
+}
+
+function reviewResult(value: unknown): ReviewRecord["result"] {
+  const result = requiredString(value, "result");
+  if (!["validated", "falsified", "inconclusive"].includes(result)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Review result");
+  }
+  return result as ReviewRecord["result"];
+}
+
+function reviewSeverity(value: unknown): ReviewRecord["severity"] {
+  const severity = value === undefined ? "normal" : requiredString(value, "severity");
+  if (!["normal", "bad_news"].includes(severity)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Review severity");
+  }
+  return severity as ReviewRecord["severity"];
+}
+
+function reviewRecommendedAction(value: unknown): ReviewRecord["recommended_action"] {
+  const action = value === undefined ? "none" : requiredString(value, "recommended_action");
+  if (!["solidify", "revise_standard", "open_gap", "none"].includes(action)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Review recommended_action");
+  }
+  return action as ReviewRecord["recommended_action"];
 }
 
 function stringArray(value: unknown, name: string): string[] {

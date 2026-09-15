@@ -129,6 +129,21 @@ export class PersonalContextController {
     return this.guard(() => this.context.getDecision(decisionId));
   }
 
+  @Post("decisions/:decisionId/reviews")
+  createDecisionReview(@Param("decisionId") decisionId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.createDecisionReview(decisionId, body));
+  }
+
+  @Get("decisions/:decisionId/reviews")
+  listDecisionReviews(@Param("decisionId") decisionId: string) {
+    return this.guard(() => this.context.listDecisionReviews(decisionId));
+  }
+
+  @Get("reviews/:reviewId")
+  getReview(@Param("reviewId") reviewId: string) {
+    return this.guard(() => this.context.getReview(reviewId));
+  }
+
   @Post("artifacts/:artifactId/decision")
   decideArtifact(@Param("artifactId") artifactId: string, @Body() body: unknown) {
     return this.guard(() => this.context.decideArtifact(artifactId, body));

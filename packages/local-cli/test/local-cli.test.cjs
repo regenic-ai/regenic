@@ -147,6 +147,26 @@ describe("regenic-local", () => {
     assert.equal(committed.proposal.outcome_ref.ref_id, committed.decision.id);
     assert.equal((await run(["context-decisions", ...common]))[0].id, committed.decision.id);
     assert.equal((await run(["context-decision-get", ...common, "--decision", committed.decision.id])).proposal_id, decisionProposal.id);
+    const reviewArgs = [
+      "context-review-new-decision", ...common,
+      "--decision", committed.decision.id,
+      "--request", "decision-review-request-1",
+      "--result", "falsified",
+      "--severity", "bad_news",
+      "--action", "revise_standard",
+      "--evidence-kind", "data",
+      "--event", ingested.records[0].event_id,
+    ];
+    const review = await run(reviewArgs);
+    assert.equal(review.context_snapshot_id, assembled.snapshot.id);
+    assert.equal(review.recommended_action, "revise_standard");
+    assert.equal((await run(reviewArgs)).id, review.id);
+    await assert.rejects(run([
+      ...reviewArgs.slice(0, -2), "--action", "open_gap",
+      "--event", ingested.records[0].event_id,
+    ]), /Cannot replace immutable Review/);
+    assert.equal((await run(["context-decision-reviews", ...common, "--decision", committed.decision.id]))[0].id, review.id);
+    assert.equal((await run(["context-review-get", ...common, "--review", review.id])).result, "falsified");
     const jobStore = new SqliteAuthorityStore(database);
     await jobStore.enqueueDailyDigestJob({
       org_id: "local-owner",

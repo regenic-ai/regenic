@@ -687,6 +687,25 @@ transaction. Retries are idempotent, while a changed payload cannot replace a
 committed Decision. This records judgment only: it does not execute work or
 create, publish, or activate a StandardVersion.
 
+### 8.4 Decision reviews
+
+An immutable Review records feedback about a governed subject. The shared
+contract reserves `standard_version`, `decision`, `hypothesis_claim`, and
+`agent_run` subjects; the current Personal vertical slice creates Reviews only
+for committed Decisions. The service fixes the subject, author, organization,
+and ContextSnapshot from authority records rather than accepting them from the
+caller.
+
+A conclusive `validated` or `falsified` Review requires at least one non-`other`
+evidence reference. Local Event references are checked before persistence, and
+a falsified Review cannot recommend `solidify`. Stable request identity makes
+an identical retry idempotent; a changed payload cannot replace the Review.
+
+`solidify`, `revise_standard`, and `open_gap` are recommendations only. Creating
+a Review never mutates its Decision or Proposal and does not create or activate
+a StandardVersion. A later governed workflow must evaluate that recommendation
+explicitly.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

@@ -360,6 +360,17 @@ pnpm local context-proposal-new-decision --database ./regenic.db --blob-root ./b
 	--org local-owner --request release-1 --title "Approve release" \
 	--summary "Approve the bounded release." --boundary "Release only" \
 	--snapshot <snapshot-id> --event <event-id>
+
+pnpm local context-review-new-decision --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --decision <decision-id> --request review-1 \
+	--result falsified --severity bad_news --action revise_standard \
+	--evidence-kind data --event <event-id>
+
+pnpm local context-decision-reviews --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --decision <decision-id>
+
+pnpm local context-review-get --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --review <review-id>
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its
