@@ -165,6 +165,62 @@ async function postJson(url, body) {
 }
 
 describe("personal context API", () => {
+  it("reviews a snapshot-pinned Proposal and atomically commits one Decision", async () => {
+    const root = await createRoot();
+    const { origin, eventId } = await startApi(root);
+    const assembled = await postJson(`${origin}/v1/me/context/assemble`, assembleBody());
+    assert.equal(assembled.response.status, 201);
+    const snapshotId = JSON.parse(assembled.text).snapshot.id;
+    const proposalBody = {
+      client_request_id: "decision-request-1",
+      title: "Approve the release",
+      summary: "Approve the bounded release plan.",
+      rights_level: "coach",
+      boundary: "Release decision only",
+      context_snapshot_id: snapshotId,
+      evidence: [{ kind: "document", uri_or_ref: `event:${eventId}` }],
+    };
+    const created = await postJson(`${origin}/v1/me/context/proposals`, proposalBody);
+    assert.equal(created.response.status, 201);
+    const proposal = JSON.parse(created.text);
+    assert.equal(proposal.kind, "decision");
+    const missingEvidence = await postJson(`${origin}/v1/me/context/proposals`, {
+      ...proposalBody,
+      client_request_id: "missing-evidence",
+      evidence: [{ kind: "document", uri_or_ref: "event:missing" }],
+    });
+    assert.equal(missingEvidence.response.status, 400);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/proposals`, proposalBody)).text).id, proposal.id);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/submit`, {})).text).status, "submitted");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/review`, {})).text).status, "in_review");
+    const decisionBody = {
+      summary: "Proceed with the release.",
+      rationale: "The pinned evidence supports the bounded release.",
+    };
+    const committed = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/decision`, decisionBody);
+    assert.equal(committed.response.status, 201);
+    const result = JSON.parse(committed.text);
+    assert.equal(result.proposal.status, "accepted");
+    assert.deepEqual(result.proposal.outcome_ref, { outcome_kind: "decision", ref_id: result.decision.id });
+    assert.equal(result.decision.context_snapshot_id, snapshotId);
+    const repeated = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/decision`, decisionBody);
+    assert.equal(JSON.parse(repeated.text).decision.id, result.decision.id);
+    const changed = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/decision`, {
+      ...decisionBody, rationale: "Changed after commit.",
+    });
+    assert.equal(changed.response.status, 409);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/decisions`)).json())[0].id, result.decision.id);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}`)).json()).proposal_id, proposal.id);
+    const rejectedCreated = await postJson(`${origin}/v1/me/context/proposals`, {
+      ...proposalBody, client_request_id: "decision-request-rejected", title: "Reject another release",
+    });
+    const rejectedId = JSON.parse(rejectedCreated.text).id;
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(rejectedId)}/submit`, {});
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(rejectedId)}/review`, {});
+    const rejected = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(rejectedId)}/reject`, {});
+    assert.equal(JSON.parse(rejected.text).status, "rejected");
+  });
+
   it("lists and resolves coverage alerts without exposing source event identity", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

@@ -125,6 +125,28 @@ describe("regenic-local", () => {
     assert.equal((await run(["context-proposal-get", ...common, "--proposal", proposal.id])).id, proposal.id);
     assert.equal((await run(["context-proposal-submit", ...common, "--proposal", proposal.id])).status, "submitted");
     assert.equal((await run(["context-proposal-withdraw", ...common, "--proposal", proposal.id])).status, "withdrawn");
+    const decisionProposalArgs = [
+      "context-proposal-new-decision", ...common,
+      "--request", "decision-request-1",
+      "--title", "Approve release",
+      "--summary", "Approve the bounded release plan.",
+      "--boundary", "Release decision only",
+      "--snapshot", assembled.snapshot.id,
+      "--event", ingested.records[0].event_id,
+    ];
+    const decisionProposal = await run(decisionProposalArgs);
+    assert.equal((await run(decisionProposalArgs)).id, decisionProposal.id);
+    assert.equal((await run(["context-proposal-submit", ...common, "--proposal", decisionProposal.id])).status, "submitted");
+    assert.equal((await run(["context-proposal-review", ...common, "--proposal", decisionProposal.id])).status, "in_review");
+    const committed = await run([
+      "context-decision-commit", ...common, "--proposal", decisionProposal.id,
+      "--summary", "Proceed with the release.",
+      "--rationale", "The pinned evidence supports the bounded release.",
+    ]);
+    assert.equal(committed.proposal.status, "accepted");
+    assert.equal(committed.proposal.outcome_ref.ref_id, committed.decision.id);
+    assert.equal((await run(["context-decisions", ...common]))[0].id, committed.decision.id);
+    assert.equal((await run(["context-decision-get", ...common, "--decision", committed.decision.id])).proposal_id, decisionProposal.id);
     const jobStore = new SqliteAuthorityStore(database);
     await jobStore.enqueueDailyDigestJob({
       org_id: "local-owner",

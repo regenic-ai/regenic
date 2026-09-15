@@ -84,6 +84,11 @@ export class PersonalContextController {
     return this.guard(() => this.context.listProposals());
   }
 
+  @Post("proposals")
+  createDecisionProposal(@Body() body: unknown) {
+    return this.guard(() => this.context.createDecisionProposal(body));
+  }
+
   @Get("proposals/:proposalId")
   getProposal(@Param("proposalId") proposalId: string) {
     return this.guard(() => this.context.getProposal(proposalId));
@@ -94,9 +99,34 @@ export class PersonalContextController {
     return this.guard(() => this.context.transitionProposal(proposalId, "submitted"));
   }
 
+  @Post("proposals/:proposalId/review")
+  reviewProposal(@Param("proposalId") proposalId: string) {
+    return this.guard(() => this.context.transitionProposal(proposalId, "in_review"));
+  }
+
+  @Post("proposals/:proposalId/reject")
+  rejectProposal(@Param("proposalId") proposalId: string) {
+    return this.guard(() => this.context.transitionProposal(proposalId, "rejected"));
+  }
+
+  @Post("proposals/:proposalId/decision")
+  commitProposalDecision(@Param("proposalId") proposalId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.commitProposalDecision(proposalId, body));
+  }
+
   @Post("proposals/:proposalId/withdraw")
   withdrawProposal(@Param("proposalId") proposalId: string) {
     return this.guard(() => this.context.transitionProposal(proposalId, "withdrawn"));
+  }
+
+  @Get("decisions")
+  listDecisions() {
+    return this.guard(() => this.context.listDecisions());
+  }
+
+  @Get("decisions/:decisionId")
+  getDecision(@Param("decisionId") decisionId: string) {
+    return this.guard(() => this.context.getDecision(decisionId));
   }
 
   @Post("artifacts/:artifactId/decision")

@@ -57,7 +57,7 @@ export interface ProposalStore {
   transitionProposal(input: {
     org_id: string;
     proposal_id: string;
-    status: "submitted" | "withdrawn";
+    status: "submitted" | "in_review" | "rejected" | "withdrawn";
     updated_at: string;
   }): Promise<ProposalRecord | null>;
 }
@@ -81,13 +81,22 @@ export function validateProposal(proposal: ProposalRecord): ProposalRecord {
     !["data", "demo", "user_quote", "document", "other"].includes(item.kind)
     || !item.uri_or_ref?.trim()
   )) throw new Error("Invalid Proposal evidence");
-  if (proposal.status === "submitted" && !proposal.evidence.some((item) => item.kind !== "other")) {
+  if (!Array.isArray(proposal.standard_bindings) || proposal.standard_bindings.some((binding) =>
+    !binding.standard_id?.trim() || !binding.version_id?.trim()
+  )) throw new Error("Invalid Proposal standard binding");
+  if (["submitted", "in_review", "accepted", "rejected"].includes(proposal.status)
+    && !proposal.evidence.some((item) => item.kind !== "other")) {
     throw new Error("Submitted Proposal requires non-other evidence");
   }
+  if (["new_standard", "revise_standard", "decision"].includes(proposal.kind)
+    && ["submitted", "in_review", "accepted"].includes(proposal.status)
+    && !proposal.context_snapshot_id) {
+    throw new Error("Submitted decision or standard Proposal requires a snapshot");
+  }
   if (["new_standard", "revise_standard"].includes(proposal.kind)
-    && proposal.status === "submitted"
-    && (!proposal.context_snapshot_id || !proposal.single_uncertainty?.trim())) {
-    throw new Error("Submitted standard Proposal requires snapshot and uncertainty");
+    && ["submitted", "in_review", "accepted"].includes(proposal.status)
+    && !proposal.single_uncertainty?.trim()) {
+    throw new Error("Submitted standard Proposal requires one uncertainty");
   }
   return structuredClone(proposal);
 }

@@ -26,6 +26,7 @@ import {
   validateContextSnapshot,
   validateDailyDigestPolicy,
   validateProposal,
+  validateDecision,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -61,6 +62,7 @@ import type {
   DailyDigestCoverageAlert,
   ProposalRecord,
   ProposalStatus,
+  DecisionRecord,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1222,34 +1224,74 @@ export class SqliteAuthorityStore
     if (proposal.status !== "draft") throw new Error("New Proposal must be draft");
     this.database.prepare(`INSERT INTO proposals (id, org_id, status, source_digest_id, source_item_event_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`).run(proposal.id, proposal.org_id, proposal.status, proposal.source_digest_id ?? null, proposal.source_item_event_id ?? null, canonicalContextJson(proposal), proposal.created_at, proposal.updated_at);
     const stored = proposal.source_digest_id && proposal.source_item_event_id
-      ? this.database.prepare(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = ? AND source_digest_id = ? AND source_item_event_id = ?`).get(proposal.org_id, proposal.source_digest_id, proposal.source_item_event_id)
-      : this.database.prepare(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = ? AND id = ?`).get(proposal.org_id, proposal.id);
-    return toProposal(stored as { status: ProposalStatus; payload_json: string; updated_at: string });
+      ? this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND source_digest_id = ? AND source_item_event_id = ?`).get(proposal.org_id, proposal.source_digest_id, proposal.source_item_event_id)
+      : this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(proposal.org_id, proposal.id);
+    return toProposal(stored as ProposalRow);
   }
 
   async getProposal(orgId: string, proposalId: string): Promise<ProposalRecord | null> {
-    const row = this.database.prepare(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = ? AND id = ?`).get(orgId, proposalId) as { status: ProposalStatus; payload_json: string; updated_at: string } | undefined;
-    return row ? toProposal(row) : null;
+    return this.getProposalSync(orgId, proposalId);
   }
 
   async listProposals(input: { org_id: string; status?: ProposalStatus; limit?: number }): Promise<ProposalRecord[]> {
     const limit = input.limit ?? 100;
-    const rows = this.database.prepare(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, limit] : [input.org_id, limit])) as Array<{ status: ProposalStatus; payload_json: string; updated_at: string }>;
+    const rows = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, limit] : [input.org_id, limit])) as ProposalRow[];
     return rows.map(toProposal);
   }
 
-  async transitionProposal(input: { org_id: string; proposal_id: string; status: "submitted" | "withdrawn"; updated_at: string }): Promise<ProposalRecord | null> {
+  async transitionProposal(input: { org_id: string; proposal_id: string; status: "submitted" | "in_review" | "rejected" | "withdrawn"; updated_at: string }): Promise<ProposalRecord | null> {
     this.assertWritable();
     return this.database.transaction(() => {
-      const current = this.database.prepare(`SELECT status, payload_json, updated_at FROM proposals WHERE org_id = ? AND id = ?`).get(input.org_id, input.proposal_id) as { status: ProposalStatus; payload_json: string; updated_at: string } | undefined;
+      const current = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(input.org_id, input.proposal_id) as ProposalRow | undefined;
       if (!current) return null;
       const proposal = toProposal(current);
-      const allowed = proposal.status === "draft" || (proposal.status === "submitted" && input.status === "withdrawn");
+      const allowed = (proposal.status === "draft" && ["submitted", "withdrawn"].includes(input.status))
+        || (proposal.status === "submitted" && ["in_review", "withdrawn"].includes(input.status))
+        || (proposal.status === "in_review" && ["rejected", "withdrawn"].includes(input.status));
       if (!allowed) throw new Error("Invalid Proposal transition");
       const next = validateProposal({ ...proposal, status: input.status, updated_at: input.updated_at });
       this.database.prepare(`UPDATE proposals SET status = ?, updated_at = ? WHERE org_id = ? AND id = ? AND status = ?`).run(next.status, next.updated_at, input.org_id, input.proposal_id, proposal.status);
       return next;
     })();
+  }
+
+  async commitProposalDecision(input: { org_id: string; proposal_id: string; decision: DecisionRecord }): Promise<{ proposal: ProposalRecord; decision: DecisionRecord }> {
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const decision = validateDecision(input.decision);
+      const existing = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? AND proposal_id = ?`).get(input.org_id, input.proposal_id) as { payload_json: string } | undefined;
+      if (existing) {
+        const stored = validateDecision(JSON.parse(existing.payload_json) as DecisionRecord);
+        if (canonicalContextJson(stored) !== canonicalContextJson(decision)) throw new Error("Cannot replace immutable Decision");
+        return { proposal: this.getProposalSync(input.org_id, input.proposal_id)!, decision: stored };
+      }
+      const proposal = this.getProposalSync(input.org_id, input.proposal_id);
+      if (!proposal || proposal.status !== "in_review" || proposal.kind !== "decision"
+        || decision.org_id !== input.org_id || decision.proposal_id !== proposal.id
+        || decision.context_snapshot_id !== proposal.context_snapshot_id
+        || decision.rights_level !== proposal.rights_level
+        || canonicalContextJson(decision.standard_bindings) !== canonicalContextJson(proposal.standard_bindings)) {
+        throw new Error("Invalid Proposal Decision commit");
+      }
+      this.database.prepare(`INSERT INTO decisions (id, org_id, proposal_id, status, payload_json, committed_at) VALUES (?, ?, ?, ?, ?, ?)`).run(decision.id, decision.org_id, decision.proposal_id, decision.status, canonicalContextJson(decision), decision.committed_at);
+      this.database.prepare(`UPDATE proposals SET status = 'accepted', outcome_kind = 'decision', outcome_ref_id = ?, updated_at = ? WHERE org_id = ? AND id = ? AND status = 'in_review'`).run(decision.id, decision.committed_at, input.org_id, input.proposal_id);
+      return { proposal: this.getProposalSync(input.org_id, input.proposal_id)!, decision };
+    })();
+  }
+
+  async getDecision(orgId: string, decisionId: string): Promise<DecisionRecord | null> {
+    const row = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? AND id = ?`).get(orgId, decisionId) as { payload_json: string } | undefined;
+    return row ? validateDecision(JSON.parse(row.payload_json) as DecisionRecord) : null;
+  }
+
+  async listDecisions(input: { org_id: string; limit?: number }): Promise<DecisionRecord[]> {
+    const rows = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? ORDER BY committed_at, id LIMIT ?`).all(input.org_id, input.limit ?? 100) as Array<{ payload_json: string }>;
+    return rows.map((row) => validateDecision(JSON.parse(row.payload_json) as DecisionRecord));
+  }
+
+  private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {
+    const row = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(orgId, proposalId) as ProposalRow | undefined;
+    return row ? toProposal(row) : null;
   }
 
   private getDailyDigestJob(id: string): DailyDigestJob | null {
@@ -4073,10 +4115,24 @@ function assertArtifactSupersession(input: ContextArtifactSupersession): void {
   if (!input?.org_id?.trim() || !input.artifact_id?.trim() || !input.replacement_id?.trim() || input.artifact_id === input.replacement_id || Number.isNaN(Date.parse(input.decided_at))) throw new Error("Invalid Context artifact supersession");
 }
 
-function toProposal(row: { status: ProposalStatus; payload_json: string; updated_at: string }): ProposalRecord {
-  return validateProposal({
+interface ProposalRow {
+  status: ProposalStatus;
+  payload_json: string;
+  updated_at: string;
+  outcome_kind: "standard_version" | "decision" | "claim" | "none" | null;
+  outcome_ref_id: string | null;
+}
+
+function toProposal(row: ProposalRow): ProposalRecord {
+  const proposal = validateProposal({
     ...(JSON.parse(row.payload_json) as ProposalRecord),
     status: row.status,
     updated_at: row.updated_at,
   });
+  return {
+    ...proposal,
+    ...(row.outcome_kind
+      ? { outcome_ref: { outcome_kind: row.outcome_kind, ...(row.outcome_ref_id ? { ref_id: row.outcome_ref_id } : {}) } }
+      : {}),
+  };
 }

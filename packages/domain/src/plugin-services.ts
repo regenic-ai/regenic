@@ -21,6 +21,7 @@ import type { DailyDigestJobStore } from "./daily-digest-jobs";
 import type { DailyDigestPolicyStore } from "./daily-digest-policy";
 import type { DailyDigestCoverageAlertStore } from "./daily-digest-coverage-alerts";
 import type { ProposalStore } from "./proposal";
+import type { DecisionStore } from "./decision";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -39,6 +40,7 @@ declare module "@regenic/plugin-host" {
     "daily-digest-policy": DailyDigestPolicyStore;
     "daily-digest-coverage-alerts": DailyDigestCoverageAlertStore;
     proposals: ProposalStore;
+    decisions: DecisionStore;
     "context-projection-outbox": ContextProjectionOutboxStore;
     "context-lexical-index": ContextLexicalIndex;
     "context-projectors": ContextProjectorRegistry;

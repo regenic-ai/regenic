@@ -27,6 +27,7 @@ import type {
   DailyDigestCoverageAlert,
   ProposalRecord,
   ProposalStatus,
+  DecisionRecord,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -318,8 +319,20 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listProposals", [input]);
   }
 
-  async transitionProposal(input: { org_id: string; proposal_id: string; status: "submitted" | "withdrawn"; updated_at: string }): Promise<ProposalRecord | null> {
+  async transitionProposal(input: { org_id: string; proposal_id: string; status: "submitted" | "in_review" | "rejected" | "withdrawn"; updated_at: string }): Promise<ProposalRecord | null> {
     return this.writer.call("transitionProposal", [input]);
+  }
+
+  async commitProposalDecision(input: { org_id: string; proposal_id: string; decision: DecisionRecord }): Promise<{ proposal: ProposalRecord; decision: DecisionRecord }> {
+    return this.writer.call("commitProposalDecision", [input]);
+  }
+
+  async getDecision(orgId: string, decisionId: string): Promise<DecisionRecord | null> {
+    return this.reader.call("getDecision", [orgId, decisionId]);
+  }
+
+  async listDecisions(input: { org_id: string; limit?: number }): Promise<DecisionRecord[]> {
+    return this.reader.call("listDecisions", [input]);
   }
 
   async getDisposition(

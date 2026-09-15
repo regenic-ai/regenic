@@ -276,6 +276,7 @@ describe("SQLite context artifact store", () => {
     const path = join(root, "authority.db");
     const policy = {
       version: 1,
+      time_zone: "UTC",
       enabled_directions: ["product", "risk"],
       max_items_per_direction: 3,
       bad_news_terms: ["blocked", "outage"],
@@ -365,6 +366,58 @@ describe("SQLite context artifact store", () => {
       updated_at: "2026-08-30T03:00:00.000Z",
     })).status, "withdrawn");
     assert.equal((await split.listProposals({ org_id: "example-org", status: "withdrawn" }))[0].id, proposal.id);
+    await split.close();
+  });
+
+  it("atomically accepts an in-review Proposal with one immutable Decision", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const proposal = {
+      schema_version: "1.0", id: "proposal-decision-1", org_id: "example-org", kind: "decision",
+      title: "Approve launch", summary: "Approve the bounded launch.", status: "draft",
+      author: { actor_type: "human", actor_id: "person-1" }, rights_level: "coach",
+      boundary: "product launch", context_snapshot_id: "snapshot-1", standard_bindings: [],
+      evidence: [{ kind: "document", uri_or_ref: "event:event-1" }],
+      created_at: "2026-09-15T00:00:00.000Z", updated_at: "2026-09-15T00:00:00.000Z",
+    };
+    const decision = {
+      schema_version: "1.0", id: "decision-1", org_id: "example-org",
+      proposal_id: proposal.id, summary: "Proceed with the launch.",
+      rationale: "The accepted evidence supports this bounded action.",
+      decided_by: { actor_type: "human", actor_id: "person-1" }, co_deciders: [],
+      rights_level: "coach", context_snapshot_id: "snapshot-1", standard_bindings: [],
+      status: "committed", committed_at: "2026-09-15T03:00:00.000Z",
+    };
+    let store = new SqliteAuthorityStore(path);
+    await store.putProposal(proposal);
+    await store.transitionProposal({
+      org_id: "example-org", proposal_id: proposal.id, status: "submitted",
+      updated_at: "2026-09-15T01:00:00.000Z",
+    });
+    await store.transitionProposal({
+      org_id: "example-org", proposal_id: proposal.id, status: "in_review",
+      updated_at: "2026-09-15T02:00:00.000Z",
+    });
+    const committed = await store.commitProposalDecision({
+      org_id: "example-org", proposal_id: proposal.id, decision,
+    });
+    assert.equal(committed.proposal.status, "accepted");
+    assert.deepEqual(committed.proposal.outcome_ref, { outcome_kind: "decision", ref_id: decision.id });
+    assert.equal((await store.commitProposalDecision({
+      org_id: "example-org", proposal_id: proposal.id, decision,
+    })).decision.id, decision.id);
+    await assert.rejects(store.commitProposalDecision({
+      org_id: "example-org", proposal_id: proposal.id,
+      decision: { ...decision, rationale: "Changed after commit." },
+    }), /Cannot replace immutable Decision/);
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.deepEqual((await split.getProposal("example-org", proposal.id)).outcome_ref, {
+      outcome_kind: "decision", ref_id: decision.id,
+    });
+    assert.equal((await split.getDecision("example-org", decision.id)).summary, decision.summary);
+    assert.equal((await split.listDecisions({ org_id: "example-org" })).length, 1);
     await split.close();
   });
 

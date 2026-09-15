@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 33;
+export const PG_SCHEMA_VERSION = 34;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -244,6 +244,24 @@ CREATE TABLE proposals (
   UNIQUE (org_id, source_digest_id, source_item_event_id)
 );
 CREATE INDEX proposals_query_idx ON proposals (org_id, status, created_at, id);
+`,
+  },
+  {
+    version: 34,
+    sql: `
+ALTER TABLE proposals ADD COLUMN outcome_kind TEXT
+  CHECK (outcome_kind IS NULL OR outcome_kind IN ('standard_version', 'decision', 'claim', 'none'));
+ALTER TABLE proposals ADD COLUMN outcome_ref_id TEXT;
+CREATE TABLE decisions (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL REFERENCES proposals(id),
+  status TEXT NOT NULL CHECK (status IN ('committed', 'superseded', 'void')),
+  payload_json JSONB NOT NULL,
+  committed_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, proposal_id)
+);
+CREATE INDEX decisions_query_idx ON decisions (org_id, committed_at, id);
 `,
   },
 ] as const;
@@ -669,12 +687,25 @@ CREATE TABLE proposals (
   status TEXT NOT NULL CHECK (status IN ('draft', 'submitted', 'in_review', 'accepted', 'rejected', 'withdrawn')),
   source_digest_id TEXT,
   source_item_event_id TEXT,
+  outcome_kind TEXT CHECK (outcome_kind IS NULL OR outcome_kind IN ('standard_version', 'decision', 'claim', 'none')),
+  outcome_ref_id TEXT,
   payload_json JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
   UNIQUE (org_id, source_digest_id, source_item_event_id)
 );
 CREATE INDEX proposals_query_idx ON proposals (org_id, status, created_at, id);
+
+CREATE TABLE decisions (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  proposal_id TEXT NOT NULL REFERENCES proposals(id),
+  status TEXT NOT NULL CHECK (status IN ('committed', 'superseded', 'void')),
+  payload_json JSONB NOT NULL,
+  committed_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, proposal_id)
+);
+CREATE INDEX decisions_query_idx ON decisions (org_id, committed_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,

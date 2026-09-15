@@ -353,6 +353,11 @@ pnpm local context-proposal-create --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-proposals --database ./regenic.db --blob-root ./blobs \
 	--org local-owner
+
+pnpm local context-proposal-new-decision --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --request release-1 --title "Approve release" \
+	--summary "Approve the bounded release." --boundary "Release only" \
+	--snapshot <snapshot-id> --event <event-id>
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、
