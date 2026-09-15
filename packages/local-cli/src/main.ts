@@ -24,11 +24,16 @@ import {
   PROPOSAL_SCHEMA_VERSION,
   DECISION_SCHEMA_VERSION,
   REVIEW_SCHEMA_VERSION,
+  HANDOFF_SCHEMA_VERSION,
   hashCanonicalContext,
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
   type ReviewRecord,
+  type HandoffDirection,
+  type HandoffReason,
+  type HandoffRecord,
+  type HandoffStatus,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -207,8 +212,26 @@ export async function runLocalCli(
     case "context-review-get":
       await getReview(commandOptions, stdout);
       return;
+    case "context-handoff-create":
+      await createHandoff(commandOptions, stdout, now);
+      return;
+    case "context-handoffs":
+      await listHandoffs(commandOptions, stdout);
+      return;
+    case "context-handoff-get":
+      await getHandoff(commandOptions, stdout);
+      return;
+    case "context-handoff-ack":
+      await transitionHandoff(commandOptions, stdout, now, "acked");
+      return;
+    case "context-handoff-resolve":
+      await transitionHandoff(commandOptions, stdout, now, "resolved");
+      return;
+    case "context-handoff-cancel":
+      await transitionHandoff(commandOptions, stdout, now, "cancelled");
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel");
   }
 }
 
@@ -1424,6 +1447,110 @@ async function getReview(options: CommandOptions, stdout: CliOutput): Promise<vo
     const review = await host.get("reviews").getReview(orgId, requireOption(options, "review"));
     if (!review) throw new Error("Review was not found");
     writeJson(stdout, review);
+  });
+}
+
+async function createHandoff(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const snapshotId = requireOption(options, "snapshot");
+    if (!await host.get("context-artifacts").getSnapshot(orgId, snapshotId)) throw new Error("Context snapshot was not found");
+    const proposalId = optionString(options, "proposal");
+    const proposal = proposalId ? await host.get("proposals").getProposal(orgId, proposalId) : null;
+    if (proposalId && !proposal) throw new Error("Proposal was not found");
+    const decisionId = optionString(options, "decision");
+    const decision = decisionId ? await host.get("decisions").getDecision(orgId, decisionId) : null;
+    if (decisionId && !decision) throw new Error("Decision was not found");
+    if (proposal && decision && decision.proposal_id !== proposal.id) throw new Error("Handoff Proposal and Decision do not refer to the same outcome");
+    const direction = cliHandoffDirection(requireOption(options, "direction"));
+    const agentId = requireOption(options, "agent");
+    const human = { actor_type: "human" as const, actor_id: orgId };
+    const agent = { actor_type: "agent" as const, actor_id: agentId };
+    const handoffs = host.get("handoffs");
+    const id = `handoff:${hashCanonicalContext([orgId, requireOption(options, "request")])}`;
+    const existing = await handoffs.getHandoff(orgId, id);
+    const handoff: HandoffRecord = {
+      schema_version: HANDOFF_SCHEMA_VERSION,
+      id,
+      org_id: orgId,
+      direction,
+      from: direction === "human_to_agent" ? human : agent,
+      to: direction === "human_to_agent" ? agent : human,
+      reason: cliHandoffReason(requireOption(options, "reason")),
+      ...(proposalId ? { proposal_id: proposalId } : {}),
+      ...(decisionId ? { decision_id: decisionId } : {}),
+      context_snapshot_id: snapshotId,
+      standard_bindings: cliStandardBindings(optionString(options, "bindings")),
+      payload: cliHandoffPayload(requireOption(options, "payload")),
+      status: "open",
+      created_at: existing?.created_at ?? now(),
+    };
+    writeJson(stdout, await handoffs.putHandoff(handoff));
+  });
+}
+
+async function listHandoffs(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const status = optionString(options, "status");
+  const direction = optionString(options, "direction");
+  if (status && !["open", "acked", "resolved", "cancelled"].includes(status)) throw new Error("Invalid Handoff status");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    writeJson(stdout, await host.get("handoffs").listHandoffs({
+      org_id: orgId,
+      ...(status ? { status: status as HandoffStatus } : {}),
+      ...(direction ? { direction: cliHandoffDirection(direction) } : {}),
+      limit: 100,
+    }));
+  });
+}
+
+async function getHandoff(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const handoff = await host.get("handoffs").getHandoff(orgId, requireOption(options, "handoff"));
+    if (!handoff) throw new Error("Handoff was not found");
+    writeJson(stdout, handoff);
+  });
+}
+
+async function transitionHandoff(options: CommandOptions, stdout: CliOutput, now: () => string, status: Exclude<HandoffStatus, "open">): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const handoff = await host.get("handoffs").transitionHandoff({
+      org_id: orgId, handoff_id: requireOption(options, "handoff"), status, transitioned_at: now(),
+    });
+    if (!handoff) throw new Error("Handoff was not found");
+    writeJson(stdout, handoff);
+  });
+}
+
+function cliHandoffDirection(value: string): HandoffDirection {
+  if (!["agent_to_human", "human_to_agent"].includes(value)) throw new Error("Invalid Handoff direction");
+  return value as HandoffDirection;
+}
+
+function cliHandoffReason(value: string): HandoffReason {
+  if (![
+    "standard_uncovered", "evidence_conflict", "permission_denied", "acceptance_failed",
+    "escalation_boundary", "approve_proposal", "revise_standard", "enrich_context",
+    "set_boundary", "retry_with_binding",
+  ].includes(value)) throw new Error("Invalid Handoff reason");
+  return value as HandoffReason;
+}
+
+function cliHandoffPayload(value: string): Record<string, JsonValue> {
+  let payload: unknown;
+  try { payload = JSON.parse(value); } catch { throw new Error("Handoff payload must be valid JSON"); }
+  if (!isObject(payload) || Object.keys(payload).length === 0) throw new Error("Handoff payload must be a non-empty object");
+  return payload as Record<string, JsonValue>;
+}
+
+function cliStandardBindings(value: string | undefined): HandoffRecord["standard_bindings"] {
+  if (!value) return [];
+  return value.split(",").map((entry) => {
+    const separator = entry.lastIndexOf("@");
+    if (separator < 1 || separator === entry.length - 1) throw new Error("Handoff bindings must use standard@version");
+    return { standard_id: entry.slice(0, separator), version_id: entry.slice(separator + 1) };
   });
 }
 

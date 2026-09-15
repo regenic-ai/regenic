@@ -198,6 +198,43 @@ describePg("postgres authority store", () => {
     assert.equal(new Set(ids).size, 1);
   });
 
+  it("persists idempotent Handoffs and transitions them under row lock", async () => {
+    const writerA = await openStore();
+    const writerB = await openStore();
+    const orgId = `org-${randomUUID()}`;
+    const handoff = {
+      schema_version: "1.0", id: `handoff-${randomUUID()}`, org_id: orgId,
+      direction: "human_to_agent",
+      from: { actor_type: "human", actor_id: "person-1" },
+      to: { actor_type: "agent", actor_id: "agent-1" },
+      reason: "set_boundary", context_snapshot_id: "snapshot-1",
+      standard_bindings: [], payload: { boundary: "Release only" },
+      status: "open", created_at: "2026-09-17T00:00:00.000Z",
+    };
+    const [first, repeated] = await Promise.all([
+      writerA.putHandoff(handoff),
+      writerB.putHandoff({ ...handoff, created_at: "2026-09-17T00:00:01.000Z" }),
+    ]);
+    assert.equal(first.id, repeated.id);
+    assert.equal(first.created_at, repeated.created_at);
+    await assert.rejects(
+      writerB.putHandoff({ ...handoff, payload: { boundary: "Changed" } }),
+      /Cannot replace immutable Handoff/,
+    );
+    assert.equal((await writerA.transitionHandoff({
+      org_id: orgId, handoff_id: handoff.id, status: "acked",
+      transitioned_at: "2026-09-17T01:00:00.000Z",
+    })).status, "acked");
+    const resolved = await writerB.transitionHandoff({
+      org_id: orgId, handoff_id: handoff.id, status: "resolved",
+      transitioned_at: "2026-09-17T02:00:00.000Z",
+    });
+    assert.equal(resolved.resolved_at, "2026-09-17T02:00:00.000Z");
+    assert.equal((await writerA.listHandoffs({
+      org_id: orgId, status: "resolved", direction: "human_to_agent",
+    })).length, 1);
+  });
+
   it("serves the store through the postgres plugin", async () => {
     const host = await createHost();
     try {

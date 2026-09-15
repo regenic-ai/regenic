@@ -11,6 +11,7 @@ import type {
   ProposalStore,
   DecisionStore,
   ReviewStore,
+  HandoffStore,
   ExecutorStore,
   WorkStore,
 } from "@regenic/domain";
@@ -24,7 +25,7 @@ export type AuthorityServicesStore = AuthorityStore &
   ContextAuthorityReader &
   ContextProjectionOutboxStore &
   DailyDigestJobStore & {
-  } & DailyDigestPolicyStore & DailyDigestCoverageAlertStore & ProposalStore & DecisionStore & ReviewStore & {
+  } & DailyDigestPolicyStore & DailyDigestCoverageAlertStore & ProposalStore & DecisionStore & ReviewStore & HandoffStore & {
     close(): void | Promise<void>;
   };
 
@@ -42,5 +43,6 @@ export function provideAuthorityServices(
   ctx.provide("proposals", store);
   ctx.provide("decisions", store);
   ctx.provide("reviews", store);
+  ctx.provide("handoffs", store);
   ctx.effect(() => () => store.close());
 }

@@ -28,6 +28,8 @@ import {
   validateProposal,
   validateDecision,
   validateReview,
+  validateHandoff,
+  assertHandoffTransition,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -65,6 +67,9 @@ import type {
   ProposalStatus,
   DecisionRecord,
   ReviewRecord,
+  HandoffDirection,
+  HandoffRecord,
+  HandoffStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1308,6 +1313,55 @@ export class SqliteAuthorityStore
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
     const rows = this.database.prepare(`SELECT payload_json FROM reviews WHERE org_id = ? ${input.subject_id ? "AND subject_id = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.subject_id ? [input.org_id, input.subject_id, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as Array<{ payload_json: string }>;
     return rows.map((row) => validateReview(JSON.parse(row.payload_json) as ReviewRecord));
+  }
+
+  async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
+    this.assertWritable();
+    const handoff = validateHandoff(input);
+    if (handoff.status !== "open") throw new Error("New Handoff must be open");
+    this.database.prepare(`INSERT INTO handoffs (id, org_id, direction, status, payload_json, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT (id) DO NOTHING`).run(handoff.id, handoff.org_id, handoff.direction, handoff.status, canonicalContextJson(handoff), handoff.created_at);
+    const row = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = ? AND id = ?`).get(handoff.org_id, handoff.id) as HandoffRow | undefined;
+    if (!row) throw new Error("Cannot replace immutable Handoff");
+    const storedCreation = validateHandoff(JSON.parse(row.payload_json) as HandoffRecord);
+    if (canonicalContextJson(storedCreation) !== canonicalContextJson({
+      ...handoff, created_at: storedCreation.created_at,
+    })) {
+      throw new Error("Cannot replace immutable Handoff");
+    }
+    return toHandoff(row);
+  }
+
+  async getHandoff(orgId: string, handoffId: string): Promise<HandoffRecord | null> {
+    const row = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = ? AND id = ?`).get(orgId, handoffId) as HandoffRow | undefined;
+    return row ? toHandoff(row) : null;
+  }
+
+  async listHandoffs(input: { org_id: string; status?: HandoffStatus; direction?: HandoffDirection; limit?: number }): Promise<HandoffRecord[]> {
+    const conditions = ["org_id = ?"];
+    const values: Array<string | number> = [input.org_id];
+    if (input.status) { conditions.push("status = ?"); values.push(input.status); }
+    if (input.direction) { conditions.push("direction = ?"); values.push(input.direction); }
+    values.push(input.limit ?? 100);
+    const rows = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE ${conditions.join(" AND ")} ORDER BY created_at, id LIMIT ?`).all(...values) as HandoffRow[];
+    return rows.map(toHandoff);
+  }
+
+  async transitionHandoff(input: { org_id: string; handoff_id: string; status: Exclude<HandoffStatus, "open">; transitioned_at: string }): Promise<HandoffRecord | null> {
+    this.assertWritable();
+    if (!input.org_id?.trim() || !input.handoff_id?.trim() || Number.isNaN(Date.parse(input.transitioned_at))) throw new Error("Invalid Handoff transition");
+    return this.database.transaction(() => {
+      const row = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = ? AND id = ?`).get(input.org_id, input.handoff_id) as HandoffRow | undefined;
+      if (!row) return null;
+      const current = toHandoff(row);
+      assertHandoffTransition(current.status, input.status);
+      const next = validateHandoff({
+        ...current,
+        status: input.status,
+        ...(input.status === "resolved" ? { resolved_at: input.transitioned_at } : {}),
+      });
+      this.database.prepare(`UPDATE handoffs SET status = ?, resolved_at = ? WHERE org_id = ? AND id = ? AND status = ?`).run(next.status, next.resolved_at ?? null, input.org_id, input.handoff_id, current.status);
+      return next;
+    })();
   }
 
   private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {
@@ -4142,6 +4196,20 @@ interface ProposalRow {
   updated_at: string;
   outcome_kind: "standard_version" | "decision" | "claim" | "none" | null;
   outcome_ref_id: string | null;
+}
+
+interface HandoffRow {
+  status: HandoffStatus;
+  payload_json: string;
+  resolved_at: string | null;
+}
+
+function toHandoff(row: HandoffRow): HandoffRecord {
+  return validateHandoff({
+    ...(JSON.parse(row.payload_json) as HandoffRecord),
+    status: row.status,
+    ...(row.resolved_at ? { resolved_at: row.resolved_at } : {}),
+  });
 }
 
 function toProposal(row: ProposalRow): ProposalRecord {
