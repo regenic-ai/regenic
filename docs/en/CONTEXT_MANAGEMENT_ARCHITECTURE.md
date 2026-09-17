@@ -674,10 +674,18 @@ non-`other` evidence. `hypothesis` maps to a hypothesis Proposal; future
 `new_judgment` and `standard_amendment` items map to new/revised-standard
 Proposals. Metric, bad-news, and clarify items cannot auto-promote.
 
-The implemented lifecycle is deliberately bounded to draft, submitted, and
-withdrawn. Submission revalidates the evidence gate; standard Proposals also
-require a ContextSnapshot and one uncertainty. No intake or transition creates
-a Decision, StandardVersion, or active Standard.
+The Proposal lifecycle supports `draft -> submitted -> in_review`, rejection
+from review, and withdrawal before an outcome. Submission revalidates the
+evidence gate. Decision and standard Proposals require a ContextSnapshot;
+standard Proposals also require one uncertainty.
+
+An in-review `decision` Proposal can commit one immutable Decision. The Decision
+inherits the Proposal's snapshot, rights level, and standard bindings;
+`negotiate` requires at least one co-decider. Decision insertion and the
+Proposal's `accepted` status plus `outcome_ref` update are one authority
+transaction. Retries are idempotent, while a changed payload cannot replace a
+committed Decision. This records judgment only: it does not execute work or
+create, publish, or activate a StandardVersion.
 
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.

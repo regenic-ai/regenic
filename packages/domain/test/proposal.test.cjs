@@ -34,7 +34,10 @@ describe("Proposal contract", () => {
   it("requires a snapshot and one uncertainty for submitted standard proposals", () => {
     assert.throws(() => validateProposal(proposal({
       kind: "new_standard", status: "submitted",
-    })), /snapshot and uncertainty/);
+    })), /requires a snapshot/);
+    assert.throws(() => validateProposal(proposal({
+      kind: "new_standard", status: "submitted", context_snapshot_id: "snapshot-1",
+    })), /requires one uncertainty/);
     assert.equal(validateProposal(proposal({
       kind: "new_standard", status: "submitted",
       context_snapshot_id: "snapshot-1", single_uncertainty: "Will this improve acceptance?",

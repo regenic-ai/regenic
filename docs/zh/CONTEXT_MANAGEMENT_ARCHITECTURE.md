@@ -584,9 +584,15 @@ Digest item 转为一个幂等 draft Proposal。Proposal 将 Digest 和该 item 
 与 `standard_amendment` item 分别映射为新建/修订 Standard Proposal。Metric、bad-news 与
 clarify item 不能自动晋升。
 
-当前 lifecycle 刻意限制为 draft、submitted 与 withdrawn。Submit 会重新校验 evidence gate；
-Standard Proposal 还必须绑定 ContextSnapshot 与 single uncertainty。任何 intake 或 transition
-都不会创建 Decision、StandardVersion 或 active Standard。
+Proposal lifecycle 支持 `draft -> submitted -> in_review`、review rejection，以及 outcome 前
+withdrawal。Submit 会重新校验 evidence gate。Decision 与 Standard Proposal 必须绑定
+ContextSnapshot；Standard Proposal 还必须提供 single uncertainty。
+
+处于 in-review 的 `decision` Proposal 可提交一条 immutable Decision。Decision 继承 Proposal
+的 snapshot、rights level 与 standard bindings；`negotiate` 至少需要一位 co-decider。
+Decision 插入与 Proposal 的 `accepted` 状态及 `outcome_ref` 更新处于同一 authority transaction。
+重试保持幂等，不同 payload 不能替换已 committed Decision。该流程只记录判断，不会执行工作，
+也不会创建、发布或激活 StandardVersion。
 
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。

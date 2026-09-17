@@ -5,6 +5,7 @@ import {
   ModelUnavailableError,
   ModelUpstreamError,
   PROPOSAL_SCHEMA_VERSION,
+  DECISION_SCHEMA_VERSION,
   hashCanonicalContext,
   type ContextBundle,
   type ContextArtifact,
@@ -16,6 +17,7 @@ import {
   validateDailyDigestPolicy,
   type ProposalKind,
   type ProposalRecord,
+  type DecisionRecord,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -205,6 +207,44 @@ export class PersonalContextService {
     });
   }
 
+  async createDecisionProposal(input: unknown): Promise<ProposalRecord> {
+    const body = strictBody(input, new Set([
+      "client_request_id", "title", "summary", "rights_level", "boundary",
+      "context_snapshot_id", "standard_bindings", "evidence",
+    ]));
+    const snapshotId = requiredString(body.context_snapshot_id, "context_snapshot_id");
+    if (!await this.runtime.requireHost().get("context-artifacts").getSnapshot(this.runtime.orgId(), snapshotId)) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
+    }
+    const clientRequestId = requiredString(body.client_request_id, "client_request_id");
+    const evidence = proposalEvidence(body.evidence);
+    for (const item of evidence) {
+      if (!item.uri_or_ref.startsWith("event:")) continue;
+      const eventId = item.uri_or_ref.slice("event:".length);
+      if (!eventId || !await this.runtime.requireHost().get("authority").getEvent(this.runtime.orgId(), eventId)) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Proposal evidence Event was not found");
+      }
+    }
+    const now = new Date().toISOString();
+    return this.runtime.requireHost().get("proposals").putProposal({
+      schema_version: PROPOSAL_SCHEMA_VERSION,
+      id: `proposal:${hashCanonicalContext([this.runtime.orgId(), clientRequestId])}`,
+      org_id: this.runtime.orgId(),
+      kind: "decision",
+      title: requiredString(body.title, "title"),
+      summary: requiredString(body.summary, "summary"),
+      status: "draft",
+      author: { actor_type: "human", actor_id: this.runtime.orgId() },
+      rights_level: optionalRightsLevel(body.rights_level),
+      boundary: requiredString(body.boundary, "boundary"),
+      context_snapshot_id: snapshotId,
+      standard_bindings: standardBindings(body.standard_bindings),
+      evidence,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
   async listProposals() {
     return this.runtime.requireHost().get("proposals").listProposals({ org_id: this.runtime.orgId(), limit: 100 });
   }
@@ -215,7 +255,10 @@ export class PersonalContextService {
     return proposal;
   }
 
-  async transitionProposal(proposalId: string, status: "submitted" | "withdrawn") {
+  async transitionProposal(
+    proposalId: string,
+    status: "submitted" | "in_review" | "rejected" | "withdrawn",
+  ) {
     try {
       const proposal = await this.runtime.requireHost().get("proposals").transitionProposal({
         org_id: this.runtime.orgId(), proposal_id: requiredString(proposalId, "proposal_id"),
@@ -227,6 +270,60 @@ export class PersonalContextService {
       if (error instanceof PersonalContextError) throw error;
       throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid Proposal transition");
     }
+  }
+
+  async commitProposalDecision(proposalId: string, input: unknown) {
+    const body = strictBody(input, new Set(["summary", "rationale", "co_decider_ids"]));
+    const proposals = this.runtime.requireHost().get("proposals");
+    const proposal = await proposals.getProposal(this.runtime.orgId(), requiredString(proposalId, "proposal_id"));
+    if (!proposal) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Proposal was not found");
+    const summary = requiredString(body.summary, "summary");
+    const rationale = requiredString(body.rationale, "rationale");
+    const requestedCoDeciders = coDeciders(body.co_decider_ids);
+    if (proposal.status === "accepted" && proposal.outcome_ref?.outcome_kind === "decision" && proposal.outcome_ref.ref_id) {
+      const existing = await this.runtime.requireHost().get("decisions").getDecision(this.runtime.orgId(), proposal.outcome_ref.ref_id);
+      if (existing && existing.summary === summary && existing.rationale === rationale
+        && hashCanonicalContext(existing.co_deciders) === hashCanonicalContext(requestedCoDeciders)) {
+        return { proposal, decision: existing };
+      }
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Cannot replace committed Decision");
+    }
+    if (proposal.kind !== "decision" || proposal.status !== "in_review" || !proposal.context_snapshot_id) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Decision commit requires an in-review decision Proposal");
+    }
+    const committedAt = new Date().toISOString();
+    const decision: DecisionRecord = {
+      schema_version: DECISION_SCHEMA_VERSION,
+      id: `decision:${hashCanonicalContext([this.runtime.orgId(), proposal.id])}`,
+      org_id: this.runtime.orgId(),
+      proposal_id: proposal.id,
+      summary,
+      rationale,
+      decided_by: { actor_type: "human", actor_id: this.runtime.orgId() },
+      co_deciders: requestedCoDeciders,
+      rights_level: proposal.rights_level,
+      context_snapshot_id: proposal.context_snapshot_id,
+      standard_bindings: proposal.standard_bindings,
+      status: "committed",
+      committed_at: committedAt,
+    };
+    try {
+      return await this.runtime.requireHost().get("decisions").commitProposalDecision({
+        org_id: this.runtime.orgId(), proposal_id: proposal.id, decision,
+      });
+    } catch (error) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid Decision commit");
+    }
+  }
+
+  async listDecisions() {
+    return this.runtime.requireHost().get("decisions").listDecisions({ org_id: this.runtime.orgId(), limit: 100 });
+  }
+
+  async getDecision(decisionId: string) {
+    const decision = await this.runtime.requireHost().get("decisions").getDecision(this.runtime.orgId(), requiredString(decisionId, "decision_id"));
+    if (!decision) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Decision was not found");
+    return decision;
   }
 
   async decideArtifact(artifactId: string, input: unknown) {
@@ -456,6 +553,58 @@ function optionalRightsLevel(value: unknown): ProposalRecord["rights_level"] {
 
 function optionalString(value: unknown): string | undefined {
   return value === undefined ? undefined : requiredString(value, "value");
+}
+
+function standardBindings(value: unknown): ProposalRecord["standard_bindings"] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "standard_bindings must be an array");
+  return value.map((entry) => {
+    const binding = asRecord(entry);
+    if (Object.keys(binding).some((key) => !["standard_id", "version_id"].includes(key))) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid standard binding field");
+    }
+    return {
+      standard_id: requiredString(binding.standard_id, "standard_id"),
+      version_id: requiredString(binding.version_id, "version_id"),
+    };
+  });
+}
+
+function proposalEvidence(value: unknown): ProposalRecord["evidence"] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "evidence must be a non-empty array");
+  }
+  return value.map((entry) => {
+    const evidence = asRecord(entry);
+    if (Object.keys(evidence).some((key) => !["kind", "uri_or_ref", "note", "claim_ids"].includes(key))) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid evidence field");
+    }
+    const kind = requiredString(evidence.kind, "evidence kind");
+    if (!["data", "demo", "user_quote", "document", "other"].includes(kind)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid evidence kind");
+    }
+    const note = optionalString(evidence.note);
+    const claimIds = evidence.claim_ids === undefined
+      ? undefined
+      : stringArray(evidence.claim_ids, "claim_ids");
+    return {
+      kind: kind as ProposalRecord["evidence"][number]["kind"],
+      uri_or_ref: requiredString(evidence.uri_or_ref, "uri_or_ref"),
+      ...(note ? { note } : {}),
+      ...(claimIds ? { claim_ids: claimIds } : {}),
+    };
+  });
+}
+
+function coDeciders(value: unknown): DecisionRecord["co_deciders"] {
+  if (value === undefined) return [];
+  return [...new Set(stringArray(value, "co_decider_ids"))]
+    .map((actorId) => ({ actor_type: "human" as const, actor_id: actorId }));
+}
+
+function stringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value)) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be an array`);
+  return value.map((entry) => requiredString(entry, name));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

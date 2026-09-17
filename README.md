@@ -355,6 +355,11 @@ pnpm local context-proposal-create --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-proposals --database ./regenic.db --blob-root ./blobs \
 	--org local-owner
+
+pnpm local context-proposal-new-decision --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --request release-1 --title "Approve release" \
+	--summary "Approve the bounded release." --boundary "Release only" \
+	--snapshot <snapshot-id> --event <event-id>
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its

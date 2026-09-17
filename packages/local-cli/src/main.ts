@@ -22,9 +22,11 @@ import {
   type ContextRequest,
   projectEvidenceBundleV1,
   PROPOSAL_SCHEMA_VERSION,
+  DECISION_SCHEMA_VERSION,
   hashCanonicalContext,
   type ProposalKind,
   type ProposalRecord,
+  type DecisionRecord,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -173,11 +175,29 @@ export async function runLocalCli(
     case "context-proposal-submit":
       await transitionProposal(commandOptions, stdout, now, "submitted");
       return;
+    case "context-proposal-new-decision":
+      await createDecisionProposal(commandOptions, stdout, now);
+      return;
+    case "context-proposal-review":
+      await transitionProposal(commandOptions, stdout, now, "in_review");
+      return;
+    case "context-proposal-reject":
+      await transitionProposal(commandOptions, stdout, now, "rejected");
+      return;
     case "context-proposal-withdraw":
       await transitionProposal(commandOptions, stdout, now, "withdrawn");
       return;
+    case "context-decision-commit":
+      await commitDecision(commandOptions, stdout, now);
+      return;
+    case "context-decisions":
+      await listDecisions(commandOptions, stdout);
+      return;
+    case "context-decision-get":
+      await getDecision(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-withdraw");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get");
   }
 }
 
@@ -1276,12 +1296,68 @@ async function getProposal(options: CommandOptions, stdout: CliOutput): Promise<
   });
 }
 
-async function transitionProposal(options: CommandOptions, stdout: CliOutput, now: () => string, status: "submitted" | "withdrawn"): Promise<void> {
+async function createDecisionProposal(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const snapshotId = requireOption(options, "snapshot");
+    if (!await host.get("context-artifacts").getSnapshot(orgId, snapshotId)) throw new Error("Context snapshot was not found");
+    const at = now();
+    const rights = optionString(options, "rights") ?? "coach";
+    if (!["direct", "coach", "negotiate", "authorize", "delegate"].includes(rights)) throw new Error("Invalid rights level");
+    const proposal: ProposalRecord = {
+      schema_version: PROPOSAL_SCHEMA_VERSION,
+      id: `proposal:${hashCanonicalContext([orgId, requireOption(options, "request")])}`,
+      org_id: orgId, kind: "decision", title: requireOption(options, "title"),
+      summary: requireOption(options, "summary"), status: "draft",
+      author: { actor_type: "human", actor_id: orgId }, rights_level: rights as ProposalRecord["rights_level"],
+      boundary: requireOption(options, "boundary"), context_snapshot_id: snapshotId,
+      standard_bindings: [], evidence: [{ kind: "document", uri_or_ref: `event:${requireOption(options, "event")}` }],
+      created_at: at, updated_at: at,
+    };
+    writeJson(stdout, await host.get("proposals").putProposal(proposal));
+  });
+}
+
+async function transitionProposal(options: CommandOptions, stdout: CliOutput, now: () => string, status: "submitted" | "in_review" | "rejected" | "withdrawn"): Promise<void> {
   const orgId = requireOption(options, "org");
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
     const proposal = await host.get("proposals").transitionProposal({ org_id: orgId, proposal_id: requireOption(options, "proposal"), status, updated_at: now() });
     if (!proposal) throw new Error("Proposal was not found");
     writeJson(stdout, proposal);
+  });
+}
+
+async function commitDecision(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const proposalId = requireOption(options, "proposal");
+    const proposal = await host.get("proposals").getProposal(orgId, proposalId);
+    if (!proposal || proposal.kind !== "decision" || proposal.status !== "in_review" || !proposal.context_snapshot_id) throw new Error("Decision commit requires an in-review decision Proposal");
+    const coDeciders = (optionString(options, "co-deciders") ?? "").split(",").map((value) => value.trim()).filter(Boolean).map((actorId) => ({ actor_type: "human" as const, actor_id: actorId }));
+    const decision: DecisionRecord = {
+      schema_version: DECISION_SCHEMA_VERSION,
+      id: `decision:${hashCanonicalContext([orgId, proposal.id])}`,
+      org_id: orgId, proposal_id: proposal.id, summary: requireOption(options, "summary"),
+      rationale: requireOption(options, "rationale"), decided_by: { actor_type: "human", actor_id: orgId },
+      co_deciders: coDeciders, rights_level: proposal.rights_level,
+      context_snapshot_id: proposal.context_snapshot_id, standard_bindings: proposal.standard_bindings,
+      status: "committed", committed_at: now(),
+    };
+    writeJson(stdout, await host.get("decisions").commitProposalDecision({ org_id: orgId, proposal_id: proposal.id, decision }));
+  });
+}
+
+async function listDecisions(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => writeJson(stdout, await host.get("decisions").listDecisions({ org_id: orgId, limit: 100 })));
+}
+
+async function getDecision(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const decision = await host.get("decisions").getDecision(orgId, requireOption(options, "decision"));
+    if (!decision) throw new Error("Decision was not found");
+    writeJson(stdout, decision);
   });
 }
 
