@@ -400,6 +400,19 @@ pnpm local context-standard-version-publish-trial --database ./regenic.db --blob
 
 pnpm local context-standard-version-promote --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --version <version-id> --upgrade-evidence ./upgrade-evidence.json
+
+pnpm local context-standard-gap-from-review --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --review <review-id> --summary "Release safety is uncovered." \
+	--uncertainty "Can a release gate prevent this failure?"
+
+pnpm local context-standard-gap-new --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --request gap-1 --summary "Release safety is uncovered." \
+	--uncertainty "Can a release gate prevent regressions?"
+
+pnpm local context-standard-gap-convert --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --gap <gap-id> --kind new_standard \
+	--title "Release safety" --proposal-summary "Create a bounded standard." \
+	--boundary "Release only" --snapshot <snapshot-id> --event <event-id>
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its

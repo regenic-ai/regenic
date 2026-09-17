@@ -25,6 +25,7 @@ import type { DecisionStore } from "./decision";
 import type { ReviewStore } from "./review";
 import type { HandoffStore } from "./handoff";
 import type { StandardStore } from "./standard";
+import type { StandardGapStore } from "./standard-gap";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -47,6 +48,7 @@ declare module "@regenic/plugin-host" {
     reviews: ReviewStore;
     handoffs: HandoffStore;
     standards: StandardStore;
+    "standard-gaps": StandardGapStore;
     "context-projection-outbox": ContextProjectionOutboxStore;
     "context-lexical-index": ContextLexicalIndex;
     "context-projectors": ContextProjectorRegistry;

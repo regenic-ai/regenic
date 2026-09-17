@@ -171,6 +171,15 @@ describe("regenic-local", () => {
     ]), /Cannot replace immutable Review/);
     assert.equal((await run(["context-decision-reviews", ...common, "--decision", committed.decision.id]))[0].id, review.id);
     assert.equal((await run(["context-review-get", ...common, "--review", review.id])).result, "falsified");
+    const reviewGap = await run([
+      "context-standard-gap-from-review", ...common,
+      "--review", review.id,
+      "--summary", "The review exposed a missing release standard.",
+      "--uncertainty", "Can a release gate prevent this failure?",
+    ]);
+    assert.equal(reviewGap.source_kind, "review");
+    assert.equal((await run(["context-standard-gap-get", ...common, "--gap", reviewGap.id])).source_ref, review.id);
+    assert.equal((await run(["context-standard-gap-dismiss", ...common, "--gap", reviewGap.id])).status, "dismissed");
     const handoffArgs = [
       "context-handoff-create", ...common,
       "--request", "handoff-request-1",
@@ -247,17 +256,30 @@ describe("regenic-local", () => {
     await writeFile(deprecationEvidencePath, JSON.stringify([{
       kind: "document", uri_or_ref: "artifact:release-regression-report",
     }]), "utf8");
-    const standardProposal = await run([
-      "context-proposal-new-standard", ...common,
-      "--request", "standard-proposal-1",
+    const standardGapArgs = [
+      "context-standard-gap-new", ...common,
+      "--request", "standard-gap-1",
+      "--summary", "Release safety is not covered.",
+      "--uncertainty", uncertainty,
+    ];
+    const standardGap = await run(standardGapArgs);
+    assert.equal((await run(standardGapArgs)).id, standardGap.id);
+    const gapConversionArgs = [
+      "context-standard-gap-convert", ...common,
+      "--gap", standardGap.id,
+      "--kind", "new_standard",
       "--title", "Create release safety standard",
-      "--summary", "Create a bounded release safety standard.",
+      "--proposal-summary", "Create a bounded release safety standard.",
       "--boundary", "Release governance only",
       "--snapshot", assembled.snapshot.id,
       "--event", ingested.records[0].event_id,
-      "--uncertainty", uncertainty,
-    ]);
+    ];
+    const convertedGap = await run(gapConversionArgs);
+    const standardProposal = convertedGap.proposal;
+    assert.equal(convertedGap.gap.status, "converted");
+    assert.equal(standardProposal.gap_id, standardGap.id);
     await run(["context-proposal-submit", ...common, "--proposal", standardProposal.id]);
+    assert.equal((await run(gapConversionArgs)).proposal.status, "submitted");
     await run(["context-proposal-review", ...common, "--proposal", standardProposal.id]);
     const standardCommit = await run([
       "context-standard-version-commit", ...common,
@@ -286,18 +308,25 @@ describe("regenic-local", () => {
       gate: { ...gate, learning_output: "revision" },
     };
     await writeFile(revisionSpecPath, JSON.stringify(revisionSpec), "utf8");
-    const revisionProposal = await run([
-      "context-proposal-revise-standard", ...common,
-      "--request", "standard-proposal-2",
+    const revisionGap = await run([
+      "context-standard-gap-new", ...common,
+      "--request", "standard-revision-gap",
+      "--summary", "The release standard needs a revision.",
+      "--uncertainty", uncertainty,
+    ]);
+    const revisionConversionArgs = [
+      "context-standard-gap-convert", ...common,
+      "--gap", revisionGap.id,
+      "--kind", "revise_standard",
       "--title", "Revise release safety standard",
-      "--summary", "Publish the bounded release result.",
+      "--proposal-summary", "Publish the bounded release result.",
       "--boundary", "Release governance only",
       "--snapshot", assembled.snapshot.id,
       "--event", ingested.records[0].event_id,
-      "--uncertainty", uncertainty,
       "--standard", standardCommit.standard.id,
-      "--supersedes", standardCommit.version.id,
-    ]);
+      "--version", standardCommit.version.id,
+    ];
+    const revisionProposal = (await run(revisionConversionArgs)).proposal;
     await run(["context-proposal-submit", ...common, "--proposal", revisionProposal.id]);
     await run(["context-proposal-review", ...common, "--proposal", revisionProposal.id]);
     const revisionCommit = await run([
@@ -315,6 +344,7 @@ describe("regenic-local", () => {
       "--version", standardCommit.version.id,
       "--deprecation-evidence", deprecationEvidencePath,
     ])).status, "deprecated");
+    assert.equal((await run(revisionConversionArgs)).proposal.status, "accepted");
     assert.deepEqual((await run([
       "context-standard-versions", ...common,
       "--standard", standardCommit.standard.id,

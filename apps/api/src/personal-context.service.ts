@@ -10,6 +10,7 @@ import {
   HANDOFF_SCHEMA_VERSION,
   STANDARD_SCHEMA_VERSION,
   STANDARD_VERSION_SCHEMA_VERSION,
+  STANDARD_GAP_SCHEMA_VERSION,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -41,6 +42,8 @@ import {
   type StandardVersionStatus,
   type TrialConfig,
   type UpgradeEvidence,
+  type StandardGapRecord,
+  type StandardGapStatus,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -409,6 +412,155 @@ export class PersonalContextService {
     const review = await this.runtime.requireHost().get("reviews").getReview(this.runtime.orgId(), requiredString(reviewId, "review_id"));
     if (!review) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Review was not found");
     return review;
+  }
+
+  async createStandardGapFromReview(reviewId: string, input: unknown): Promise<StandardGapRecord> {
+    const body = strictBody(input, new Set(["summary", "proposed_uncertainty"]));
+    const review = await this.getReview(reviewId);
+    if (review.result !== "falsified" || !["open_gap", "revise_standard"].includes(review.recommended_action)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Review does not recommend a StandardGap");
+    }
+    return this.putStandardGap({
+      source_kind: "review",
+      source_ref: review.id,
+      summary: requiredString(body.summary, "summary"),
+      proposed_uncertainty: requiredString(body.proposed_uncertainty, "proposed_uncertainty"),
+    });
+  }
+
+  async createManualStandardGap(input: unknown): Promise<StandardGapRecord> {
+    const body = strictBody(input, new Set(["client_request_id", "summary", "proposed_uncertainty"]));
+    return this.putStandardGap({
+      source_kind: "manual",
+      source_ref: requiredString(body.client_request_id, "client_request_id"),
+      summary: requiredString(body.summary, "summary"),
+      proposed_uncertainty: requiredString(body.proposed_uncertainty, "proposed_uncertainty"),
+    });
+  }
+
+  async listStandardGaps(status?: string) {
+    return this.runtime.requireHost().get("standard-gaps").listStandardGaps({
+      org_id: this.runtime.orgId(),
+      ...(status ? { status: standardGapStatus(status) } : {}),
+      limit: 100,
+    });
+  }
+
+  async getStandardGap(gapId: string) {
+    const gap = await this.runtime.requireHost().get("standard-gaps").getStandardGap(this.runtime.orgId(), requiredString(gapId, "gap_id"));
+    if (!gap) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "StandardGap was not found");
+    return gap;
+  }
+
+  async convertStandardGap(gapId: string, input: unknown) {
+    const body = strictBody(input, new Set([
+      "kind", "title", "summary", "rights_level", "boundary", "context_snapshot_id",
+      "standard_id", "version_id", "evidence",
+    ]));
+    const gap = await this.getStandardGap(gapId);
+    const kind = requiredString(body.kind, "kind");
+    if (!["new_standard", "revise_standard"].includes(kind)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "StandardGap can convert only to a Standard Proposal");
+    }
+    const snapshotId = requiredString(body.context_snapshot_id, "context_snapshot_id");
+    if (!await this.runtime.requireHost().get("context-artifacts").getSnapshot(this.runtime.orgId(), snapshotId)) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
+    }
+    const evidence = proposalEvidence(body.evidence);
+    for (const item of evidence) {
+      if (!item.uri_or_ref.startsWith("event:")) continue;
+      if (!await this.runtime.requireHost().get("authority").getEvent(this.runtime.orgId(), item.uri_or_ref.slice("event:".length))) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Proposal evidence Event was not found");
+      }
+    }
+    evidence.unshift({ kind: "document", uri_or_ref: `standard-gap:${gap.id}` });
+    let bindings: ProposalRecord["standard_bindings"] = [];
+    if (kind === "revise_standard") {
+      const standardId = requiredString(body.standard_id, "standard_id");
+      const versionId = requiredString(body.version_id, "version_id");
+      const standard = await this.runtime.requireHost().get("standards").getStandard(this.runtime.orgId(), standardId);
+      const version = await this.runtime.requireHost().get("standards").getStandardVersion(this.runtime.orgId(), versionId);
+      if (!standard || !version || version.standard_id !== standard.id) {
+        throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Revision StandardVersion was not found");
+      }
+      if (gap.status === "open"
+        && (standard.current_version_id !== version.id || ["draft", "deprecated"].includes(version.status))) {
+        throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Revision must pin the current published StandardVersion");
+      }
+      bindings = [{ standard_id: standard.id, version_id: version.id }];
+    } else if (body.standard_id !== undefined || body.version_id !== undefined) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "New Standard Proposal cannot set a target version");
+    }
+    const now = new Date().toISOString();
+    const proposal: ProposalRecord = {
+      schema_version: PROPOSAL_SCHEMA_VERSION,
+      id: `proposal:${hashCanonicalContext([this.runtime.orgId(), gap.id])}`,
+      org_id: this.runtime.orgId(),
+      kind: kind as "new_standard" | "revise_standard",
+      title: requiredString(body.title, "title"),
+      summary: requiredString(body.summary, "summary"),
+      status: "draft",
+      author: { actor_type: "human", actor_id: this.runtime.orgId() },
+      rights_level: optionalRightsLevel(body.rights_level),
+      boundary: requiredString(body.boundary, "boundary"),
+      context_snapshot_id: snapshotId,
+      standard_bindings: bindings,
+      single_uncertainty: gap.proposed_uncertainty,
+      evidence,
+      gap_id: gap.id,
+      created_at: now,
+      updated_at: now,
+    };
+    try {
+      return await this.runtime.requireHost().get("standard-gaps").convertStandardGap({
+        org_id: this.runtime.orgId(), gap_id: gap.id, proposal,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid StandardGap conversion";
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, message);
+    }
+  }
+
+  async dismissStandardGap(gapId: string) {
+    try {
+      const gap = await this.runtime.requireHost().get("standard-gaps").dismissStandardGap({
+        org_id: this.runtime.orgId(), gap_id: requiredString(gapId, "gap_id"),
+        dismissed_at: new Date().toISOString(),
+      });
+      if (!gap) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "StandardGap was not found");
+      return gap;
+    } catch (error) {
+      if (error instanceof PersonalContextError) throw error;
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid StandardGap dismissal");
+    }
+  }
+
+  private async putStandardGap(input: {
+    source_kind: "review" | "manual";
+    source_ref: string;
+    summary: string;
+    proposed_uncertainty: string;
+  }): Promise<StandardGapRecord> {
+    const now = new Date().toISOString();
+    try {
+      return await this.runtime.requireHost().get("standard-gaps").putStandardGap({
+        schema_version: STANDARD_GAP_SCHEMA_VERSION,
+        id: `standard-gap:${hashCanonicalContext([this.runtime.orgId(), input.source_kind, input.source_ref])}`,
+        org_id: this.runtime.orgId(),
+        summary: input.summary,
+        source_kind: input.source_kind,
+        source_ref: input.source_ref,
+        proposed_uncertainty: input.proposed_uncertainty,
+        status: "open",
+        created_by: { actor_type: "human", actor_id: this.runtime.orgId() },
+        created_at: now,
+        updated_at: now,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid StandardGap";
+      const status = message.includes("Cannot replace") ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
+      throw new PersonalContextError("invalid_request", status, message);
+    }
   }
 
   async createHandoff(input: unknown): Promise<HandoffRecord> {
@@ -899,6 +1051,14 @@ function standardLayer(value: unknown): StandardLayer {
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Standard layer");
   }
   return layer as StandardLayer;
+}
+
+function standardGapStatus(value: unknown): StandardGapStatus {
+  const status = requiredString(value, "status");
+  if (!["open", "converted", "dismissed"].includes(status)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid StandardGap status");
+  }
+  return status as StandardGapStatus;
 }
 
 function standardScope(value: unknown, orgId: string): StandardScope {

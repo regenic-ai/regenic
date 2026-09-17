@@ -190,6 +190,36 @@ export class PersonalContextController {
     return this.guard(() => this.context.getReview(reviewId));
   }
 
+  @Post("reviews/:reviewId/standard-gap")
+  createStandardGapFromReview(@Param("reviewId") reviewId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.createStandardGapFromReview(reviewId, body));
+  }
+
+  @Post("standard-gaps")
+  createManualStandardGap(@Body() body: unknown) {
+    return this.guard(() => this.context.createManualStandardGap(body));
+  }
+
+  @Get("standard-gaps")
+  listStandardGaps(@Query("status") status?: string) {
+    return this.guard(() => this.context.listStandardGaps(status));
+  }
+
+  @Get("standard-gaps/:gapId")
+  getStandardGap(@Param("gapId") gapId: string) {
+    return this.guard(() => this.context.getStandardGap(gapId));
+  }
+
+  @Post("standard-gaps/:gapId/proposal")
+  convertStandardGap(@Param("gapId") gapId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.convertStandardGap(gapId, body));
+  }
+
+  @Post("standard-gaps/:gapId/dismiss")
+  dismissStandardGap(@Param("gapId") gapId: string) {
+    return this.guard(() => this.context.dismissStandardGap(gapId));
+  }
+
   @Post("handoffs")
   createHandoff(@Body() body: unknown) {
     return this.guard(() => this.context.createHandoff(body));

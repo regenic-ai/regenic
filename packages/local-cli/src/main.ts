@@ -27,6 +27,7 @@ import {
   HANDOFF_SCHEMA_VERSION,
   STANDARD_SCHEMA_VERSION,
   STANDARD_VERSION_SCHEMA_VERSION,
+  STANDARD_GAP_SCHEMA_VERSION,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -49,6 +50,8 @@ import {
   type StandardVersionStatus,
   type TrialConfig,
   type UpgradeEvidence,
+  type StandardGapRecord,
+  type StandardGapStatus,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -276,8 +279,26 @@ export async function runLocalCli(
     case "context-standard-version-deprecate":
       await transitionCliStandardVersion(commandOptions, stdout, now, "deprecated");
       return;
+    case "context-standard-gap-new":
+      await createManualStandardGap(commandOptions, stdout, now);
+      return;
+    case "context-standard-gap-from-review":
+      await createReviewStandardGap(commandOptions, stdout, now);
+      return;
+    case "context-standard-gaps":
+      await listStandardGaps(commandOptions, stdout);
+      return;
+    case "context-standard-gap-get":
+      await getStandardGap(commandOptions, stdout);
+      return;
+    case "context-standard-gap-convert":
+      await convertStandardGap(commandOptions, stdout, now);
+      return;
+    case "context-standard-gap-dismiss":
+      await dismissStandardGap(commandOptions, stdout, now);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss");
   }
 }
 
@@ -1878,6 +1899,139 @@ async function readEvidenceArray(path: string, name: string): Promise<ProposalRe
 function assertObjectKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, name: string): void {
   const unexpected = Object.keys(value).find((key) => !allowed.has(key));
   if (unexpected) throw new Error(`Unexpected ${name} field: ${unexpected}`);
+}
+
+async function createManualStandardGap(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  await putCliStandardGap(options, stdout, now, {
+    source_kind: "manual",
+    source_ref: requireOption(options, "request"),
+  });
+}
+
+async function createReviewStandardGap(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const reviewId = requireOption(options, "review");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const review = await host.get("reviews").getReview(orgId, reviewId);
+    if (!review) throw new Error("Review was not found");
+    if (review.result !== "falsified" || !["open_gap", "revise_standard"].includes(review.recommended_action)) {
+      throw new Error("Review does not recommend a StandardGap");
+    }
+  });
+  await putCliStandardGap(options, stdout, now, { source_kind: "review", source_ref: reviewId });
+}
+
+async function putCliStandardGap(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+  source: Pick<StandardGapRecord, "source_kind" | "source_ref">,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const at = now();
+    writeJson(stdout, await host.get("standard-gaps").putStandardGap({
+      schema_version: STANDARD_GAP_SCHEMA_VERSION,
+      id: `standard-gap:${hashCanonicalContext([orgId, source.source_kind, source.source_ref])}`,
+      org_id: orgId,
+      summary: requireOption(options, "summary"),
+      source_kind: source.source_kind,
+      source_ref: source.source_ref,
+      proposed_uncertainty: requireOption(options, "uncertainty"),
+      status: "open",
+      created_by: { actor_type: "human", actor_id: orgId },
+      created_at: at,
+      updated_at: at,
+    }));
+  });
+}
+
+async function listStandardGaps(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const status = optionString(options, "status");
+  if (status && !["open", "converted", "dismissed"].includes(status)) throw new Error("Invalid StandardGap status");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    writeJson(stdout, await host.get("standard-gaps").listStandardGaps({
+      org_id: orgId, ...(status ? { status: status as StandardGapStatus } : {}), limit: 100,
+    }));
+  });
+}
+
+async function getStandardGap(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const gap = await host.get("standard-gaps").getStandardGap(orgId, requireOption(options, "gap"));
+    if (!gap) throw new Error("StandardGap was not found");
+    writeJson(stdout, gap);
+  });
+}
+
+async function convertStandardGap(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const gap = await host.get("standard-gaps").getStandardGap(orgId, requireOption(options, "gap"));
+    if (!gap) throw new Error("StandardGap was not found");
+    const snapshotId = requireOption(options, "snapshot");
+    if (!await host.get("context-artifacts").getSnapshot(orgId, snapshotId)) throw new Error("Context snapshot was not found");
+    const eventId = requireOption(options, "event");
+    if (!await host.get("authority").getEvent(orgId, eventId)) throw new Error("Proposal evidence Event was not found");
+    const kind = requireOption(options, "kind");
+    if (!["new_standard", "revise_standard"].includes(kind)) throw new Error("StandardGap can convert only to a Standard Proposal");
+    let bindings: ProposalRecord["standard_bindings"] = [];
+    if (kind === "revise_standard") {
+      const standardId = requireOption(options, "standard");
+      const versionId = requireOption(options, "version");
+      const standard = await host.get("standards").getStandard(orgId, standardId);
+      const version = await host.get("standards").getStandardVersion(orgId, versionId);
+      if (!standard || !version || version.standard_id !== standard.id) {
+        throw new Error("Revision StandardVersion was not found");
+      }
+      if (gap.status === "open"
+        && (standard.current_version_id !== version.id || ["draft", "deprecated"].includes(version.status))) {
+        throw new Error("Revision must pin the current published StandardVersion");
+      }
+      bindings = [{ standard_id: standard.id, version_id: version.id }];
+    } else if (optionString(options, "standard") || optionString(options, "version")) {
+      throw new Error("New Standard Proposal cannot set a target version");
+    }
+    const rights = optionString(options, "rights") ?? "coach";
+    if (!["direct", "coach", "negotiate", "authorize", "delegate"].includes(rights)) throw new Error("Invalid rights level");
+    const at = now();
+    const proposal: ProposalRecord = {
+      schema_version: PROPOSAL_SCHEMA_VERSION,
+      id: `proposal:${hashCanonicalContext([orgId, gap.id])}`,
+      org_id: orgId,
+      kind: kind as "new_standard" | "revise_standard",
+      title: requireOption(options, "title"),
+      summary: requireOption(options, "proposal-summary"),
+      status: "draft",
+      author: { actor_type: "human", actor_id: orgId },
+      rights_level: rights as ProposalRecord["rights_level"],
+      boundary: requireOption(options, "boundary"),
+      context_snapshot_id: snapshotId,
+      standard_bindings: bindings,
+      single_uncertainty: gap.proposed_uncertainty,
+      evidence: [
+        { kind: "document", uri_or_ref: `standard-gap:${gap.id}` },
+        { kind: "document", uri_or_ref: `event:${eventId}` },
+      ],
+      gap_id: gap.id,
+      created_at: at,
+      updated_at: at,
+    };
+    writeJson(stdout, await host.get("standard-gaps").convertStandardGap({ org_id: orgId, gap_id: gap.id, proposal }));
+  });
+}
+
+async function dismissStandardGap(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const gap = await host.get("standard-gaps").dismissStandardGap({
+      org_id: orgId, gap_id: requireOption(options, "gap"), dismissed_at: now(),
+    });
+    if (!gap) throw new Error("StandardGap was not found");
+    writeJson(stdout, gap);
+  });
 }
 
 function cliDigestItem(attrs: unknown, direction: string, eventId: string): { item_kind: string; text: unknown } {
