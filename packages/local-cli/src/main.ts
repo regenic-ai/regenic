@@ -333,8 +333,14 @@ export async function runLocalCli(
     case "context-run-drift-scan":
       await scanStandardDriftCommand(commandOptions, stdout);
       return;
+    case "context-standard-usage-project":
+      await projectStandardUsageCommand(commandOptions, stdout);
+      return;
+    case "context-standard-usage":
+      await listStandardUsageCommand(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage");
   }
 }
 
@@ -1438,17 +1444,30 @@ async function createDecisionProposal(options: CommandOptions, stdout: CliOutput
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
     const snapshotId = requireOption(options, "snapshot");
     if (!await host.get("context-artifacts").getSnapshot(orgId, snapshotId)) throw new Error("Context snapshot was not found");
+    const eventId = requireOption(options, "event");
+    if (!await host.get("authority").getEvent(orgId, eventId)) throw new Error("Proposal evidence Event was not found");
+    const proposalId = `proposal:${hashCanonicalContext([orgId, requireOption(options, "request")])}`;
+    const existing = await host.get("proposals").getProposal(orgId, proposalId);
+    const bindings = cliStandardBindings(optionString(options, "bindings"));
+    for (const binding of bindings) {
+      const standard = await host.get("standards").getStandard(orgId, binding.standard_id);
+      const version = await host.get("standards").getStandardVersion(orgId, binding.version_id);
+      if (!standard || !version || version.standard_id !== standard.id
+        || (!existing && !["trial", "active"].includes(version.status))) {
+        throw new Error("Decision Proposal binding must pin a published StandardVersion");
+      }
+    }
     const at = now();
     const rights = optionString(options, "rights") ?? "coach";
     if (!["direct", "coach", "negotiate", "authorize", "delegate"].includes(rights)) throw new Error("Invalid rights level");
     const proposal: ProposalRecord = {
       schema_version: PROPOSAL_SCHEMA_VERSION,
-      id: `proposal:${hashCanonicalContext([orgId, requireOption(options, "request")])}`,
+      id: proposalId,
       org_id: orgId, kind: "decision", title: requireOption(options, "title"),
       summary: requireOption(options, "summary"), status: "draft",
       author: { actor_type: "human", actor_id: orgId }, rights_level: rights as ProposalRecord["rights_level"],
       boundary: requireOption(options, "boundary"), context_snapshot_id: snapshotId,
-      standard_bindings: [], evidence: [{ kind: "document", uri_or_ref: `event:${requireOption(options, "event")}` }],
+      standard_bindings: bindings, evidence: [{ kind: "document", uri_or_ref: `event:${eventId}` }],
       created_at: at, updated_at: at,
     };
     writeJson(stdout, await host.get("proposals").putProposal(proposal));
@@ -1469,18 +1488,36 @@ async function commitDecision(options: CommandOptions, stdout: CliOutput, now: (
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
     const proposalId = requireOption(options, "proposal");
     const proposal = await host.get("proposals").getProposal(orgId, proposalId);
-    if (!proposal || proposal.kind !== "decision" || proposal.status !== "in_review" || !proposal.context_snapshot_id) throw new Error("Decision commit requires an in-review decision Proposal");
     const coDeciders = (optionString(options, "co-deciders") ?? "").split(",").map((value) => value.trim()).filter(Boolean).map((actorId) => ({ actor_type: "human" as const, actor_id: actorId }));
+    const summary = requireOption(options, "summary");
+    const rationale = requireOption(options, "rationale");
+    if (proposal?.status === "accepted" && proposal.outcome_ref?.outcome_kind === "decision" && proposal.outcome_ref.ref_id) {
+      const existing = await host.get("decisions").getDecision(orgId, proposal.outcome_ref.ref_id);
+      if (!existing || existing.summary !== summary || existing.rationale !== rationale
+        || hashCanonicalContext(existing.co_deciders) !== hashCanonicalContext(coDeciders)) {
+        throw new Error("Cannot replace committed Decision");
+      }
+      await projectCliStandardUsageBestEffort(host, {
+        org_id: orgId, source_kind: "decision", source_id: existing.id,
+      });
+      writeJson(stdout, { proposal, decision: existing });
+      return;
+    }
+    if (!proposal || proposal.kind !== "decision" || proposal.status !== "in_review" || !proposal.context_snapshot_id) throw new Error("Decision commit requires an in-review decision Proposal");
     const decision: DecisionRecord = {
       schema_version: DECISION_SCHEMA_VERSION,
       id: `decision:${hashCanonicalContext([orgId, proposal.id])}`,
-      org_id: orgId, proposal_id: proposal.id, summary: requireOption(options, "summary"),
-      rationale: requireOption(options, "rationale"), decided_by: { actor_type: "human", actor_id: orgId },
+      org_id: orgId, proposal_id: proposal.id, summary,
+      rationale, decided_by: { actor_type: "human", actor_id: orgId },
       co_deciders: coDeciders, rights_level: proposal.rights_level,
       context_snapshot_id: proposal.context_snapshot_id, standard_bindings: proposal.standard_bindings,
       status: "committed", committed_at: now(),
     };
-    writeJson(stdout, await host.get("decisions").commitProposalDecision({ org_id: orgId, proposal_id: proposal.id, decision }));
+    const committed = await host.get("decisions").commitProposalDecision({ org_id: orgId, proposal_id: proposal.id, decision });
+    await projectCliStandardUsageBestEffort(host, {
+      org_id: orgId, source_kind: "decision", source_id: committed.decision.id,
+    });
+    writeJson(stdout, committed);
   });
 }
 
@@ -1744,11 +1781,15 @@ function cliHandoffPayload(value: string): Record<string, JsonValue> {
 
 function cliStandardBindings(value: string | undefined): HandoffRecord["standard_bindings"] {
   if (!value) return [];
-  return value.split(",").map((entry) => {
+  const bindings = value.split(",").map((entry) => {
     const separator = entry.lastIndexOf("@");
-    if (separator < 1 || separator === entry.length - 1) throw new Error("Handoff bindings must use standard@version");
+    if (separator < 1 || separator === entry.length - 1) throw new Error("Standard bindings must use standard@version");
     return { standard_id: entry.slice(0, separator), version_id: entry.slice(separator + 1) };
   });
+  if (new Set(bindings.map(({ standard_id, version_id }) => `${standard_id}\u0000${version_id}`)).size !== bindings.length) {
+    throw new Error("Standard bindings must not contain duplicates");
+  }
+  return bindings;
 }
 
 async function createStandardProposal(
@@ -1898,6 +1939,54 @@ async function listStandardVersions(options: CommandOptions, stdout: CliOutput):
     if (!await host.get("standards").getStandard(orgId, standardId)) throw new Error("Standard was not found");
     writeJson(stdout, await host.get("standards").listStandardVersions({ org_id: orgId, standard_id: standardId, limit: 100 }));
   });
+}
+
+async function projectStandardUsageCommand(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const sourceKind = cliStandardUsageSourceKind(requireOption(options, "source-kind"));
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    writeJson(stdout, await host.get("standard-usage").projectStandardUsage({
+      org_id: orgId, source_kind: sourceKind, source_id: requireOption(options, "source"),
+    }));
+  });
+}
+
+async function listStandardUsageCommand(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const standardId = requireOption(options, "standard");
+  const versionId = optionString(options, "version");
+  const sourceKind = optionString(options, "source-kind");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const standard = await host.get("standards").getStandard(orgId, standardId);
+    if (!standard) throw new Error("Standard was not found");
+    if (versionId) {
+      const version = await host.get("standards").getStandardVersion(orgId, versionId);
+      if (!version || version.standard_id !== standard.id) throw new Error("StandardVersion does not belong to Standard");
+    }
+    writeJson(stdout, await host.get("standard-usage").listStandardUsage({
+      org_id: orgId,
+      standard_id: standard.id,
+      ...(versionId ? { version_id: versionId } : {}),
+      ...(sourceKind ? { source_kind: cliStandardUsageSourceKind(sourceKind) } : {}),
+      limit: 100,
+    }));
+  });
+}
+
+function cliStandardUsageSourceKind(value: string): "decision" | "agent_run" {
+  if (!["decision", "agent_run"].includes(value)) throw new Error("Invalid StandardUsage source kind");
+  return value as "decision" | "agent_run";
+}
+
+async function projectCliStandardUsageBestEffort(
+  host: Awaited<ReturnType<typeof import("./host")["createLocalHost"]>>,
+  input: { org_id: string; source_kind: "decision" | "agent_run"; source_id: string },
+): Promise<void> {
+  try {
+    await host.get("standard-usage").projectStandardUsage(input);
+  } catch {
+    // The source is authority; explicit repair can rebuild this derived ledger.
+  }
 }
 
 async function getStandardVersion(options: CommandOptions, stdout: CliOutput): Promise<void> {
@@ -2216,7 +2305,11 @@ async function createAgentRun(options: CommandOptions, stdout: CliOutput, now: (
       input: parseJsonObjectValue(requireOption(options, "input"), "AgentRun input"),
       created_at: existing?.created_at ?? now(),
     };
-    writeJson(stdout, await host.get("agent-runs").putAgentRun(run));
+    const persisted = await host.get("agent-runs").putAgentRun(run);
+    await projectCliStandardUsageBestEffort(host, {
+      org_id: orgId, source_kind: "agent_run", source_id: persisted.id,
+    });
+    writeJson(stdout, persisted);
   });
 }
 

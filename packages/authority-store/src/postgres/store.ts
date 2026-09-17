@@ -39,6 +39,8 @@ import {
   handoffAgentRun as applyAgentRunHandoff,
   cancelAgentRun as applyAgentRunCancellation,
   agentRunState,
+  STANDARD_USAGE_SCHEMA_VERSION,
+  validateStandardUsage,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -89,6 +91,8 @@ import type {
   AgentRunRecord,
   AgentRunState,
   AgentRunStatus,
+  StandardUsageRecord,
+  StandardUsageSourceKind,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1317,14 +1321,13 @@ export class PostgresAuthorityStore
   async commitProposalDecision(input: { org_id: string; proposal_id: string; decision: DecisionRecord }): Promise<{ proposal: ProposalRecord; decision: DecisionRecord }> {
     return this.withTx(async (client) => {
       const decision = validateDecision(input.decision);
+      const proposal = await this.getProposalWithinTransaction(input.org_id, input.proposal_id, client, true);
       const existing = await this.queryOne<{ payload_json: unknown }>(`SELECT payload_json FROM decisions WHERE org_id = $1 AND proposal_id = $2`, [input.org_id, input.proposal_id], client);
       if (existing) {
         const stored = validateDecision(parseContextJson<DecisionRecord>(existing.payload_json));
         if (canonicalContextJson(stored) !== canonicalContextJson(decision)) throw new Error("Cannot replace immutable Decision");
-        const proposal = await this.getProposalWithinTransaction(input.org_id, input.proposal_id, client);
         return { proposal: proposal!, decision: stored };
       }
-      const proposal = await this.getProposalWithinTransaction(input.org_id, input.proposal_id, client, true);
       if (!proposal || proposal.status !== "in_review" || proposal.kind !== "decision"
         || decision.org_id !== input.org_id || decision.proposal_id !== proposal.id
         || decision.context_snapshot_id !== proposal.context_snapshot_id
@@ -1683,6 +1686,80 @@ export class PostgresAuthorityStore
       await this.updateAgentRunState(current, next, client);
       return next;
     });
+  }
+
+  async projectStandardUsage(input: { org_id: string; source_kind: StandardUsageSourceKind; source_id: string }): Promise<StandardUsageRecord[]> {
+    if (!input.org_id?.trim() || !input.source_id?.trim() || !["decision", "agent_run"].includes(input.source_kind)) {
+      throw new Error("Invalid StandardUsage projection");
+    }
+    return this.withTx(async (client) => {
+      let bindings: Array<{ standard_id: string; version_id: string }>;
+      let contextSnapshotId: string;
+      let citedAt: string;
+      if (input.source_kind === "decision") {
+        const row = await this.queryOne<{ payload_json: unknown }>(`SELECT payload_json FROM decisions WHERE org_id = $1 AND id = $2`, [input.org_id, input.source_id], client);
+        if (!row) throw new Error("StandardUsage source Decision was not found");
+        const decision = validateDecision(parseContextJson<DecisionRecord>(row.payload_json));
+        bindings = decision.standard_bindings;
+        contextSnapshotId = decision.context_snapshot_id;
+        citedAt = decision.committed_at;
+      } else {
+        const row = await this.queryOne<AgentRunRow>(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = $1 AND id = $2`, [input.org_id, input.source_id], client);
+        if (!row) throw new Error("StandardUsage source AgentRun was not found");
+        const run = toAgentRun(row);
+        bindings = run.standard_bindings;
+        contextSnapshotId = run.context_snapshot_id;
+        citedAt = run.created_at;
+      }
+      for (const standardId of [...new Set(bindings.map(({ standard_id }) => standard_id))].sort()) {
+        const locked = await this.queryOne<{ id: string }>(`SELECT id FROM standards WHERE org_id = $1 AND id = $2 FOR UPDATE`, [input.org_id, standardId], client);
+        if (!locked) throw new Error("StandardUsage binding was not found");
+      }
+      const usages: StandardUsageRecord[] = [];
+      for (const binding of bindings) {
+        const standardRow = await this.queryOne<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 AND id = $2`, [input.org_id, binding.standard_id], client);
+        const versionRow = await this.queryOne<StandardVersionRow>(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = $1 AND id = $2`, [input.org_id, binding.version_id], client);
+        const standard = standardRow ? toStandard(standardRow) : null;
+        const version = versionRow ? toStandardVersion(versionRow) : null;
+        if (!standard || !version || version.standard_id !== standard.id) {
+          throw new Error("StandardUsage binding was not found");
+        }
+        const usage = validateStandardUsage({
+          schema_version: STANDARD_USAGE_SCHEMA_VERSION,
+          id: `standard-usage:${hashCanonicalContext([
+            input.org_id, input.source_kind, input.source_id, standard.id, version.id,
+          ])}`,
+          org_id: input.org_id,
+          standard_id: standard.id,
+          version_id: version.id,
+          source_kind: input.source_kind,
+          source_id: input.source_id,
+          context_snapshot_id: contextSnapshotId,
+          cited_at: citedAt,
+        });
+        await this.execute(`INSERT INTO standard_usage (id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING`, [usage.id, usage.org_id, usage.standard_id, usage.version_id, usage.source_kind, usage.source_id, usage.context_snapshot_id, usage.cited_at], client);
+        usages.push(usage);
+      }
+      for (const standardId of new Set(usages.map(({ standard_id }) => standard_id))) {
+        await this.execute(`UPDATE standards SET citation_count = (SELECT COUNT(*) FROM standard_usage WHERE org_id = $1 AND standard_id = $2) WHERE org_id = $1 AND id = $2`, [input.org_id, standardId], client);
+      }
+      return usages;
+    });
+  }
+
+  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; limit?: number }): Promise<StandardUsageRecord[]> {
+    const conditions = ["org_id = $1"];
+    const values: unknown[] = [input.org_id];
+    if (input.standard_id) { values.push(input.standard_id); conditions.push(`standard_id = $${values.length}`); }
+    if (input.version_id) { values.push(input.version_id); conditions.push(`version_id = $${values.length}`); }
+    if (input.source_kind) { values.push(input.source_kind); conditions.push(`source_kind = $${values.length}`); }
+    values.push(input.limit ?? 100);
+    const rows = await this.query<Omit<StandardUsageRecord, "schema_version">>(`SELECT id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at FROM standard_usage WHERE ${conditions.join(" AND ")} ORDER BY cited_at, id LIMIT $${values.length}`, values);
+    return rows.map((row) => validateStandardUsage({
+      schema_version: STANDARD_USAGE_SCHEMA_VERSION,
+      ...row,
+      cited_at: toIso(row.cited_at),
+    }));
   }
 
   private async getProposalWithinTransaction(orgId: string, proposalId: string, client: PoolClient, lock = false): Promise<ProposalRecord | null> {

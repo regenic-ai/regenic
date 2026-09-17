@@ -628,6 +628,60 @@ describe("SQLite context artifact store", () => {
     assert.equal(deprecated.superseded_by_version_id, revision.id);
     assert.equal((await split.getStandardBySlug("example-org", standard.slug)).current_version_id, revision.id);
     assert.deepEqual((await split.listStandardVersions({ org_id: "example-org", standard_id: standard.id })).map(({ status }) => status), ["deprecated", "active"]);
+    const usageRun = {
+      schema_version: "1.0", id: "standard-usage-run-1", org_id: "example-org",
+      agent: { actor_type: "agent", actor_id: "agent-1" },
+      intent: "Apply the active release standard.", status: "queued",
+      context_snapshot_id: "snapshot-usage-1",
+      standard_bindings: [{ standard_id: standard.id, version_id: revision.id }],
+      input: { release_id: "release-usage-1" }, created_at: "2026-10-04T06:00:00.000Z",
+    };
+    await split.putAgentRun(usageRun);
+    const [usage] = await split.projectStandardUsage({
+      org_id: "example-org", source_kind: "agent_run", source_id: usageRun.id,
+    });
+    assert.equal(usage.version_id, revision.id);
+    assert.equal((await split.projectStandardUsage({
+      org_id: "example-org", source_kind: "agent_run", source_id: usageRun.id,
+    })).length, 1);
+    assert.equal((await split.getStandard("example-org", standard.id)).citation_count, 1);
+    assert.deepEqual((await split.listStandardUsage({
+      org_id: "example-org", standard_id: standard.id, version_id: revision.id,
+      source_kind: "agent_run",
+    })).map(({ source_id }) => source_id), [usageRun.id]);
+    const usageDecisionProposal = {
+      schema_version: "1.0", id: "standard-usage-decision-proposal", org_id: "example-org",
+      kind: "decision", title: "Approve release under standard",
+      summary: "Approve one release under the active StandardVersion.", status: "draft",
+      author: proposal.author, rights_level: "coach", boundary: "Release decision only",
+      context_snapshot_id: "snapshot-usage-2",
+      standard_bindings: [{ standard_id: standard.id, version_id: revision.id }],
+      evidence: [{ kind: "document", uri_or_ref: "event:event-1" }],
+      created_at: "2026-10-04T07:00:00.000Z", updated_at: "2026-10-04T07:00:00.000Z",
+    };
+    await split.putProposal(usageDecisionProposal);
+    await split.transitionProposal({ org_id: "example-org", proposal_id: usageDecisionProposal.id, status: "submitted", updated_at: "2026-10-04T07:01:00.000Z" });
+    await split.transitionProposal({ org_id: "example-org", proposal_id: usageDecisionProposal.id, status: "in_review", updated_at: "2026-10-04T07:02:00.000Z" });
+    const usageDecision = {
+      schema_version: "1.0", id: "standard-usage-decision-1", org_id: "example-org",
+      proposal_id: usageDecisionProposal.id, summary: "Proceed with the release.",
+      rationale: "The pinned evidence supports the bounded release.",
+      decided_by: proposal.author, co_deciders: [], rights_level: "coach",
+      context_snapshot_id: usageDecisionProposal.context_snapshot_id,
+      standard_bindings: usageDecisionProposal.standard_bindings,
+      status: "committed", committed_at: "2026-10-04T07:03:00.000Z",
+    };
+    await split.commitProposalDecision({
+      org_id: "example-org", proposal_id: usageDecisionProposal.id, decision: usageDecision,
+    });
+    assert.equal((await split.projectStandardUsage({
+      org_id: "example-org", source_kind: "decision", source_id: usageDecision.id,
+    }))[0].source_id, usageDecision.id);
+    assert.equal((await split.getStandard("example-org", standard.id)).citation_count, 2);
+    assert.deepEqual((await split.listStandardUsage({
+      org_id: "example-org", standard_id: standard.id, source_kind: "decision",
+    })).map(({ source_id }) => source_id), [usageDecision.id]);
+    assert.equal((await split.listStandardUsage({ org_id: "other-org" })).length, 0);
     await split.close();
   });
 
@@ -1258,6 +1312,7 @@ describe("SQLite context artifact store", () => {
     assert.equal(host.get("authority"), host.get("standards"));
     assert.equal(host.get("authority"), host.get("standard-gaps"));
     assert.equal(host.get("authority"), host.get("agent-runs"));
+    assert.equal(host.get("authority"), host.get("standard-usage"));
     assert.deepEqual(
       await host.get("context-artifacts").getArtifact("example-org", "artifact-1"),
       artifactValue,
@@ -1270,6 +1325,7 @@ describe("SQLite context artifact store", () => {
     assert.throws(() => host.get("standards"), /Service is not available/);
     assert.throws(() => host.get("standard-gaps"), /Service is not available/);
     assert.throws(() => host.get("agent-runs"), /Service is not available/);
+    assert.throws(() => host.get("standard-usage"), /Service is not available/);
     await host.dispose();
   });
 

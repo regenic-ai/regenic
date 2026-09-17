@@ -141,6 +141,10 @@ describe("regenic-local", () => {
       "--event", ingested.records[0].event_id,
     ];
     const decisionProposal = await run(decisionProposalArgs);
+    const missingDecisionEvidenceArgs = [...decisionProposalArgs];
+    missingDecisionEvidenceArgs[missingDecisionEvidenceArgs.indexOf("--request") + 1] = "decision-request-missing-event";
+    missingDecisionEvidenceArgs[missingDecisionEvidenceArgs.indexOf("--event") + 1] = "missing-event";
+    await assert.rejects(run(missingDecisionEvidenceArgs), /Proposal evidence Event was not found/);
     assert.equal((await run(decisionProposalArgs)).id, decisionProposal.id);
     assert.equal((await run(["context-proposal-submit", ...common, "--proposal", decisionProposal.id])).status, "submitted");
     assert.equal((await run(["context-proposal-review", ...common, "--proposal", decisionProposal.id])).status, "in_review");
@@ -151,6 +155,16 @@ describe("regenic-local", () => {
     ]);
     assert.equal(committed.proposal.status, "accepted");
     assert.equal(committed.proposal.outcome_ref.ref_id, committed.decision.id);
+    assert.equal((await run([
+      "context-decision-commit", ...common, "--proposal", decisionProposal.id,
+      "--summary", "Proceed with the release.",
+      "--rationale", "The pinned evidence supports the bounded release.",
+    ])).decision.id, committed.decision.id);
+    await assert.rejects(run([
+      "context-decision-commit", ...common, "--proposal", decisionProposal.id,
+      "--summary", "Proceed with the release.",
+      "--rationale", "Changed after commit.",
+    ]), /Cannot replace committed Decision/);
     assert.equal((await run(["context-decisions", ...common]))[0].id, committed.decision.id);
     assert.equal((await run(["context-decision-get", ...common, "--decision", committed.decision.id])).proposal_id, decisionProposal.id);
     const reviewArgs = [
@@ -341,6 +355,30 @@ describe("regenic-local", () => {
       "--version", revisionCommit.version.id,
       "--upgrade-evidence", upgradeEvidencePath,
     ])).status, "active");
+    const runBindings = `${standardCommit.standard.id}@${revisionCommit.version.id}`;
+    const usageDecisionProposal = await run([
+      "context-proposal-new-decision", ...common,
+      "--request", "standard-usage-decision",
+      "--title", "Approve release under active standard",
+      "--summary", "Approve one release under the active StandardVersion.",
+      "--boundary", "Release decision only",
+      "--snapshot", assembled.snapshot.id,
+      "--event", ingested.records[0].event_id,
+      "--bindings", runBindings,
+    ]);
+    await run(["context-proposal-submit", ...common, "--proposal", usageDecisionProposal.id]);
+    await run(["context-proposal-review", ...common, "--proposal", usageDecisionProposal.id]);
+    const usageDecision = (await run([
+      "context-decision-commit", ...common,
+      "--proposal", usageDecisionProposal.id,
+      "--summary", "Proceed under the active release standard.",
+      "--rationale", "The pinned evidence supports the bounded release.",
+    ])).decision;
+    assert.deepEqual((await run([
+      "context-standard-usage", ...common,
+      "--standard", standardCommit.standard.id,
+      "--source-kind", "decision",
+    ])).map(({ source_id }) => source_id), [usageDecision.id]);
     assert.equal((await run([
       "context-standard-version-deprecate", ...common,
       "--version", standardCommit.version.id,
@@ -355,7 +393,6 @@ describe("regenic-local", () => {
       "context-standard-version-get", ...common,
       "--version", revisionCommit.version.id,
     ])).status, "active");
-    const runBindings = `${standardCommit.standard.id}@${revisionCommit.version.id}`;
     const runArgs = [
       "context-run-new", ...common,
       "--request", "agent-run-1",
@@ -368,6 +405,23 @@ describe("regenic-local", () => {
     const agentRun = await run(runArgs);
     assert.equal(agentRun.status, "queued");
     assert.equal((await run(runArgs)).id, agentRun.id);
+    const duplicateRunBindings = [...runArgs];
+    duplicateRunBindings[duplicateRunBindings.indexOf("--request") + 1] = "agent-run-duplicate-binding";
+    duplicateRunBindings[duplicateRunBindings.indexOf("--bindings") + 1] = `${runBindings},${runBindings}`;
+    await assert.rejects(run(duplicateRunBindings), /must not contain duplicates/);
+    assert.equal((await run([
+      "context-standard-usage-project", ...common,
+      "--source-kind", "agent_run", "--source", agentRun.id,
+    ]))[0].source_id, agentRun.id);
+    assert.deepEqual((await run([
+      "context-standard-usage", ...common,
+      "--standard", standardCommit.standard.id,
+      "--version", revisionCommit.version.id,
+      "--source-kind", "agent_run",
+    ])).map(({ source_id }) => source_id), [agentRun.id]);
+    assert.equal((await run([
+      "context-standard-get", ...common, "--standard", standardCommit.standard.id,
+    ])).citation_count, 2);
     await assert.rejects(run(runArgs.slice(0, -2)), /Missing required option --input/);
     const runReviewArgs = [
       "context-review-new-run", ...common,

@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 39;
+export const PG_SCHEMA_VERSION = 40;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -354,6 +354,24 @@ CREATE TABLE agent_runs (
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX agent_runs_query_idx ON agent_runs (org_id, status, created_at, id);
+`,
+  },
+  {
+    version: 40,
+    sql: `
+CREATE TABLE standard_usage (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  standard_id TEXT NOT NULL REFERENCES standards(id),
+  version_id TEXT NOT NULL REFERENCES standard_versions(id),
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('decision', 'agent_run')),
+  source_id TEXT NOT NULL,
+  context_snapshot_id TEXT NOT NULL,
+  cited_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, source_kind, source_id, standard_id, version_id)
+);
+CREATE INDEX standard_usage_query_idx
+  ON standard_usage (org_id, standard_id, version_id, cited_at, id);
 `,
   },
 ] as const;
@@ -871,6 +889,20 @@ CREATE TABLE agent_runs (
   created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX agent_runs_query_idx ON agent_runs (org_id, status, created_at, id);
+
+CREATE TABLE standard_usage (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  standard_id TEXT NOT NULL REFERENCES standards(id),
+  version_id TEXT NOT NULL REFERENCES standard_versions(id),
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('decision', 'agent_run')),
+  source_id TEXT NOT NULL,
+  context_snapshot_id TEXT NOT NULL,
+  cited_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, source_kind, source_id, standard_id, version_id)
+);
+CREATE INDEX standard_usage_query_idx
+  ON standard_usage (org_id, standard_id, version_id, cited_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,

@@ -92,7 +92,9 @@ export function validateHandoff(handoff: HandoffRecord): HandoffRecord {
   }
   if (!Array.isArray(handoff.standard_bindings) || handoff.standard_bindings.some((binding) =>
     !binding.standard_id?.trim() || !binding.version_id?.trim()
-  )) throw new Error("Invalid Handoff standard binding");
+  ) || new Set(handoff.standard_bindings.map(({ standard_id, version_id }) =>
+    `${standard_id}\u0000${version_id}`
+  )).size !== handoff.standard_bindings.length) throw new Error("Invalid Handoff standard binding");
   if (!handoff.payload || typeof handoff.payload !== "object" || Array.isArray(handoff.payload)
     || Object.keys(handoff.payload).length === 0 || !JsonValueSchema.safeParse(handoff.payload).success) {
     throw new Error("Invalid Handoff payload");

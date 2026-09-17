@@ -45,7 +45,7 @@ export function validateDecision(decision: DecisionRecord): DecisionRecord {
     || Number.isNaN(Date.parse(decision.committed_at))) {
     throw new Error("Invalid Decision");
   }
-  if (decision.co_deciders.some((actor) =>
+  if (!Array.isArray(decision.co_deciders) || decision.co_deciders.some((actor) =>
     !actor.actor_id?.trim() || !["human", "agent", "system"].includes(actor.actor_type)
   )) throw new Error("Invalid Decision co-decider");
   if (decision.rights_level === "negotiate" && decision.co_deciders.length === 0) {
@@ -54,8 +54,12 @@ export function validateDecision(decision: DecisionRecord): DecisionRecord {
   if (decision.rights_level !== "negotiate" && decision.co_deciders.length > 0) {
     throw new Error("Only negotiated Decisions may have co-deciders");
   }
-  if (decision.standard_bindings.some((binding) =>
+  if (!Array.isArray(decision.standard_bindings) || decision.standard_bindings.some((binding) =>
     !binding.standard_id?.trim() || !binding.version_id?.trim()
-  )) throw new Error("Invalid Decision standard binding");
+  ) || hasDuplicateStandardBindings(decision.standard_bindings)) throw new Error("Invalid Decision standard binding");
   return structuredClone(decision);
+}
+
+function hasDuplicateStandardBindings(bindings: StandardBinding[]): boolean {
+  return new Set(bindings.map(({ standard_id, version_id }) => `${standard_id}\u0000${version_id}`)).size !== bindings.length;
 }

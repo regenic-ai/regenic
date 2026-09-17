@@ -45,6 +45,13 @@ describe("Handoff contract", () => {
     })).status, "resolved");
   });
 
+  it("rejects duplicate StandardVersion bindings", () => {
+    const binding = { standard_id: "standard-1", version_id: "version-1" };
+    assert.throws(() => validateHandoff(handoff({
+      standard_bindings: [binding, binding],
+    })), /Invalid Handoff standard binding/);
+  });
+
   it("requires acknowledgement before resolution and keeps terminal states closed", () => {
     assert.doesNotThrow(() => assertHandoffTransition("open", "acked"));
     assert.doesNotThrow(() => assertHandoffTransition("open", "cancelled"));

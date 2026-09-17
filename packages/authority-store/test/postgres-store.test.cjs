@@ -164,6 +164,39 @@ describePg("postgres authority store", () => {
     assert.equal(head.id, first.id);
   });
 
+  it("converges concurrent identical Decision commits", async () => {
+    const writerA = await openStore();
+    const writerB = await openStore();
+    const orgId = `org-${randomUUID()}`;
+    const proposal = {
+      schema_version: "1.0", id: `proposal-${randomUUID()}`, org_id: orgId,
+      kind: "decision", title: "Approve release", summary: "Approve the bounded release.",
+      status: "draft", author: { actor_type: "human", actor_id: "person-1" },
+      rights_level: "coach", boundary: "Release decision only",
+      context_snapshot_id: "snapshot-1", standard_bindings: [],
+      evidence: [{ kind: "document", uri_or_ref: "event:event-1" }],
+      created_at: "2026-09-15T00:00:00.000Z", updated_at: "2026-09-15T00:00:00.000Z",
+    };
+    await writerA.putProposal(proposal);
+    await writerA.transitionProposal({ org_id: orgId, proposal_id: proposal.id, status: "submitted", updated_at: "2026-09-15T01:00:00.000Z" });
+    await writerA.transitionProposal({ org_id: orgId, proposal_id: proposal.id, status: "in_review", updated_at: "2026-09-15T02:00:00.000Z" });
+    const decision = {
+      schema_version: "1.0", id: `decision-${randomUUID()}`, org_id: orgId,
+      proposal_id: proposal.id, summary: "Proceed with the release.",
+      rationale: "The pinned evidence supports the bounded release.",
+      decided_by: proposal.author, co_deciders: [], rights_level: "coach",
+      context_snapshot_id: proposal.context_snapshot_id, standard_bindings: [],
+      status: "committed", committed_at: "2026-09-15T03:00:00.000Z",
+    };
+    const [committedA, committedB] = await Promise.all([
+      writerA.commitProposalDecision({ org_id: orgId, proposal_id: proposal.id, decision }),
+      writerB.commitProposalDecision({ org_id: orgId, proposal_id: proposal.id, decision }),
+    ]);
+    assert.equal(committedA.decision.id, decision.id);
+    assert.equal(committedB.decision.id, decision.id);
+    assert.equal(committedB.proposal.status, "accepted");
+  });
+
   it("does not let two claimers take the same projection job", async () => {
     const writer = await openStore();
     const orgId = `org-${randomUUID()}`;
@@ -295,6 +328,31 @@ describePg("postgres authority store", () => {
     assert.equal(active.status, "active");
     assert.equal((await store.getStandard(orgId, standard.id)).current_version_id, version.id);
     assert.equal((await store.listStandardVersions({ org_id: orgId, standard_id: standard.id })).length, 1);
+    const run = {
+      schema_version: "1.0", id: `run-${randomUUID()}`, org_id: orgId,
+      agent: { actor_type: "agent", actor_id: "agent-1" },
+      intent: "Apply the release standard.", status: "queued",
+      context_snapshot_id: "snapshot-usage-1",
+      standard_bindings: [{ standard_id: standard.id, version_id: version.id }],
+      input: { release_id: "release-1" }, created_at: "2026-09-20T00:00:00.000Z",
+    };
+    const secondStore = await openStore();
+    const secondRun = { ...run, id: `run-${randomUUID()}`, input: { release_id: "release-2" } };
+    await store.putAgentRun(run);
+    await secondStore.putAgentRun(secondRun);
+    const [firstUsage, secondUsage] = await Promise.all([
+      store.projectStandardUsage({ org_id: orgId, source_kind: "agent_run", source_id: run.id }),
+      secondStore.projectStandardUsage({ org_id: orgId, source_kind: "agent_run", source_id: secondRun.id }),
+    ]);
+    assert.equal(firstUsage[0].version_id, version.id);
+    assert.equal(secondUsage[0].version_id, version.id);
+    assert.equal((await store.projectStandardUsage({
+      org_id: orgId, source_kind: "agent_run", source_id: run.id,
+    })).length, 1);
+    assert.equal((await store.listStandardUsage({
+      org_id: orgId, standard_id: standard.id, version_id: version.id,
+    })).length, 2);
+    assert.equal((await store.getStandard(orgId, standard.id)).citation_count, 2);
   });
 
   it("converges concurrent StandardGap intake and Proposal conversion", async () => {

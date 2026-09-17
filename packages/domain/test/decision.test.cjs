@@ -32,4 +32,11 @@ describe("Decision contract", () => {
       co_deciders: [{ actor_type: "human", actor_id: "person-2" }],
     })), /Only negotiated/);
   });
+
+  it("rejects duplicate StandardVersion bindings", () => {
+    const binding = { standard_id: "standard-1", version_id: "version-1" };
+    assert.throws(() => validateDecision(decision({
+      standard_bindings: [binding, binding],
+    })), /Invalid Decision standard binding/);
+  });
 });

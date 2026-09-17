@@ -250,6 +250,8 @@ export class PersonalContextService {
       throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
     }
     const clientRequestId = requiredString(body.client_request_id, "client_request_id");
+    const proposalId = `proposal:${hashCanonicalContext([this.runtime.orgId(), clientRequestId])}`;
+    const existingProposal = await this.runtime.requireHost().get("proposals").getProposal(this.runtime.orgId(), proposalId);
     const singleUncertainty = optionalString(body.single_uncertainty);
     if (["new_standard", "revise_standard"].includes(kind) && !singleUncertainty) {
       throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Standard Proposal requires single_uncertainty");
@@ -265,10 +267,19 @@ export class PersonalContextService {
         throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Proposal evidence Event was not found");
       }
     }
+    const bindings = standardBindings(body.standard_bindings);
+    for (const binding of bindings) {
+      const standard = await this.runtime.requireHost().get("standards").getStandard(this.runtime.orgId(), binding.standard_id);
+      const version = await this.runtime.requireHost().get("standards").getStandardVersion(this.runtime.orgId(), binding.version_id);
+      if (!standard || !version || version.standard_id !== standard.id
+        || (!existingProposal && !["trial", "active"].includes(version.status))) {
+        throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Proposal binding must pin a published StandardVersion");
+      }
+    }
     const now = new Date().toISOString();
     return this.runtime.requireHost().get("proposals").putProposal({
       schema_version: PROPOSAL_SCHEMA_VERSION,
-      id: `proposal:${hashCanonicalContext([this.runtime.orgId(), clientRequestId])}`,
+      id: proposalId,
       org_id: this.runtime.orgId(),
       kind,
       title: requiredString(body.title, "title"),
@@ -278,7 +289,7 @@ export class PersonalContextService {
       rights_level: optionalRightsLevel(body.rights_level),
       boundary: requiredString(body.boundary, "boundary"),
       context_snapshot_id: snapshotId,
-      standard_bindings: standardBindings(body.standard_bindings),
+      standard_bindings: bindings,
       ...(singleUncertainty ? { single_uncertainty: singleUncertainty } : {}),
       evidence,
       created_at: now,
@@ -325,6 +336,9 @@ export class PersonalContextService {
       const existing = await this.runtime.requireHost().get("decisions").getDecision(this.runtime.orgId(), proposal.outcome_ref.ref_id);
       if (existing && existing.summary === summary && existing.rationale === rationale
         && hashCanonicalContext(existing.co_deciders) === hashCanonicalContext(requestedCoDeciders)) {
+        await this.projectStandardUsageBestEffort({
+          org_id: this.runtime.orgId(), source_kind: "decision", source_id: existing.id,
+        });
         return { proposal, decision: existing };
       }
       throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Cannot replace committed Decision");
@@ -348,13 +362,18 @@ export class PersonalContextService {
       status: "committed",
       committed_at: committedAt,
     };
+    let committed: { proposal: ProposalRecord; decision: DecisionRecord };
     try {
-      return await this.runtime.requireHost().get("decisions").commitProposalDecision({
+      committed = await this.runtime.requireHost().get("decisions").commitProposalDecision({
         org_id: this.runtime.orgId(), proposal_id: proposal.id, decision,
       });
     } catch (error) {
       throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid Decision commit");
     }
+    await this.projectStandardUsageBestEffort({
+      org_id: this.runtime.orgId(), source_kind: "decision", source_id: committed.decision.id,
+    });
+    return committed;
   }
 
   async listDecisions() {
@@ -365,6 +384,13 @@ export class PersonalContextService {
     const decision = await this.runtime.requireHost().get("decisions").getDecision(this.runtime.orgId(), requiredString(decisionId, "decision_id"));
     if (!decision) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Decision was not found");
     return decision;
+  }
+
+  async projectDecisionUsage(decisionId: string) {
+    const decision = await this.getDecision(decisionId);
+    return this.runtime.requireHost().get("standard-usage").projectStandardUsage({
+      org_id: this.runtime.orgId(), source_kind: "decision", source_id: decision.id,
+    });
   }
 
   async createDecisionReview(decisionId: string, input: unknown): Promise<ReviewRecord> {
@@ -826,13 +852,18 @@ export class PersonalContextService {
       input: jsonObject(body.input, "input"),
       created_at: existing?.created_at ?? new Date().toISOString(),
     };
+    let persisted: AgentRunRecord;
     try {
-      return await runs.putAgentRun(run);
+      persisted = await runs.putAgentRun(run);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid AgentRun";
       const status = message.includes("Cannot replace") ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
       throw new PersonalContextError("invalid_request", status, message);
     }
+    await this.projectStandardUsageBestEffort({
+      org_id: this.runtime.orgId(), source_kind: "agent_run", source_id: persisted.id,
+    });
+    return persisted;
   }
 
   async listAgentRuns(status?: string) {
@@ -847,6 +878,13 @@ export class PersonalContextService {
     const run = await this.runtime.requireHost().get("agent-runs").getAgentRun(this.runtime.orgId(), requiredString(runId, "run_id"));
     if (!run) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "AgentRun was not found");
     return run;
+  }
+
+  async projectAgentRunUsage(runId: string) {
+    const run = await this.getAgentRun(runId);
+    return this.runtime.requireHost().get("standard-usage").projectStandardUsage({
+      org_id: this.runtime.orgId(), source_kind: "agent_run", source_id: run.id,
+    });
   }
 
   async startAgentRun(runId: string) {
@@ -921,6 +959,18 @@ export class PersonalContextService {
     } catch (error) {
       if (error instanceof PersonalContextError) throw error;
       throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid AgentRun transition");
+    }
+  }
+
+  private async projectStandardUsageBestEffort(input: {
+    org_id: string;
+    source_kind: "decision" | "agent_run";
+    source_id: string;
+  }): Promise<void> {
+    try {
+      await this.runtime.requireHost().get("standard-usage").projectStandardUsage(input);
+    } catch {
+      // The source is authority; explicit repair can rebuild this derived ledger.
     }
   }
 
@@ -1023,6 +1073,23 @@ export class PersonalContextService {
     const standard = await this.getStandard(standardId);
     return this.runtime.requireHost().get("standards").listStandardVersions({
       org_id: this.runtime.orgId(), standard_id: standard.id, limit: 100,
+    });
+  }
+
+  async listStandardUsage(standardId: string, versionId?: string, sourceKind?: string) {
+    const standard = await this.getStandard(standardId);
+    if (versionId) {
+      const version = await this.getStandardVersion(versionId);
+      if (version.standard_id !== standard.id) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "StandardVersion does not belong to Standard");
+      }
+    }
+    return this.runtime.requireHost().get("standard-usage").listStandardUsage({
+      org_id: this.runtime.orgId(),
+      standard_id: standard.id,
+      ...(versionId ? { version_id: versionId } : {}),
+      ...(sourceKind ? { source_kind: standardUsageSourceKind(sourceKind) } : {}),
+      limit: 100,
     });
   }
 
@@ -1306,7 +1373,7 @@ function optionalString(value: unknown): string | undefined {
 function standardBindings(value: unknown): ProposalRecord["standard_bindings"] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "standard_bindings must be an array");
-  return value.map((entry) => {
+  const bindings = value.map((entry) => {
     const binding = asRecord(entry);
     if (Object.keys(binding).some((key) => !["standard_id", "version_id"].includes(key))) {
       throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid standard binding field");
@@ -1316,6 +1383,10 @@ function standardBindings(value: unknown): ProposalRecord["standard_bindings"] {
       version_id: requiredString(binding.version_id, "version_id"),
     };
   });
+  if (new Set(bindings.map(({ standard_id, version_id }) => `${standard_id}\u0000${version_id}`)).size !== bindings.length) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "standard_bindings must not contain duplicates");
+  }
+  return bindings;
 }
 
 function standardLayer(value: unknown): StandardLayer {
@@ -1332,6 +1403,14 @@ function standardGapStatus(value: unknown): StandardGapStatus {
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid StandardGap status");
   }
   return status as StandardGapStatus;
+}
+
+function standardUsageSourceKind(value: unknown): "decision" | "agent_run" {
+  const kind = requiredString(value, "source_kind");
+  if (!["decision", "agent_run"].includes(kind)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid StandardUsage source_kind");
+  }
+  return kind as "decision" | "agent_run";
 }
 
 function agentRunStatus(value: unknown): AgentRunStatus {

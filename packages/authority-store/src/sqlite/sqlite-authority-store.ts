@@ -41,6 +41,8 @@ import {
   handoffAgentRun as applyAgentRunHandoff,
   cancelAgentRun as applyAgentRunCancellation,
   agentRunState,
+  STANDARD_USAGE_SCHEMA_VERSION,
+  validateStandardUsage,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -91,6 +93,8 @@ import type {
   AgentRunRecord,
   AgentRunState,
   AgentRunStatus,
+  StandardUsageRecord,
+  StandardUsageSourceKind,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1658,6 +1662,74 @@ export class SqliteAuthorityStore
       return next;
     });
     return transaction.immediate();
+  }
+
+  async projectStandardUsage(input: { org_id: string; source_kind: StandardUsageSourceKind; source_id: string }): Promise<StandardUsageRecord[]> {
+    this.assertWritable();
+    const transaction = this.database.transaction(() => {
+      if (!input.org_id?.trim() || !input.source_id?.trim() || !["decision", "agent_run"].includes(input.source_kind)) {
+        throw new Error("Invalid StandardUsage projection");
+      }
+      let bindings: Array<{ standard_id: string; version_id: string }>;
+      let contextSnapshotId: string;
+      let citedAt: string;
+      if (input.source_kind === "decision") {
+        const row = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? AND id = ?`).get(input.org_id, input.source_id) as { payload_json: string } | undefined;
+        if (!row) throw new Error("StandardUsage source Decision was not found");
+        const decision = validateDecision(JSON.parse(row.payload_json) as DecisionRecord);
+        bindings = decision.standard_bindings;
+        contextSnapshotId = decision.context_snapshot_id;
+        citedAt = decision.committed_at;
+      } else {
+        const row = this.getAgentRunRow(input.org_id, input.source_id);
+        if (!row) throw new Error("StandardUsage source AgentRun was not found");
+        const run = toAgentRun(row);
+        bindings = run.standard_bindings;
+        contextSnapshotId = run.context_snapshot_id;
+        citedAt = run.created_at;
+      }
+      const usages = bindings.map((binding) => {
+        const standard = this.getStandardSync(input.org_id, binding.standard_id);
+        const version = this.getStandardVersionSync(input.org_id, binding.version_id);
+        if (!standard || !version || version.standard_id !== standard.id) {
+          throw new Error("StandardUsage binding was not found");
+        }
+        const usage = validateStandardUsage({
+          schema_version: STANDARD_USAGE_SCHEMA_VERSION,
+          id: `standard-usage:${hashCanonicalContext([
+            input.org_id, input.source_kind, input.source_id, standard.id, version.id,
+          ])}`,
+          org_id: input.org_id,
+          standard_id: standard.id,
+          version_id: version.id,
+          source_kind: input.source_kind,
+          source_id: input.source_id,
+          context_snapshot_id: contextSnapshotId,
+          cited_at: citedAt,
+        });
+        this.database.prepare(`INSERT INTO standard_usage (id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`).run(usage.id, usage.org_id, usage.standard_id, usage.version_id, usage.source_kind, usage.source_id, usage.context_snapshot_id, usage.cited_at);
+        return usage;
+      });
+      for (const standardId of new Set(usages.map(({ standard_id }) => standard_id))) {
+        this.database.prepare(`UPDATE standards SET citation_count = (SELECT COUNT(*) FROM standard_usage WHERE org_id = ? AND standard_id = ?) WHERE org_id = ? AND id = ?`).run(input.org_id, standardId, input.org_id, standardId);
+      }
+      return usages;
+    });
+    return transaction.immediate();
+  }
+
+  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; limit?: number }): Promise<StandardUsageRecord[]> {
+    const conditions = ["org_id = ?"];
+    const values: Array<string | number> = [input.org_id];
+    if (input.standard_id) { conditions.push("standard_id = ?"); values.push(input.standard_id); }
+    if (input.version_id) { conditions.push("version_id = ?"); values.push(input.version_id); }
+    if (input.source_kind) { conditions.push("source_kind = ?"); values.push(input.source_kind); }
+    values.push(input.limit ?? 100);
+    const rows = this.database.prepare(`SELECT id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at FROM standard_usage WHERE ${conditions.join(" AND ")} ORDER BY cited_at, id LIMIT ?`).all(...values) as Array<Omit<StandardUsageRecord, "schema_version">>;
+    return rows.map((row) => validateStandardUsage({
+      schema_version: STANDARD_USAGE_SCHEMA_VERSION,
+      ...row,
+    }));
   }
 
   private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {

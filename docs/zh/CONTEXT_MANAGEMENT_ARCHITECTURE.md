@@ -695,6 +695,21 @@ AgentRun。默认情况下，同一精确 StandardVersion 上最早两条 `accep
 drift Review。Review 可进入显式 StandardGap workflow，且 revision 必须以该被评审
 StandardVersion 为目标；scan 本身不会创建 Gap 或修改 Standard。
 
+### 8.9 Standard usage ledger
+
+Committed Decision 与 queued AgentRun 上的 pinned bindings 会投影为 immutable StandardUsage
+ledger。Projection 只接受 organization、source kind 与 source ID；authority store 回读 source
+snapshot、bindings 与时间，验证每个 StandardVersion 确实属于对应 Standard，并派生确定性
+usage ID。调用方不能直接提交 usage bindings 或 citation count。
+
+Decision commit 与 Run creation 会立即尝试 projection。Source authority record 仍是主记录，因此
+projection 失败不会把成功的 Decision 或 Run 写入伪装成失败请求；重试或显式 repair 命令可重建
+缺失的派生 usage。重复 binding pair 会在持久化前被拒绝。重复 projection 不会重复计数。
+`Standard.citation_count` 在同一 transaction 中从 ledger 重算，而不是乐观递增。SQLite
+串行化 writer；PostgreSQL 按排序后的 Standard identity 加锁，避免并发 source 丢失计数更新。
+Usage 可按精确 Standard、StandardVersion 与 source kind 查询。它记录受治理的应用行为，不代表
+该应用是否成功。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

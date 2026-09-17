@@ -136,6 +136,11 @@ export class PersonalContextController {
     return this.guard(() => this.context.getDecision(decisionId));
   }
 
+  @Post("decisions/:decisionId/usage/project")
+  projectDecisionUsage(@Param("decisionId") decisionId: string) {
+    return this.guard(() => this.context.projectDecisionUsage(decisionId));
+  }
+
   @Get("standards")
   listStandards() {
     return this.guard(() => this.context.listStandards());
@@ -149,6 +154,15 @@ export class PersonalContextController {
   @Get("standards/:standardId/versions")
   listStandardVersions(@Param("standardId") standardId: string) {
     return this.guard(() => this.context.listStandardVersions(standardId));
+  }
+
+  @Get("standards/:standardId/usage")
+  listStandardUsage(
+    @Param("standardId") standardId: string,
+    @Query("version_id") versionId?: string,
+    @Query("source_kind") sourceKind?: string,
+  ) {
+    return this.guard(() => this.context.listStandardUsage(standardId, versionId, sourceKind));
   }
 
   @Get("standard-versions/:versionId")
@@ -270,6 +284,11 @@ export class PersonalContextController {
   @Get("runs/:runId")
   getAgentRun(@Param("runId") runId: string) {
     return this.guard(() => this.context.getAgentRun(runId));
+  }
+
+  @Post("runs/:runId/usage/project")
+  projectAgentRunUsage(@Param("runId") runId: string) {
+    return this.guard(() => this.context.projectAgentRunUsage(runId));
   }
 
   @Post("runs/:runId/start")

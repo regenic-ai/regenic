@@ -40,6 +40,8 @@ import type {
   AgentRunOutput,
   AgentRunRecord,
   AgentRunStatus,
+  StandardUsageRecord,
+  StandardUsageSourceKind,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -449,6 +451,14 @@ export class SqliteSplitAuthorityStore
 
   async cancelAgentRun(input: { org_id: string; run_id: string; cancelled_at: string }): Promise<AgentRunRecord | null> {
     return this.writer.call("cancelAgentRun", [input]);
+  }
+
+  async projectStandardUsage(input: { org_id: string; source_kind: StandardUsageSourceKind; source_id: string }): Promise<StandardUsageRecord[]> {
+    return this.writer.call("projectStandardUsage", [input]);
+  }
+
+  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; limit?: number }): Promise<StandardUsageRecord[]> {
+    return this.reader.call("listStandardUsage", [input]);
   }
 
   async getDisposition(

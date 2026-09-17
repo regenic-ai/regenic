@@ -43,4 +43,11 @@ describe("Proposal contract", () => {
       context_snapshot_id: "snapshot-1", single_uncertainty: "Will this improve acceptance?",
     })).kind, "new_standard");
   });
+
+  it("rejects duplicate StandardVersion bindings", () => {
+    const binding = { standard_id: "standard-1", version_id: "version-1" };
+    assert.throws(() => validateProposal(proposal({
+      standard_bindings: [binding, binding],
+    })), /Invalid Proposal standard binding/);
+  });
 });

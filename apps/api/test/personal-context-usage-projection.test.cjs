@@ -1,0 +1,44 @@
+const assert = require("node:assert/strict");
+const { it } = require("node:test");
+const { PersonalContextService } = require("../dist/personal-context.service");
+
+it("keeps AgentRun creation successful when derived usage projection fails", async () => {
+  let storedRun = null;
+  const services = {
+    "context-artifacts": {
+      async getSnapshot() { return { id: "snapshot-1" }; },
+    },
+    standards: {
+      async getStandard() { return { id: "standard-1" }; },
+      async getStandardVersion() {
+        return { id: "version-1", standard_id: "standard-1", status: "active" };
+      },
+    },
+    "agent-runs": {
+      async getAgentRun() { return storedRun; },
+      async putAgentRun(run) { storedRun = run; return run; },
+    },
+    "standard-usage": {
+      async projectStandardUsage() { throw new Error("projection unavailable"); },
+    },
+  };
+  const service = new PersonalContextService({
+    orgId() { return "example-org"; },
+    requireHost() { return { get(name) { return services[name]; } }; },
+  });
+
+  const run = await service.createAgentRun({
+    client_request_id: "run-request-1",
+    agent_id: "agent-1",
+    intent: "Apply the release standard.",
+    context_snapshot_id: "snapshot-1",
+    standard_bindings: [{ standard_id: "standard-1", version_id: "version-1" }],
+    input: { release_id: "release-1" },
+  });
+
+  assert.equal(run.status, "queued");
+  await assert.rejects(
+    service.projectAgentRunUsage(run.id),
+    /projection unavailable/,
+  );
+});
