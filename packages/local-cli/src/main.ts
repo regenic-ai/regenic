@@ -23,10 +23,12 @@ import {
   projectEvidenceBundleV1,
   PROPOSAL_SCHEMA_VERSION,
   DECISION_SCHEMA_VERSION,
+  REVIEW_SCHEMA_VERSION,
   hashCanonicalContext,
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
+  type ReviewRecord,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -196,8 +198,17 @@ export async function runLocalCli(
     case "context-decision-get":
       await getDecision(commandOptions, stdout);
       return;
+    case "context-review-new-decision":
+      await createDecisionReview(commandOptions, stdout, now);
+      return;
+    case "context-decision-reviews":
+      await listDecisionReviews(commandOptions, stdout);
+      return;
+    case "context-review-get":
+      await getReview(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get");
   }
 }
 
@@ -1358,6 +1369,61 @@ async function getDecision(options: CommandOptions, stdout: CliOutput): Promise<
     const decision = await host.get("decisions").getDecision(orgId, requireOption(options, "decision"));
     if (!decision) throw new Error("Decision was not found");
     writeJson(stdout, decision);
+  });
+}
+
+async function createDecisionReview(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const decisionId = requireOption(options, "decision");
+    const decision = await host.get("decisions").getDecision(orgId, decisionId);
+    if (!decision) throw new Error("Decision was not found");
+    const eventId = requireOption(options, "event");
+    if (!await host.get("authority").getEvent(orgId, eventId)) throw new Error("Review evidence Event was not found");
+    const result = requireOption(options, "result");
+    if (!["validated", "falsified", "inconclusive"].includes(result)) throw new Error("Invalid Review result");
+    const severity = optionString(options, "severity") ?? "normal";
+    if (!["normal", "bad_news"].includes(severity)) throw new Error("Invalid Review severity");
+    const action = optionString(options, "action") ?? "none";
+    if (!["solidify", "revise_standard", "open_gap", "none"].includes(action)) throw new Error("Invalid Review action");
+    const evidenceKind = optionString(options, "evidence-kind") ?? "document";
+    if (!["data", "demo", "user_quote", "document", "other"].includes(evidenceKind)) throw new Error("Invalid Review evidence kind");
+    const reviews = host.get("reviews");
+    const id = `review:${hashCanonicalContext([orgId, decision.id, requireOption(options, "request")])}`;
+    const existing = await reviews.getReview(orgId, id);
+    const review: ReviewRecord = {
+      schema_version: REVIEW_SCHEMA_VERSION,
+      id,
+      org_id: orgId,
+      subject_kind: "decision",
+      subject_id: decision.id,
+      result: result as ReviewRecord["result"],
+      severity: severity as ReviewRecord["severity"],
+      evidence: [{ kind: evidenceKind as ReviewRecord["evidence"][number]["kind"], uri_or_ref: `event:${eventId}` }],
+      context_snapshot_id: decision.context_snapshot_id,
+      recommended_action: action as ReviewRecord["recommended_action"],
+      author: { actor_type: "human", actor_id: orgId },
+      created_at: existing?.created_at ?? now(),
+    };
+    writeJson(stdout, await reviews.putReview(review));
+  });
+}
+
+async function listDecisionReviews(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const decisionId = requireOption(options, "decision");
+    if (!await host.get("decisions").getDecision(orgId, decisionId)) throw new Error("Decision was not found");
+    writeJson(stdout, await host.get("reviews").listReviews({ org_id: orgId, subject_id: decisionId, limit: 100 }));
+  });
+}
+
+async function getReview(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const review = await host.get("reviews").getReview(orgId, requireOption(options, "review"));
+    if (!review) throw new Error("Review was not found");
+    writeJson(stdout, review);
   });
 }
 

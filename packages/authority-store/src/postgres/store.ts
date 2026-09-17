@@ -25,6 +25,7 @@ import {
   validateDailyDigestPolicy,
   validateProposal,
   validateDecision,
+  validateReview,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -61,6 +62,7 @@ import type {
   ProposalRecord,
   ProposalStatus,
   DecisionRecord,
+  ReviewRecord,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1321,6 +1323,24 @@ export class PostgresAuthorityStore
   async listDecisions(input: { org_id: string; limit?: number }): Promise<DecisionRecord[]> {
     const rows = await this.query<{ payload_json: unknown }>(`SELECT payload_json FROM decisions WHERE org_id = $1 ORDER BY committed_at, id LIMIT $2`, [input.org_id, input.limit ?? 100]);
     return rows.map((row) => validateDecision(parseContextJson<DecisionRecord>(row.payload_json)));
+  }
+
+  async putReview(input: ReviewRecord): Promise<ReviewRecord> {
+    const review = validateReview(input);
+    await this.execute(`INSERT INTO reviews (id, org_id, subject_kind, subject_id, payload_json, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`, [review.id, review.org_id, review.subject_kind, review.subject_id, jsonb(review), review.created_at]);
+    const stored = await this.getReview(review.org_id, review.id);
+    if (!stored || canonicalContextJson(stored) !== canonicalContextJson(review)) throw new Error("Cannot replace immutable Review");
+    return stored;
+  }
+
+  async getReview(orgId: string, reviewId: string): Promise<ReviewRecord | null> {
+    const row = await this.queryOne<{ payload_json: unknown }>(`SELECT payload_json FROM reviews WHERE org_id = $1 AND id = $2`, [orgId, reviewId]);
+    return row ? validateReview(parseContextJson<ReviewRecord>(row.payload_json)) : null;
+  }
+
+  async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
+    const rows = await this.query<{ payload_json: unknown }>(`SELECT payload_json FROM reviews WHERE org_id = $1 ${input.subject_id ? "AND subject_id = $2" : ""} ORDER BY created_at, id LIMIT $${input.subject_id ? 3 : 2}`, input.subject_id ? [input.org_id, input.subject_id, input.limit ?? 100] : [input.org_id, input.limit ?? 100]);
+    return rows.map((row) => validateReview(parseContextJson<ReviewRecord>(row.payload_json)));
   }
 
   private async getProposalWithinTransaction(orgId: string, proposalId: string, client: PoolClient, lock = false): Promise<ProposalRecord | null> {

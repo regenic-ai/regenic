@@ -28,6 +28,7 @@ import type {
   ProposalRecord,
   ProposalStatus,
   DecisionRecord,
+  ReviewRecord,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -333,6 +334,18 @@ export class SqliteSplitAuthorityStore
 
   async listDecisions(input: { org_id: string; limit?: number }): Promise<DecisionRecord[]> {
     return this.reader.call("listDecisions", [input]);
+  }
+
+  async putReview(review: ReviewRecord): Promise<ReviewRecord> {
+    return this.writer.call("putReview", [review]);
+  }
+
+  async getReview(orgId: string, reviewId: string): Promise<ReviewRecord | null> {
+    return this.reader.call("getReview", [orgId, reviewId]);
+  }
+
+  async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
+    return this.reader.call("listReviews", [input]);
   }
 
   async getDisposition(

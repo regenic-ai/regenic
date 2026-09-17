@@ -421,6 +421,31 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("persists immutable Decision Reviews across restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const review = {
+      schema_version: "1.0", id: "review-1", org_id: "example-org",
+      subject_kind: "decision", subject_id: "decision-1", result: "falsified",
+      severity: "bad_news", evidence: [{ kind: "data", uri_or_ref: "event:event-2" }],
+      context_snapshot_id: "snapshot-1", recommended_action: "revise_standard",
+      author: { actor_type: "human", actor_id: "person-2" },
+      created_at: "2026-09-16T00:00:00.000Z",
+    };
+    const store = new SqliteAuthorityStore(path);
+    assert.deepEqual(await store.putReview(review), review);
+    assert.deepEqual(await store.putReview(review), review);
+    await store.putReview({ ...review, id: "review-2", subject_id: "decision-2" });
+    await assert.rejects(store.putReview({ ...review, result: "inconclusive" }), /Cannot replace immutable Review/);
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.equal((await split.getReview("example-org", review.id)).recommended_action, "revise_standard");
+    assert.deepEqual((await split.listReviews({ org_id: "example-org", subject_id: "decision-1" })).map(({ id }) => id), [review.id]);
+    assert.equal((await split.listReviews({ org_id: "other-org" })).length, 0);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
@@ -886,6 +911,7 @@ describe("SQLite context artifact store", () => {
     const host = await createHost();
     const handle = await host.plugin(sqliteAuthorityPlugin, { path });
     assert.equal(host.get("authority"), host.get("context-artifacts"));
+    assert.equal(host.get("authority"), host.get("reviews"));
     assert.deepEqual(
       await host.get("context-artifacts").getArtifact("example-org", "artifact-1"),
       artifactValue,
@@ -893,6 +919,7 @@ describe("SQLite context artifact store", () => {
     await handle.dispose();
     assert.throws(() => host.get("authority"), /Service is not available/);
     assert.throws(() => host.get("context-artifacts"), /Service is not available/);
+    assert.throws(() => host.get("reviews"), /Service is not available/);
     await host.dispose();
   });
 

@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 34;
+export const PG_SCHEMA_VERSION = 35;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -262,6 +262,20 @@ CREATE TABLE decisions (
   UNIQUE (org_id, proposal_id)
 );
 CREATE INDEX decisions_query_idx ON decisions (org_id, committed_at, id);
+`,
+  },
+  {
+    version: 35,
+    sql: `
+CREATE TABLE reviews (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('standard_version', 'decision', 'hypothesis_claim', 'agent_run')),
+  subject_id TEXT NOT NULL,
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX reviews_query_idx ON reviews (org_id, subject_id, created_at, id);
 `,
   },
 ] as const;
@@ -706,6 +720,16 @@ CREATE TABLE decisions (
   UNIQUE (org_id, proposal_id)
 );
 CREATE INDEX decisions_query_idx ON decisions (org_id, committed_at, id);
+
+CREATE TABLE reviews (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('standard_version', 'decision', 'hypothesis_claim', 'agent_run')),
+  subject_id TEXT NOT NULL,
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX reviews_query_idx ON reviews (org_id, subject_id, created_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,
