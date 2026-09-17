@@ -37,6 +37,7 @@ import {
   validateTrialConfig,
   validateUpgradeEvidence,
   detectStandardDrift,
+  detectStandardHealth,
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
@@ -339,8 +340,11 @@ export async function runLocalCli(
     case "context-standard-usage":
       await listStandardUsageCommand(commandOptions, stdout);
       return;
+    case "context-standard-health":
+      await listStandardHealthCommand(commandOptions, stdout, now);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
   }
 }
 
@@ -1976,6 +1980,51 @@ async function listStandardUsageCommand(options: CommandOptions, stdout: CliOutp
 function cliStandardUsageSourceKind(value: string): "decision" | "agent_run" {
   if (!["decision", "agent_run"].includes(value)) throw new Error("Invalid StandardUsage source kind");
   return value as "decision" | "agent_run";
+}
+
+async function listStandardHealthCommand(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const observedAt = optionString(options, "observed-at") ?? now();
+  if (!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(observedAt) || Number.isNaN(Date.parse(observedAt))) {
+    throw new Error("--observed-at must be a timestamp with timezone");
+  }
+  const staleAfterDays = requirePositiveInteger(options, "stale-after-days", 90);
+  if (staleAfterDays > 3_650) throw new Error("--stale-after-days must be from 1 to 3650");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const standards = await host.get("standards").listStandards({ org_id: orgId, limit: 101 });
+    if (standards.length > 100) throw new Error("Standard health scan supports at most 100 Standards");
+    const observations = [];
+    for (const standard of standards) {
+      if (!standard.current_version_id) continue;
+      const version = await host.get("standards").getStandardVersion(orgId, standard.current_version_id);
+      if (!version) throw new Error("Standard current version was not found");
+      const totalUsageCount = await host.get("standard-usage").countStandardUsage({
+        org_id: orgId, standard_id: standard.id,
+      });
+      const currentVersionUsageCount = await host.get("standard-usage").countStandardUsage({
+        org_id: orgId, standard_id: standard.id, version_id: version.id,
+      });
+      const [latestUsage] = await host.get("standard-usage").listStandardUsage({
+        org_id: orgId, standard_id: standard.id, version_id: version.id,
+        newest_first: true, limit: 1,
+      });
+      observations.push({
+        standard,
+        current_version: version,
+        total_usage_count: totalUsageCount,
+        current_version_usage_count: currentVersionUsageCount,
+        ...(latestUsage ? { latest_usage: latestUsage } : {}),
+      });
+    }
+    writeJson(stdout, detectStandardHealth(observations, {
+      observed_at: observedAt,
+      stale_after_days: staleAfterDays,
+    }));
+  });
 }
 
 async function projectCliStandardUsageBestEffort(

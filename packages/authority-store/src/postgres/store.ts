@@ -1747,19 +1747,30 @@ export class PostgresAuthorityStore
     });
   }
 
-  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; limit?: number }): Promise<StandardUsageRecord[]> {
+  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; newest_first?: boolean; limit?: number }): Promise<StandardUsageRecord[]> {
     const conditions = ["org_id = $1"];
     const values: unknown[] = [input.org_id];
     if (input.standard_id) { values.push(input.standard_id); conditions.push(`standard_id = $${values.length}`); }
     if (input.version_id) { values.push(input.version_id); conditions.push(`version_id = $${values.length}`); }
     if (input.source_kind) { values.push(input.source_kind); conditions.push(`source_kind = $${values.length}`); }
     values.push(input.limit ?? 100);
-    const rows = await this.query<Omit<StandardUsageRecord, "schema_version">>(`SELECT id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at FROM standard_usage WHERE ${conditions.join(" AND ")} ORDER BY cited_at, id LIMIT $${values.length}`, values);
+    const order = input.newest_first ? "cited_at DESC, id DESC" : "cited_at, id";
+    const rows = await this.query<Omit<StandardUsageRecord, "schema_version">>(`SELECT id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at FROM standard_usage WHERE ${conditions.join(" AND ")} ORDER BY ${order} LIMIT $${values.length}`, values);
     return rows.map((row) => validateStandardUsage({
       schema_version: STANDARD_USAGE_SCHEMA_VERSION,
       ...row,
       cited_at: toIso(row.cited_at),
     }));
+  }
+
+  async countStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind }): Promise<number> {
+    const conditions = ["org_id = $1"];
+    const values: unknown[] = [input.org_id];
+    if (input.standard_id) { values.push(input.standard_id); conditions.push(`standard_id = $${values.length}`); }
+    if (input.version_id) { values.push(input.version_id); conditions.push(`version_id = $${values.length}`); }
+    if (input.source_kind) { values.push(input.source_kind); conditions.push(`source_kind = $${values.length}`); }
+    const row = await this.queryOne<{ count: string }>(`SELECT COUNT(*) AS count FROM standard_usage WHERE ${conditions.join(" AND ")}`, values);
+    return Number(row?.count ?? 0);
   }
 
   private async getProposalWithinTransaction(orgId: string, proposalId: string, client: PoolClient, lock = false): Promise<ProposalRecord | null> {

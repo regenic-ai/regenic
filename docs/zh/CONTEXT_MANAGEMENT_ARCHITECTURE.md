@@ -710,6 +710,27 @@ projection 失败不会把成功的 Decision 或 Run 写入伪装成失败请求
 Usage 可按精确 Standard、StandardVersion 与 source kind 查询。它记录受治理的应用行为，不代表
 该应用是否成功。
 
+### 8.10 Standard health candidates
+
+Usage ledger 为确定性、治理只读的 Standard health detector 提供输入：它不会修改 Standard、
+Review、Proposal 或 usage record。它最多检查 100 条 Standard，并且只评估每条记录的 current
+active StandardVersion。超过可配置窗口（默认 90 天）后，从未产生 usage 的 Standard 会标记为
+`never_cited`；最近 usage 早于窗口的 Standard 会标记为 `stale_usage`。Trial、draft、
+deprecated 和刚 active 的 version 都不会成为候选。
+
+有界的 v1 surface 会探测第 101 条 Standard；组织超过 100 条的 scan limit 时会 fail closed，
+绝不静默截断 health 结果。提高该产品上限前必须先实现 pagination。
+
+API 与 CLI 可接收带显式时区的 observation timestamp 以支持确定性重放，并且只查询 current
+version 的最近 usage。候选输出包含精确 current version、该版本的 usage count、Standard 总
+citation count、存在时的 current-version 最近 citation 时间，以及 `review_deprecate_or_merge`
+推荐。候选不是 Review，也不会自动 deprecate 或 merge 任何对象。损坏的 current-version
+pointer 和精确 citation-count/ledger 不一致会 fail closed；旧版本 usage 不能让 current version
+看起来健康。
+
+Local CLI 仍会打开普通 local Context host，因此可能执行 SQLite migration 或维护 lexical
+sidecar。该 surface 不承诺零文件系统写入；这需要后续专用 read-only host。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

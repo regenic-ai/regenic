@@ -36,6 +36,7 @@ export const AUTHORITY_READ_METHODS = [
   "getAgentRun",
   "listAgentRuns",
   "listStandardUsage",
+  "countStandardUsage",
   "getDisposition",
   "listInbox",
   "summarizeInbox",

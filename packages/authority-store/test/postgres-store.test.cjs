@@ -352,6 +352,12 @@ describePg("postgres authority store", () => {
     assert.equal((await store.listStandardUsage({
       org_id: orgId, standard_id: standard.id, version_id: version.id,
     })).length, 2);
+    assert.equal(await store.countStandardUsage({
+      org_id: orgId, standard_id: standard.id,
+    }), 2);
+    assert.equal(await store.countStandardUsage({
+      org_id: orgId, standard_id: standard.id, version_id: version.id,
+    }), 2);
     assert.equal((await store.getStandard(orgId, standard.id)).citation_count, 2);
   });
 

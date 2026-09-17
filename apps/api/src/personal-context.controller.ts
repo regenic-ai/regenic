@@ -146,6 +146,14 @@ export class PersonalContextController {
     return this.guard(() => this.context.listStandards());
   }
 
+  @Get("standards/health")
+  listStandardHealthCandidates(
+    @Query("observed_at") observedAt?: string,
+    @Query("stale_after_days") staleAfterDays?: string,
+  ) {
+    return this.guard(() => this.context.listStandardHealthCandidates(observedAt, staleAfterDays));
+  }
+
   @Get("standards/:standardId")
   getStandard(@Param("standardId") standardId: string) {
     return this.guard(() => this.context.getStandard(standardId));

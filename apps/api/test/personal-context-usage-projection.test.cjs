@@ -42,3 +42,26 @@ it("keeps AgentRun creation successful when derived usage projection fails", asy
     /projection unavailable/,
   );
 });
+
+it("fails closed instead of truncating a Standard health scan", async () => {
+  const service = new PersonalContextService({
+    orgId() { return "example-org"; },
+    requireHost() {
+      return {
+        get(name) {
+          if (name !== "standards") throw new Error(`Unexpected service: ${name}`);
+          return {
+            async listStandards() {
+              return Array.from({ length: 101 }, (_, index) => ({ id: `standard-${index}` }));
+            },
+          };
+        },
+      };
+    },
+  });
+
+  await assert.rejects(
+    service.listStandardHealthCandidates("2027-12-31T00:00:00.000Z", "90"),
+    /supports at most 100 Standards/,
+  );
+});

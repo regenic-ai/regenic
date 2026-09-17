@@ -457,8 +457,12 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("projectStandardUsage", [input]);
   }
 
-  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; limit?: number }): Promise<StandardUsageRecord[]> {
+  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; newest_first?: boolean; limit?: number }): Promise<StandardUsageRecord[]> {
     return this.reader.call("listStandardUsage", [input]);
+  }
+
+  async countStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind }): Promise<number> {
+    return this.reader.call("countStandardUsage", [input]);
   }
 
   async getDisposition(

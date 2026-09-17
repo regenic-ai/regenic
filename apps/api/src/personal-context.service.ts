@@ -20,6 +20,7 @@ import {
   validateTrialConfig,
   validateUpgradeEvidence,
   detectStandardDrift,
+  detectStandardHealth,
   type ContextBundle,
   type ContextArtifact,
   type ContextReplayRequest,
@@ -1063,6 +1064,48 @@ export class PersonalContextService {
     return this.runtime.requireHost().get("standards").listStandards({ org_id: this.runtime.orgId(), limit: 100 });
   }
 
+  async listStandardHealthCandidates(observedAt?: string, staleAfterDays?: string) {
+    const observed = observedAt === undefined
+      ? new Date().toISOString()
+      : requiredTimestamp(observedAt, "observed_at");
+    const staleDays = querySafeInteger(staleAfterDays, "stale_after_days", 90, 1, 3_650);
+    const standards = await this.runtime.requireHost().get("standards").listStandards({
+      org_id: this.runtime.orgId(), limit: 101,
+    });
+    if (standards.length > 100) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Standard health scan supports at most 100 Standards");
+    }
+    const observations = [];
+    for (const standard of standards) {
+      if (!standard.current_version_id) continue;
+      const version = await this.runtime.requireHost().get("standards").getStandardVersion(
+        this.runtime.orgId(), standard.current_version_id,
+      );
+      if (!version) throw new Error("Standard current version was not found");
+      const totalUsageCount = await this.runtime.requireHost().get("standard-usage").countStandardUsage({
+        org_id: this.runtime.orgId(), standard_id: standard.id,
+      });
+      const currentVersionUsageCount = await this.runtime.requireHost().get("standard-usage").countStandardUsage({
+        org_id: this.runtime.orgId(), standard_id: standard.id, version_id: version.id,
+      });
+      const [latestUsage] = await this.runtime.requireHost().get("standard-usage").listStandardUsage({
+        org_id: this.runtime.orgId(), standard_id: standard.id, version_id: version.id,
+        newest_first: true, limit: 1,
+      });
+      observations.push({
+        standard,
+        current_version: version,
+        total_usage_count: totalUsageCount,
+        current_version_usage_count: currentVersionUsageCount,
+        ...(latestUsage ? { latest_usage: latestUsage } : {}),
+      });
+    }
+    return detectStandardHealth(observations, {
+      observed_at: observed,
+      stale_after_days: staleDays,
+    });
+  }
+
   async getStandard(standardId: string) {
     const standard = await this.runtime.requireHost().get("standards").getStandard(this.runtime.orgId(), requiredString(standardId, "standard_id"));
     if (!standard) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Standard was not found");
@@ -1316,6 +1359,29 @@ function requiredUtcDate(value: unknown): string {
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "utc_date must be YYYY-MM-DD in UTC");
   }
   return date;
+}
+
+function requiredTimestamp(value: unknown, name: string): string {
+  const timestamp = requiredString(value, name);
+  if (!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(timestamp) || Number.isNaN(Date.parse(timestamp))) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be a timestamp with timezone`);
+  }
+  return timestamp;
+}
+
+function querySafeInteger(
+  value: string | undefined,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return parsed;
 }
 
 function safeCoverageAlert(alert: {

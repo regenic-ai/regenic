@@ -444,6 +444,10 @@ pnpm local context-standard-usage --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-standard-usage-project --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source-kind agent_run --source <run-id>
+
+pnpm local context-standard-health --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --observed-at 2027-12-31T00:00:00.000Z \
+	--stale-after-days 90
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

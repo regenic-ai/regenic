@@ -678,8 +678,17 @@ describe("SQLite context artifact store", () => {
       org_id: "example-org", source_kind: "decision", source_id: usageDecision.id,
     }))[0].source_id, usageDecision.id);
     assert.equal((await split.getStandard("example-org", standard.id)).citation_count, 2);
+    assert.equal(await split.countStandardUsage({
+      org_id: "example-org", standard_id: standard.id,
+    }), 2);
+    assert.equal(await split.countStandardUsage({
+      org_id: "example-org", standard_id: standard.id, version_id: revision.id,
+    }), 2);
     assert.deepEqual((await split.listStandardUsage({
       org_id: "example-org", standard_id: standard.id, source_kind: "decision",
+    })).map(({ source_id }) => source_id), [usageDecision.id]);
+    assert.deepEqual((await split.listStandardUsage({
+      org_id: "example-org", standard_id: standard.id, newest_first: true, limit: 1,
     })).map(({ source_id }) => source_id), [usageDecision.id]);
     assert.equal((await split.listStandardUsage({ org_id: "other-org" })).length, 0);
     await split.close();
