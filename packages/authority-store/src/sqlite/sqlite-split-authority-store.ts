@@ -37,6 +37,9 @@ import type {
   StandardVersionTransition,
   StandardGapRecord,
   StandardGapStatus,
+  AgentRunOutput,
+  AgentRunRecord,
+  AgentRunStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -418,6 +421,34 @@ export class SqliteSplitAuthorityStore
 
   async dismissStandardGap(input: { org_id: string; gap_id: string; dismissed_at: string }): Promise<StandardGapRecord | null> {
     return this.writer.call("dismissStandardGap", [input]);
+  }
+
+  async putAgentRun(run: AgentRunRecord): Promise<AgentRunRecord> {
+    return this.writer.call("putAgentRun", [run]);
+  }
+
+  async getAgentRun(orgId: string, runId: string): Promise<AgentRunRecord | null> {
+    return this.reader.call("getAgentRun", [orgId, runId]);
+  }
+
+  async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; limit?: number }): Promise<AgentRunRecord[]> {
+    return this.reader.call("listAgentRuns", [input]);
+  }
+
+  async startAgentRun(input: { org_id: string; run_id: string; started_at: string }): Promise<AgentRunRecord | null> {
+    return this.writer.call("startAgentRun", [input]);
+  }
+
+  async settleAgentRun(input: { org_id: string; run_id: string; status: "succeeded" | "failed"; output: AgentRunOutput; finished_at: string }): Promise<AgentRunRecord | null> {
+    return this.writer.call("settleAgentRun", [input]);
+  }
+
+  async handoffAgentRun(input: { org_id: string; run_id: string; handoff: HandoffRecord; handed_off_at: string }): Promise<{ run: AgentRunRecord; handoff: HandoffRecord }> {
+    return this.writer.call("handoffAgentRun", [input]);
+  }
+
+  async cancelAgentRun(input: { org_id: string; run_id: string; cancelled_at: string }): Promise<AgentRunRecord | null> {
+    return this.writer.call("cancelAgentRun", [input]);
   }
 
   async getDisposition(

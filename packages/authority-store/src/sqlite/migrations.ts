@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 37;
+export const LATEST_SCHEMA_VERSION = 38;
 
 export const MIGRATIONS = [
   {
@@ -836,6 +836,20 @@ export const MIGRATIONS = [
         UNIQUE (org_id, source_kind, source_ref)
       );
       CREATE INDEX standard_gaps_query_idx ON standard_gaps (org_id, status, created_at, id);
+    `,
+  },
+  {
+    version: 38,
+    sql: `
+      CREATE TABLE agent_runs (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'handed_off', 'cancelled')),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX agent_runs_query_idx ON agent_runs (org_id, status, created_at, id);
     `,
   },
 ] as const;

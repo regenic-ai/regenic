@@ -411,6 +411,21 @@ pnpm local context-standard-gap-convert --database ./regenic.db --blob-root ./bl
 	--org local-owner --gap <gap-id> --kind new_standard \
 	--title "Release safety" --proposal-summary "Create a bounded standard." \
 	--boundary "Release only" --snapshot <snapshot-id> --event <event-id>
+
+pnpm local context-run-new --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --request run-1 --agent agent-1 \
+	--intent "Apply the release standard." --snapshot <snapshot-id> \
+	--bindings <standard-id>@<version-id> --input '{"release_id":"release-1"}'
+
+pnpm local context-run-start --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --run <run-id>
+
+pnpm local context-run-complete --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --run <run-id> --status succeeded --output ./run-output.json
+
+pnpm local context-run-handoff --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --run <run-id> --reason evidence_conflict \
+	--payload '{"summary":"Two claims disagree."}'
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

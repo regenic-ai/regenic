@@ -438,6 +438,15 @@ describe("personal context API", () => {
     assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(revision.version.id)}/publish-active`, {
       upgrade_evidence: upgradeEvidence,
     })).text).status, "active");
+    const historicalRunBody = {
+      client_request_id: "agent-run-historical-retry",
+      agent_id: "agent-1",
+      intent: "Apply the pinned release standard.",
+      context_snapshot_id: snapshotId,
+      standard_bindings: [{ standard_id: first.standard.id, version_id: first.version.id }],
+      input: { release_id: "release-historical" },
+    };
+    const historicalRun = JSON.parse((await postJson(`${origin}/v1/me/context/runs`, historicalRunBody)).text);
     const deprecated = JSON.parse((await postJson(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(first.version.id)}/deprecate`, {
       superseded_by_version_id: revision.version.id,
     })).text);
@@ -446,8 +455,83 @@ describe("personal context API", () => {
     const retriedConversion = await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(revisionGap.id)}/proposal`, revisionConversionBody);
     assert.equal(retriedConversion.response.status, 201);
     assert.equal(JSON.parse(retriedConversion.text).proposal.status, "accepted");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs`, historicalRunBody)).text).id, historicalRun.id);
     assert.deepEqual((await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}/versions`)).json()).map(({ status }) => status), ["deprecated", "active"]);
     assert.equal((await (await fetch(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(revision.version.id)}`)).json()).status, "active");
+
+    const runBody = {
+      client_request_id: "agent-run-1",
+      agent_id: "agent-1",
+      intent: "Apply the active release standard.",
+      context_snapshot_id: snapshotId,
+      standard_bindings: [{ standard_id: first.standard.id, version_id: revision.version.id }],
+      input: { release_id: "release-1" },
+    };
+    const queuedResponse = await postJson(`${origin}/v1/me/context/runs`, runBody);
+    assert.equal(queuedResponse.response.status, 202);
+    const run = JSON.parse(queuedResponse.text);
+    assert.equal(run.status, "queued");
+    assert.equal(run.agent.actor_type, "agent");
+    assert.equal(run.on_behalf_of.actor_type, "human");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs`, runBody)).text).id, run.id);
+    const deprecatedBinding = await postJson(`${origin}/v1/me/context/runs`, {
+      ...runBody, client_request_id: "agent-run-deprecated",
+      standard_bindings: [{ standard_id: first.standard.id, version_id: first.version.id }],
+    });
+    assert.equal(deprecatedBinding.response.status, 409);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/start`, {})).text).status, "running");
+    const output = {
+      summary: "The release check passed.",
+      artifacts: [{ kind: "report", ref: "artifact-1" }],
+      applied_standard_version_ids: [revision.version.id],
+      context_snapshot_id: snapshotId,
+      acceptance_check: "pass",
+      exceptions: [],
+      confidence: 0.9,
+    };
+    const completed = await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/complete`, {
+      status: "succeeded", output,
+    });
+    assert.equal(JSON.parse(completed.text).status, "succeeded");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/complete`, {
+      status: "succeeded", output,
+    })).text).finished_at, JSON.parse(completed.text).finished_at);
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/complete`, {
+      status: "failed", output: { ...output, acceptance_check: "fail" },
+    })).response.status, 409);
+    const invalidOutputRun = JSON.parse((await postJson(`${origin}/v1/me/context/runs`, {
+      ...runBody, client_request_id: "agent-run-invalid-output", input: { release_id: "release-invalid" },
+    })).text);
+    await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(invalidOutputRun.id)}/start`, {});
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(invalidOutputRun.id)}/complete`, {
+      status: "succeeded", output: { ...output, acceptance_check: "bogus" },
+    })).response.status, 400);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/runs?status=succeeded`)).json())[0].id, run.id);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}`)).json()).output.context_snapshot_id, snapshotId);
+
+    const handoffRun = JSON.parse((await postJson(`${origin}/v1/me/context/runs`, {
+      ...runBody, client_request_id: "agent-run-handoff", input: { release_id: "release-2" },
+    })).text);
+    await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(handoffRun.id)}/start`, {});
+    const handoffBody = { reason: "evidence_conflict", payload: { summary: "Two claims disagree." } };
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(handoffRun.id)}/handoff`, {
+      ...handoffBody, reason: "retry_with_binding",
+    })).response.status, 400);
+    const handedOff = JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(handoffRun.id)}/handoff`, handoffBody)).text);
+    assert.equal(handedOff.run.status, "handed_off");
+    assert.equal(handedOff.handoff.agent_run_id, handoffRun.id);
+    assert.equal(handedOff.handoff.context_snapshot_id, snapshotId);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(handoffRun.id)}/handoff`, handoffBody)).text).handoff.id, handedOff.handoff.id);
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(handoffRun.id)}/handoff`, {
+      ...handoffBody, payload: { summary: "Changed after handoff." },
+    })).response.status, 409);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/handoffs/${encodeURIComponent(handedOff.handoff.id)}`)).json()).agent_run_id, handoffRun.id);
+
+    const cancelledRun = JSON.parse((await postJson(`${origin}/v1/me/context/runs`, {
+      ...runBody, client_request_id: "agent-run-cancel", input: { release_id: "release-3" },
+    })).text);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(cancelledRun.id)}/cancel`, {})).text).status, "cancelled");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(cancelledRun.id)}/cancel`, {})).text).status, "cancelled");
   });
 
   it("converts one StandardGap into one governed Proposal", async () => {

@@ -340,6 +340,59 @@ describePg("postgres authority store", () => {
     assert.equal((await writerA.listStandardGaps({ org_id: orgId, status: "converted" })).length, 1);
   });
 
+  it("serializes AgentRun transitions and commits Handoff atomically", async () => {
+    const writerA = await openStore();
+    const writerB = await openStore();
+    const orgId = `org-${randomUUID()}`;
+    const run = {
+      schema_version: "1.0", id: `run-${randomUUID()}`, org_id: orgId,
+      agent: { actor_type: "agent", actor_id: "agent-1" },
+      on_behalf_of: { actor_type: "human", actor_id: "person-1" },
+      intent: "Apply the release standard.", status: "queued",
+      context_snapshot_id: "snapshot-1",
+      standard_bindings: [{ standard_id: "standard-1", version_id: "version-1" }],
+      input: { release_id: "release-1" }, created_at: "2026-09-21T00:00:00.000Z",
+    };
+    await writerA.putAgentRun(run);
+    const [startedA, startedB] = await Promise.all([
+      writerA.startAgentRun({ org_id: orgId, run_id: run.id, started_at: "2026-09-21T01:00:00.000Z" }),
+      writerB.startAgentRun({ org_id: orgId, run_id: run.id, started_at: "2026-09-21T01:01:00.000Z" }),
+    ]);
+    assert.equal(startedA.status, "running");
+    assert.equal(startedB.started_at, startedA.started_at);
+    const output = {
+      summary: "The release check passed.", artifacts: [],
+      applied_standard_version_ids: ["version-1"], context_snapshot_id: "snapshot-1",
+      acceptance_check: "pass", exceptions: [],
+    };
+    assert.equal((await writerA.settleAgentRun({
+      org_id: orgId, run_id: run.id, status: "succeeded", output,
+      finished_at: "2026-09-21T02:00:00.000Z",
+    })).status, "succeeded");
+    assert.equal((await writerB.settleAgentRun({
+      org_id: orgId, run_id: run.id, status: "succeeded", output,
+      finished_at: "2026-09-21T02:01:00.000Z",
+    })).finished_at, "2026-09-21T02:00:00.000Z");
+
+    const handoffRun = { ...run, id: `run-${randomUUID()}`, input: { release_id: "release-2" } };
+    await writerA.putAgentRun(handoffRun);
+    await writerA.startAgentRun({ org_id: orgId, run_id: handoffRun.id, started_at: "2026-09-21T01:00:00.000Z" });
+    const handoff = {
+      schema_version: "1.0", id: `handoff-${randomUUID()}`, org_id: orgId,
+      direction: "agent_to_human", from: handoffRun.agent,
+      to: { actor_type: "human", actor_id: "person-1" }, reason: "evidence_conflict",
+      agent_run_id: handoffRun.id, context_snapshot_id: handoffRun.context_snapshot_id,
+      standard_bindings: handoffRun.standard_bindings,
+      payload: { summary: "Two claims disagree." }, status: "open",
+      created_at: "2026-09-21T02:00:00.000Z",
+    };
+    const handedOff = await writerB.handoffAgentRun({
+      org_id: orgId, run_id: handoffRun.id, handoff, handed_off_at: handoff.created_at,
+    });
+    assert.equal(handedOff.run.status, "handed_off");
+    assert.equal((await writerA.getHandoff(orgId, handoff.id)).agent_run_id, handoffRun.id);
+  });
+
   it("serves the store through the postgres plugin", async () => {
     const host = await createHost();
     try {

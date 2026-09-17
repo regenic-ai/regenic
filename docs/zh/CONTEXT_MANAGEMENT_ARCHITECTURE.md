@@ -661,6 +661,25 @@ Revision conversion 必须固定当前已发布且未 deprecated 的 StandardVer
 SQLite 使用 immediate transaction 取得写 ownership，PostgreSQL 锁定该行。Revision 已
 converted 后的重试按原始 Proposal payload 比较，因此即使 Standard head 已推进仍保持幂等。
 
+### 8.8 AgentRun ledger
+
+Personal 实现 RFC 0004 的异步 AgentRun resource contract，不实现 agent framework 或 scheduler。
+创建 Run 会返回 queued authority record，并强制提供显式 agent identity、ContextSnapshot、
+结构化 input 及至少一个精确 StandardVersion binding。新 Run 只接受 trial 或 active version。
+Human caller 通过 `on_behalf_of` 显式记录；agent 不会假扮该 human。既有 Run 的重试按原始
+payload 比较，因此 pinned version 后续 deprecated 也不影响幂等确认。
+
+只有显式 resource 操作可将 `queued -> running`，再推进为 `succeeded`、`failed`、
+`handed_off` 或 `cancelled`；queued Run 也可直接取消。终态关闭。Succeeded/failed output 必须
+回显精确 snapshot 与全部 pinned StandardVersion ID，包含结构化 artifact list 和 acceptance
+check，且 changed retry 不能替换 terminal outcome。
+
+运行中的 agent 撞到边界时，一个操作会原子创建 Agent-to-Human Handoff，并将 Run 标为
+`handed_off`。Handoff 必须携带同一 agent、`on_behalf_of` human、Run ID、snapshot 与
+bindings。继续执行需要先解决
+Handoff，再以显式 bindings 创建新 Run；普通聊天或 Event ingestion 永远不会启动、完成或恢复
+Run。当前 slice 不会把 queued Run 分发给 executor。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

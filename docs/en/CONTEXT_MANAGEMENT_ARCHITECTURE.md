@@ -775,6 +775,30 @@ immediate transaction and PostgreSQL locks the row. A converted revision retry
 compares the original Proposal payload and remains idempotent even after the
 Standard head advances.
 
+### 8.8 Agent run ledger
+
+Personal implements the RFC 0004 asynchronous AgentRun resource contract, not
+an agent framework or scheduler. Creating a Run returns a queued authority
+record and requires one explicit agent identity, a ContextSnapshot, structured
+input, and at least one exact StandardVersion binding. A new Run accepts only
+trial or active versions. The human caller is recorded explicitly in
+`on_behalf_of`; the agent never impersonates that human. A retry of an existing
+Run compares its original payload and remains valid if a pinned version later
+becomes deprecated.
+
+Only explicit resource operations advance `queued -> running` and then to
+`succeeded`, `failed`, `handed_off`, or `cancelled`; queued Runs may also be
+cancelled. Terminal states are closed. A succeeded or failed output must echo
+the exact snapshot and all pinned StandardVersion IDs, includes a structured
+artifact list and acceptance check, and cannot be replaced by a changed retry.
+
+When a running agent reaches a boundary, one operation atomically creates an
+Agent-to-Human Handoff and marks the Run `handed_off`. The Handoff must carry
+the same agent, `on_behalf_of` human, Run ID, snapshot, and bindings. Continuing requires resolving
+the Handoff and creating a new Run with explicit bindings; ordinary chat or
+Event ingestion never starts, completes, or resumes a Run. The current slice
+does not dispatch queued Runs to an executor.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.
