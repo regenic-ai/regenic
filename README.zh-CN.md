@@ -383,6 +383,21 @@ pnpm local context-handoff-ack --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-handoff-resolve --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --handoff <handoff-id>
+
+pnpm local context-proposal-new-standard --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --request standard-1 --title "Release safety" \
+	--summary "Create a bounded release standard." --boundary "Release only" \
+	--snapshot <snapshot-id> --event <event-id> \
+	--uncertainty "Can this process prevent regressions?"
+
+pnpm local context-standard-version-commit --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --proposal <proposal-id> --spec ./standard-version.json
+
+pnpm local context-standard-version-publish-trial --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --version <version-id>
+
+pnpm local context-standard-version-promote --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --version <version-id> --upgrade-evidence ./upgrade-evidence.json
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

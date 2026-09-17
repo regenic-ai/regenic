@@ -42,6 +42,10 @@ describe("regenic-local", () => {
     const evidenceOutput = join(root, "context-evidence.jsonl");
     const evaluationDataset = join(root, "context-evaluation.json");
     const evaluationOutput = join(root, "context-evaluation-report.json");
+    const standardSpecPath = join(root, "standard-version.json");
+    const revisionSpecPath = join(root, "standard-revision.json");
+    const upgradeEvidencePath = join(root, "upgrade-evidence.json");
+    const deprecationEvidencePath = join(root, "deprecation-evidence.json");
     const authority = new SqliteAuthorityStore(database);
     const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
     const ingested = await ingestion.ingest({
@@ -198,6 +202,127 @@ describe("regenic-local", () => {
     assert.equal(resolvedHandoff.status, "resolved");
     assert.equal((await run(handoffArgs)).status, "resolved");
     await assert.rejects(run(["context-handoff-cancel", ...common, "--handoff", handoff.id]), /Invalid Handoff transition/);
+    const uncertainty = "Can this release process prevent regressions?";
+    const gate = {
+      single_uncertainty: uncertainty,
+      target_user_tier: "early_adopter",
+      consensus_hypothesis: "Teams need a bounded release check.",
+      value_metric: "Escaped regressions per release",
+      cost_budget: "Two engineer-days",
+      validation_window: "14 days",
+      stop_condition: "Stop after one severe regression.",
+      stable_core_preserved: true,
+      compat_and_rollback: "Keep the previous release path available.",
+      learning_output: "new_standard",
+    };
+    const standardSpec = {
+      slug: "release-safety",
+      title: "Release safety",
+      layer: "adjacent",
+      scope: { decision_kinds: ["release"] },
+      version: "1.0.0",
+      condition: "A release changes production behavior.",
+      action: "Run the bounded release check.",
+      acceptance: "No severe regression escapes during the validation window.",
+      boundary: "Escalate when rollback is unavailable.",
+      revision_trigger: "A severe regression escapes the check.",
+      gate,
+      trial: {
+        audience: { team_ids: ["team-1"], decision_kinds: ["release"] },
+        starts_at: "2026-08-14T00:00:00.000Z",
+        ends_at: "2026-08-28T00:00:00.000Z",
+        success_metric: "Zero severe escaped regressions",
+        stop_condition: "Stop after one severe escaped regression.",
+      },
+    };
+    const upgradeEvidence = {
+      core_value_revalidated: true,
+      delivery_standardized: true,
+      unit_economics_or_roi_ok: true,
+      next_tier_behavioral_evidence: true,
+      rollback_safe: true,
+    };
+    await writeFile(standardSpecPath, JSON.stringify(standardSpec), "utf8");
+    await writeFile(upgradeEvidencePath, JSON.stringify(upgradeEvidence), "utf8");
+    await writeFile(deprecationEvidencePath, JSON.stringify([{
+      kind: "document", uri_or_ref: "artifact:release-regression-report",
+    }]), "utf8");
+    const standardProposal = await run([
+      "context-proposal-new-standard", ...common,
+      "--request", "standard-proposal-1",
+      "--title", "Create release safety standard",
+      "--summary", "Create a bounded release safety standard.",
+      "--boundary", "Release governance only",
+      "--snapshot", assembled.snapshot.id,
+      "--event", ingested.records[0].event_id,
+      "--uncertainty", uncertainty,
+    ]);
+    await run(["context-proposal-submit", ...common, "--proposal", standardProposal.id]);
+    await run(["context-proposal-review", ...common, "--proposal", standardProposal.id]);
+    const standardCommit = await run([
+      "context-standard-version-commit", ...common,
+      "--proposal", standardProposal.id,
+      "--spec", standardSpecPath,
+    ]);
+    assert.equal(standardCommit.proposal.status, "accepted");
+    assert.equal(standardCommit.version.status, "draft");
+    assert.equal((await run(["context-standards", ...common]))[0].id, standardCommit.standard.id);
+    assert.equal((await run(["context-standard-get", ...common, "--standard", standardCommit.standard.id])).slug, "release-safety");
+    assert.equal((await run(["context-standard-version-publish-trial", ...common, "--version", standardCommit.version.id])).status, "trial");
+    assert.equal((await run([
+      "context-standard-version-promote", ...common,
+      "--version", standardCommit.version.id,
+      "--upgrade-evidence", upgradeEvidencePath,
+    ])).status, "active");
+    const revisionSpec = {
+      target_standard_id: standardCommit.standard.id,
+      supersedes_version_id: standardCommit.version.id,
+      version: "1.1.0",
+      condition: standardSpec.condition,
+      action: "Run the bounded release check and publish its result.",
+      acceptance: standardSpec.acceptance,
+      boundary: standardSpec.boundary,
+      revision_trigger: standardSpec.revision_trigger,
+      gate: { ...gate, learning_output: "revision" },
+    };
+    await writeFile(revisionSpecPath, JSON.stringify(revisionSpec), "utf8");
+    const revisionProposal = await run([
+      "context-proposal-revise-standard", ...common,
+      "--request", "standard-proposal-2",
+      "--title", "Revise release safety standard",
+      "--summary", "Publish the bounded release result.",
+      "--boundary", "Release governance only",
+      "--snapshot", assembled.snapshot.id,
+      "--event", ingested.records[0].event_id,
+      "--uncertainty", uncertainty,
+      "--standard", standardCommit.standard.id,
+      "--supersedes", standardCommit.version.id,
+    ]);
+    await run(["context-proposal-submit", ...common, "--proposal", revisionProposal.id]);
+    await run(["context-proposal-review", ...common, "--proposal", revisionProposal.id]);
+    const revisionCommit = await run([
+      "context-standard-version-commit", ...common,
+      "--proposal", revisionProposal.id,
+      "--spec", revisionSpecPath,
+    ]);
+    assert.equal((await run([
+      "context-standard-version-publish-active", ...common,
+      "--version", revisionCommit.version.id,
+      "--upgrade-evidence", upgradeEvidencePath,
+    ])).status, "active");
+    assert.equal((await run([
+      "context-standard-version-deprecate", ...common,
+      "--version", standardCommit.version.id,
+      "--deprecation-evidence", deprecationEvidencePath,
+    ])).status, "deprecated");
+    assert.deepEqual((await run([
+      "context-standard-versions", ...common,
+      "--standard", standardCommit.standard.id,
+    ])).map(({ status }) => status), ["deprecated", "active"]);
+    assert.equal((await run([
+      "context-standard-version-get", ...common,
+      "--version", revisionCommit.version.id,
+    ])).status, "active");
     const jobStore = new SqliteAuthorityStore(database);
     await jobStore.enqueueDailyDigestJob({
       org_id: "local-owner",

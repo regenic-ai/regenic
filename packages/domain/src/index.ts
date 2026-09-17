@@ -65,6 +65,7 @@ export * from "./proposal";
 export * from "./decision";
 export * from "./review";
 export * from "./handoff";
+export * from "./standard";
 export * from "./context-candidate";
 export * from "./context-request";
 export * from "./context-artifact";

@@ -30,6 +30,9 @@ import {
   validateReview,
   validateHandoff,
   assertHandoffTransition,
+  validateStandard,
+  validateStandardVersion,
+  transitionStandardVersion as applyStandardVersionTransition,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -70,6 +73,10 @@ import type {
   HandoffDirection,
   HandoffRecord,
   HandoffStatus,
+  StandardRecord,
+  StandardVersionRecord,
+  StandardVersionState,
+  StandardVersionTransition,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1364,9 +1371,127 @@ export class SqliteAuthorityStore
     })();
   }
 
+  async commitProposalStandardVersion(input: { org_id: string; proposal_id: string; standard?: StandardRecord; version: StandardVersionRecord }): Promise<{ proposal: ProposalRecord; standard: StandardRecord; version: StandardVersionRecord }> {
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const version = validateStandardVersion(input.version);
+      if (version.status !== "draft") throw new Error("New StandardVersion must be draft");
+      const proposal = this.getProposalSync(input.org_id, input.proposal_id);
+      if (!proposal || !["new_standard", "revise_standard"].includes(proposal.kind)
+        || version.org_id !== input.org_id || version.proposal_id !== proposal.id
+        || !version.gate || version.gate.single_uncertainty !== proposal.single_uncertainty) {
+        throw new Error("Invalid Proposal StandardVersion commit");
+      }
+      const existingRow = this.database.prepare(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = ? AND proposal_id = ?`).get(input.org_id, input.proposal_id) as StandardVersionRow | undefined;
+      if (existingRow) {
+        const storedCreation = validateStandardVersion(JSON.parse(existingRow.payload_json) as StandardVersionRecord);
+        if (canonicalContextJson(storedCreation) !== canonicalContextJson({ ...version, created_at: storedCreation.created_at })) {
+          throw new Error("Cannot replace immutable StandardVersion");
+        }
+        const standardRow = this.database.prepare(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = ? AND id = ?`).get(input.org_id, storedCreation.standard_id) as StandardRow | undefined;
+        if (!standardRow) throw new Error("Standard was not found");
+        if (proposal.kind === "new_standard" && input.standard) {
+          const storedStandard = validateStandard(JSON.parse(standardRow.payload_json) as StandardRecord);
+          const attemptedStandard = validateStandard(input.standard);
+          if (canonicalContextJson(storedStandard) !== canonicalContextJson({ ...attemptedStandard, created_at: storedStandard.created_at })) {
+            throw new Error("Cannot replace immutable Standard");
+          }
+        }
+        return { proposal, standard: toStandard(standardRow), version: toStandardVersion(existingRow) };
+      }
+      if (proposal.status !== "in_review") throw new Error("StandardVersion commit requires an in-review Proposal");
+      let standard: StandardRecord;
+      if (proposal.kind === "new_standard") {
+        if (!input.standard) throw new Error("New Standard Proposal requires Standard identity");
+        standard = validateStandard(input.standard);
+        if (standard.org_id !== input.org_id || standard.id !== version.standard_id
+          || standard.current_version_id || standard.citation_count !== 0
+          || version.supersedes_version_id || version.gate.learning_output !== "new_standard"
+          || canonicalContextJson(standard.created_by) !== canonicalContextJson(proposal.author)) {
+          throw new Error("Invalid new Standard Proposal outcome");
+        }
+        this.database.prepare(`INSERT INTO standards (id, org_id, slug, payload_json, current_version_id, citation_count, created_at) VALUES (?, ?, ?, ?, NULL, 0, ?)`).run(standard.id, standard.org_id, standard.slug, canonicalContextJson(standard), standard.created_at);
+      } else {
+        standard = this.getStandardSync(input.org_id, version.standard_id)!;
+        const supersedesId = version.supersedes_version_id;
+        const superseded = supersedesId ? this.getStandardVersionSync(input.org_id, supersedesId) : null;
+        const pinned = proposal.standard_bindings.some((binding) =>
+          binding.standard_id === version.standard_id && binding.version_id === supersedesId
+        );
+        if (!standard || !superseded || superseded.standard_id !== standard.id
+          || superseded.status === "draft" || superseded.status === "deprecated"
+          || standard.current_version_id !== supersedesId
+          || !pinned || version.gate.learning_output !== "revision") {
+          throw new Error("Invalid revised Standard Proposal outcome");
+        }
+      }
+      this.database.prepare(`INSERT INTO standard_versions (id, org_id, standard_id, proposal_id, version, status, payload_json, state_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(version.id, version.org_id, version.standard_id, version.proposal_id, version.version, version.status, canonicalContextJson(version), canonicalContextJson(standardVersionState(version)), version.created_at);
+      this.database.prepare(`UPDATE proposals SET status = 'accepted', outcome_kind = 'standard_version', outcome_ref_id = ?, updated_at = ? WHERE org_id = ? AND id = ? AND status = 'in_review'`).run(version.id, version.created_at, input.org_id, proposal.id);
+      return { proposal: this.getProposalSync(input.org_id, proposal.id)!, standard, version };
+    })();
+  }
+
+  async getStandard(orgId: string, standardId: string): Promise<StandardRecord | null> {
+    return this.getStandardSync(orgId, standardId);
+  }
+
+  async getStandardBySlug(orgId: string, slug: string): Promise<StandardRecord | null> {
+    const row = this.database.prepare(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = ? AND slug = ?`).get(orgId, slug) as StandardRow | undefined;
+    return row ? toStandard(row) : null;
+  }
+
+  async listStandards(input: { org_id: string; limit?: number }): Promise<StandardRecord[]> {
+    const rows = this.database.prepare(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = ? ORDER BY created_at, id LIMIT ?`).all(input.org_id, input.limit ?? 100) as StandardRow[];
+    return rows.map(toStandard);
+  }
+
+  async getStandardVersion(orgId: string, versionId: string): Promise<StandardVersionRecord | null> {
+    return this.getStandardVersionSync(orgId, versionId);
+  }
+
+  async listStandardVersions(input: { org_id: string; standard_id: string; limit?: number }): Promise<StandardVersionRecord[]> {
+    const rows = this.database.prepare(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = ? AND standard_id = ? ORDER BY created_at, id LIMIT ?`).all(input.org_id, input.standard_id, input.limit ?? 100) as StandardVersionRow[];
+    return rows.map(toStandardVersion);
+  }
+
+  async transitionStandardVersion(input: StandardVersionTransition): Promise<StandardVersionRecord | null> {
+    this.assertWritable();
+    return this.database.transaction(() => {
+      const row = this.database.prepare(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = ? AND id = ?`).get(input.org_id, input.version_id) as StandardVersionRow | undefined;
+      if (!row) return null;
+      const current = toStandardVersion(row);
+      const standard = this.getStandardSync(input.org_id, current.standard_id);
+      if (!standard) throw new Error("Standard was not found");
+      if (input.superseded_by_version_id) {
+        const replacement = this.getStandardVersionSync(input.org_id, input.superseded_by_version_id);
+        if (!replacement || replacement.standard_id !== current.standard_id || replacement.status !== "active") {
+          throw new Error("StandardVersion replacement must be active in the same Standard");
+        }
+      }
+      const next = applyStandardVersionTransition(current, standard, input);
+      this.database.prepare(`UPDATE standard_versions SET status = ?, state_json = ? WHERE org_id = ? AND id = ? AND status = ?`).run(next.status, canonicalContextJson(standardVersionState(next)), input.org_id, input.version_id, current.status);
+      if (next.status === "trial" || next.status === "active") {
+        this.database.prepare(`UPDATE standards SET current_version_id = ? WHERE org_id = ? AND id = ?`).run(next.id, input.org_id, standard.id);
+      } else if (next.superseded_by_version_id) {
+        this.database.prepare(`UPDATE standards SET current_version_id = ? WHERE org_id = ? AND id = ? AND current_version_id = ?`).run(next.superseded_by_version_id, input.org_id, standard.id, next.id);
+      }
+      return next;
+    })();
+  }
+
   private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {
     const row = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(orgId, proposalId) as ProposalRow | undefined;
     return row ? toProposal(row) : null;
+  }
+
+  private getStandardSync(orgId: string, standardId: string): StandardRecord | null {
+    const row = this.database.prepare(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = ? AND id = ?`).get(orgId, standardId) as StandardRow | undefined;
+    return row ? toStandard(row) : null;
+  }
+
+  private getStandardVersionSync(orgId: string, versionId: string): StandardVersionRecord | null {
+    const row = this.database.prepare(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = ? AND id = ?`).get(orgId, versionId) as StandardVersionRow | undefined;
+    return row ? toStandardVersion(row) : null;
   }
 
   private getDailyDigestJob(id: string): DailyDigestJob | null {
@@ -4202,6 +4327,57 @@ interface HandoffRow {
   status: HandoffStatus;
   payload_json: string;
   resolved_at: string | null;
+}
+
+interface StandardRow {
+  payload_json: string;
+  current_version_id: string | null;
+  citation_count: number;
+}
+
+interface StandardVersionRow {
+  status: StandardVersionRecord["status"];
+  payload_json: string;
+  state_json: string;
+}
+
+function toStandard(row: StandardRow): StandardRecord {
+  return validateStandard({
+    ...(JSON.parse(row.payload_json) as StandardRecord),
+    ...(row.current_version_id ? { current_version_id: row.current_version_id } : {}),
+    citation_count: row.citation_count,
+  });
+}
+
+function standardVersionState(version: StandardVersionRecord): StandardVersionState {
+  return {
+    status: version.status,
+    ...(version.gate?.upgrade_evidence ? { upgrade_evidence: version.gate.upgrade_evidence } : {}),
+    ...(version.published_at ? { published_at: version.published_at } : {}),
+    ...(version.published_by ? { published_by: version.published_by } : {}),
+    ...(version.deprecated_at ? { deprecated_at: version.deprecated_at } : {}),
+    ...(version.deprecated_by ? { deprecated_by: version.deprecated_by } : {}),
+    ...(version.deprecation_evidence ? { deprecation_evidence: version.deprecation_evidence } : {}),
+    ...(version.superseded_by_version_id ? { superseded_by_version_id: version.superseded_by_version_id } : {}),
+  };
+}
+
+function toStandardVersion(row: StandardVersionRow): StandardVersionRecord {
+  const version = JSON.parse(row.payload_json) as StandardVersionRecord;
+  const state = JSON.parse(row.state_json) as StandardVersionState;
+  return validateStandardVersion({
+    ...version,
+    status: row.status,
+    ...(version.gate && state.upgrade_evidence
+      ? { gate: { ...version.gate, upgrade_evidence: state.upgrade_evidence } }
+      : {}),
+    ...(state.published_at ? { published_at: state.published_at } : {}),
+    ...(state.published_by ? { published_by: state.published_by } : {}),
+    ...(state.deprecated_at ? { deprecated_at: state.deprecated_at } : {}),
+    ...(state.deprecated_by ? { deprecated_by: state.deprecated_by } : {}),
+    ...(state.deprecation_evidence ? { deprecation_evidence: state.deprecation_evidence } : {}),
+    ...(state.superseded_by_version_id ? { superseded_by_version_id: state.superseded_by_version_id } : {}),
+  });
 }
 
 function toHandoff(row: HandoffRow): HandoffRecord {

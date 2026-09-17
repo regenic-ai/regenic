@@ -25,7 +25,14 @@ import {
   DECISION_SCHEMA_VERSION,
   REVIEW_SCHEMA_VERSION,
   HANDOFF_SCHEMA_VERSION,
+  STANDARD_SCHEMA_VERSION,
+  STANDARD_VERSION_SCHEMA_VERSION,
   hashCanonicalContext,
+  hashStandardVersionBody,
+  validateIterationGate,
+  validateStandardScope,
+  validateTrialConfig,
+  validateUpgradeEvidence,
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
@@ -34,6 +41,14 @@ import {
   type HandoffReason,
   type HandoffRecord,
   type HandoffStatus,
+  type IterationGate,
+  type StandardLayer,
+  type StandardRecord,
+  type StandardScope,
+  type StandardVersionRecord,
+  type StandardVersionStatus,
+  type TrialConfig,
+  type UpgradeEvidence,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -230,8 +245,39 @@ export async function runLocalCli(
     case "context-handoff-cancel":
       await transitionHandoff(commandOptions, stdout, now, "cancelled");
       return;
+    case "context-proposal-new-standard":
+      await createStandardProposal(commandOptions, stdout, now, "new_standard");
+      return;
+    case "context-proposal-revise-standard":
+      await createStandardProposal(commandOptions, stdout, now, "revise_standard");
+      return;
+    case "context-standard-version-commit":
+      await commitStandardVersion(commandOptions, stdout, now);
+      return;
+    case "context-standards":
+      await listStandards(commandOptions, stdout);
+      return;
+    case "context-standard-get":
+      await getStandard(commandOptions, stdout);
+      return;
+    case "context-standard-versions":
+      await listStandardVersions(commandOptions, stdout);
+      return;
+    case "context-standard-version-get":
+      await getStandardVersion(commandOptions, stdout);
+      return;
+    case "context-standard-version-publish-trial":
+      await transitionCliStandardVersion(commandOptions, stdout, now, "trial");
+      return;
+    case "context-standard-version-publish-active":
+    case "context-standard-version-promote":
+      await transitionCliStandardVersion(commandOptions, stdout, now, "active");
+      return;
+    case "context-standard-version-deprecate":
+      await transitionCliStandardVersion(commandOptions, stdout, now, "deprecated");
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate");
   }
 }
 
@@ -1552,6 +1598,286 @@ function cliStandardBindings(value: string | undefined): HandoffRecord["standard
     if (separator < 1 || separator === entry.length - 1) throw new Error("Handoff bindings must use standard@version");
     return { standard_id: entry.slice(0, separator), version_id: entry.slice(separator + 1) };
   });
+}
+
+async function createStandardProposal(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+  kind: "new_standard" | "revise_standard",
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const snapshotId = requireOption(options, "snapshot");
+    if (!await host.get("context-artifacts").getSnapshot(orgId, snapshotId)) throw new Error("Context snapshot was not found");
+    const eventId = requireOption(options, "event");
+    if (!await host.get("authority").getEvent(orgId, eventId)) throw new Error("Proposal evidence Event was not found");
+    const rights = optionString(options, "rights") ?? "coach";
+    if (!["direct", "coach", "negotiate", "authorize", "delegate"].includes(rights)) throw new Error("Invalid rights level");
+    let standardBindings: ProposalRecord["standard_bindings"] = [];
+    if (kind === "revise_standard") {
+      const standardId = requireOption(options, "standard");
+      const supersedesId = requireOption(options, "supersedes");
+      const standard = await host.get("standards").getStandard(orgId, standardId);
+      const superseded = await host.get("standards").getStandardVersion(orgId, supersedesId);
+      if (!standard || !superseded || superseded.standard_id !== standard.id || superseded.status === "draft") {
+        throw new Error("Revision must pin a published StandardVersion");
+      }
+      standardBindings = [{ standard_id: standard.id, version_id: superseded.id }];
+    }
+    const at = now();
+    const proposal: ProposalRecord = {
+      schema_version: PROPOSAL_SCHEMA_VERSION,
+      id: `proposal:${hashCanonicalContext([orgId, requireOption(options, "request")])}`,
+      org_id: orgId,
+      kind,
+      title: requireOption(options, "title"),
+      summary: requireOption(options, "summary"),
+      status: "draft",
+      author: { actor_type: "human", actor_id: orgId },
+      rights_level: rights as ProposalRecord["rights_level"],
+      boundary: requireOption(options, "boundary"),
+      context_snapshot_id: snapshotId,
+      standard_bindings: standardBindings,
+      single_uncertainty: requireOption(options, "uncertainty"),
+      evidence: [{ kind: "document", uri_or_ref: `event:${eventId}` }],
+      created_at: at,
+      updated_at: at,
+    };
+    writeJson(stdout, await host.get("proposals").putProposal(proposal));
+  });
+}
+
+async function commitStandardVersion(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const spec = await readJsonObject(requirePath(options, "spec"), "StandardVersion spec");
+  assertObjectKeys(spec, new Set([
+    "slug", "title", "layer", "scope", "target_standard_id", "supersedes_version_id",
+    "version", "condition", "action", "acceptance", "boundary", "revision_trigger",
+    "gate", "trial",
+  ]), "StandardVersion spec");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const proposalId = requireOption(options, "proposal");
+    const proposal = await host.get("proposals").getProposal(orgId, proposalId);
+    if (!proposal || !["new_standard", "revise_standard"].includes(proposal.kind)
+      || !["in_review", "accepted"].includes(proposal.status) || !proposal.single_uncertainty) {
+      throw new Error("StandardVersion commit requires an in-review Standard Proposal");
+    }
+    const gate = validateIterationGate(spec.gate as IterationGate);
+    if (gate.single_uncertainty !== proposal.single_uncertainty) throw new Error("IterationGate must preserve the Proposal uncertainty");
+    const at = now();
+    let standard: StandardRecord | undefined;
+    let standardId: string;
+    let supersedesVersionId: string | undefined;
+    if (proposal.kind === "new_standard") {
+      if (spec.target_standard_id !== undefined || spec.supersedes_version_id !== undefined) throw new Error("New Standard cannot set target or superseded version");
+      const slug = requireString(spec.slug);
+      const layer = requireString(spec.layer);
+      if (!["stable_core", "adjacent", "frontier"].includes(layer)) throw new Error("Invalid Standard layer");
+      standardId = `standard:${hashCanonicalContext([orgId, slug])}`;
+      standard = {
+        schema_version: STANDARD_SCHEMA_VERSION,
+        id: standardId,
+        org_id: orgId,
+        slug,
+        title: requireString(spec.title),
+        layer: layer as StandardLayer,
+        scope: cliStandardScope(spec.scope, orgId),
+        created_at: at,
+        created_by: proposal.author,
+        citation_count: 0,
+      };
+    } else {
+      if (spec.slug !== undefined || spec.title !== undefined || spec.layer !== undefined || spec.scope !== undefined) throw new Error("Revised StandardVersion cannot replace Standard identity");
+      standardId = requireString(spec.target_standard_id);
+      supersedesVersionId = requireString(spec.supersedes_version_id);
+      if (!await host.get("standards").getStandard(orgId, standardId)) throw new Error("Standard was not found");
+      if (!proposal.standard_bindings.some((binding) => binding.standard_id === standardId && binding.version_id === supersedesVersionId)) {
+        throw new Error("Revision Proposal must pin the superseded StandardVersion");
+      }
+    }
+    const body = {
+      condition: requireString(spec.condition),
+      action: requireString(spec.action),
+      acceptance: requireString(spec.acceptance),
+      boundary: requireString(spec.boundary),
+      revision_trigger: requireString(spec.revision_trigger),
+    };
+    const version: StandardVersionRecord = {
+      schema_version: STANDARD_VERSION_SCHEMA_VERSION,
+      id: `standard-version:${hashCanonicalContext([orgId, proposal.id])}`,
+      org_id: orgId,
+      standard_id: standardId,
+      proposal_id: proposal.id,
+      version: requireString(spec.version),
+      status: "draft",
+      ...body,
+      gate,
+      ...(spec.trial === undefined ? {} : { trial: cliTrialConfig(spec.trial, orgId) }),
+      ...(supersedesVersionId ? { supersedes_version_id: supersedesVersionId } : {}),
+      body_hash: hashStandardVersionBody(body),
+      created_at: at,
+    };
+    writeJson(stdout, await host.get("standards").commitProposalStandardVersion({
+      org_id: orgId, proposal_id: proposal.id, ...(standard ? { standard } : {}), version,
+    }));
+  });
+}
+
+async function listStandards(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    writeJson(stdout, await host.get("standards").listStandards({ org_id: orgId, limit: 100 }));
+  });
+}
+
+async function getStandard(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const standard = await host.get("standards").getStandard(orgId, requireOption(options, "standard"));
+    if (!standard) throw new Error("Standard was not found");
+    writeJson(stdout, standard);
+  });
+}
+
+async function listStandardVersions(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const standardId = requireOption(options, "standard");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    if (!await host.get("standards").getStandard(orgId, standardId)) throw new Error("Standard was not found");
+    writeJson(stdout, await host.get("standards").listStandardVersions({ org_id: orgId, standard_id: standardId, limit: 100 }));
+  });
+}
+
+async function getStandardVersion(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const version = await host.get("standards").getStandardVersion(orgId, requireOption(options, "version"));
+    if (!version) throw new Error("StandardVersion was not found");
+    writeJson(stdout, version);
+  });
+}
+
+async function transitionCliStandardVersion(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+  status: Exclude<StandardVersionStatus, "draft">,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const upgradePath = optionPath(options, "upgrade-evidence");
+  const deprecationPath = optionPath(options, "deprecation-evidence");
+  const replacementId = optionString(options, "replacement");
+  const eventId = optionString(options, "event");
+  if (status !== "active" && upgradePath) throw new Error("--upgrade-evidence is valid only when publishing active");
+  if (status !== "deprecated" && (deprecationPath || replacementId || eventId)) throw new Error("Deprecation inputs are valid only when deprecating");
+  if (deprecationPath && eventId) throw new Error("Provide --deprecation-evidence or --event, not both");
+  const upgradeEvidence = upgradePath
+    ? cliUpgradeEvidence(await readJsonObject(upgradePath, "UpgradeEvidence"))
+    : undefined;
+  const deprecationEvidence = deprecationPath
+    ? await readEvidenceArray(deprecationPath, "Deprecation evidence")
+    : eventId ? [{ kind: "document" as const, uri_or_ref: `event:${eventId}` }] : undefined;
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    for (const evidence of deprecationEvidence ?? []) {
+      if (!evidence.uri_or_ref.startsWith("event:")) continue;
+      if (!await host.get("authority").getEvent(orgId, evidence.uri_or_ref.slice("event:".length))) {
+        throw new Error("Deprecation evidence Event was not found");
+      }
+    }
+    const version = await host.get("standards").transitionStandardVersion({
+      org_id: orgId,
+      version_id: requireOption(options, "version"),
+      status,
+      actor: { actor_type: "human", actor_id: orgId },
+      transitioned_at: now(),
+      ...(upgradeEvidence ? { upgrade_evidence: upgradeEvidence } : {}),
+      ...(deprecationEvidence ? { deprecation_evidence: deprecationEvidence } : {}),
+      ...(replacementId ? { superseded_by_version_id: replacementId } : {}),
+    });
+    if (!version) throw new Error("StandardVersion was not found");
+    writeJson(stdout, version);
+  });
+}
+
+function cliStandardScope(value: unknown, orgId: string): StandardScope {
+  if (!isObject(value)) throw new Error("Standard scope must be an object");
+  assertObjectKeys(value, new Set(["org_id", "team_ids", "roles", "decision_kinds"]), "Standard scope");
+  if (value.org_id !== undefined && value.org_id !== orgId) throw new Error("Standard scope organization mismatch");
+  return validateStandardScope({
+    org_id: orgId,
+    team_ids: cliStringArray(value.team_ids),
+    roles: cliStringArray(value.roles),
+    decision_kinds: cliStringArray(value.decision_kinds),
+  }, orgId);
+}
+
+function cliTrialConfig(value: unknown, orgId: string): TrialConfig {
+  if (!isObject(value)) throw new Error("Trial config must be an object");
+  assertObjectKeys(value, new Set(["audience", "starts_at", "ends_at", "success_metric", "stop_condition"]), "Trial config");
+  return validateTrialConfig({
+    audience: cliStandardScope(value.audience, orgId),
+    starts_at: requireString(value.starts_at),
+    ...(value.ends_at === undefined ? {} : { ends_at: requireString(value.ends_at) }),
+    success_metric: requireString(value.success_metric),
+    stop_condition: requireString(value.stop_condition),
+  });
+}
+
+function cliStringArray(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Expected an array of strings");
+  return value.map(requireString);
+}
+
+function cliUpgradeEvidence(value: Record<string, unknown>): UpgradeEvidence {
+  assertObjectKeys(value, new Set([
+    "core_value_revalidated", "delivery_standardized", "unit_economics_or_roi_ok",
+    "next_tier_behavioral_evidence", "rollback_safe", "waiver_reason",
+  ]), "UpgradeEvidence");
+  return validateUpgradeEvidence({
+    core_value_revalidated: cliBoolean(value.core_value_revalidated, "core_value_revalidated"),
+    delivery_standardized: cliBoolean(value.delivery_standardized, "delivery_standardized"),
+    unit_economics_or_roi_ok: cliBoolean(value.unit_economics_or_roi_ok, "unit_economics_or_roi_ok"),
+    next_tier_behavioral_evidence: cliBoolean(value.next_tier_behavioral_evidence, "next_tier_behavioral_evidence"),
+    rollback_safe: cliBoolean(value.rollback_safe, "rollback_safe"),
+    ...(value.waiver_reason === undefined ? {} : { waiver_reason: requireString(value.waiver_reason) }),
+  });
+}
+
+function cliBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${name} must be boolean`);
+  return value;
+}
+
+async function readJsonObject(path: string, name: string): Promise<Record<string, unknown>> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(await readFile(path, "utf8")); } catch { throw new Error(`${name} must be valid JSON`); }
+  if (!isObject(parsed)) throw new Error(`${name} must be an object`);
+  return parsed;
+}
+
+async function readEvidenceArray(path: string, name: string): Promise<ProposalRecord["evidence"]> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(await readFile(path, "utf8")); } catch { throw new Error(`${name} must be valid JSON`); }
+  if (!Array.isArray(parsed)) throw new Error(`${name} must be an array`);
+  return parsed.map((entry) => {
+    if (!isObject(entry)) throw new Error(`${name} entries must be objects`);
+    assertObjectKeys(entry, new Set(["kind", "uri_or_ref", "note", "claim_ids"]), name);
+    const kind = requireString(entry.kind);
+    if (!["data", "demo", "user_quote", "document", "other"].includes(kind)) throw new Error(`Invalid ${name} kind`);
+    return {
+      kind: kind as ProposalRecord["evidence"][number]["kind"],
+      uri_or_ref: requireString(entry.uri_or_ref),
+      ...(entry.note === undefined ? {} : { note: requireString(entry.note) }),
+      ...(entry.claim_ids === undefined ? {} : { claim_ids: cliStringArray(entry.claim_ids) }),
+    };
+  });
+}
+
+function assertObjectKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, name: string): void {
+  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
+  if (unexpected) throw new Error(`Unexpected ${name} field: ${unexpected}`);
 }
 
 function cliDigestItem(attrs: unknown, direction: string, eventId: string): { item_kind: string; text: unknown } {
