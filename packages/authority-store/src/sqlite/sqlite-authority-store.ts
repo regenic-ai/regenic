@@ -1585,8 +1585,11 @@ export class SqliteAuthorityStore
     return row ? toAgentRun(row) : null;
   }
 
-  async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; limit?: number }): Promise<AgentRunRecord[]> {
-    const rows = this.database.prepare(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as AgentRunRow[];
+  async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; newest_first?: boolean; limit?: number }): Promise<AgentRunRecord[]> {
+    const order = input.newest_first
+      ? "ORDER BY julianday(json_extract(state_json, '$.finished_at')) DESC, id DESC"
+      : "ORDER BY created_at, id";
+    const rows = this.database.prepare(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ${order} LIMIT ?`).all(...(input.status ? [input.org_id, input.status, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as AgentRunRow[];
     return rows.map(toAgentRun);
   }
 

@@ -262,6 +262,11 @@ export class PersonalContextController {
     return this.guard(() => this.context.listAgentRuns(status));
   }
 
+  @Post("runs/drift-scan")
+  scanStandardDrift(@Body() body: unknown) {
+    return this.guard(() => this.context.scanStandardDrift(body));
+  }
+
   @Get("runs/:runId")
   getAgentRun(@Param("runId") runId: string) {
     return this.guard(() => this.context.getAgentRun(runId));

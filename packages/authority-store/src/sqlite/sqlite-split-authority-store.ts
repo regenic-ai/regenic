@@ -431,7 +431,7 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getAgentRun", [orgId, runId]);
   }
 
-  async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; limit?: number }): Promise<AgentRunRecord[]> {
+  async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; newest_first?: boolean; limit?: number }): Promise<AgentRunRecord[]> {
     return this.reader.call("listAgentRuns", [input]);
   }
 

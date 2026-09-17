@@ -436,6 +436,9 @@ pnpm local context-review-new-run --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-run-reviews --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --run <run-id>
+
+pnpm local context-run-drift-scan --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --minimum-failures 2
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its
