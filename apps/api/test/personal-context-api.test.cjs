@@ -33,19 +33,19 @@ async function createRoot() {
   return root;
 }
 
-async function ingestEvidence(database, blobRoot) {
+async function ingestEvidence(database, blobRoot, suffix = "") {
   const authority = new SqliteAuthorityStore(database);
   const service = new IngestionService(new FsBlobStore(blobRoot), authority);
   const result = await service.ingest({
     schema_version: INGEST_SCHEMA_VERSION,
     connector_id: "synthetic-chat",
     org_id: "local-owner",
-    delivery_id: "delivery-context-api",
+    delivery_id: `delivery-context-api${suffix ? `-${suffix}` : ""}`,
     received_at: "2026-08-30T01:00:00.000Z",
     records: [{
       operation: "create",
       source: "synthetic-chat",
-      external_id: "chat-1:message-1",
+      external_id: `chat-1:message-1${suffix ? `-${suffix}` : ""}`,
       occurred_at: "2026-08-30T00:00:00.000Z",
       actor: { id: "person-1" },
       scope: { id: "chat-1" },
@@ -55,7 +55,7 @@ async function ingestEvidence(database, blobRoot) {
       content: [{
         role: "body",
         media_type: "text/plain",
-        text: "The release is approved for Monday.",
+        text: suffix ? `Additional release evidence ${suffix}.` : "The release is approved for Monday.",
       }],
     }],
   });
@@ -474,6 +474,14 @@ describe("personal context API", () => {
     assert.equal(run.agent.actor_type, "agent");
     assert.equal(run.on_behalf_of.actor_type, "human");
     assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs`, runBody)).text).id, run.id);
+    const reviewBody = {
+      client_request_id: "agent-run-review-1",
+      result: "falsified",
+      severity: "bad_news",
+      evidence: [{ kind: "data", uri_or_ref: `event:${eventId}` }],
+      recommended_action: "revise_standard",
+    };
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/reviews`, reviewBody)).response.status, 409);
     const deprecatedBinding = await postJson(`${origin}/v1/me/context/runs`, {
       ...runBody, client_request_id: "agent-run-deprecated",
       standard_bindings: [{ standard_id: first.standard.id, version_id: first.version.id }],
@@ -508,6 +516,72 @@ describe("personal context API", () => {
     })).response.status, 400);
     assert.equal((await (await fetch(`${origin}/v1/me/context/runs?status=succeeded`)).json())[0].id, run.id);
     assert.equal((await (await fetch(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}`)).json()).output.context_snapshot_id, snapshotId);
+    const reviewedResponse = await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/reviews`, reviewBody);
+    assert.equal(reviewedResponse.response.status, 201);
+    const runReview = JSON.parse(reviewedResponse.text);
+    assert.equal(runReview.subject_kind, "agent_run");
+    assert.equal(runReview.subject_id, run.id);
+    assert.equal(runReview.context_snapshot_id, snapshotId);
+    assert.equal(runReview.evidence[0].uri_or_ref, `agent-run:${run.id}`);
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/reviews`, {
+      ...reviewBody, client_request_id: "agent-run-review-other-only",
+      evidence: [{ kind: "other", uri_or_ref: `event:${eventId}` }],
+    })).response.status, 400);
+    const outsideEventId = await ingestEvidence(
+      join(root, "authority.db"), join(root, "blobs"), "outside-run-snapshot",
+    );
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/reviews`, {
+      ...reviewBody, client_request_id: "agent-run-review-outside-snapshot",
+      evidence: [{ kind: "data", uri_or_ref: `event:${outsideEventId}` }],
+    })).response.status, 400);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/reviews`, reviewBody)).text).id, runReview.id);
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/reviews`, {
+      ...reviewBody, result: "inconclusive",
+    })).response.status, 409);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/reviews`)).json())[0].id, runReview.id);
+    const runGap = JSON.parse((await postJson(`${origin}/v1/me/context/reviews/${encodeURIComponent(runReview.id)}/standard-gap`, {
+      summary: "The run falsified the current release standard.",
+      proposed_uncertainty: "Can publishing the check result prevent this failure?",
+    })).text);
+    const otherSnapshot = JSON.parse((await postJson(`${origin}/v1/me/context/assemble`, {
+      ...assembleBody(), consumer_id: "context-api-other-snapshot",
+    })).text).snapshot.id;
+    assert.equal((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(runGap.id)}/proposal`, {
+      kind: "revise_standard",
+      title: "Wrong snapshot revision",
+      summary: "This conversion must not change snapshots.",
+      rights_level: "coach",
+      boundary: "Release governance only",
+      context_snapshot_id: otherSnapshot,
+      standard_id: first.standard.id,
+      version_id: revision.version.id,
+      evidence: [{ kind: "data", uri_or_ref: `event:${eventId}` }],
+    })).response.status, 409);
+    assert.equal((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(runGap.id)}/proposal`, {
+      kind: "revise_standard",
+      title: "Wrong binding revision",
+      summary: "This conversion must not change bindings.",
+      rights_level: "coach",
+      boundary: "Release governance only",
+      context_snapshot_id: snapshotId,
+      standard_id: first.standard.id,
+      version_id: first.version.id,
+      evidence: [{ kind: "data", uri_or_ref: `event:${eventId}` }],
+    })).response.status, 409);
+    const runGapConversion = JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(runGap.id)}/proposal`, {
+      kind: "revise_standard",
+      title: "Revise release safety after run failure",
+      summary: "Revise the standard using the failed run evidence.",
+      rights_level: "coach",
+      boundary: "Release governance only",
+      context_snapshot_id: snapshotId,
+      standard_id: first.standard.id,
+      version_id: revision.version.id,
+      evidence: [{ kind: "data", uri_or_ref: `event:${eventId}` }],
+    })).text);
+    assert.equal(runGapConversion.gap.status, "converted");
+    assert.equal(runGapConversion.proposal.kind, "revise_standard");
+    assert.equal(runGapConversion.proposal.gap_id, runGap.id);
 
     const handoffRun = JSON.parse((await postJson(`${origin}/v1/me/context/runs`, {
       ...runBody, client_request_id: "agent-run-handoff", input: { release_id: "release-2" },

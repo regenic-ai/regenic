@@ -680,6 +680,14 @@ bindings。继续执行需要先解决
 Handoff，再以显式 bindings 创建新 Run；普通聊天或 Event ingestion 永远不会启动、完成或恢复
 Run。当前 slice 不会把 queued Run 分发给 executor。
 
+Terminal Run 可通过与 Decision 相同的 immutable Review authority 接受评审；queued 与 running
+Run 不可评审。服务端固定 Run ID 与 ContextSnapshot，前置加入 `agent-run:<id>` evidence
+reference，并要求调用方提供该 snapshot 已选择的非 `other` Event evidence；仅在同一 org 可见、
+但不在 pinned snapshot 中的 Event 不足以支持结论。Review 可按 Run 查询；当结论为 falsified
+且推荐 `open_gap` 或 `revise_standard` 时，可显式进入已有 Review-to-StandardGap 路径。该转换
+必须保留 Review snapshot，revision target 也必须存在于被评审 Run 或 Decision 的 bindings 中。
+Acceptance check 失败或生成 Review 都不会静默创建 Gap，也不会修改 Standard。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

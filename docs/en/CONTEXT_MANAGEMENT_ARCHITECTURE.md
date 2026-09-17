@@ -799,6 +799,17 @@ the Handoff and creating a new Run with explicit bindings; ordinary chat or
 Event ingestion never starts, completes, or resumes a Run. The current slice
 does not dispatch queued Runs to an executor.
 
+A terminal Run may be reviewed through the same immutable Review authority
+used for Decisions. Queued and running Runs cannot be reviewed. The service
+pins the Run ID and ContextSnapshot, prepends an `agent-run:<id>` evidence
+reference, and requires non-`other` Event evidence selected by that snapshot;
+an org-visible Event outside the pinned snapshot is insufficient. The result
+may be listed by Run and, when falsified with `open_gap` or `revise_standard`,
+may be explicitly converted through the existing Review-to-StandardGap path.
+That conversion preserves the Review snapshot, and a revision target must
+appear in the reviewed Run or Decision bindings. Neither a failed acceptance
+check nor a Review silently opens a Gap or changes a Standard.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

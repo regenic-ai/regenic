@@ -287,6 +287,16 @@ export class PersonalContextController {
     return this.guard(() => this.context.cancelAgentRun(runId));
   }
 
+  @Post("runs/:runId/reviews")
+  createAgentRunReview(@Param("runId") runId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.createAgentRunReview(runId, body));
+  }
+
+  @Get("runs/:runId/reviews")
+  listAgentRunReviews(@Param("runId") runId: string) {
+    return this.guard(() => this.context.listAgentRunReviews(runId));
+  }
+
   @Post("artifacts/:artifactId/decision")
   decideArtifact(@Param("artifactId") artifactId: string, @Body() body: unknown) {
     return this.guard(() => this.context.decideArtifact(artifactId, body));

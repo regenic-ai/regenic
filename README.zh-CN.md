@@ -426,6 +426,14 @@ pnpm local context-run-complete --database ./regenic.db --blob-root ./blobs \
 pnpm local context-run-handoff --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --run <run-id> --reason evidence_conflict \
 	--payload '{"summary":"Two claims disagree."}'
+
+pnpm local context-review-new-run --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --run <run-id> --request review-1 \
+	--result falsified --severity bad_news --action revise_standard \
+	--evidence-kind data --event <event-id>
+
+pnpm local context-run-reviews --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --run <run-id>
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

@@ -368,6 +368,17 @@ describe("regenic-local", () => {
     assert.equal(agentRun.status, "queued");
     assert.equal((await run(runArgs)).id, agentRun.id);
     await assert.rejects(run(runArgs.slice(0, -2)), /Missing required option --input/);
+    const runReviewArgs = [
+      "context-review-new-run", ...common,
+      "--run", agentRun.id,
+      "--request", "agent-run-review-1",
+      "--result", "falsified",
+      "--severity", "bad_news",
+      "--action", "revise_standard",
+      "--evidence-kind", "data",
+      "--event", ingested.records[0].event_id,
+    ];
+    await assert.rejects(run(runReviewArgs), /must be terminal before Review/);
     assert.equal((await run(["context-run-start", ...common, "--run", agentRun.id])).status, "running");
     await writeFile(agentRunOutputPath, JSON.stringify({
       summary: "The release check passed.",
@@ -389,6 +400,47 @@ describe("regenic-local", () => {
     ])).finished_at, completedRun.finished_at);
     assert.equal((await run(["context-runs", ...common, "--status", "succeeded"]))[0].id, agentRun.id);
     assert.equal((await run(["context-run-get", ...common, "--run", agentRun.id])).output.acceptance_check, "pass");
+    const runReview = await run(runReviewArgs);
+    assert.equal(runReview.subject_kind, "agent_run");
+    assert.equal(runReview.evidence[0].uri_or_ref, `agent-run:${agentRun.id}`);
+    const otherEvidenceReviewArgs = [...runReviewArgs];
+    otherEvidenceReviewArgs[otherEvidenceReviewArgs.indexOf("--request") + 1] = "agent-run-review-other";
+    otherEvidenceReviewArgs[otherEvidenceReviewArgs.indexOf("--evidence-kind") + 1] = "other";
+    await assert.rejects(run(otherEvidenceReviewArgs), /requires non-other Event evidence/);
+    assert.equal((await run(runReviewArgs)).id, runReview.id);
+    assert.equal((await run(["context-run-reviews", ...common, "--run", agentRun.id]))[0].id, runReview.id);
+    assert.equal((await run(["context-review-get", ...common, "--review", runReview.id])).context_snapshot_id, assembled.snapshot.id);
+    const runGap = await run([
+      "context-standard-gap-from-review", ...common,
+      "--review", runReview.id,
+      "--summary", "The run falsified the current release standard.",
+      "--uncertainty", "Can publishing the check result prevent this failure?",
+    ]);
+    assert.equal(runGap.source_ref, runReview.id);
+    const runGapConversionArgs = [
+      "context-standard-gap-convert", ...common,
+      "--gap", runGap.id,
+      "--kind", "revise_standard",
+      "--title", "Revise release safety after run failure",
+      "--proposal-summary", "Revise the standard using the failed run evidence.",
+      "--boundary", "Release governance only",
+      "--snapshot", assembled.snapshot.id,
+      "--event", ingested.records[0].event_id,
+      "--standard", standardCommit.standard.id,
+      "--version", revisionCommit.version.id,
+    ];
+    const otherSnapshot = await run([
+      "context-assemble", ...common, "--query", "different review snapshot",
+    ], { env: { REGENIC_MODEL_DRIVER: "none" } });
+    const wrongSnapshotConversion = [...runGapConversionArgs];
+    wrongSnapshotConversion[wrongSnapshotConversion.indexOf("--snapshot") + 1] = otherSnapshot.snapshot.id;
+    await assert.rejects(run(wrongSnapshotConversion), /must preserve the Review snapshot/);
+    const wrongBindingConversion = [...runGapConversionArgs];
+    wrongBindingConversion[wrongBindingConversion.indexOf("--version") + 1] = standardCommit.version.id;
+    await assert.rejects(run(wrongBindingConversion), /outside the reviewed AgentRun bindings/);
+    const convertedRunGap = await run(runGapConversionArgs);
+    assert.equal(convertedRunGap.gap.status, "converted");
+    assert.equal(convertedRunGap.proposal.kind, "revise_standard");
 
     const handoffRun = await run([
       ...runArgs.slice(0, runArgs.indexOf("--request") + 1), "agent-run-handoff",
