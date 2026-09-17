@@ -318,6 +318,120 @@ describe("personal context API", () => {
     assert.equal((await (await fetch(`${origin}/v1/me/context/handoffs?status=cancelled&direction=human_to_agent`)).json())[0].id, outbound.id);
   });
 
+  it("commits and promotes governed Standard versions", async () => {
+    const root = await createRoot();
+    const { origin, eventId } = await startApi(root);
+    const assembled = await postJson(`${origin}/v1/me/context/assemble`, assembleBody());
+    const snapshotId = JSON.parse(assembled.text).snapshot.id;
+    const uncertainty = "Can this release process prevent regressions?";
+    const proposalBody = {
+      client_request_id: "standard-proposal-1",
+      kind: "new_standard",
+      title: "Create release safety standard",
+      summary: "Create a bounded release safety standard.",
+      rights_level: "coach",
+      boundary: "Release governance only",
+      context_snapshot_id: snapshotId,
+      single_uncertainty: uncertainty,
+      evidence: [{ kind: "document", uri_or_ref: `event:${eventId}` }],
+    };
+    const proposal = JSON.parse((await postJson(`${origin}/v1/me/context/proposals`, proposalBody)).text);
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/submit`, {});
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/review`, {});
+    const gate = {
+      single_uncertainty: uncertainty,
+      target_user_tier: "early_adopter",
+      consensus_hypothesis: "Teams need a bounded release check.",
+      value_metric: "Escaped regressions per release",
+      cost_budget: "Two engineer-days",
+      validation_window: "14 days",
+      stop_condition: "Stop after one severe regression.",
+      stable_core_preserved: true,
+      compat_and_rollback: "Keep the previous release path available.",
+      learning_output: "new_standard",
+    };
+    const versionBody = {
+      slug: "release-safety",
+      title: "Release safety",
+      layer: "adjacent",
+      scope: { decision_kinds: ["release"] },
+      version: "1.0.0",
+      condition: "A release changes production behavior.",
+      action: "Run the bounded release check.",
+      acceptance: "No severe regression escapes during the validation window.",
+      boundary: "Escalate when rollback is unavailable.",
+      revision_trigger: "A severe regression escapes the check.",
+      gate,
+      trial: {
+        audience: { team_ids: ["team-1"], decision_kinds: ["release"] },
+        starts_at: "2026-09-19T00:00:00.000Z",
+        ends_at: "2026-10-03T00:00:00.000Z",
+        success_metric: "Zero severe escaped regressions",
+        stop_condition: "Stop after one severe escaped regression.",
+      },
+    };
+    const committed = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/standard-version`, versionBody);
+    assert.equal(committed.response.status, 201);
+    const first = JSON.parse(committed.text);
+    assert.equal(first.proposal.status, "accepted");
+    assert.deepEqual(first.proposal.outcome_ref, { outcome_kind: "standard_version", ref_id: first.version.id });
+    assert.equal(first.version.status, "draft");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/standard-version`, versionBody)).text).version.id, first.version.id);
+    const changed = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(proposal.id)}/standard-version`, {
+      ...versionBody, action: "Changed after commit.",
+    });
+    assert.equal(changed.response.status, 409);
+    const noEvidence = await postJson(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(first.version.id)}/publish-active`, {});
+    assert.equal(noEvidence.response.status, 409);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(first.version.id)}/publish-trial`, {})).text).status, "trial");
+    const upgradeEvidence = {
+      core_value_revalidated: true,
+      delivery_standardized: true,
+      unit_economics_or_roi_ok: true,
+      next_tier_behavioral_evidence: true,
+      rollback_safe: true,
+    };
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(first.version.id)}/promote`, {
+      upgrade_evidence: upgradeEvidence,
+    })).text).status, "active");
+    assert.equal((await (await fetch(`${origin}/v1/me/context/standards`)).json())[0].id, first.standard.id);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}`)).json()).current_version_id, first.version.id);
+
+    const revisionProposalBody = {
+      ...proposalBody,
+      client_request_id: "standard-proposal-2",
+      kind: "revise_standard",
+      title: "Revise release safety standard",
+      standard_bindings: [{ standard_id: first.standard.id, version_id: first.version.id }],
+    };
+    const revisionProposal = JSON.parse((await postJson(`${origin}/v1/me/context/proposals`, revisionProposalBody)).text);
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(revisionProposal.id)}/submit`, {});
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(revisionProposal.id)}/review`, {});
+    const revisionBody = {
+      target_standard_id: first.standard.id,
+      supersedes_version_id: first.version.id,
+      version: "1.1.0",
+      condition: versionBody.condition,
+      action: "Run the bounded release check and publish its result.",
+      acceptance: versionBody.acceptance,
+      boundary: versionBody.boundary,
+      revision_trigger: versionBody.revision_trigger,
+      gate: { ...gate, learning_output: "revision" },
+    };
+    const revision = JSON.parse((await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(revisionProposal.id)}/standard-version`, revisionBody)).text);
+    assert.equal(revision.version.supersedes_version_id, first.version.id);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(revision.version.id)}/publish-active`, {
+      upgrade_evidence: upgradeEvidence,
+    })).text).status, "active");
+    const deprecated = JSON.parse((await postJson(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(first.version.id)}/deprecate`, {
+      superseded_by_version_id: revision.version.id,
+    })).text);
+    assert.equal(deprecated.status, "deprecated");
+    assert.equal(deprecated.superseded_by_version_id, revision.version.id);
+    assert.deepEqual((await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}/versions`)).json()).map(({ status }) => status), ["deprecated", "active"]);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(revision.version.id)}`)).json()).status, "active");
+  });
+
   it("lists and resolves coverage alerts without exposing source event identity", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

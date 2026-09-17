@@ -28,6 +28,9 @@ import {
   validateReview,
   validateHandoff,
   assertHandoffTransition,
+  validateStandard,
+  validateStandardVersion,
+  transitionStandardVersion as applyStandardVersionTransition,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -68,6 +71,10 @@ import type {
   HandoffDirection,
   HandoffRecord,
   HandoffStatus,
+  StandardRecord,
+  StandardVersionRecord,
+  StandardVersionState,
+  StandardVersionTransition,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1391,6 +1398,124 @@ export class PostgresAuthorityStore
         ...(input.status === "resolved" ? { resolved_at: input.transitioned_at } : {}),
       });
       await this.execute(`UPDATE handoffs SET status = $1, resolved_at = $2 WHERE org_id = $3 AND id = $4 AND status = $5`, [next.status, next.resolved_at ?? null, input.org_id, input.handoff_id, current.status], client);
+      return next;
+    });
+  }
+
+  async commitProposalStandardVersion(input: { org_id: string; proposal_id: string; standard?: StandardRecord; version: StandardVersionRecord }): Promise<{ proposal: ProposalRecord; standard: StandardRecord; version: StandardVersionRecord }> {
+    const version = validateStandardVersion(input.version);
+    if (version.status !== "draft") throw new Error("New StandardVersion must be draft");
+    return this.withTx(async (client) => {
+      const proposal = await this.getProposalWithinTransaction(input.org_id, input.proposal_id, client, true);
+      if (!proposal || !["new_standard", "revise_standard"].includes(proposal.kind)
+        || version.org_id !== input.org_id || version.proposal_id !== proposal.id
+        || !version.gate || version.gate.single_uncertainty !== proposal.single_uncertainty) {
+        throw new Error("Invalid Proposal StandardVersion commit");
+      }
+      const existingRow = await this.queryOne<StandardVersionRow>(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = $1 AND proposal_id = $2`, [input.org_id, input.proposal_id], client);
+      if (existingRow) {
+        const storedCreation = validateStandardVersion(parseContextJson<StandardVersionRecord>(existingRow.payload_json));
+        if (canonicalContextJson(storedCreation) !== canonicalContextJson({ ...version, created_at: storedCreation.created_at })) {
+          throw new Error("Cannot replace immutable StandardVersion");
+        }
+        const standardRow = await this.queryOne<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 AND id = $2`, [input.org_id, storedCreation.standard_id], client);
+        if (!standardRow) throw new Error("Standard was not found");
+        if (proposal.kind === "new_standard" && input.standard) {
+          const storedStandard = validateStandard(parseContextJson<StandardRecord>(standardRow.payload_json));
+          const attemptedStandard = validateStandard(input.standard);
+          if (canonicalContextJson(storedStandard) !== canonicalContextJson({ ...attemptedStandard, created_at: storedStandard.created_at })) {
+            throw new Error("Cannot replace immutable Standard");
+          }
+        }
+        return { proposal, standard: toStandard(standardRow), version: toStandardVersion(existingRow) };
+      }
+      if (proposal.status !== "in_review") throw new Error("StandardVersion commit requires an in-review Proposal");
+      let standard: StandardRecord;
+      if (proposal.kind === "new_standard") {
+        if (!input.standard) throw new Error("New Standard Proposal requires Standard identity");
+        standard = validateStandard(input.standard);
+        if (standard.org_id !== input.org_id || standard.id !== version.standard_id
+          || standard.current_version_id || standard.citation_count !== 0
+          || version.supersedes_version_id || version.gate.learning_output !== "new_standard"
+          || canonicalContextJson(standard.created_by) !== canonicalContextJson(proposal.author)) {
+          throw new Error("Invalid new Standard Proposal outcome");
+        }
+        await this.execute(`INSERT INTO standards (id, org_id, slug, payload_json, current_version_id, citation_count, created_at) VALUES ($1, $2, $3, $4, NULL, 0, $5)`, [standard.id, standard.org_id, standard.slug, jsonb(standard), standard.created_at], client);
+      } else {
+        const standardRow = await this.queryOne<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 AND id = $2 FOR UPDATE`, [input.org_id, version.standard_id], client);
+        standard = standardRow ? toStandard(standardRow) : null!;
+        const supersedesId = version.supersedes_version_id;
+        const supersededRow = supersedesId
+          ? await this.queryOne<StandardVersionRow>(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = $1 AND id = $2`, [input.org_id, supersedesId], client)
+          : null;
+        const superseded = supersededRow ? toStandardVersion(supersededRow) : null;
+        const pinned = proposal.standard_bindings.some((binding) =>
+          binding.standard_id === version.standard_id && binding.version_id === supersedesId
+        );
+        if (!standard || !superseded || superseded.standard_id !== standard.id
+          || superseded.status === "draft" || superseded.status === "deprecated"
+          || standard.current_version_id !== supersedesId
+          || !pinned || version.gate.learning_output !== "revision") {
+          throw new Error("Invalid revised Standard Proposal outcome");
+        }
+      }
+      await this.execute(`INSERT INTO standard_versions (id, org_id, standard_id, proposal_id, version, status, payload_json, state_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [version.id, version.org_id, version.standard_id, version.proposal_id, version.version, version.status, jsonb(version), jsonb(standardVersionState(version)), version.created_at], client);
+      await this.execute(`UPDATE proposals SET status = 'accepted', outcome_kind = 'standard_version', outcome_ref_id = $1, updated_at = $2 WHERE org_id = $3 AND id = $4 AND status = 'in_review'`, [version.id, version.created_at, input.org_id, proposal.id], client);
+      return {
+        proposal: (await this.getProposalWithinTransaction(input.org_id, proposal.id, client))!,
+        standard,
+        version,
+      };
+    });
+  }
+
+  async getStandard(orgId: string, standardId: string): Promise<StandardRecord | null> {
+    const row = await this.queryOne<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 AND id = $2`, [orgId, standardId]);
+    return row ? toStandard(row) : null;
+  }
+
+  async getStandardBySlug(orgId: string, slug: string): Promise<StandardRecord | null> {
+    const row = await this.queryOne<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 AND slug = $2`, [orgId, slug]);
+    return row ? toStandard(row) : null;
+  }
+
+  async listStandards(input: { org_id: string; limit?: number }): Promise<StandardRecord[]> {
+    const rows = await this.query<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 ORDER BY created_at, id LIMIT $2`, [input.org_id, input.limit ?? 100]);
+    return rows.map(toStandard);
+  }
+
+  async getStandardVersion(orgId: string, versionId: string): Promise<StandardVersionRecord | null> {
+    const row = await this.queryOne<StandardVersionRow>(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = $1 AND id = $2`, [orgId, versionId]);
+    return row ? toStandardVersion(row) : null;
+  }
+
+  async listStandardVersions(input: { org_id: string; standard_id: string; limit?: number }): Promise<StandardVersionRecord[]> {
+    const rows = await this.query<StandardVersionRow>(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = $1 AND standard_id = $2 ORDER BY created_at, id LIMIT $3`, [input.org_id, input.standard_id, input.limit ?? 100]);
+    return rows.map(toStandardVersion);
+  }
+
+  async transitionStandardVersion(input: StandardVersionTransition): Promise<StandardVersionRecord | null> {
+    return this.withTx(async (client) => {
+      const row = await this.queryOne<StandardVersionRow>(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = $1 AND id = $2 FOR UPDATE`, [input.org_id, input.version_id], client);
+      if (!row) return null;
+      const current = toStandardVersion(row);
+      const standardRow = await this.queryOne<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 AND id = $2 FOR UPDATE`, [input.org_id, current.standard_id], client);
+      if (!standardRow) throw new Error("Standard was not found");
+      const standard = toStandard(standardRow);
+      if (input.superseded_by_version_id) {
+        const replacementRow = await this.queryOne<StandardVersionRow>(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = $1 AND id = $2`, [input.org_id, input.superseded_by_version_id], client);
+        const replacement = replacementRow ? toStandardVersion(replacementRow) : null;
+        if (!replacement || replacement.standard_id !== current.standard_id || replacement.status !== "active") {
+          throw new Error("StandardVersion replacement must be active in the same Standard");
+        }
+      }
+      const next = applyStandardVersionTransition(current, standard, input);
+      await this.execute(`UPDATE standard_versions SET status = $1, state_json = $2 WHERE org_id = $3 AND id = $4 AND status = $5`, [next.status, jsonb(standardVersionState(next)), input.org_id, input.version_id, current.status], client);
+      if (next.status === "trial" || next.status === "active") {
+        await this.execute(`UPDATE standards SET current_version_id = $1 WHERE org_id = $2 AND id = $3`, [next.id, input.org_id, standard.id], client);
+      } else if (next.superseded_by_version_id) {
+        await this.execute(`UPDATE standards SET current_version_id = $1 WHERE org_id = $2 AND id = $3 AND current_version_id = $4`, [next.superseded_by_version_id, input.org_id, standard.id, next.id], client);
+      }
       return next;
     });
   }
@@ -4191,6 +4316,57 @@ interface HandoffRow {
   status: HandoffStatus;
   payload_json: unknown;
   resolved_at: unknown;
+}
+
+interface StandardRow {
+  payload_json: unknown;
+  current_version_id: string | null;
+  citation_count: number;
+}
+
+interface StandardVersionRow {
+  status: StandardVersionRecord["status"];
+  payload_json: unknown;
+  state_json: unknown;
+}
+
+function toStandard(row: StandardRow): StandardRecord {
+  return validateStandard({
+    ...parseContextJson<StandardRecord>(row.payload_json),
+    ...(row.current_version_id ? { current_version_id: row.current_version_id } : {}),
+    citation_count: Number(row.citation_count),
+  });
+}
+
+function standardVersionState(version: StandardVersionRecord): StandardVersionState {
+  return {
+    status: version.status,
+    ...(version.gate?.upgrade_evidence ? { upgrade_evidence: version.gate.upgrade_evidence } : {}),
+    ...(version.published_at ? { published_at: version.published_at } : {}),
+    ...(version.published_by ? { published_by: version.published_by } : {}),
+    ...(version.deprecated_at ? { deprecated_at: version.deprecated_at } : {}),
+    ...(version.deprecated_by ? { deprecated_by: version.deprecated_by } : {}),
+    ...(version.deprecation_evidence ? { deprecation_evidence: version.deprecation_evidence } : {}),
+    ...(version.superseded_by_version_id ? { superseded_by_version_id: version.superseded_by_version_id } : {}),
+  };
+}
+
+function toStandardVersion(row: StandardVersionRow): StandardVersionRecord {
+  const version = parseContextJson<StandardVersionRecord>(row.payload_json);
+  const state = parseContextJson<StandardVersionState>(row.state_json);
+  return validateStandardVersion({
+    ...version,
+    status: row.status,
+    ...(version.gate && state.upgrade_evidence
+      ? { gate: { ...version.gate, upgrade_evidence: state.upgrade_evidence } }
+      : {}),
+    ...(state.published_at ? { published_at: state.published_at } : {}),
+    ...(state.published_by ? { published_by: state.published_by } : {}),
+    ...(state.deprecated_at ? { deprecated_at: state.deprecated_at } : {}),
+    ...(state.deprecated_by ? { deprecated_by: state.deprecated_by } : {}),
+    ...(state.deprecation_evidence ? { deprecation_evidence: state.deprecation_evidence } : {}),
+    ...(state.superseded_by_version_id ? { superseded_by_version_id: state.superseded_by_version_id } : {}),
+  });
 }
 
 function toHandoff(row: HandoffRow): HandoffRecord {

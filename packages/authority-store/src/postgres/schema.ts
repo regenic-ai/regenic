@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 36;
+export const PG_SCHEMA_VERSION = 37;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -291,6 +291,37 @@ CREATE TABLE handoffs (
   resolved_at TIMESTAMPTZ
 );
 CREATE INDEX handoffs_query_idx ON handoffs (org_id, status, direction, created_at, id);
+`,
+  },
+  {
+    version: 37,
+    sql: `
+CREATE TABLE standards (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  payload_json JSONB NOT NULL,
+  current_version_id TEXT,
+  citation_count INTEGER NOT NULL DEFAULT 0 CHECK (citation_count >= 0),
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, slug)
+);
+CREATE INDEX standards_query_idx ON standards (org_id, created_at, id);
+CREATE TABLE standard_versions (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  standard_id TEXT NOT NULL REFERENCES standards(id),
+  proposal_id TEXT NOT NULL REFERENCES proposals(id),
+  version TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('draft', 'trial', 'active', 'deprecated')),
+  payload_json JSONB NOT NULL,
+  state_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, standard_id, version),
+  UNIQUE (org_id, proposal_id)
+);
+CREATE INDEX standard_versions_query_idx
+  ON standard_versions (org_id, standard_id, created_at, id);
 `,
   },
 ] as const;
@@ -756,6 +787,34 @@ CREATE TABLE handoffs (
   resolved_at TIMESTAMPTZ
 );
 CREATE INDEX handoffs_query_idx ON handoffs (org_id, status, direction, created_at, id);
+
+CREATE TABLE standards (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  payload_json JSONB NOT NULL,
+  current_version_id TEXT,
+  citation_count INTEGER NOT NULL DEFAULT 0 CHECK (citation_count >= 0),
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, slug)
+);
+CREATE INDEX standards_query_idx ON standards (org_id, created_at, id);
+
+CREATE TABLE standard_versions (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  standard_id TEXT NOT NULL REFERENCES standards(id),
+  proposal_id TEXT NOT NULL REFERENCES proposals(id),
+  version TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('draft', 'trial', 'active', 'deprecated')),
+  payload_json JSONB NOT NULL,
+  state_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, standard_id, version),
+  UNIQUE (org_id, proposal_id)
+);
+CREATE INDEX standard_versions_query_idx
+  ON standard_versions (org_id, standard_id, created_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,
