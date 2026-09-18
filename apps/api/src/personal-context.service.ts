@@ -8,7 +8,14 @@ import {
   DECISION_SCHEMA_VERSION,
   REVIEW_SCHEMA_VERSION,
   HANDOFF_SCHEMA_VERSION,
+  STANDARD_SCHEMA_VERSION,
+  STANDARD_VERSION_SCHEMA_VERSION,
   hashCanonicalContext,
+  hashStandardVersionBody,
+  validateIterationGate,
+  validateStandardScope,
+  validateTrialConfig,
+  validateUpgradeEvidence,
   type ContextBundle,
   type ContextArtifact,
   type ContextReplayRequest,
@@ -26,6 +33,14 @@ import {
   type HandoffRecord,
   type HandoffStatus,
   type JsonValue,
+  type IterationGate,
+  type StandardLayer,
+  type StandardRecord,
+  type StandardScope,
+  type StandardVersionRecord,
+  type StandardVersionStatus,
+  type TrialConfig,
+  type UpgradeEvidence,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -215,16 +230,24 @@ export class PersonalContextService {
     });
   }
 
-  async createDecisionProposal(input: unknown): Promise<ProposalRecord> {
+  async createProposal(input: unknown): Promise<ProposalRecord> {
     const body = strictBody(input, new Set([
-      "client_request_id", "title", "summary", "rights_level", "boundary",
-      "context_snapshot_id", "standard_bindings", "evidence",
+      "client_request_id", "kind", "title", "summary", "rights_level", "boundary",
+      "context_snapshot_id", "standard_bindings", "single_uncertainty", "evidence",
     ]));
+    const kind = proposalKind(body.kind);
     const snapshotId = requiredString(body.context_snapshot_id, "context_snapshot_id");
     if (!await this.runtime.requireHost().get("context-artifacts").getSnapshot(this.runtime.orgId(), snapshotId)) {
       throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
     }
     const clientRequestId = requiredString(body.client_request_id, "client_request_id");
+    const singleUncertainty = optionalString(body.single_uncertainty);
+    if (["new_standard", "revise_standard"].includes(kind) && !singleUncertainty) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Standard Proposal requires single_uncertainty");
+    }
+    if (kind === "decision" && singleUncertainty) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Decision Proposal cannot set single_uncertainty");
+    }
     const evidence = proposalEvidence(body.evidence);
     for (const item of evidence) {
       if (!item.uri_or_ref.startsWith("event:")) continue;
@@ -238,7 +261,7 @@ export class PersonalContextService {
       schema_version: PROPOSAL_SCHEMA_VERSION,
       id: `proposal:${hashCanonicalContext([this.runtime.orgId(), clientRequestId])}`,
       org_id: this.runtime.orgId(),
-      kind: "decision",
+      kind,
       title: requiredString(body.title, "title"),
       summary: requiredString(body.summary, "summary"),
       status: "draft",
@@ -247,6 +270,7 @@ export class PersonalContextService {
       boundary: requiredString(body.boundary, "boundary"),
       context_snapshot_id: snapshotId,
       standard_bindings: standardBindings(body.standard_bindings),
+      ...(singleUncertainty ? { single_uncertainty: singleUncertainty } : {}),
       evidence,
       created_at: now,
       updated_at: now,
@@ -475,6 +499,148 @@ export class PersonalContextService {
     }
   }
 
+  async commitProposalStandardVersion(proposalId: string, input: unknown) {
+    const body = strictBody(input, new Set([
+      "slug", "title", "layer", "scope", "target_standard_id", "supersedes_version_id",
+      "version", "condition", "action", "acceptance", "boundary", "revision_trigger",
+      "gate", "trial",
+    ]));
+    const proposal = await this.getProposal(proposalId);
+    if (!["new_standard", "revise_standard"].includes(proposal.kind)
+      || !["in_review", "accepted"].includes(proposal.status) || !proposal.single_uncertainty) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "StandardVersion commit requires an in-review Standard Proposal");
+    }
+    const now = new Date().toISOString();
+    let standard: StandardRecord | undefined;
+    let standardId: string;
+    let supersedesVersionId: string | undefined;
+    if (proposal.kind === "new_standard") {
+      if (body.target_standard_id !== undefined || body.supersedes_version_id !== undefined) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "New Standard cannot set target or superseded version");
+      }
+      const slug = requiredString(body.slug, "slug");
+      standardId = `standard:${hashCanonicalContext([this.runtime.orgId(), slug])}`;
+      standard = {
+        schema_version: STANDARD_SCHEMA_VERSION,
+        id: standardId,
+        org_id: this.runtime.orgId(),
+        slug,
+        title: requiredString(body.title, "title"),
+        layer: standardLayer(body.layer),
+        scope: standardScope(body.scope, this.runtime.orgId()),
+        created_at: now,
+        created_by: proposal.author,
+        citation_count: 0,
+      };
+    } else {
+      if (body.slug !== undefined || body.title !== undefined || body.layer !== undefined || body.scope !== undefined) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Revised StandardVersion cannot replace Standard identity");
+      }
+      standardId = requiredString(body.target_standard_id, "target_standard_id");
+      if (!await this.runtime.requireHost().get("standards").getStandard(this.runtime.orgId(), standardId)) {
+        throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Standard was not found");
+      }
+      supersedesVersionId = requiredString(body.supersedes_version_id, "supersedes_version_id");
+      if (!proposal.standard_bindings.some((binding) =>
+        binding.standard_id === standardId && binding.version_id === supersedesVersionId
+      )) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Revision Proposal must pin the superseded StandardVersion");
+      }
+    }
+    const gate = iterationGate(body.gate);
+    if (gate.single_uncertainty !== proposal.single_uncertainty) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "IterationGate must preserve the Proposal uncertainty");
+    }
+    const versionBody = {
+      condition: requiredString(body.condition, "condition"),
+      action: requiredString(body.action, "action"),
+      acceptance: requiredString(body.acceptance, "acceptance"),
+      boundary: requiredString(body.boundary, "boundary"),
+      revision_trigger: requiredString(body.revision_trigger, "revision_trigger"),
+    };
+    const version: StandardVersionRecord = {
+      schema_version: STANDARD_VERSION_SCHEMA_VERSION,
+      id: `standard-version:${hashCanonicalContext([this.runtime.orgId(), proposal.id])}`,
+      org_id: this.runtime.orgId(),
+      standard_id: standardId,
+      proposal_id: proposal.id,
+      version: requiredString(body.version, "version"),
+      status: "draft",
+      ...versionBody,
+      gate,
+      ...(body.trial === undefined ? {} : { trial: trialConfig(body.trial, this.runtime.orgId()) }),
+      ...(supersedesVersionId ? { supersedes_version_id: supersedesVersionId } : {}),
+      body_hash: hashStandardVersionBody(versionBody),
+      created_at: now,
+    };
+    try {
+      return await this.runtime.requireHost().get("standards").commitProposalStandardVersion({
+        org_id: this.runtime.orgId(), proposal_id: proposal.id, ...(standard ? { standard } : {}), version,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid StandardVersion commit";
+      const status = /Cannot replace|UNIQUE|duplicate|in-review/.test(message) ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
+      throw new PersonalContextError("invalid_request", status, message);
+    }
+  }
+
+  async listStandards() {
+    return this.runtime.requireHost().get("standards").listStandards({ org_id: this.runtime.orgId(), limit: 100 });
+  }
+
+  async getStandard(standardId: string) {
+    const standard = await this.runtime.requireHost().get("standards").getStandard(this.runtime.orgId(), requiredString(standardId, "standard_id"));
+    if (!standard) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Standard was not found");
+    return standard;
+  }
+
+  async listStandardVersions(standardId: string) {
+    const standard = await this.getStandard(standardId);
+    return this.runtime.requireHost().get("standards").listStandardVersions({
+      org_id: this.runtime.orgId(), standard_id: standard.id, limit: 100,
+    });
+  }
+
+  async getStandardVersion(versionId: string) {
+    const version = await this.runtime.requireHost().get("standards").getStandardVersion(this.runtime.orgId(), requiredString(versionId, "version_id"));
+    if (!version) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "StandardVersion was not found");
+    return version;
+  }
+
+  async transitionStandardVersion(versionId: string, status: Exclude<StandardVersionStatus, "draft">, input: unknown) {
+    const allowed = status === "trial" ? new Set<string>()
+      : status === "active" ? new Set(["upgrade_evidence"])
+        : new Set(["deprecation_evidence", "superseded_by_version_id"]);
+    const body = strictBody(input, allowed);
+    const upgradeEvidence = body.upgrade_evidence === undefined ? undefined : upgradeEvidenceInput(body.upgrade_evidence);
+    const deprecationEvidence = body.deprecation_evidence === undefined ? undefined : proposalEvidence(body.deprecation_evidence);
+    if (deprecationEvidence) {
+      for (const item of deprecationEvidence) {
+        if (!item.uri_or_ref.startsWith("event:")) continue;
+        if (!await this.runtime.requireHost().get("authority").getEvent(this.runtime.orgId(), item.uri_or_ref.slice("event:".length))) {
+          throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Deprecation evidence Event was not found");
+        }
+      }
+    }
+    try {
+      const version = await this.runtime.requireHost().get("standards").transitionStandardVersion({
+        org_id: this.runtime.orgId(), version_id: requiredString(versionId, "version_id"),
+        status, actor: { actor_type: "human", actor_id: this.runtime.orgId() },
+        transitioned_at: new Date().toISOString(),
+        ...(upgradeEvidence ? { upgrade_evidence: upgradeEvidence } : {}),
+        ...(deprecationEvidence ? { deprecation_evidence: deprecationEvidence } : {}),
+        ...(body.superseded_by_version_id === undefined ? {} : {
+          superseded_by_version_id: requiredString(body.superseded_by_version_id, "superseded_by_version_id"),
+        }),
+      });
+      if (!version) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "StandardVersion was not found");
+      return version;
+    } catch (error) {
+      if (error instanceof PersonalContextError) throw error;
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid StandardVersion transition");
+    }
+  }
+
   async decideArtifact(artifactId: string, input: unknown) {
     const body = strictBody(input, new Set(["status"]));
     const status = requiredString(body.status, "status");
@@ -692,6 +858,14 @@ function proposalKindForItem(itemKind: string): ProposalKind {
   throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Digest item kind cannot create a Proposal");
 }
 
+function proposalKind(value: unknown): "decision" | "new_standard" | "revise_standard" {
+  const kind = value === undefined ? "decision" : requiredString(value, "kind");
+  if (!["decision", "new_standard", "revise_standard"].includes(kind)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Proposal kind");
+  }
+  return kind as "decision" | "new_standard" | "revise_standard";
+}
+
 function optionalRightsLevel(value: unknown): ProposalRecord["rights_level"] {
   const level = value === undefined ? "coach" : requiredString(value, "rights_level");
   if (!["direct", "coach", "negotiate", "authorize", "delegate"].includes(level)) {
@@ -717,6 +891,106 @@ function standardBindings(value: unknown): ProposalRecord["standard_bindings"] {
       version_id: requiredString(binding.version_id, "version_id"),
     };
   });
+}
+
+function standardLayer(value: unknown): StandardLayer {
+  const layer = requiredString(value, "layer");
+  if (!["stable_core", "adjacent", "frontier"].includes(layer)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Standard layer");
+  }
+  return layer as StandardLayer;
+}
+
+function standardScope(value: unknown, orgId: string): StandardScope {
+  const scope = strictNestedBody(value, new Set(["team_ids", "roles", "decision_kinds"]), "scope");
+  return standardDomainInput(() => validateStandardScope({
+    org_id: orgId,
+    team_ids: scope.team_ids === undefined ? [] : stringArray(scope.team_ids, "team_ids"),
+    roles: scope.roles === undefined ? [] : stringArray(scope.roles, "roles"),
+    decision_kinds: scope.decision_kinds === undefined ? [] : stringArray(scope.decision_kinds, "decision_kinds"),
+  }, orgId));
+}
+
+function iterationGate(value: unknown): IterationGate {
+  const gate = strictNestedBody(value, new Set([
+    "single_uncertainty", "target_user_tier", "consensus_hypothesis", "value_metric",
+    "cost_budget", "validation_window", "stop_condition", "stable_core_preserved",
+    "compat_and_rollback", "upgrade_evidence", "learning_output",
+  ]), "gate");
+  return standardDomainInput(() => validateIterationGate({
+    single_uncertainty: requiredString(gate.single_uncertainty, "single_uncertainty"),
+    target_user_tier: requiredString(gate.target_user_tier, "target_user_tier") as IterationGate["target_user_tier"],
+    consensus_hypothesis: requiredString(gate.consensus_hypothesis, "consensus_hypothesis"),
+    value_metric: requiredString(gate.value_metric, "value_metric"),
+    cost_budget: requiredString(gate.cost_budget, "cost_budget"),
+    validation_window: requiredString(gate.validation_window, "validation_window"),
+    stop_condition: requiredString(gate.stop_condition, "stop_condition"),
+    stable_core_preserved: requiredBoolean(gate.stable_core_preserved, "stable_core_preserved"),
+    compat_and_rollback: requiredString(gate.compat_and_rollback, "compat_and_rollback"),
+    ...(gate.upgrade_evidence === undefined ? {} : { upgrade_evidence: upgradeEvidenceInput(gate.upgrade_evidence) }),
+    learning_output: requiredString(gate.learning_output, "learning_output") as IterationGate["learning_output"],
+  }));
+}
+
+function trialConfig(value: unknown, orgId: string): TrialConfig {
+  const trial = strictNestedBody(value, new Set([
+    "audience", "starts_at", "ends_at", "success_metric", "stop_condition",
+  ]), "trial");
+  const audienceBody = strictNestedBody(trial.audience, new Set([
+    "team_ids", "roles", "decision_kinds",
+  ]), "trial.audience");
+  return standardDomainInput(() => validateTrialConfig({
+    audience: validateStandardScope({
+      org_id: orgId,
+      team_ids: audienceBody.team_ids === undefined ? [] : stringArray(audienceBody.team_ids, "team_ids"),
+      roles: audienceBody.roles === undefined ? [] : stringArray(audienceBody.roles, "roles"),
+      decision_kinds: audienceBody.decision_kinds === undefined ? [] : stringArray(audienceBody.decision_kinds, "decision_kinds"),
+    }),
+    starts_at: requiredString(trial.starts_at, "starts_at"),
+    ...(trial.ends_at === undefined ? {} : { ends_at: requiredString(trial.ends_at, "ends_at") }),
+    success_metric: requiredString(trial.success_metric, "success_metric"),
+    stop_condition: requiredString(trial.stop_condition, "stop_condition"),
+  }));
+}
+
+function upgradeEvidenceInput(value: unknown): UpgradeEvidence {
+  const evidence = strictNestedBody(value, new Set([
+    "core_value_revalidated", "delivery_standardized", "unit_economics_or_roi_ok",
+    "next_tier_behavioral_evidence", "rollback_safe", "waiver_reason",
+  ]), "upgrade_evidence");
+  return standardDomainInput(() => validateUpgradeEvidence({
+    core_value_revalidated: requiredBoolean(evidence.core_value_revalidated, "core_value_revalidated"),
+    delivery_standardized: requiredBoolean(evidence.delivery_standardized, "delivery_standardized"),
+    unit_economics_or_roi_ok: requiredBoolean(evidence.unit_economics_or_roi_ok, "unit_economics_or_roi_ok"),
+    next_tier_behavioral_evidence: requiredBoolean(evidence.next_tier_behavioral_evidence, "next_tier_behavioral_evidence"),
+    rollback_safe: requiredBoolean(evidence.rollback_safe, "rollback_safe"),
+    ...(evidence.waiver_reason === undefined ? {} : { waiver_reason: requiredString(evidence.waiver_reason, "waiver_reason") }),
+  }));
+}
+
+function strictNestedBody(value: unknown, allowed: ReadonlySet<string>, name: string): Record<string, unknown> {
+  const body = asRecord(value);
+  const unexpected = Object.keys(body).find((key) => !allowed.has(key));
+  if (unexpected) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `Unexpected ${name} field: ${unexpected}`);
+  }
+  return body;
+}
+
+function standardDomainInput<T>(run: () => T): T {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof PersonalContextError) throw error;
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, error instanceof Error ? error.message : "Invalid Standard input");
+  }
+}
+
+function requiredBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be boolean`);
+  }
+  return value;
 }
 
 function proposalEvidence(value: unknown): ProposalRecord["evidence"] {

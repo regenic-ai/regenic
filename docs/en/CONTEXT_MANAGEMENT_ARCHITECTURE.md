@@ -724,6 +724,35 @@ Resolution records its timestamp, and terminal states cannot reopen. State
 changes require the dedicated acknowledge, resolve, or cancel operation; chat
 messages and ingested Events never imply a transition.
 
+### 8.6 Standards machine
+
+Personal implements the first RFC 0001 Standards vertical slice. A reviewed
+`new_standard` or `revise_standard` Proposal atomically creates one stable
+Standard identity plus one draft StandardVersion, or one draft revision under
+an existing Standard. The Proposal becomes `accepted` and receives a
+`standard_version` outcome in the same authority transaction. A revision must
+pin the published version it supersedes through the Proposal's standard
+bindings. That version must still be the Standard's current head when the
+revision is committed, and publication rechecks the head to prevent stale or
+parallel branches from taking over the convenience pointer.
+
+The five semantic body fields (`condition`, `action`, `acceptance`, `boundary`,
+and `revision_trigger`) have a canonical content hash. In this bounded slice,
+the reviewed Proposal outcome is immutable from creation, including while its
+status is `draft`; changing meaning requires another governed Proposal. Mutable
+lifecycle evidence is stored separately, so trial, activation, and deprecation
+never rewrite the semantic body or its hash.
+
+The lifecycle permits `draft -> trial -> active -> deprecated` and an
+evidence-complete `draft -> active` fast path. A non-frontier version must
+preserve the stable core before publication. Trial audience scope must be a
+strict subset of the Standard scope and is fixed to the current organization.
+Promotion requires every UpgradeEvidence gate to pass, or a non-empty audited
+waiver. Deprecation requires non-`other` evidence or an active replacement in
+the same Standard. Lifecycle timestamps are monotonic. Applications continue
+to bind exact StandardVersion IDs;
+`current_version_id` is a convenience pointer, not a floating stored binding.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

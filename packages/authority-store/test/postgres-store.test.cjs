@@ -5,6 +5,7 @@ const {
   AuthorityConflictError,
   INGEST_SCHEMA_VERSION,
   IngestionService,
+  hashStandardVersionBody,
 } = require("@regenic/domain");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { mkdtemp, rm } = require("node:fs/promises");
@@ -233,6 +234,67 @@ describePg("postgres authority store", () => {
     assert.equal((await writerA.listHandoffs({
       org_id: orgId, status: "resolved", direction: "human_to_agent",
     })).length, 1);
+  });
+
+  it("atomically commits and promotes a Standard Proposal", async () => {
+    const store = await openStore();
+    const orgId = `org-${randomUUID()}`;
+    const proposal = {
+      schema_version: "1.0", id: `proposal-${randomUUID()}`, org_id: orgId,
+      kind: "new_standard", title: "Create release safety standard",
+      summary: "Create a bounded release safety standard.", status: "draft",
+      author: { actor_type: "human", actor_id: "person-1" }, rights_level: "coach",
+      boundary: "Release governance only", context_snapshot_id: "snapshot-1",
+      standard_bindings: [], single_uncertainty: "Can this prevent regressions?",
+      evidence: [{ kind: "document", uri_or_ref: "event:event-1" }],
+      created_at: "2026-09-18T00:00:00.000Z", updated_at: "2026-09-18T00:00:00.000Z",
+    };
+    const standard = {
+      schema_version: "1.0", id: `standard-${randomUUID()}`, org_id: orgId,
+      slug: `release-safety-${randomUUID()}`, title: "Release safety", layer: "adjacent",
+      scope: { org_id: orgId, team_ids: [], roles: [], decision_kinds: ["release"] },
+      created_at: "2026-09-18T03:00:00.000Z", created_by: proposal.author,
+      citation_count: 0,
+    };
+    const body = {
+      condition: "A release changes production behavior.",
+      action: "Run the bounded release check.",
+      acceptance: "No severe regression escapes.",
+      boundary: "Escalate when rollback is unavailable.",
+      revision_trigger: "A severe regression escapes.",
+    };
+    const version = {
+      schema_version: "1.0", id: `standard-version-${randomUUID()}`, org_id: orgId,
+      standard_id: standard.id, proposal_id: proposal.id, version: "1.0.0", status: "draft",
+      ...body,
+      gate: {
+        single_uncertainty: proposal.single_uncertainty, target_user_tier: "early_adopter",
+        consensus_hypothesis: "Teams need a bounded release check.",
+        value_metric: "Escaped regressions", cost_budget: "Two engineer-days",
+        validation_window: "14 days", stop_condition: "Stop after one severe regression.",
+        stable_core_preserved: true, compat_and_rollback: "Keep the previous path.",
+        learning_output: "new_standard",
+      },
+      body_hash: hashStandardVersionBody(body), created_at: "2026-09-18T03:00:00.000Z",
+    };
+    await store.putProposal(proposal);
+    await store.transitionProposal({ org_id: orgId, proposal_id: proposal.id, status: "submitted", updated_at: "2026-09-18T01:00:00.000Z" });
+    await store.transitionProposal({ org_id: orgId, proposal_id: proposal.id, status: "in_review", updated_at: "2026-09-18T02:00:00.000Z" });
+    const committed = await store.commitProposalStandardVersion({ org_id: orgId, proposal_id: proposal.id, standard, version });
+    assert.equal(committed.proposal.status, "accepted");
+    assert.deepEqual(committed.proposal.outcome_ref, { outcome_kind: "standard_version", ref_id: version.id });
+    const active = await store.transitionStandardVersion({
+      org_id: orgId, version_id: version.id, status: "active", actor: proposal.author,
+      transitioned_at: "2026-09-19T00:00:00.000Z",
+      upgrade_evidence: {
+        core_value_revalidated: true, delivery_standardized: true,
+        unit_economics_or_roi_ok: true, next_tier_behavioral_evidence: true,
+        rollback_safe: true,
+      },
+    });
+    assert.equal(active.status, "active");
+    assert.equal((await store.getStandard(orgId, standard.id)).current_version_id, version.id);
+    assert.equal((await store.listStandardVersions({ org_id: orgId, standard_id: standard.id })).length, 1);
   });
 
   it("serves the store through the postgres plugin", async () => {

@@ -622,6 +622,28 @@ Handoff 内容不可变，稳定 request identity 使创建操作在状态推进
 时间，终态不能重新打开。状态只能由专用 acknowledge、resolve 或 cancel 操作推进；聊天消息与
 ingested Event 均不会隐式触发状态变化。
 
+### 8.6 Standards machine
+
+Personal 实现首个 RFC 0001 Standards vertical slice。已 review 的 `new_standard` 或
+`revise_standard` Proposal 会在同一 authority transaction 中创建一条稳定 Standard identity
+及其 draft StandardVersion，或在既有 Standard 下创建一条 draft revision；Proposal 同时变为
+`accepted` 并获得 `standard_version` outcome。修订 Proposal 必须通过 standard bindings 固定
+被取代的已发布版本。提交 revision 时，该版本必须仍是 Standard 的 current head；发布时会再次
+检查 head，避免 stale 或并行分支覆盖便利指针。
+
+五段语义正文（`condition`、`action`、`acceptance`、`boundary` 与 `revision_trigger`）使用
+canonical content hash。当前受限实现将已 review 的 Proposal outcome 从创建起保持不可变，
+包括 `draft` 状态；改变语义必须经过另一个治理 Proposal。可变 lifecycle evidence 独立存储，
+因此 trial、activation 与 deprecation 不会改写语义正文或其 hash。
+
+合法 lifecycle 为 `draft -> trial -> active -> deprecated`，另有 evidence 完整的
+`draft -> active` 快速路径。非 frontier 版本发布前必须保留 stable core。Trial audience 必须是
+Standard scope 的严格子集，且 organization 由 Personal authority 固定。晋升要求全部
+UpgradeEvidence gate 通过，或提供非空且可审计的 waiver。废弃需要非 `other` evidence，或同一
+Standard 下的 active replacement。Lifecycle 时间必须单调。应用仍必须绑定精确
+StandardVersion ID；
+`current_version_id` 只是便利指针，不是浮动的持久化绑定。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

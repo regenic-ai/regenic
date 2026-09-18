@@ -24,6 +24,7 @@ import type { ProposalStore } from "./proposal";
 import type { DecisionStore } from "./decision";
 import type { ReviewStore } from "./review";
 import type { HandoffStore } from "./handoff";
+import type { StandardStore } from "./standard";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -45,6 +46,7 @@ declare module "@regenic/plugin-host" {
     decisions: DecisionStore;
     reviews: ReviewStore;
     handoffs: HandoffStore;
+    standards: StandardStore;
     "context-projection-outbox": ContextProjectionOutboxStore;
     "context-lexical-index": ContextLexicalIndex;
     "context-projectors": ContextProjectorRegistry;

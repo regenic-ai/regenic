@@ -10,6 +10,7 @@ const {
   hashContextArtifactInputs,
   hashContextBundle,
   hashContextSnapshot,
+  hashStandardVersionBody,
 } = require("@regenic/domain");
 const { createHost } = require("@regenic/plugin-host");
 const {
@@ -497,6 +498,139 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("commits Standard Proposals and advances pinned versions through lifecycle", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const uncertainty = "Can this release process prevent regressions?";
+    const proposal = {
+      schema_version: "1.0", id: "proposal-standard-1", org_id: "example-org",
+      kind: "new_standard", title: "Create release safety standard",
+      summary: "Create a bounded release safety standard.", status: "draft",
+      author: { actor_type: "human", actor_id: "person-1" }, rights_level: "coach",
+      boundary: "Release governance only", context_snapshot_id: "snapshot-1",
+      standard_bindings: [], single_uncertainty: uncertainty,
+      evidence: [{ kind: "document", uri_or_ref: "event:event-1" }],
+      created_at: "2026-09-18T00:00:00.000Z", updated_at: "2026-09-18T00:00:00.000Z",
+    };
+    const standard = {
+      schema_version: "1.0", id: "standard-1", org_id: "example-org",
+      slug: "release-safety", title: "Release safety", layer: "adjacent",
+      scope: { org_id: "example-org", team_ids: [], roles: [], decision_kinds: ["release"] },
+      created_at: "2026-09-18T03:00:00.000Z", created_by: proposal.author,
+      citation_count: 0,
+    };
+    const gate = {
+      single_uncertainty: uncertainty, target_user_tier: "early_adopter",
+      consensus_hypothesis: "Teams need a bounded release check.",
+      value_metric: "Escaped regressions per release", cost_budget: "Two engineer-days",
+      validation_window: "14 days", stop_condition: "Stop after one severe regression.",
+      stable_core_preserved: true, compat_and_rollback: "Keep the previous path available.",
+      learning_output: "new_standard",
+    };
+    const body = {
+      condition: "A release changes production behavior.",
+      action: "Run the bounded release check.",
+      acceptance: "No severe regression escapes during the validation window.",
+      boundary: "Escalate when rollback is unavailable.",
+      revision_trigger: "A severe regression escapes the check.",
+    };
+    const version = {
+      schema_version: "1.0", id: "standard-version-1", org_id: "example-org",
+      standard_id: standard.id, proposal_id: proposal.id, version: "1.0.0", status: "draft",
+      ...body, gate,
+      trial: {
+        audience: { org_id: "example-org", team_ids: ["team-1"], roles: [], decision_kinds: ["release"] },
+        starts_at: "2026-09-19T00:00:00.000Z", ends_at: "2026-10-03T00:00:00.000Z",
+        success_metric: "Zero severe escaped regressions", stop_condition: "Stop after one severe regression.",
+      },
+      body_hash: hashStandardVersionBody(body), created_at: "2026-09-18T03:00:00.000Z",
+    };
+    const upgradeEvidence = {
+      core_value_revalidated: true, delivery_standardized: true,
+      unit_economics_or_roi_ok: true, next_tier_behavioral_evidence: true,
+      rollback_safe: true,
+    };
+    const store = new SqliteAuthorityStore(path);
+    await store.putProposal(proposal);
+    await store.transitionProposal({ org_id: "example-org", proposal_id: proposal.id, status: "submitted", updated_at: "2026-09-18T01:00:00.000Z" });
+    await store.transitionProposal({ org_id: "example-org", proposal_id: proposal.id, status: "in_review", updated_at: "2026-09-18T02:00:00.000Z" });
+    const committed = await store.commitProposalStandardVersion({ org_id: "example-org", proposal_id: proposal.id, standard, version });
+    assert.equal(committed.proposal.status, "accepted");
+    assert.deepEqual(committed.proposal.outcome_ref, { outcome_kind: "standard_version", ref_id: version.id });
+    assert.equal(committed.version.status, "draft");
+    assert.equal((await store.commitProposalStandardVersion({
+      org_id: "example-org", proposal_id: proposal.id,
+      standard: { ...standard, created_at: "2026-09-18T03:00:01.000Z" },
+      version: { ...version, created_at: "2026-09-18T03:00:01.000Z" },
+    })).version.id, version.id);
+    await assert.rejects(store.commitProposalStandardVersion({
+      org_id: "example-org", proposal_id: proposal.id, standard,
+      version: { ...version, action: "Changed after commit.", body_hash: hashStandardVersionBody({ ...body, action: "Changed after commit." }) },
+    }), /Cannot replace immutable StandardVersion/);
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.equal((await split.transitionStandardVersion({
+      org_id: "example-org", version_id: version.id, status: "trial",
+      actor: proposal.author, transitioned_at: "2026-09-19T00:00:00.000Z",
+    })).status, "trial");
+    assert.equal((await split.getStandard("example-org", standard.id)).current_version_id, version.id);
+    assert.equal((await split.transitionStandardVersion({
+      org_id: "example-org", version_id: version.id, status: "active",
+      actor: proposal.author, transitioned_at: "2026-10-03T00:00:00.000Z",
+      upgrade_evidence: upgradeEvidence,
+    })).status, "active");
+
+    const revisionProposal = {
+      ...proposal, id: "proposal-standard-2", kind: "revise_standard",
+      title: "Revise release safety standard", summary: "Revise the release safety action.",
+      status: "draft", standard_bindings: [{ standard_id: standard.id, version_id: version.id }],
+      created_at: "2026-10-04T00:00:00.000Z", updated_at: "2026-10-04T00:00:00.000Z",
+    };
+    await split.putProposal(revisionProposal);
+    await split.transitionProposal({ org_id: "example-org", proposal_id: revisionProposal.id, status: "submitted", updated_at: "2026-10-04T01:00:00.000Z" });
+    await split.transitionProposal({ org_id: "example-org", proposal_id: revisionProposal.id, status: "in_review", updated_at: "2026-10-04T02:00:00.000Z" });
+    const revisedBody = { ...body, action: "Run the bounded release check and publish its result." };
+    const revision = {
+      ...version, id: "standard-version-2", proposal_id: revisionProposal.id,
+      version: "1.1.0", ...revisedBody,
+      gate: { ...gate, learning_output: "revision" }, trial: undefined,
+      supersedes_version_id: version.id, body_hash: hashStandardVersionBody(revisedBody),
+      created_at: "2026-10-04T03:00:00.000Z",
+    };
+    assert.equal((await split.commitProposalStandardVersion({
+      org_id: "example-org", proposal_id: revisionProposal.id, version: revision,
+    })).proposal.status, "accepted");
+    assert.equal((await split.transitionStandardVersion({
+      org_id: "example-org", version_id: revision.id, status: "active",
+      actor: proposal.author, transitioned_at: "2026-10-04T04:00:00.000Z",
+      upgrade_evidence: upgradeEvidence,
+    })).status, "active");
+    const staleProposal = {
+      ...revisionProposal, id: "proposal-standard-stale", title: "Stale revision",
+      created_at: "2026-10-04T04:10:00.000Z", updated_at: "2026-10-04T04:10:00.000Z",
+    };
+    await split.putProposal(staleProposal);
+    await split.transitionProposal({ org_id: "example-org", proposal_id: staleProposal.id, status: "submitted", updated_at: "2026-10-04T04:11:00.000Z" });
+    await split.transitionProposal({ org_id: "example-org", proposal_id: staleProposal.id, status: "in_review", updated_at: "2026-10-04T04:12:00.000Z" });
+    await assert.rejects(split.commitProposalStandardVersion({
+      org_id: "example-org", proposal_id: staleProposal.id,
+      version: {
+        ...revision, id: "standard-version-stale", proposal_id: staleProposal.id,
+        version: "1.0.1", created_at: "2026-10-04T04:13:00.000Z",
+      },
+    }), /Invalid revised Standard Proposal outcome/);
+    const deprecated = await split.transitionStandardVersion({
+      org_id: "example-org", version_id: version.id, status: "deprecated",
+      actor: proposal.author, transitioned_at: "2026-10-04T05:00:00.000Z",
+      superseded_by_version_id: revision.id,
+    });
+    assert.equal(deprecated.superseded_by_version_id, revision.id);
+    assert.equal((await split.getStandardBySlug("example-org", standard.slug)).current_version_id, revision.id);
+    assert.deepEqual((await split.listStandardVersions({ org_id: "example-org", standard_id: standard.id })).map(({ status }) => status), ["deprecated", "active"]);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
@@ -964,6 +1098,7 @@ describe("SQLite context artifact store", () => {
     assert.equal(host.get("authority"), host.get("context-artifacts"));
     assert.equal(host.get("authority"), host.get("reviews"));
     assert.equal(host.get("authority"), host.get("handoffs"));
+    assert.equal(host.get("authority"), host.get("standards"));
     assert.deepEqual(
       await host.get("context-artifacts").getArtifact("example-org", "artifact-1"),
       artifactValue,
@@ -973,6 +1108,7 @@ describe("SQLite context artifact store", () => {
     assert.throws(() => host.get("context-artifacts"), /Service is not available/);
     assert.throws(() => host.get("reviews"), /Service is not available/);
     assert.throws(() => host.get("handoffs"), /Service is not available/);
+    assert.throws(() => host.get("standards"), /Service is not available/);
     await host.dispose();
   });
 

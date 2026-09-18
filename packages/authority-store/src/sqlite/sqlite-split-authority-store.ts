@@ -32,6 +32,9 @@ import type {
   HandoffDirection,
   HandoffRecord,
   HandoffStatus,
+  StandardRecord,
+  StandardVersionRecord,
+  StandardVersionTransition,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -365,6 +368,34 @@ export class SqliteSplitAuthorityStore
 
   async transitionHandoff(input: { org_id: string; handoff_id: string; status: Exclude<HandoffStatus, "open">; transitioned_at: string }): Promise<HandoffRecord | null> {
     return this.writer.call("transitionHandoff", [input]);
+  }
+
+  async commitProposalStandardVersion(input: { org_id: string; proposal_id: string; standard?: StandardRecord; version: StandardVersionRecord }): Promise<{ proposal: ProposalRecord; standard: StandardRecord; version: StandardVersionRecord }> {
+    return this.writer.call("commitProposalStandardVersion", [input]);
+  }
+
+  async getStandard(orgId: string, standardId: string): Promise<StandardRecord | null> {
+    return this.reader.call("getStandard", [orgId, standardId]);
+  }
+
+  async getStandardBySlug(orgId: string, slug: string): Promise<StandardRecord | null> {
+    return this.reader.call("getStandardBySlug", [orgId, slug]);
+  }
+
+  async listStandards(input: { org_id: string; limit?: number }): Promise<StandardRecord[]> {
+    return this.reader.call("listStandards", [input]);
+  }
+
+  async getStandardVersion(orgId: string, versionId: string): Promise<StandardVersionRecord | null> {
+    return this.reader.call("getStandardVersion", [orgId, versionId]);
+  }
+
+  async listStandardVersions(input: { org_id: string; standard_id: string; limit?: number }): Promise<StandardVersionRecord[]> {
+    return this.reader.call("listStandardVersions", [input]);
+  }
+
+  async transitionStandardVersion(input: StandardVersionTransition): Promise<StandardVersionRecord | null> {
+    return this.writer.call("transitionStandardVersion", [input]);
   }
 
   async getDisposition(

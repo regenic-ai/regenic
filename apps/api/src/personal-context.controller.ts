@@ -86,8 +86,8 @@ export class PersonalContextController {
   }
 
   @Post("proposals")
-  createDecisionProposal(@Body() body: unknown) {
-    return this.guard(() => this.context.createDecisionProposal(body));
+  createProposal(@Body() body: unknown) {
+    return this.guard(() => this.context.createProposal(body));
   }
 
   @Get("proposals/:proposalId")
@@ -115,6 +115,11 @@ export class PersonalContextController {
     return this.guard(() => this.context.commitProposalDecision(proposalId, body));
   }
 
+  @Post("proposals/:proposalId/standard-version")
+  commitProposalStandardVersion(@Param("proposalId") proposalId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.commitProposalStandardVersion(proposalId, body));
+  }
+
   @Post("proposals/:proposalId/withdraw")
   withdrawProposal(@Param("proposalId") proposalId: string) {
     return this.guard(() => this.context.transitionProposal(proposalId, "withdrawn"));
@@ -128,6 +133,46 @@ export class PersonalContextController {
   @Get("decisions/:decisionId")
   getDecision(@Param("decisionId") decisionId: string) {
     return this.guard(() => this.context.getDecision(decisionId));
+  }
+
+  @Get("standards")
+  listStandards() {
+    return this.guard(() => this.context.listStandards());
+  }
+
+  @Get("standards/:standardId")
+  getStandard(@Param("standardId") standardId: string) {
+    return this.guard(() => this.context.getStandard(standardId));
+  }
+
+  @Get("standards/:standardId/versions")
+  listStandardVersions(@Param("standardId") standardId: string) {
+    return this.guard(() => this.context.listStandardVersions(standardId));
+  }
+
+  @Get("standard-versions/:versionId")
+  getStandardVersion(@Param("versionId") versionId: string) {
+    return this.guard(() => this.context.getStandardVersion(versionId));
+  }
+
+  @Post("standard-versions/:versionId/publish-trial")
+  publishStandardVersionTrial(@Param("versionId") versionId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.transitionStandardVersion(versionId, "trial", body));
+  }
+
+  @Post("standard-versions/:versionId/publish-active")
+  publishStandardVersionActive(@Param("versionId") versionId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.transitionStandardVersion(versionId, "active", body));
+  }
+
+  @Post("standard-versions/:versionId/promote")
+  promoteStandardVersion(@Param("versionId") versionId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.transitionStandardVersion(versionId, "active", body));
+  }
+
+  @Post("standard-versions/:versionId/deprecate")
+  deprecateStandardVersion(@Param("versionId") versionId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.transitionStandardVersion(versionId, "deprecated", body));
   }
 
   @Post("decisions/:decisionId/reviews")
