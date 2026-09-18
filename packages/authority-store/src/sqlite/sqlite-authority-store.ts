@@ -33,6 +33,8 @@ import {
   validateStandard,
   validateStandardVersion,
   transitionStandardVersion as applyStandardVersionTransition,
+  validateStandardGap,
+  validateStandardGapConversion,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -77,6 +79,8 @@ import type {
   StandardVersionRecord,
   StandardVersionState,
   StandardVersionTransition,
+  StandardGapRecord,
+  StandardGapStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -1477,6 +1481,79 @@ export class SqliteAuthorityStore
       }
       return next;
     })();
+  }
+
+  async putStandardGap(input: StandardGapRecord): Promise<StandardGapRecord> {
+    this.assertWritable();
+    const gap = validateStandardGap(input);
+    if (gap.status !== "open") throw new Error("New StandardGap must be open");
+    this.database.prepare(`INSERT INTO standard_gaps (id, org_id, source_kind, source_ref, status, payload_json, converted_proposal_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'open', ?, NULL, ?, ?) ON CONFLICT DO NOTHING`).run(gap.id, gap.org_id, gap.source_kind, gap.source_ref, canonicalContextJson(gap), gap.created_at, gap.updated_at);
+    const row = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND source_kind = ? AND source_ref = ?`).get(gap.org_id, gap.source_kind, gap.source_ref) as StandardGapRow | undefined;
+    if (!row) throw new Error("Cannot persist StandardGap");
+    const storedCreation = validateStandardGap(JSON.parse(row.payload_json) as StandardGapRecord);
+    if (canonicalContextJson(storedCreation) !== canonicalContextJson({
+      ...gap,
+      id: storedCreation.id,
+      created_at: storedCreation.created_at,
+      updated_at: storedCreation.updated_at,
+    })) throw new Error("Cannot replace immutable StandardGap");
+    return toStandardGap(row);
+  }
+
+  async getStandardGap(orgId: string, gapId: string): Promise<StandardGapRecord | null> {
+    const row = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND id = ?`).get(orgId, gapId) as StandardGapRow | undefined;
+    return row ? toStandardGap(row) : null;
+  }
+
+  async listStandardGaps(input: { org_id: string; status?: StandardGapStatus; limit?: number }): Promise<StandardGapRecord[]> {
+    const rows = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as StandardGapRow[];
+    return rows.map(toStandardGap);
+  }
+
+  async convertStandardGap(input: { org_id: string; gap_id: string; proposal: ProposalRecord }): Promise<{ gap: StandardGapRecord; proposal: ProposalRecord }> {
+    this.assertWritable();
+    const proposal = validateProposal(input.proposal);
+    const transaction = this.database.transaction(() => {
+      const gapRow = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND id = ?`).get(input.org_id, input.gap_id) as StandardGapRow | undefined;
+      if (!gapRow) throw new Error("StandardGap was not found");
+      const gap = toStandardGap(gapRow);
+      if (gap.status === "converted") {
+        if (gap.converted_proposal_id !== proposal.id) throw new Error("Cannot replace StandardGap Proposal");
+        const proposalRow = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(input.org_id, proposal.id) as ProposalRow | undefined;
+        if (!proposalRow) throw new Error("Converted StandardGap Proposal was not found");
+        const storedCreation = validateProposal(JSON.parse(proposalRow.payload_json) as ProposalRecord);
+        if (canonicalContextJson(storedCreation) !== canonicalContextJson({
+          ...proposal,
+          created_at: storedCreation.created_at,
+          updated_at: storedCreation.updated_at,
+        })) throw new Error("Cannot replace StandardGap Proposal");
+        return { gap, proposal: toProposal(proposalRow) };
+      }
+      validateStandardGapConversion(gap, proposal);
+      this.database.prepare(`INSERT INTO proposals (id, org_id, status, source_digest_id, source_item_event_id, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', NULL, NULL, ?, ?, ?)`).run(proposal.id, proposal.org_id, canonicalContextJson(proposal), proposal.created_at, proposal.updated_at);
+      const changed = this.database.prepare(`UPDATE standard_gaps SET status = 'converted', converted_proposal_id = ?, updated_at = ? WHERE org_id = ? AND id = ? AND status = 'open'`).run(proposal.id, proposal.created_at, input.org_id, input.gap_id).changes;
+      if (changed !== 1) throw new Error("StandardGap state changed during conversion");
+      const convertedRow = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND id = ?`).get(input.org_id, input.gap_id) as StandardGapRow;
+      return { gap: toStandardGap(convertedRow), proposal };
+    });
+    return transaction.immediate();
+  }
+
+  async dismissStandardGap(input: { org_id: string; gap_id: string; dismissed_at: string }): Promise<StandardGapRecord | null> {
+    this.assertWritable();
+    if (!input.org_id?.trim() || !input.gap_id?.trim() || Number.isNaN(Date.parse(input.dismissed_at))) throw new Error("Invalid StandardGap dismissal");
+    const transaction = this.database.transaction(() => {
+      const row = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND id = ?`).get(input.org_id, input.gap_id) as StandardGapRow | undefined;
+      if (!row) return null;
+      const gap = toStandardGap(row);
+      if (gap.status === "converted") throw new Error("Converted StandardGap cannot be dismissed");
+      if (gap.status === "dismissed") return gap;
+      if (Date.parse(input.dismissed_at) < Date.parse(gap.created_at)) throw new Error("Invalid StandardGap dismissal");
+      const changed = this.database.prepare(`UPDATE standard_gaps SET status = 'dismissed', updated_at = ? WHERE org_id = ? AND id = ? AND status = 'open'`).run(input.dismissed_at, input.org_id, input.gap_id).changes;
+      if (changed !== 1) throw new Error("StandardGap state changed during dismissal");
+      return validateStandardGap({ ...gap, status: "dismissed", updated_at: input.dismissed_at });
+    });
+    return transaction.immediate();
   }
 
   private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {
@@ -4339,6 +4416,22 @@ interface StandardVersionRow {
   status: StandardVersionRecord["status"];
   payload_json: string;
   state_json: string;
+}
+
+interface StandardGapRow {
+  status: StandardGapStatus;
+  payload_json: string;
+  converted_proposal_id: string | null;
+  updated_at: string;
+}
+
+function toStandardGap(row: StandardGapRow): StandardGapRecord {
+  return validateStandardGap({
+    ...(JSON.parse(row.payload_json) as StandardGapRecord),
+    status: row.status,
+    updated_at: row.updated_at,
+    ...(row.converted_proposal_id ? { converted_proposal_id: row.converted_proposal_id } : {}),
+  });
 }
 
 function toStandard(row: StandardRow): StandardRecord {

@@ -753,6 +753,28 @@ the same Standard. Lifecycle timestamps are monotonic. Applications continue
 to bind exact StandardVersion IDs;
 `current_version_id` is a convenience pointer, not a floating stored binding.
 
+### 8.7 Standard gap intake
+
+A StandardGap is an immutable intake record with a small mutable lifecycle:
+`open`, `converted`, or `dismissed`. The shared contract reserves execution
+failure, exception, daily-three-questions, Review, and manual sources; the
+current Personal surface accepts explicit manual intake and explicit intake
+from a falsified Review whose recommendation is `open_gap` or
+`revise_standard`. A Review recommendation never creates a Gap automatically.
+
+The `(organization, source kind, source reference)` identity makes repeated
+intake converge. An open Gap may be dismissed idempotently, or converted once
+to a snapshot-pinned `new_standard` or `revise_standard` draft Proposal. The
+Proposal inherits the Gap's single uncertainty, cites the Gap plus caller
+evidence, and stores `gap_id`. Proposal insertion and the Gap's
+`converted_proposal_id` state change are one authority transaction. A revision
+conversion must pin the current published, non-deprecated StandardVersion.
+Converted Gaps cannot be dismissed or redirected to another Proposal. Convert
+and dismiss serialize on the Gap state; SQLite claims the write with an
+immediate transaction and PostgreSQL locks the row. A converted revision retry
+compares the original Proposal payload and remains idempotent even after the
+Standard head advances.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

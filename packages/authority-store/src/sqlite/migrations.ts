@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 36;
+export const LATEST_SCHEMA_VERSION = 37;
 
 export const MIGRATIONS = [
   {
@@ -818,6 +818,24 @@ export const MIGRATIONS = [
       );
       CREATE INDEX standard_versions_query_idx
         ON standard_versions (org_id, standard_id, created_at, id);
+    `,
+  },
+  {
+    version: 37,
+    sql: `
+      CREATE TABLE standard_gaps (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('execution_failure', 'exception', 'three_questions', 'review', 'manual')),
+        source_ref TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'converted', 'dismissed')),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        converted_proposal_id TEXT REFERENCES proposals(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (org_id, source_kind, source_ref)
+      );
+      CREATE INDEX standard_gaps_query_idx ON standard_gaps (org_id, status, created_at, id);
     `,
   },
 ] as const;

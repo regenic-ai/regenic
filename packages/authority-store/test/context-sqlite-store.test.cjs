@@ -631,6 +631,66 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("converts one immutable StandardGap into one draft Proposal", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const gap = {
+      schema_version: "1.0", id: "standard-gap-1", org_id: "example-org",
+      summary: "Release safety is not covered.", source_kind: "review", source_ref: "review-1",
+      proposed_uncertainty: "Can this release process prevent regressions?", status: "open",
+      created_by: { actor_type: "human", actor_id: "person-1" },
+      created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z",
+    };
+    const proposal = {
+      schema_version: "1.0", id: "proposal-from-gap-1", org_id: "example-org",
+      kind: "new_standard", title: "Create release safety standard",
+      summary: "Create a bounded release safety standard.", status: "draft",
+      author: gap.created_by, rights_level: "coach", boundary: "Release governance only",
+      context_snapshot_id: "snapshot-1", standard_bindings: [],
+      single_uncertainty: gap.proposed_uncertainty,
+      evidence: [{ kind: "document", uri_or_ref: "review:review-1" }], gap_id: gap.id,
+      created_at: "2026-09-20T01:00:00.000Z", updated_at: "2026-09-20T01:00:00.000Z",
+    };
+    const store = new SqliteAuthorityStore(path);
+    assert.deepEqual(await store.putStandardGap(gap), gap);
+    assert.equal((await store.putStandardGap({
+      ...gap, id: "different-id", created_at: "2026-09-20T00:00:01.000Z",
+      updated_at: "2026-09-20T00:00:01.000Z",
+    })).id, gap.id);
+    await assert.rejects(store.putStandardGap({ ...gap, summary: "Changed intake." }), /Cannot replace immutable StandardGap/);
+    const converted = await store.convertStandardGap({ org_id: "example-org", gap_id: gap.id, proposal });
+    assert.equal(converted.gap.status, "converted");
+    assert.equal(converted.gap.converted_proposal_id, proposal.id);
+    assert.equal(converted.proposal.status, "draft");
+    await store.transitionProposal({
+      org_id: "example-org", proposal_id: proposal.id, status: "submitted",
+      updated_at: "2026-09-20T02:00:00.000Z",
+    });
+    assert.equal((await store.convertStandardGap({
+      org_id: "example-org", gap_id: gap.id,
+      proposal: { ...proposal, created_at: "2026-09-20T01:00:01.000Z", updated_at: "2026-09-20T01:00:01.000Z" },
+    })).proposal.status, "submitted");
+    await assert.rejects(store.dismissStandardGap({
+      org_id: "example-org", gap_id: gap.id, dismissed_at: "2026-09-20T03:00:00.000Z",
+    }), /cannot be dismissed/);
+    await store.putStandardGap({
+      ...gap, id: "standard-gap-2", source_kind: "manual", source_ref: "manual-1",
+    });
+    assert.equal((await store.dismissStandardGap({
+      org_id: "example-org", gap_id: "standard-gap-2", dismissed_at: "2026-09-20T03:00:00.000Z",
+    })).status, "dismissed");
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.equal((await split.getStandardGap("example-org", gap.id)).converted_proposal_id, proposal.id);
+    assert.deepEqual((await split.listStandardGaps({ org_id: "example-org", status: "converted" })).map(({ id }) => id), [gap.id]);
+    assert.equal((await split.dismissStandardGap({
+      org_id: "example-org", gap_id: "standard-gap-2", dismissed_at: "2026-09-20T04:00:00.000Z",
+    })).updated_at, "2026-09-20T03:00:00.000Z");
+    assert.equal((await split.listStandardGaps({ org_id: "other-org" })).length, 0);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
@@ -1099,6 +1159,7 @@ describe("SQLite context artifact store", () => {
     assert.equal(host.get("authority"), host.get("reviews"));
     assert.equal(host.get("authority"), host.get("handoffs"));
     assert.equal(host.get("authority"), host.get("standards"));
+    assert.equal(host.get("authority"), host.get("standard-gaps"));
     assert.deepEqual(
       await host.get("context-artifacts").getArtifact("example-org", "artifact-1"),
       artifactValue,
@@ -1109,6 +1170,7 @@ describe("SQLite context artifact store", () => {
     assert.throws(() => host.get("reviews"), /Service is not available/);
     assert.throws(() => host.get("handoffs"), /Service is not available/);
     assert.throws(() => host.get("standards"), /Service is not available/);
+    assert.throws(() => host.get("standard-gaps"), /Service is not available/);
     await host.dispose();
   });
 

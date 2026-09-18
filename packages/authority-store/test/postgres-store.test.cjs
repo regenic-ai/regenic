@@ -297,6 +297,49 @@ describePg("postgres authority store", () => {
     assert.equal((await store.listStandardVersions({ org_id: orgId, standard_id: standard.id })).length, 1);
   });
 
+  it("converges concurrent StandardGap intake and Proposal conversion", async () => {
+    const writerA = await openStore();
+    const writerB = await openStore();
+    const orgId = `org-${randomUUID()}`;
+    const baseGap = {
+      schema_version: "1.0", org_id: orgId,
+      summary: "Release safety is not covered.", source_kind: "manual", source_ref: "manual-gap-1",
+      proposed_uncertainty: "Can a release gate prevent regressions?", status: "open",
+      created_by: { actor_type: "human", actor_id: "person-1" },
+    };
+    const [gapA, gapB] = await Promise.all([
+      writerA.putStandardGap({
+        ...baseGap, id: `gap-${randomUUID()}`,
+        created_at: "2026-09-20T00:00:00.000Z", updated_at: "2026-09-20T00:00:00.000Z",
+      }),
+      writerB.putStandardGap({
+        ...baseGap, id: `gap-${randomUUID()}`,
+        created_at: "2026-09-20T00:00:01.000Z", updated_at: "2026-09-20T00:00:01.000Z",
+      }),
+    ]);
+    assert.equal(gapA.id, gapB.id);
+    const proposal = {
+      schema_version: "1.0", id: `proposal-${randomUUID()}`, org_id: orgId,
+      kind: "new_standard", title: "Create release safety standard",
+      summary: "Create a bounded release safety standard.", status: "draft",
+      author: baseGap.created_by, rights_level: "coach", boundary: "Release governance only",
+      context_snapshot_id: "snapshot-1", standard_bindings: [],
+      single_uncertainty: baseGap.proposed_uncertainty,
+      evidence: [{ kind: "document", uri_or_ref: `standard-gap:${gapA.id}` }], gap_id: gapA.id,
+      created_at: "2026-09-20T01:00:00.000Z", updated_at: "2026-09-20T01:00:00.000Z",
+    };
+    const [convertedA, convertedB] = await Promise.all([
+      writerA.convertStandardGap({ org_id: orgId, gap_id: gapA.id, proposal }),
+      writerB.convertStandardGap({
+        org_id: orgId, gap_id: gapA.id,
+        proposal: { ...proposal, created_at: "2026-09-20T01:00:01.000Z", updated_at: "2026-09-20T01:00:01.000Z" },
+      }),
+    ]);
+    assert.equal(convertedA.gap.converted_proposal_id, proposal.id);
+    assert.equal(convertedB.proposal.id, proposal.id);
+    assert.equal((await writerA.listStandardGaps({ org_id: orgId, status: "converted" })).length, 1);
+  });
+
   it("serves the store through the postgres plugin", async () => {
     const host = await createHost();
     try {

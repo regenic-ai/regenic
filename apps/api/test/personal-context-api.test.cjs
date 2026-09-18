@@ -240,6 +240,12 @@ describe("personal context API", () => {
     assert.equal(invalidReview.response.status, 400);
     assert.deepEqual((await (await fetch(`${origin}/v1/me/context/decisions/${encodeURIComponent(result.decision.id)}/reviews`)).json()).map(({ id }) => id), [review.id]);
     assert.equal((await (await fetch(`${origin}/v1/me/context/reviews/${encodeURIComponent(review.id)}`)).json()).result, "falsified");
+    const reviewGap = await postJson(`${origin}/v1/me/context/reviews/${encodeURIComponent(review.id)}/standard-gap`, {
+      summary: "The release decision exposed a missing standard.",
+      proposed_uncertainty: "Can a release gate prevent this failure?",
+    });
+    assert.equal(reviewGap.response.status, 201);
+    assert.equal(JSON.parse(reviewGap.text).source_ref, review.id);
     const rejectedCreated = await postJson(`${origin}/v1/me/context/proposals`, {
       ...proposalBody, client_request_id: "decision-request-rejected", title: "Reject another release",
     });
@@ -397,14 +403,23 @@ describe("personal context API", () => {
     assert.equal((await (await fetch(`${origin}/v1/me/context/standards`)).json())[0].id, first.standard.id);
     assert.equal((await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}`)).json()).current_version_id, first.version.id);
 
-    const revisionProposalBody = {
-      ...proposalBody,
-      client_request_id: "standard-proposal-2",
+    const revisionGap = JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps`, {
+      client_request_id: "standard-revision-gap",
+      summary: "The release standard needs a revision.",
+      proposed_uncertainty: uncertainty,
+    })).text);
+    const revisionConversionBody = {
       kind: "revise_standard",
       title: "Revise release safety standard",
-      standard_bindings: [{ standard_id: first.standard.id, version_id: first.version.id }],
+      summary: "Publish the bounded release result.",
+      rights_level: "coach",
+      boundary: "Release governance only",
+      context_snapshot_id: snapshotId,
+      standard_id: first.standard.id,
+      version_id: first.version.id,
+      evidence: [{ kind: "document", uri_or_ref: `event:${eventId}` }],
     };
-    const revisionProposal = JSON.parse((await postJson(`${origin}/v1/me/context/proposals`, revisionProposalBody)).text);
+    const revisionProposal = JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(revisionGap.id)}/proposal`, revisionConversionBody)).text).proposal;
     await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(revisionProposal.id)}/submit`, {});
     await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(revisionProposal.id)}/review`, {});
     const revisionBody = {
@@ -428,8 +443,60 @@ describe("personal context API", () => {
     })).text);
     assert.equal(deprecated.status, "deprecated");
     assert.equal(deprecated.superseded_by_version_id, revision.version.id);
+    const retriedConversion = await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(revisionGap.id)}/proposal`, revisionConversionBody);
+    assert.equal(retriedConversion.response.status, 201);
+    assert.equal(JSON.parse(retriedConversion.text).proposal.status, "accepted");
     assert.deepEqual((await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}/versions`)).json()).map(({ status }) => status), ["deprecated", "active"]);
     assert.equal((await (await fetch(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(revision.version.id)}`)).json()).status, "active");
+  });
+
+  it("converts one StandardGap into one governed Proposal", async () => {
+    const root = await createRoot();
+    const { origin, eventId } = await startApi(root);
+    const assembled = await postJson(`${origin}/v1/me/context/assemble`, assembleBody());
+    const snapshotId = JSON.parse(assembled.text).snapshot.id;
+    const gapBody = {
+      client_request_id: "manual-gap-1",
+      summary: "Release safety is not covered.",
+      proposed_uncertainty: "Can a release gate prevent regressions?",
+    };
+    const created = await postJson(`${origin}/v1/me/context/standard-gaps`, gapBody);
+    assert.equal(created.response.status, 201);
+    const gap = JSON.parse(created.text);
+    assert.equal(gap.status, "open");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps`, gapBody)).text).id, gap.id);
+    const changed = await postJson(`${origin}/v1/me/context/standard-gaps`, {
+      ...gapBody, summary: "Changed after intake.",
+    });
+    assert.equal(changed.response.status, 409);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/standard-gaps?status=open`)).json())[0].id, gap.id);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(gap.id)}`)).json()).source_kind, "manual");
+    const conversionBody = {
+      kind: "new_standard",
+      title: "Create release safety standard",
+      summary: "Create a bounded release safety standard.",
+      rights_level: "coach",
+      boundary: "Release governance only",
+      context_snapshot_id: snapshotId,
+      evidence: [{ kind: "document", uri_or_ref: `event:${eventId}` }],
+    };
+    const convertedResponse = await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(gap.id)}/proposal`, conversionBody);
+    assert.equal(convertedResponse.response.status, 201);
+    const converted = JSON.parse(convertedResponse.text);
+    assert.equal(converted.gap.status, "converted");
+    assert.equal(converted.proposal.gap_id, gap.id);
+    assert.equal(converted.proposal.single_uncertainty, gap.proposed_uncertainty);
+    assert.equal(converted.proposal.evidence[0].uri_or_ref, `standard-gap:${gap.id}`);
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(converted.proposal.id)}/submit`, {});
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(gap.id)}/proposal`, conversionBody)).text).proposal.status, "submitted");
+    assert.equal((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(gap.id)}/dismiss`, {})).response.status, 409);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps`, gapBody)).text).status, "converted");
+
+    const dismissedGap = JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps`, {
+      ...gapBody, client_request_id: "manual-gap-2", summary: "A duplicate gap is not actionable.",
+    })).text);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(dismissedGap.id)}/dismiss`, {})).text).status, "dismissed");
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(dismissedGap.id)}/dismiss`, {})).text).status, "dismissed");
   });
 
   it("lists and resolves coverage alerts without exposing source event identity", async () => {

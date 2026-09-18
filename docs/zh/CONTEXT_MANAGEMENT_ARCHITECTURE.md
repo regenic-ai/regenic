@@ -644,6 +644,23 @@ Standard 下的 active replacement。Lifecycle 时间必须单调。应用仍必
 StandardVersion ID；
 `current_version_id` 只是便利指针，不是浮动的持久化绑定。
 
+### 8.7 StandardGap intake
+
+StandardGap 是 immutable intake record，只具有 `open`、`converted` 或 `dismissed` 三态的
+小型可变 lifecycle。共享 contract 预留 execution failure、exception、每日三问、Review 与
+manual source；当前 Personal surface 支持显式 manual intake，以及从 `recommended_action` 为
+`open_gap` 或 `revise_standard` 的 falsified Review 显式 intake。Review recommendation 永远
+不会自动创建 Gap。
+
+`(organization, source kind, source reference)` identity 使重复 intake 收敛。Open Gap 可幂等
+dismiss，或仅转换一次为绑定 snapshot 的 `new_standard` / `revise_standard` draft Proposal。
+Proposal 继承 Gap 的 single uncertainty，引用 Gap 及调用方 evidence，并保存 `gap_id`。
+Proposal 插入与 Gap 的 `converted_proposal_id` 状态变更处于同一 authority transaction。
+Revision conversion 必须固定当前已发布且未 deprecated 的 StandardVersion。Converted Gap
+不能被 dismiss，也不能重定向到另一 Proposal。Convert 与 dismiss 会在 Gap state 上串行化；
+SQLite 使用 immediate transaction 取得写 ownership，PostgreSQL 锁定该行。Revision 已
+converted 后的重试按原始 Proposal payload 比较，因此即使 Standard head 已推进仍保持幂等。
+
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 

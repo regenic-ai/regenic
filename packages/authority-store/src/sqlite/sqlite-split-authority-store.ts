@@ -35,6 +35,8 @@ import type {
   StandardRecord,
   StandardVersionRecord,
   StandardVersionTransition,
+  StandardGapRecord,
+  StandardGapStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -396,6 +398,26 @@ export class SqliteSplitAuthorityStore
 
   async transitionStandardVersion(input: StandardVersionTransition): Promise<StandardVersionRecord | null> {
     return this.writer.call("transitionStandardVersion", [input]);
+  }
+
+  async putStandardGap(gap: StandardGapRecord): Promise<StandardGapRecord> {
+    return this.writer.call("putStandardGap", [gap]);
+  }
+
+  async getStandardGap(orgId: string, gapId: string): Promise<StandardGapRecord | null> {
+    return this.reader.call("getStandardGap", [orgId, gapId]);
+  }
+
+  async listStandardGaps(input: { org_id: string; status?: StandardGapStatus; limit?: number }): Promise<StandardGapRecord[]> {
+    return this.reader.call("listStandardGaps", [input]);
+  }
+
+  async convertStandardGap(input: { org_id: string; gap_id: string; proposal: ProposalRecord }): Promise<{ gap: StandardGapRecord; proposal: ProposalRecord }> {
+    return this.writer.call("convertStandardGap", [input]);
+  }
+
+  async dismissStandardGap(input: { org_id: string; gap_id: string; dismissed_at: string }): Promise<StandardGapRecord | null> {
+    return this.writer.call("dismissStandardGap", [input]);
   }
 
   async getDisposition(
