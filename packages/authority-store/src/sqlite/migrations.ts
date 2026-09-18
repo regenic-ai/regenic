@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 34;
+export const LATEST_SCHEMA_VERSION = 35;
 
 export const MIGRATIONS = [
   {
@@ -772,6 +772,21 @@ export const MIGRATIONS = [
         created_at TEXT NOT NULL
       );
       CREATE INDEX reviews_query_idx ON reviews (org_id, subject_id, created_at, id);
+    `,
+  },
+  {
+    version: 35,
+    sql: `
+      CREATE TABLE handoffs (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        direction TEXT NOT NULL CHECK (direction IN ('agent_to_human', 'human_to_agent')),
+        status TEXT NOT NULL CHECK (status IN ('open', 'acked', 'resolved', 'cancelled')),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        created_at TEXT NOT NULL,
+        resolved_at TEXT
+      );
+      CREATE INDEX handoffs_query_idx ON handoffs (org_id, status, direction, created_at, id);
     `,
   },
 ] as const;

@@ -706,6 +706,24 @@ a Review never mutates its Decision or Proposal and does not create or activate
 a StandardVersion. A later governed workflow must evaluate that recommendation
 explicitly.
 
+### 8.5 Human-agent handoffs
+
+A Handoff is an explicit, snapshot-pinned transfer between one human and one
+agent. Direction and reason are validated together: agent-to-human handoffs
+cover missing standards, evidence conflicts, permission or acceptance failures,
+and escalation boundaries; human-to-agent handoffs cover approved work,
+standard revision, context enrichment, bounded execution, and bound retries.
+The structured payload is a non-empty JSON object. Optional Proposal and
+Decision references must resolve inside the same organization; when both are
+present, the Decision must be the Proposal's outcome.
+
+Handoff content is immutable and a stable request identity makes creation
+idempotent even after its state advances. The only lifecycle paths are
+`open -> acked -> resolved`, `open -> cancelled`, and `acked -> cancelled`.
+Resolution records its timestamp, and terminal states cannot reopen. State
+changes require the dedicated acknowledge, resolve, or cancel operation; chat
+messages and ingested Events never imply a transition.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

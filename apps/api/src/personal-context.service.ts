@@ -7,6 +7,7 @@ import {
   PROPOSAL_SCHEMA_VERSION,
   DECISION_SCHEMA_VERSION,
   REVIEW_SCHEMA_VERSION,
+  HANDOFF_SCHEMA_VERSION,
   hashCanonicalContext,
   type ContextBundle,
   type ContextArtifact,
@@ -20,6 +21,11 @@ import {
   type ProposalRecord,
   type DecisionRecord,
   type ReviewRecord,
+  type HandoffDirection,
+  type HandoffReason,
+  type HandoffRecord,
+  type HandoffStatus,
+  type JsonValue,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -381,6 +387,94 @@ export class PersonalContextService {
     return review;
   }
 
+  async createHandoff(input: unknown): Promise<HandoffRecord> {
+    const body = strictBody(input, new Set([
+      "client_request_id", "direction", "agent_id", "reason", "proposal_id",
+      "decision_id", "context_snapshot_id", "standard_bindings", "payload",
+    ]));
+    const direction = handoffDirection(body.direction);
+    const agentId = requiredString(body.agent_id, "agent_id");
+    const snapshotId = requiredString(body.context_snapshot_id, "context_snapshot_id");
+    if (!await this.runtime.requireHost().get("context-artifacts").getSnapshot(this.runtime.orgId(), snapshotId)) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
+    }
+    const proposalId = optionalString(body.proposal_id);
+    const proposal = proposalId
+      ? await this.runtime.requireHost().get("proposals").getProposal(this.runtime.orgId(), proposalId)
+      : null;
+    if (proposalId && !proposal) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Proposal was not found");
+    }
+    const decisionId = optionalString(body.decision_id);
+    const decision = decisionId
+      ? await this.runtime.requireHost().get("decisions").getDecision(this.runtime.orgId(), decisionId)
+      : null;
+    if (decisionId && !decision) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Decision was not found");
+    }
+    if (proposal && decision && decision.proposal_id !== proposal.id) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Handoff Proposal and Decision do not refer to the same outcome");
+    }
+    const clientRequestId = requiredString(body.client_request_id, "client_request_id");
+    const handoffs = this.runtime.requireHost().get("handoffs");
+    const id = `handoff:${hashCanonicalContext([this.runtime.orgId(), clientRequestId])}`;
+    const existing = await handoffs.getHandoff(this.runtime.orgId(), id);
+    const human = { actor_type: "human" as const, actor_id: this.runtime.orgId() };
+    const agent = { actor_type: "agent" as const, actor_id: agentId };
+    const handoff: HandoffRecord = {
+      schema_version: HANDOFF_SCHEMA_VERSION,
+      id,
+      org_id: this.runtime.orgId(),
+      direction,
+      from: direction === "human_to_agent" ? human : agent,
+      to: direction === "human_to_agent" ? agent : human,
+      reason: handoffReason(body.reason),
+      ...(proposalId ? { proposal_id: proposalId } : {}),
+      ...(decisionId ? { decision_id: decisionId } : {}),
+      context_snapshot_id: snapshotId,
+      standard_bindings: standardBindings(body.standard_bindings),
+      payload: handoffPayload(body.payload),
+      status: "open",
+      created_at: existing?.created_at ?? new Date().toISOString(),
+    };
+    try {
+      return await handoffs.putHandoff(handoff);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid Handoff";
+      const status = message.includes("Cannot replace") ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
+      throw new PersonalContextError("invalid_request", status, message);
+    }
+  }
+
+  async listHandoffs(status?: string, direction?: string) {
+    return this.runtime.requireHost().get("handoffs").listHandoffs({
+      org_id: this.runtime.orgId(),
+      ...(status ? { status: handoffStatus(status) } : {}),
+      ...(direction ? { direction: handoffDirection(direction) } : {}),
+      limit: 100,
+    });
+  }
+
+  async getHandoff(handoffId: string) {
+    const handoff = await this.runtime.requireHost().get("handoffs").getHandoff(this.runtime.orgId(), requiredString(handoffId, "handoff_id"));
+    if (!handoff) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Handoff was not found");
+    return handoff;
+  }
+
+  async transitionHandoff(handoffId: string, status: Exclude<HandoffStatus, "open">) {
+    try {
+      const handoff = await this.runtime.requireHost().get("handoffs").transitionHandoff({
+        org_id: this.runtime.orgId(), handoff_id: requiredString(handoffId, "handoff_id"),
+        status, transitioned_at: new Date().toISOString(),
+      });
+      if (!handoff) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Handoff was not found");
+      return handoff;
+    } catch (error) {
+      if (error instanceof PersonalContextError) throw error;
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid Handoff transition");
+    }
+  }
+
   async decideArtifact(artifactId: string, input: unknown) {
     const body = strictBody(input, new Set(["status"]));
     const status = requiredString(body.status, "status");
@@ -679,6 +773,42 @@ function reviewRecommendedAction(value: unknown): ReviewRecord["recommended_acti
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Review recommended_action");
   }
   return action as ReviewRecord["recommended_action"];
+}
+
+function handoffDirection(value: unknown): HandoffDirection {
+  const direction = requiredString(value, "direction");
+  if (!["agent_to_human", "human_to_agent"].includes(direction)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Handoff direction");
+  }
+  return direction as HandoffDirection;
+}
+
+function handoffReason(value: unknown): HandoffReason {
+  const reason = requiredString(value, "reason");
+  if (![
+    "standard_uncovered", "evidence_conflict", "permission_denied", "acceptance_failed",
+    "escalation_boundary", "approve_proposal", "revise_standard", "enrich_context",
+    "set_boundary", "retry_with_binding",
+  ].includes(reason)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Handoff reason");
+  }
+  return reason as HandoffReason;
+}
+
+function handoffStatus(value: unknown): HandoffStatus {
+  const status = requiredString(value, "status");
+  if (!["open", "acked", "resolved", "cancelled"].includes(status)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid Handoff status");
+  }
+  return status as HandoffStatus;
+}
+
+function handoffPayload(value: unknown): Record<string, JsonValue> {
+  const payload = asRecord(value);
+  if (Object.keys(payload).length === 0) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Handoff payload must not be empty");
+  }
+  return payload as Record<string, JsonValue>;
 }
 
 function stringArray(value: unknown, name: string): string[] {

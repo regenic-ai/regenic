@@ -7,6 +7,7 @@ import {
   Inject,
   Param,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import { PersonalApiGuard } from "./personal-api.guard";
@@ -142,6 +143,36 @@ export class PersonalContextController {
   @Get("reviews/:reviewId")
   getReview(@Param("reviewId") reviewId: string) {
     return this.guard(() => this.context.getReview(reviewId));
+  }
+
+  @Post("handoffs")
+  createHandoff(@Body() body: unknown) {
+    return this.guard(() => this.context.createHandoff(body));
+  }
+
+  @Get("handoffs")
+  listHandoffs(@Query("status") status?: string, @Query("direction") direction?: string) {
+    return this.guard(() => this.context.listHandoffs(status, direction));
+  }
+
+  @Get("handoffs/:handoffId")
+  getHandoff(@Param("handoffId") handoffId: string) {
+    return this.guard(() => this.context.getHandoff(handoffId));
+  }
+
+  @Post("handoffs/:handoffId/ack")
+  acknowledgeHandoff(@Param("handoffId") handoffId: string) {
+    return this.guard(() => this.context.transitionHandoff(handoffId, "acked"));
+  }
+
+  @Post("handoffs/:handoffId/resolve")
+  resolveHandoff(@Param("handoffId") handoffId: string) {
+    return this.guard(() => this.context.transitionHandoff(handoffId, "resolved"));
+  }
+
+  @Post("handoffs/:handoffId/cancel")
+  cancelHandoff(@Param("handoffId") handoffId: string) {
+    return this.guard(() => this.context.transitionHandoff(handoffId, "cancelled"));
   }
 
   @Post("artifacts/:artifactId/decision")
