@@ -28,6 +28,7 @@ import {
   STANDARD_SCHEMA_VERSION,
   STANDARD_VERSION_SCHEMA_VERSION,
   STANDARD_GAP_SCHEMA_VERSION,
+  AGENT_RUN_SCHEMA_VERSION,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -52,6 +53,9 @@ import {
   type UpgradeEvidence,
   type StandardGapRecord,
   type StandardGapStatus,
+  type AgentRunOutput,
+  type AgentRunRecord,
+  type AgentRunStatus,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -297,8 +301,29 @@ export async function runLocalCli(
     case "context-standard-gap-dismiss":
       await dismissStandardGap(commandOptions, stdout, now);
       return;
+    case "context-run-new":
+      await createAgentRun(commandOptions, stdout, now);
+      return;
+    case "context-runs":
+      await listAgentRuns(commandOptions, stdout);
+      return;
+    case "context-run-get":
+      await getAgentRun(commandOptions, stdout);
+      return;
+    case "context-run-start":
+      await startAgentRunCommand(commandOptions, stdout, now);
+      return;
+    case "context-run-complete":
+      await settleAgentRunCommand(commandOptions, stdout, now);
+      return;
+    case "context-run-handoff":
+      await handoffAgentRunCommand(commandOptions, stdout, now);
+      return;
+    case "context-run-cancel":
+      await cancelAgentRunCommand(commandOptions, stdout, now);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel");
   }
 }
 
@@ -2032,6 +2057,157 @@ async function dismissStandardGap(options: CommandOptions, stdout: CliOutput, no
     if (!gap) throw new Error("StandardGap was not found");
     writeJson(stdout, gap);
   });
+}
+
+async function createAgentRun(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const snapshotId = requireOption(options, "snapshot");
+    if (!await host.get("context-artifacts").getSnapshot(orgId, snapshotId)) throw new Error("Context snapshot was not found");
+    const bindings = cliStandardBindings(requireOption(options, "bindings"));
+    if (!bindings.length) throw new Error("AgentRun requires at least one StandardVersion binding");
+    const id = `agent-run:${hashCanonicalContext([orgId, requireOption(options, "request")])}`;
+    const existing = await host.get("agent-runs").getAgentRun(orgId, id);
+    for (const binding of bindings) {
+      const standard = await host.get("standards").getStandard(orgId, binding.standard_id);
+      const version = await host.get("standards").getStandardVersion(orgId, binding.version_id);
+      if (!standard || !version || version.standard_id !== standard.id
+        || (!existing && !["trial", "active"].includes(version.status))) {
+        throw new Error("AgentRun binding must pin a published StandardVersion");
+      }
+    }
+    const run: AgentRunRecord = {
+      schema_version: AGENT_RUN_SCHEMA_VERSION,
+      id,
+      org_id: orgId,
+      agent: { actor_type: "agent", actor_id: requireOption(options, "agent") },
+      on_behalf_of: { actor_type: "human", actor_id: orgId },
+      intent: requireOption(options, "intent"),
+      status: "queued",
+      context_snapshot_id: snapshotId,
+      standard_bindings: bindings,
+      input: parseJsonObjectValue(requireOption(options, "input"), "AgentRun input"),
+      created_at: existing?.created_at ?? now(),
+    };
+    writeJson(stdout, await host.get("agent-runs").putAgentRun(run));
+  });
+}
+
+async function listAgentRuns(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const status = optionString(options, "status");
+  if (status && !["queued", "running", "succeeded", "failed", "handed_off", "cancelled"].includes(status)) throw new Error("Invalid AgentRun status");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    writeJson(stdout, await host.get("agent-runs").listAgentRuns({
+      org_id: orgId, ...(status ? { status: status as AgentRunStatus } : {}), limit: 100,
+    }));
+  });
+}
+
+async function getAgentRun(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const run = await host.get("agent-runs").getAgentRun(orgId, requireOption(options, "run"));
+    if (!run) throw new Error("AgentRun was not found");
+    writeJson(stdout, run);
+  });
+}
+
+async function startAgentRunCommand(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  await mutateCliAgentRun(options, stdout, (host, orgId, runId) => host.get("agent-runs").startAgentRun({
+    org_id: orgId, run_id: runId, started_at: now(),
+  }));
+}
+
+async function settleAgentRunCommand(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const status = requireOption(options, "status");
+  if (!["succeeded", "failed"].includes(status)) throw new Error("AgentRun settlement status must be succeeded or failed");
+  const output = cliAgentRunOutput(await readJsonObject(requirePath(options, "output"), "AgentRun output"));
+  await mutateCliAgentRun(options, stdout, (host, orgId, runId) => host.get("agent-runs").settleAgentRun({
+    org_id: orgId, run_id: runId, status: status as "succeeded" | "failed", output,
+    finished_at: now(),
+  }));
+}
+
+async function handoffAgentRunCommand(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const run = await host.get("agent-runs").getAgentRun(orgId, requireOption(options, "run"));
+    if (!run) throw new Error("AgentRun was not found");
+    const onBehalfOf = run.on_behalf_of;
+    if (!onBehalfOf) throw new Error("AgentRun has no human principal for Handoff");
+    const reason = cliHandoffReason(requireOption(options, "reason"));
+    if (!["standard_uncovered", "evidence_conflict", "permission_denied", "acceptance_failed", "escalation_boundary"].includes(reason)) {
+      throw new Error("AgentRun Handoff requires an Agent-to-Human reason");
+    }
+    const at = now();
+    const handoff: HandoffRecord = {
+      schema_version: HANDOFF_SCHEMA_VERSION,
+      id: `handoff:${hashCanonicalContext([orgId, run.id])}`,
+      org_id: orgId,
+      direction: "agent_to_human",
+      from: run.agent,
+      to: onBehalfOf,
+      reason,
+      agent_run_id: run.id,
+      context_snapshot_id: run.context_snapshot_id,
+      standard_bindings: run.standard_bindings,
+      payload: parseJsonObjectValue(requireOption(options, "payload"), "Handoff payload"),
+      status: "open",
+      created_at: at,
+    };
+    writeJson(stdout, await host.get("agent-runs").handoffAgentRun({
+      org_id: orgId, run_id: run.id, handoff, handed_off_at: at,
+    }));
+  });
+}
+
+async function cancelAgentRunCommand(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  await mutateCliAgentRun(options, stdout, (host, orgId, runId) => host.get("agent-runs").cancelAgentRun({
+    org_id: orgId, run_id: runId, cancelled_at: now(),
+  }));
+}
+
+async function mutateCliAgentRun(
+  options: CommandOptions,
+  stdout: CliOutput,
+  mutate: (host: Awaited<ReturnType<typeof import("./host")["createLocalHost"]>>, orgId: string, runId: string) => Promise<AgentRunRecord | null>,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const run = await mutate(host, orgId, requireOption(options, "run"));
+    if (!run) throw new Error("AgentRun was not found");
+    writeJson(stdout, run);
+  });
+}
+
+function cliAgentRunOutput(value: Record<string, unknown>): AgentRunOutput {
+  assertObjectKeys(value, new Set([
+    "summary", "artifacts", "applied_standard_version_ids", "context_snapshot_id",
+    "acceptance_check", "exceptions", "confidence",
+  ]), "AgentRun output");
+  if (!Array.isArray(value.artifacts) || value.artifacts.some((artifact) => !isObject(artifact))) {
+    throw new Error("AgentRun output artifacts must be objects");
+  }
+  const acceptanceCheck = requireString(value.acceptance_check);
+  if (!["pass", "fail", "not_applicable"].includes(acceptanceCheck)) throw new Error("Invalid AgentRun acceptance check");
+  if (value.confidence !== undefined && typeof value.confidence !== "number") throw new Error("AgentRun confidence must be a number");
+  return {
+    summary: requireString(value.summary),
+    artifacts: value.artifacts as Array<Record<string, JsonValue>>,
+    applied_standard_version_ids: cliStringArray(value.applied_standard_version_ids),
+    context_snapshot_id: requireString(value.context_snapshot_id),
+    acceptance_check: acceptanceCheck as AgentRunOutput["acceptance_check"],
+    exceptions: cliStringArray(value.exceptions),
+    ...(value.confidence === undefined ? {} : { confidence: value.confidence as number }),
+  };
+}
+
+function parseJsonObjectValue(value: string, name: string): Record<string, JsonValue> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error(`${name} must be valid JSON`); }
+  if (!isObject(parsed)) throw new Error(`${name} must be an object`);
+  return parsed as Record<string, JsonValue>;
 }
 
 function cliDigestItem(attrs: unknown, direction: string, eventId: string): { item_kind: string; text: unknown } {

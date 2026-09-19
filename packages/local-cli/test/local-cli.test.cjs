@@ -46,6 +46,7 @@ describe("regenic-local", () => {
     const revisionSpecPath = join(root, "standard-revision.json");
     const upgradeEvidencePath = join(root, "upgrade-evidence.json");
     const deprecationEvidencePath = join(root, "deprecation-evidence.json");
+    const agentRunOutputPath = join(root, "agent-run-output.json");
     const authority = new SqliteAuthorityStore(database);
     const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
     const ingested = await ingestion.ingest({
@@ -353,6 +354,64 @@ describe("regenic-local", () => {
       "context-standard-version-get", ...common,
       "--version", revisionCommit.version.id,
     ])).status, "active");
+    const runBindings = `${standardCommit.standard.id}@${revisionCommit.version.id}`;
+    const runArgs = [
+      "context-run-new", ...common,
+      "--request", "agent-run-1",
+      "--agent", "agent-1",
+      "--intent", "Apply the active release standard.",
+      "--snapshot", assembled.snapshot.id,
+      "--bindings", runBindings,
+      "--input", JSON.stringify({ release_id: "release-1" }),
+    ];
+    const agentRun = await run(runArgs);
+    assert.equal(agentRun.status, "queued");
+    assert.equal((await run(runArgs)).id, agentRun.id);
+    await assert.rejects(run(runArgs.slice(0, -2)), /Missing required option --input/);
+    assert.equal((await run(["context-run-start", ...common, "--run", agentRun.id])).status, "running");
+    await writeFile(agentRunOutputPath, JSON.stringify({
+      summary: "The release check passed.",
+      artifacts: [{ kind: "report", ref: "artifact-1" }],
+      applied_standard_version_ids: [revisionCommit.version.id],
+      context_snapshot_id: assembled.snapshot.id,
+      acceptance_check: "pass",
+      exceptions: [],
+      confidence: 0.9,
+    }), "utf8");
+    const completedRun = await run([
+      "context-run-complete", ...common,
+      "--run", agentRun.id, "--status", "succeeded", "--output", agentRunOutputPath,
+    ]);
+    assert.equal(completedRun.status, "succeeded");
+    assert.equal((await run([
+      "context-run-complete", ...common,
+      "--run", agentRun.id, "--status", "succeeded", "--output", agentRunOutputPath,
+    ])).finished_at, completedRun.finished_at);
+    assert.equal((await run(["context-runs", ...common, "--status", "succeeded"]))[0].id, agentRun.id);
+    assert.equal((await run(["context-run-get", ...common, "--run", agentRun.id])).output.acceptance_check, "pass");
+
+    const handoffRun = await run([
+      ...runArgs.slice(0, runArgs.indexOf("--request") + 1), "agent-run-handoff",
+      ...runArgs.slice(runArgs.indexOf("--request") + 2, -1), JSON.stringify({ release_id: "release-2" }),
+    ]);
+    await run(["context-run-start", ...common, "--run", handoffRun.id]);
+    const runHandoffArgs = [
+      "context-run-handoff", ...common,
+      "--run", handoffRun.id,
+      "--reason", "evidence_conflict",
+      "--payload", JSON.stringify({ summary: "Two claims disagree." }),
+    ];
+    const runHandoff = await run(runHandoffArgs);
+    assert.equal(runHandoff.run.status, "handed_off");
+    assert.equal(runHandoff.handoff.agent_run_id, handoffRun.id);
+    assert.equal((await run(runHandoffArgs)).handoff.id, runHandoff.handoff.id);
+
+    const cancelledRun = await run([
+      ...runArgs.slice(0, runArgs.indexOf("--request") + 1), "agent-run-cancel",
+      ...runArgs.slice(runArgs.indexOf("--request") + 2, -1), JSON.stringify({ release_id: "release-3" }),
+    ]);
+    assert.equal((await run(["context-run-cancel", ...common, "--run", cancelledRun.id])).status, "cancelled");
+    assert.equal((await run(["context-run-cancel", ...common, "--run", cancelledRun.id])).status, "cancelled");
     const jobStore = new SqliteAuthorityStore(database);
     await jobStore.enqueueDailyDigestJob({
       org_id: "local-owner",

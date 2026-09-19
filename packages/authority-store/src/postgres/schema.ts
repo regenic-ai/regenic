@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 38;
+export const PG_SCHEMA_VERSION = 39;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -340,6 +340,20 @@ CREATE TABLE standard_gaps (
   UNIQUE (org_id, source_kind, source_ref)
 );
 CREATE INDEX standard_gaps_query_idx ON standard_gaps (org_id, status, created_at, id);
+`,
+  },
+  {
+    version: 39,
+    sql: `
+CREATE TABLE agent_runs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'handed_off', 'cancelled')),
+  payload_json JSONB NOT NULL,
+  state_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX agent_runs_query_idx ON agent_runs (org_id, status, created_at, id);
 `,
   },
 ] as const;
@@ -847,6 +861,16 @@ CREATE TABLE standard_gaps (
   UNIQUE (org_id, source_kind, source_ref)
 );
 CREATE INDEX standard_gaps_query_idx ON standard_gaps (org_id, status, created_at, id);
+
+CREATE TABLE agent_runs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'handed_off', 'cancelled')),
+  payload_json JSONB NOT NULL,
+  state_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX agent_runs_query_idx ON agent_runs (org_id, status, created_at, id);
 
 CREATE TABLE outbound_attempts (
   org_id TEXT NOT NULL,

@@ -11,6 +11,7 @@ import {
   STANDARD_SCHEMA_VERSION,
   STANDARD_VERSION_SCHEMA_VERSION,
   STANDARD_GAP_SCHEMA_VERSION,
+  AGENT_RUN_SCHEMA_VERSION,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -44,6 +45,9 @@ import {
   type UpgradeEvidence,
   type StandardGapRecord,
   type StandardGapStatus,
+  type AgentRunOutput,
+  type AgentRunRecord,
+  type AgentRunStatus,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -651,6 +655,140 @@ export class PersonalContextService {
     }
   }
 
+  async createAgentRun(input: unknown): Promise<AgentRunRecord> {
+    const body = strictBody(input, new Set([
+      "client_request_id", "agent_id", "intent", "context_snapshot_id", "standard_bindings", "input",
+    ]));
+    const snapshotId = requiredString(body.context_snapshot_id, "context_snapshot_id");
+    if (!await this.runtime.requireHost().get("context-artifacts").getSnapshot(this.runtime.orgId(), snapshotId)) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
+    }
+    const bindings = standardBindings(body.standard_bindings);
+    if (bindings.length === 0) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "AgentRun requires at least one StandardVersion binding");
+    }
+    const runs = this.runtime.requireHost().get("agent-runs");
+    const id = `agent-run:${hashCanonicalContext([this.runtime.orgId(), requiredString(body.client_request_id, "client_request_id")])}`;
+    const existing = await runs.getAgentRun(this.runtime.orgId(), id);
+    for (const binding of bindings) {
+      const standard = await this.runtime.requireHost().get("standards").getStandard(this.runtime.orgId(), binding.standard_id);
+      const version = await this.runtime.requireHost().get("standards").getStandardVersion(this.runtime.orgId(), binding.version_id);
+      if (!standard || !version || version.standard_id !== standard.id
+        || (!existing && !["trial", "active"].includes(version.status))) {
+        throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "AgentRun binding must pin a published StandardVersion");
+      }
+    }
+    const run: AgentRunRecord = {
+      schema_version: AGENT_RUN_SCHEMA_VERSION,
+      id,
+      org_id: this.runtime.orgId(),
+      agent: { actor_type: "agent", actor_id: requiredString(body.agent_id, "agent_id") },
+      on_behalf_of: { actor_type: "human", actor_id: this.runtime.orgId() },
+      intent: requiredString(body.intent, "intent"),
+      status: "queued",
+      context_snapshot_id: snapshotId,
+      standard_bindings: bindings,
+      input: jsonObject(body.input, "input"),
+      created_at: existing?.created_at ?? new Date().toISOString(),
+    };
+    try {
+      return await runs.putAgentRun(run);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid AgentRun";
+      const status = message.includes("Cannot replace") ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
+      throw new PersonalContextError("invalid_request", status, message);
+    }
+  }
+
+  async listAgentRuns(status?: string) {
+    return this.runtime.requireHost().get("agent-runs").listAgentRuns({
+      org_id: this.runtime.orgId(),
+      ...(status ? { status: agentRunStatus(status) } : {}),
+      limit: 100,
+    });
+  }
+
+  async getAgentRun(runId: string) {
+    const run = await this.runtime.requireHost().get("agent-runs").getAgentRun(this.runtime.orgId(), requiredString(runId, "run_id"));
+    if (!run) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "AgentRun was not found");
+    return run;
+  }
+
+  async startAgentRun(runId: string) {
+    return this.mutateAgentRun(() => this.runtime.requireHost().get("agent-runs").startAgentRun({
+      org_id: this.runtime.orgId(), run_id: requiredString(runId, "run_id"),
+      started_at: new Date().toISOString(),
+    }));
+  }
+
+  async settleAgentRun(runId: string, input: unknown) {
+    const body = strictBody(input, new Set(["status", "output"]));
+    const status = requiredString(body.status, "status");
+    if (!['succeeded', 'failed'].includes(status)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "AgentRun settlement status must be succeeded or failed");
+    }
+    return this.mutateAgentRun(() => this.runtime.requireHost().get("agent-runs").settleAgentRun({
+      org_id: this.runtime.orgId(), run_id: requiredString(runId, "run_id"),
+      status: status as "succeeded" | "failed", output: agentRunOutput(body.output),
+      finished_at: new Date().toISOString(),
+    }));
+  }
+
+  async handoffAgentRun(runId: string, input: unknown) {
+    const body = strictBody(input, new Set(["reason", "payload"]));
+    const run = await this.getAgentRun(runId);
+    if (!run.on_behalf_of) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "AgentRun has no human principal for Handoff");
+    }
+    const at = new Date().toISOString();
+    const reason = handoffReason(body.reason);
+    if (!["standard_uncovered", "evidence_conflict", "permission_denied", "acceptance_failed", "escalation_boundary"].includes(reason)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "AgentRun Handoff requires an Agent-to-Human reason");
+    }
+    const handoff: HandoffRecord = {
+      schema_version: HANDOFF_SCHEMA_VERSION,
+      id: `handoff:${hashCanonicalContext([this.runtime.orgId(), run.id])}`,
+      org_id: this.runtime.orgId(),
+      direction: "agent_to_human",
+      from: run.agent,
+      to: run.on_behalf_of,
+      reason,
+      agent_run_id: run.id,
+      context_snapshot_id: run.context_snapshot_id,
+      standard_bindings: run.standard_bindings,
+      payload: handoffPayload(body.payload),
+      status: "open",
+      created_at: at,
+    };
+    try {
+      return await this.runtime.requireHost().get("agent-runs").handoffAgentRun({
+        org_id: this.runtime.orgId(), run_id: run.id, handoff, handed_off_at: at,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid AgentRun Handoff";
+      const status = message.includes("Cannot replace") ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
+      throw new PersonalContextError("invalid_request", status, message);
+    }
+  }
+
+  async cancelAgentRun(runId: string) {
+    return this.mutateAgentRun(() => this.runtime.requireHost().get("agent-runs").cancelAgentRun({
+      org_id: this.runtime.orgId(), run_id: requiredString(runId, "run_id"),
+      cancelled_at: new Date().toISOString(),
+    }));
+  }
+
+  private async mutateAgentRun(run: () => Promise<AgentRunRecord | null>): Promise<AgentRunRecord> {
+    try {
+      const result = await run();
+      if (!result) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "AgentRun was not found");
+      return result;
+    } catch (error) {
+      if (error instanceof PersonalContextError) throw error;
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error instanceof Error ? error.message : "Invalid AgentRun transition");
+    }
+  }
+
   async commitProposalStandardVersion(proposalId: string, input: unknown) {
     const body = strictBody(input, new Set([
       "slug", "title", "layer", "scope", "target_standard_id", "supersedes_version_id",
@@ -1059,6 +1197,49 @@ function standardGapStatus(value: unknown): StandardGapStatus {
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid StandardGap status");
   }
   return status as StandardGapStatus;
+}
+
+function agentRunStatus(value: unknown): AgentRunStatus {
+  const status = requiredString(value, "status");
+  if (!["queued", "running", "succeeded", "failed", "handed_off", "cancelled"].includes(status)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid AgentRun status");
+  }
+  return status as AgentRunStatus;
+}
+
+function agentRunOutput(value: unknown): AgentRunOutput {
+  const output = strictNestedBody(value, new Set([
+    "summary", "artifacts", "applied_standard_version_ids", "context_snapshot_id",
+    "acceptance_check", "exceptions", "confidence",
+  ]), "output");
+  if (!Array.isArray(output.artifacts)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "output.artifacts must be an array");
+  }
+  const confidence = output.confidence;
+  if (confidence !== undefined && (typeof confidence !== "number"
+    || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "output.confidence must be between 0 and 1");
+  }
+  const acceptanceCheck = requiredString(output.acceptance_check, "acceptance_check");
+  if (!["pass", "fail", "not_applicable"].includes(acceptanceCheck)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid AgentRun acceptance_check");
+  }
+  return {
+    summary: requiredString(output.summary, "output.summary"),
+    artifacts: output.artifacts.map((artifact) => jsonObject(artifact, "output artifact")),
+    applied_standard_version_ids: stringArray(output.applied_standard_version_ids, "applied_standard_version_ids"),
+    context_snapshot_id: requiredString(output.context_snapshot_id, "output.context_snapshot_id"),
+    acceptance_check: acceptanceCheck as AgentRunOutput["acceptance_check"],
+    exceptions: stringArray(output.exceptions, "exceptions"),
+    ...(confidence === undefined ? {} : { confidence }),
+  };
+}
+
+function jsonObject(value: unknown, name: string): Record<string, JsonValue> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be an object`);
+  }
+  return value as Record<string, JsonValue>;
 }
 
 function standardScope(value: unknown, orgId: string): StandardScope {

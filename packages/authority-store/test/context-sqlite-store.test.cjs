@@ -691,6 +691,85 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("persists AgentRun outcomes and atomically hands off a running agent", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const run = {
+      schema_version: "1.0", id: "agent-run-1", org_id: "example-org",
+      agent: { actor_type: "agent", actor_id: "agent-1" },
+      on_behalf_of: { actor_type: "human", actor_id: "person-1" },
+      intent: "Apply the release standard.", status: "queued",
+      context_snapshot_id: "snapshot-1",
+      standard_bindings: [{ standard_id: "standard-1", version_id: "version-1" }],
+      input: { release_id: "release-1" }, created_at: "2026-09-21T00:00:00.000Z",
+    };
+    const output = {
+      summary: "The release check passed.", artifacts: [{ kind: "report", ref: "artifact-1" }],
+      applied_standard_version_ids: ["version-1"], context_snapshot_id: "snapshot-1",
+      acceptance_check: "pass", exceptions: [], confidence: 0.9,
+    };
+    const store = new SqliteAuthorityStore(path);
+    assert.deepEqual(await store.putAgentRun(run), run);
+    assert.equal((await store.putAgentRun({ ...run, created_at: "2026-09-21T00:00:01.000Z" })).created_at, run.created_at);
+    await assert.rejects(store.putAgentRun({ ...run, intent: "Changed after queue." }), /Cannot replace immutable AgentRun/);
+    assert.equal((await store.startAgentRun({
+      org_id: "example-org", run_id: run.id, started_at: "2026-09-21T01:00:00.000Z",
+    })).status, "running");
+    assert.equal((await store.startAgentRun({
+      org_id: "example-org", run_id: run.id, started_at: "2026-09-21T01:01:00.000Z",
+    })).started_at, "2026-09-21T01:00:00.000Z");
+    const succeeded = await store.settleAgentRun({
+      org_id: "example-org", run_id: run.id, status: "succeeded", output,
+      finished_at: "2026-09-21T02:00:00.000Z",
+    });
+    assert.equal(succeeded.status, "succeeded");
+    assert.equal((await store.settleAgentRun({
+      org_id: "example-org", run_id: run.id, status: "succeeded", output,
+      finished_at: "2026-09-21T02:01:00.000Z",
+    })).finished_at, succeeded.finished_at);
+    await assert.rejects(store.settleAgentRun({
+      org_id: "example-org", run_id: run.id, status: "failed",
+      output: { ...output, acceptance_check: "fail" }, finished_at: "2026-09-21T03:00:00.000Z",
+    }), /Invalid AgentRun settlement/);
+    const cancelledRun = { ...run, id: "agent-run-cancelled", input: { release_id: "release-2" } };
+    await store.putAgentRun(cancelledRun);
+    assert.equal((await store.cancelAgentRun({
+      org_id: "example-org", run_id: cancelledRun.id, cancelled_at: "2026-09-21T00:30:00.000Z",
+    })).status, "cancelled");
+    store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    const handedOffRun = { ...run, id: "agent-run-handoff", input: { release_id: "release-3" } };
+    await split.putAgentRun(handedOffRun);
+    await split.startAgentRun({
+      org_id: "example-org", run_id: handedOffRun.id, started_at: "2026-09-21T01:00:00.000Z",
+    });
+    const handoff = {
+      schema_version: "1.0", id: "agent-run-handoff-1", org_id: "example-org",
+      direction: "agent_to_human", from: handedOffRun.agent,
+      to: { actor_type: "human", actor_id: "person-1" }, reason: "evidence_conflict",
+      agent_run_id: handedOffRun.id, context_snapshot_id: handedOffRun.context_snapshot_id,
+      standard_bindings: handedOffRun.standard_bindings,
+      payload: { summary: "Two claims disagree." }, status: "open",
+      created_at: "2026-09-21T02:00:00.000Z",
+    };
+    const handedOff = await split.handoffAgentRun({
+      org_id: "example-org", run_id: handedOffRun.id, handoff,
+      handed_off_at: handoff.created_at,
+    });
+    assert.equal(handedOff.run.status, "handed_off");
+    assert.equal(handedOff.run.handoff_id, handoff.id);
+    assert.equal((await split.getHandoff("example-org", handoff.id)).agent_run_id, handedOffRun.id);
+    assert.equal((await split.handoffAgentRun({
+      org_id: "example-org", run_id: handedOffRun.id,
+      handoff: { ...handoff, created_at: "2026-09-21T02:01:00.000Z" },
+      handed_off_at: "2026-09-21T02:01:00.000Z",
+    })).handoff.created_at, handoff.created_at);
+    assert.deepEqual((await split.listAgentRuns({ org_id: "example-org", status: "handed_off" })).map(({ id }) => id), [handedOffRun.id]);
+    assert.equal((await split.listAgentRuns({ org_id: "other-org" })).length, 0);
+    await split.close();
+  });
+
   it("leases, retries, reclaims, and completes projection jobs across restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
@@ -1160,6 +1239,7 @@ describe("SQLite context artifact store", () => {
     assert.equal(host.get("authority"), host.get("handoffs"));
     assert.equal(host.get("authority"), host.get("standards"));
     assert.equal(host.get("authority"), host.get("standard-gaps"));
+    assert.equal(host.get("authority"), host.get("agent-runs"));
     assert.deepEqual(
       await host.get("context-artifacts").getArtifact("example-org", "artifact-1"),
       artifactValue,
@@ -1171,6 +1251,7 @@ describe("SQLite context artifact store", () => {
     assert.throws(() => host.get("handoffs"), /Service is not available/);
     assert.throws(() => host.get("standards"), /Service is not available/);
     assert.throws(() => host.get("standard-gaps"), /Service is not available/);
+    assert.throws(() => host.get("agent-runs"), /Service is not available/);
     await host.dispose();
   });
 

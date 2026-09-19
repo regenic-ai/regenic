@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpException,
+  HttpCode,
   HttpStatus,
   Inject,
   Param,
@@ -248,6 +249,42 @@ export class PersonalContextController {
   @Post("handoffs/:handoffId/cancel")
   cancelHandoff(@Param("handoffId") handoffId: string) {
     return this.guard(() => this.context.transitionHandoff(handoffId, "cancelled"));
+  }
+
+  @Post("runs")
+  @HttpCode(HttpStatus.ACCEPTED)
+  createAgentRun(@Body() body: unknown) {
+    return this.guard(() => this.context.createAgentRun(body));
+  }
+
+  @Get("runs")
+  listAgentRuns(@Query("status") status?: string) {
+    return this.guard(() => this.context.listAgentRuns(status));
+  }
+
+  @Get("runs/:runId")
+  getAgentRun(@Param("runId") runId: string) {
+    return this.guard(() => this.context.getAgentRun(runId));
+  }
+
+  @Post("runs/:runId/start")
+  startAgentRun(@Param("runId") runId: string) {
+    return this.guard(() => this.context.startAgentRun(runId));
+  }
+
+  @Post("runs/:runId/complete")
+  settleAgentRun(@Param("runId") runId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.settleAgentRun(runId, body));
+  }
+
+  @Post("runs/:runId/handoff")
+  handoffAgentRun(@Param("runId") runId: string, @Body() body: unknown) {
+    return this.guard(() => this.context.handoffAgentRun(runId, body));
+  }
+
+  @Post("runs/:runId/cancel")
+  cancelAgentRun(@Param("runId") runId: string) {
+    return this.guard(() => this.context.cancelAgentRun(runId));
   }
 
   @Post("artifacts/:artifactId/decision")
