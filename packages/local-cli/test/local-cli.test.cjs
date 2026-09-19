@@ -47,6 +47,7 @@ describe("regenic-local", () => {
     const upgradeEvidencePath = join(root, "upgrade-evidence.json");
     const deprecationEvidencePath = join(root, "deprecation-evidence.json");
     const agentRunOutputPath = join(root, "agent-run-output.json");
+    const agentRunFailureOutputPath = join(root, "agent-run-failure-output.json");
     const authority = new SqliteAuthorityStore(database);
     const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
     const ingested = await ingestion.ingest({
@@ -441,6 +442,61 @@ describe("regenic-local", () => {
     const convertedRunGap = await run(runGapConversionArgs);
     assert.equal(convertedRunGap.gap.status, "converted");
     assert.equal(convertedRunGap.proposal.kind, "revise_standard");
+
+    await writeFile(agentRunFailureOutputPath, JSON.stringify({
+      summary: "The release standard acceptance check failed.",
+      artifacts: [],
+      applied_standard_version_ids: [revisionCommit.version.id],
+      context_snapshot_id: assembled.snapshot.id,
+      acceptance_check: "fail",
+      exceptions: ["Acceptance failed."],
+    }), "utf8");
+    const driftRunIds = [];
+    for (const suffix of ["one", "two", "three"]) {
+      const driftRunArgs = [...runArgs];
+      driftRunArgs[driftRunArgs.indexOf("--request") + 1] = `agent-run-drift-${suffix}`;
+      driftRunArgs[driftRunArgs.indexOf("--input") + 1] = JSON.stringify({ release_id: `release-drift-${suffix}` });
+      const driftRun = await run(driftRunArgs);
+      driftRunIds.push(driftRun.id);
+      await run(["context-run-start", ...common, "--run", driftRun.id]);
+      assert.equal((await run([
+        "context-run-complete", ...common,
+        "--run", driftRun.id, "--status", "failed", "--output", agentRunFailureOutputPath,
+      ])).status, "failed");
+      const scan = await run(["context-run-drift-scan", ...common, "--minimum-failures", "2"]);
+      if (suffix === "one") assert.deepEqual(scan, []);
+    }
+    await assert.rejects(run(["context-run-drift-scan", ...common, "--minimum-failures", "1"]), /must be from 2 to 20/);
+    const [driftReview] = await run(["context-run-drift-scan", ...common]);
+    assert.equal(driftReview.subject_kind, "standard_version");
+    assert.equal(driftReview.subject_id, revisionCommit.version.id);
+    assert.deepEqual(driftReview.evidence.map(({ uri_or_ref }) => uri_or_ref), driftRunIds.slice(0, 2).map((id) => `agent-run:${id}`));
+    assert.equal((await run(["context-run-drift-scan", ...common]))[0].id, driftReview.id);
+    const [higherThresholdReview] = await run(["context-run-drift-scan", ...common, "--minimum-failures", "3"]);
+    assert.notEqual(higherThresholdReview.id, driftReview.id);
+    assert.deepEqual(higherThresholdReview.evidence.map(({ uri_or_ref }) => uri_or_ref), driftRunIds.map((id) => `agent-run:${id}`));
+    const driftGap = await run([
+      "context-standard-gap-from-review", ...common,
+      "--review", driftReview.id,
+      "--summary", "Repeated Run failures indicate Standard drift.",
+      "--uncertainty", "Can revised acceptance prevent repeated failures?",
+    ]);
+    const driftConversionArgs = [
+      "context-standard-gap-convert", ...common,
+      "--gap", driftGap.id,
+      "--kind", "revise_standard",
+      "--title", "Revise drifting release standard",
+      "--proposal-summary", "Revise after repeated acceptance failures.",
+      "--boundary", "Release governance only",
+      "--snapshot", assembled.snapshot.id,
+      "--event", ingested.records[0].event_id,
+      "--standard", standardCommit.standard.id,
+      "--version", revisionCommit.version.id,
+    ];
+    const wrongDriftBinding = [...driftConversionArgs];
+    wrongDriftBinding[wrongDriftBinding.indexOf("--version") + 1] = standardCommit.version.id;
+    await assert.rejects(run(wrongDriftBinding), /outside the reviewed StandardVersion/);
+    assert.equal((await run(driftConversionArgs)).proposal.standard_bindings[0].version_id, revisionCommit.version.id);
 
     const handoffRun = await run([
       ...runArgs.slice(0, runArgs.indexOf("--request") + 1), "agent-run-handoff",

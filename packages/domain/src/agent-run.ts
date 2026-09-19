@@ -45,7 +45,12 @@ export interface AgentRunRecord {
 export interface AgentRunStore {
   putAgentRun(run: AgentRunRecord): Promise<AgentRunRecord>;
   getAgentRun(orgId: string, runId: string): Promise<AgentRunRecord | null>;
-  listAgentRuns(input: { org_id: string; status?: AgentRunStatus; limit?: number }): Promise<AgentRunRecord[]>;
+  listAgentRuns(input: {
+    org_id: string;
+    status?: AgentRunStatus;
+    newest_first?: boolean;
+    limit?: number;
+  }): Promise<AgentRunRecord[]>;
   startAgentRun(input: { org_id: string; run_id: string; started_at: string }): Promise<AgentRunRecord | null>;
   settleAgentRun(input: {
     org_id: string;

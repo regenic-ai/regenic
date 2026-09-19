@@ -12,12 +12,14 @@ import {
   STANDARD_VERSION_SCHEMA_VERSION,
   STANDARD_GAP_SCHEMA_VERSION,
   AGENT_RUN_SCHEMA_VERSION,
+  STANDARD_DRIFT_DETECTOR_VERSION,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
   validateStandardScope,
   validateTrialConfig,
   validateUpgradeEvidence,
+  detectStandardDrift,
   type ContextBundle,
   type ContextArtifact,
   type ContextReplayRequest,
@@ -476,6 +478,52 @@ export class PersonalContextService {
     });
   }
 
+  async scanStandardDrift(input: unknown) {
+    const body = strictBody(input, new Set(["minimum_failures"]));
+    const minimumFailures = optionalSafeInteger(body.minimum_failures, "minimum_failures", 2, 2, 20);
+    const runs = await this.runtime.requireHost().get("agent-runs").listAgentRuns({
+      org_id: this.runtime.orgId(), status: "failed", newest_first: true, limit: 100,
+    });
+    const reviews = this.runtime.requireHost().get("reviews");
+    const detected: ReviewRecord[] = [];
+    for (const candidate of detectStandardDrift(runs, minimumFailures)) {
+      const version = await this.runtime.requireHost().get("standards").getStandardVersion(this.runtime.orgId(), candidate.version_id);
+      if (!version || version.standard_id !== candidate.standard_id || !["trial", "active"].includes(version.status)) continue;
+      const id = `review:${hashCanonicalContext([
+        this.runtime.orgId(), STANDARD_DRIFT_DETECTOR_VERSION, minimumFailures, candidate.version_id,
+      ])}`;
+      const existing = await reviews.getReview(this.runtime.orgId(), id);
+      if (existing) {
+        detected.push(existing);
+        continue;
+      }
+      try {
+        detected.push(await reviews.putReview({
+        schema_version: REVIEW_SCHEMA_VERSION,
+        id,
+        org_id: this.runtime.orgId(),
+        subject_kind: "standard_version",
+        subject_id: candidate.version_id,
+        result: "falsified",
+        severity: "bad_news",
+        evidence: candidate.run_ids.map((runId) => ({
+          kind: "document" as const, uri_or_ref: `agent-run:${runId}`,
+        })),
+        context_snapshot_id: candidate.context_snapshot_id,
+        recommended_action: "revise_standard",
+        author: { actor_type: "system", actor_id: STANDARD_DRIFT_DETECTOR_VERSION },
+          created_at: candidate.detected_at,
+        }));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("Cannot replace immutable Review")) {
+          throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, error.message);
+        }
+        throw error;
+      }
+    }
+    return detected;
+  }
+
   async getReview(reviewId: string) {
     const review = await this.runtime.requireHost().get("reviews").getReview(this.runtime.orgId(), requiredString(reviewId, "review_id"));
     if (!review) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Review was not found");
@@ -570,6 +618,9 @@ export class PersonalContextService {
         )) {
           throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Revision target is outside the reviewed Decision bindings");
         }
+      }
+      if (sourceReview?.subject_kind === "standard_version" && sourceReview.subject_id !== version.id) {
+        throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Revision target is outside the reviewed StandardVersion");
       }
       if (gap.status === "open"
         && (standard.current_version_id !== version.id || ["draft", "deprecated"].includes(version.status))) {
@@ -1416,6 +1467,20 @@ function requiredBoolean(value: unknown, name: string): boolean {
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be boolean`);
   }
   return value;
+}
+
+function optionalSafeInteger(
+  value: unknown,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value as number;
 }
 
 function proposalEvidence(value: unknown): ProposalRecord["evidence"] {

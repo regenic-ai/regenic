@@ -29,12 +29,14 @@ import {
   STANDARD_VERSION_SCHEMA_VERSION,
   STANDARD_GAP_SCHEMA_VERSION,
   AGENT_RUN_SCHEMA_VERSION,
+  STANDARD_DRIFT_DETECTOR_VERSION,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
   validateStandardScope,
   validateTrialConfig,
   validateUpgradeEvidence,
+  detectStandardDrift,
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
@@ -328,8 +330,11 @@ export async function runLocalCli(
     case "context-run-reviews":
       await listAgentRunReviews(commandOptions, stdout);
       return;
+    case "context-run-drift-scan":
+      await scanStandardDriftCommand(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan");
   }
 }
 
@@ -1595,6 +1600,44 @@ async function listAgentRunReviews(options: CommandOptions, stdout: CliOutput): 
   });
 }
 
+async function scanStandardDriftCommand(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const minimumFailures = requirePositiveInteger(options, "minimum-failures", 2);
+  if (minimumFailures < 2 || minimumFailures > 20) throw new Error("--minimum-failures must be from 2 to 20");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const runs = await host.get("agent-runs").listAgentRuns({
+      org_id: orgId, status: "failed", newest_first: true, limit: 100,
+    });
+    const reviews = host.get("reviews");
+    const detected: ReviewRecord[] = [];
+    for (const candidate of detectStandardDrift(runs, minimumFailures)) {
+      const version = await host.get("standards").getStandardVersion(orgId, candidate.version_id);
+      if (!version || version.standard_id !== candidate.standard_id || !["trial", "active"].includes(version.status)) continue;
+      const id = `review:${hashCanonicalContext([orgId, STANDARD_DRIFT_DETECTOR_VERSION, minimumFailures, candidate.version_id])}`;
+      const existing = await reviews.getReview(orgId, id);
+      if (existing) {
+        detected.push(existing);
+        continue;
+      }
+      detected.push(await reviews.putReview({
+        schema_version: REVIEW_SCHEMA_VERSION,
+        id,
+        org_id: orgId,
+        subject_kind: "standard_version",
+        subject_id: candidate.version_id,
+        result: "falsified",
+        severity: "bad_news",
+        evidence: candidate.run_ids.map((runId) => ({ kind: "document", uri_or_ref: `agent-run:${runId}` })),
+        context_snapshot_id: candidate.context_snapshot_id,
+        recommended_action: "revise_standard",
+        author: { actor_type: "system", actor_id: STANDARD_DRIFT_DETECTOR_VERSION },
+        created_at: candidate.detected_at,
+      }));
+    }
+    writeJson(stdout, detected);
+  });
+}
+
 async function getReview(options: CommandOptions, stdout: CliOutput): Promise<void> {
   const orgId = requireOption(options, "org");
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
@@ -2091,6 +2134,9 @@ async function convertStandardGap(options: CommandOptions, stdout: CliOutput, no
         if (!sourceDecision || !sourceDecision.standard_bindings.some((binding) =>
           binding.standard_id === standard.id && binding.version_id === version.id
         )) throw new Error("Revision target is outside the reviewed Decision bindings");
+      }
+      if (sourceReview?.subject_kind === "standard_version" && sourceReview.subject_id !== version.id) {
+        throw new Error("Revision target is outside the reviewed StandardVersion");
       }
       if (gap.status === "open"
         && (standard.current_version_id !== version.id || ["draft", "deprecated"].includes(version.status))) {

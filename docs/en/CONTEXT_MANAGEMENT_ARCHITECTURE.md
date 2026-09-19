@@ -794,10 +794,10 @@ artifact list and acceptance check, and cannot be replaced by a changed retry.
 
 When a running agent reaches a boundary, one operation atomically creates an
 Agent-to-Human Handoff and marks the Run `handed_off`. The Handoff must carry
-the same agent, `on_behalf_of` human, Run ID, snapshot, and bindings. Continuing requires resolving
-the Handoff and creating a new Run with explicit bindings; ordinary chat or
-Event ingestion never starts, completes, or resumes a Run. The current slice
-does not dispatch queued Runs to an executor.
+the same agent, `on_behalf_of` human, Run ID, snapshot, and bindings.
+Continuing requires resolving the Handoff and creating a new Run with explicit
+bindings; ordinary chat or Event ingestion never starts, completes, or resumes
+a Run. The current slice does not dispatch queued Runs to an executor.
 
 A terminal Run may be reviewed through the same immutable Review authority
 used for Decisions. Queued and running Runs cannot be reviewed. The service
@@ -809,6 +809,18 @@ may be explicitly converted through the existing Review-to-StandardGap path.
 That conversion preserves the Review snapshot, and a revision target must
 appear in the reviewed Run or Decision bindings. Neither a failed acceptance
 check nor a Review silently opens a Gap or changes a Standard.
+
+An explicit, bounded drift scan evaluates the latest 100 failed AgentRuns with
+the same deterministic domain function in the API and CLI. By default, the
+first two Runs whose `acceptance_check` is `fail` on one exact
+StandardVersion produce one system-authored, bad-news Review. The threshold is
+configurable from 2 through 20 and contributes to the Review identity, so
+different thresholds cannot overwrite or reuse one another. Input order does
+not affect the result, and the first threshold evidence set is frozen so later
+failures do not replace the immutable Review. Deprecated or draft versions do
+not trigger new drift Reviews. The Review may enter the explicit StandardGap
+workflow, where a revision must target that reviewed StandardVersion; scanning
+itself never creates a Gap or modifies a Standard.
 
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.

@@ -1618,8 +1618,11 @@ export class PostgresAuthorityStore
     return row ? toAgentRun(row) : null;
   }
 
-  async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; limit?: number }): Promise<AgentRunRecord[]> {
-    const rows = await this.query<AgentRunRow>(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = $1 ${input.status ? "AND status = $2" : ""} ORDER BY created_at, id LIMIT $${input.status ? 3 : 2}`, input.status ? [input.org_id, input.status, input.limit ?? 100] : [input.org_id, input.limit ?? 100]);
+  async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; newest_first?: boolean; limit?: number }): Promise<AgentRunRecord[]> {
+    const order = input.newest_first
+      ? "ORDER BY (state_json->>'finished_at')::timestamptz DESC NULLS LAST, id DESC"
+      : "ORDER BY created_at, id";
+    const rows = await this.query<AgentRunRow>(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = $1 ${input.status ? "AND status = $2" : ""} ${order} LIMIT $${input.status ? 3 : 2}`, input.status ? [input.org_id, input.status, input.limit ?? 100] : [input.org_id, input.limit ?? 100]);
     return rows.map(toAgentRun);
   }
 

@@ -736,6 +736,24 @@ describe("SQLite context artifact store", () => {
     assert.equal((await store.cancelAgentRun({
       org_id: "example-org", run_id: cancelledRun.id, cancelled_at: "2026-09-21T00:30:00.000Z",
     })).status, "cancelled");
+    for (const [id, finishedAt] of [
+      ["agent-run-failed-old", "2026-09-21T03:00:00.000Z"],
+      ["agent-run-failed-new", "2026-09-22T03:00:00.000Z"],
+    ]) {
+      const failedRun = { ...run, id, input: { release_id: id } };
+      await store.putAgentRun(failedRun);
+      await store.startAgentRun({
+        org_id: "example-org", run_id: id, started_at: "2026-09-21T01:00:00.000Z",
+      });
+      await store.settleAgentRun({
+        org_id: "example-org", run_id: id, status: "failed",
+        output: { ...output, summary: "The release check failed.", acceptance_check: "fail" },
+        finished_at: finishedAt,
+      });
+    }
+    assert.deepEqual((await store.listAgentRuns({
+      org_id: "example-org", status: "failed", newest_first: true, limit: 1,
+    })).map(({ id }) => id), ["agent-run-failed-new"]);
     store.close();
 
     const split = await SqliteSplitAuthorityStore.open(path);

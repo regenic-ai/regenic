@@ -676,9 +676,8 @@ check，且 changed retry 不能替换 terminal outcome。
 
 运行中的 agent 撞到边界时，一个操作会原子创建 Agent-to-Human Handoff，并将 Run 标为
 `handed_off`。Handoff 必须携带同一 agent、`on_behalf_of` human、Run ID、snapshot 与
-bindings。继续执行需要先解决
-Handoff，再以显式 bindings 创建新 Run；普通聊天或 Event ingestion 永远不会启动、完成或恢复
-Run。当前 slice 不会把 queued Run 分发给 executor。
+bindings。继续执行需要先解决 Handoff，再以显式 bindings 创建新 Run；普通聊天或 Event
+ingestion 永远不会启动、完成或恢复 Run。当前 slice 不会把 queued Run 分发给 executor。
 
 Terminal Run 可通过与 Decision 相同的 immutable Review authority 接受评审；queued 与 running
 Run 不可评审。服务端固定 Run ID 与 ContextSnapshot，前置加入 `agent-run:<id>` evidence
@@ -687,6 +686,14 @@ reference，并要求调用方提供该 snapshot 已选择的非 `other` Event e
 且推荐 `open_gap` 或 `revise_standard` 时，可显式进入已有 Review-to-StandardGap 路径。该转换
 必须保留 Review snapshot，revision target 也必须存在于被评审 Run 或 Decision 的 bindings 中。
 Acceptance check 失败或生成 Review 都不会静默创建 Gap，也不会修改 Standard。
+
+显式、有界的 drift scan 在 API 与 CLI 中调用同一确定性 domain 函数，检查最近 100 条 failed
+AgentRun。默认情况下，同一精确 StandardVersion 上最早两条 `acceptance_check=fail` 的 Run
+会生成一条 system-authored bad-news Review；阈值可配置为 2 到 20，并参与 Review identity，
+因此不同阈值不会覆盖或复用彼此的 Review。输入顺序不影响结果，最早达到阈值的 evidence set
+会被冻结，后续失败不能替换 immutable Review。Draft 或 deprecated version 不会触发新的
+drift Review。Review 可进入显式 StandardGap workflow，且 revision 必须以该被评审
+StandardVersion 为目标；scan 本身不会创建 Gap 或修改 Standard。
 
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。

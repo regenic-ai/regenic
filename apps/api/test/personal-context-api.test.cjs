@@ -583,6 +583,67 @@ describe("personal context API", () => {
     assert.equal(runGapConversion.proposal.kind, "revise_standard");
     assert.equal(runGapConversion.proposal.gap_id, runGap.id);
 
+    const failedRunIds = [];
+    for (const suffix of ["one", "two", "three"]) {
+      const failedRun = JSON.parse((await postJson(`${origin}/v1/me/context/runs`, {
+        ...runBody,
+        client_request_id: `agent-run-drift-${suffix}`,
+        input: { release_id: `release-drift-${suffix}` },
+      })).text);
+      failedRunIds.push(failedRun.id);
+      await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(failedRun.id)}/start`, {});
+      const failed = await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(failedRun.id)}/complete`, {
+        status: "failed",
+        output: {
+          summary: "The release standard acceptance check failed.",
+          artifacts: [],
+          applied_standard_version_ids: [revision.version.id],
+          context_snapshot_id: snapshotId,
+          acceptance_check: "fail",
+          exceptions: ["Acceptance failed."],
+        },
+      });
+      assert.equal(JSON.parse(failed.text).status, "failed");
+      const scan = await postJson(`${origin}/v1/me/context/runs/drift-scan`, { minimum_failures: 2 });
+      assert.equal(scan.response.status, 201);
+      if (suffix === "one") assert.deepEqual(JSON.parse(scan.text), []);
+    }
+    assert.equal((await postJson(`${origin}/v1/me/context/runs/drift-scan`, { minimum_failures: 1 })).response.status, 400);
+    const [driftReview] = JSON.parse((await postJson(`${origin}/v1/me/context/runs/drift-scan`, {
+      minimum_failures: 2,
+    })).text);
+    assert.equal(driftReview.subject_kind, "standard_version");
+    assert.equal(driftReview.subject_id, revision.version.id);
+    assert.equal(driftReview.severity, "bad_news");
+    assert.equal(driftReview.author.actor_type, "system");
+    assert.deepEqual(driftReview.evidence.map(({ uri_or_ref }) => uri_or_ref), failedRunIds.slice(0, 2).map((id) => `agent-run:${id}`));
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/drift-scan`, {})).text)[0].id, driftReview.id);
+    const [higherThresholdReview] = JSON.parse((await postJson(`${origin}/v1/me/context/runs/drift-scan`, {
+      minimum_failures: 3,
+    })).text);
+    assert.notEqual(higherThresholdReview.id, driftReview.id);
+    assert.deepEqual(higherThresholdReview.evidence.map(({ uri_or_ref }) => uri_or_ref), failedRunIds.map((id) => `agent-run:${id}`));
+    const driftGap = JSON.parse((await postJson(`${origin}/v1/me/context/reviews/${encodeURIComponent(driftReview.id)}/standard-gap`, {
+      summary: "Repeated Run failures indicate Standard drift.",
+      proposed_uncertainty: "Can revised acceptance prevent repeated failures?",
+    })).text);
+    const driftConversionBody = {
+      kind: "revise_standard",
+      title: "Revise drifting release standard",
+      summary: "Revise the standard after repeated acceptance failures.",
+      rights_level: "coach",
+      boundary: "Release governance only",
+      context_snapshot_id: snapshotId,
+      standard_id: first.standard.id,
+      version_id: revision.version.id,
+      evidence: [{ kind: "data", uri_or_ref: `event:${eventId}` }],
+    };
+    assert.equal((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(driftGap.id)}/proposal`, {
+      ...driftConversionBody, version_id: first.version.id,
+    })).response.status, 409);
+    const driftConversion = JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(driftGap.id)}/proposal`, driftConversionBody)).text);
+    assert.equal(driftConversion.proposal.standard_bindings[0].version_id, revision.version.id);
+
     const handoffRun = JSON.parse((await postJson(`${origin}/v1/me/context/runs`, {
       ...runBody, client_request_id: "agent-run-handoff", input: { release_id: "release-2" },
     })).text);
