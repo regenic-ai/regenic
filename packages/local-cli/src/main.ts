@@ -322,8 +322,14 @@ export async function runLocalCli(
     case "context-run-cancel":
       await cancelAgentRunCommand(commandOptions, stdout, now);
       return;
+    case "context-review-new-run":
+      await createAgentRunReview(commandOptions, stdout, now);
+      return;
+    case "context-run-reviews":
+      await listAgentRunReviews(commandOptions, stdout);
+      return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-decision-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel");
   }
 }
 
@@ -1533,6 +1539,62 @@ async function listDecisionReviews(options: CommandOptions, stdout: CliOutput): 
   });
 }
 
+async function createAgentRunReview(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const runId = requireOption(options, "run");
+    const run = await host.get("agent-runs").getAgentRun(orgId, runId);
+    if (!run) throw new Error("AgentRun was not found");
+    if (["queued", "running"].includes(run.status)) throw new Error("AgentRun must be terminal before Review");
+    const snapshot = await host.get("context-artifacts").getSnapshot(orgId, run.context_snapshot_id);
+    if (!snapshot) throw new Error("AgentRun ContextSnapshot was not found");
+    const eventId = requireOption(options, "event");
+    if (!await host.get("authority").getEvent(orgId, eventId)) throw new Error("Review evidence Event was not found");
+    if (!snapshot.selected.some((reference) => reference.kind === "event" && reference.resource_id === eventId)) {
+      throw new Error("Review evidence Event is outside the AgentRun snapshot");
+    }
+    const result = requireOption(options, "result");
+    if (!["validated", "falsified", "inconclusive"].includes(result)) throw new Error("Invalid Review result");
+    const severity = optionString(options, "severity") ?? "normal";
+    if (!["normal", "bad_news"].includes(severity)) throw new Error("Invalid Review severity");
+    const action = optionString(options, "action") ?? "none";
+    if (!["solidify", "revise_standard", "open_gap", "none"].includes(action)) throw new Error("Invalid Review action");
+    const evidenceKind = optionString(options, "evidence-kind") ?? "document";
+    if (!["data", "demo", "user_quote", "document", "other"].includes(evidenceKind)) throw new Error("Invalid Review evidence kind");
+    if (evidenceKind === "other") throw new Error("AgentRun Review requires non-other Event evidence from its snapshot");
+    const reviews = host.get("reviews");
+    const id = `review:${hashCanonicalContext([orgId, run.id, requireOption(options, "request")])}`;
+    const existing = await reviews.getReview(orgId, id);
+    const review: ReviewRecord = {
+      schema_version: REVIEW_SCHEMA_VERSION,
+      id,
+      org_id: orgId,
+      subject_kind: "agent_run",
+      subject_id: run.id,
+      result: result as ReviewRecord["result"],
+      severity: severity as ReviewRecord["severity"],
+      evidence: [
+        { kind: "document", uri_or_ref: `agent-run:${run.id}` },
+        { kind: evidenceKind as ReviewRecord["evidence"][number]["kind"], uri_or_ref: `event:${eventId}` },
+      ],
+      context_snapshot_id: run.context_snapshot_id,
+      recommended_action: action as ReviewRecord["recommended_action"],
+      author: { actor_type: "human", actor_id: orgId },
+      created_at: existing?.created_at ?? now(),
+    };
+    writeJson(stdout, await reviews.putReview(review));
+  });
+}
+
+async function listAgentRunReviews(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const runId = requireOption(options, "run");
+    if (!await host.get("agent-runs").getAgentRun(orgId, runId)) throw new Error("AgentRun was not found");
+    writeJson(stdout, await host.get("reviews").listReviews({ org_id: orgId, subject_id: runId, limit: 100 }));
+  });
+}
+
 async function getReview(options: CommandOptions, stdout: CliOutput): Promise<void> {
   const orgId = requireOption(options, "org");
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
@@ -1997,6 +2059,13 @@ async function convertStandardGap(options: CommandOptions, stdout: CliOutput, no
     const gap = await host.get("standard-gaps").getStandardGap(orgId, requireOption(options, "gap"));
     if (!gap) throw new Error("StandardGap was not found");
     const snapshotId = requireOption(options, "snapshot");
+    const sourceReview = gap.source_kind === "review"
+      ? await host.get("reviews").getReview(orgId, gap.source_ref)
+      : null;
+    if (gap.source_kind === "review" && !sourceReview) throw new Error("Source Review was not found");
+    if (sourceReview && sourceReview.context_snapshot_id !== snapshotId) {
+      throw new Error("Review-sourced StandardGap must preserve the Review snapshot");
+    }
     if (!await host.get("context-artifacts").getSnapshot(orgId, snapshotId)) throw new Error("Context snapshot was not found");
     const eventId = requireOption(options, "event");
     if (!await host.get("authority").getEvent(orgId, eventId)) throw new Error("Proposal evidence Event was not found");
@@ -2010,6 +2079,18 @@ async function convertStandardGap(options: CommandOptions, stdout: CliOutput, no
       const version = await host.get("standards").getStandardVersion(orgId, versionId);
       if (!standard || !version || version.standard_id !== standard.id) {
         throw new Error("Revision StandardVersion was not found");
+      }
+      if (sourceReview?.subject_kind === "agent_run") {
+        const sourceRun = await host.get("agent-runs").getAgentRun(orgId, sourceReview.subject_id);
+        if (!sourceRun || !sourceRun.standard_bindings.some((binding) =>
+          binding.standard_id === standard.id && binding.version_id === version.id
+        )) throw new Error("Revision target is outside the reviewed AgentRun bindings");
+      }
+      if (sourceReview?.subject_kind === "decision") {
+        const sourceDecision = await host.get("decisions").getDecision(orgId, sourceReview.subject_id);
+        if (!sourceDecision || !sourceDecision.standard_bindings.some((binding) =>
+          binding.standard_id === standard.id && binding.version_id === version.id
+        )) throw new Error("Revision target is outside the reviewed Decision bindings");
       }
       if (gap.status === "open"
         && (standard.current_version_id !== version.id || ["draft", "deprecated"].includes(version.status))) {

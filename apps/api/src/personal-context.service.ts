@@ -412,6 +412,70 @@ export class PersonalContextService {
     });
   }
 
+  async createAgentRunReview(runId: string, input: unknown): Promise<ReviewRecord> {
+    const body = strictBody(input, new Set([
+      "client_request_id", "result", "severity", "evidence", "recommended_action",
+    ]));
+    const run = await this.getAgentRun(runId);
+    if (["queued", "running"].includes(run.status)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "AgentRun must be terminal before Review");
+    }
+    const snapshot = await this.runtime.requireHost().get("context-artifacts").getSnapshot(this.runtime.orgId(), run.context_snapshot_id);
+    if (!snapshot) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "AgentRun ContextSnapshot was not found");
+    const pinnedEventIds = new Set(snapshot.selected
+      .filter((reference) => reference.kind === "event")
+      .map((reference) => reference.resource_id));
+    const evidence = proposalEvidence(body.evidence);
+    let hasPinnedNonOtherEvent = false;
+    for (const item of evidence) {
+      if (!item.uri_or_ref.startsWith("event:")) continue;
+      const eventId = item.uri_or_ref.slice("event:".length);
+      if (!eventId || !await this.runtime.requireHost().get("authority").getEvent(this.runtime.orgId(), eventId)) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Review evidence Event was not found");
+      }
+      if (!pinnedEventIds.has(eventId)) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Review evidence Event is outside the AgentRun snapshot");
+      }
+      if (item.kind !== "other") hasPinnedNonOtherEvent = true;
+    }
+    if (!hasPinnedNonOtherEvent) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "AgentRun Review requires non-other Event evidence from its snapshot");
+    }
+    evidence.unshift({ kind: "document", uri_or_ref: `agent-run:${run.id}` });
+    const clientRequestId = requiredString(body.client_request_id, "client_request_id");
+    const reviews = this.runtime.requireHost().get("reviews");
+    const id = `review:${hashCanonicalContext([this.runtime.orgId(), run.id, clientRequestId])}`;
+    const existing = await reviews.getReview(this.runtime.orgId(), id);
+    const review: ReviewRecord = {
+      schema_version: REVIEW_SCHEMA_VERSION,
+      id,
+      org_id: this.runtime.orgId(),
+      subject_kind: "agent_run",
+      subject_id: run.id,
+      result: reviewResult(body.result),
+      severity: reviewSeverity(body.severity),
+      evidence,
+      context_snapshot_id: run.context_snapshot_id,
+      recommended_action: reviewRecommendedAction(body.recommended_action),
+      author: { actor_type: "human", actor_id: this.runtime.orgId() },
+      created_at: existing?.created_at ?? new Date().toISOString(),
+    };
+    try {
+      return await reviews.putReview(review);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid Review";
+      const status = message.includes("Cannot replace") ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST;
+      throw new PersonalContextError("invalid_request", status, message);
+    }
+  }
+
+  async listAgentRunReviews(runId: string) {
+    const run = await this.getAgentRun(runId);
+    return this.runtime.requireHost().get("reviews").listReviews({
+      org_id: this.runtime.orgId(), subject_id: run.id, limit: 100,
+    });
+  }
+
   async getReview(reviewId: string) {
     const review = await this.runtime.requireHost().get("reviews").getReview(this.runtime.orgId(), requiredString(reviewId, "review_id"));
     if (!review) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Review was not found");
@@ -467,6 +531,10 @@ export class PersonalContextService {
       throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "StandardGap can convert only to a Standard Proposal");
     }
     const snapshotId = requiredString(body.context_snapshot_id, "context_snapshot_id");
+    const sourceReview = gap.source_kind === "review" ? await this.getReview(gap.source_ref) : null;
+    if (sourceReview && sourceReview.context_snapshot_id !== snapshotId) {
+      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Review-sourced StandardGap must preserve the Review snapshot");
+    }
     if (!await this.runtime.requireHost().get("context-artifacts").getSnapshot(this.runtime.orgId(), snapshotId)) {
       throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
     }
@@ -486,6 +554,22 @@ export class PersonalContextService {
       const version = await this.runtime.requireHost().get("standards").getStandardVersion(this.runtime.orgId(), versionId);
       if (!standard || !version || version.standard_id !== standard.id) {
         throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Revision StandardVersion was not found");
+      }
+      if (sourceReview?.subject_kind === "agent_run") {
+        const sourceRun = await this.getAgentRun(sourceReview.subject_id);
+        if (!sourceRun.standard_bindings.some((binding) =>
+          binding.standard_id === standard.id && binding.version_id === version.id
+        )) {
+          throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Revision target is outside the reviewed AgentRun bindings");
+        }
+      }
+      if (sourceReview?.subject_kind === "decision") {
+        const sourceDecision = await this.getDecision(sourceReview.subject_id);
+        if (!sourceDecision.standard_bindings.some((binding) =>
+          binding.standard_id === standard.id && binding.version_id === version.id
+        )) {
+          throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Revision target is outside the reviewed Decision bindings");
+        }
       }
       if (gap.status === "open"
         && (standard.current_version_id !== version.id || ["draft", "deprecated"].includes(version.status))) {
