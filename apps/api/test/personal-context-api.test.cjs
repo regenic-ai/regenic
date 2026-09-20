@@ -498,6 +498,22 @@ describe("personal context API", () => {
     const decisionUsage = await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}/usage?source_kind=decision`)).json();
     assert.deepEqual(decisionUsage.map(({ source_id }) => source_id), [usageDecision.id]);
     assert.equal((await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}`)).json()).citation_count, 3);
+    const recentObservedAt = new Date(Date.now() + 60_000).toISOString();
+    const recentHealth = await fetch(`${origin}/v1/me/context/standards/health?observed_at=${encodeURIComponent(recentObservedAt)}&stale_after_days=30`);
+    assert.equal(recentHealth.status, 200);
+    assert.deepEqual(await recentHealth.json(), []);
+    const staleObservedAt = new Date(Date.parse(recentObservedAt) + 31 * 24 * 60 * 60 * 1_000).toISOString();
+    const staleHealth = await fetch(`${origin}/v1/me/context/standards/health?observed_at=${encodeURIComponent(staleObservedAt)}&stale_after_days=30`);
+    assert.equal(staleHealth.status, 200);
+    const [healthCandidate] = await staleHealth.json();
+    assert.equal(healthCandidate.standard_id, first.standard.id);
+    assert.equal(healthCandidate.version_id, revision.version.id);
+    assert.equal(healthCandidate.reason, "stale_usage");
+    assert.equal(healthCandidate.recommendation, "review_deprecate_or_merge");
+    assert.ok(healthCandidate.standard_citation_count >= healthCandidate.citation_count);
+    assert.equal((await fetch(`${origin}/v1/me/context/standards/health?stale_after_days=0`)).status, 400);
+    assert.equal((await fetch(`${origin}/v1/me/context/standards/health?observed_at=${encodeURIComponent("2027-12-31T00:00:00")}`)).status, 400);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/standard-versions/${encodeURIComponent(revision.version.id)}`)).json()).status, "active");
     const reviewBody = {
       client_request_id: "agent-run-review-1",
       result: "falsified",

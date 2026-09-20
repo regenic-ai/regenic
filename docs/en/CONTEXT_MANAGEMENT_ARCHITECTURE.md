@@ -843,6 +843,35 @@ concurrent sources cannot lose count updates. Usage can be queried by exact
 Standard, StandardVersion, and source kind. It records governed application,
 not whether that application succeeded.
 
+### 8.10 Standard health candidates
+
+The usage ledger feeds a deterministic, governance-read-only Standard health
+detector: it does not mutate Standard, Review, Proposal, or usage records. It
+examines up to 100 Standards and only evaluates each current active
+StandardVersion. After a configurable window (90 days by default), a Standard
+with no usage is surfaced as `never_cited`; a Standard whose latest usage is
+older than the window is surfaced as `stale_usage`. Trial, draft, deprecated,
+and newly active versions are not candidates.
+
+The bounded v1 surface probes for a 101st Standard and fails closed when an
+organization exceeds the 100-Standard scan limit; it never silently truncates
+health results. Pagination is required before increasing that product limit.
+
+The API and CLI accept an explicit timezone-bearing observation timestamp for
+deterministic replay and query only the latest usage row for the current
+version. Candidate output includes the exact current version, its usage count,
+the Standard-wide citation count, latest current-version citation time when
+present, and `review_deprecate_or_merge` as a recommendation. A candidate is
+not a Review and never deprecates or merges anything. Broken current-version
+pointers and exact citation-count/ledger disagreement fail closed instead of
+being silently omitted; usage of an older version cannot make the current
+version healthy.
+
+The local CLI still opens the ordinary local Context host, which may run
+SQLite migrations or maintain its lexical sidecar. Zero-filesystem-write
+inspection requires a future dedicated read-only host and is not claimed by
+this surface.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

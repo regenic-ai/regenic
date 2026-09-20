@@ -422,6 +422,30 @@ describe("regenic-local", () => {
     assert.equal((await run([
       "context-standard-get", ...common, "--standard", standardCommit.standard.id,
     ])).citation_count, 2);
+    assert.deepEqual(await run([
+      "context-standard-health", ...common,
+      "--observed-at", "2026-08-14T00:00:00.000Z",
+      "--stale-after-days", "30",
+    ]), []);
+    const [healthCandidate] = await run([
+      "context-standard-health", ...common,
+      "--observed-at", "2027-12-31T00:00:00.000Z",
+      "--stale-after-days", "30",
+    ]);
+    assert.equal(healthCandidate.standard_id, standardCommit.standard.id);
+    assert.equal(healthCandidate.version_id, revisionCommit.version.id);
+    assert.equal(healthCandidate.reason, "stale_usage");
+    assert.equal(healthCandidate.recommendation, "review_deprecate_or_merge");
+    assert.ok(healthCandidate.standard_citation_count >= healthCandidate.citation_count);
+    await assert.rejects(run([
+      "context-standard-health", ...common, "--stale-after-days", "3651",
+    ]), /must be from 1 to 3650/);
+    await assert.rejects(run([
+      "context-standard-health", ...common, "--observed-at", "2027-12-31T00:00:00",
+    ]), /must be a timestamp with timezone/);
+    assert.equal((await run([
+      "context-standard-version-get", ...common, "--version", revisionCommit.version.id,
+    ])).status, "active");
     await assert.rejects(run(runArgs.slice(0, -2)), /Missing required option --input/);
     const runReviewArgs = [
       "context-review-new-run", ...common,

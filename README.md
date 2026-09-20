@@ -446,6 +446,10 @@ pnpm local context-standard-usage --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-standard-usage-project --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source-kind agent_run --source <run-id>
+
+pnpm local context-standard-health --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --observed-at 2027-12-31T00:00:00.000Z \
+	--stale-after-days 90
 ```
 
 Run a versioned synthetic evaluation dataset and optionally persist its

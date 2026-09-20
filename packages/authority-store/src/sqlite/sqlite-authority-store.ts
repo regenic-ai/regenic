@@ -1718,18 +1718,31 @@ export class SqliteAuthorityStore
     return transaction.immediate();
   }
 
-  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; limit?: number }): Promise<StandardUsageRecord[]> {
+  async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; newest_first?: boolean; limit?: number }): Promise<StandardUsageRecord[]> {
     const conditions = ["org_id = ?"];
     const values: Array<string | number> = [input.org_id];
     if (input.standard_id) { conditions.push("standard_id = ?"); values.push(input.standard_id); }
     if (input.version_id) { conditions.push("version_id = ?"); values.push(input.version_id); }
     if (input.source_kind) { conditions.push("source_kind = ?"); values.push(input.source_kind); }
     values.push(input.limit ?? 100);
-    const rows = this.database.prepare(`SELECT id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at FROM standard_usage WHERE ${conditions.join(" AND ")} ORDER BY cited_at, id LIMIT ?`).all(...values) as Array<Omit<StandardUsageRecord, "schema_version">>;
+    const order = input.newest_first
+      ? "julianday(cited_at) DESC, id DESC"
+      : "julianday(cited_at), id";
+    const rows = this.database.prepare(`SELECT id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at FROM standard_usage WHERE ${conditions.join(" AND ")} ORDER BY ${order} LIMIT ?`).all(...values) as Array<Omit<StandardUsageRecord, "schema_version">>;
     return rows.map((row) => validateStandardUsage({
       schema_version: STANDARD_USAGE_SCHEMA_VERSION,
       ...row,
     }));
+  }
+
+  async countStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind }): Promise<number> {
+    const conditions = ["org_id = ?"];
+    const values: string[] = [input.org_id];
+    if (input.standard_id) { conditions.push("standard_id = ?"); values.push(input.standard_id); }
+    if (input.version_id) { conditions.push("version_id = ?"); values.push(input.version_id); }
+    if (input.source_kind) { conditions.push("source_kind = ?"); values.push(input.source_kind); }
+    const row = this.database.prepare(`SELECT COUNT(*) AS count FROM standard_usage WHERE ${conditions.join(" AND ")}`).get(...values) as { count: number };
+    return row.count;
   }
 
   private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {

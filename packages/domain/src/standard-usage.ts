@@ -25,8 +25,15 @@ export interface StandardUsageStore {
     standard_id?: string;
     version_id?: string;
     source_kind?: StandardUsageSourceKind;
+    newest_first?: boolean;
     limit?: number;
   }): Promise<StandardUsageRecord[]>;
+  countStandardUsage(input: {
+    org_id: string;
+    standard_id?: string;
+    version_id?: string;
+    source_kind?: StandardUsageSourceKind;
+  }): Promise<number>;
 }
 
 export function validateStandardUsage(input: StandardUsageRecord): StandardUsageRecord {
