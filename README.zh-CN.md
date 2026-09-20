@@ -437,6 +437,13 @@ pnpm local context-run-reviews --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-run-drift-scan --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --minimum-failures 2
+
+pnpm local context-standard-usage --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --standard <standard-id> --version <version-id> \
+	--source-kind agent_run
+
+pnpm local context-standard-usage-project --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --source-kind agent_run --source <run-id>
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

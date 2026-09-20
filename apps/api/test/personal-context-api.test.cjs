@@ -474,6 +474,30 @@ describe("personal context API", () => {
     assert.equal(run.agent.actor_type, "agent");
     assert.equal(run.on_behalf_of.actor_type, "human");
     assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs`, runBody)).text).id, run.id);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/usage/project`, {})).text)[0].source_id, run.id);
+    const runUsageUrl = `${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}/usage?version_id=${encodeURIComponent(revision.version.id)}&source_kind=agent_run`;
+    assert.deepEqual((await (await fetch(runUsageUrl)).json()).map(({ source_id }) => source_id), [run.id]);
+    const usageDecisionProposal = JSON.parse((await postJson(`${origin}/v1/me/context/proposals`, {
+      client_request_id: "usage-decision-proposal",
+      kind: "decision",
+      title: "Approve usage-ledger release",
+      summary: "Approve one release under the active StandardVersion.",
+      rights_level: "coach",
+      boundary: "Release decision only",
+      context_snapshot_id: snapshotId,
+      standard_bindings: [{ standard_id: first.standard.id, version_id: revision.version.id }],
+      evidence: [{ kind: "document", uri_or_ref: `event:${eventId}` }],
+    })).text);
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(usageDecisionProposal.id)}/submit`, {});
+    await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(usageDecisionProposal.id)}/review`, {});
+    const usageDecision = JSON.parse((await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(usageDecisionProposal.id)}/decision`, {
+      summary: "Proceed under the active release standard.",
+      rationale: "The pinned evidence supports the bounded release.",
+    })).text).decision;
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/decisions/${encodeURIComponent(usageDecision.id)}/usage/project`, {})).text)[0].source_id, usageDecision.id);
+    const decisionUsage = await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}/usage?source_kind=decision`)).json();
+    assert.deepEqual(decisionUsage.map(({ source_id }) => source_id), [usageDecision.id]);
+    assert.equal((await (await fetch(`${origin}/v1/me/context/standards/${encodeURIComponent(first.standard.id)}`)).json()).citation_count, 3);
     const reviewBody = {
       client_request_id: "agent-run-review-1",
       result: "falsified",
@@ -487,6 +511,11 @@ describe("personal context API", () => {
       standard_bindings: [{ standard_id: first.standard.id, version_id: first.version.id }],
     });
     assert.equal(deprecatedBinding.response.status, 409);
+    assert.equal((await postJson(`${origin}/v1/me/context/runs`, {
+      ...runBody,
+      client_request_id: "agent-run-duplicate-binding",
+      standard_bindings: [runBody.standard_bindings[0], runBody.standard_bindings[0]],
+    })).response.status, 400);
     assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/runs/${encodeURIComponent(run.id)}/start`, {})).text).status, "running");
     const output = {
       summary: "The release check passed.",

@@ -83,7 +83,7 @@ export function validateProposal(proposal: ProposalRecord): ProposalRecord {
   )) throw new Error("Invalid Proposal evidence");
   if (!Array.isArray(proposal.standard_bindings) || proposal.standard_bindings.some((binding) =>
     !binding.standard_id?.trim() || !binding.version_id?.trim()
-  )) throw new Error("Invalid Proposal standard binding");
+  ) || hasDuplicateStandardBindings(proposal.standard_bindings)) throw new Error("Invalid Proposal standard binding");
   if (["submitted", "in_review", "accepted", "rejected"].includes(proposal.status)
     && !proposal.evidence.some((item) => item.kind !== "other")) {
     throw new Error("Submitted Proposal requires non-other evidence");
@@ -99,4 +99,8 @@ export function validateProposal(proposal: ProposalRecord): ProposalRecord {
     throw new Error("Submitted standard Proposal requires one uncertainty");
   }
   return structuredClone(proposal);
+}
+
+function hasDuplicateStandardBindings(bindings: Array<{ standard_id: string; version_id: string }>): boolean {
+  return new Set(bindings.map(({ standard_id, version_id }) => `${standard_id}\u0000${version_id}`)).size !== bindings.length;
 }

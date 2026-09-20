@@ -822,6 +822,27 @@ not trigger new drift Reviews. The Review may enter the explicit StandardGap
 workflow, where a revision must target that reviewed StandardVersion; scanning
 itself never creates a Gap or modifies a Standard.
 
+### 8.9 Standard usage ledger
+
+Pinned bindings on committed Decisions and queued AgentRuns project into an
+immutable StandardUsage ledger. Projection accepts only an organization,
+source kind, and source ID; the authority store reloads the source snapshot,
+bindings, and timestamp, verifies every StandardVersion belongs to its
+Standard, and derives deterministic usage IDs. Callers cannot submit usage
+bindings or citation counts directly.
+
+Decision commit and Run creation immediately attempt the projection. The
+source authority record remains primary, so projection failure does not turn a
+successful Decision or Run write into a failed request; a retry or explicit
+repair command can recreate missing derived usage. Duplicate binding pairs are
+rejected before persistence. Repeating a projection never increments twice.
+`Standard.citation_count` is recomputed from the ledger in the same transaction,
+not incremented optimistically. SQLite
+serializes writers; PostgreSQL locks Standard identities in sorted order so
+concurrent sources cannot lose count updates. Usage can be queried by exact
+Standard, StandardVersion, and source kind. It records governed application,
+not whether that application succeeded.
+
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.

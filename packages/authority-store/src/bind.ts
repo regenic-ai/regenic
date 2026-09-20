@@ -15,6 +15,7 @@ import type {
   StandardStore,
   StandardGapStore,
   AgentRunStore,
+  StandardUsageStore,
   ExecutorStore,
   WorkStore,
 } from "@regenic/domain";
@@ -28,7 +29,7 @@ export type AuthorityServicesStore = AuthorityStore &
   ContextAuthorityReader &
   ContextProjectionOutboxStore &
   DailyDigestJobStore & {
-  } & DailyDigestPolicyStore & DailyDigestCoverageAlertStore & ProposalStore & DecisionStore & ReviewStore & HandoffStore & StandardStore & StandardGapStore & AgentRunStore & {
+  } & DailyDigestPolicyStore & DailyDigestCoverageAlertStore & ProposalStore & DecisionStore & ReviewStore & HandoffStore & StandardStore & StandardGapStore & AgentRunStore & StandardUsageStore & {
     close(): void | Promise<void>;
   };
 
@@ -50,5 +51,6 @@ export function provideAuthorityServices(
   ctx.provide("standards", store);
   ctx.provide("standard-gaps", store);
   ctx.provide("agent-runs", store);
+  ctx.provide("standard-usage", store);
   ctx.effect(() => () => store.close());
 }
