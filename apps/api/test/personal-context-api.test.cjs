@@ -501,11 +501,12 @@ describe("personal context API", () => {
     const recentObservedAt = new Date(Date.now() + 60_000).toISOString();
     const recentHealth = await fetch(`${origin}/v1/me/context/standards/health?observed_at=${encodeURIComponent(recentObservedAt)}&stale_after_days=30`);
     assert.equal(recentHealth.status, 200);
-    assert.deepEqual(await recentHealth.json(), []);
+    assert.deepEqual(await recentHealth.json(), { candidates: [], next_after: null });
     const staleObservedAt = new Date(Date.parse(recentObservedAt) + 31 * 24 * 60 * 60 * 1_000).toISOString();
     const staleHealth = await fetch(`${origin}/v1/me/context/standards/health?observed_at=${encodeURIComponent(staleObservedAt)}&stale_after_days=30`);
     assert.equal(staleHealth.status, 200);
-    const [healthCandidate] = await staleHealth.json();
+    const { candidates: [healthCandidate], next_after: nextHealthAfter } = await staleHealth.json();
+    assert.equal(nextHealthAfter, null);
     assert.equal(healthCandidate.standard_id, first.standard.id);
     assert.equal(healthCandidate.version_id, revision.version.id);
     assert.equal(healthCandidate.reason, "stale_usage");

@@ -389,7 +389,12 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getStandardBySlug", [orgId, slug]);
   }
 
-  async listStandards(input: { org_id: string; limit?: number }): Promise<StandardRecord[]> {
+  async listStandards(input: {
+    org_id: string;
+    limit?: number;
+    after_created_at?: string;
+    after_id?: string;
+  }): Promise<StandardRecord[]> {
     return this.reader.call("listStandards", [input]);
   }
 

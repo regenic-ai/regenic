@@ -447,7 +447,12 @@ pnpm local context-standard-usage-project --database ./regenic.db --blob-root ./
 
 pnpm local context-standard-health --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --observed-at 2027-12-31T00:00:00.000Z \
-	--stale-after-days 90
+	--stale-after-days 90 --limit 100
+
+# 使用上一页响应中的 next_after cursor 继续读取。
+pnpm local context-standard-health --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --observed-at 2027-12-31T00:00:00.000Z \
+	--stale-after-days 90 --after-created-at <created-at> --after-id <standard-id>
 ```
 
 可以运行版本化 synthetic evaluation dataset，并按需保存确定性报告。报告包含 Recall@K、

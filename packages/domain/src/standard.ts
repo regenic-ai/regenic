@@ -119,7 +119,12 @@ export interface StandardStore {
   }): Promise<{ proposal: ProposalRecord; standard: StandardRecord; version: StandardVersionRecord }>;
   getStandard(orgId: string, standardId: string): Promise<StandardRecord | null>;
   getStandardBySlug(orgId: string, slug: string): Promise<StandardRecord | null>;
-  listStandards(input: { org_id: string; limit?: number }): Promise<StandardRecord[]>;
+  listStandards(input: {
+    org_id: string;
+    limit?: number;
+    after_created_at?: string;
+    after_id?: string;
+  }): Promise<StandardRecord[]>;
   getStandardVersion(orgId: string, versionId: string): Promise<StandardVersionRecord | null>;
   listStandardVersions(input: { org_id: string; standard_id: string; limit?: number }): Promise<StandardVersionRecord[]>;
   transitionStandardVersion(input: StandardVersionTransition): Promise<StandardVersionRecord | null>;

@@ -43,7 +43,12 @@ it("keeps AgentRun creation successful when derived usage projection fails", asy
   );
 });
 
-it("fails closed instead of truncating a Standard health scan", async () => {
+it("returns a bounded Standard health page with a stable next cursor", async () => {
+  const standards = Array.from({ length: 101 }, (_, index) => ({
+    id: `standard-${index}`,
+    created_at: "2026-01-01T00:00:00.000Z",
+  }));
+  let requested = null;
   const service = new PersonalContextService({
     orgId() { return "example-org"; },
     requireHost() {
@@ -51,8 +56,9 @@ it("fails closed instead of truncating a Standard health scan", async () => {
         get(name) {
           if (name !== "standards") throw new Error(`Unexpected service: ${name}`);
           return {
-            async listStandards() {
-              return Array.from({ length: 101 }, (_, index) => ({ id: `standard-${index}` }));
+            async listStandards(input) {
+              requested = input;
+              return standards;
             },
           };
         },
@@ -60,8 +66,14 @@ it("fails closed instead of truncating a Standard health scan", async () => {
     },
   });
 
+  const page = await service.listStandardHealthCandidates("2027-12-31T00:00:00.000Z", "90");
+  assert.equal(requested.limit, 101);
+  assert.deepEqual(page, {
+    candidates: [],
+    next_after: { created_at: "2026-01-01T00:00:00.000Z", id: "standard-99" },
+  });
   await assert.rejects(
-    service.listStandardHealthCandidates("2027-12-31T00:00:00.000Z", "90"),
-    /supports at most 100 Standards/,
+    service.listStandardHealthCandidates("2027-12-31T00:00:00.000Z", "90", "2026-01-01T00:00:00.000Z"),
+    /cursor requires after_created_at and after_id/,
   );
 });

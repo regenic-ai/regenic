@@ -426,12 +426,13 @@ describe("regenic-local", () => {
       "context-standard-health", ...common,
       "--observed-at", "2026-08-14T00:00:00.000Z",
       "--stale-after-days", "30",
-    ]), []);
-    const [healthCandidate] = await run([
+    ]), { candidates: [], next_after: null });
+    const { candidates: [healthCandidate], next_after: nextHealthAfter } = await run([
       "context-standard-health", ...common,
       "--observed-at", "2027-12-31T00:00:00.000Z",
       "--stale-after-days", "30",
     ]);
+    assert.equal(nextHealthAfter, null);
     assert.equal(healthCandidate.standard_id, standardCommit.standard.id);
     assert.equal(healthCandidate.version_id, revisionCommit.version.id);
     assert.equal(healthCandidate.reason, "stale_usage");

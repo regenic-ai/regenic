@@ -853,9 +853,10 @@ with no usage is surfaced as `never_cited`; a Standard whose latest usage is
 older than the window is surfaced as `stale_usage`. Trial, draft, deprecated,
 and newly active versions are not candidates.
 
-The bounded v1 surface probes for a 101st Standard and fails closed when an
-organization exceeds the 100-Standard scan limit; it never silently truncates
-health results. Pagination is required before increasing that product limit.
+The bounded surface returns at most 100 Standards per page. A `next_after`
+cursor carries the final `(created_at, id)` key, so callers can resume the
+deterministic keyset scan without silently truncating health results. Cursors
+require both keys and cannot widen the organization boundary.
 
 The API and CLI accept an explicit timezone-bearing observation timestamp for
 deterministic replay and query only the latest usage row for the current
