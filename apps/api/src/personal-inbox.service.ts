@@ -821,6 +821,33 @@ export class PersonalInboxService {
     this.events.threadUpdated(threadId);
   }
 
+  async triageInboxEvent(
+    eventId: string,
+    disposition: ArrangementDecision["disposition"],
+  ): Promise<ArrangementDecision> {
+    if (!['current_work', 'outside_current_work', 'pending'].includes(disposition)) {
+      throw new PersonalConnectorError("invalid_config", "Invalid inbox disposition", 400);
+    }
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    const current = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !current) {
+      throw new PersonalConnectorError("not_found", "Inbox event was not found", 404);
+    }
+    const decision: ArrangementDecision = {
+      ...current,
+      disposition,
+      reason_codes: [...new Set([...current.reason_codes, "human_triage"])],
+      decided_at: new Date().toISOString(),
+    };
+    await authority.putDisposition(decision);
+    this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
+    this.touchInboxDigest({ immediate: true });
+    return decision;
+  }
+
   async listInbox(
     query: InboxListQuery & { split: true },
   ): Promise<InboxHeadsPage>;

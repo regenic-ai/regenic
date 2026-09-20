@@ -280,6 +280,10 @@ pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
 
 ```bash
 pnpm local inbox --database ./regenic.db --org local-owner
+
+# 人工 triage 覆盖当前工作分层，但不会修改 Event。
+pnpm local inbox-triage --database ./regenic.db --org local-owner \
+	--event <event-id> --disposition pending
 ```
 
 ### JSONL 导出

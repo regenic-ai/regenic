@@ -91,6 +91,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 - AuthorityStore / BlobStore 写入
 - ACL `visible()` 与权威边界
 - D0 过滤与分层：`current_work` / `outside_current_work` / `pending`；Event 仍留下；从不自动 defer
+- 人工 triage 可以显式覆盖 Event 的分层；disposition 会保留先前 reason code、记录 `human_triage`，且绝不修改 Event
 - 标准的应用与修订钩子
 - 调度：不进入当前工作 vs pending
 - 读与发的审计
