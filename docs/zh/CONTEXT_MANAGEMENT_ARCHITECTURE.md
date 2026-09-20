@@ -729,8 +729,8 @@ citation count、存在时的 current-version 最近 citation 时间，以及 `r
 pointer 和精确 citation-count/ledger 不一致会 fail closed；旧版本 usage 不能让 current version
 看起来健康。
 
-Local CLI 仍会打开普通 local Context host，因此可能执行 SQLite migration 或维护 lexical
-sidecar。该 surface 不承诺零文件系统写入；这需要后续专用 read-only host。
+`context-standard-health` CLI 使用专用 SQLite `query_only` host。它不会运行 migration，也不
+会挂载 lexical sidecar，因此 scan 不会执行应用层 database 或 sidecar 写入。
 
 投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。

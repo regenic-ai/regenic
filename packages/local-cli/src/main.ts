@@ -75,7 +75,7 @@ import {
   createWhatsAppPersonalImport,
   WHATSAPP_PERSONAL_SOURCE,
 } from "@regenic/whatsapp-personal";
-import { withLocalHost } from "./host";
+import { withLocalHost, withLocalReadOnlyHost } from "./host";
 
 interface CliOutput {
   write(chunk: string): boolean;
@@ -2004,7 +2004,7 @@ async function listStandardHealthCommand(
   if (afterCreatedAt && (!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(afterCreatedAt) || Number.isNaN(Date.parse(afterCreatedAt)))) {
     throw new Error("--after-created-at must be a timestamp with timezone");
   }
-  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+  await withLocalReadOnlyHost(requirePath(options, "database"), async (host) => {
     const standards = await host.get("standards").listStandards({
       org_id: orgId,
       limit: limit + 1,

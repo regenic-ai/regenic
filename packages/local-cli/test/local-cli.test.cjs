@@ -34,6 +34,21 @@ async function run(args, options = {}) {
   return JSON.parse(output);
 }
 
+it("reads Standard health without a Blob root or lexical sidecar", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const authority = new SqliteAuthorityStore(database);
+  authority.close();
+
+  assert.deepEqual(await run([
+    "context-standard-health",
+    "--database", database,
+    "--org", "local-owner",
+    "--observed-at", "2027-12-31T00:00:00.000Z",
+  ]), { candidates: [], next_after: null });
+  await assert.rejects(access(`${database}.lexical.db`));
+});
+
 describe("regenic-local", () => {
   it("assembles, inspects, replays, and asks over durable context", async () => {
     const root = await createRoot();

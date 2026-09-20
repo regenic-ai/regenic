@@ -868,10 +868,9 @@ pointers and exact citation-count/ledger disagreement fail closed instead of
 being silently omitted; usage of an older version cannot make the current
 version healthy.
 
-The local CLI still opens the ordinary local Context host, which may run
-SQLite migrations or maintain its lexical sidecar. Zero-filesystem-write
-inspection requires a future dedicated read-only host and is not claimed by
-this surface.
+The `context-standard-health` CLI uses a dedicated SQLite `query_only` host.
+It does not run migrations or mount the lexical sidecar, so the scan does not
+perform application-level database or sidecar writes.
 
 Projection dependencies form a declared DAG. For example, a daily digest may
 depend on accepted thread summaries, but a lexical Event retriever does not.

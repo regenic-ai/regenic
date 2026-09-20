@@ -447,12 +447,12 @@ pnpm local context-standard-usage --database ./regenic.db --blob-root ./blobs \
 pnpm local context-standard-usage-project --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --source-kind agent_run --source <run-id>
 
-pnpm local context-standard-health --database ./regenic.db --blob-root ./blobs \
+pnpm local context-standard-health --database ./regenic.db \
 	--org local-owner --observed-at 2027-12-31T00:00:00.000Z \
 	--stale-after-days 90 --limit 100
 
 # Continue from the previous response's next_after cursor.
-pnpm local context-standard-health --database ./regenic.db --blob-root ./blobs \
+pnpm local context-standard-health --database ./regenic.db \
 	--org local-owner --observed-at 2027-12-31T00:00:00.000Z \
 	--stale-after-days 90 --after-created-at <created-at> --after-id <standard-id>
 ```
