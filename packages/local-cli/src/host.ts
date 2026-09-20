@@ -76,3 +76,16 @@ export async function withLocalHost<T>(
     await host.dispose();
   }
 }
+
+export async function withLocalReadOnlyHost<T>(
+  database: string,
+  run: (host: Host) => Promise<T>,
+): Promise<T> {
+  const host = await createHost();
+  try {
+    await host.plugin(sqliteAuthorityPlugin, { path: database, readonly: true });
+    return await run(host);
+  } finally {
+    await host.dispose();
+  }
+}
