@@ -1994,11 +1994,25 @@ async function listStandardHealthCommand(
   }
   const staleAfterDays = requirePositiveInteger(options, "stale-after-days", 90);
   if (staleAfterDays > 3_650) throw new Error("--stale-after-days must be from 1 to 3650");
+  const limit = optionString(options, "limit") === undefined
+    ? 100
+    : requirePositiveInteger(options, "limit", 100);
+  if (limit > 100) throw new Error("--limit must be from 1 to 100");
+  const afterCreatedAt = optionString(options, "after-created-at");
+  const afterId = optionString(options, "after-id");
+  if (!!afterCreatedAt !== !!afterId) throw new Error("--after-created-at and --after-id must be provided together");
+  if (afterCreatedAt && (!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(afterCreatedAt) || Number.isNaN(Date.parse(afterCreatedAt)))) {
+    throw new Error("--after-created-at must be a timestamp with timezone");
+  }
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
-    const standards = await host.get("standards").listStandards({ org_id: orgId, limit: 101 });
-    if (standards.length > 100) throw new Error("Standard health scan supports at most 100 Standards");
+    const standards = await host.get("standards").listStandards({
+      org_id: orgId,
+      limit: limit + 1,
+      ...(afterCreatedAt ? { after_created_at: afterCreatedAt, after_id: afterId! } : {}),
+    });
+    const page = standards.slice(0, limit);
     const observations = [];
-    for (const standard of standards) {
+    for (const standard of page) {
       if (!standard.current_version_id) continue;
       const version = await host.get("standards").getStandardVersion(orgId, standard.current_version_id);
       if (!version) throw new Error("Standard current version was not found");
@@ -2020,10 +2034,14 @@ async function listStandardHealthCommand(
         ...(latestUsage ? { latest_usage: latestUsage } : {}),
       });
     }
-    writeJson(stdout, detectStandardHealth(observations, {
-      observed_at: observedAt,
-      stale_after_days: staleAfterDays,
-    }));
+    const next = standards.length > limit ? page.at(-1) : undefined;
+    writeJson(stdout, {
+      candidates: detectStandardHealth(observations, {
+        observed_at: observedAt,
+        stale_after_days: staleAfterDays,
+      }),
+      next_after: next ? { created_at: next.created_at, id: next.id } : null,
+    });
   });
 }
 

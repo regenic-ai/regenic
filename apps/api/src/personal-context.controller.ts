@@ -150,8 +150,13 @@ export class PersonalContextController {
   listStandardHealthCandidates(
     @Query("observed_at") observedAt?: string,
     @Query("stale_after_days") staleAfterDays?: string,
+    @Query("after_created_at") afterCreatedAt?: string,
+    @Query("after_id") afterId?: string,
+    @Query("limit") limit?: string,
   ) {
-    return this.guard(() => this.context.listStandardHealthCandidates(observedAt, staleAfterDays));
+    return this.guard(() => this.context.listStandardHealthCandidates(
+      observedAt, staleAfterDays, afterCreatedAt, afterId, limit,
+    ));
   }
 
   @Get("standards/:standardId")

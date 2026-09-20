@@ -1458,8 +1458,20 @@ export class SqliteAuthorityStore
     return row ? toStandard(row) : null;
   }
 
-  async listStandards(input: { org_id: string; limit?: number }): Promise<StandardRecord[]> {
-    const rows = this.database.prepare(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = ? ORDER BY created_at, id LIMIT ?`).all(input.org_id, input.limit ?? 100) as StandardRow[];
+  async listStandards(input: {
+    org_id: string;
+    limit?: number;
+    after_created_at?: string;
+    after_id?: string;
+  }): Promise<StandardRecord[]> {
+    const hasCursor = !!input.after_created_at && !!input.after_id;
+    const rows = this.database.prepare(
+      `SELECT payload_json, current_version_id, citation_count FROM standards
+       WHERE org_id = ?${hasCursor ? " AND (created_at > ? OR (created_at = ? AND id > ?))" : ""}
+       ORDER BY created_at, id LIMIT ?`,
+    ).all(...(hasCursor
+      ? [input.org_id, input.after_created_at!, input.after_created_at!, input.after_id!, input.limit ?? 100]
+      : [input.org_id, input.limit ?? 100])) as StandardRow[];
     return rows.map(toStandard);
   }
 

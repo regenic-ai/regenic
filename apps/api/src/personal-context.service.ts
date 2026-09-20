@@ -1064,19 +1064,31 @@ export class PersonalContextService {
     return this.runtime.requireHost().get("standards").listStandards({ org_id: this.runtime.orgId(), limit: 100 });
   }
 
-  async listStandardHealthCandidates(observedAt?: string, staleAfterDays?: string) {
+  async listStandardHealthCandidates(
+    observedAt?: string,
+    staleAfterDays?: string,
+    afterCreatedAt?: string,
+    afterId?: string,
+    limit?: string,
+  ) {
     const observed = observedAt === undefined
       ? new Date().toISOString()
       : requiredTimestamp(observedAt, "observed_at");
     const staleDays = querySafeInteger(staleAfterDays, "stale_after_days", 90, 1, 3_650);
-    const standards = await this.runtime.requireHost().get("standards").listStandards({
-      org_id: this.runtime.orgId(), limit: 101,
-    });
-    if (standards.length > 100) {
-      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Standard health scan supports at most 100 Standards");
+    const pageLimit = querySafeInteger(limit, "limit", 100, 1, 100);
+    if (!!afterCreatedAt !== !!afterId) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Standard health cursor requires after_created_at and after_id");
     }
+    const cursorCreatedAt = afterCreatedAt === undefined
+      ? undefined
+      : requiredTimestamp(afterCreatedAt, "after_created_at");
+    const standards = await this.runtime.requireHost().get("standards").listStandards({
+      org_id: this.runtime.orgId(), limit: pageLimit + 1,
+      ...(cursorCreatedAt ? { after_created_at: cursorCreatedAt, after_id: requiredString(afterId, "after_id") } : {}),
+    });
+    const page = standards.slice(0, pageLimit);
     const observations = [];
-    for (const standard of standards) {
+    for (const standard of page) {
       if (!standard.current_version_id) continue;
       const version = await this.runtime.requireHost().get("standards").getStandardVersion(
         this.runtime.orgId(), standard.current_version_id,
@@ -1100,10 +1112,14 @@ export class PersonalContextService {
         ...(latestUsage ? { latest_usage: latestUsage } : {}),
       });
     }
-    return detectStandardHealth(observations, {
-      observed_at: observed,
-      stale_after_days: staleDays,
-    });
+    const next = standards.length > pageLimit ? page.at(-1) : undefined;
+    return {
+      candidates: detectStandardHealth(observations, {
+        observed_at: observed,
+        stale_after_days: staleDays,
+      }),
+      next_after: next ? { created_at: next.created_at, id: next.id } : null,
+    };
   }
 
   async getStandard(standardId: string) {

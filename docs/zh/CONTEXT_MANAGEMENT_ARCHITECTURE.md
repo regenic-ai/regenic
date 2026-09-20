@@ -718,8 +718,9 @@ active StandardVersion。超过可配置窗口（默认 90 天）后，从未产
 `never_cited`；最近 usage 早于窗口的 Standard 会标记为 `stale_usage`。Trial、draft、
 deprecated 和刚 active 的 version 都不会成为候选。
 
-有界的 v1 surface 会探测第 101 条 Standard；组织超过 100 条的 scan limit 时会 fail closed，
-绝不静默截断 health 结果。提高该产品上限前必须先实现 pagination。
+有界 surface 每页最多返回 100 条 Standard。`next_after` cursor 保存最后一条的
+`(created_at, id)` key，使调用方能够恢复确定性的 keyset scan，而不会静默截断 health
+结果。cursor 必须同时携带两个 key，且不能扩大 organization boundary。
 
 API 与 CLI 可接收带显式时区的 observation timestamp 以支持确定性重放，并且只查询 current
 version 的最近 usage。候选输出包含精确 current version、该版本的 usage count、Standard 总

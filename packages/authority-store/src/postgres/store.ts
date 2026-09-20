@@ -1496,8 +1496,21 @@ export class PostgresAuthorityStore
     return row ? toStandard(row) : null;
   }
 
-  async listStandards(input: { org_id: string; limit?: number }): Promise<StandardRecord[]> {
-    const rows = await this.query<StandardRow>(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = $1 ORDER BY created_at, id LIMIT $2`, [input.org_id, input.limit ?? 100]);
+  async listStandards(input: {
+    org_id: string;
+    limit?: number;
+    after_created_at?: string;
+    after_id?: string;
+  }): Promise<StandardRecord[]> {
+    const hasCursor = !!input.after_created_at && !!input.after_id;
+    const rows = await this.query<StandardRow>(
+      `SELECT payload_json, current_version_id, citation_count FROM standards
+       WHERE org_id = $1${hasCursor ? " AND (created_at > $2 OR (created_at = $2 AND id > $3))" : ""}
+       ORDER BY created_at, id LIMIT $${hasCursor ? 4 : 2}`,
+      hasCursor
+        ? [input.org_id, input.after_created_at!, input.after_id!, input.limit ?? 100]
+        : [input.org_id, input.limit ?? 100],
+    );
     return rows.map(toStandard);
   }
 

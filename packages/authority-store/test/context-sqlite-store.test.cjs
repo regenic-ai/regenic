@@ -567,6 +567,28 @@ describe("SQLite context artifact store", () => {
       org_id: "example-org", proposal_id: proposal.id, standard,
       version: { ...version, action: "Changed after commit.", body_hash: hashStandardVersionBody({ ...body, action: "Changed after commit." }) },
     }), /Cannot replace immutable StandardVersion/);
+    const nextProposal = {
+      ...proposal, id: "proposal-standard-page-2", title: "Create second standard",
+      status: "draft", created_at: "2026-09-18T04:00:00.000Z", updated_at: "2026-09-18T04:00:00.000Z",
+    };
+    const nextStandard = {
+      ...standard, id: "standard-page-2", slug: "release-safety-page-2",
+      created_at: "2026-09-18T04:00:00.000Z",
+    };
+    const nextVersion = {
+      ...version, id: "standard-version-page-2", proposal_id: nextProposal.id,
+      standard_id: nextStandard.id, created_at: "2026-09-18T04:00:00.000Z",
+    };
+    await store.putProposal(nextProposal);
+    await store.transitionProposal({ org_id: "example-org", proposal_id: nextProposal.id, status: "submitted", updated_at: "2026-09-18T04:01:00.000Z" });
+    await store.transitionProposal({ org_id: "example-org", proposal_id: nextProposal.id, status: "in_review", updated_at: "2026-09-18T04:02:00.000Z" });
+    await store.commitProposalStandardVersion({ org_id: "example-org", proposal_id: nextProposal.id, standard: nextStandard, version: nextVersion });
+    const [firstStandard] = await store.listStandards({ org_id: "example-org", limit: 1 });
+    assert.equal(firstStandard.id, standard.id);
+    assert.deepEqual(
+      (await store.listStandards({ org_id: "example-org", limit: 1, after_created_at: firstStandard.created_at, after_id: firstStandard.id })).map(({ id }) => id),
+      [nextStandard.id],
+    );
     store.close();
 
     const split = await SqliteSplitAuthorityStore.open(path);
