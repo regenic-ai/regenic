@@ -137,6 +137,17 @@ export class PersonalController {
     return this.guard(async () => this.inbox.listInbox(query));
   }
 
+  @Post("inbox/:eventId/triage")
+  triageInboxEvent(
+    @Param("eventId") eventId: string,
+    @Body() body: { disposition?: string } | undefined,
+  ) {
+    return this.guard(() => this.inbox.triageInboxEvent(
+      eventId,
+      body?.disposition as "current_work" | "outside_current_work" | "pending",
+    ));
+  }
+
   @Post("presence")
   reportPresence(
     @Body()

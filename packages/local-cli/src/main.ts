@@ -162,6 +162,9 @@ export async function runLocalCli(
     case "inbox":
       await showInbox(commandOptions, stdout);
       return;
+    case "inbox-triage":
+      await triageInbox(commandOptions, stdout, now);
+      return;
     case "context-assemble":
       await assembleContext(commandOptions, stdout, createId);
       return;
@@ -344,7 +347,7 @@ export async function runLocalCli(
       await listStandardHealthCommand(commandOptions, stdout, now);
       return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
   }
 }
 
@@ -633,6 +636,28 @@ async function sendDsh(
 async function showInbox(options: CommandOptions, stdout: CliOutput): Promise<void> {
   await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
     writeJson(stdout, await host.get("authority").listInbox(requireOption(options, "org")));
+  });
+}
+
+async function triageInbox(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const disposition = requireOption(options, "disposition");
+  if (!['current_work', 'outside_current_work', 'pending'].includes(disposition)) {
+    throw new Error("Invalid inbox disposition");
+  }
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const authority = host.get("authority");
+    const event = await authority.getEvent(orgId, requireOption(options, "event"));
+    const current = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !current) throw new Error("Inbox event was not found");
+    const decision = {
+      ...current,
+      disposition: disposition as typeof current.disposition,
+      reason_codes: [...new Set([...current.reason_codes, "human_triage"])],
+      decided_at: now(),
+    };
+    await authority.putDisposition(decision);
+    writeJson(stdout, decision);
   });
 }
 

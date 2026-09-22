@@ -1129,6 +1129,12 @@ describe("regenic-local", () => {
     assert.equal(inbox[0].event.external_id, "ask-1");
     assert.equal(inbox[0].decision.disposition, "current_work");
     assert.deepEqual(inbox[0].decision.reason_codes, ["actionable"]);
+    const triaged = await run([
+      "inbox-triage", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id, "--disposition", "pending",
+    ]);
+    assert.equal(triaged.disposition, "pending");
+    assert.ok(triaged.reason_codes.includes("human_triage"));
   });
 
   it("exports append-only Event metadata as JSONL without content bodies", async () => {

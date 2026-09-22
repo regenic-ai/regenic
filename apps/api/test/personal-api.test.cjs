@@ -406,6 +406,28 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("lets a human triage an inbox event out of current work", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const triaged = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/triage`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ disposition: "outside_current_work" }),
+        })
+      ).json();
+      assert.equal(triaged.disposition, "outside_current_work");
+      assert.ok(triaged.reason_codes.includes("human_triage"));
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lists a tombstoned thread on the hidden list after policy fold", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
