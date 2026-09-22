@@ -1135,6 +1135,12 @@ describe("regenic-local", () => {
     ]);
     assert.equal(triaged.disposition, "pending");
     assert.ok(triaged.reason_codes.includes("human_triage"));
+    const acknowledged = await run([
+      "inbox-ack", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id,
+    ]);
+    assert.equal(acknowledged.last_read_external_id, "ask-1");
+    assert.equal(acknowledged.last_read_at, "2026-08-12T23:00:00.000Z");
   });
 
   it("exports append-only Event metadata as JSONL without content bodies", async () => {

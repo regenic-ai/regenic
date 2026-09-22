@@ -428,6 +428,25 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("acknowledges an inbox event with its exact read cursor", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const response = await fetch(`${origin}/v1/me/inbox/${eventId}/ack`, {
+        method: "POST",
+      });
+      if (!response.ok) assert.fail(await response.text());
+      const pref = await response.json();
+      assert.equal(pref.last_read_external_id, "ask-1");
+      assert.equal(pref.last_read_at, "2026-08-21T00:00:00.000Z");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lists a tombstoned thread on the hidden list after policy fold", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

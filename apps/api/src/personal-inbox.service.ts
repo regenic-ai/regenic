@@ -1723,6 +1723,22 @@ export class PersonalInboxService {
     return toPrefView(pref);
   }
 
+  async acknowledgeInboxEvent(eventId: string): Promise<ConversationPrefView> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    const decision = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !decision) {
+      throw new PersonalConnectorError("not_found", "Inbox event was not found", 404);
+    }
+    return this.ackConversationAttention({
+      thread_id: conversationId(event.source, event.external_id, event.id),
+      last_read_at: event.occurred_at,
+      last_read_external_id: event.external_id,
+    });
+  }
+
   async answerConversationPrompt(
     input: ConversationPromptInput,
   ): Promise<{ accepted: true; thread_id: string; prompt_id: string }> {

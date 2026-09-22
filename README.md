@@ -281,6 +281,10 @@ List the messages that need you now. Receipts, deletions, and ordinary thread re
 ```bash
 pnpm local inbox --database ./regenic.db --org local-owner
 
+# Acknowledge exactly this Event's inbound read cursor.
+pnpm local inbox-ack --database ./regenic.db --org local-owner \
+	--event <event-id>
+
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
