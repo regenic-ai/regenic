@@ -294,6 +294,10 @@ pnpm local inbox-unfold --database ./regenic.db --org local-owner \
 # 人工 triage 覆盖当前工作分层，但不会修改 Event。
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
+
+# 对先前人工 triage 的 Event 重新应用自动分层。
+pnpm local inbox-triage-reset --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --event <event-id>
 ```
 
 ### JSONL 导出

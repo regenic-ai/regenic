@@ -164,6 +164,11 @@ export class PersonalController {
     return this.guard(() => this.inbox.setInboxEventHidden(eventId, false));
   }
 
+  @Post("inbox/:eventId/triage/reset")
+  resetInboxTriage(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.resetInboxTriage(eventId));
+  }
+
   @Post("presence")
   reportPresence(
     @Body()

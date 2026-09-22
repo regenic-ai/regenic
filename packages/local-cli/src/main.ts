@@ -39,6 +39,11 @@ import {
   detectStandardDrift,
   detectStandardHealth,
   foldByHuman,
+  unfold,
+  arrangeMessage,
+  bodyTextFromStored,
+  parseStoredContentParts,
+  surfaceFromParts,
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
@@ -60,7 +65,6 @@ import {
   type AgentRunOutput,
   type AgentRunRecord,
   type AgentRunStatus,
-  unfold,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -175,6 +179,9 @@ export async function runLocalCli(
       return;
     case "inbox-unfold":
       await setInboxEventHidden(commandOptions, stdout, now, false);
+      return;
+    case "inbox-triage-reset":
+      await resetInboxTriage(commandOptions, stdout, now);
       return;
     case "context-assemble":
       await assembleContext(commandOptions, stdout, createId);
@@ -358,7 +365,7 @@ export async function runLocalCli(
       await listStandardHealthCommand(commandOptions, stdout, now);
       return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-jobs, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
   }
 }
 
@@ -687,6 +694,30 @@ async function acknowledgeInboxEvent(options: CommandOptions, stdout: CliOutput,
       updated_at: now(),
     });
     writeJson(stdout, pref);
+  });
+}
+
+async function resetInboxTriage(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const authority = host.get("authority");
+    const event = await authority.getEvent(orgId, requireOption(options, "event"));
+    const current = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !current) throw new Error("Inbox event was not found");
+    const blob = event.content_hash ? await authority.findBlob(event.content_hash) : null;
+    const bytes = blob && event.content_hash ? await host.get("blobs").get(event.content_hash) : undefined;
+    const parts = blob && bytes ? parseStoredContentParts(bytes) : undefined;
+    const surface = parts ? surfaceFromParts(parts) : undefined;
+    const decision = arrangeMessage({
+      event,
+      type: surface?.type,
+      kind: surface?.kind,
+      text: blob && bytes ? bodyTextFromStored(bytes, blob.media_type) : undefined,
+      weight_hints: event.weight_hints,
+      now: now(),
+    });
+    await authority.putDisposition(decision);
+    writeJson(stdout, decision);
   });
 }
 

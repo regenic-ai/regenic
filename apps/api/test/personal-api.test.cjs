@@ -423,6 +423,14 @@ describe("personal /v1/me", () => {
       assert.equal(triaged.disposition, "outside_current_work");
       assert.ok(triaged.reason_codes.includes("human_triage"));
       assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
+      const reset = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/triage/reset`, {
+          method: "POST",
+        })
+      ).json();
+      assert.equal(reset.disposition, "current_work");
+      assert.deepEqual(reset.reason_codes, ["actionable"]);
+      assert.equal((await (await fetch(`${origin}/v1/me/inbox`)).json()).length, 1);
     } finally {
       await app.close();
     }

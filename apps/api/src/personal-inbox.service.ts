@@ -8,6 +8,7 @@ import {
   resolveCopy,
   type CopyLocale,
   attentionOf,
+  arrangeMessage,
   collectLatestInbound,
   computeThreadUnread,
   conversationId,
@@ -843,6 +844,30 @@ export class PersonalInboxService {
       reason_codes: [...new Set([...current.reason_codes, "human_triage"])],
       decided_at: new Date().toISOString(),
     };
+    await authority.putDisposition(decision);
+    this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
+    this.touchInboxDigest({ immediate: true });
+    return decision;
+  }
+
+  async resetInboxTriage(eventId: string): Promise<ArrangementDecision> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    const current = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !current) {
+      throw new PersonalConnectorError("not_found", "Inbox event was not found", 404);
+    }
+    const body = await resolveInboxBody(authority, host.get("blobs"), event.content_hash, "meta");
+    const decision = arrangeMessage({
+      event,
+      type: body.surface?.type,
+      kind: body.surface?.kind,
+      text: body.body_text,
+      weight_hints: event.weight_hints,
+      now: new Date().toISOString(),
+    });
     await authority.putDisposition(decision);
     this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
     this.touchInboxDigest({ immediate: true });

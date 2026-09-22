@@ -1153,6 +1153,12 @@ describe("regenic-local", () => {
     ]);
     assert.equal(unfolded.hidden, false);
     assert.equal(unfolded.hidden_reason, null);
+    const reset = await run([
+      "inbox-triage-reset", "--database", database, "--blob-root", blobRoot,
+      "--org", "local-owner", "--event", inbox[0].event.id,
+    ]);
+    assert.equal(reset.disposition, "current_work");
+    assert.deepEqual(reset.reason_codes, ["actionable"]);
   });
 
   it("exports append-only Event metadata as JSONL without content bodies", async () => {
