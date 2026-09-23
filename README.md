@@ -294,6 +294,10 @@ pnpm local inbox-unfold --database ./regenic.db --org local-owner \
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
+
+# Reapply the automatic arrangement for an event previously triaged by hand.
+pnpm local inbox-triage-reset --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --event <event-id>
 ```
 
 ### JSONL export
