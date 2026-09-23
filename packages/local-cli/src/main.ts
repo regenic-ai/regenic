@@ -165,6 +165,9 @@ export async function runLocalCli(
     case "inbox-triage":
       await triageInbox(commandOptions, stdout, now);
       return;
+    case "inbox-ack":
+      await acknowledgeInboxEvent(commandOptions, stdout, now);
+      return;
     case "context-assemble":
       await assembleContext(commandOptions, stdout, createId);
       return;
@@ -658,6 +661,24 @@ async function triageInbox(options: CommandOptions, stdout: CliOutput, now: () =
     };
     await authority.putDisposition(decision);
     writeJson(stdout, decision);
+  });
+}
+
+async function acknowledgeInboxEvent(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const authority = host.get("authority");
+    const event = await authority.getEvent(orgId, requireOption(options, "event"));
+    const decision = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !decision) throw new Error("Inbox event was not found");
+    const pref = await authority.putConversationPref({
+      org_id: orgId,
+      thread_id: `${event.source}:${event.external_id}`,
+      last_read_at: event.occurred_at,
+      last_read_external_id: event.external_id,
+      updated_at: now(),
+    });
+    writeJson(stdout, pref);
   });
 }
 

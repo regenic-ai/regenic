@@ -281,6 +281,10 @@ pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
 ```bash
 pnpm local inbox --database ./regenic.db --org local-owner
 
+# 确认该 Event 对应的精确 inbound read cursor。
+pnpm local inbox-ack --database ./regenic.db --org local-owner \
+	--event <event-id>
+
 # 人工 triage 覆盖当前工作分层，但不会修改 Event。
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending

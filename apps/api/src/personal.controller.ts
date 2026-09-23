@@ -148,6 +148,12 @@ export class PersonalController {
     ));
   }
 
+  @Post("inbox/:eventId/ack")
+  acknowledgeInboxEvent(@Param("eventId") eventId: string) {
+    noteHumanActivity();
+    return this.guard(() => this.inbox.acknowledgeInboxEvent(eventId));
+  }
+
   @Post("presence")
   reportPresence(
     @Body()

@@ -91,6 +91,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 - AuthorityStore / BlobStore writes
 - ACL `visible()` and authority boundaries
 - D0 filter and layer: `current_work` / `outside_current_work` / `pending`; the Event stays; never auto-defer
+- Acknowledging an Inbox Event records that Event's exact inbound cursor, asks the source driver to acknowledge the same cursor when supported, and may fold completed work
 - Human triage may explicitly override an Event's layer; the disposition keeps its prior reason codes, records `human_triage`, and never mutates the Event
 - Standards application and revision hooks
 - Dispatch: outside current work vs pending
