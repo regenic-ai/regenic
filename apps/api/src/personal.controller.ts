@@ -164,6 +164,16 @@ export class PersonalController {
     return this.guard(() => this.inbox.setInboxEventHidden(eventId, false));
   }
 
+  @Post("inbox/:eventId/pin")
+  pinInboxEvent(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.setInboxEventPinned(eventId, true));
+  }
+
+  @Post("inbox/:eventId/unpin")
+  unpinInboxEvent(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.setInboxEventPinned(eventId, false));
+  }
+
   @Post("inbox/:eventId/triage/reset")
   resetInboxTriage(@Param("eventId") eventId: string) {
     return this.guard(() => this.inbox.resetInboxTriage(eventId));

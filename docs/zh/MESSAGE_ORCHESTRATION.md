@@ -93,6 +93,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 - D0 过滤与分层：`current_work` / `outside_current_work` / `pending`；Event 仍留下；从不自动 defer
 - 确认 Inbox Event 会记录该 Event 的精确 inbound cursor；支持时要求 source driver 确认同一 cursor，并可能折叠已完成 work
 - 折叠 Inbox Event 会将人工 conversation preference 应用到其派生 thread；该 preference 会跨新 work 保持折叠，直到人工显式恢复
+- 置顶 Inbox Event 会将人工 conversation preference 应用到其派生 thread；置顶 conversation 在 normal 与 attention 列表中领先，且不改变 Event 或 work state
 - 人工 triage 可以显式覆盖 Event 的分层；disposition 会保留先前 reason code、记录 `human_triage`，且绝不修改 Event
 - 重置人工 triage 会从持久化的 Event、body、surface 与 weight hint 重新运行自动分层；它替换人工决策，而不是保留 `human_triage`
 - 标准的应用与修订钩子

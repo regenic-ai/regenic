@@ -1153,6 +1153,16 @@ describe("regenic-local", () => {
     ]);
     assert.equal(unfolded.hidden, false);
     assert.equal(unfolded.hidden_reason, null);
+    const pinned = await run([
+      "inbox-pin", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id,
+    ]);
+    assert.equal(pinned.pinned, true);
+    const unpinned = await run([
+      "inbox-unpin", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id,
+    ]);
+    assert.equal(unpinned.pinned, false);
     const reset = await run([
       "inbox-triage-reset", "--database", database, "--blob-root", blobRoot,
       "--org", "local-owner", "--event", inbox[0].event.id,
