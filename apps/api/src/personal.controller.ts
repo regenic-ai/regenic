@@ -154,6 +154,16 @@ export class PersonalController {
     return this.guard(() => this.inbox.acknowledgeInboxEvent(eventId));
   }
 
+  @Post("inbox/:eventId/fold")
+  foldInboxEvent(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.setInboxEventHidden(eventId, true));
+  }
+
+  @Post("inbox/:eventId/unfold")
+  unfoldInboxEvent(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.setInboxEventHidden(eventId, false));
+  }
+
   @Post("presence")
   reportPresence(
     @Body()

@@ -1141,6 +1141,18 @@ describe("regenic-local", () => {
     ]);
     assert.equal(acknowledged.last_read_external_id, "ask-1");
     assert.equal(acknowledged.last_read_at, "2026-08-12T23:00:00.000Z");
+    const folded = await run([
+      "inbox-fold", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id,
+    ]);
+    assert.equal(folded.hidden, true);
+    assert.equal(folded.hidden_reason, "human");
+    const unfolded = await run([
+      "inbox-unfold", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id,
+    ]);
+    assert.equal(unfolded.hidden, false);
+    assert.equal(unfolded.hidden_reason, null);
   });
 
   it("exports append-only Event metadata as JSONL without content bodies", async () => {

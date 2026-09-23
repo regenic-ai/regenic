@@ -285,6 +285,12 @@ pnpm local inbox --database ./regenic.db --org local-owner
 pnpm local inbox-ack --database ./regenic.db --org local-owner \
 	--event <event-id>
 
+# Fold or restore this Event's conversation on the message console.
+pnpm local inbox-fold --database ./regenic.db --org local-owner \
+	--event <event-id>
+pnpm local inbox-unfold --database ./regenic.db --org local-owner \
+	--event <event-id>
+
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending

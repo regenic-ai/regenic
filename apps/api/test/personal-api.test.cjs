@@ -447,6 +447,32 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("folds and unfolds an inbox event's thread with human preference", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const folded = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/fold`, { method: "POST" })
+      ).json();
+      assert.equal(folded.hidden, true);
+      assert.equal(folded.hidden_reason, "human");
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
+      assert.equal((await (await fetch(`${origin}/v1/me/inbox?list=hidden`)).json()).length, 1);
+
+      const unfolded = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/unfold`, { method: "POST" })
+      ).json();
+      assert.equal(unfolded.hidden, false);
+      assert.equal(unfolded.hidden_reason, null);
+      assert.equal((await (await fetch(`${origin}/v1/me/inbox`)).json()).length, 1);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lists a tombstoned thread on the hidden list after policy fold", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
