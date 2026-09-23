@@ -285,6 +285,12 @@ pnpm local inbox --database ./regenic.db --org local-owner
 pnpm local inbox-ack --database ./regenic.db --org local-owner \
 	--event <event-id>
 
+# 在消息控制台中折叠或恢复该 Event 所在的 conversation。
+pnpm local inbox-fold --database ./regenic.db --org local-owner \
+	--event <event-id>
+pnpm local inbox-unfold --database ./regenic.db --org local-owner \
+	--event <event-id>
+
 # 人工 triage 覆盖当前工作分层，但不会修改 Event。
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending

@@ -147,6 +147,7 @@ export interface ConversationPrefView {
   title: string | null;
   pinned: boolean;
   hidden: boolean;
+  hidden_reason: "human" | "policy" | null;
   last_read_at: string | null;
   last_read_external_id: string | null;
   updated_at: string;
@@ -1739,6 +1740,24 @@ export class PersonalInboxService {
     });
   }
 
+  async setInboxEventHidden(
+    eventId: string,
+    hidden: boolean,
+  ): Promise<ConversationPrefView> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    const decision = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !decision) {
+      throw new PersonalConnectorError("not_found", "Inbox event was not found", 404);
+    }
+    return this.updateConversationPrefs({
+      thread_id: conversationId(event.source, event.external_id, event.id),
+      hidden,
+    });
+  }
+
   async answerConversationPrompt(
     input: ConversationPromptInput,
   ): Promise<{ accepted: true; thread_id: string; prompt_id: string }> {
@@ -2447,6 +2466,7 @@ function toPrefView(pref: ConversationPref): ConversationPrefView {
     title: pref.title,
     pinned: pref.pinned,
     hidden: pref.hidden === true,
+    hidden_reason: pref.hidden_reason ?? null,
     last_read_at: pref.last_read_at,
     last_read_external_id: pref.last_read_external_id,
     updated_at: pref.updated_at,

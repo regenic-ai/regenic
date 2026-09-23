@@ -38,6 +38,7 @@ import {
   validateUpgradeEvidence,
   detectStandardDrift,
   detectStandardHealth,
+  foldByHuman,
   type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
@@ -59,6 +60,7 @@ import {
   type AgentRunOutput,
   type AgentRunRecord,
   type AgentRunStatus,
+  unfold,
 } from "@regenic/domain";
 import {
   dshSessionKey,
@@ -167,6 +169,12 @@ export async function runLocalCli(
       return;
     case "inbox-ack":
       await acknowledgeInboxEvent(commandOptions, stdout, now);
+      return;
+    case "inbox-fold":
+      await setInboxEventHidden(commandOptions, stdout, now, true);
+      return;
+    case "inbox-unfold":
+      await setInboxEventHidden(commandOptions, stdout, now, false);
       return;
     case "context-assemble":
       await assembleContext(commandOptions, stdout, createId);
@@ -676,6 +684,30 @@ async function acknowledgeInboxEvent(options: CommandOptions, stdout: CliOutput,
       thread_id: `${event.source}:${event.external_id}`,
       last_read_at: event.occurred_at,
       last_read_external_id: event.external_id,
+      updated_at: now(),
+    });
+    writeJson(stdout, pref);
+  });
+}
+
+async function setInboxEventHidden(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+  hidden: boolean,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const authority = host.get("authority");
+    const event = await authority.getEvent(orgId, requireOption(options, "event"));
+    const decision = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !decision) throw new Error("Inbox event was not found");
+    const fold = hidden ? foldByHuman() : unfold();
+    const pref = await authority.putConversationPref({
+      org_id: orgId,
+      thread_id: `${event.source}:${event.external_id}`,
+      hidden: fold.hidden,
+      hidden_reason: fold.reason,
       updated_at: now(),
     });
     writeJson(stdout, pref);
