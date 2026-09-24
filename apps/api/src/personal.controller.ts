@@ -116,6 +116,7 @@ export class PersonalController {
     @Query("limit") limit?: string,
     @Query("list") list?: string,
     @Query("membership") membership?: string,
+    @Query("disposition") disposition?: string,
     @Query("locale") locale?: string,
     @Headers("accept-language") acceptLanguage?: string,
   ) {
@@ -132,6 +133,7 @@ export class PersonalController {
       thread_id: threadId?.trim() || undefined,
       limit: limit?.trim() ? Number(limit) : undefined,
       list: list?.trim() || membership?.trim() || undefined,
+      disposition: disposition === "pending" ? ("pending" as const) : undefined,
       locale: requestLocale(locale, acceptLanguage),
     };
     return this.guard(async () => this.inbox.listInbox(query));

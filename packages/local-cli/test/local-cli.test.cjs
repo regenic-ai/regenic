@@ -1206,6 +1206,11 @@ describe("regenic-local", () => {
     assert.equal(reapplied.disposition, "pending");
     assert.ok(reapplied.reason_codes.includes("policy_actionable"));
     assert.ok(reapplied.reason_codes.includes("personal_dispatch_policy"));
+    assert.deepEqual(await run(["inbox", "--database", database, "--org", "local-owner"]), []);
+    const pending = await run(["inbox-pending", "--database", database, "--org", "local-owner"]);
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].event.id, inbox[0].event.id);
+    assert.equal(pending[0].decision.disposition, "pending");
   });
 
   it("exports append-only Event metadata as JSONL without content bodies", async () => {

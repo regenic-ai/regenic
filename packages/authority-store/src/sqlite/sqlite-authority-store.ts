@@ -3893,7 +3893,11 @@ export class SqliteAuthorityStore
         params: [...params, ...tail.orderParams],
       };
     }
-    const { clauses, params } = this.inboxClauses(orgId, query, "current_work");
+    const { clauses, params } = this.inboxClauses(
+      orgId,
+      query,
+      query?.disposition ?? "current_work",
+    );
     if (!scoped) {
       clauses.push(notHiddenSql("e"));
       params.push(orgId);
@@ -3938,15 +3942,16 @@ export class SqliteAuthorityStore
   private inboxClauses(
     orgId: string,
     query: InboxQuery | undefined,
-    disposition: "current_work" | "any",
+    disposition: "current_work" | "pending" | "any",
     tables: { event?: string; disposition?: string } = {},
   ): { clauses: string[]; params: unknown[] } {
     const event = tables.event ?? "e";
     const decision = tables.disposition ?? "d";
     const clauses = [`${event}.org_id = ?`];
     const params: unknown[] = [orgId];
-    if (disposition === "current_work") {
-      clauses.push(`${decision}.disposition = 'current_work'`);
+    if (disposition !== "any") {
+      clauses.push(`${decision}.disposition = ?`);
+      params.push(disposition);
     }
     if (query?.source) {
       clauses.push(`${event}.source = ?`);

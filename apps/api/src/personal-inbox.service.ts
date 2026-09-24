@@ -231,6 +231,7 @@ export interface InboxListQuery {
   thread_ids?: string[];
   limit?: number;
   list?: string;
+  disposition?: "current_work" | "pending";
   locale?: CopyLocale;
 }
 
@@ -2512,7 +2513,8 @@ export function inboxStoreQuery(
     before: query.before,
     before_id: query.before_id,
     limit: query.limit,
-    siblings: true,
+    siblings: !query.disposition,
+    disposition: query.disposition,
     list: normalizeInboxListView(query.list),
   };
 }
