@@ -54,6 +54,30 @@ describe("deadline", () => {
     assert.equal(looksLikeDeadlineExceededMessage("token expired"), false);
   });
 
+  it("recognizes lease contention as a soft miss", () => {
+    const {
+      isLeaseUnavailable,
+      isSyncSoftMiss,
+      looksLikeLeaseUnavailableMessage,
+      looksLikeSyncSoftMissMessage,
+    } = require("../dist");
+    assert.equal(isLeaseUnavailable({ code: "lease_unavailable" }), true);
+    assert.equal(isLeaseUnavailable(new Error("Connector stream is already leased")), false);
+    assert.equal(
+      isSyncSoftMiss({ code: "lease_unavailable" }),
+      true,
+    );
+    assert.equal(
+      looksLikeLeaseUnavailableMessage("Connector stream is already leased"),
+      true,
+    );
+    assert.equal(
+      looksLikeSyncSoftMissMessage("poll x timed out after 20000ms"),
+      true,
+    );
+    assert.equal(looksLikeSyncSoftMissMessage("token expired"), false);
+  });
+
   it("lets a fast install finish while another hangs", async () => {
     const seen = [];
     const started = Date.now();

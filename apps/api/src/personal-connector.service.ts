@@ -9,7 +9,7 @@ import {
   InProcessConnectorInvoker,
   readEnvCredential,
   DeadlineExceededError,
-  isDeadlineExceeded,
+  isSyncSoftMiss,
   INGEST_SCHEMA_VERSION,
   InstallationQuotaBook,
   asConnectorHost,
@@ -23,7 +23,6 @@ import {
   parseConversationThread,
   requireCreateThread,
   requireWebhookPorts,
-  currentSyncLane,
   runInSyncLane,
   SyncEngine,
   applyKernelPressureToSyncBudget,
@@ -3587,7 +3586,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     idleMs?: number;
     error?: unknown;
   }): void {
-    const softMiss = input.error != null && isDeadlineExceeded(input.error);
+    const softMiss = input.error != null && isSyncSoftMiss(input.error);
     if (input.error && !softMiss) {
       this.streamErrors.set(input.key, errorMessage(input.error));
     } else {
@@ -3795,15 +3794,8 @@ async function pollStream(
     });
     runs.push(run);
     if (run.status === "lease_unavailable") {
-      if (currentSyncLane() === "interactive") {
-        // Same-stream history may hold the lease; retry on the next focus/tick.
-        break;
-      }
-      throw new PersonalConnectorError(
-        "lease_unavailable",
-        "Connector stream is already leased",
-        409,
-      );
+      // Another lane holds the lease; retry on the next tick without sticky-alert.
+      break;
     }
     if (run.status === "throttled" || run.status === "unsupported_mode") {
       break;
