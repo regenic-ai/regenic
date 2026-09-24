@@ -179,6 +179,11 @@ export class PersonalController {
     return this.guard(() => this.inbox.resetInboxTriage(eventId));
   }
 
+  @Post("inbox/:eventId/dispatch-policy/reapply")
+  reapplyInboxDispatchPolicy(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.reapplyInboxDispatchPolicy(eventId));
+  }
+
   @Post("presence")
   reportPresence(
     @Body()

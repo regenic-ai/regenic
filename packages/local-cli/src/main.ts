@@ -197,6 +197,9 @@ export async function runLocalCli(
     case "dispatch-policy-set":
       await putPersonalDispatchPolicy(commandOptions, stdout, now);
       return;
+    case "inbox-dispatch-reapply":
+      await reapplyInboxDispatchPolicy(commandOptions, stdout, now);
+      return;
     case "context-assemble":
       await assembleContext(commandOptions, stdout, createId);
       return;
@@ -812,6 +815,39 @@ async function putPersonalDispatchPolicy(options: CommandOptions, stdout: CliOut
       now(),
     );
     writeJson(stdout, policy);
+  });
+}
+
+async function reapplyInboxDispatchPolicy(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
+    const authority = host.get("authority");
+    const event = await authority.getEvent(orgId, requireOption(options, "event"));
+    const current = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !current) throw new Error("Inbox event was not found");
+    const value = await authority.getUiPref(orgId, PERSONAL_DISPATCH_POLICY_PREF_KEY);
+    const policy = value
+      ? validatePersonalDispatchPolicy(JSON.parse(value))
+      : DEFAULT_PERSONAL_DISPATCH_POLICY;
+    const blob = event.content_hash ? await authority.findBlob(event.content_hash) : null;
+    const bytes = blob && event.content_hash ? await host.get("blobs").get(event.content_hash) : undefined;
+    const parts = blob && bytes ? parseStoredContentParts(bytes) : undefined;
+    const surface = parts ? surfaceFromParts(parts) : undefined;
+    const arranged = arrangeMessage({
+      event,
+      type: surface?.type,
+      kind: surface?.kind,
+      text: blob && bytes ? bodyTextFromStored(bytes, blob.media_type) : undefined,
+      weight_hints: event.weight_hints,
+      dispatch_policy: policy,
+      now: now(),
+    });
+    const decision = {
+      ...arranged,
+      reason_codes: [...new Set([...arranged.reason_codes, "personal_dispatch_policy"])],
+    };
+    await authority.putDisposition(decision);
+    writeJson(stdout, decision);
   });
 }
 
