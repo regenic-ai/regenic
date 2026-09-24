@@ -454,6 +454,10 @@ describe("personal /v1/me", () => {
       assert.ok(decision.reason_codes.includes("policy_actionable"));
       assert.ok(decision.reason_codes.includes("personal_dispatch_policy"));
       assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
+      const pending = await (await fetch(`${origin}/v1/me/inbox?disposition=pending`)).json();
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].event.id, eventId);
+      assert.equal(pending[0].decision.disposition, "pending");
     } finally {
       await app.close();
     }
