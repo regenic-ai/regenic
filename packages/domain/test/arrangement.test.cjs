@@ -126,6 +126,52 @@ describe("arrangeMessage", () => {
     assert.deepEqual(decision.reason_codes, ["weight_hint"]);
   });
 
+  it("applies a personal policy to configurable dispositions only", () => {
+    const policy = {
+      version: 1,
+      high_hint_disposition: "pending",
+      actionable_disposition: "pending",
+      short_text_disposition: "outside_current_work",
+      default_disposition: "outside_current_work",
+    };
+    const actionable = arrangeMessage({
+      event: event(),
+      text: "Please review the release.",
+      dispatch_policy: policy,
+    });
+    assert.equal(actionable.disposition, "pending");
+    assert.deepEqual(actionable.reason_codes, ["policy_actionable"]);
+    const defaulted = arrangeMessage({
+      event: event(),
+      text: "A detailed status update with no direct request.",
+      dispatch_policy: policy,
+    });
+    assert.equal(defaulted.disposition, "outside_current_work");
+    assert.deepEqual(defaulted.reason_codes, ["policy_default_personal_attention"]);
+  });
+
+  it("does not let a personal policy override safety filters", () => {
+    const policy = {
+      version: 1,
+      high_hint_disposition: "current_work",
+      actionable_disposition: "current_work",
+      short_text_disposition: "current_work",
+      default_disposition: "current_work",
+    };
+    assert.equal(
+      arrangeMessage({ event: event(), text: "thanks", dispatch_policy: policy }).disposition,
+      "outside_current_work",
+    );
+    assert.equal(
+      arrangeMessage({ event: event(), kind: "assistant", text: "pong", dispatch_policy: policy }).disposition,
+      "outside_current_work",
+    );
+    assert.equal(
+      arrangeMessage({ event: event(), type: "task", text: "Approve travel", dispatch_policy: policy }).disposition,
+      "current_work",
+    );
+  });
+
   it("filters Chinese acknowledgements and keeps Chinese requests", () => {
     assert.deepEqual(
       arrangeMessage({ event: event(), text: "收到" }).reason_codes,
