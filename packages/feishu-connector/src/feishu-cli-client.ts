@@ -8,6 +8,7 @@ import {
   DeadlineExceededError,
   SyncSlotPool,
   withDeadline,
+  type SyncLane,
 } from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
@@ -144,18 +145,25 @@ export interface LarkCliClientOptions {
   fetch?: typeof fetch;
 }
 
-export const LARK_CLI_CONCURRENCY = 2;
+/** Dedicated slots: open/latest, background live, history, catalog+media. */
+export const LARK_CLI_CONCURRENCY = 4;
 export const LARK_CLI_RETRIES = 2;
 
 const larkCliSlots = new SyncSlotPool({
   total: LARK_CLI_CONCURRENCY,
-  reserved: { interactive: 1 },
+  reserved: { interactive: 1, live: 1, history: 1, catalog: 1 },
 });
 
 const readStatusInflight = new Map<string, Promise<Map<string, boolean>>>();
 
+/** Media shares the catalog auxiliary slot so downloads do not steal live/history capacity. */
+function larkCliSlotLane(): SyncLane {
+  const lane = currentSyncLane();
+  return lane === "media" ? "catalog" : lane;
+}
+
 export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
-  return larkCliSlots.withSlot(currentSyncLane(), work);
+  return larkCliSlots.withSlot(larkCliSlotLane(), work);
 }
 
 export function resetLarkCliSlot(): void {
