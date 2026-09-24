@@ -434,6 +434,31 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("reapplies the saved dispatch policy to an inbox event", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const defaults = await (await fetch(`${origin}/v1/me/dispatch-policy`)).json();
+      await fetch(`${origin}/v1/me/dispatch-policy`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ policy: { ...defaults, actionable_disposition: "pending" } }),
+      });
+      const decision = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/dispatch-policy/reapply`, { method: "POST" })
+      ).json();
+      assert.equal(decision.disposition, "pending");
+      assert.ok(decision.reason_codes.includes("policy_actionable"));
+      assert.ok(decision.reason_codes.includes("personal_dispatch_policy"));
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lets a human triage an inbox event out of current work", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
