@@ -297,6 +297,11 @@ pnpm local inbox-pin --database ./regenic.db --org local-owner \
 pnpm local inbox-unpin --database ./regenic.db --org local-owner \
 	--event <event-id>
 
+# Inspect or update the versioned personal dispatch policy.
+pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
+pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
+	--policy ./dispatch-policy.json
+
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending

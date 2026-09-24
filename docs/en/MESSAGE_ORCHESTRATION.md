@@ -96,6 +96,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 - Pinning an Inbox Event applies a human conversation preference to its derived thread; pinned conversations lead the normal and attention list views without changing the Event or work state
 - Human triage may explicitly override an Event's layer; the disposition keeps its prior reason codes, records `human_triage`, and never mutates the Event
 - Resetting a human triage re-runs the automatic arrangement from the persisted Event, body, surface, and weight hints; it replaces the manual decision rather than retaining `human_triage`
+- A versioned personal dispatch policy records the intended dispositions for high hints, actionable messages, short text, and the fallback path; this configuration surface does not alter ingest decisions until the policy-aware arranger is enabled
 - Standards application and revision hooks
 - Dispatch: outside current work vs pending
 - Audit of reads and sends

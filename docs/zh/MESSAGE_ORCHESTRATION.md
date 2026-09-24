@@ -96,6 +96,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 - 置顶 Inbox Event 会将人工 conversation preference 应用到其派生 thread；置顶 conversation 在 normal 与 attention 列表中领先，且不改变 Event 或 work state
 - 人工 triage 可以显式覆盖 Event 的分层；disposition 会保留先前 reason code、记录 `human_triage`，且绝不修改 Event
 - 重置人工 triage 会从持久化的 Event、body、surface 与 weight hint 重新运行自动分层；它替换人工决策，而不是保留 `human_triage`
+- 版本化个人 dispatch policy 记录 high hint、actionable message、short text 与 fallback path 的目标 disposition；在启用 policy-aware arranger 前，该配置面不会改变 ingest decision
 - 标准的应用与修订钩子
 - 调度：不进入当前工作 vs pending
 - 读与发的审计

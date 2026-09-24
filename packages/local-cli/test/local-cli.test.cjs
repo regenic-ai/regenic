@@ -23,6 +23,25 @@ async function createRoot() {
   return root;
 }
 
+it("stores a personal dispatch policy through the local CLI", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const policyPath = join(root, "dispatch-policy.json");
+  const authority = new SqliteAuthorityStore(database);
+  authority.close();
+  const defaults = await run(["dispatch-policy-get", "--database", database, "--org", "local-owner"]);
+  const policy = {
+    ...defaults,
+    high_hint_disposition: "pending",
+    default_disposition: "outside_current_work",
+  };
+  await writeFile(policyPath, JSON.stringify(policy));
+  assert.deepEqual(await run([
+    "dispatch-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
+  ]), policy);
+  assert.deepEqual(await run(["dispatch-policy-get", "--database", database, "--org", "local-owner"]), policy);
+});
+
 async function run(args, options = {}) {
   let output = "";
   await runLocalCli(args, {
