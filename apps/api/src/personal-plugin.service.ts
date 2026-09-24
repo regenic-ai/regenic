@@ -55,13 +55,18 @@ export class PersonalPluginService implements OnModuleDestroy {
     };
   }
 
-  onModuleDestroy(): void {
+  stopBackground(): void {
     if (this.debounce) {
       clearTimeout(this.debounce);
       this.debounce = undefined;
     }
     this.watcher?.close();
     this.watcher = undefined;
+    this.started = false;
+  }
+
+  onModuleDestroy(): void {
+    this.stopBackground();
   }
 
   private watchPluginDir(env: NodeJS.ProcessEnv): void {

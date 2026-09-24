@@ -12,9 +12,18 @@ export type ConnectorAlert = {
   hint: string | null;
 };
 
-/** Soft poll miss — keep in sync with domain `looksLikeDeadlineExceededMessage`. */
-function looksLikeDeadlineExceededMessage(message: string): boolean {
-  return /\btimed out after \d+ms\b/i.test(message.trim());
+/** Soft poll miss — keep in sync with domain `looksLikeSyncSoftMissMessage`. */
+function looksLikeSyncSoftMissMessage(message: string): boolean {
+  const text = message.trim();
+  if (/\btimed out after \d+ms\b/i.test(text)) {
+    return true;
+  }
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("already leased") ||
+    lower.includes("already syncing") ||
+    lower.includes("lease_unavailable")
+  );
 }
 
 function isActiveInstallation(item: EngineInstallationView): boolean {
@@ -109,8 +118,8 @@ function pullConnectorAlerts(
     }
     const error =
       stream.last_error?.trim() || t("chrome.connectorStreamError");
-    // Poll deadlines are soft misses (retry next idle); do not sticky-banner.
-    if (looksLikeDeadlineExceededMessage(error)) {
+    // Poll deadlines and lease contention are soft misses; do not sticky-banner.
+    if (looksLikeSyncSoftMissMessage(error)) {
       continue;
     }
     const matched = matchStreamInstallation(stream, activeInstallations);
@@ -133,7 +142,7 @@ function pullConnectorAlerts(
 
   if (pull.last_error?.trim()) {
     const top = pull.last_error.trim();
-    if (looksLikeDeadlineExceededMessage(top)) {
+    if (looksLikeSyncSoftMissMessage(top)) {
       return alerts;
     }
     // Prefer a failing stream's identity; otherwise stay generic — do not

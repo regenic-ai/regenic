@@ -1,5 +1,6 @@
 import type { ArrangementDecision, InboxItem } from "./arrangement";
 import type { SyncPollHint, SyncStore } from "./sync-contracts";
+import type { SyncWorkStore } from "./sync-work";
 
 export const INGEST_SCHEMA_VERSION = "1.0" as const;
 
@@ -138,6 +139,8 @@ export interface ConnectorCursor {
 export interface ConnectorPollOptions {
   /** One older/history page instead of the live/recent page. */
   older?: boolean;
+  /** One latest page for the thread the user just opened. Serializable across hosts. */
+  latest?: boolean;
   /**
    * Download attachments.
    * - `false`: text/history only; enqueue media jobs but do not download.
@@ -317,6 +320,32 @@ export interface RepointContentInput {
 export interface IngestCommitRequest {
   appends: NewEvent[];
   dispositions: ArrangementDecision[];
+}
+
+export interface CommitSyncPage {
+  attempt: NewIngestAttempt;
+  ingest?: IngestCommitRequest;
+  settle: SettleIngestAttempt;
+  prefs?: ConversationPrefPatch[];
+}
+
+export interface CommitSyncPageResult {
+  attempt: IngestAttempt;
+  events: EventRecord[];
+}
+
+/** Hint from ConnectorRunner so create-only pages share one Authority commit. */
+export interface SyncPageCommit {
+  attempt: NewIngestAttempt;
+  settle: Omit<
+    SettleIngestAttempt,
+    | "accepted_count"
+    | "duplicate_count"
+    | "quarantined_count"
+    | "retryable_failure_count"
+    | "error_code"
+    | "quarantines"
+  >;
 }
 
 export interface EventRevision extends NewEvent {
@@ -524,6 +553,8 @@ export interface AcquireConnectorLease {
   lease_owner: string;
   now: string;
   lease_duration_ms: number;
+  /** Interactive open-thread poll may take a lease held by background work. */
+  preempt?: boolean;
 }
 
 export interface ReleaseConnectorLease {
@@ -609,7 +640,51 @@ export interface SettleIngestAttempt {
   quarantines: NewIngestQuarantine[];
 }
 
-export interface ConnectorRuntimeStore extends SyncStore {
+export function ingestAttemptSummary(
+  records: readonly IngestRecordResult[],
+): Pick<
+  SettleIngestAttempt,
+  | "accepted_count"
+  | "duplicate_count"
+  | "quarantined_count"
+  | "retryable_failure_count"
+  | "error_code"
+> {
+  const retryable = records.find(
+    (record) => record.status === "retryable_failure",
+  );
+  return {
+    accepted_count: records.filter((record) => record.status === "accepted")
+      .length,
+    duplicate_count: records.filter((record) => record.status === "duplicate")
+      .length,
+    quarantined_count: records.filter(
+      (record) => record.status === "quarantined",
+    ).length,
+    retryable_failure_count: records.filter(
+      (record) => record.status === "retryable_failure",
+    ).length,
+    ...(retryable?.error_code ? { error_code: retryable.error_code } : {}),
+  };
+}
+
+export function ingestAttemptQuarantines(
+  records: readonly IngestRecordResult[],
+  now: string,
+  id: () => string,
+): NewIngestQuarantine[] {
+  return records
+    .filter((record) => record.status === "quarantined")
+    .map((record) => ({
+      id: id(),
+      record_external_id: record.external_id,
+      reason_code: record.error_code ?? "invalid_record",
+      safe_metadata: {},
+      created_at: now,
+    }));
+}
+
+export interface ConnectorRuntimeStore extends SyncStore, SyncWorkStore {
   createInstallation(input: NewConnectorInstallation): Promise<ConnectorInstallation>;
   findInstallation(id: string): Promise<ConnectorInstallation | null>;
   listInstallations(orgId: string): Promise<ConnectorInstallation[]>;
@@ -620,6 +695,7 @@ export interface ConnectorRuntimeStore extends SyncStore {
   releaseLease(input: ReleaseConnectorLease): Promise<boolean>;
   resetCursor(input: ResetConnectorCursor): Promise<ConnectorStreamCursor | null>;
   beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt>;
+  commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult>;
   settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt>;
   listAttempts(installationId: string, limit?: number): Promise<IngestAttempt[]>;
   latestAttempt(installationId: string): Promise<IngestAttempt | null>;
@@ -628,4 +704,8 @@ export interface ConnectorRuntimeStore extends SyncStore {
     installationId: string,
     streamKey: string,
   ): Promise<ConnectorStreamCursor | null>;
+  listCursors(
+    installationId: string,
+    streamKeys?: readonly string[],
+  ): Promise<ConnectorStreamCursor[]>;
 }

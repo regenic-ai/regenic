@@ -21,6 +21,7 @@ import type { Request } from "express";
 import { Observable } from "rxjs";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
+import { syncMetricsView } from "./sync-metrics-view";
 import { PersonalConnectorError, PersonalConnectorService } from "./personal-connector.service";
 import {
   conversationFocusThreadId,
@@ -264,6 +265,11 @@ export class PersonalController {
   getHeartbeat() {
     const started = Date.now();
     return this.guard(() => this.inbox.getHeartbeat(started));
+  }
+
+  @Get("sync-metrics")
+  getSyncMetrics() {
+    return this.guard(async () => syncMetricsView());
   }
 
   @Get("engine")
@@ -562,11 +568,74 @@ export class PersonalController {
   @Post("connectors/:id/sync")
   syncConnector(
     @Param("id") id: string,
-    @Body() body: { max_pages?: number } | undefined,
+    @Body()
+    body:
+      | {
+          mode?: "quick_start" | "continuous" | "archive";
+          max_pages?: number;
+          stream_keys?: string[];
+          archive_from?: string;
+          archive_to?: string;
+          run_window?: {
+            start_hour: number;
+            end_hour: number;
+            timezone?: string;
+          };
+        }
+      | undefined,
   ) {
     noteHumanActivity();
     return this.guard(() =>
-      this.connectors.sync(id, body?.max_pages, { discover: true }),
+      this.connectors.startSyncRun(id, body ?? {}),
+    );
+  }
+
+  @Get("sync-runs")
+  listSyncRuns(
+    @Query("installation_id") installationId?: string,
+    @Query("limit") limit?: string,
+  ) {
+    const parsed = limit ? Number(limit) : undefined;
+    return this.guard(() =>
+      this.connectors.listSyncRuns(
+        installationId,
+        Number.isInteger(parsed) && Number(parsed) > 0 ? parsed : undefined,
+      ),
+    );
+  }
+
+  @Get("sync-runs/:id")
+  getSyncRun(@Param("id") id: string) {
+    return this.guard(() => this.connectors.getSyncRun(id));
+  }
+
+  @Post("sync-runs/:id/pause")
+  pauseSyncRun(@Param("id") id: string) {
+    return this.guard(() => this.connectors.commandSyncRun(id, "pause"));
+  }
+
+  @Post("sync-runs/:id/resume")
+  resumeSyncRun(@Param("id") id: string) {
+    return this.guard(() => this.connectors.commandSyncRun(id, "resume"));
+  }
+
+  @Post("sync-runs/:id/cancel")
+  cancelSyncRun(@Param("id") id: string) {
+    return this.guard(() => this.connectors.commandSyncRun(id, "cancel"));
+  }
+
+  @Get("connectors/:id/quarantines")
+  listConnectorQuarantines(@Param("id") id: string) {
+    return this.guard(() => this.connectors.listQuarantines(id));
+  }
+
+  @Post("connectors/:id/quarantines/retry")
+  retryConnectorQuarantines(
+    @Param("id") id: string,
+    @Body() body: { quarantine_id?: string } | undefined,
+  ) {
+    return this.guard(() =>
+      this.connectors.retryQuarantines(id, body?.quarantine_id),
     );
   }
 

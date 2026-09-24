@@ -28,21 +28,15 @@ importers:
       '@regenic/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@regenic/connector-host':
+        specifier: workspace:*
+        version: link:../../packages/connector-host
       '@regenic/context-engine':
         specifier: workspace:*
         version: link:../../packages/context-engine
-      '@regenic/cursor-connector':
-        specifier: workspace:*
-        version: link:../../packages/cursor-connector
       '@regenic/domain':
         specifier: workspace:*
         version: link:../../packages/domain
-      '@regenic/dsh-connector':
-        specifier: workspace:*
-        version: link:../../packages/dsh-connector
-      '@regenic/feishu-connector':
-        specifier: workspace:*
-        version: link:../../packages/feishu-connector
       '@regenic/lexical-index':
         specifier: workspace:*
         version: link:../../packages/lexical-index
@@ -52,12 +46,6 @@ importers:
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
-      '@regenic/slack-connector':
-        specifier: workspace:*
-        version: link:../../packages/slack-connector
-      '@regenic/whatsapp-personal':
-        specifier: workspace:*
-        version: link:../../packages/whatsapp-personal
       pg:
         specifier: ^8.13.1
         version: 8.22.0
@@ -122,9 +110,27 @@ importers:
       '@nestjs/core':
         specifier: ^10.4.15
         version: 10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@10.4.22)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@regenic/authority-store':
+        specifier: workspace:*
+        version: link:../../packages/authority-store
+      '@regenic/blob-store':
+        specifier: workspace:*
+        version: link:../../packages/blob-store
       '@regenic/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@regenic/context-engine':
+        specifier: workspace:*
+        version: link:../../packages/context-engine
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@regenic/model-provider':
+        specifier: workspace:*
+        version: link:../../packages/model-provider
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../../packages/plugin-host
       bullmq:
         specifier: ^5.34.5
         version: 5.81.3
@@ -214,6 +220,43 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/connector-contract:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/connector-host:
+    dependencies:
+      '@regenic/cursor-connector':
+        specifier: workspace:*
+        version: link:../cursor-connector
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/dsh-connector':
+        specifier: workspace:*
+        version: link:../dsh-connector
+      '@regenic/feishu-connector':
+        specifier: workspace:*
+        version: link:../feishu-connector
+      '@regenic/slack-connector':
+        specifier: workspace:*
+        version: link:../slack-connector
+      '@regenic/whatsapp-personal':
+        specifier: workspace:*
+        version: link:../whatsapp-personal
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/context-engine:
     dependencies:
       '@regenic/domain':
@@ -257,6 +300,9 @@ importers:
 
   packages/domain:
     dependencies:
+      '@regenic/connector-contract':
+        specifier: workspace:*
+        version: link:../connector-contract
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host

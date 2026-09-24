@@ -57,6 +57,24 @@ function engine(over: Partial<PersonalEngineView> = {}): PersonalEngineView {
 }
 
 describe("connector alerts", () => {
+  it("does not sticky-banner a lease contention soft miss", () => {
+    const view = engine({
+      pull: pull({
+        streams: [
+          {
+            stream_key: "inst-1:chat:oc_1",
+            thread_id: null,
+            label: "李必琪",
+            phase: "error",
+            last_error: "Connector stream is already leased",
+          },
+        ],
+      }),
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+    assert.equal(hasConnectorFailure(view), false);
+  });
+
   it("does not sticky-banner a poll deadline soft miss", () => {
     const view = engine({
       pull: pull({

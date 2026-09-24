@@ -1,6 +1,20 @@
-import { t } from "../../shared/i18n.ts";
+import { t, type MessageKey } from "../../shared/i18n.ts";
+import { KernelRequestError } from "./kernel-request.ts";
 
-export function connectorActionError(message: string): string {
+const ERROR_COPY: Record<string, MessageKey> = {
+  already_installed: "error.connector.alreadyInstalled",
+  disabled: "error.connector.disabled",
+  channel_required: "error.connector.slackChannel",
+  conversation_required: "error.connector.feishuConversation",
+  kinds_required: "error.connector.feishuKinds",
+};
+
+export function connectorActionError(error: unknown): string {
+  const code = kernelErrorCode(error);
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (code && ERROR_COPY[code]) {
+    return t(ERROR_COPY[code]);
+  }
   const text = message.toLowerCase();
   if (text.includes("already installed")) {
     return t("error.connector.alreadyInstalled");
@@ -17,22 +31,6 @@ export function connectorActionError(message: string): string {
   if (text.includes("not found")) {
     return t("error.connector.notFound");
   }
-  if (text.includes("requires channel_id") || text.includes("missing channel_id")) {
-    return t("error.connector.slackChannel");
-  }
-  if (text.includes("requires session_id")) {
-    return t("error.connector.dshSession");
-  }
-  if (
-    text.includes("requires chat_id") ||
-    text.includes("at least one group") ||
-    text.includes("at least one conversation")
-  ) {
-    return t("error.connector.feishuConversation");
-  }
-  if (text.includes("groups, direct messages, or both")) {
-    return t("error.connector.feishuKinds");
-  }
   return message;
 }
 
@@ -47,4 +45,14 @@ export function networkWatchHint(hint: string | null | undefined): string | null
     return t("network.blockedHint");
   }
   return hint;
+}
+
+function kernelErrorCode(error: unknown): string | undefined {
+  if (error instanceof KernelRequestError) {
+    return error.code;
+  }
+  if (typeof error === "string") {
+    return undefined;
+  }
+  return undefined;
 }

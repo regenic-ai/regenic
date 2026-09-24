@@ -84,6 +84,20 @@ import type {
   WorkStore,
   ExecutorInstallation,
   ExecutorStore,
+  ClaimSyncWork,
+  CommandSyncRun,
+  CommitSyncPage,
+  CommitSyncPageResult,
+  EnqueueSyncWork,
+  ListSyncRunsQuery,
+  NewSyncRun,
+  RenewSyncWork,
+  SettleSyncWork,
+  SyncRun,
+  SyncWorkIdentity,
+  SyncWorkRecord,
+  UnassignedSyncWorkQuery,
+  WakeUnassignedSyncWork,
 } from "@regenic/domain";
 import { resolve } from "node:path";
 import { SqliteWriteClient } from "./sqlite-write-client";
@@ -525,6 +539,71 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getCursor", [installationId, streamKey]);
   }
 
+  async listCursors(
+    installationId: string,
+    streamKeys?: readonly string[],
+  ): Promise<ConnectorStreamCursor[]> {
+    return this.reader.call("listCursors", [installationId, streamKeys]);
+  }
+
+  async createSyncRun(input: NewSyncRun): Promise<SyncRun> {
+    return this.writer.call("createSyncRun", [input]);
+  }
+
+  async getSyncRun(id: string, orgId: string): Promise<SyncRun | null> {
+    return this.reader.call("getSyncRun", [id, orgId]);
+  }
+
+  async listSyncRuns(query: ListSyncRunsQuery): Promise<SyncRun[]> {
+    return this.reader.call("listSyncRuns", [query]);
+  }
+
+  async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
+    return this.writer.call("commandSyncRun", [input]);
+  }
+
+  async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {
+    return this.writer.call("enqueueSyncWork", [input]);
+  }
+
+  async enqueueSyncWorkMany(
+    inputs: readonly EnqueueSyncWork[],
+  ): Promise<number> {
+    return this.writer.call("enqueueSyncWorkMany", [inputs]);
+  }
+
+  async claimSyncWork(input: ClaimSyncWork): Promise<SyncWorkRecord[]> {
+    return this.writer.call("claimSyncWork", [input]);
+  }
+
+  async renewSyncWork(input: RenewSyncWork): Promise<boolean> {
+    return this.writer.call("renewSyncWork", [input]);
+  }
+
+  async settleSyncWork(
+    input: SettleSyncWork,
+  ): Promise<SyncWorkRecord | null> {
+    return this.writer.call("settleSyncWork", [input]);
+  }
+
+  async hasUnassignedSyncWork(
+    query: UnassignedSyncWorkQuery = {},
+  ): Promise<boolean> {
+    return this.reader.call("hasUnassignedSyncWork", [query]);
+  }
+
+  async listUnassignedSyncWorkIdentities(query: {
+    installation_id: string;
+  }): Promise<SyncWorkIdentity[]> {
+    return this.reader.call("listUnassignedSyncWorkIdentities", [query]);
+  }
+
+  async wakeUnassignedSyncWork(
+    input: WakeUnassignedSyncWork,
+  ): Promise<number> {
+    return this.writer.call("wakeUnassignedSyncWork", [input]);
+  }
+
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
     return this.reader.call("getSyncCatalog", [installationId]);
   }
@@ -740,6 +819,7 @@ export class SqliteSplitAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     return this.writer.call("acquireLease", [input]);
   }
@@ -756,6 +836,10 @@ export class SqliteSplitAuthorityStore
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
     return this.writer.call("beginAttempt", [input]);
+  }
+
+  async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    return this.writer.call("commitSyncPage", [input]);
   }
 
   async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {

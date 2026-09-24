@@ -65,6 +65,16 @@ const heartbeat: PersonalHeartbeatView = {
     catching_up_count: 218,
     last_tick_at: "2026-01-01T00:00:00.000Z",
     last_accepted_count: 7,
+    streams: [
+      {
+        stream_key: "chat:oc_1",
+        thread_id: "feishu:oc_1",
+        label: "熊峰",
+        phase: "pulling",
+        work: "live",
+        last_error: null,
+      },
+    ],
   },
   installations: [
     {
@@ -106,6 +116,7 @@ describe("runtime pulse", () => {
     assert.equal(next.installations.length, 1);
     assert.equal(next.pull?.phase, "pulling");
     assert.equal(next.pull?.catching_up_count, 218);
+    assert.equal(next.pull?.streams[0]?.label, "熊峰");
     assert.equal(next.database_path, "/tmp/regenic.db");
     assert.equal(next.pressure?.level, "elevated");
     assert.equal(next.installations[0]?.sync?.backfilling, 12);

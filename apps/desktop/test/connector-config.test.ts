@@ -3,8 +3,8 @@ import { describe, it } from "node:test";
 import {
   catalogFieldUsesSelect,
   configWithOptionNames,
-  conversationNameFromOptionLabel,
-  filterCatalogChatOptions,
+  filterCatalogFieldOptions,
+  optionTitle,
   resolveCatalogFieldOptions,
 } from "../src/renderer/src/connector-config.ts";
 
@@ -12,15 +12,16 @@ describe("configWithOptionNames", () => {
   const fields = [
     {
       key: "chat_ids",
+      option_labels_key: "chat_names",
       options: [
-        { value: "oc_1", label: "Group · 合伙" },
-        { value: "oc_2", label: "Direct · 李诗婷" },
-        { value: "oc_3", label: "Group · oc_3" },
+        { value: "oc_1", label: "Group · 合伙", kind: "group", title: "合伙" },
+        { value: "oc_2", label: "Direct · 李诗婷", kind: "p2p", title: "李诗婷" },
+        { value: "oc_3", label: "Group · oc_3", kind: "group", title: "oc_3" },
       ],
     },
   ];
 
-  it("writes chat_names from picked option labels", () => {
+  it("writes option labels from catalog titles", () => {
     assert.deepEqual(
       configWithOptionNames({ selection: "pick", chat_ids: "oc_1,oc_2" }, fields),
       {
@@ -31,7 +32,7 @@ describe("configWithOptionNames", () => {
     );
   });
 
-  it("drops stale chat_names when a label is still the raw id", () => {
+  it("drops stale labels when a title is still the raw id", () => {
     assert.deepEqual(
       configWithOptionNames(
         { chat_ids: "oc_1,oc_3", chat_names: "old,names" },
@@ -42,47 +43,40 @@ describe("configWithOptionNames", () => {
   });
 });
 
-describe("conversationNameFromOptionLabel", () => {
-  it("strips the catalog kind prefix", () => {
-    assert.equal(conversationNameFromOptionLabel("Group · 合伙", "oc_1"), "合伙");
+describe("optionTitle", () => {
+  it("uses the connector-supplied title", () => {
     assert.equal(
-      conversationNameFromOptionLabel("Direct · 李诗婷", "oc_2"),
-      "李诗婷",
+      optionTitle({ value: "oc_1", label: "Group · 合伙", title: "合伙" }),
+      "合伙",
     );
-    assert.equal(conversationNameFromOptionLabel("单聊 · Ada", "oc_3"), "Ada");
-    assert.equal(conversationNameFromOptionLabel("Group · oc_1", "oc_1"), "");
+    assert.equal(
+      optionTitle({ value: "oc_1", label: "Group · oc_1", title: "oc_1" }),
+      "",
+    );
   });
 });
 
-describe("filterCatalogChatOptions", () => {
+describe("filterCatalogFieldOptions", () => {
+  const field = { filter_options_by: "kinds" };
   const options = [
-    { value: "oc_g", label: "Group · Eng" },
-    { value: "oc_p", label: "Direct · Ada" },
+    { value: "oc_g", label: "Group · Eng", kind: "group", title: "Eng" },
+    { value: "oc_p", label: "Direct · Ada", kind: "p2p", title: "Ada" },
   ];
 
-  it("filters picked chats by kinds", () => {
+  it("filters options by another catalog field", () => {
     assert.deepEqual(
-      filterCatalogChatOptions("chat_ids", options, {
-        selection: "pick",
-        kinds: "group",
-      }),
+      filterCatalogFieldOptions(field, options, { kinds: "group" }),
       [options[0]],
     );
     assert.deepEqual(
-      filterCatalogChatOptions("chat_ids", options, {
-        selection: "pick",
-        kinds: "p2p",
-      }),
+      filterCatalogFieldOptions(field, options, { kinds: "p2p" }),
       [options[1]],
     );
   });
 
-  it("keeps all chats when both kinds are selected", () => {
+  it("keeps every option when all kinds are selected", () => {
     assert.deepEqual(
-      filterCatalogChatOptions("chat_ids", options, {
-        selection: "pick",
-        kinds: "group,p2p",
-      }),
+      filterCatalogFieldOptions(field, options, { kinds: "group,p2p" }),
       options,
     );
   });
@@ -91,7 +85,7 @@ describe("filterCatalogChatOptions", () => {
 describe("resolveCatalogFieldOptions", () => {
   it("leaves free-text fields without options so the form stays an input", () => {
     assert.equal(
-      resolveCatalogFieldOptions("base_url", undefined, undefined, {}),
+      resolveCatalogFieldOptions({ key: "base_url" }, undefined, undefined, {}),
       undefined,
     );
     assert.equal(catalogFieldUsesSelect(undefined), false);
@@ -99,16 +93,19 @@ describe("resolveCatalogFieldOptions", () => {
   });
 
   it("keeps declared or remote option lists for selects", () => {
-    const options = [{ value: "oc_1", label: "Group · Eng" }];
+    const field = { key: "chat_ids", filter_options_by: "kinds" };
+    const options = [
+      { value: "oc_1", label: "Group · Eng", kind: "group", title: "Eng" },
+    ];
     assert.deepEqual(
-      resolveCatalogFieldOptions("chat_ids", options, undefined, {
-        selection: "all",
+      resolveCatalogFieldOptions(field, options, undefined, {
+        kinds: "group,p2p",
       }),
       options,
     );
     assert.deepEqual(
-      resolveCatalogFieldOptions("chat_ids", undefined, options, {
-        selection: "all",
+      resolveCatalogFieldOptions(field, undefined, options, {
+        kinds: "group,p2p",
       }),
       options,
     );

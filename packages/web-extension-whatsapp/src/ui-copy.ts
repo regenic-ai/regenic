@@ -35,7 +35,7 @@ const zh = {
   statusOffline: "连不上本机 Regenic",
   statusBlocked: "配对码不对或被拒绝",
   statusNotInstalled: "Engine 里还没安装 WhatsApp Web",
-  statusConnected: "已连上内核",
+  statusConnected: "已连接",
   scanIdle: "尚未同步会话",
   scanRunning: "正在点开并读取可见会话…",
   needsWhatsAppTab: "先打开 web.whatsapp.com 再点同步",
@@ -45,7 +45,7 @@ const zh = {
   scanNoChatId:
     "已打开对话，但仍读不到 WhatsApp ID。请刷新这个网页后再同步。新版页面不再把 ID 放在气泡上。",
   scanInjectFailed:
-    "页面脚本还没就绪，消息没有入库。请刷新 WhatsApp 网页后再点同步。",
+    "页面脚本还没就绪，消息没有保存。请刷新 WhatsApp 网页后再同步。",
 };
 
 const en: typeof zh = {
@@ -83,7 +83,7 @@ const en: typeof zh = {
   statusOffline: "Cannot reach local Regenic",
   statusBlocked: "Pairing code rejected",
   statusNotInstalled: "WhatsApp Web is not installed in Engine",
-  statusConnected: "Connected to the kernel",
+  statusConnected: "Connected",
   scanIdle: "Chats not synced yet",
   scanRunning: "Opening visible chats and reading them…",
   needsWhatsAppTab: "Open web.whatsapp.com first, then sync",
@@ -93,7 +93,7 @@ const en: typeof zh = {
   scanNoChatId:
     "This chat is open, but its WhatsApp ID is still missing. Refresh the tab and sync again. Current WhatsApp Web no longer puts the ID on bubbles.",
   scanInjectFailed:
-    "The page script was not ready, so nothing was ingested. Refresh the WhatsApp tab and sync again.",
+    "The page script was not ready, so nothing was saved. Refresh the WhatsApp tab and sync again.",
 };
 
 export type UiCopy = typeof zh;

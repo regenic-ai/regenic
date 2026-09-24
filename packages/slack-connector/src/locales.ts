@@ -5,7 +5,7 @@ export const slackLocaleTables = defineLocaleTables({
     "catalog.title": "Slack",
     "catalog.channelLabel": "Slack",
     "catalog.description":
-      "Install by channel. The kernel pulls that channel after install and keeps pulling while enabled.",
+      "Install one channel. It syncs after install and stays up to date while enabled.",
     "catalog.credentialHint": "REGENIC_SLACK_TOKEN",
     "field.channelId": "Channel ID",
     "field.channelId.placeholder": "C01234567",
@@ -25,7 +25,7 @@ export const slackLocaleTables = defineLocaleTables({
     "catalog.title": "Slack",
     "catalog.channelLabel": "Slack",
     "catalog.description":
-      "按频道安装。装好后内核会拉这个频道，启用期间一直拉。",
+      "按频道安装。安装后开始同步，启用期间保持最新。",
     "catalog.credentialHint": "REGENIC_SLACK_TOKEN",
     "field.channelId": "频道 ID",
     "field.channelId.placeholder": "C01234567",

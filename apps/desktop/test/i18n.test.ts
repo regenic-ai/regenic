@@ -133,7 +133,7 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "executor.field.baseUrl"), "Base URL");
     assert.equal(translate("zh", "executor.field.baseUrl"), "接口地址");
     assert.equal(translate("zh", "executor.detail.autoFirst"), "自动 · 第一个可新建会话的连接器");
-    assert.equal(translate("zh", "error.connector.feishuConversation"), "选全部会话，或勾选要同步的会话");
+    assert.equal(translate("zh", "error.connector.feishuConversation"), "至少选一个会话，或改为同步全部。");
     assert.equal(translate("zh", "connector.noOptions"), "还没有可选项");
     assert.equal(translate("zh", "connector.loadingOptions"), "正在加载会话…");
   });

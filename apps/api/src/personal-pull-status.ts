@@ -1,6 +1,6 @@
 import {
   clearLocalNetwork,
-  isDeadlineExceeded,
+  isSyncSoftMiss,
   isTransportFailure,
   watchLocalFetchFailure,
   type LocalNetworkWatch,
@@ -98,7 +98,7 @@ export async function applyPullOutcome(
   errors: unknown[],
   options: { env?: NodeJS.ProcessEnv; connect?: TcpConnect } = {},
 ): Promise<void> {
-  const durable = errors.filter((item) => !isDeadlineExceeded(item));
+  const durable = errors.filter((item) => !isSyncSoftMiss(item));
   if (durable.length === 0) {
     pullStatus.last_error = null;
     pullStatus.last_error_hint = null;

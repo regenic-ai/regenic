@@ -11,15 +11,24 @@ import type {
   AuthorityStore,
   BlobObject,
   BlobStore,
+  ConnectorRuntimeStore,
+  ConversationPrefPatch,
   EventRecord,
   IngestBatchResult,
+  IngestCommitRequest,
   IngestErrorCode,
   IngestRecord,
   IngestRecordResult,
   NewEvent,
   SourceIdentity,
+  SyncPageCommit,
 } from "./ingestion";
-import { AuthorityConflictError, collectAvailableBlobs } from "./ingestion";
+import {
+  AuthorityConflictError,
+  collectAvailableBlobs,
+  ingestAttemptQuarantines,
+  ingestAttemptSummary,
+} from "./ingestion";
 import {
   CONTENT_PARTS_MEDIA_TYPE,
   attachmentHashesFromStoredParts,
@@ -29,7 +38,10 @@ import {
   validateIngestBatch,
   type IngestValidationIssue,
 } from "./ingestion-schema";
-import { applyListSurfaceAfterIngest } from "./list-surface";
+import {
+  applyListSurfaceAfterIngest,
+  collectListSurfacePatches,
+} from "./list-surface";
 import { threadIdOf } from "./thread-surface";
 import {
   incomingImprovesAttachments,
@@ -51,7 +63,7 @@ import {
 } from "./message-contract";
 
 export type IngestSubmissionResult =
-  | ({ valid: true } & IngestBatchResult)
+  | ({ valid: true } & IngestBatchResult & { page_committed?: boolean })
   | {
       valid: false;
       error_code: Extract<IngestErrorCode, "invalid_envelope" | "invalid_record">;
@@ -105,7 +117,10 @@ export class IngestionService {
     this.arrangement = new ArrangementService(authorityStore);
   }
 
-  async ingest(input: unknown): Promise<IngestSubmissionResult> {
+  async ingest(
+    input: unknown,
+    page?: SyncPageCommit,
+  ): Promise<IngestSubmissionResult> {
     const validation = validateIngestBatch(input);
     if (!validation.success) {
       return {
@@ -119,12 +134,20 @@ export class IngestionService {
     const records: IngestRecordResult[] = new Array(batch.records.length);
     const overlay = new PendingIngestOverlay();
     const pendingCreates: PlannedCreate[] = [];
+    const bufferedCreates: PlannedCreate[] = [];
+    let mixedWrites = false;
+    const pendingIngest: IngestCommitRequest = { appends: [], dispositions: [] };
+    const atomic = Boolean(page) && canCommitSyncPage(this.authorityStore);
 
     const flushCreates = async () => {
       if (pendingCreates.length === 0) {
         return;
       }
       const planned = pendingCreates.splice(0, pendingCreates.length);
+      if (atomic && !mixedWrites) {
+        await this.bufferCreates(planned, records, pendingIngest, bufferedCreates);
+        return;
+      }
       await this.commitCreates(planned, records);
     };
 
@@ -150,22 +173,57 @@ export class IngestionService {
         });
         continue;
       }
+      mixedWrites = true;
       await flushCreates();
       records[index] = await this.ingestRecord(batch.org_id, record);
     }
     await flushCreates();
 
-    await applyListSurfaceAfterIngest(
-      this.authorityStore,
-      batch.org_id,
-      records.flatMap((row) => (row?.event_id ? [row.event_id] : [])),
+    let pageCommitted = false;
+    const eventIds = records.flatMap((row) =>
+      row?.event_id ? [row.event_id] : [],
     );
+    if (atomic && page && !mixedWrites) {
+      const prefs = await collectListSurfacePatches(
+        this.authorityStore,
+        batch.org_id,
+        eventIds,
+        {
+          events: bufferedCreates.map((item) =>
+            previewCreate(
+              item.eventId,
+              item.identity,
+              item.record,
+              item.canonical,
+            ),
+          ),
+          dispositions: pendingIngest.dispositions,
+          now: page.settle.finished_at,
+        },
+      );
+      pageCommitted = await this.commitPreparedPage(
+        page,
+        pendingIngest,
+        records,
+        bufferedCreates,
+        prefs,
+      );
+    }
+
+    if (!pageCommitted) {
+      await applyListSurfaceAfterIngest(
+        this.authorityStore,
+        batch.org_id,
+        eventIds,
+      );
+    }
 
     return {
       valid: true,
       connector_id: batch.connector_id,
       delivery_id: batch.delivery_id,
       records,
+      ...(pageCommitted ? { page_committed: true } : {}),
     };
   }
 
@@ -407,6 +465,93 @@ export class IngestionService {
           );
         }
         return;
+      }
+      throw error;
+    }
+  }
+
+  private async bufferCreates(
+    creates: PlannedCreate[],
+    records: IngestRecordResult[],
+    pendingIngest: IngestCommitRequest,
+    bufferedCreates: PlannedCreate[],
+  ): Promise<void> {
+    const blobs = new Map<string, BlobObject>();
+    for (const item of creates) {
+      for (const blob of blobsForCanonical(item.canonical)) {
+        if (!blobs.has(blob.hash)) {
+          blobs.set(blob.hash, blob);
+        }
+      }
+    }
+    await this.blobStore.putMany([...blobs.values()]);
+    for (const item of creates) {
+      pendingIngest.appends.push({
+        id: item.eventId,
+        ...item.identity,
+        ...eventContextMetadata(item.record),
+        content_hash: item.canonical.hash,
+        content_media_type: item.canonical.media_type,
+        content_byte_size: item.canonical.bytes.byteLength,
+        extra_blobs: extraBlobsForCanonical(item.canonical),
+        occurred_at: item.record.occurred_at,
+        expected_head_id: null,
+      });
+      pendingIngest.dispositions.push(
+        this.arrangement.decide(
+          previewCreate(item.eventId, item.identity, item.record, item.canonical),
+          item.record,
+        ),
+      );
+      bufferedCreates.push(item);
+      records[item.index] = {
+        external_id: item.record.external_id,
+        status: "accepted",
+        event_id: item.eventId,
+      };
+    }
+  }
+
+  private async commitPreparedPage(
+    page: SyncPageCommit,
+    pendingIngest: IngestCommitRequest,
+    records: IngestRecordResult[],
+    bufferedCreates: PlannedCreate[],
+    prefs: ConversationPrefPatch[],
+  ): Promise<boolean> {
+    const store = this.authorityStore as unknown as AuthorityStore &
+      Pick<ConnectorRuntimeStore, "commitSyncPage">;
+    const ingest =
+      pendingIngest.appends.length === 0 &&
+      pendingIngest.dispositions.length === 0
+        ? undefined
+        : pendingIngest;
+    try {
+      await store.commitSyncPage({
+        attempt: page.attempt,
+        ingest,
+        settle: {
+          ...page.settle,
+          attempt_id: page.attempt.id,
+          ...ingestAttemptSummary(records),
+          quarantines: ingestAttemptQuarantines(
+            records,
+            page.settle.finished_at,
+            () => randomUUID(),
+          ),
+        },
+        ...(prefs.length > 0 ? { prefs } : {}),
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof AuthorityConflictError) {
+        for (const item of bufferedCreates) {
+          records[item.index] = await this.ingestRecord(
+            item.identity.org_id,
+            item.record,
+          );
+        }
+        return false;
       }
       throw error;
     }
@@ -706,6 +851,15 @@ class PendingIngestOverlay {
     }
     return null;
   }
+}
+
+function canCommitSyncPage(
+  store: AuthorityStore,
+): store is AuthorityStore & Pick<ConnectorRuntimeStore, "commitSyncPage"> {
+  return (
+    typeof (store as unknown as ConnectorRuntimeStore).commitSyncPage ===
+    "function"
+  );
 }
 
 function previewCreate(

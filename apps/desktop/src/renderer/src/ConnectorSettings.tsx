@@ -27,6 +27,7 @@ import type {
   ConnectorCatalogItem,
   ConnectorSetupStep,
   EngineInstallationView,
+  SyncRunMode,
 } from "./types";
 
 export function ConnectorKind({
@@ -41,6 +42,7 @@ export function ConnectorKind({
   onCloseInstall,
   onInstall,
   onSync,
+  onRetryQuarantines,
   onToggle,
   onUpdate,
   onRefresh,
@@ -57,7 +59,8 @@ export function ConnectorKind({
   onOpenInstall: () => void;
   onCloseInstall: () => void;
   onInstall: (config: Record<string, string>) => void;
-  onSync: (id: string) => void;
+  onSync: (id: string, mode: SyncRunMode) => void;
+  onRetryQuarantines: (id: string) => void;
   onToggle: (installation: EngineInstallationView) => void;
   onUpdate: (
     installation: EngineInstallationView,
@@ -149,7 +152,8 @@ export function ConnectorKind({
               current === installation.id ? null : installation.id,
             )
           }
-          onSync={() => onSync(installation.id)}
+          onSync={(mode) => onSync(installation.id, mode)}
+          onRetryQuarantines={() => onRetryQuarantines(installation.id)}
           onToggle={() => onToggle(installation)}
           onSave={(config) => {
             void onUpdate(installation, config).then((saved) => {
@@ -231,7 +235,7 @@ function ConnectorFileImport({
             } catch (caught) {
               setError(
                 caught instanceof Error
-                  ? connectorActionError(caught.message)
+                  ? connectorActionError(caught)
                   : t("connector.importFailed"),
               );
             } finally {
@@ -372,7 +376,7 @@ function ConnectorSettingsForm({
     .map((field) => ({
       ...field,
       options: resolveCatalogFieldOptions(
-        field.key,
+        field,
         field.options,
         remoteOptions[field.key],
         values,
@@ -745,6 +749,7 @@ function ConnectorRow({
   pairingCode,
   onEdit,
   onSync,
+  onRetryQuarantines,
   onToggle,
   onSave,
   onUninstall,
@@ -756,13 +761,15 @@ function ConnectorRow({
   editing: boolean;
   pairingCode?: string;
   onEdit: () => void;
-  onSync: () => void;
+  onSync: (mode: SyncRunMode) => void;
+  onRetryQuarantines: () => void;
   onToggle: () => void;
   onSave: (config: Record<string, string>) => void;
   onUninstall: () => void;
   onPairingCode?: (id: string, code: string) => void;
 }) {
   const { t } = useLocale();
+  const [syncMode, setSyncMode] = useState<SyncRunMode>("quick_start");
   const statusChip =
     installation.status === "enabled"
       ? "running"
@@ -788,7 +795,7 @@ function ConnectorRow({
           {installation.sync ? (
             <div className="muted">{syncProgressSummary(installation.sync)}</div>
           ) : null}
-          {kind.connector_type === "whatsapp-web-live" ? (
+          {installation.can_pair ? (
             <PairingCodeCard
               installationId={installation.id}
               pairingCode={pairingCode}
@@ -797,14 +804,36 @@ function ConnectorRow({
           ) : null}
         </div>
         <div className="install-actions">
+          <select
+            value={syncMode}
+            disabled={busy || !installation.syncable}
+            aria-label={t("sync.mode")}
+            onChange={(event) =>
+              setSyncMode(event.target.value as SyncRunMode)
+            }
+          >
+            <option value="quick_start">{t("sync.mode.quick")}</option>
+            <option value="continuous">{t("sync.mode.continuous")}</option>
+            <option value="archive">{t("sync.mode.archive")}</option>
+          </select>
           <button
             type="button"
             className="primary"
             disabled={busy || !installation.syncable}
-            onClick={onSync}
+            onClick={() => onSync(syncMode)}
           >
             {busy ? t("engine.syncing") : t("connector.sync")}
           </button>
+          {(installation.last_attempt?.quarantined_count ?? 0) > 0 ? (
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy}
+              onClick={onRetryQuarantines}
+            >
+              {t("sync.retryQuarantine")}
+            </button>
+          ) : null}
           <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
             {installation.status === "disabled"
               ? t("connector.enable")
@@ -897,7 +926,7 @@ function PairingCodeCard({
               .catch((caught) => {
                 setError(
                   caught instanceof Error
-                    ? connectorActionError(caught.message)
+                    ? connectorActionError(caught)
                     : t("engine.actionFailed"),
                 );
               })

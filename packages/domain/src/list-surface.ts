@@ -139,21 +139,98 @@ export async function foldThreadByPolicy(
   await writeHiddenPref(store, orgId, threadId, next, now);
 }
 
-export async function applyListSurfaceAfterIngest(
+export function listSurfacePatches(input: {
+  orgId: string;
+  now: string;
+  events: readonly EventRecord[];
+  dispositions: ReadonlyMap<string, ArrangementDecision | null>;
+  prefs: ReadonlyMap<string, ConversationPref | null>;
+  onDesk: ReadonlyMap<string, boolean>;
+}): ConversationPrefPatch[] {
+  const byThread = new Map<string, EventRecord[]>();
+  for (const event of input.events) {
+    const threadId = conversationId(event.source, event.external_id, event.id);
+    const bucket = byThread.get(threadId);
+    if (bucket) {
+      bucket.push(event);
+    } else {
+      byThread.set(threadId, [event]);
+    }
+  }
+  const patches: ConversationPrefPatch[] = [];
+  for (const [threadId, threadEvents] of byThread) {
+    let acceptedCurrentWork = false;
+    let acceptedTombstone = false;
+    for (const event of threadEvents) {
+      if (event.operation === "tombstone") {
+        acceptedTombstone = true;
+      }
+      if (input.dispositions.get(event.id)?.disposition === "current_work") {
+        acceptedCurrentWork = true;
+      }
+    }
+    const pref = input.prefs.get(threadId) ?? null;
+    const next = nextHiddenPref({
+      hidden: pref?.hidden === true,
+      reason: pref?.hidden_reason,
+      onDesk: input.onDesk.get(threadId) === true,
+      acceptedCurrentWork,
+      acceptedTombstone,
+    });
+    if (!next) {
+      continue;
+    }
+    const currentReason = effectiveHiddenReason({
+      hidden: pref?.hidden === true,
+      reason: pref?.hidden_reason,
+    });
+    const nextReason = next.hidden ? next.reason : null;
+    if (pref?.hidden === next.hidden && currentReason === nextReason) {
+      continue;
+    }
+    patches.push({
+      org_id: input.orgId,
+      thread_id: threadId,
+      hidden: next.hidden,
+      hidden_reason: nextReason,
+      updated_at: input.now,
+    });
+  }
+  return patches;
+}
+
+export async function collectListSurfacePatches(
   store: ListSurfaceStore,
   orgId: string,
   eventIds: readonly string[],
-): Promise<void> {
+  known: {
+    events?: readonly EventRecord[];
+    dispositions?: readonly ArrangementDecision[];
+    now?: string;
+  } = {},
+): Promise<ConversationPrefPatch[]> {
   if (eventIds.length === 0) {
-    return;
+    return [];
   }
-  const now = new Date().toISOString();
+  const now = known.now ?? new Date().toISOString();
+  const knownEvents = new Map(
+    (known.events ?? []).map((event) => [event.id, event]),
+  );
+  const knownDispositions = new Map(
+    (known.dispositions ?? []).map((decision) => [decision.event_id, decision]),
+  );
   const events: EventRecord[] = [];
+  const dispositions = new Map<string, ArrangementDecision | null>();
   for (const id of eventIds) {
-    const event = await store.getEvent(orgId, id);
-    if (event) {
-      events.push(event);
+    const event = knownEvents.get(id) ?? (await store.getEvent(orgId, id));
+    if (!event) {
+      continue;
     }
+    events.push(event);
+    dispositions.set(
+      id,
+      knownDispositions.get(id) ?? (await store.getDisposition(id)),
+    );
   }
   const byThread = new Map<string, EventRecord[]>();
   for (const event of events) {
@@ -165,30 +242,35 @@ export async function applyListSurfaceAfterIngest(
       byThread.set(threadId, [event]);
     }
   }
-  for (const [threadId, threadEvents] of byThread) {
-    let acceptedCurrentWork = false;
-    let acceptedTombstone = false;
-    for (const event of threadEvents) {
-      if (event.operation === "tombstone") {
-        acceptedTombstone = true;
-      }
-      const decision = await store.getDisposition(event.id);
-      if (decision?.disposition === "current_work") {
-        acceptedCurrentWork = true;
-      }
-    }
-    const pref = await store.getConversationPref(orgId, threadId);
-    const onDesk =
-      (await store.listInbox(orgId, { thread_ids: [threadId] })).length > 0;
-    const next = nextHiddenPref({
-      hidden: pref?.hidden === true,
-      reason: pref?.hidden_reason,
-      onDesk,
-      acceptedCurrentWork,
-      acceptedTombstone,
-    });
-    if (next) {
-      await writeHiddenPref(store, orgId, threadId, next, now);
-    }
+  const prefs = new Map<string, ConversationPref | null>();
+  const onDesk = new Map<string, boolean>();
+  const needsOnDesk = events.some((event) => event.operation === "tombstone");
+  for (const threadId of byThread.keys()) {
+    prefs.set(threadId, await store.getConversationPref(orgId, threadId));
+    onDesk.set(
+      threadId,
+      needsOnDesk
+        ? (await store.listInbox(orgId, { thread_ids: [threadId] })).length > 0
+        : false,
+    );
+  }
+  return listSurfacePatches({
+    orgId,
+    now,
+    events,
+    dispositions,
+    prefs,
+    onDesk,
+  });
+}
+
+export async function applyListSurfaceAfterIngest(
+  store: ListSurfaceStore,
+  orgId: string,
+  eventIds: readonly string[],
+): Promise<void> {
+  const patches = await collectListSurfacePatches(store, orgId, eventIds);
+  for (const patch of patches) {
+    await store.putConversationPref(patch);
   }
 }

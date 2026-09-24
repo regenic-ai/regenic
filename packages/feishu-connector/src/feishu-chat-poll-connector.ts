@@ -138,7 +138,7 @@ export class FeishuChatPollConnector {
 
   async poll(
     cursor: ConnectorCursor | null,
-    options?: { older?: boolean; media?: boolean },
+    options?: { older?: boolean; latest?: boolean; media?: boolean },
   ): Promise<PollResult> {
     const state = decodeFeishuCursor(cursor);
     const mediaJobs = this.hydrateMediaJobs(state);
@@ -148,12 +148,20 @@ export class FeishuChatPollConnector {
     if (mediaOnly) {
       return this.pollMediaOnly(state, mediaJobs, cursor, nowMs);
     }
-    const request = planFeishuHistoryRequest(
-      this.options.chat_id,
-      this.pageSize,
-      state,
-      { older: options?.older === true },
-    );
+    const interactiveTip =
+      options?.latest === true && options?.older !== true;
+    const request = interactiveTip
+      ? {
+          chat_id: this.options.chat_id,
+          page_size: this.pageSize,
+          sort_type: "ByCreateTimeDesc" as const,
+        }
+      : planFeishuHistoryRequest(
+          this.options.chat_id,
+          this.pageSize,
+          state,
+          { older: options?.older === true },
+        );
     if (!request && !(wantMedia && hasDueMediaJobs(mediaJobs, nowMs))) {
       this.persistMediaJobs(mediaJobs);
       const nextCursor = encodeFeishuCursor(state);
@@ -174,9 +182,12 @@ export class FeishuChatPollConnector {
       };
     }
     const page = request
-      ? await this.client.listMessages(request)
+      ? await this.client.listMessages(
+          interactiveTip ? { ...request, timeout_ms: 8_000 } : request,
+        )
       : { items: [], has_more: false };
-    const names = await this.resolveNames(page.items);
+    // Name lookup can outlive the interactive poll budget and discard the page.
+    const names = await this.resolveNames(page.items, { network: !interactiveTip });
     const selfId = await this.selfUserId();
     const records: IngestBatch["records"] = [];
     for (const item of page.items) {
@@ -295,6 +306,7 @@ export class FeishuChatPollConnector {
 
   private async resolveNames(
     items: FeishuHistoryItem[],
+    options?: { network?: boolean },
   ): Promise<Map<string, string>> {
     const names = new Map<string, string>();
     for (const item of items) {
@@ -302,7 +314,7 @@ export class FeishuChatPollConnector {
         names.set(id, name);
       }
     }
-    if (!this.client.resolveUserNames) {
+    if (options?.network === false || !this.client.resolveUserNames) {
       return names;
     }
     const ids = [
@@ -688,6 +700,23 @@ export function planFeishuHistoryRequest(
       sort_type: "ByCreateTimeDesc",
     };
   }
+  // A seeded chat whose history cursor is behind the newest watermark must
+  // poll from that watermark. A page_token that is still the live walk stays.
+  const historyParked =
+    state.recent_seeded &&
+    Boolean(state.page_token) &&
+    Boolean(state.head_time) &&
+    state.start_time !== state.head_time;
+  if (state.recent_seeded && (historyParked || !state.page_token)) {
+    const liveStart = state.head_time ?? state.start_time;
+    return {
+      chat_id: chatId,
+      page_size: pageSize,
+      page_token: undefined,
+      start_time: liveStart,
+      sort_type: "ByCreateTimeAsc",
+    };
+  }
   return {
     chat_id: chatId,
     page_size: pageSize,
@@ -700,7 +729,13 @@ export function planFeishuHistoryRequest(
 export function deferredHistoryToken(state: FeishuCursorState): string | undefined {
   return (
     state.history_token ??
-    (state.sort === "desc" ? state.page_token : undefined)
+    (state.sort === "desc" ? state.page_token : undefined) ??
+    (state.recent_seeded &&
+    state.page_token &&
+    state.head_time &&
+    state.start_time !== state.head_time
+      ? state.page_token
+      : undefined)
   );
 }
 
@@ -733,10 +768,13 @@ export function nextFeishuCursor(
   if (needsRecentSeed(current) && sort === "ByCreateTimeDesc") {
     if (current.page_token) {
       return {
-        page_token: current.page_token,
-        start_time: current.start_time,
+        history_token: current.history_token ?? current.page_token,
+        ...(head
+          ? { start_time: head, head_time: head }
+          : current.start_time
+            ? { start_time: current.start_time }
+            : {}),
         recent_seeded: true,
-        ...(head ? { head_time: head } : {}),
       };
     }
     if (page.has_more && page.page_token) {
@@ -760,7 +798,9 @@ export function nextFeishuCursor(
         recent_seeded: true,
       };
     }
-    return live ? { start_time: live, recent_seeded: true } : { recent_seeded: true };
+    return live
+      ? { start_time: live, recent_seeded: true }
+      : { recent_seeded: true };
   }
   const lastStart = lastStartTime(page.items) ?? current.start_time;
   const history = deferredHistoryToken(current);

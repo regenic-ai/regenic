@@ -29,7 +29,7 @@ import { EngineChip, RailButton } from "./console-chrome";
 import { connectorAlerts } from "./connector-alerts";
 import { engineRevision } from "./console-refresh";
 import { EnginePage } from "./EnginePage";
-import { engineChip, memoryWatchCopy, pullProgressChip } from "./format";
+import { engineChip, memoryWatchCopy, releaseOtherLivePulls } from "./format";
 import {
   evictThreadCache,
   groupInboxThreads,
@@ -86,6 +86,7 @@ import {
   mergeRecentInbox,
   patchInboxWork,
   shouldFetchInboxDelta,
+  unfinishedOpenAction,
   threadHasPendingImagePreviews,
   LIST_HEADS_PAGE_SIZE,
   THREAD_OPEN_PAGE_SIZE,
@@ -164,6 +165,8 @@ export function ConsoleApp() {
   const reuseHintRef = useRef<InboxReuse | undefined>(undefined);
   const groupedInboxRef = useRef<InboxViewItem[] | null>(null);
   const loadedThreadsRef = useRef(new Set<string>());
+  const openInFlightSeq = useRef<Record<string, number>>({});
+  const openTimeoutAttempts = useRef<Record<string, number>>({});
   const olderBusyRef = useRef(new Set<string>());
   const hasOlderRef = useRef(hasOlderByThread);
   hasOlderRef.current = hasOlderByThread;
@@ -280,9 +283,13 @@ export function ConsoleApp() {
     const cursor = inboxCursor(current);
     const signal = focusSignal();
     const coldOpen = mode === "open" && !loaded;
+    if (coldOpen) {
+      openInFlightSeq.current[threadId] = seq;
+    }
     void focusConversation(openThreadFocusRequest(threadId, coldOpen)).catch(
       () => undefined,
     );
+    let settleOpen = true;
     if (coldOpen) {
       setOpeningId(threadId);
       setSeedingId(threadId);
@@ -441,23 +448,70 @@ export function ConsoleApp() {
         finishSeed();
       }
       scheduleMediaDrainIfNeeded(threadId, merged);
+      delete openTimeoutAttempts.current[threadId];
       return merged;
     } catch (caught) {
-      if (isInboxAbortError(caught) || threadLoadSeq.current[threadId] !== seq) {
+      const superseded = threadLoadSeq.current[threadId] !== seq;
+      const action = unfinishedOpenAction({
+        aborted: isInboxAbortError(caught),
+        superseded,
+        stillSelected: selectedIdRef.current === threadId,
+        focusAborted: signal.aborted,
+        loaded: loadedThreadsRef.current.has(threadId),
+        attempt: openTimeoutAttempts.current[threadId] ?? 0,
+      });
+      if (action === "retry") {
+        settleOpen = false;
+        openTimeoutAttempts.current[threadId] =
+          (openTimeoutAttempts.current[threadId] ?? 0) + 1;
+        window.setTimeout(() => {
+          if (
+            selectedIdRef.current !== threadId ||
+            threadLoadSeq.current[threadId] !== seq ||
+            loadedThreadsRef.current.has(threadId)
+          ) {
+            if (openInFlightSeq.current[threadId] === seq) {
+              delete openInFlightSeq.current[threadId];
+            }
+            return;
+          }
+          void ensureThread(threadId, "open");
+        }, OPEN_RETRY_MS);
+        return undefined;
+      }
+      if (action === "ignore") {
+        if (!superseded && !loadedThreadsRef.current.has(threadId)) {
+          delete openTimeoutAttempts.current[threadId];
+          setMessagesByThread((prev) => {
+            const cached = prev[threadId];
+            if (!cached || cached.length > 0) {
+              return prev;
+            }
+            const next = { ...prev };
+            delete next[threadId];
+            return next;
+          });
+        }
         finishOpen();
         finishSeed();
         return undefined;
       }
+      delete openTimeoutAttempts.current[threadId];
       if (!loadedThreadsRef.current.has(threadId)) {
-        setThreadError((prev) => ({
-          ...prev,
-          [threadId]:
-            caught instanceof Error ? caught.message : "Could not open this conversation.",
-        }));
+        const message = isInboxAbortError(caught)
+          ? t("thread.openFailed")
+          : caught instanceof Error
+            ? caught.message
+            : t("thread.openFailed");
+        setThreadError((prev) => ({ ...prev, [threadId]: message }));
       }
       finishOpen();
       finishSeed();
       return current;
+    } finally {
+      if (settleOpen && openInFlightSeq.current[threadId] === seq) {
+        delete openInFlightSeq.current[threadId];
+      }
     }
   };
 
@@ -493,6 +547,33 @@ export function ConsoleApp() {
       );
     } catch (caught) {
       if (isInboxAbortError(caught)) {
+        // live=1 is the receipt overlay. If it is aborted, still read SQLite
+        // so the interactive kick's new messages are not dropped with it.
+        try {
+          const items = await fetchInbox(
+            {
+              thread_id: threadId,
+              limit: THREAD_OPEN_PAGE_SIZE,
+            },
+            { signal, timeoutMs: OPEN_FETCH_MS },
+          );
+          if (
+            workspaceEpoch.current !== epoch ||
+            selectedIdRef.current !== threadId ||
+            !loadedThreadsRef.current.has(threadId)
+          ) {
+            return;
+          }
+          setMessagesByThread((prev) =>
+            rememberThreadMessages(
+              prev,
+              threadId,
+              orderThreadMessages(mergeInboxDelta(prev[threadId] ?? [], items)),
+            ),
+          );
+        } catch {
+          // The thread is already on screen from the local open.
+        }
         return;
       }
       // Receipts stay optional; the thread is already on screen.
@@ -744,11 +825,17 @@ export function ConsoleApp() {
         const openId = selectedIdRef.current;
         if (openId) {
           const openMessages = messagesRef.current[openId] ?? [];
+          const openBusy =
+            openInFlightSeq.current[openId] != null &&
+            !loadedThreadsRef.current.has(openId);
           const skipOpenPoll =
             sseConnectedRef.current &&
             loadedThreadsRef.current.has(openId) &&
             !threadHasPendingImagePreviews(openMessages);
-          if (!skipOpenPoll) {
+          if (openBusy) {
+            // A cold open is already reading this thread. Starting another
+            // would bump the generation and discard the page in flight.
+          } else if (!skipOpenPoll) {
             const knownOpen =
               loadedThreadsRef.current.has(openId) || openMessages.length > 0;
             const loaded = await ensureThread(
@@ -847,6 +934,8 @@ export function ConsoleApp() {
     selectedIdRef.current = null;
     selectedThreadRef.current = null;
     loadedThreadsRef.current.clear();
+    openInFlightSeq.current = {};
+    openTimeoutAttempts.current = {};
     olderBusyRef.current.clear();
     headsBusyRef.current = false;
     replaceFocusAbort();
@@ -914,6 +1003,12 @@ export function ConsoleApp() {
       },
       onThreadUpdated: (threadId) => {
         if (threadId !== selectedIdRef.current) {
+          return;
+        }
+        if (
+          !loadedThreadsRef.current.has(threadId) ||
+          openInFlightSeq.current[threadId] != null
+        ) {
           return;
         }
         void ensureThread(threadId, "poll");
@@ -1009,9 +1104,40 @@ export function ConsoleApp() {
       setSeedingId(null);
       return;
     }
-    void ensureThread(selectedId, "open").then((loaded) =>
-      ackOpenThread(selectedId, loaded),
+    delete openTimeoutAttempts.current[selectedId];
+    const threadId = selectedId;
+    setEngine((current) => {
+      const pull = releaseOtherLivePulls(current?.pull, threadId);
+      if (!current || pull === current.pull) {
+        return current;
+      }
+      const next = { ...current, pull: pull ?? current.pull };
+      engineRef.current = next;
+      return next;
+    });
+    void ensureThread(threadId, "open").then((loaded) =>
+      ackOpenThread(threadId, loaded),
     );
+    // Preference on the server expires after two minutes. Keep the open
+    // thread on the interactive lane and pull its latest page while it
+    // stays selected, including when the list stream is already connected.
+    const timer = window.setInterval(() => {
+      if (selectedIdRef.current !== threadId) {
+        return;
+      }
+      void focusConversation(liveReceiptFocusRequest(threadId)).catch(
+        () => undefined,
+      );
+      if (
+        loadedThreadsRef.current.has(threadId) &&
+        openInFlightSeq.current[threadId] == null
+      ) {
+        void ensureThread(threadId, "poll");
+      }
+    }, RECEIPT_REFRESH_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
   }, [selectedId]);
 
   const ackOpenThread = async (
@@ -1102,7 +1228,6 @@ export function ConsoleApp() {
   const chip = engineChip(engine, reachability);
   const alerts = connectorAlerts(engine);
   const alert = alerts[0];
-  const pullProgress = pullProgressChip(engine?.pull);
   const createTargets = createConversationTargets(engine);
 
   const startConversation = async (installationId: string) => {
@@ -1438,11 +1563,6 @@ export function ConsoleApp() {
         <div className="search">{t("chrome.searchSoon")}</div>
         <div className="titlebar-meta">
           <EngineChip state={chip} />
-          {pullProgress ? (
-            <span className="chip" title={pullProgress}>
-              {pullProgress}
-            </span>
-          ) : null}
           {host && host.memory.kind !== "ok" ? (
             <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
           ) : null}
@@ -1534,7 +1654,20 @@ export function ConsoleApp() {
             creating={creating}
             onCreate={startConversation}
             onCommitDraft={commitDraft}
-            onSelect={setSelectedId}
+            onSelect={(id) => {
+              const unloaded = !loadedThreadsRef.current.has(id);
+              if (unloaded && (messagesRef.current[id]?.length ?? 0) === 0) {
+                setOpeningId(id);
+              }
+              if (id === selectedIdRef.current && unloaded) {
+                delete openTimeoutAttempts.current[id];
+                replaceFocusAbort();
+                void ensureThread(id, "open").then((loaded) =>
+                  ackOpenThread(id, loaded),
+                );
+              }
+              setSelectedId(id);
+            }}
             onRefresh={refresh}
             onApplyOutbound={applyOutbound}
             onRefreshThread={refreshThread}

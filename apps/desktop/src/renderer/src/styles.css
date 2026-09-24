@@ -201,6 +201,10 @@ button {
   border-color: transparent;
 }
 
+.chip.syncing .dot {
+  animation: thread-sync-pulse 1.2s ease-in-out infinite;
+}
+
 .chip.stopped {
   color: var(--risk);
   background: var(--danger-soft);
@@ -724,6 +728,23 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.item-syncing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ai);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.item-sync {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ai);
+  animation: thread-sync-pulse 1.2s ease-in-out infinite;
 }
 
 .item.unread .item-title {

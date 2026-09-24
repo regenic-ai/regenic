@@ -43,6 +43,10 @@ import {
   agentRunState,
   STANDARD_USAGE_SCHEMA_VERSION,
   validateStandardUsage,
+  processSyncMetrics,
+  recordSyncDuration,
+  syncWorkPriority,
+  validateSyncRunOptions,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -136,6 +140,20 @@ import type {
   SyncCatalogView,
   SyncPhase,
   SyncStreamState,
+  ClaimSyncWork,
+  CommandSyncRun,
+  CommitSyncPage,
+  CommitSyncPageResult,
+  EnqueueSyncWork,
+  ListSyncRunsQuery,
+  NewSyncRun,
+  RenewSyncWork,
+  SettleSyncWork,
+  SyncRun,
+  SyncWorkIdentity,
+  SyncWorkRecord,
+  UnassignedSyncWorkQuery,
+  WakeUnassignedSyncWork,
 } from "@regenic/domain";
 import { LATEST_SCHEMA_VERSION, MIGRATIONS } from "./migrations";
 
@@ -237,6 +255,42 @@ interface SyncStateRow {
   media_pending: number;
   idle_until: string | null;
   generation: number;
+  updated_at: string;
+}
+
+interface SyncRunRow {
+  id: string;
+  org_id: string;
+  installation_id: string;
+  mode: SyncRun["mode"];
+  status: SyncRun["status"];
+  options_json: string;
+  total_work: number;
+  completed_work: number;
+  failed_work: number;
+  accepted_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SyncWorkRow {
+  id: string;
+  run_id: string | null;
+  installation_id: string;
+  stream_key: string;
+  lane: SyncWorkRecord["lane"];
+  priority: number;
+  next_due_at: string;
+  status: SyncWorkRecord["status"];
+  attempts: number;
+  generation: number;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  last_error: string | null;
+  created_at: string;
   updated_at: string;
 }
 
@@ -1975,73 +2029,77 @@ export class SqliteAuthorityStore
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const current = this.database
-        .prepare(
-          `
-            SELECT ${PREF_COLUMNS}
-            FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
-          `,
-        )
-        .get(input.org_id, input.thread_id) as PrefRow | undefined;
-      const hidden =
-        input.hidden !== undefined ? input.hidden : Boolean(current?.hidden);
-      const next: ConversationPref = {
-        org_id: input.org_id,
-        thread_id: input.thread_id,
-        title: input.title !== undefined ? input.title : (current?.title ?? null),
-        pinned:
-          input.pinned !== undefined
-            ? input.pinned
-            : Boolean(current?.pinned),
-        hidden,
-        hidden_reason: hidden
-          ? input.hidden_reason !== undefined
-            ? input.hidden_reason
-            : normalizeHiddenReason(current?.hidden_reason) ??
-              (input.hidden === true ? "human" : null)
-          : null,
-        last_read_at:
-          input.last_read_at !== undefined
-            ? input.last_read_at
-            : (current?.last_read_at ?? null),
-        last_read_external_id:
-          input.last_read_external_id !== undefined
-            ? input.last_read_external_id
-            : (current?.last_read_external_id ?? null),
-        updated_at: input.updated_at,
-      };
-      this.database
-        .prepare(
-          `
-            INSERT INTO conversation_prefs (
-              org_id, thread_id, title, pinned, hidden, hidden_reason,
-              last_read_at, last_read_external_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(org_id, thread_id) DO UPDATE SET
-              title = excluded.title,
-              pinned = excluded.pinned,
-              hidden = excluded.hidden,
-              hidden_reason = excluded.hidden_reason,
-              last_read_at = excluded.last_read_at,
-              last_read_external_id = excluded.last_read_external_id,
-              updated_at = excluded.updated_at
-          `,
-        )
-        .run(
-          next.org_id,
-          next.thread_id,
-          next.title,
-          next.pinned ? 1 : 0,
-          next.hidden ? 1 : 0,
-          next.hidden_reason,
-          next.last_read_at,
-          next.last_read_external_id,
-          next.updated_at,
-        );
-      return next;
-    });
+    const transaction = this.database.transaction(() =>
+      this.putConversationPrefUnlocked(input),
+    );
     return transaction.immediate();
+  }
+
+  private putConversationPrefUnlocked(
+    input: ConversationPrefPatch,
+  ): ConversationPref {
+    const current = this.database
+      .prepare(
+        `
+          SELECT ${PREF_COLUMNS}
+          FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
+        `,
+      )
+      .get(input.org_id, input.thread_id) as PrefRow | undefined;
+    const hidden =
+      input.hidden !== undefined ? input.hidden : Boolean(current?.hidden);
+    const next: ConversationPref = {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      title: input.title !== undefined ? input.title : (current?.title ?? null),
+      pinned:
+        input.pinned !== undefined ? input.pinned : Boolean(current?.pinned),
+      hidden,
+      hidden_reason: hidden
+        ? input.hidden_reason !== undefined
+          ? input.hidden_reason
+          : normalizeHiddenReason(current?.hidden_reason) ??
+            (input.hidden === true ? "human" : null)
+        : null,
+      last_read_at:
+        input.last_read_at !== undefined
+          ? input.last_read_at
+          : (current?.last_read_at ?? null),
+      last_read_external_id:
+        input.last_read_external_id !== undefined
+          ? input.last_read_external_id
+          : (current?.last_read_external_id ?? null),
+      updated_at: input.updated_at,
+    };
+    this.database
+      .prepare(
+        `
+          INSERT INTO conversation_prefs (
+            org_id, thread_id, title, pinned, hidden, hidden_reason,
+            last_read_at, last_read_external_id, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(org_id, thread_id) DO UPDATE SET
+            title = excluded.title,
+            pinned = excluded.pinned,
+            hidden = excluded.hidden,
+            hidden_reason = excluded.hidden_reason,
+            last_read_at = excluded.last_read_at,
+            last_read_external_id = excluded.last_read_external_id,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        next.org_id,
+        next.thread_id,
+        next.title,
+        next.pinned ? 1 : 0,
+        next.hidden ? 1 : 0,
+        next.hidden_reason,
+        next.last_read_at,
+        next.last_read_external_id,
+        next.updated_at,
+      );
+    return next;
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {
@@ -2146,6 +2204,24 @@ export class SqliteAuthorityStore
             WHERE installation_id IN (
               SELECT id FROM connector_installations WHERE org_id = ?
             )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_sync_work
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM sync_runs
+            WHERE org_id = ?
           `,
         )
         .run(orgId);
@@ -2724,16 +2800,21 @@ export class SqliteAuthorityStore
       return [];
     }
     return this.database
-      .transaction(() => {
-        const events = request.appends.map((input) =>
-          this.insertWithinTransaction({ ...input, operation: "create" }),
-        );
-        for (const decision of request.dispositions) {
-          this.putDispositionWithinTransaction(decision);
-        }
-        return events;
-      })
+      .transaction(() => this.commitIngestUnlocked(request))
       .immediate();
+  }
+
+  private commitIngestUnlocked(request: IngestCommitRequest): EventRecord[] {
+    if (request.appends.length === 0 && request.dispositions.length === 0) {
+      return [];
+    }
+    const events = request.appends.map((input) =>
+      this.insertWithinTransaction({ ...input, operation: "create" }),
+    );
+    for (const decision of request.dispositions) {
+      this.putDispositionWithinTransaction(decision);
+    }
+    return events;
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
@@ -2884,6 +2965,12 @@ export class SqliteAuthorityStore
         .prepare(`DELETE FROM connector_sync_state WHERE installation_id = ?`)
         .run(id);
       this.database
+        .prepare(`DELETE FROM connector_sync_work WHERE installation_id = ?`)
+        .run(id);
+      this.database
+        .prepare(`DELETE FROM sync_runs WHERE installation_id = ?`)
+        .run(id);
+      this.database
         .prepare(`DELETE FROM connector_installations WHERE id = ? AND org_id = ?`)
         .run(id, orgId);
       return true;
@@ -2897,6 +2984,7 @@ export class SqliteAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     this.assertWritable();
     const transaction = this.database.transaction(() => {
@@ -2914,6 +3002,7 @@ export class SqliteAuthorityStore
         input.stream_key,
       );
       if (
+        !input.preempt &&
         current?.lease_expires_at &&
         current.lease_expires_at > input.now &&
         current.lease_owner !== input.lease_owner
@@ -3018,6 +3107,66 @@ export class SqliteAuthorityStore
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
     this.assertWritable();
+    this.beginAttemptUnlocked(input);
+    return this.findAttempt(input.id)!;
+  }
+
+  async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    this.assertWritable();
+    const startedAt = Date.now();
+    const commit = this.database.transaction(() => this.commitSyncPageUnlocked(input));
+    try {
+      return commit.immediate();
+    } finally {
+      recordSyncDuration(processSyncMetrics, "database_transaction_ms", startedAt, {
+        operation: "commit_sync_page",
+      });
+    }
+  }
+
+  async commitSyncPages(inputs: CommitSyncPage[]): Promise<CommitSyncPageResult[]> {
+    this.assertWritable();
+    if (inputs.length === 0) {
+      return [];
+    }
+    if (inputs.length === 1) {
+      const only = inputs[0];
+      return only ? [await this.commitSyncPage(only)] : [];
+    }
+    const startedAt = Date.now();
+    const commit = this.database.transaction(() =>
+      inputs.map((input) => this.commitSyncPageUnlocked(input)),
+    );
+    try {
+      return commit.immediate();
+    } finally {
+      recordSyncDuration(processSyncMetrics, "database_transaction_ms", startedAt, {
+        operation: "commit_sync_pages",
+      });
+    }
+  }
+
+  private commitSyncPageUnlocked(input: CommitSyncPage): CommitSyncPageResult {
+    this.beginAttemptUnlocked(input.attempt);
+    const events = input.ingest
+      ? this.commitIngestUnlocked(input.ingest)
+      : [];
+    for (const pref of input.prefs ?? []) {
+      this.putConversationPrefUnlocked(pref);
+    }
+    const attempt = this.settleAttemptUnlocked(input.settle);
+    return { attempt, events };
+  }
+
+  async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
+    this.assertWritable();
+    const transaction = this.database.transaction(() =>
+      this.settleAttemptUnlocked(input),
+    );
+    return transaction.immediate();
+  }
+
+  private beginAttemptUnlocked(input: NewIngestAttempt): void {
     this.database
       .prepare(
         `
@@ -3035,78 +3184,72 @@ export class SqliteAuthorityStore
         input.delivery_id,
         input.started_at,
       );
-    return this.findAttempt(input.id)!;
   }
 
-  async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
-    this.assertWritable();
-
-    const transaction = this.database.transaction(() => {
-      const cursor = this.findCursorRow(input.installation_id, input.stream_key);
-      if (!cursor || cursor.lease_owner !== input.lease_owner) {
-        throw new Error("Connector lease is not held by the attempt owner");
-      }
-      const status =
-        input.retryable_failure_count === 0 ? "succeeded" : "failed";
+  private settleAttemptUnlocked(input: SettleIngestAttempt): IngestAttempt {
+    const cursor = this.findCursorRow(input.installation_id, input.stream_key);
+    if (!cursor || cursor.lease_owner !== input.lease_owner) {
+      throw new Error("Connector lease is not held by the attempt owner");
+    }
+    const status =
+      input.retryable_failure_count === 0 ? "succeeded" : "failed";
+    this.database
+      .prepare(
+        `
+          UPDATE ingest_attempts
+          SET finished_at = ?, status = ?, accepted_count = ?, duplicate_count = ?,
+              quarantined_count = ?, retryable_failure_count = ?, error_code = ?
+          WHERE id = ?
+        `,
+      )
+      .run(
+        input.finished_at,
+        status,
+        input.accepted_count,
+        input.duplicate_count,
+        input.quarantined_count,
+        input.retryable_failure_count,
+        input.error_code ?? null,
+        input.attempt_id,
+      );
+    for (const quarantine of input.quarantines) {
       this.database
         .prepare(
           `
-            UPDATE ingest_attempts
-            SET finished_at = ?, status = ?, accepted_count = ?, duplicate_count = ?,
-                quarantined_count = ?, retryable_failure_count = ?, error_code = ?
-            WHERE id = ?
+            INSERT INTO ingest_quarantines (
+              id, attempt_id, record_external_id, reason_code,
+              safe_metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
           `,
         )
         .run(
-          input.finished_at,
-          status,
-          input.accepted_count,
-          input.duplicate_count,
-          input.quarantined_count,
-          input.retryable_failure_count,
-          input.error_code ?? null,
+          quarantine.id,
           input.attempt_id,
+          quarantine.record_external_id,
+          quarantine.reason_code,
+          JSON.stringify(quarantine.safe_metadata),
+          quarantine.created_at,
         );
-      for (const quarantine of input.quarantines) {
-        this.database
-          .prepare(
-            `
-              INSERT INTO ingest_quarantines (
-                id, attempt_id, record_external_id, reason_code,
-                safe_metadata_json, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?)
-            `,
-          )
-          .run(
-            quarantine.id,
-            input.attempt_id,
-            quarantine.record_external_id,
-            quarantine.reason_code,
-            JSON.stringify(quarantine.safe_metadata),
-            quarantine.created_at,
-          );
-      }
-      const advancesCursor =
-        input.retryable_failure_count === 0 && input.next_cursor !== undefined;
-      this.database
-        .prepare(
-          `
-            UPDATE connector_cursors
-            SET cursor_value = ?, cursor_version = ?, lease_owner = NULL,
-                lease_expires_at = NULL, updated_at = ?
-            WHERE installation_id = ? AND stream_key = ?
-          `,
-        )
-        .run(
-          advancesCursor ? input.next_cursor : cursor.cursor_value,
-          advancesCursor ? cursor.cursor_version + 1 : cursor.cursor_version,
-          input.finished_at,
-          input.installation_id,
-          input.stream_key,
-        );
-      return this.findAttempt(input.attempt_id)!;
-    });
-    return transaction.immediate();
+    }
+    const advancesCursor =
+      input.retryable_failure_count === 0 && input.next_cursor !== undefined;
+    this.database
+      .prepare(
+        `
+          UPDATE connector_cursors
+          SET cursor_value = ?, cursor_version = ?, lease_owner = NULL,
+              lease_expires_at = NULL, updated_at = ?
+          WHERE installation_id = ? AND stream_key = ?
+        `,
+      )
+      .run(
+        advancesCursor ? input.next_cursor : cursor.cursor_value,
+        advancesCursor ? cursor.cursor_version + 1 : cursor.cursor_version,
+        input.finished_at,
+        input.installation_id,
+        input.stream_key,
+      );
+    return this.findAttempt(input.attempt_id)!;
   }
 
   async listAttempts(
@@ -3290,6 +3433,577 @@ export class SqliteAuthorityStore
   ): Promise<ConnectorStreamCursor | null> {
     const row = this.findCursorRow(installationId, streamKey);
     return row ? this.toCursor(row) : null;
+  }
+
+  async listCursors(
+    installationId: string,
+    streamKeys?: readonly string[],
+  ): Promise<ConnectorStreamCursor[]> {
+    const wanted = streamKeys ? new Set(streamKeys) : null;
+    const rows = this.database
+      .prepare(
+        `
+          SELECT installation_id, stream_key, cursor_value, cursor_version,
+                 lease_owner, lease_expires_at, updated_at
+          FROM connector_cursors
+          WHERE installation_id = ?
+          ORDER BY stream_key
+        `,
+      )
+      .all(installationId) as CursorRow[];
+    return rows
+      .filter((row) => !wanted || wanted.has(row.stream_key))
+      .map((row) => this.toCursor(row));
+  }
+
+  async createSyncRun(input: NewSyncRun): Promise<SyncRun> {
+    this.assertWritable();
+    validateSyncRunOptions(input.options ?? {});
+    const installation = this.database
+      .prepare(
+        `SELECT id FROM connector_installations WHERE id = ? AND org_id = ?`,
+      )
+      .get(input.installation_id, input.org_id);
+    if (!installation) {
+      throw new Error("Connector installation not found for sync run");
+    }
+    this.database
+      .prepare(
+        `
+          INSERT INTO sync_runs (
+            id, org_id, installation_id, mode, status, options_json,
+            total_work, completed_work, failed_work, accepted_count,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'queued', ?, 0, 0, 0, 0, ?, ?)
+        `,
+      )
+      .run(
+        input.id,
+        input.org_id,
+        input.installation_id,
+        input.mode,
+        JSON.stringify(input.options ?? {}),
+        input.now,
+        input.now,
+      );
+    return this.findSyncRun(input.id)!;
+  }
+
+  async getSyncRun(id: string, orgId: string): Promise<SyncRun | null> {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, org_id, installation_id, mode, status, options_json,
+                 total_work, completed_work, failed_work, accepted_count,
+                 started_at, finished_at, last_error, created_at, updated_at
+          FROM sync_runs WHERE id = ? AND org_id = ?
+        `,
+      )
+      .get(id, orgId) as SyncRunRow | undefined;
+    return row ? this.toSyncRun(row) : null;
+  }
+
+  async listSyncRuns(query: ListSyncRunsQuery): Promise<SyncRun[]> {
+    const limit =
+      Number.isInteger(query.limit) && Number(query.limit) > 0
+        ? Math.min(Number(query.limit), 1_000)
+        : 100;
+    const rows = query.installation_id
+      ? (this.database
+          .prepare(
+            `
+              SELECT id, org_id, installation_id, mode, status, options_json,
+                     total_work, completed_work, failed_work, accepted_count,
+                     started_at, finished_at, last_error, created_at, updated_at
+              FROM sync_runs
+              WHERE org_id = ? AND installation_id = ?
+              ORDER BY created_at DESC, id DESC LIMIT ?
+            `,
+          )
+          .all(query.org_id, query.installation_id, limit) as SyncRunRow[])
+      : (this.database
+          .prepare(
+            `
+              SELECT id, org_id, installation_id, mode, status, options_json,
+                     total_work, completed_work, failed_work, accepted_count,
+                     started_at, finished_at, last_error, created_at, updated_at
+              FROM sync_runs
+              WHERE org_id = ?
+              ORDER BY created_at DESC, id DESC LIMIT ?
+            `,
+          )
+          .all(query.org_id, limit) as SyncRunRow[]);
+    return rows.map((row) => this.toSyncRun(row));
+  }
+
+  async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
+    this.assertWritable();
+    const command = this.database.transaction(() => {
+      const current = this.database
+        .prepare(`SELECT status FROM sync_runs WHERE id = ? AND org_id = ?`)
+        .get(input.id, input.org_id) as
+        | { status: SyncRun["status"] }
+        | undefined;
+      if (!current) {
+        return null;
+      }
+      if (
+        input.command === "pause" &&
+        (current.status === "queued" || current.status === "running")
+      ) {
+        this.database
+          .prepare(
+            `UPDATE sync_runs SET status = 'paused', updated_at = ? WHERE id = ?`,
+          )
+          .run(input.now, input.id);
+      } else if (
+        input.command === "resume" &&
+        current.status === "paused"
+      ) {
+        this.database
+          .prepare(
+            `
+              UPDATE sync_runs
+              SET status = 'queued', finished_at = NULL, updated_at = ?
+              WHERE id = ?
+            `,
+          )
+          .run(input.now, input.id);
+      } else if (
+        input.command === "cancel" &&
+        (current.status === "queued" ||
+          current.status === "running" ||
+          current.status === "paused")
+      ) {
+        this.database
+          .prepare(
+            `
+              UPDATE sync_runs
+              SET status = 'cancelled', finished_at = ?, updated_at = ?
+              WHERE id = ?
+            `,
+          )
+          .run(input.now, input.now, input.id);
+        this.database
+          .prepare(
+            `
+              UPDATE connector_sync_work
+              SET status = 'cancelled', lease_owner = NULL,
+                  lease_expires_at = NULL, updated_at = ?
+              WHERE run_id = ? AND status IN ('pending', 'running')
+            `,
+          )
+          .run(input.now, input.id);
+      }
+      return this.findSyncRun(input.id);
+    });
+    return command.immediate();
+  }
+
+  async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {
+    this.assertWritable();
+    const enqueue = this.database.transaction(() =>
+      this.enqueueSyncWorkUnlocked(input),
+    );
+    return enqueue.immediate();
+  }
+
+  async enqueueSyncWorkMany(
+    inputs: readonly EnqueueSyncWork[],
+  ): Promise<number> {
+    this.assertWritable();
+    if (inputs.length === 0) {
+      return 0;
+    }
+    const enqueue = this.database.transaction(() => {
+      const lookup = this.database.prepare(
+        `
+          SELECT id, status FROM connector_sync_work
+          WHERE installation_id = ? AND stream_key = ?
+            AND lane = ? AND generation = ?
+        `,
+      );
+      const update = this.database.prepare(
+        `
+          UPDATE connector_sync_work
+          SET run_id = COALESCE(?, run_id), priority = ?,
+              next_due_at = ?, status = 'pending',
+              lease_owner = NULL, lease_expires_at = NULL,
+              last_error = NULL, updated_at = ?
+          WHERE id = ?
+        `,
+      );
+      const insert = this.database.prepare(
+        `
+          INSERT INTO connector_sync_work (
+            id, run_id, installation_id, stream_key, lane, priority,
+            next_due_at, status, attempts, generation, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+        `,
+      );
+      const bumpRun = this.database.prepare(
+        `
+          UPDATE sync_runs
+          SET total_work = total_work + 1, updated_at = ?
+          WHERE id = ?
+        `,
+      );
+      for (const input of inputs) {
+        const current = lookup.get(
+          input.installation_id,
+          input.stream_key,
+          input.lane,
+          input.generation,
+        ) as { id: string; status: string } | undefined;
+        if (current) {
+          if (current.status !== "running") {
+            update.run(
+              input.run_id ?? null,
+              input.priority ?? syncWorkPriority(input.lane),
+              input.next_due_at,
+              input.now,
+              current.id,
+            );
+          }
+          continue;
+        }
+        if (input.run_id && !this.findSyncRun(input.run_id)) {
+          throw new Error(`Sync run not found: ${input.run_id}`);
+        }
+        insert.run(
+          input.id,
+          input.run_id ?? null,
+          input.installation_id,
+          input.stream_key,
+          input.lane,
+          input.priority ?? syncWorkPriority(input.lane),
+          input.next_due_at,
+          input.generation,
+          input.now,
+          input.now,
+        );
+        if (input.run_id) {
+          bumpRun.run(input.now, input.run_id);
+        }
+      }
+      return inputs.length;
+    });
+    return enqueue.immediate();
+  }
+
+  private enqueueSyncWorkUnlocked(input: EnqueueSyncWork): SyncWorkRecord {
+    const current = this.findSyncWorkByIdentity(input);
+    if (current) {
+      if (current.status !== "running") {
+        this.database
+          .prepare(
+            `
+              UPDATE connector_sync_work
+              SET run_id = COALESCE(?, run_id), priority = ?,
+                  next_due_at = ?, status = 'pending',
+                  lease_owner = NULL, lease_expires_at = NULL,
+                  last_error = NULL, updated_at = ?
+              WHERE id = ?
+            `,
+          )
+          .run(
+            input.run_id ?? null,
+            input.priority ?? syncWorkPriority(input.lane),
+            input.next_due_at,
+            input.now,
+            current.id,
+          );
+      }
+      return this.findSyncWork(current.id)!;
+    }
+    if (input.run_id && !this.findSyncRun(input.run_id)) {
+      throw new Error(`Sync run not found: ${input.run_id}`);
+    }
+    this.database
+      .prepare(
+        `
+          INSERT INTO connector_sync_work (
+            id, run_id, installation_id, stream_key, lane, priority,
+            next_due_at, status, attempts, generation, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+        `,
+      )
+      .run(
+        input.id,
+        input.run_id ?? null,
+        input.installation_id,
+        input.stream_key,
+        input.lane,
+        input.priority ?? syncWorkPriority(input.lane),
+        input.next_due_at,
+        input.generation,
+        input.now,
+        input.now,
+      );
+    if (input.run_id) {
+      this.database
+        .prepare(
+          `
+            UPDATE sync_runs
+            SET total_work = total_work + 1, updated_at = ?
+            WHERE id = ?
+          `,
+        )
+        .run(input.now, input.run_id);
+    }
+    return this.findSyncWork(input.id)!;
+  }
+
+  async claimSyncWork(input: ClaimSyncWork): Promise<SyncWorkRecord[]> {
+    this.assertWritable();
+    if (!Number.isInteger(input.limit) || input.limit < 1) {
+      return [];
+    }
+    const claim = this.database.transaction(() => {
+      const clauses = [
+        `(
+          (w.status = 'pending' AND w.next_due_at <= ?)
+          OR
+          (w.status = 'running' AND w.lease_expires_at <= ?)
+        )`,
+        `(w.run_id IS NULL OR r.status IN ('queued', 'running'))`,
+      ];
+      const params: unknown[] = [input.now, input.now];
+      if (input.work_id) {
+        clauses.push(`w.id = ?`);
+        params.push(input.work_id);
+      }
+      if (input.installation_id) {
+        clauses.push(`w.installation_id = ?`);
+        params.push(input.installation_id);
+      }
+      if (input.lanes?.length) {
+        clauses.push(
+          `w.lane IN (${input.lanes.map(() => "?").join(", ")})`,
+        );
+        params.push(...input.lanes);
+      }
+      if (input.unassigned) {
+        clauses.push(`w.run_id IS NULL`);
+      }
+      params.push(Math.min(input.limit, 1_000));
+      const ids = this.database
+        .prepare(
+          `
+            SELECT w.id
+            FROM connector_sync_work w
+            LEFT JOIN sync_runs r ON r.id = w.run_id
+            WHERE ${clauses.join(" AND ")}
+            ORDER BY w.priority DESC, w.next_due_at, w.created_at, w.id
+            LIMIT ?
+          `,
+        )
+        .all(...params) as Array<{ id: string }>;
+      if (ids.length === 0) {
+        return [];
+      }
+      const leaseExpiresAt = new Date(
+        Date.parse(input.now) + input.lease_ms,
+      ).toISOString();
+      const update = this.database.prepare(
+        `
+          UPDATE connector_sync_work
+          SET status = 'running', attempts = attempts + 1,
+              lease_owner = ?, lease_expires_at = ?, updated_at = ?
+          WHERE id = ?
+        `,
+      );
+      for (const { id } of ids) {
+        update.run(input.owner, leaseExpiresAt, input.now, id);
+      }
+      this.database
+        .prepare(
+          `
+            UPDATE sync_runs
+            SET status = 'running',
+                started_at = COALESCE(started_at, ?),
+                updated_at = ?
+            WHERE status = 'queued'
+              AND id IN (
+                SELECT DISTINCT run_id FROM connector_sync_work
+                WHERE id IN (${ids.map(() => "?").join(", ")})
+                  AND run_id IS NOT NULL
+              )
+          `,
+        )
+        .run(input.now, input.now, ...ids.map((item) => item.id));
+      return ids.map(({ id }) => this.findSyncWork(id)!);
+    });
+    return claim.immediate();
+  }
+
+  async renewSyncWork(input: RenewSyncWork): Promise<boolean> {
+    this.assertWritable();
+    const leaseExpiresAt = new Date(
+      Date.parse(input.now) + input.lease_ms,
+    ).toISOString();
+    const result = this.database
+      .prepare(
+        `
+          UPDATE connector_sync_work
+          SET lease_expires_at = ?, updated_at = ?
+          WHERE id = ? AND status = 'running' AND lease_owner = ?
+            AND lease_expires_at > ?
+        `,
+      )
+      .run(
+        leaseExpiresAt,
+        input.now,
+        input.id,
+        input.owner,
+        input.now,
+      );
+    return result.changes === 1;
+  }
+
+  async settleSyncWork(
+    input: SettleSyncWork,
+  ): Promise<SyncWorkRecord | null> {
+    this.assertWritable();
+    const settle = this.database.transaction(() => {
+      const current = this.findSyncWork(input.id);
+      if (
+        !current ||
+        current.status !== "running" ||
+        current.lease_owner !== input.owner
+      ) {
+        return null;
+      }
+      const status =
+        input.outcome === "retry" ? "pending" : input.outcome;
+      this.database
+        .prepare(
+          `
+            UPDATE connector_sync_work
+            SET status = ?, next_due_at = ?, lease_owner = NULL,
+                lease_expires_at = NULL, last_error = ?, updated_at = ?
+            WHERE id = ? AND status = 'running' AND lease_owner = ?
+          `,
+        )
+        .run(
+          status,
+          input.next_due_at ?? current.next_due_at,
+          input.error_code ?? null,
+          input.now,
+          input.id,
+          input.owner,
+        );
+      if (current.run_id && input.outcome !== "retry") {
+        const completed = input.outcome === "succeeded" ? 1 : 0;
+        const failed = input.outcome === "failed" ? 1 : 0;
+        this.database
+          .prepare(
+            `
+              UPDATE sync_runs
+              SET completed_work = completed_work + ?,
+                  failed_work = failed_work + ?,
+                  accepted_count = accepted_count + ?,
+                  last_error = COALESCE(?, last_error),
+                  updated_at = ?
+              WHERE id = ? AND status != 'cancelled'
+            `,
+          )
+          .run(
+            completed,
+            failed,
+            Math.max(0, input.accepted_count ?? 0),
+            input.error_code ?? null,
+            input.now,
+            current.run_id,
+          );
+        const remaining = this.database
+          .prepare(
+            `
+              SELECT 1 FROM connector_sync_work
+              WHERE run_id = ? AND status IN ('pending', 'running')
+              LIMIT 1
+            `,
+          )
+          .get(current.run_id);
+        if (!remaining) {
+          this.database
+            .prepare(
+              `
+                UPDATE sync_runs
+                SET status = CASE
+                      WHEN failed_work > 0 THEN 'failed'
+                      ELSE 'succeeded'
+                    END,
+                    finished_at = ?, updated_at = ?
+                WHERE id = ? AND status NOT IN ('paused', 'cancelled')
+              `,
+            )
+            .run(input.now, input.now, current.run_id);
+        }
+      }
+      return this.findSyncWork(input.id);
+    });
+    return settle.immediate();
+  }
+
+  async hasUnassignedSyncWork(
+    query: UnassignedSyncWorkQuery = {},
+  ): Promise<boolean> {
+    const { sql, params } = unassignedSyncWorkWhere(query, "?");
+    const row = this.database
+      .prepare(
+        `SELECT 1 AS found FROM connector_sync_work WHERE ${sql} LIMIT 1`,
+      )
+      .get(...params) as { found: number } | undefined;
+    return Boolean(row);
+  }
+
+  async listUnassignedSyncWorkIdentities(query: {
+    installation_id: string;
+  }): Promise<SyncWorkIdentity[]> {
+    const { sql, params } = unassignedSyncWorkWhere(
+      { installation_id: query.installation_id },
+      "?",
+    );
+    return (
+      this.database
+        .prepare(
+          `
+            SELECT stream_key, lane, generation
+            FROM connector_sync_work
+            WHERE ${sql}
+          `,
+        )
+        .all(...params) as SyncWorkIdentity[]
+    ).map((row) => ({
+      stream_key: row.stream_key,
+      lane: row.lane,
+      generation: row.generation,
+    }));
+  }
+
+  async wakeUnassignedSyncWork(
+    input: WakeUnassignedSyncWork,
+  ): Promise<number> {
+    this.assertWritable();
+    const streamKeys = uniqueStreamKeys(input.stream_keys);
+    if (streamKeys.length === 0) {
+      return 0;
+    }
+    const placeholders = streamKeys.map(() => "?").join(", ");
+    const result = this.database
+      .prepare(
+        `
+          UPDATE connector_sync_work
+          SET next_due_at = ?, updated_at = ?
+          WHERE installation_id = ?
+            AND run_id IS NULL
+            AND status = 'pending'
+            AND stream_key IN (${placeholders})
+        `,
+      )
+      .run(input.now, input.now, input.installation_id, ...streamKeys);
+    return result.changes;
   }
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
@@ -3579,6 +4293,102 @@ export class SqliteAuthorityStore
       media_pending: row.media_pending === 1,
       ...(row.idle_until ? { idle_until: row.idle_until } : {}),
       generation: row.generation,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private findSyncRun(id: string): SyncRun | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, org_id, installation_id, mode, status, options_json,
+                 total_work, completed_work, failed_work, accepted_count,
+                 started_at, finished_at, last_error, created_at, updated_at
+          FROM sync_runs WHERE id = ?
+        `,
+      )
+      .get(id) as SyncRunRow | undefined;
+    return row ? this.toSyncRun(row) : null;
+  }
+
+  private findSyncWork(id: string): SyncWorkRecord | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, run_id, installation_id, stream_key, lane, priority,
+                 next_due_at, status, attempts, generation, lease_owner,
+                 lease_expires_at, last_error, created_at, updated_at
+          FROM connector_sync_work WHERE id = ?
+        `,
+      )
+      .get(id) as SyncWorkRow | undefined;
+    return row ? this.toSyncWork(row) : null;
+  }
+
+  private findSyncWorkByIdentity(
+    input: Pick<
+      EnqueueSyncWork,
+      "installation_id" | "stream_key" | "lane" | "generation"
+    >,
+  ): SyncWorkRecord | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT id, run_id, installation_id, stream_key, lane, priority,
+                 next_due_at, status, attempts, generation, lease_owner,
+                 lease_expires_at, last_error, created_at, updated_at
+          FROM connector_sync_work
+          WHERE installation_id = ? AND stream_key = ?
+            AND lane = ? AND generation = ?
+        `,
+      )
+      .get(
+        input.installation_id,
+        input.stream_key,
+        input.lane,
+        input.generation,
+      ) as SyncWorkRow | undefined;
+    return row ? this.toSyncWork(row) : null;
+  }
+
+  private toSyncRun(row: SyncRunRow): SyncRun {
+    return {
+      id: row.id,
+      org_id: row.org_id,
+      installation_id: row.installation_id,
+      mode: row.mode,
+      status: row.status,
+      options: JSON.parse(row.options_json) as SyncRun["options"],
+      total_work: row.total_work,
+      completed_work: row.completed_work,
+      failed_work: row.failed_work,
+      accepted_count: row.accepted_count,
+      ...(row.started_at ? { started_at: row.started_at } : {}),
+      ...(row.finished_at ? { finished_at: row.finished_at } : {}),
+      ...(row.last_error ? { last_error: row.last_error } : {}),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private toSyncWork(row: SyncWorkRow): SyncWorkRecord {
+    return {
+      id: row.id,
+      ...(row.run_id ? { run_id: row.run_id } : {}),
+      installation_id: row.installation_id,
+      stream_key: row.stream_key,
+      lane: row.lane,
+      priority: row.priority,
+      next_due_at: row.next_due_at,
+      status: row.status,
+      attempts: row.attempts,
+      generation: row.generation,
+      ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
+      ...(row.lease_expires_at
+        ? { lease_expires_at: row.lease_expires_at }
+        : {}),
+      ...(row.last_error ? { last_error: row.last_error } : {}),
+      created_at: row.created_at,
       updated_at: row.updated_at,
     };
   }
@@ -4722,4 +5532,25 @@ function toProposal(row: ProposalRow): ProposalRecord {
       ? { outcome_ref: { outcome_kind: row.outcome_kind, ...(row.outcome_ref_id ? { ref_id: row.outcome_ref_id } : {}) } }
       : {}),
   };
+}
+
+function unassignedSyncWorkWhere(
+  query: UnassignedSyncWorkQuery,
+  _placeholder: "?",
+): { sql: string; params: unknown[] } {
+  const clauses = ["run_id IS NULL", "status IN ('pending', 'running')"];
+  const params: unknown[] = [];
+  if (query.installation_id) {
+    clauses.push("installation_id = ?");
+    params.push(query.installation_id);
+  }
+  if (query.lanes?.length) {
+    clauses.push(`lane IN (${query.lanes.map(() => "?").join(", ")})`);
+    params.push(...query.lanes);
+  }
+  return { sql: clauses.join(" AND "), params };
+}
+
+function uniqueStreamKeys(keys: readonly string[]): string[] {
+  return [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
 }

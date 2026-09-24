@@ -1,7 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { loadEnv, resolveAuthorityBackend } from "@regenic/config";
+import {
+  assertSqliteSingleReplica,
+  loadEnv,
+  resolveAuthorityBackend,
+} from "@regenic/config";
 import { postgresAuthorityPlugin, sqliteAuthorityPlugin } from "@regenic/authority-store";
 import { fsBlobPlugin } from "@regenic/blob-store";
 import { compactEmbeddedContent } from "@regenic/domain";
@@ -32,6 +36,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     const env = loadEnv();
+    assertSqliteSingleReplica(env);
     const backend = resolveAuthorityBackend(env);
     if (backend.driver === "none") {
       return;

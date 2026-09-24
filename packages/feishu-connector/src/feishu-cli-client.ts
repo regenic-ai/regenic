@@ -6,8 +6,10 @@ import { basename, isAbsolute, join } from "node:path";
 import {
   currentSyncLane,
   DeadlineExceededError,
+  runInSyncLane,
   SyncSlotPool,
   withDeadline,
+  type SyncLane,
 } from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
@@ -94,6 +96,7 @@ export interface FeishuListInput {
   page_token?: string;
   start_time?: string;
   sort_type?: FeishuSortType;
+  timeout_ms?: number;
 }
 
 export type FeishuChatMode = "group" | "p2p";
@@ -144,18 +147,31 @@ export interface LarkCliClientOptions {
   fetch?: typeof fetch;
 }
 
-export const LARK_CLI_CONCURRENCY = 2;
+/** Open thread keeps one process. Batch latest and batch history each keep their own. */
+export const LARK_CLI_CONCURRENCY = 4;
 export const LARK_CLI_RETRIES = 2;
 
 const larkCliSlots = new SyncSlotPool({
   total: LARK_CLI_CONCURRENCY,
-  reserved: { interactive: 1 },
+  reserved: { interactive: 1, live: 2, history: 1 },
 });
 
 const readStatusInflight = new Map<string, Promise<Map<string, boolean>>>();
 
+/** Catalog and media share the history process so they do not take a latest slot. */
+function larkCliSlotLane(): SyncLane {
+  const lane = currentSyncLane();
+  if (lane === "interactive") {
+    return "interactive";
+  }
+  if (lane === "history" || lane === "media" || lane === "catalog") {
+    return "history";
+  }
+  return "live";
+}
+
 export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
-  return larkCliSlots.withSlot(currentSyncLane(), work);
+  return larkCliSlots.withSlot(larkCliSlotLane(), work);
 }
 
 export function resetLarkCliSlot(): void {
@@ -243,6 +259,7 @@ export class LarkCliClient implements FeishuImClient {
       sort_type: input.sort_type ?? "ByCreateTimeAsc",
       page_size: input.page_size,
       user_id_type: "open_id",
+      with_sender_name: "true",
     };
     if (input.page_token) {
       params.page_token = input.page_token;
@@ -255,9 +272,12 @@ export class LarkCliClient implements FeishuImClient {
       path: "/open-apis/im/v1/messages",
       params,
     };
-    // HTTP list shares the CLI slot pool so interactive polls keep a reserved lane.
+    // User-token HTTP does not take a CLI process slot.
     const viaHttp = this.options.userToken
-      ? await withLarkCliSlot(() => this.requestViaHttp(request))
+      ? await this.requestViaHttp({
+          ...request,
+          ...(input.timeout_ms ? { timeout_ms: input.timeout_ms } : {}),
+        })
       : undefined;
     const payload =
       viaHttp !== undefined ? viaHttp : await this.requestViaCli(request);
@@ -1008,8 +1028,8 @@ export class LarkCliClient implements FeishuImClient {
   }
 
   /**
-   * Prefer official contact batch over HTTP (user token). Fall back to
-   * `contact +search-user` for missing ids or when no token is available.
+   * Prefer the names already on the message list. Contact batch is only for
+   * ids still missing, and CLI only when there is no user token.
    */
   private async lookupUserNamesFresh(ids: string[]): Promise<Map<string, string>> {
     if (ids.length === 0) {
@@ -1018,14 +1038,6 @@ export class LarkCliClient implements FeishuImClient {
     const viaHttp = await this.lookupUserNamesViaOpenApi(ids);
     if (!viaHttp) {
       return this.lookupUserNamesViaCli(ids);
-    }
-    const missing = ids.filter((id) => !viaHttp.has(id));
-    if (missing.length === 0) {
-      return viaHttp;
-    }
-    const viaCli = await this.lookupUserNamesViaCli(missing);
-    for (const [id, name] of viaCli) {
-      viaHttp.set(id, name);
     }
     return viaHttp;
   }
@@ -1041,7 +1053,7 @@ export class LarkCliClient implements FeishuImClient {
           user_id_type: "open_id",
           user_ids: ids,
         },
-        timeout_ms: Math.min(this.timeoutMs, 15_000),
+        timeout_ms: 3_000,
       });
       if (payload === undefined) {
         return undefined;
@@ -1057,21 +1069,23 @@ export class LarkCliClient implements FeishuImClient {
       return new Map();
     }
     try {
-      const result = await this.runCli({
-        command: [
-          this.command,
-          "contact",
-          "+search-user",
-          "--as",
-          "user",
-          "--user-ids",
-          ids.join(","),
-          "--format",
-          "json",
-        ],
-        env: this.options.env,
-        timeout_ms: Math.min(this.timeoutMs, 15_000),
-      });
+      const result = await runInSyncLane("live", () =>
+        this.runCli({
+          command: [
+            this.command,
+            "contact",
+            "+search-user",
+            "--as",
+            "user",
+            "--user-ids",
+            ids.join(","),
+            "--format",
+            "json",
+          ],
+          env: this.options.env,
+          timeout_ms: 8_000,
+        }),
+      );
       return parseUserNamePage(unwrapLarkCli(result));
     } catch {
       return new Map();

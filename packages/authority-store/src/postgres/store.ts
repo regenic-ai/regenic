@@ -41,6 +41,10 @@ import {
   agentRunState,
   STANDARD_USAGE_SCHEMA_VERSION,
   validateStandardUsage,
+  processSyncMetrics,
+  recordSyncDuration,
+  syncWorkPriority,
+  validateSyncRunOptions,
 } from "@regenic/domain";
 import type {
   ArrangementDecision,
@@ -134,6 +138,20 @@ import type {
   SyncCatalogView,
   SyncPhase,
   SyncStreamState,
+  ClaimSyncWork,
+  CommandSyncRun,
+  CommitSyncPage,
+  CommitSyncPageResult,
+  EnqueueSyncWork,
+  ListSyncRunsQuery,
+  NewSyncRun,
+  RenewSyncWork,
+  SettleSyncWork,
+  SyncRun,
+  SyncWorkIdentity,
+  SyncWorkRecord,
+  UnassignedSyncWorkQuery,
+  WakeUnassignedSyncWork,
 } from "@regenic/domain";
 import { migratePostgresAuthority } from "./migrate";
 
@@ -242,6 +260,42 @@ interface SyncStateRow {
   media_pending: unknown;
   idle_until: unknown;
   generation: number;
+  updated_at: unknown;
+}
+
+interface SyncRunRow {
+  id: string;
+  org_id: string;
+  installation_id: string;
+  mode: SyncRun["mode"];
+  status: SyncRun["status"];
+  options_json: unknown;
+  total_work: number;
+  completed_work: number;
+  failed_work: number;
+  accepted_count: number;
+  started_at: unknown;
+  finished_at: unknown;
+  last_error: string | null;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
+interface SyncWorkRow {
+  id: string;
+  run_id: string | null;
+  installation_id: string;
+  stream_key: string;
+  lane: SyncWorkRecord["lane"];
+  priority: number;
+  next_due_at: unknown;
+  status: SyncWorkRecord["status"];
+  attempts: number;
+  generation: number;
+  lease_owner: string | null;
+  lease_expires_at: unknown;
+  last_error: string | null;
+  created_at: unknown;
   updated_at: unknown;
 }
 
@@ -1975,70 +2029,75 @@ export class PostgresAuthorityStore
   async putConversationPref(
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
-    return this.withTx(async (client) => {
-      const current = await this.queryOne<PrefRow>(
-        `
-          SELECT ${PREF_COLUMNS}
-          FROM conversation_prefs WHERE org_id = $1 AND thread_id = $2
-        `,
-        [input.org_id, input.thread_id],
-        client,
-      );
-      const hidden =
-        input.hidden !== undefined ? input.hidden : asBool(current?.hidden);
-      const next: ConversationPref = {
-        org_id: input.org_id,
-        thread_id: input.thread_id,
-        title: input.title !== undefined ? input.title : (current?.title ?? null),
-        pinned:
-          input.pinned !== undefined ? input.pinned : asBool(current?.pinned),
-        hidden,
-        hidden_reason: hidden
-          ? input.hidden_reason !== undefined
-            ? input.hidden_reason
-            : normalizeHiddenReason(current?.hidden_reason) ??
-              (input.hidden === true ? "human" : null)
-          : null,
-        last_read_at:
-          input.last_read_at !== undefined
-            ? input.last_read_at
-            : toIsoOrNull(current?.last_read_at),
-        last_read_external_id:
-          input.last_read_external_id !== undefined
-            ? input.last_read_external_id
-            : (current?.last_read_external_id ?? null),
-        updated_at: input.updated_at,
-      };
-      await this.execute(
-        `
-          INSERT INTO conversation_prefs (
-            org_id, thread_id, title, pinned, hidden, hidden_reason,
-            last_read_at, last_read_external_id, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (org_id, thread_id) DO UPDATE SET
-            title = EXCLUDED.title,
-            pinned = EXCLUDED.pinned,
-            hidden = EXCLUDED.hidden,
-            hidden_reason = EXCLUDED.hidden_reason,
-            last_read_at = EXCLUDED.last_read_at,
-            last_read_external_id = EXCLUDED.last_read_external_id,
-            updated_at = EXCLUDED.updated_at
-        `,
-        [
-          next.org_id,
-          next.thread_id,
-          next.title,
-          next.pinned,
-          next.hidden,
-          next.hidden_reason,
-          next.last_read_at,
-          next.last_read_external_id,
-          next.updated_at,
-        ],
-        client,
-      );
-      return next;
-    });
+    return this.withTx((client) => this.putConversationPrefOn(client, input));
+  }
+
+  private async putConversationPrefOn(
+    client: PoolClient,
+    input: ConversationPrefPatch,
+  ): Promise<ConversationPref> {
+    const current = await this.queryOne<PrefRow>(
+      `
+        SELECT ${PREF_COLUMNS}
+        FROM conversation_prefs WHERE org_id = $1 AND thread_id = $2
+      `,
+      [input.org_id, input.thread_id],
+      client,
+    );
+    const hidden =
+      input.hidden !== undefined ? input.hidden : asBool(current?.hidden);
+    const next: ConversationPref = {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      title: input.title !== undefined ? input.title : (current?.title ?? null),
+      pinned:
+        input.pinned !== undefined ? input.pinned : asBool(current?.pinned),
+      hidden,
+      hidden_reason: hidden
+        ? input.hidden_reason !== undefined
+          ? input.hidden_reason
+          : normalizeHiddenReason(current?.hidden_reason) ??
+            (input.hidden === true ? "human" : null)
+        : null,
+      last_read_at:
+        input.last_read_at !== undefined
+          ? input.last_read_at
+          : toIsoOrNull(current?.last_read_at),
+      last_read_external_id:
+        input.last_read_external_id !== undefined
+          ? input.last_read_external_id
+          : (current?.last_read_external_id ?? null),
+      updated_at: input.updated_at,
+    };
+    await this.execute(
+      `
+        INSERT INTO conversation_prefs (
+          org_id, thread_id, title, pinned, hidden, hidden_reason,
+          last_read_at, last_read_external_id, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (org_id, thread_id) DO UPDATE SET
+          title = EXCLUDED.title,
+          pinned = EXCLUDED.pinned,
+          hidden = EXCLUDED.hidden,
+          hidden_reason = EXCLUDED.hidden_reason,
+          last_read_at = EXCLUDED.last_read_at,
+          last_read_external_id = EXCLUDED.last_read_external_id,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
+        next.org_id,
+        next.thread_id,
+        next.title,
+        next.pinned,
+        next.hidden,
+        next.hidden_reason,
+        next.last_read_at,
+        next.last_read_external_id,
+        next.updated_at,
+      ],
+      client,
+    );
+    return next;
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {
@@ -2152,6 +2211,17 @@ export class PostgresAuthorityStore
         [orgId],
         client,
       );
+      await this.execute(
+        `
+          DELETE FROM connector_sync_work
+          WHERE installation_id IN (
+            SELECT id FROM connector_installations WHERE org_id = $1
+          )
+        `,
+        [orgId],
+        client,
+      );
+      await this.execute(`DELETE FROM sync_runs WHERE org_id = $1`, [orgId], client);
       const after = await this.storeFootprint(orgId, client);
       return {
         cleared: {
@@ -2720,21 +2790,29 @@ export class PostgresAuthorityStore
     if (request.appends.length === 0 && request.dispositions.length === 0) {
       return [];
     }
-    return this.withTx(async (client) => {
-      const events: EventRecord[] = [];
-      for (const input of request.appends) {
-        events.push(
-          await this.insertWithinTransaction(
-            { ...input, operation: "create" },
-            client,
-          ),
-        );
-      }
-      for (const decision of request.dispositions) {
-        await this.putDispositionWithinTransaction(decision, client);
-      }
-      return events;
-    });
+    return this.withTx((client) => this.commitIngestOn(client, request));
+  }
+
+  private async commitIngestOn(
+    client: PoolClient,
+    request: IngestCommitRequest,
+  ): Promise<EventRecord[]> {
+    if (request.appends.length === 0 && request.dispositions.length === 0) {
+      return [];
+    }
+    const events: EventRecord[] = [];
+    for (const input of request.appends) {
+      events.push(
+        await this.insertWithinTransaction(
+          { ...input, operation: "create" },
+          client,
+        ),
+      );
+    }
+    for (const decision of request.dispositions) {
+      await this.putDispositionWithinTransaction(decision, client);
+    }
+    return events;
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
@@ -2881,6 +2959,16 @@ export class PostgresAuthorityStore
         client,
       );
       await this.execute(
+        `DELETE FROM connector_sync_work WHERE installation_id = $1`,
+        [id],
+        client,
+      );
+      await this.execute(
+        `DELETE FROM sync_runs WHERE installation_id = $1`,
+        [id],
+        client,
+      );
+      await this.execute(
         `DELETE FROM connector_installations WHERE id = $1 AND org_id = $2`,
         [id, orgId],
         client,
@@ -2895,6 +2983,7 @@ export class PostgresAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     return this.withTx(async (client) => {
       const installation = await this.queryOne<{
@@ -2916,7 +3005,8 @@ export class PostgresAuthorityStore
           SET lease_owner = $1, lease_expires_at = $2, updated_at = $3
           WHERE installation_id = $4 AND stream_key = $5
             AND (
-              lease_owner IS NULL
+              $6::boolean
+              OR lease_owner IS NULL
               OR lease_owner = $1
               OR lease_expires_at IS NULL
               OR lease_expires_at <= $3::timestamptz
@@ -2929,6 +3019,7 @@ export class PostgresAuthorityStore
           input.now,
           input.installation_id,
           input.stream_key,
+          input.preempt === true,
         ],
         client,
       );
@@ -3022,6 +3113,39 @@ export class PostgresAuthorityStore
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
+    await this.beginAttemptOn(undefined, input);
+    return (await this.findAttempt(input.id))!;
+  }
+
+  async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    const startedAt = Date.now();
+    try {
+      return await this.withTx(async (client) => {
+        await this.beginAttemptOn(client, input.attempt);
+        const events = input.ingest
+          ? await this.commitIngestOn(client, input.ingest)
+          : [];
+        for (const pref of input.prefs ?? []) {
+          await this.putConversationPrefOn(client, pref);
+        }
+        const attempt = await this.settleAttemptOn(client, input.settle);
+        return { attempt, events };
+      });
+    } finally {
+      recordSyncDuration(processSyncMetrics, "database_transaction_ms", startedAt, {
+        operation: "commit_sync_page",
+      });
+    }
+  }
+
+  async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
+    return this.withTx((client) => this.settleAttemptOn(client, input));
+  }
+
+  private async beginAttemptOn(
+    client: PoolClient | undefined,
+    input: NewIngestAttempt,
+  ): Promise<void> {
     await this.execute(
       `
         INSERT INTO ingest_attempts (
@@ -3037,82 +3161,83 @@ export class PostgresAuthorityStore
         input.delivery_id,
         input.started_at,
       ],
+      client,
     );
-    return (await this.findAttempt(input.id))!;
   }
 
-  async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
-    return this.withTx(async (client) => {
-      const cursor = await this.findCursorRow(
+  private async settleAttemptOn(
+    client: PoolClient,
+    input: SettleIngestAttempt,
+  ): Promise<IngestAttempt> {
+    const cursor = await this.findCursorRow(
+      input.installation_id,
+      input.stream_key,
+      client,
+    );
+    if (!cursor || cursor.lease_owner !== input.lease_owner) {
+      throw new Error("Connector lease is not held by the attempt owner");
+    }
+    const status =
+      input.retryable_failure_count === 0 ? "succeeded" : "failed";
+    await this.execute(
+      `
+        UPDATE ingest_attempts
+        SET finished_at = $1, status = $2, accepted_count = $3, duplicate_count = $4,
+            quarantined_count = $5, retryable_failure_count = $6, error_code = $7
+        WHERE id = $8
+      `,
+      [
+        input.finished_at,
+        status,
+        input.accepted_count,
+        input.duplicate_count,
+        input.quarantined_count,
+        input.retryable_failure_count,
+        input.error_code ?? null,
+        input.attempt_id,
+      ],
+      client,
+    );
+    for (const quarantine of input.quarantines) {
+      await this.execute(
+        `
+          INSERT INTO ingest_quarantines (
+            id, attempt_id, record_external_id, reason_code,
+            safe_metadata_json, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          quarantine.id,
+          input.attempt_id,
+          quarantine.record_external_id,
+          quarantine.reason_code,
+          jsonb(quarantine.safe_metadata),
+          quarantine.created_at,
+        ],
+        client,
+      );
+    }
+    const advancesCursor =
+      input.retryable_failure_count === 0 && input.next_cursor !== undefined;
+    await this.execute(
+      `
+        UPDATE connector_cursors
+        SET cursor_value = $1, cursor_version = $2, lease_owner = NULL,
+            lease_expires_at = NULL, updated_at = $3
+        WHERE installation_id = $4 AND stream_key = $5
+      `,
+      [
+        advancesCursor ? input.next_cursor : cursor.cursor_value,
+        advancesCursor
+          ? asNumber(cursor.cursor_version) + 1
+          : asNumber(cursor.cursor_version),
+        input.finished_at,
         input.installation_id,
         input.stream_key,
-        client,
-      );
-      if (!cursor || cursor.lease_owner !== input.lease_owner) {
-        throw new Error("Connector lease is not held by the attempt owner");
-      }
-      const status =
-        input.retryable_failure_count === 0 ? "succeeded" : "failed";
-      await this.execute(
-        `
-          UPDATE ingest_attempts
-          SET finished_at = $1, status = $2, accepted_count = $3, duplicate_count = $4,
-              quarantined_count = $5, retryable_failure_count = $6, error_code = $7
-          WHERE id = $8
-        `,
-        [
-          input.finished_at,
-          status,
-          input.accepted_count,
-          input.duplicate_count,
-          input.quarantined_count,
-          input.retryable_failure_count,
-          input.error_code ?? null,
-          input.attempt_id,
-        ],
-        client,
-      );
-      for (const quarantine of input.quarantines) {
-        await this.execute(
-          `
-            INSERT INTO ingest_quarantines (
-              id, attempt_id, record_external_id, reason_code,
-              safe_metadata_json, created_at
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-          `,
-          [
-            quarantine.id,
-            input.attempt_id,
-            quarantine.record_external_id,
-            quarantine.reason_code,
-            jsonb(quarantine.safe_metadata),
-            quarantine.created_at,
-          ],
-          client,
-        );
-      }
-      const advancesCursor =
-        input.retryable_failure_count === 0 && input.next_cursor !== undefined;
-      await this.execute(
-        `
-          UPDATE connector_cursors
-          SET cursor_value = $1, cursor_version = $2, lease_owner = NULL,
-              lease_expires_at = NULL, updated_at = $3
-          WHERE installation_id = $4 AND stream_key = $5
-        `,
-        [
-          advancesCursor ? input.next_cursor : cursor.cursor_value,
-          advancesCursor
-            ? asNumber(cursor.cursor_version) + 1
-            : asNumber(cursor.cursor_version),
-          input.finished_at,
-          input.installation_id,
-          input.stream_key,
-        ],
-        client,
-      );
-      return (await this.findAttempt(input.attempt_id, client))!;
-    });
+      ],
+      client,
+    );
+    return (await this.findAttempt(input.attempt_id, client))!;
   }
 
   async listAttempts(
@@ -3277,6 +3402,511 @@ export class PostgresAuthorityStore
   ): Promise<ConnectorStreamCursor | null> {
     const row = await this.findCursorRow(installationId, streamKey);
     return row ? this.toCursor(row) : null;
+  }
+
+  async listCursors(
+    installationId: string,
+    streamKeys?: readonly string[],
+  ): Promise<ConnectorStreamCursor[]> {
+    if (streamKeys && streamKeys.length === 0) {
+      return [];
+    }
+    const rows = streamKeys
+      ? await this.query<CursorRow>(
+          `
+            SELECT ${CURSOR_COLUMNS}
+            FROM connector_cursors
+            WHERE installation_id = $1 AND stream_key = ANY($2::text[])
+            ORDER BY stream_key
+          `,
+          [installationId, [...streamKeys]],
+        )
+      : await this.query<CursorRow>(
+          `
+            SELECT ${CURSOR_COLUMNS}
+            FROM connector_cursors
+            WHERE installation_id = $1
+            ORDER BY stream_key
+          `,
+          [installationId],
+        );
+    return rows.map((row) => this.toCursor(row));
+  }
+
+  async createSyncRun(input: NewSyncRun): Promise<SyncRun> {
+    validateSyncRunOptions(input.options ?? {});
+    const installation = await this.queryOne<{ id: string }>(
+      `SELECT id FROM connector_installations WHERE id = $1 AND org_id = $2`,
+      [input.installation_id, input.org_id],
+    );
+    if (!installation) {
+      throw new Error("Connector installation not found for sync run");
+    }
+    const row = await this.queryOne<SyncRunRow>(
+      `
+        INSERT INTO sync_runs (
+          id, org_id, installation_id, mode, status, options_json,
+          total_work, completed_work, failed_work, accepted_count,
+          created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, 'queued', $5, 0, 0, 0, 0, $6, $6)
+        RETURNING *
+      `,
+      [
+        input.id,
+        input.org_id,
+        input.installation_id,
+        input.mode,
+        jsonb(input.options ?? {}),
+        input.now,
+      ],
+    );
+    return this.toSyncRun(row!);
+  }
+
+  async getSyncRun(id: string, orgId: string): Promise<SyncRun | null> {
+    const row = await this.queryOne<SyncRunRow>(
+      `SELECT * FROM sync_runs WHERE id = $1 AND org_id = $2`,
+      [id, orgId],
+    );
+    return row ? this.toSyncRun(row) : null;
+  }
+
+  async listSyncRuns(query: ListSyncRunsQuery): Promise<SyncRun[]> {
+    const limit =
+      Number.isInteger(query.limit) && Number(query.limit) > 0
+        ? Math.min(Number(query.limit), 1_000)
+        : 100;
+    const rows = query.installation_id
+      ? await this.query<SyncRunRow>(
+          `
+            SELECT * FROM sync_runs
+            WHERE org_id = $1 AND installation_id = $2
+            ORDER BY created_at DESC, id DESC LIMIT $3
+          `,
+          [query.org_id, query.installation_id, limit],
+        )
+      : await this.query<SyncRunRow>(
+          `
+            SELECT * FROM sync_runs
+            WHERE org_id = $1
+            ORDER BY created_at DESC, id DESC LIMIT $2
+          `,
+          [query.org_id, limit],
+        );
+    return rows.map((row) => this.toSyncRun(row));
+  }
+
+  async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
+    return this.withTx(async (client) => {
+      const current = await this.queryOne<SyncRunRow>(
+        `SELECT * FROM sync_runs WHERE id = $1 AND org_id = $2 FOR UPDATE`,
+        [input.id, input.org_id],
+        client,
+      );
+      if (!current) {
+        return null;
+      }
+      if (
+        input.command === "pause" &&
+        (current.status === "queued" || current.status === "running")
+      ) {
+        await this.execute(
+          `UPDATE sync_runs SET status = 'paused', updated_at = $1 WHERE id = $2`,
+          [input.now, input.id],
+          client,
+        );
+      } else if (
+        input.command === "resume" &&
+        current.status === "paused"
+      ) {
+        await this.execute(
+          `
+            UPDATE sync_runs
+            SET status = 'queued', finished_at = NULL, updated_at = $1
+            WHERE id = $2
+          `,
+          [input.now, input.id],
+          client,
+        );
+      } else if (
+        input.command === "cancel" &&
+        (current.status === "queued" ||
+          current.status === "running" ||
+          current.status === "paused")
+      ) {
+        await this.execute(
+          `
+            UPDATE sync_runs
+            SET status = 'cancelled', finished_at = $1, updated_at = $1
+            WHERE id = $2
+          `,
+          [input.now, input.id],
+          client,
+        );
+        await this.execute(
+          `
+            UPDATE connector_sync_work
+            SET status = 'cancelled', lease_owner = NULL,
+                lease_expires_at = NULL, updated_at = $1
+            WHERE run_id = $2 AND status IN ('pending', 'running')
+          `,
+          [input.now, input.id],
+          client,
+        );
+      }
+      const next = await this.queryOne<SyncRunRow>(
+        `SELECT * FROM sync_runs WHERE id = $1`,
+        [input.id],
+        client,
+      );
+      return next ? this.toSyncRun(next) : null;
+    });
+  }
+
+  async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {
+    return this.withTx((client) => this.enqueueSyncWorkOn(client, input));
+  }
+
+  async enqueueSyncWorkMany(
+    inputs: readonly EnqueueSyncWork[],
+  ): Promise<number> {
+    if (inputs.length === 0) {
+      return 0;
+    }
+    return this.withTx(async (client) => {
+      for (const input of inputs) {
+        await this.enqueueSyncWorkOn(client, input);
+      }
+      return inputs.length;
+    });
+  }
+
+  private async enqueueSyncWorkOn(
+    client: PoolClient,
+    input: EnqueueSyncWork,
+  ): Promise<SyncWorkRecord> {
+    const current = await this.queryOne<SyncWorkRow>(
+      `
+        SELECT * FROM connector_sync_work
+        WHERE installation_id = $1 AND stream_key = $2
+          AND lane = $3 AND generation = $4
+        FOR UPDATE
+      `,
+      [
+        input.installation_id,
+        input.stream_key,
+        input.lane,
+        input.generation,
+      ],
+      client,
+    );
+    if (current) {
+      if (current.status !== "running") {
+        const row = await this.queryOne<SyncWorkRow>(
+          `
+            UPDATE connector_sync_work
+            SET run_id = COALESCE($1, run_id), priority = $2,
+                next_due_at = $3, status = 'pending',
+                lease_owner = NULL, lease_expires_at = NULL,
+                last_error = NULL, updated_at = $4
+            WHERE id = $5 RETURNING *
+          `,
+          [
+            input.run_id ?? null,
+            input.priority ?? syncWorkPriority(input.lane),
+            input.next_due_at,
+            input.now,
+            current.id,
+          ],
+          client,
+        );
+        return this.toSyncWork(row!);
+      }
+      return this.toSyncWork(current);
+    }
+    if (input.run_id) {
+      const run = await this.queryOne<{ id: string }>(
+        `SELECT id FROM sync_runs WHERE id = $1`,
+        [input.run_id],
+        client,
+      );
+      if (!run) {
+        throw new Error(`Sync run not found: ${input.run_id}`);
+      }
+    }
+    const row = await this.queryOne<SyncWorkRow>(
+      `
+        INSERT INTO connector_sync_work (
+          id, run_id, installation_id, stream_key, lane, priority,
+          next_due_at, status, attempts, generation, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 0, $8, $9, $9)
+        RETURNING *
+      `,
+      [
+        input.id,
+        input.run_id ?? null,
+        input.installation_id,
+        input.stream_key,
+        input.lane,
+        input.priority ?? syncWorkPriority(input.lane),
+        input.next_due_at,
+        input.generation,
+        input.now,
+      ],
+      client,
+    );
+    if (input.run_id) {
+      await this.execute(
+        `
+          UPDATE sync_runs
+          SET total_work = total_work + 1, updated_at = $1
+          WHERE id = $2
+        `,
+        [input.now, input.run_id],
+        client,
+      );
+    }
+    return this.toSyncWork(row!);
+  }
+
+  async claimSyncWork(input: ClaimSyncWork): Promise<SyncWorkRecord[]> {
+    if (!Number.isInteger(input.limit) || input.limit < 1) {
+      return [];
+    }
+    return this.withTx(async (client) => {
+      const params: unknown[] = [input.now];
+      const clauses = [
+        `(
+          (w.status = 'pending' AND w.next_due_at <= $1::timestamptz)
+          OR
+          (w.status = 'running' AND w.lease_expires_at <= $1::timestamptz)
+        )`,
+        `(w.run_id IS NULL OR r.status IN ('queued', 'running'))`,
+      ];
+      if (input.work_id) {
+        params.push(input.work_id);
+        clauses.push(`w.id = $${params.length}`);
+      }
+      if (input.installation_id) {
+        params.push(input.installation_id);
+        clauses.push(`w.installation_id = $${params.length}`);
+      }
+      if (input.lanes?.length) {
+        params.push(input.lanes);
+        clauses.push(`w.lane = ANY($${params.length}::text[])`);
+      }
+      if (input.unassigned) {
+        clauses.push(`w.run_id IS NULL`);
+      }
+      params.push(Math.min(input.limit, 1_000));
+      const limitParam = params.length;
+      const candidates = await this.query<{ id: string }>(
+        `
+          SELECT w.id
+          FROM connector_sync_work w
+          LEFT JOIN sync_runs r ON r.id = w.run_id
+          WHERE ${clauses.join(" AND ")}
+          ORDER BY w.priority DESC, w.next_due_at, w.created_at, w.id
+          LIMIT $${limitParam}
+          FOR UPDATE OF w SKIP LOCKED
+        `,
+        params,
+        client,
+      );
+      if (candidates.length === 0) {
+        return [];
+      }
+      const ids = candidates.map((candidate) => candidate.id);
+      const leaseExpiresAt = new Date(
+        Date.parse(input.now) + input.lease_ms,
+      ).toISOString();
+      const rows = await this.query<SyncWorkRow>(
+        `
+          UPDATE connector_sync_work
+          SET status = 'running', attempts = attempts + 1,
+              lease_owner = $1, lease_expires_at = $2, updated_at = $3
+          WHERE id = ANY($4::text[])
+          RETURNING *
+        `,
+        [input.owner, leaseExpiresAt, input.now, ids],
+        client,
+      );
+      await this.execute(
+        `
+          UPDATE sync_runs
+          SET status = 'running',
+              started_at = COALESCE(started_at, $1),
+              updated_at = $1
+          WHERE status = 'queued'
+            AND id IN (
+              SELECT DISTINCT run_id FROM connector_sync_work
+              WHERE id = ANY($2::text[]) AND run_id IS NOT NULL
+            )
+        `,
+        [input.now, ids],
+        client,
+      );
+      const byId = new Map(rows.map((row) => [row.id, row] as const));
+      return ids.map((id) => this.toSyncWork(byId.get(id)!));
+    });
+  }
+
+  async renewSyncWork(input: RenewSyncWork): Promise<boolean> {
+    const leaseExpiresAt = new Date(
+      Date.parse(input.now) + input.lease_ms,
+    ).toISOString();
+    return (
+      (await this.execute(
+        `
+          UPDATE connector_sync_work
+          SET lease_expires_at = $1, updated_at = $2
+          WHERE id = $3 AND status = 'running' AND lease_owner = $4
+            AND lease_expires_at > $2::timestamptz
+        `,
+        [leaseExpiresAt, input.now, input.id, input.owner],
+      )) === 1
+    );
+  }
+
+  async settleSyncWork(
+    input: SettleSyncWork,
+  ): Promise<SyncWorkRecord | null> {
+    return this.withTx(async (client) => {
+      const current = await this.queryOne<SyncWorkRow>(
+        `SELECT * FROM connector_sync_work WHERE id = $1 FOR UPDATE`,
+        [input.id],
+        client,
+      );
+      if (
+        !current ||
+        current.status !== "running" ||
+        current.lease_owner !== input.owner
+      ) {
+        return null;
+      }
+      const status =
+        input.outcome === "retry" ? "pending" : input.outcome;
+      const row = await this.queryOne<SyncWorkRow>(
+        `
+          UPDATE connector_sync_work
+          SET status = $1, next_due_at = $2, lease_owner = NULL,
+              lease_expires_at = NULL, last_error = $3, updated_at = $4
+          WHERE id = $5 AND status = 'running' AND lease_owner = $6
+          RETURNING *
+        `,
+        [
+          status,
+          input.next_due_at ?? toIso(current.next_due_at),
+          input.error_code ?? null,
+          input.now,
+          input.id,
+          input.owner,
+        ],
+        client,
+      );
+      if (current.run_id && input.outcome !== "retry") {
+        await this.execute(
+          `
+            UPDATE sync_runs
+            SET completed_work = completed_work + $1,
+                failed_work = failed_work + $2,
+                accepted_count = accepted_count + $3,
+                last_error = COALESCE($4, last_error),
+                updated_at = $5
+            WHERE id = $6 AND status != 'cancelled'
+          `,
+          [
+            input.outcome === "succeeded" ? 1 : 0,
+            input.outcome === "failed" ? 1 : 0,
+            Math.max(0, input.accepted_count ?? 0),
+            input.error_code ?? null,
+            input.now,
+            current.run_id,
+          ],
+          client,
+        );
+        const remaining = await this.queryOne<{ found: number }>(
+          `
+            SELECT 1 AS found FROM connector_sync_work
+            WHERE run_id = $1 AND status IN ('pending', 'running')
+            LIMIT 1
+          `,
+          [current.run_id],
+          client,
+        );
+        if (!remaining) {
+          await this.execute(
+            `
+              UPDATE sync_runs
+              SET status = CASE
+                    WHEN failed_work > 0 THEN 'failed'
+                    ELSE 'succeeded'
+                  END,
+                  finished_at = $1, updated_at = $1
+              WHERE id = $2 AND status NOT IN ('paused', 'cancelled')
+            `,
+            [input.now, current.run_id],
+            client,
+          );
+        }
+      }
+      return row ? this.toSyncWork(row) : null;
+    });
+  }
+
+  async hasUnassignedSyncWork(
+    query: UnassignedSyncWorkQuery = {},
+  ): Promise<boolean> {
+    const { sql, params } = unassignedSyncWorkWhere(query);
+    const row = await this.queryOne<{ found: number }>(
+      `SELECT 1 AS found FROM connector_sync_work WHERE ${sql} LIMIT 1`,
+      params,
+    );
+    return Boolean(row);
+  }
+
+  async listUnassignedSyncWorkIdentities(query: {
+    installation_id: string;
+  }): Promise<SyncWorkIdentity[]> {
+    const { sql, params } = unassignedSyncWorkWhere({
+      installation_id: query.installation_id,
+    });
+    const rows = await this.query<SyncWorkIdentity>(
+      `
+        SELECT stream_key, lane, generation
+        FROM connector_sync_work
+        WHERE ${sql}
+      `,
+      params,
+    );
+    return rows.map((row) => ({
+      stream_key: row.stream_key,
+      lane: row.lane,
+      generation: row.generation,
+    }));
+  }
+
+  async wakeUnassignedSyncWork(
+    input: WakeUnassignedSyncWork,
+  ): Promise<number> {
+    const streamKeys = uniqueStreamKeys(input.stream_keys);
+    if (streamKeys.length === 0) {
+      return 0;
+    }
+    const keyPlaceholders = streamKeys
+      .map((_, index) => `$${index + 4}`)
+      .join(", ");
+    return this.execute(
+      `
+        UPDATE connector_sync_work
+        SET next_due_at = $1::timestamptz, updated_at = $2::timestamptz
+        WHERE installation_id = $3
+          AND run_id IS NULL
+          AND status = 'pending'
+          AND stream_key IN (${keyPlaceholders})
+      `,
+      [input.now, input.now, input.installation_id, ...streamKeys],
+    );
   }
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
@@ -3594,6 +4224,48 @@ export class PostgresAuthorityStore
       media_pending: asBool(row.media_pending),
       ...(row.idle_until ? { idle_until: toIso(row.idle_until) } : {}),
       generation: asNumber(row.generation),
+      updated_at: toIso(row.updated_at),
+    };
+  }
+
+  private toSyncRun(row: SyncRunRow): SyncRun {
+    return {
+      id: row.id,
+      org_id: row.org_id,
+      installation_id: row.installation_id,
+      mode: row.mode,
+      status: row.status,
+      options: parseContextJson<SyncRun["options"]>(row.options_json),
+      total_work: asNumber(row.total_work),
+      completed_work: asNumber(row.completed_work),
+      failed_work: asNumber(row.failed_work),
+      accepted_count: asNumber(row.accepted_count),
+      ...(row.started_at ? { started_at: toIso(row.started_at) } : {}),
+      ...(row.finished_at ? { finished_at: toIso(row.finished_at) } : {}),
+      ...(row.last_error ? { last_error: row.last_error } : {}),
+      created_at: toIso(row.created_at),
+      updated_at: toIso(row.updated_at),
+    };
+  }
+
+  private toSyncWork(row: SyncWorkRow): SyncWorkRecord {
+    return {
+      id: row.id,
+      ...(row.run_id ? { run_id: row.run_id } : {}),
+      installation_id: row.installation_id,
+      stream_key: row.stream_key,
+      lane: row.lane,
+      priority: asNumber(row.priority),
+      next_due_at: toIso(row.next_due_at),
+      status: row.status,
+      attempts: asNumber(row.attempts),
+      generation: asNumber(row.generation),
+      ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
+      ...(row.lease_expires_at
+        ? { lease_expires_at: toIso(row.lease_expires_at) }
+        : {}),
+      ...(row.last_error ? { last_error: row.last_error } : {}),
+      created_at: toIso(row.created_at),
       updated_at: toIso(row.updated_at),
     };
   }
@@ -4755,4 +5427,27 @@ function requireContextValue(
       `Invalid context ${label}: ${result.issues.map((issue) => issue.message).join("; ")}`,
     );
   }
+}
+
+function unassignedSyncWorkWhere(
+  query: UnassignedSyncWorkQuery,
+): { sql: string; params: unknown[] } {
+  const clauses = ["run_id IS NULL", "status IN ('pending', 'running')"];
+  const params: unknown[] = [];
+  if (query.installation_id) {
+    params.push(query.installation_id);
+    clauses.push(`installation_id = $${params.length}`);
+  }
+  if (query.lanes?.length) {
+    const slots = query.lanes.map((lane) => {
+      params.push(lane);
+      return `$${params.length}`;
+    });
+    clauses.push(`lane IN (${slots.join(", ")})`);
+  }
+  return { sql: clauses.join(" AND "), params };
+}
+
+function uniqueStreamKeys(keys: readonly string[]): string[] {
+  return [...new Set(keys.map((key) => key.trim()).filter(Boolean))];
 }

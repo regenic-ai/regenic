@@ -385,6 +385,13 @@ export interface ConnectorInstallConfirm {
   ack: string;
 }
 
+export interface ConnectorFieldOption {
+  value: string;
+  label: string;
+  kind?: string;
+  title?: string;
+}
+
 export interface ConnectorField {
   key: string;
   label: string;
@@ -393,7 +400,9 @@ export interface ConnectorField {
   default?: string;
   multiple?: boolean;
   secret?: boolean;
-  options?: { value: string; label: string }[];
+  options?: ConnectorFieldOption[];
+  filter_options_by?: string;
+  option_labels_key?: string;
   visible_when?: ConnectorFieldWhen;
 }
 
@@ -459,6 +468,7 @@ export interface EngineInstallationView {
   can_reply: boolean;
   can_create: boolean;
   create_with_task?: boolean;
+  can_pair?: boolean;
   channel?: string;
   channel_label?: string;
   last_attempt: IngestAttempt | null;
@@ -508,6 +518,59 @@ export interface ConnectorSyncView {
   quarantined_count: number;
   last_run_status: "completed" | "retryable_failure" | "lease_unavailable" | "idle";
   installation: EngineInstallationView;
+}
+
+export type SyncRunMode = "quick_start" | "continuous" | "archive";
+export type SyncRunStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface SyncEtaRange {
+  low_ms: number;
+  high_ms: number;
+}
+
+export type SyncThrottleReason = "source_429" | "throttled" | "writer_wait";
+
+export interface SyncReadinessView {
+  remaining_streams: number;
+  freshness_ms: number | null;
+  freshness_source: "poll" | "none";
+  accepted_count: number;
+  throttle_reason: SyncThrottleReason | null;
+  eta: SyncEtaRange | null;
+}
+
+export interface SyncRunView {
+  id: string;
+  org_id: string;
+  installation_id: string;
+  mode: SyncRunMode;
+  status: SyncRunStatus;
+  options: {
+    max_pages?: number;
+    stream_keys?: string[];
+    archive_from?: string;
+    archive_to?: string;
+    run_window?: {
+      start_hour: number;
+      end_hour: number;
+      timezone?: string;
+    };
+  };
+  total_work: number;
+  completed_work: number;
+  failed_work: number;
+  accepted_count: number;
+  started_at?: string;
+  finished_at?: string;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface LocalNetworkWatch {
@@ -587,7 +650,11 @@ export interface PersonalHeartbeatView {
   reachability: "live" | "degraded" | "offline";
   pull: Pick<
     PullStatusView,
-    "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
+    | "phase"
+    | "catching_up_count"
+    | "last_tick_at"
+    | "last_accepted_count"
+    | "streams"
   >;
   installations: PersonalHeartbeatInstallationPulse[];
 }
@@ -603,6 +670,8 @@ export interface PersonalEngineView {
   pressure?: PersonalHeartbeatView["pressure"];
   pull?: PullStatusView;
   installations: EngineInstallationView[];
+  sync_runs?: SyncRunView[];
+  sync_readiness?: SyncReadinessView;
   catalog: ConnectorCatalogItem[];
   executor_installations: EngineExecutorView[];
   executor_catalog: ExecutorKindCatalogItem[];
