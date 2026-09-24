@@ -505,6 +505,16 @@ export class PersonalController {
     return this.guard(() => this.work.getPrefs());
   }
 
+  @Get("dispatch-policy")
+  getPersonalDispatchPolicy() {
+    return this.guard(() => this.work.getPersonalDispatchPolicy());
+  }
+
+  @Post("dispatch-policy")
+  putPersonalDispatchPolicy(@Body() body: { policy?: unknown } | undefined) {
+    return this.guard(() => this.work.putPersonalDispatchPolicy(body?.policy));
+  }
+
   @Post("prefs")
   putPrefs(
     @Body()

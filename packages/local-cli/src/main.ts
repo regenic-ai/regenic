@@ -30,9 +30,11 @@ import {
   STANDARD_GAP_SCHEMA_VERSION,
   AGENT_RUN_SCHEMA_VERSION,
   STANDARD_DRIFT_DETECTOR_VERSION,
+  DEFAULT_PERSONAL_DISPATCH_POLICY,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
+  validatePersonalDispatchPolicy,
   validateStandardScope,
   validateTrialConfig,
   validateUpgradeEvidence,
@@ -188,6 +190,12 @@ export async function runLocalCli(
       return;
     case "inbox-triage-reset":
       await resetInboxTriage(commandOptions, stdout, now);
+      return;
+    case "dispatch-policy-get":
+      await getPersonalDispatchPolicy(commandOptions, stdout);
+      return;
+    case "dispatch-policy-set":
+      await putPersonalDispatchPolicy(commandOptions, stdout, now);
       return;
     case "context-assemble":
       await assembleContext(commandOptions, stdout, createId);
@@ -770,6 +778,40 @@ async function setInboxEventPinned(
       updated_at: now(),
     });
     writeJson(stdout, pref);
+  });
+}
+
+const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
+
+async function getPersonalDispatchPolicy(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const value = await host.get("authority").getUiPref(orgId, PERSONAL_DISPATCH_POLICY_PREF_KEY);
+    if (!value) {
+      writeJson(stdout, DEFAULT_PERSONAL_DISPATCH_POLICY);
+      return;
+    }
+    try {
+      writeJson(stdout, validatePersonalDispatchPolicy(JSON.parse(value)));
+    } catch {
+      throw new Error("Stored personal dispatch policy is invalid");
+    }
+  });
+}
+
+async function putPersonalDispatchPolicy(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const policy = validatePersonalDispatchPolicy(
+    await readJsonObject(requirePath(options, "policy"), "Personal dispatch policy") as never,
+  );
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    await host.get("authority").putUiPref(
+      orgId,
+      PERSONAL_DISPATCH_POLICY_PREF_KEY,
+      JSON.stringify(policy),
+      now(),
+    );
+    writeJson(stdout, policy);
   });
 }
 

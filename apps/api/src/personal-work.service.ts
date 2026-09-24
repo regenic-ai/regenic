@@ -6,6 +6,7 @@ import {
   INBOX_LIST_PREF_KEY,
   INBOX_MEMBERSHIP_PREF_KEY,
   INBOX_SORT_PREF_KEY,
+  DEFAULT_PERSONAL_DISPATCH_POLICY,
   cancelWorkRun,
   foldThreadByPolicy,
   deliveryAbandoned,
@@ -16,6 +17,7 @@ import {
   normalizeInboxSort,
   normalizeUnitKind,
   parseConversationThread,
+  validatePersonalDispatchPolicy,
   projectThreadFacet,
   recipeMatches,
   recordClassFromType,
@@ -24,6 +26,7 @@ import {
   type ConversationThread,
   type InboxListView,
   type InboxSortMode,
+  type PersonalDispatchPolicy,
   type PromptAnswer,
   type Recipe,
   type ThreadPrompt,
@@ -55,6 +58,7 @@ export type { RecipeInput } from "./personal-work-recipe";
 export type { WorkInboxFace } from "./personal-work-faces";
 
 const WORK_TICK_MS = 3_000;
+export const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
 
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
@@ -180,6 +184,43 @@ export class PersonalWorkService implements OnModuleDestroy {
       this.tickSupervise(),
       this.tickFlush(),
     ]);
+  }
+
+  async getPersonalDispatchPolicy(): Promise<PersonalDispatchPolicy> {
+    const host = this.runtime.requireHost();
+    const value = await host.get("authority").getUiPref(
+      this.runtime.orgId(),
+      PERSONAL_DISPATCH_POLICY_PREF_KEY,
+    );
+    if (!value) {
+      return DEFAULT_PERSONAL_DISPATCH_POLICY;
+    }
+    try {
+      return validatePersonalDispatchPolicy(JSON.parse(value) as PersonalDispatchPolicy);
+    } catch {
+      throw new PersonalConnectorError("invalid_config", "Stored personal dispatch policy is invalid", 409);
+    }
+  }
+
+  async putPersonalDispatchPolicy(input: unknown): Promise<PersonalDispatchPolicy> {
+    let policy: PersonalDispatchPolicy;
+    try {
+      policy = validatePersonalDispatchPolicy(input as PersonalDispatchPolicy);
+    } catch (error) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        error instanceof Error ? error.message : "Invalid personal dispatch policy",
+        400,
+      );
+    }
+    const host = this.runtime.requireHost();
+    await host.get("authority").putUiPref(
+      this.runtime.orgId(),
+      PERSONAL_DISPATCH_POLICY_PREF_KEY,
+      JSON.stringify(policy),
+      new Date().toISOString(),
+    );
+    return policy;
   }
 
   private async tickDispatch(): Promise<void> {

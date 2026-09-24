@@ -25,6 +25,7 @@ export * from "./ingestion-schema";
 export * from "./canonicalization";
 export * from "./arrangement";
 export * from "./arrangement-service";
+export * from "./personal-dispatch-policy";
 export * from "./ingestion-service";
 export * from "./connector-runner";
 export * from "./deadline";
