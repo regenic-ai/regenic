@@ -371,6 +371,8 @@ export interface EventListQuery {
 export interface InboxQuery extends EventListQuery {
   heads?: boolean;
   siblings?: boolean;
+  /** Default `current_work`. `pending` exposes items for explicit review. */
+  disposition?: "current_work" | "pending";
   /** Default `shown`. `hidden` is the folded list, not deleted Events. */
   list?: "shown" | "hidden";
 }

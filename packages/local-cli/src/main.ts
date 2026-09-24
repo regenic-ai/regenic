@@ -170,6 +170,9 @@ export async function runLocalCli(
     case "inbox":
       await showInbox(commandOptions, stdout);
       return;
+    case "inbox-pending":
+      await showPendingInbox(commandOptions, stdout);
+      return;
     case "inbox-triage":
       await triageInbox(commandOptions, stdout, now);
       return;
@@ -671,6 +674,14 @@ async function sendDsh(
 async function showInbox(options: CommandOptions, stdout: CliOutput): Promise<void> {
   await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
     writeJson(stdout, await host.get("authority").listInbox(requireOption(options, "org")));
+  });
+}
+
+async function showPendingInbox(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    writeJson(stdout, await host.get("authority").listInbox(requireOption(options, "org"), {
+      disposition: "pending",
+    }));
   });
 }
 

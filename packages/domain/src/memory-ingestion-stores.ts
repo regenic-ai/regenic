@@ -228,10 +228,11 @@ export class MemoryAuthorityStore
     const useDecided =
       query?.siblings ||
       query?.heads ||
+      query?.disposition === "pending" ||
       normalizeInboxListView(query?.list) === "hidden";
     const items = useDecided
       ? await this.decidedInbox(orgId, headsScanQuery(query) ?? query)
-      : this.currentWorkInbox(orgId);
+      : this.currentWorkInbox(orgId, query?.disposition ?? "current_work");
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
       if (byTime !== 0) {
@@ -270,11 +271,14 @@ export class MemoryAuthorityStore
     return withFace.size;
   }
 
-  private currentWorkInbox(orgId: string): InboxItem[] {
+  private currentWorkInbox(
+    orgId: string,
+    disposition: "current_work" | "pending" = "current_work",
+  ): InboxItem[] {
     const hidden = this.hiddenThreadIds(orgId);
     return [...this.currentBySource.values()].flatMap((event) => {
       const decision = this.dispositions.get(event.id);
-      if (event.org_id !== orgId || decision?.disposition !== "current_work") {
+      if (event.org_id !== orgId || decision?.disposition !== disposition) {
         return [];
       }
       if (hidden.has(eventThreadId(event))) {
@@ -315,7 +319,7 @@ export class MemoryAuthorityStore
         return [];
       }
       const decision = this.dispositions.get(event.id);
-      if (!decision) {
+      if (!decision || (query?.disposition && decision.disposition !== query.disposition)) {
         return [];
       }
       return [
