@@ -182,9 +182,12 @@ export class FeishuChatPollConnector {
       };
     }
     const page = request
-      ? await this.client.listMessages(request)
+      ? await this.client.listMessages(
+          interactiveTip ? { ...request, timeout_ms: 8_000 } : request,
+        )
       : { items: [], has_more: false };
-    const names = await this.resolveNames(page.items);
+    // Name lookup can outlive the interactive poll budget and discard the page.
+    const names = await this.resolveNames(page.items, { network: !interactiveTip });
     const selfId = await this.selfUserId();
     const records: IngestBatch["records"] = [];
     for (const item of page.items) {
@@ -303,6 +306,7 @@ export class FeishuChatPollConnector {
 
   private async resolveNames(
     items: FeishuHistoryItem[],
+    options?: { network?: boolean },
   ): Promise<Map<string, string>> {
     const names = new Map<string, string>();
     for (const item of items) {
@@ -310,7 +314,7 @@ export class FeishuChatPollConnector {
         names.set(id, name);
       }
     }
-    if (!this.client.resolveUserNames) {
+    if (options?.network === false || !this.client.resolveUserNames) {
       return names;
     }
     const ids = [

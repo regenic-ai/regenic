@@ -147,6 +147,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "resetCursor",
   "beginAttempt",
   "commitSyncPage",
+  "commitSyncPages",
   "settleAttempt",
   "createSyncRun",
   "commandSyncRun",

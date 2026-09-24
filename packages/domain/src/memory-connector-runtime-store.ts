@@ -159,6 +159,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     const key = cursorKey(input.installation_id, input.stream_key);
     const current = this.cursors.get(key);
     if (
+      !input.preempt &&
       current?.lease_expires_at &&
       current.lease_expires_at > input.now &&
       current.lease_owner !== input.lease_owner

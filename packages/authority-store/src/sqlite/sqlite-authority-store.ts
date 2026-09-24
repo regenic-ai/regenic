@@ -2984,6 +2984,7 @@ export class SqliteAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     this.assertWritable();
     const transaction = this.database.transaction(() => {
@@ -3001,6 +3002,7 @@ export class SqliteAuthorityStore
         input.stream_key,
       );
       if (
+        !input.preempt &&
         current?.lease_expires_at &&
         current.lease_expires_at > input.now &&
         current.lease_owner !== input.lease_owner
@@ -3112,17 +3114,7 @@ export class SqliteAuthorityStore
   async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
     this.assertWritable();
     const startedAt = Date.now();
-    const commit = this.database.transaction(() => {
-      this.beginAttemptUnlocked(input.attempt);
-      const events = input.ingest
-        ? this.commitIngestUnlocked(input.ingest)
-        : [];
-      for (const pref of input.prefs ?? []) {
-        this.putConversationPrefUnlocked(pref);
-      }
-      const attempt = this.settleAttemptUnlocked(input.settle);
-      return { attempt, events };
-    });
+    const commit = this.database.transaction(() => this.commitSyncPageUnlocked(input));
     try {
       return commit.immediate();
     } finally {
@@ -3130,6 +3122,40 @@ export class SqliteAuthorityStore
         operation: "commit_sync_page",
       });
     }
+  }
+
+  async commitSyncPages(inputs: CommitSyncPage[]): Promise<CommitSyncPageResult[]> {
+    this.assertWritable();
+    if (inputs.length === 0) {
+      return [];
+    }
+    if (inputs.length === 1) {
+      const only = inputs[0];
+      return only ? [await this.commitSyncPage(only)] : [];
+    }
+    const startedAt = Date.now();
+    const commit = this.database.transaction(() =>
+      inputs.map((input) => this.commitSyncPageUnlocked(input)),
+    );
+    try {
+      return commit.immediate();
+    } finally {
+      recordSyncDuration(processSyncMetrics, "database_transaction_ms", startedAt, {
+        operation: "commit_sync_pages",
+      });
+    }
+  }
+
+  private commitSyncPageUnlocked(input: CommitSyncPage): CommitSyncPageResult {
+    this.beginAttemptUnlocked(input.attempt);
+    const events = input.ingest
+      ? this.commitIngestUnlocked(input.ingest)
+      : [];
+    for (const pref of input.prefs ?? []) {
+      this.putConversationPrefUnlocked(pref);
+    }
+    const attempt = this.settleAttemptUnlocked(input.settle);
+    return { attempt, events };
   }
 
   async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {

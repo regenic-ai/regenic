@@ -553,6 +553,8 @@ export interface AcquireConnectorLease {
   lease_owner: string;
   now: string;
   lease_duration_ms: number;
+  /** Interactive open-thread poll may take a lease held by background work. */
+  preempt?: boolean;
 }
 
 export interface ReleaseConnectorLease {

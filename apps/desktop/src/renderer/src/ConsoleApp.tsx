@@ -547,6 +547,33 @@ export function ConsoleApp() {
       );
     } catch (caught) {
       if (isInboxAbortError(caught)) {
+        // live=1 is the receipt overlay. If it is aborted, still read SQLite
+        // so the interactive kick's new messages are not dropped with it.
+        try {
+          const items = await fetchInbox(
+            {
+              thread_id: threadId,
+              limit: THREAD_OPEN_PAGE_SIZE,
+            },
+            { signal, timeoutMs: OPEN_FETCH_MS },
+          );
+          if (
+            workspaceEpoch.current !== epoch ||
+            selectedIdRef.current !== threadId ||
+            !loadedThreadsRef.current.has(threadId)
+          ) {
+            return;
+          }
+          setMessagesByThread((prev) =>
+            rememberThreadMessages(
+              prev,
+              threadId,
+              orderThreadMessages(mergeInboxDelta(prev[threadId] ?? [], items)),
+            ),
+          );
+        } catch {
+          // The thread is already on screen from the local open.
+        }
         return;
       }
       // Receipts stay optional; the thread is already on screen.

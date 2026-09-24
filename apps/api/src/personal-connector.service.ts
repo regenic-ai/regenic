@@ -1266,12 +1266,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
                 installation,
                 stream,
                 1,
-                { latest: true },
+                { latest: true, media: false },
                 this.quota,
               ),
             );
           },
-          { skipIfBusy: false },
+          { ahead: true },
         );
         if (pages === undefined || !this.focusAlive(generation, signal)) {
           return;
@@ -2494,6 +2494,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
             eager: older || media,
           }),
           catalogSize,
+          item.lane,
         );
         this.rememberStreamMeta(key, stream);
         this.streamPulling.add(key);
@@ -2544,6 +2545,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
             installation.config,
             heat,
             catalogSize,
+            item.lane,
           );
           const result = {
             key,
@@ -3645,13 +3647,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
     installationId: string,
     streamKey: string,
     work: () => Promise<T>,
-    options?: { skipIfBusy?: boolean },
+    options?: { skipIfBusy?: boolean; ahead?: boolean },
   ): Promise<T | undefined> {
     const lock = `${installationId}:${streamKey}`;
     if (options?.skipIfBusy && this.streamLocks.has(lock)) {
       return Promise.resolve(undefined);
     }
-    const previous = this.streamLocks.get(lock) ?? Promise.resolve();
+    const previous = options?.ahead
+      ? Promise.resolve()
+      : (this.streamLocks.get(lock) ?? Promise.resolve());
     const current = previous.then(work, work);
     const released = current.then(
       () => undefined,
@@ -3983,6 +3987,7 @@ function dueWorkStreamIdleMs(
   config: Record<string, unknown> | undefined,
   heat: DueWorkHeat,
   catalogSize: number,
+  lane?: SyncLane,
 ): number | undefined {
   const value = stream.pace?.idle_ms;
   const hintMs =
@@ -3995,13 +4000,18 @@ function dueWorkStreamIdleMs(
   }
   const envTiers = streamIdleTiersFromEnv();
   const modeTiers = mode != null ? syncModePreset(mode) : null;
-  return dueWorkIdleMs({
+  const idleMs = dueWorkIdleMs({
     heat,
     hintMs,
     activeIdleMs: modeTiers?.activeIdleMs ?? envTiers.activeIdleMs,
     hotIdleMs: envTiers.hotIdleMs,
     coldIdleMs: coldIdleMsForCatalogSize(catalogSize, envTiers.coldIdleMs),
   });
+  if (lane === "history" || lane === "media" || idleMs == null) {
+    return idleMs;
+  }
+  // Quiet chats still need a list-freshness pass. History keeps the long cold idle.
+  return Math.min(idleMs, 10 * 60 * 1000);
 }
 
 function pollRunsHadPressure(runs: ConnectorPollRunResult[]): boolean {

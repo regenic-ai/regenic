@@ -128,6 +128,7 @@ export class ConnectorRunner {
       lease_owner: input.lease_owner,
       now: startedAt,
       lease_duration_ms: input.lease_duration_ms,
+      preempt: currentSyncLane() === "interactive",
     });
     recordSyncDuration(this.metrics, "lease_wait_ms", leaseStartedAt, labels);
     if (!lease) {

@@ -1,4 +1,5 @@
 import {
+  currentSyncLane,
   processSyncMetrics,
   type SyncMetricPoint,
 } from "@regenic/domain";
@@ -16,11 +17,24 @@ interface PendingCall {
   startedAt: number;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  pages?: QueuedPage[];
+}
+
+const PAGE_BATCH_MAX = 8;
+const PAGE_BATCH_MS = 20;
+
+interface QueuedPage {
+  input: unknown;
+  startedAt: number;
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
 }
 
 export class SqliteWriteClient {
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
+  private readonly pageBatch: QueuedPage[] = [];
+  private pageTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly recordWait: boolean;
 
   private constructor(
@@ -38,6 +52,10 @@ export class SqliteWriteClient {
       }
       this.pending.delete(message.id);
       this.recordCallMetrics(pending, message);
+      if (pending.pages) {
+        this.settlePageBatch(pending, message);
+        return;
+      }
       if (message.ok) {
         pending.resolve(message.result);
         return;
@@ -73,6 +91,27 @@ export class SqliteWriteClient {
   }
 
   call<T>(method: string, args: unknown[] = []): Promise<T> {
+    if (
+      method === "commitSyncPage" &&
+      currentSyncLane() !== "interactive" &&
+      args.length === 1
+    ) {
+      return new Promise<T>((resolve, reject) => {
+        this.pageBatch.push({
+          input: args[0],
+          startedAt: Date.now(),
+          resolve: (value) => resolve(value as T),
+          reject,
+        });
+        if (this.pageBatch.length >= PAGE_BATCH_MAX) {
+          this.flushPageBatch();
+          return;
+        }
+        if (!this.pageTimer) {
+          this.pageTimer = setTimeout(() => this.flushPageBatch(), PAGE_BATCH_MS);
+        }
+      });
+    }
     const id = this.nextId;
     this.nextId += 1;
     const startedAt = Date.now();
@@ -85,6 +124,56 @@ export class SqliteWriteClient {
       });
       const request: SqliteWriteRequest = { id, method, args };
       this.worker.postMessage(request);
+      if (method === "commitSyncPage") {
+        this.flushPageBatch();
+      }
+    });
+  }
+
+  private flushPageBatch(): void {
+    if (this.pageTimer) {
+      clearTimeout(this.pageTimer);
+      this.pageTimer = undefined;
+    }
+    const pages = this.pageBatch.splice(0);
+    if (pages.length === 0) {
+      return;
+    }
+    const id = this.nextId;
+    this.nextId += 1;
+    this.pending.set(id, {
+      method: "commitSyncPages",
+      startedAt: pages[0]?.startedAt ?? Date.now(),
+      resolve: () => undefined,
+      reject: () => undefined,
+      pages,
+    });
+    const request: SqliteWriteRequest = {
+      id,
+      method: pages.length === 1 ? "commitSyncPage" : "commitSyncPages",
+      args: pages.length === 1 ? [pages[0]?.input] : [pages.map((page) => page.input)],
+    };
+    this.worker.postMessage(request);
+  }
+
+  private settlePageBatch(pending: PendingCall, message: SqliteWriteResponse): void {
+    const pages = pending.pages ?? [];
+    if (!message.ok) {
+      const error = message.error
+        ? reviveStoreError(message.error)
+        : new Error("Authority write worker failed");
+      for (const page of pages) {
+        page.reject(error);
+      }
+      return;
+    }
+    if (pages.length === 1) {
+      pages[0]?.resolve(message.result);
+      return;
+    }
+    const results = Array.isArray(message.result) ? message.result : [];
+    pages.forEach((page, index) => {
+      page.resolve(results[index]);
     });
   }
 
@@ -129,6 +218,13 @@ export class SqliteWriteClient {
     this.pending.clear();
     for (const call of pending) {
       call.reject(error);
+      for (const page of call.pages ?? []) {
+        page.reject(error);
+      }
+    }
+    const queued = this.pageBatch.splice(0);
+    for (const page of queued) {
+      page.reject(error);
     }
   }
 }

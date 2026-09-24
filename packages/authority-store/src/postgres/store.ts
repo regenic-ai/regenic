@@ -2983,6 +2983,7 @@ export class PostgresAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     return this.withTx(async (client) => {
       const installation = await this.queryOne<{
@@ -3004,7 +3005,8 @@ export class PostgresAuthorityStore
           SET lease_owner = $1, lease_expires_at = $2, updated_at = $3
           WHERE installation_id = $4 AND stream_key = $5
             AND (
-              lease_owner IS NULL
+              $6::boolean
+              OR lease_owner IS NULL
               OR lease_owner = $1
               OR lease_expires_at IS NULL
               OR lease_expires_at <= $3::timestamptz
@@ -3017,6 +3019,7 @@ export class PostgresAuthorityStore
           input.now,
           input.installation_id,
           input.stream_key,
+          input.preempt === true,
         ],
         client,
       );

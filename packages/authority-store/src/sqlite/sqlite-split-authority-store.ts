@@ -819,6 +819,7 @@ export class SqliteSplitAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     return this.writer.call("acquireLease", [input]);
   }
