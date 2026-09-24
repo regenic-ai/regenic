@@ -141,4 +141,37 @@ describe("engineRevision", () => {
     );
     assert.notEqual(before, after);
   });
+
+  it("changes when freshness or ETA changes", () => {
+    const base = engineWithCatalog("Feishu", "Install lark-cli");
+    const before = engineRevision(
+      {
+        ...base,
+        sync_readiness: {
+          remaining_streams: 10_000,
+          freshness_ms: 60_000,
+          freshness_source: "poll",
+          accepted_count: 0,
+          throttle_reason: null,
+          eta: { low_ms: 6_240_000, high_ms: 37_440_000 },
+        },
+      },
+      false,
+    );
+    const after = engineRevision(
+      {
+        ...base,
+        sync_readiness: {
+          remaining_streams: 8_000,
+          freshness_ms: 60_000,
+          freshness_source: "poll",
+          accepted_count: 12,
+          throttle_reason: null,
+          eta: { low_ms: 4_000_000, high_ms: 28_000_000 },
+        },
+      },
+      false,
+    );
+    assert.notEqual(before, after);
+  });
 });

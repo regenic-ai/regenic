@@ -20,11 +20,11 @@ const {
 } = require("@regenic/config");
 const { decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
 const {
+  createPurrWhatsAppImport,
   dshPromptStoreFor,
   dropDshPromptStore,
   questionPromptId,
-} = require("@regenic/dsh-connector");
-const { createPurrWhatsAppImport } = require("@regenic/whatsapp-personal");
+} = require("@regenic/connector-host");
 
 const roots = [];
 const previousEnv = {};
@@ -35,6 +35,24 @@ afterEach(async () => {
   setKeychainStoreForTests();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true })));
 });
+
+async function waitForSyncRun(origin, runId, timeoutMs = 8_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const response = await fetch(`${origin}/v1/me/sync-runs/${runId}`);
+    const body = await response.json();
+    if (
+      response.ok &&
+      (body.status === "succeeded" ||
+        body.status === "failed" ||
+        body.status === "cancelled")
+    ) {
+      return body;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`sync run ${runId} did not finish`);
+}
 
 async function createRoot() {
   const root = await mkdtemp(join(tmpdir(), "regenic-personal-api-"));
@@ -383,7 +401,7 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
   return { app, origin: await app.getUrl() };
 }
 
-describe("personal /v1/me", () => {
+describe("personal /v1/me", { concurrency: 1 }, () => {
   it("lists current-work inbox items with Blob body text", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
@@ -578,13 +596,17 @@ describe("personal /v1/me", () => {
       assert.ok(before.executors >= 1);
       assert.equal(before.recipes, 1);
 
-      const cleared = await (
-        await fetch(`${origin}/v1/me/store/clear`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-        })
-      ).json();
+      const clearResponse = await fetch(`${origin}/v1/me/store/clear`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const cleared = await clearResponse.json();
+      assert.equal(
+        clearResponse.status,
+        201,
+        JSON.stringify(cleared),
+      );
       assert.ok(cleared.cleared.events >= 1);
       assert.equal(cleared.kept.recipes, 1);
       assert.ok(cleared.kept.connectors >= 1);
@@ -1771,11 +1793,12 @@ describe("personal /v1/me", () => {
       assert.equal(engine.catalog[1].fields[1].required, false);
       assert.equal(engine.catalog[2].connector_type, "feishu-chat");
       assert.equal(engine.catalog[2].installed, false);
-      assert.equal(engine.catalog[2].fields[0].key, "selection");
-      assert.equal(engine.catalog[2].fields[1].key, "kinds");
-      assert.equal(engine.catalog[2].fields[1].default, "group,p2p");
-      assert.equal(engine.catalog[2].fields[2].key, "chat_ids");
-      assert.equal(engine.catalog[2].fields[2].multiple, true);
+      assert.equal(engine.catalog[2].fields[0].key, "sync_mode");
+      assert.equal(engine.catalog[2].fields[1].key, "selection");
+      assert.equal(engine.catalog[2].fields[2].key, "kinds");
+      assert.equal(engine.catalog[2].fields[2].default, "group,p2p");
+      assert.equal(engine.catalog[2].fields[3].key, "chat_ids");
+      assert.equal(engine.catalog[2].fields[3].multiple, true);
       assert.equal(engine.catalog[2].prerequisites[0].key, "lark-cli");
       assert.equal(engine.catalog[3].connector_type, "cursor-agent");
       assert.equal(engine.catalog[3].installed, false);
@@ -1900,6 +1923,8 @@ describe("personal /v1/me", () => {
       });
       const body = await synced.json();
       assert.equal(synced.status, 201);
+      const run = await waitForSyncRun(origin, body.id);
+      assert.equal(run.status, "succeeded");
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const slackItem = inbox.find(
         (item) => item.event.external_id === "C123:1710000000.000100",
@@ -1909,8 +1934,6 @@ describe("personal /v1/me", () => {
       assert.equal(slackItem.await_reply, false);
       assert.equal(slackItem.list_title, "conversation");
       assert.equal(body.installation_id, "slack-1");
-      assert.equal(body.last_run_status, "completed");
-      assert.equal(body.installation.label, "C123");
       assert.equal(JSON.stringify(body).includes("xoxb-test-token"), false);
       assert.equal(JSON.stringify(body).includes("credentials_ref"), false);
 
@@ -1928,6 +1951,51 @@ describe("personal /v1/me", () => {
     } finally {
       await app.close();
       await slack.close();
+    }
+  });
+
+  it("pauses and cancels an async connector sync run", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const hanging = createServer(() => undefined);
+    await new Promise((resolve) => {
+      hanging.listen(0, "127.0.0.1", resolve);
+    });
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_SLACK_TOKEN: "xoxb-test-token",
+      REGENIC_SLACK_API_ENDPOINT: `http://127.0.0.1:${hanging.address().port}/conversations.history`,
+      REGENIC_CONNECTOR_POLL_TIMEOUT_MS: "250",
+    });
+    try {
+      const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "quick_start" }),
+      });
+      const body = await synced.json();
+      assert.equal(synced.status, 201);
+      assert.equal(body.installation_id, "slack-1");
+      assert.ok(["queued", "running"].includes(body.status));
+
+      const paused = await fetch(
+        `${origin}/v1/me/sync-runs/${body.id}/pause`,
+        { method: "POST" },
+      );
+      assert.equal(paused.status, 201);
+      assert.equal((await paused.json()).status, "paused");
+
+      const cancelled = await fetch(
+        `${origin}/v1/me/sync-runs/${body.id}/cancel`,
+        { method: "POST" },
+      );
+      assert.equal(cancelled.status, 201);
+      assert.equal((await cancelled.json()).status, "cancelled");
+    } finally {
+      hanging.closeAllConnections?.();
+      hanging.close();
+      await app.close();
     }
   });
 
@@ -2169,8 +2237,10 @@ describe("personal /v1/me", () => {
       );
       const body = await synced.json();
       assert.equal(synced.status, 201);
-      assert.equal(body.streams_attempted, 2);
-      assert.equal(body.last_run_status, "completed");
+      const run = await waitForSyncRun(origin, body.id);
+      assert.equal(run.status, "succeeded");
+      assert.equal(run.installation_id, installation.id);
+      assert.ok(run.completed_work >= 1);
     } finally {
       await app.close();
       await dsh.close();

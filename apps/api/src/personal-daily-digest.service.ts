@@ -33,14 +33,21 @@ export class PersonalDailyDigestService implements OnModuleDestroy {
 
   startAfterListen(): void {
     if (this.started) return;
+    this.stopping = false;
     this.started = true;
     this.timer = setInterval(() => void this.runOnce(), TICK_MS);
     void this.runOnce();
   }
 
-  async onModuleDestroy(): Promise<void> {
+  stopBackground(): void {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    this.started = false;
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.stopBackground();
   }
 
   async runOnce(now = new Date()): Promise<void> {
@@ -82,10 +89,21 @@ export class PersonalDailyDigestService implements OnModuleDestroy {
           });
         }
       }
+    } catch (error) {
+      if (isMissingHostService(error)) {
+        return;
+      }
+      throw error;
     } finally {
       this.running = false;
     }
   }
+}
+
+function isMissingHostService(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.startsWith("Service is not available:")
+  );
 }
 
 class DailyDigestLeaseLostError extends Error {}

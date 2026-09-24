@@ -5,7 +5,7 @@ export const dshLocaleTables = defineLocaleTables({
     "catalog.title": "DSH",
     "catalog.channelLabel": "DSH",
     "catalog.description":
-      "One install talks to dsh web (local loopback, or REGENIC_DSH_BASE_URL on a hosted API). The kernel pulls every session after install; set a Session ID to follow only that one.",
+      "One install connects to dsh web (local loopback, or REGENIC_DSH_BASE_URL on a hosted API). Every session syncs after install. Set a Session ID to follow only one.",
     "catalog.descriptionHosted":
       "Hosted kernel talks to DSH over the cluster Service (REGENIC_DSH_BASE_URL). Leave Session ID empty to follow every session. Do not paste a public DSH URL.",
     "catalog.credentialHint": "REGENIC_DSH_TOKEN (web, optional)",
@@ -66,7 +66,7 @@ export const dshLocaleTables = defineLocaleTables({
     "catalog.title": "DSH",
     "catalog.channelLabel": "DSH",
     "catalog.description":
-      "一次安装对接 dsh web（本机回环，或托管 API 上的 REGENIC_DSH_BASE_URL）。装好后内核会拉全部会话；填 Session ID 则只跟那一条。",
+      "一次安装连接 dsh web（本机回环，或托管 API 上的 REGENIC_DSH_BASE_URL）。安装后同步全部会话。填写 Session ID 则只跟那一条。",
     "catalog.descriptionHosted":
       "托管内核经集群 Service（REGENIC_DSH_BASE_URL）连 DSH。Session ID 留空则跟全部会话。不要粘贴公网 DSH 地址。",
     "catalog.credentialHint": "REGENIC_DSH_TOKEN（web，可选）",

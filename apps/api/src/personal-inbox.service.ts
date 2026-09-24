@@ -1,5 +1,4 @@
 import { Inject, Injectable, forwardRef } from "@nestjs/common";
-import { clearAllFeishuMediaJobs } from "@regenic/feishu-connector";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -58,6 +57,7 @@ import {
   type ThreadReceiptQuery,
   type WorkFace,
   loadSyncProgress,
+  aggregateSyncProgress,
   personalReadTierFromDetail,
   personalReadTierSpec,
   personalInboxReadTier,
@@ -66,6 +66,8 @@ import {
   classifyKernelReachability,
   type KernelPressureView,
   type SyncStore,
+  type SyncRun,
+  type SyncReadinessView,
   withDeadline,
 } from "@regenic/domain";
 import {
@@ -87,6 +89,7 @@ import {
 import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-status";
 import { noteInteractiveReadFinished } from "./personal-interactive-gate";
 import { processMemoryView } from "./process-memory";
+import { currentSyncReadiness } from "./sync-metrics-view";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
   PersonalKernelStoppedError,
@@ -188,6 +191,8 @@ export interface PersonalEngineView {
   pressure: KernelPressureView;
   pull: PullStatusView;
   installations: EngineInstallationView[];
+  sync_runs: SyncRun[];
+  sync_readiness: SyncReadinessView;
   catalog: ConnectorCatalogItem[];
   executor_installations: EngineExecutorView[];
   executor_catalog: ExecutorKindCatalogItem[];
@@ -212,7 +217,11 @@ export interface PersonalHeartbeatView {
   reachability: "live" | "degraded" | "offline";
   pull: Pick<
     PullStatusView,
-    "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
+    | "phase"
+    | "catching_up_count"
+    | "last_tick_at"
+    | "last_accepted_count"
+    | "streams"
   >;
   installations: PersonalHeartbeatInstallationPulse[];
 }
@@ -717,7 +726,9 @@ export class PersonalInboxService {
   async listCatalogFieldOptions(
     connectorType: string,
     locale: CopyLocale = DEFAULT_COPY_LOCALE,
-  ): Promise<Record<string, { value: string; label: string }[]>> {
+  ): Promise<
+    Record<string, { value: string; label: string; kind?: string; title?: string }[]>
+  > {
     const type = connectorType.trim();
     if (!type) {
       return {};
@@ -733,12 +744,17 @@ export class PersonalInboxService {
         DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
         `catalog options ${type}`,
       );
-      const resolved: Record<string, { value: string; label: string }[]> = {};
+      const resolved: Record<
+        string,
+        { value: string; label: string; kind?: string; title?: string }[]
+      > = {};
       for (const [key, options] of Object.entries(raw ?? {})) {
         resolved[key] = (options ?? []).map((option) => ({
           value: option.value,
           label:
             resolveCopy(tables, locale, option.label) ?? String(option.label),
+          ...(option.kind ? { kind: option.kind } : {}),
+          ...(option.title ? { title: option.title } : {}),
         }));
       }
       return resolved;
@@ -1013,6 +1029,7 @@ export class PersonalInboxService {
             catching_up_count: pullStatus.catching_up_count,
             last_tick_at: pullStatus.last_tick_at,
             last_accepted_count: pullStatus.last_accepted_count,
+            streams: pullStatus.streams,
           },
           installations: [],
         };
@@ -1046,6 +1063,7 @@ export class PersonalInboxService {
           catching_up_count: pullStatus.catching_up_count,
           last_tick_at: pullStatus.last_tick_at,
           last_accepted_count: pullStatus.last_accepted_count,
+          streams: pullStatus.streams,
         },
         installations: installations.map((installation) => {
           const pulse: PersonalHeartbeatInstallationPulse = {
@@ -1104,6 +1122,8 @@ export class PersonalInboxService {
         pressure: this.kernelRuntime.pressureView(),
         pull: { ...pullStatus },
         installations: [],
+        sync_runs: [],
+        sync_readiness: currentSyncReadiness(null),
         catalog: catalogReady([]),
         executor_installations: [],
         executor_catalog: executorCatalog,
@@ -1113,9 +1133,10 @@ export class PersonalInboxService {
     }
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
-    const [inbox, installations] = await Promise.all([
+    const [inbox, installations, syncRuns] = await Promise.all([
       this.summarizeInboxCached(orgId, authority),
       authority.listInstallations(orgId),
+      authority.listSyncRuns({ org_id: orgId, limit: 50 }),
     ]);
     const views = await Promise.all(
       installations.map(async (installation) => {
@@ -1164,6 +1185,14 @@ export class PersonalInboxService {
       pressure: this.kernelRuntime.pressureView(),
       pull: { ...pullStatus },
       installations: views,
+      sync_runs: syncRuns,
+      sync_readiness: currentSyncReadiness(
+        aggregateSyncProgress(
+          views
+            .map((item) => item.sync)
+            .filter((item): item is NonNullable<typeof item> => item != null),
+        ),
+      ),
       catalog: catalogReady(views),
       executor_installations: executorInstallations,
       executor_catalog: tier.include_executor_catalog
@@ -1188,20 +1217,28 @@ export class PersonalInboxService {
 
   async clearStore(): Promise<StoreClearView> {
     const host = this.runtime.requireHost();
-    const result = await host
-      .get("authority")
-      .clearOperationalData(this.runtime.orgId(), new Date().toISOString());
+    const authority = host.get("authority");
+    const installations = await authority.listInstallations(this.runtime.orgId());
+    const result = await authority.clearOperationalData(
+      this.runtime.orgId(),
+      new Date().toISOString(),
+    );
     try {
       await host.get("blobs").clear();
     } catch (error) {
       console.error("blob store clear leftover files", error);
     }
+    await this.drivers.clearOperationalState(installations, host);
     try {
-      clearAllFeishuMediaJobs();
+      await host.get("context-lexical-index").clearOrganization(this.runtime.orgId());
     } catch (error) {
-      console.error("feishu media job clear leftover files", error);
+      if (
+        !(error instanceof Error) ||
+        !error.message.startsWith("Service is not available:")
+      ) {
+        console.error("lexical index clear leftover files", error);
+      }
     }
-    await host.get("context-lexical-index").clearOrganization(this.runtime.orgId());
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
     this.kernelRuntime.clearInstallationSnapshots();
     this.touchInboxDigest({ immediate: true });

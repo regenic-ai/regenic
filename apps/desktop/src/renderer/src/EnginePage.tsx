@@ -1,7 +1,9 @@
 import { useRef, useState } from "react";
 import {
+  commandSyncRun,
   installConnector,
   installExecutor,
+  retryConnectorQuarantines,
   setConnectorStatus,
   setExecutorStatus,
   syncConnector,
@@ -22,12 +24,15 @@ import {
   networkWatchLabel,
   pullStatusLabel,
   aggregateInstallationSync,
+  syncEtaSummary,
+  syncFreshnessSummary,
   syncProgressSummary,
   syncProgressTone,
+  syncReadinessTone,
 } from "./format";
 import type { HostStats } from "../../shared/host-watch.ts";
 import { useLocale } from "./LocaleContext";
-import type { PersonalEngineView } from "./types";
+import type { PersonalEngineView, SyncRunMode } from "./types";
 
 export function EnginePage({
   engine,
@@ -65,7 +70,7 @@ export function EnginePage({
       return true;
     } catch (caught) {
       setActionError(
-        caught instanceof Error ? connectorActionError(caught.message) : t("engine.actionFailed"),
+        caught instanceof Error ? connectorActionError(caught) : t("engine.actionFailed"),
       );
       return false;
     } finally {
@@ -105,6 +110,9 @@ export function EnginePage({
   ]
     .filter(Boolean)
     .join(" · ");
+  const visibleRuns = (engine.sync_runs ?? []).filter((run) =>
+    ["queued", "running", "paused", "failed"].includes(run.status),
+  );
 
   return (
     <div className="page page-wide">
@@ -132,6 +140,18 @@ export function EnginePage({
             label={t("engine.coverage")}
             value={coverage ? syncProgressSummary(coverage) : "—"}
             tone={syncProgressTone(coverage)}
+          />
+          <EngineStat
+            label={t("engine.freshness")}
+            value={syncFreshnessSummary(engine.sync_readiness)}
+            tone={
+              engine.sync_readiness?.freshness_source === "poll" ? "ok" : undefined
+            }
+          />
+          <EngineStat
+            label={t("engine.eta")}
+            value={syncEtaSummary(engine.sync_readiness)}
+            tone={syncReadinessTone(engine.sync_readiness)}
           />
           <EngineStat
             label={t("engine.livePull")}
@@ -198,6 +218,82 @@ export function EnginePage({
           <p className="action-hint">{host.memory.hint}</p>
         ) : null}
       </section>
+      {visibleRuns.length > 0 ? (
+        <section className="card engine-sync-runs">
+          <div className="card-head">
+            <h2>{t("sync.runs")}</h2>
+          </div>
+          <div className="connector-kind">
+            {visibleRuns.map((run) => {
+              const completed = run.completed_work + run.failed_work;
+              const progress =
+                run.total_work > 0
+                  ? `${completed}/${run.total_work}`
+                  : t("sync.totalUnknown");
+              return (
+                <div className="install install-instance" key={run.id}>
+                  <div>
+                    <strong>{t(`sync.mode.${syncModeKey(run.mode)}`)}</strong>
+                    <div className="install-meta">
+                      <span className={`chip ${run.status === "running" ? "running" : ""}`}>
+                        {t(`sync.status.${run.status}`)}
+                      </span>
+                      <span className="muted">{progress}</span>
+                      <span className="muted">
+                        {t("sync.accepted", { count: run.accepted_count })}
+                      </span>
+                    </div>
+                    {run.last_error ? (
+                      <p className="action-error">{run.last_error}</p>
+                    ) : null}
+                  </div>
+                  <div className="install-actions">
+                    {run.status === "running" || run.status === "queued" ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          void runAction(`run:${run.id}`, async () => {
+                            await commandSyncRun(run.id, "pause");
+                          })
+                        }
+                      >
+                        {t("sync.pause")}
+                      </button>
+                    ) : null}
+                    {run.status === "paused" ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() =>
+                          void runAction(`run:${run.id}`, async () => {
+                            await commandSyncRun(run.id, "resume");
+                          })
+                        }
+                      >
+                        {t("sync.resume")}
+                      </button>
+                    ) : null}
+                    {run.status !== "failed" ? (
+                      <button
+                        type="button"
+                        className="ghost danger"
+                        onClick={() =>
+                          void runAction(`run:${run.id}`, async () => {
+                            await commandSyncRun(run.id, "cancel");
+                          })
+                        }
+                      >
+                        {t("sync.cancel")}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
       <section className="card engine-connectors">
         <div className="card-head">
           <div className="card-title">
@@ -214,14 +310,16 @@ export function EnginePage({
                   setSyncingAll(true);
                   setActionError(null);
                   try {
-                    for (const item of syncable) {
-                      await syncConnector(item.id);
-                    }
+                    await Promise.all(
+                      syncable.map((item) =>
+                        syncConnector(item.id, { mode: "quick_start" }),
+                      ),
+                    );
                     await onChanged();
                   } catch (caught) {
                     setActionError(
                       caught instanceof Error
-                        ? connectorActionError(caught.message)
+                        ? connectorActionError(caught)
                         : t("engine.syncFailed"),
                     );
                   } finally {
@@ -292,9 +390,14 @@ export function EnginePage({
                 setInstallingType(null);
               })
             }
-            onSync={(id) =>
+            onSync={(id, mode) =>
               void runAction(id, async () => {
-                await syncConnector(id);
+                await syncConnector(id, { mode });
+              })
+            }
+            onRetryQuarantines={(id) =>
+              void runAction(id, async () => {
+                await retryConnectorQuarantines(id);
               })
             }
             onToggle={(installation) =>
@@ -462,4 +565,16 @@ function watchTone(kind?: string): "ok" | "warn" | "risk" | undefined {
     return "ok";
   }
   return undefined;
+}
+
+function syncModeKey(
+  mode: SyncRunMode,
+): "quick" | "continuous" | "archive" {
+  if (mode === "continuous") {
+    return "continuous";
+  }
+  if (mode === "archive") {
+    return "archive";
+  }
+  return "quick";
 }

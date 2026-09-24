@@ -5,12 +5,12 @@ export const feishuLocaleTables = defineLocaleTables({
     "catalog.title": "Feishu",
     "catalog.channelLabel": "Feishu",
     "catalog.description":
-      "Install once. Default is recently active conversations plus current work. You can pick specific chats or sync every conversation later. Replies go back through lark-cli.",
+      "Install once. Starts with recently active conversations and your current work. Pick specific chats, or sync every conversation later. Replies go back through lark-cli.",
     "catalog.credentialHint": "lark-cli (user login)",
-    "field.syncMode": "Sync mode",
-    "option.syncMode.conversation": "Conversation first (recommended)",
+    "field.syncMode": "Check frequency",
+    "option.syncMode.conversation": "Open chat first (recommended)",
     "option.syncMode.balanced": "Balanced",
-    "option.syncMode.context": "Context / automation",
+    "option.syncMode.context": "Background",
     "field.selection": "Sync set",
     "option.selection.recent": "Recently active (recommended)",
     "option.selection.all": "All conversations of the kinds below",
@@ -38,9 +38,8 @@ export const feishuLocaleTables = defineLocaleTables({
     "present.allGroups": "All groups",
     "present.pickedCount": "{count} conversations",
     "confirm.all.warning":
-      "Syncing every group and direct message can pull hundreds of conversations into the background. Memory use and list lag may increase.",
-    "confirm.all.ack":
-      "I understand this may sync hundreds of conversations and slow the app",
+      "This syncs every group and direct message. That can be hundreds of conversations, and the app may get slower.",
+    "confirm.all.ack": "Sync all conversations",
     "probe.notInstalled":
       "Not installed. Run: npx @larksuite/cli@latest install. Docs: https://github.com/larksuite/cli",
     "probe.notSignedIn":
@@ -51,12 +50,12 @@ export const feishuLocaleTables = defineLocaleTables({
     "catalog.title": "飞书",
     "catalog.channelLabel": "飞书",
     "catalog.description":
-      "装一次即可。默认跟最近活跃的会话和当前工作。也可自选，或以后改成全部群和单聊。回复经 lark-cli 发回。",
+      "装一次即可。先同步最近活跃的会话和当前工作。也可以自选，或之后改为全部会话。回复经 lark-cli 发回。",
     "catalog.credentialHint": "lark-cli（用户登录）",
-    "field.syncMode": "同步模式",
-    "option.syncMode.conversation": "对话优先（推荐）",
+    "field.syncMode": "检查频率",
+    "option.syncMode.conversation": "当前会话优先（推荐）",
     "option.syncMode.balanced": "均衡",
-    "option.syncMode.context": "上下文 / 自动化",
+    "option.syncMode.context": "后台慢慢检查",
     "field.selection": "同步范围",
     "option.selection.recent": "最近活跃（推荐）",
     "option.selection.all": "下面这些类型的全部会话",
@@ -82,9 +81,8 @@ export const feishuLocaleTables = defineLocaleTables({
     "present.allGroups": "全部群",
     "present.pickedCount": "{count} 个会话",
     "confirm.all.warning":
-      "同步全部群和单聊可能会把数百个会话拉进后台，内存占用和列表延迟都可能上升。",
-    "confirm.all.ack":
-      "我知道这可能会同步数百个会话，并让界面变慢",
+      "这会同步全部群和单聊，可能有数百个会话，应用会变慢。",
+    "confirm.all.ack": "仍然同步全部会话",
     "probe.notInstalled":
       "未安装。运行：npx @larksuite/cli@latest install。文档：https://github.com/larksuite/cli",
     "probe.notSignedIn":

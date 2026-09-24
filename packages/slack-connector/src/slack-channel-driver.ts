@@ -24,7 +24,11 @@ export const slackChannelDriver: ChannelDriver = {
   install(input): NewConnectorInstallation {
     const channelId = configString(input.config, "channel_id");
     if (!channelId) {
-      throw new ChannelDriverError("invalid_config", "Slack install requires channel_id");
+      throw new ChannelDriverError(
+        "invalid_config",
+        "Slack install requires channel_id",
+        "channel_required",
+      );
     }
     const channelName = configString(input.config, "channel_name");
     const config: Record<string, JsonValue> = { channel_id: channelId };

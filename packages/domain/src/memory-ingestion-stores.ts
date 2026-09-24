@@ -11,6 +11,8 @@ import type {
   EventRevision,
   InboxQuery,
   InboxSummary,
+  CommitSyncPage,
+  CommitSyncPageResult,
   IngestCommitRequest,
   NewEvent,
   OutboundAttemptPut,
@@ -475,6 +477,27 @@ export class MemoryAuthorityStore
       });
     }
     return events;
+  }
+
+  async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    const events = input.ingest ? await this.commitIngest(input.ingest) : [];
+    for (const pref of input.prefs ?? []) {
+      await this.putConversationPref(pref);
+    }
+    return {
+      attempt: {
+        ...input.attempt,
+        status:
+          input.settle.retryable_failure_count === 0 ? "succeeded" : "failed",
+        finished_at: input.settle.finished_at,
+        accepted_count: input.settle.accepted_count,
+        duplicate_count: input.settle.duplicate_count,
+        quarantined_count: input.settle.quarantined_count,
+        retryable_failure_count: input.settle.retryable_failure_count,
+        error_code: input.settle.error_code,
+      },
+      events,
+    };
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {

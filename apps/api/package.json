@@ -6,7 +6,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
-    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/domain build && pnpm --filter @regenic/config build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/lexical-index build && pnpm --filter @regenic/context-engine build && pnpm --filter @regenic/model-provider build && pnpm --filter @regenic/dsh-connector build && pnpm --filter @regenic/slack-connector build && pnpm --filter @regenic/feishu-connector build && pnpm --filter @regenic/cursor-connector build && pnpm --filter @regenic/whatsapp-personal build && pnpm run build && node --test test/*.test.cjs",
+    "test": "pnpm --filter @regenic/connector-host... build && pnpm --filter @regenic/config build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/lexical-index build && pnpm --filter @regenic/context-engine build && pnpm --filter @regenic/model-provider build && pnpm run build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -16,16 +16,12 @@
     "@regenic/authority-store": "workspace:*",
     "@regenic/blob-store": "workspace:*",
     "@regenic/config": "workspace:*",
+    "@regenic/connector-host": "workspace:*",
     "@regenic/context-engine": "workspace:*",
-    "@regenic/cursor-connector": "workspace:*",
     "@regenic/domain": "workspace:*",
-    "@regenic/dsh-connector": "workspace:*",
-    "@regenic/feishu-connector": "workspace:*",
     "@regenic/lexical-index": "workspace:*",
     "@regenic/model-provider": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
-    "@regenic/slack-connector": "workspace:*",
-    "@regenic/whatsapp-personal": "workspace:*",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

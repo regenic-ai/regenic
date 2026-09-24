@@ -13,6 +13,7 @@
     "local": "pnpm --filter @regenic/dsh-connector --filter @regenic/lexical-index --filter @regenic/local-cli build && node ./packages/local-cli/dist/main.js",
     "start:api": "pnpm --filter @regenic/api start",
     "start:worker": "pnpm --filter @regenic/worker start",
+    "check:boundaries": "node scripts/check-dependency-boundaries.mjs",
     "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r run typecheck"
   }

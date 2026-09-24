@@ -68,6 +68,79 @@ export function pullStatusLabel(pull?: PullStatusView | null): string {
   return t("sync.off");
 }
 
+/** Titlebar chip, with the inbox title of the stream that is actually pulling. */
+export function namedPullProgress(
+  pull: PullStatusView | null | undefined,
+  titles: ReadonlyArray<{ id: string; title: string }>,
+): string | null {
+  const chip = pullProgressChip(pull);
+  if (!chip || !pull) {
+    return chip;
+  }
+  const stream = pullingLiveStream(pull) ?? pullingHistoryStream(pull);
+  const title = stream ? titleForStream(stream, titles) : null;
+  if (stream && title) {
+    return isHistoryWork(stream) || stream.phase === "catching_up"
+      ? t("sync.historyNamed", { label: title })
+      : t("sync.latestNamed", { label: title });
+  }
+  return nameSyncLabel(chip, titles);
+}
+
+function pullingLiveStream(pull: PullStatusView) {
+  return pull.streams.find(
+    (stream) => stream.phase === "pulling" && stream.work !== "history",
+  );
+}
+
+function pullingHistoryStream(pull: PullStatusView) {
+  return pull.streams.find(
+    (stream) => isHistoryWork(stream) || stream.phase === "catching_up",
+  );
+}
+
+function titleForStream(
+  stream: { thread_id: string | null; label: string | null },
+  titles: ReadonlyArray<{ id: string; title: string }>,
+): string | null {
+  const key = chatKey(stream.thread_id);
+  const hit = titles.find(
+    (item) => item.id === stream.thread_id || (key != null && item.id.endsWith(key)),
+  );
+  const fromInbox = hit?.title?.trim();
+  if (fromInbox && !opaqueChatLabel(fromInbox)) {
+    return fromInbox;
+  }
+  const label = stream.label?.trim();
+  if (label && !opaqueChatLabel(label)) {
+    return label;
+  }
+  return null;
+}
+
+function opaqueChatLabel(value: string): boolean {
+  return /^oc_[0-9a-f]+$/i.test(value.trim());
+}
+
+/** Replace a raw Feishu chat id in a status label with the inbox title. */
+export function nameSyncLabel(
+  label: string | null,
+  titles: ReadonlyArray<{ id: string; title: string }>,
+): string | null {
+  if (!label) {
+    return null;
+  }
+  const match = /oc_[0-9a-f]+/i.exec(label);
+  if (!match) {
+    return label;
+  }
+  const title = titles.find((item) => item.id.includes(match[0]))?.title?.trim();
+  const named = title
+    ? label.replace(match[0], title)
+    : label.replace(match[0], "").replace(/[·\s]+$/u, "").trim();
+  return named || null;
+}
+
 /** Compact titlebar chip: only when history backfill or live pull is active. */
 export function pullProgressChip(pull?: PullStatusView | null): string | null {
   if (!pull) {
@@ -93,7 +166,7 @@ export function threadSyncLabel(
   threadId: string,
   pull?: PullStatusView | null,
 ): string | null {
-  const stream = pull?.streams.find((item) => item.thread_id === threadId);
+  const stream = pullingStream(threadId, pull) ?? streamForThread(threadId, pull);
   if (!stream) {
     return null;
   }
@@ -103,6 +176,9 @@ export function threadSyncLabel(
   if (isHistoryWork(stream)) {
     return t("thread.syncOlder");
   }
+  if (stream.phase === "pulling") {
+    return t("thread.syncLatest");
+  }
   return null;
 }
 
@@ -110,17 +186,87 @@ export function threadSyncTone(
   threadId: string,
   pull?: PullStatusView | null,
 ): "syncing" | "error" | null {
-  const stream = pull?.streams.find((item) => item.thread_id === threadId);
+  const stream = pullingStream(threadId, pull) ?? streamForThread(threadId, pull);
   if (!stream) {
     return null;
   }
   if (stream.phase === "error") {
     return "error";
   }
-  if (isHistoryWork(stream)) {
+  if (isHistoryWork(stream) || stream.phase === "pulling") {
     return "syncing";
   }
   return null;
+}
+
+export function threadIsSyncing(
+  threadId: string,
+  pull?: PullStatusView | null,
+): boolean {
+  return pullingStream(threadId, pull) != null;
+}
+
+/** Drop live pulling marks for every thread except the one just opened. */
+export function releaseOtherLivePulls(
+  pull: PullStatusView | null | undefined,
+  threadId: string,
+): PullStatusView | null | undefined {
+  if (!pull) {
+    return pull;
+  }
+  let changed = false;
+  const streams = pull.streams.map((stream) => {
+    if (
+      stream.phase === "pulling" &&
+      stream.work !== "history" &&
+      stream.thread_id &&
+      stream.thread_id !== threadId
+    ) {
+      changed = true;
+      return { ...stream, phase: "idle" as const, work: null };
+    }
+    return stream;
+  });
+  if (!changed) {
+    return pull;
+  }
+  const stillPulling = streams.some((stream) => stream.phase === "pulling");
+  return {
+    ...pull,
+    phase: stillPulling ? pull.phase : "idle",
+    streams,
+  };
+}
+
+function pullingStream(threadId: string, pull?: PullStatusView | null) {
+  return pull?.streams.find(
+    (stream) => stream.phase === "pulling" && streamMatchesThread(stream, threadId),
+  );
+}
+
+function streamForThread(threadId: string, pull?: PullStatusView | null) {
+  return pull?.streams.find((stream) => streamMatchesThread(stream, threadId));
+}
+
+function streamMatchesThread(
+  stream: { thread_id: string | null; label: string | null },
+  threadId: string,
+): boolean {
+  if (stream.thread_id === threadId) {
+    return true;
+  }
+  const threadKey = chatKey(threadId);
+  const streamKey = chatKey(stream.thread_id) ?? chatKey(stream.label);
+  return Boolean(threadKey && streamKey && threadKey === streamKey);
+}
+
+function chatKey(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const bare = trimmed.includes(":") ? trimmed.slice(trimmed.lastIndexOf(":") + 1) : trimmed;
+  return bare || null;
 }
 
 function isHistoryWork(stream: {

@@ -21,6 +21,7 @@
     "test": "pnpm --filter @regenic/plugin-host build && pnpm run build && node --test test/*.test.cjs"
   },
   "dependencies": {
+    "@regenic/connector-contract": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
     "zod": "^3.24.1"
   },

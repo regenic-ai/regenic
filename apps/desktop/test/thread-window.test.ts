@@ -25,6 +25,8 @@ import {
   shouldLoadOlder,
   shouldRearmLoadMoreHeads,
   shouldRearmLoadOlder,
+  unfinishedOpenAction,
+  OPEN_TIMEOUT_RETRIES,
   LIST_LOAD_MORE_PX,
   THREAD_LOAD_OLDER_PX,
   THREAD_PAGE_SIZE,
@@ -372,6 +374,64 @@ describe("thread window", () => {
     );
     assert.equal(merged[0], older);
     assert.equal(merged[1], mid);
+  });
+
+  it("does not treat a cancelled open as an empty transcript", () => {
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: false,
+        stillSelected: false,
+        focusAborted: true,
+        loaded: false,
+        attempt: 0,
+      }),
+      "ignore",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: true,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: false,
+        attempt: 0,
+      }),
+      "ignore",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: false,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: false,
+        attempt: 0,
+      }),
+      "retry",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: false,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: false,
+        attempt: OPEN_TIMEOUT_RETRIES,
+      }),
+      "fail",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: false,
+        superseded: false,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: true,
+        attempt: 0,
+      }),
+      "ignore",
+    );
   });
 
   it("refetches a thin open window instead of polling only new ingest", () => {

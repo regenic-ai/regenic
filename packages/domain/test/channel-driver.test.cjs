@@ -3,8 +3,10 @@ const { describe, it } = require("node:test");
 const {
   ChannelDriverError,
   ChannelDriverRegistry,
+  conversationThreadFromStreamKey,
   driverCanReply,
   parseConversationThread,
+  streamKeysForThreadId,
   requireBindEgress,
   requireCreateThread,
   requireReplyPorts,
@@ -52,6 +54,38 @@ describe("channel driver registry", () => {
       () => parseConversationThread("dsh"),
       (error) => error instanceof ChannelDriverError && error.code === "invalid_config",
     );
+  });
+
+  it("recovers a thread from catalog stream_key prefixes", () => {
+    assert.deepEqual(
+      conversationThreadFromStreamKey("feishu", "chat:oc-1", "feishu:oc-1"),
+      { source: "feishu", target: "oc-1" },
+    );
+    assert.deepEqual(conversationThreadFromStreamKey("slack", "channel:C123"), {
+      source: "slack",
+      target: "C123",
+    });
+    assert.deepEqual(conversationThreadFromStreamKey("dsh", "session:sess-a"), {
+      source: "dsh",
+      target: "sess-a",
+    });
+    assert.deepEqual(conversationThreadFromStreamKey("cursor", "agent:run-1"), {
+      source: "cursor",
+      target: "run-1",
+    });
+    assert.equal(conversationThreadFromStreamKey("slack", ""), null);
+  });
+
+  it("maps a thread_id to candidate stream_keys without a catalog scan", () => {
+    assert.deepEqual(streamKeysForThreadId("feishu:oc-1").slice(0, 5), [
+      "chat:oc-1",
+      "session:oc-1",
+      "channel:oc-1",
+      "agent:oc-1",
+      "feishu:oc-1",
+    ]);
+    assert.ok(streamKeysForThreadId("slack:C123").includes("channel:C123"));
+    assert.deepEqual(streamKeysForThreadId(""), []);
   });
 
   it("resolves reply from installation + thread, not channel name in the kernel", () => {

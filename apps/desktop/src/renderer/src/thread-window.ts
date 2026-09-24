@@ -245,6 +245,37 @@ export function shouldFetchInboxDelta(input: {
   return input.loaded && input.hasCursor && input.loadedCount > 1;
 }
 
+/** Extra attempts after a timed-out open while the user stays on that thread. */
+export const OPEN_TIMEOUT_RETRIES = 2;
+
+export type UnfinishedOpen = {
+  aborted: boolean;
+  superseded: boolean;
+  stillSelected: boolean;
+  focusAborted: boolean;
+  loaded: boolean;
+  /** Failures already spent before this one. */
+  attempt: number;
+};
+
+/** What to do when an open-thread fetch does not return a page. */
+export type UnfinishedOpenAction = "ignore" | "retry" | "fail";
+
+/**
+ * Cancelling an open, or losing it to a newer load, is not an empty transcript.
+ * A timeout while the user is still looking at the thread retries, then fails
+ * visibly. Leaving the thread drops the attempt.
+ */
+export function unfinishedOpenAction(input: UnfinishedOpen): UnfinishedOpenAction {
+  if (input.loaded || input.superseded || !input.stillSelected || input.focusAborted) {
+    return "ignore";
+  }
+  if (input.aborted && input.attempt < OPEN_TIMEOUT_RETRIES) {
+    return "retry";
+  }
+  return "fail";
+}
+
 export function inboxCursor(
   items: InboxViewItem[],
 ): { since: string; since_id: string } | null {

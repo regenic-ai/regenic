@@ -1,0 +1,29 @@
+{
+  "name": "@regenic/connector-host",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@regenic/cursor-connector": "workspace:*",
+    "@regenic/domain": "workspace:*",
+    "@regenic/dsh-connector": "workspace:*",
+    "@regenic/feishu-connector": "workspace:*",
+    "@regenic/slack-connector": "workspace:*",
+    "@regenic/whatsapp-personal": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

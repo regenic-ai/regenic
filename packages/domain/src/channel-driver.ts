@@ -144,9 +144,16 @@ export interface ConnectorCatalogServiceState {
   hint?: CopyRef;
 }
 
+export interface ConnectorCatalogFieldOption {
+  value: string;
+  label: CopyRef;
+  kind?: string;
+  title?: string;
+}
+
 export interface ConnectorCatalogProbe {
   services?: Record<string, ConnectorCatalogServiceState>;
-  field_options?: Record<string, { value: string; label: CopyRef }[]>;
+  field_options?: Record<string, ConnectorCatalogFieldOption[]>;
 }
 
 /** Drivers declare their own install card. The host does not keep a parallel catalog. */
@@ -170,7 +177,11 @@ export interface DriverCatalogField {
   default?: string;
   multiple?: boolean;
   secret?: boolean;
-  options?: { value: string; label: CopyRef }[];
+  options?: ConnectorCatalogFieldOption[];
+  /** Restrict this field's options to the CSV values of another field. */
+  filter_options_by?: string;
+  /** Persist resolved option titles under this config key. */
+  option_labels_key?: string;
   visible_when?: DriverCatalogFieldWhen;
 }
 
@@ -300,6 +311,7 @@ export class ChannelDriverError extends Error {
       | "no_sender"
       | "throttled",
     message: string,
+    readonly reason?: string,
   ) {
     super(message);
     this.name = "ChannelDriverError";
@@ -528,6 +540,14 @@ export interface ChannelDriver
       env: NodeJS.ProcessEnv;
     },
   ): Promise<void>;
+  /**
+   * Clear connector-owned operational caches after Core data is cleared.
+   * The hook cannot access Authority, Ingest, or Blob services.
+   */
+  onStoreClear?(
+    installations: readonly ConnectorInstallation[],
+    host: ConnectorHost,
+  ): void | Promise<void>;
 }
 
 export function driverCanReply(
@@ -1146,6 +1166,29 @@ export class ChannelDriverRegistry {
       ),
     );
   }
+
+  async clearOperationalState(
+    installations: ConnectorInstallation[],
+    host: Host | ConnectorHost,
+  ): Promise<void> {
+    const drivers = asConnectorHost(host);
+    await Promise.all(
+      this.list().map(async (driver) => {
+        if (!driver.onStoreClear) {
+          return;
+        }
+        const owned = installations.filter(
+          (installation) =>
+            installation.connector_type === driver.connector_type,
+        );
+        try {
+          await driver.onStoreClear(owned, drivers);
+        } catch {
+          // Connector cleanup is best-effort after the authority was cleared.
+        }
+      }),
+    );
+  }
 }
 
 function uniqueThreads<T extends ConversationThread>(threads: T[]): T[] {
@@ -1178,4 +1221,68 @@ export function parseConversationThread(threadId: string): ConversationThread {
     source: threadId.slice(0, colon),
     target: threadId.slice(colon + 1),
   };
+}
+
+const STREAM_KEY_KINDS = ["chat:", "session:", "channel:", "agent:"] as const;
+
+/** Recover a thread from a catalog stream_key without listing every stream. */
+export function conversationThreadFromStreamKey(
+  source: string,
+  streamKey: string,
+  threadId?: string | null,
+): ConversationThread | null {
+  if (threadId?.trim()) {
+    try {
+      return parseConversationThread(threadId);
+    } catch {
+      // Fall through to the stream_key shape used by catalog members.
+    }
+  }
+  const key = streamKey.trim();
+  if (!key || !source.trim()) {
+    return null;
+  }
+  const prefix = `${source}:`;
+  for (const kind of STREAM_KEY_KINDS) {
+    if (key.startsWith(kind)) {
+      const target = key.slice(kind.length);
+      return target ? { source, target } : null;
+    }
+  }
+  if (key.startsWith(prefix)) {
+    const target = key.slice(prefix.length);
+    return target ? { source, target } : null;
+  }
+  return null;
+}
+
+/** Candidate stream_keys for a thread_id without loading the catalog. */
+export function streamKeysForThreadId(threadId: string): string[] {
+  const trimmed = threadId.trim();
+  if (!trimmed) {
+    return [];
+  }
+  try {
+    const thread = parseConversationThread(trimmed);
+    return [
+      `chat:${thread.target}`,
+      `session:${thread.target}`,
+      `channel:${thread.target}`,
+      `agent:${thread.target}`,
+      `${thread.source}:${thread.target}`,
+      trimmed,
+    ];
+  } catch {
+    return [trimmed];
+  }
+}
+
+export function streamKeysForThreadIds(threadIds: readonly string[]): string[] {
+  const keys = new Set<string>();
+  for (const id of threadIds) {
+    for (const key of streamKeysForThreadId(id)) {
+      keys.add(key);
+    }
+  }
+  return [...keys];
 }

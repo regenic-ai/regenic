@@ -450,13 +450,20 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(
       result.next_cursor,
       JSON.stringify({
-        page_token: "asc-20",
-        start_time: "100",
-        head_time: "1723600000",
+        start_time: "1723600000",
         recent_seeded: true,
+        history_token: "asc-20",
       }),
     );
     assert.equal(result.has_more, true);
+    const seeded = decodeFeishuCursor({ value: result.next_cursor });
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, seeded), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: undefined,
+      start_time: "1723600000",
+      sort_type: "ByCreateTimeAsc",
+    });
   });
 
   it("reseeds a live start_time cursor that never stored recent messages", async () => {

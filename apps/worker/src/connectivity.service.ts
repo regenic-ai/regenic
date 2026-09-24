@@ -25,15 +25,23 @@ export class ConnectivityService implements OnModuleDestroy {
       await pg.end().catch(() => undefined);
     }
 
-    this.redis = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
-    const pong = await this.redis.ping();
-    this.logger.log(`redis: ${pong === "PONG" ? "up" : "down"}`);
+    try {
+      this.redis = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
+      const pong = await this.redis.ping();
+      this.logger.log(`redis: ${pong === "PONG" ? "up" : "down"}`);
 
-    this.queue = new Queue("regenic-spike", {
-      connection: this.redis.duplicate(),
-    });
-    await this.queue.waitUntilReady();
-    this.logger.log("bullmq: queue ready");
+      this.queue = new Queue("regenic-wake", {
+        connection: this.redis.duplicate(),
+      });
+      await this.queue.waitUntilReady();
+      this.logger.log("bullmq: wake queue ready");
+    } catch (err) {
+      this.logger.warn(`redis/bullmq optional (${String(err)})`);
+      await this.queue?.close().catch(() => undefined);
+      this.redis?.disconnect();
+      this.queue = null;
+      this.redis = null;
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -12,6 +12,7 @@ const {
   IngestionService,
   compactEmbeddedContent,
   parseStoredContentParts,
+  processSyncMetrics,
 } = require("@regenic/domain");
 const {
   SqliteAuthorityStore,
@@ -433,5 +434,139 @@ describe("sqlite read/write split", () => {
     assert.equal(second.deleted, 3);
     assert.equal(remaining.length, 64);
     store.close();
+  });
+
+  it("commits a leased sync page through one writer RPC", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    try {
+      await store.createInstallation({
+        id: "installation-page",
+        org_id: "local-owner",
+        connector_type: "fake-poll",
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-24T00:00:00.000Z",
+      });
+      await store.acquireLease({
+        installation_id: "installation-page",
+        stream_key: "personal",
+        lease_owner: "worker-a",
+        now: "2026-08-24T00:00:00.000Z",
+        lease_duration_ms: 30_000,
+      });
+      const service = new IngestionService(
+        new FsBlobStore(join(root, "blobs")),
+        store,
+      );
+      processSyncMetrics.clear();
+      const result = await service.ingest(createBatch(), {
+        attempt: {
+          id: "attempt-page",
+          org_id: "local-owner",
+          connector_installation_id: "installation-page",
+          stream_key: "personal",
+          delivery_id: "delivery-source-event-1",
+          started_at: "2026-08-24T00:00:00.000Z",
+        },
+        settle: {
+          attempt_id: "attempt-page",
+          installation_id: "installation-page",
+          stream_key: "personal",
+          lease_owner: "worker-a",
+          finished_at: "2026-08-24T00:00:01.000Z",
+          next_cursor: "cursor-2",
+        },
+      });
+      const cursor = await store.getCursor("installation-page", "personal");
+      assert.equal(result.valid, true);
+      assert.equal(result.page_committed, true);
+      assert.equal(cursor.cursor, "cursor-2");
+      assert.equal((await store.listInbox("local-owner")).length, 1);
+      const snapshot = processSyncMetrics.snapshot();
+      const pageTx = snapshot.find(
+        (row) =>
+          row.name === "database_transaction_ms" &&
+          row.labels.operation === "commit_sync_page",
+      );
+      const pageWait = snapshot.find(
+        (row) =>
+          row.name === "writer_wait_ms" &&
+          row.labels.operation === "commitSyncPage",
+      );
+      assert.equal(pageTx?.count, 1);
+      assert.ok(pageWait);
+      assert.ok(
+        pageWait.last < (pageTx?.last ?? 0) + 50,
+        `writer_wait_ms ${pageWait.last} included the transaction ${pageTx?.last}`,
+      );
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("counts writer queue time separately from the page transaction", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    try {
+      await store.createInstallation({
+        id: "installation-wait",
+        org_id: "local-owner",
+        connector_type: "fake-poll",
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-24T00:00:00.000Z",
+      });
+      await store.acquireLease({
+        installation_id: "installation-wait",
+        stream_key: "personal",
+        lease_owner: "worker-a",
+        now: "2026-08-24T00:00:00.000Z",
+        lease_duration_ms: 30_000,
+      });
+      processSyncMetrics.clear();
+      const held = store.stallWriter(80);
+      await store.commitSyncPage({
+        attempt: {
+          id: "attempt-wait",
+          org_id: "local-owner",
+          connector_installation_id: "installation-wait",
+          stream_key: "personal",
+          delivery_id: "page-wait",
+          started_at: "2026-08-24T00:00:00.000Z",
+        },
+        settle: {
+          attempt_id: "attempt-wait",
+          installation_id: "installation-wait",
+          stream_key: "personal",
+          lease_owner: "worker-a",
+          finished_at: "2026-08-24T00:00:01.000Z",
+          accepted_count: 0,
+          duplicate_count: 0,
+          quarantined_count: 0,
+          retryable_failure_count: 0,
+          quarantines: [],
+        },
+      });
+      await held;
+      const snapshot = processSyncMetrics.snapshot();
+      const pageTx = snapshot.find(
+        (row) =>
+          row.name === "database_transaction_ms" &&
+          row.labels.operation === "commit_sync_page",
+      );
+      const pageWait = snapshot.find(
+        (row) =>
+          row.name === "writer_wait_ms" &&
+          row.labels.operation === "commitSyncPage",
+      );
+      assert.ok(pageTx && pageTx.last < 70, `transaction was ${pageTx?.last}ms`);
+      assert.ok(
+        pageWait && pageWait.last >= 70,
+        `writer_wait_ms was ${pageWait?.last}`,
+      );
+    } finally {
+      await store.close();
+    }
   });
 });

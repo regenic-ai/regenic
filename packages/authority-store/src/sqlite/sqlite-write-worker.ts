@@ -1,3 +1,4 @@
+import { processSyncMetrics, syncMetricDeltas } from "@regenic/domain";
 import { parentPort, workerData } from "node:worker_threads";
 import { SqliteAuthorityStore } from "./sqlite-authority-store";
 import {
@@ -18,9 +19,20 @@ const store = new SqliteAuthorityStore(String(workerData.path), {
 });
 parentPort.postMessage({ type: "ready" });
 
-parentPort.on("message", async (message: SqliteWriteRequest) => {
+let chain: Promise<void> = Promise.resolve();
+parentPort.on("message", (message: SqliteWriteRequest) => {
+  chain = chain.then(() => handleWrite(message)).catch(() => undefined);
+});
+
+async function handleWrite(message: SqliteWriteRequest): Promise<void> {
+  const before = processSyncMetrics.snapshot();
+  const execStarted = Date.now();
   const reply = (response: SqliteWriteResponse) => {
-    parentPort?.postMessage(response);
+    parentPort?.postMessage({
+      ...response,
+      exec_ms: Math.max(0, Date.now() - execStarted),
+      metrics: syncMetricDeltas(before, processSyncMetrics.snapshot()),
+    });
   };
   try {
     if (message.method === "close") {
@@ -52,7 +64,7 @@ parentPort.on("message", async (message: SqliteWriteRequest) => {
       error: serializeStoreError(error),
     });
   }
-});
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {

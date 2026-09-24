@@ -42,17 +42,23 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
     if (this.started) {
       return;
     }
+    this.stopping = false;
     this.started = true;
     this.timer = setInterval(() => void this.runOnce(), PROJECTION_TICK_MS);
     void this.runOnce();
   }
 
-  async onModuleDestroy(): Promise<void> {
+  stopBackground(): void {
     this.stopping = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    this.started = false;
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.stopBackground();
   }
 
   async runOnce(now = new Date()): Promise<void> {
