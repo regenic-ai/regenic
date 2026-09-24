@@ -93,6 +93,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 - D0 filter and layer: `current_work` / `outside_current_work` / `pending`; the Event stays; never auto-defer
 - Acknowledging an Inbox Event records that Event's exact inbound cursor, asks the source driver to acknowledge the same cursor when supported, and may fold completed work
 - Folding an Inbox Event applies a human conversation preference to its derived thread; the preference stays folded across new work until a person explicitly unfolds it
+- Pinning an Inbox Event applies a human conversation preference to its derived thread; pinned conversations lead the normal and attention list views without changing the Event or work state
 - Human triage may explicitly override an Event's layer; the disposition keeps its prior reason codes, records `human_triage`, and never mutates the Event
 - Resetting a human triage re-runs the automatic arrangement from the persisted Event, body, surface, and weight hints; it replaces the manual decision rather than retaining `human_triage`
 - Standards application and revision hooks

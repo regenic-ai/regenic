@@ -1783,6 +1783,24 @@ export class PersonalInboxService {
     });
   }
 
+  async setInboxEventPinned(
+    eventId: string,
+    pinned: boolean,
+  ): Promise<ConversationPrefView> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    const decision = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !decision) {
+      throw new PersonalConnectorError("not_found", "Inbox event was not found", 404);
+    }
+    return this.updateConversationPrefs({
+      thread_id: conversationId(event.source, event.external_id, event.id),
+      pinned,
+    });
+  }
+
   async answerConversationPrompt(
     input: ConversationPromptInput,
   ): Promise<{ accepted: true; thread_id: string; prompt_id: string }> {

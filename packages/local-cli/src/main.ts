@@ -180,6 +180,12 @@ export async function runLocalCli(
     case "inbox-unfold":
       await setInboxEventHidden(commandOptions, stdout, now, false);
       return;
+    case "inbox-pin":
+      await setInboxEventPinned(commandOptions, stdout, now, true);
+      return;
+    case "inbox-unpin":
+      await setInboxEventPinned(commandOptions, stdout, now, false);
+      return;
     case "inbox-triage-reset":
       await resetInboxTriage(commandOptions, stdout, now);
       return;
@@ -739,6 +745,28 @@ async function setInboxEventHidden(
       thread_id: `${event.source}:${event.external_id}`,
       hidden: fold.hidden,
       hidden_reason: fold.reason,
+      updated_at: now(),
+    });
+    writeJson(stdout, pref);
+  });
+}
+
+async function setInboxEventPinned(
+  options: CommandOptions,
+  stdout: CliOutput,
+  now: () => string,
+  pinned: boolean,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const authority = host.get("authority");
+    const event = await authority.getEvent(orgId, requireOption(options, "event"));
+    const decision = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !decision) throw new Error("Inbox event was not found");
+    const pref = await authority.putConversationPref({
+      org_id: orgId,
+      thread_id: `${event.source}:${event.external_id}`,
+      pinned,
       updated_at: now(),
     });
     writeJson(stdout, pref);

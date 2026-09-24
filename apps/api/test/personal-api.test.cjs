@@ -481,6 +481,31 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("pins and unpins an inbox event's thread", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const pinned = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/pin`, { method: "POST" })
+      ).json();
+      assert.equal(pinned.pinned, true);
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1&split=1`)).json();
+      assert.equal(heads.pinned.length, 1);
+
+      const unpinned = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/unpin`, { method: "POST" })
+      ).json();
+      assert.equal(unpinned.pinned, false);
+      const after = await (await fetch(`${origin}/v1/me/inbox?heads=1&split=1`)).json();
+      assert.equal(after.pinned.length, 0);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lists a tombstoned thread on the hidden list after policy fold", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

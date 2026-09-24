@@ -291,6 +291,12 @@ pnpm local inbox-fold --database ./regenic.db --org local-owner \
 pnpm local inbox-unfold --database ./regenic.db --org local-owner \
 	--event <event-id>
 
+# Pin or unpin this Event's conversation above the live message list.
+pnpm local inbox-pin --database ./regenic.db --org local-owner \
+	--event <event-id>
+pnpm local inbox-unpin --database ./regenic.db --org local-owner \
+	--event <event-id>
+
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
