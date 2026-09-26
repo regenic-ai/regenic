@@ -144,6 +144,19 @@ export class PersonalController {
     return this.guard(() => this.inbox.listFollowUps());
   }
 
+  @Post("follow-ups/:threadId/snooze")
+  snoozeFollowUp(
+    @Param("threadId") threadId: string,
+    @Body() body: { until?: string } | undefined,
+  ) {
+    return this.guard(() => this.inbox.snoozeFollowUp(threadId, body?.until ?? ""));
+  }
+
+  @Delete("follow-ups/:threadId/snooze")
+  unsnoozeFollowUp(@Param("threadId") threadId: string) {
+    return this.guard(() => this.inbox.unsnoozeFollowUp(threadId));
+  }
+
   @Post("inbox/:eventId/triage")
   triageInboxEvent(
     @Param("eventId") eventId: string,

@@ -180,6 +180,12 @@ export async function runLocalCli(
     case "follow-ups":
       await showFollowUps(commandOptions, stdout, now);
       return;
+      case "follow-up-snooze":
+        await snoozeFollowUp(commandOptions, stdout, now);
+        return;
+      case "follow-up-unsnooze":
+        await unsnoozeFollowUp(commandOptions, stdout, now);
+        return;
     case "inbox-triage":
       await triageInbox(commandOptions, stdout, now);
       return;
@@ -725,7 +731,10 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
     const policy = value
       ? validatePersonalFollowUpPolicy(JSON.parse(value))
       : DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
-    const candidates = collectFollowUpCandidates({ items: items.map((item) => item.scan), policy, now: now() });
+    const at = now();
+    const snoozes = await getFollowUpSnoozes(authority, orgId);
+    const candidates = collectFollowUpCandidates({ items: items.map((item) => item.scan), policy, now: at })
+      .filter((candidate) => (snoozes[candidate.thread_id] ?? "") <= at);
     const byIdentity = new Map(items.map((item) => [`${item.scan.thread_id}\u0000${item.scan.external_id}`, item.event]));
     writeJson(stdout, candidates.flatMap((candidate) => {
       const event = byIdentity.get(`${candidate.thread_id}\u0000${candidate.outbound_external_id}`);
@@ -846,6 +855,7 @@ async function setInboxEventPinned(
 
 const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
 const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
+const PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY = "personal_follow_up_snoozes_v1";
 
 async function getPersonalDispatchPolicy(options: CommandOptions, stdout: CliOutput): Promise<void> {
   const orgId = requireOption(options, "org");
@@ -861,6 +871,60 @@ async function getPersonalDispatchPolicy(options: CommandOptions, stdout: CliOut
       throw new Error("Stored personal dispatch policy is invalid");
     }
   });
+}
+
+async function snoozeFollowUp(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const threadId = requireOption(options, "thread");
+  const until = normalizeFollowUpSnooze(requireOption(options, "until"));
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const authority = host.get("authority");
+    const snoozes = await getFollowUpSnoozes(authority, orgId);
+    snoozes[threadId] = until;
+    await authority.putUiPref(orgId, PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY, JSON.stringify(snoozes), now());
+    writeJson(stdout, { thread_id: threadId, snoozed_until: until });
+  });
+}
+
+async function unsnoozeFollowUp(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const threadId = requireOption(options, "thread");
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const authority = host.get("authority");
+    const snoozes = await getFollowUpSnoozes(authority, orgId);
+    delete snoozes[threadId];
+    await authority.putUiPref(orgId, PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY, JSON.stringify(snoozes), now());
+    writeJson(stdout, { thread_id: threadId, snoozed_until: null });
+  });
+}
+
+async function getFollowUpSnoozes(
+  authority: { getUiPref(orgId: string, key: string): Promise<string | null> },
+  orgId: string,
+): Promise<Record<string, string>> {
+  const value = await authority.getUiPref(orgId, PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY);
+  if (!value) {
+    return {};
+  }
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Stored personal follow-up snoozes are invalid");
+  }
+  return Object.fromEntries(Object.entries(parsed).map(([threadId, until]) => [
+    threadId,
+    normalizeFollowUpSnooze(until),
+  ]));
+}
+
+function normalizeFollowUpSnooze(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("Invalid follow-up snooze time");
+  }
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error("Invalid follow-up snooze time");
+  }
+  return timestamp.toISOString();
 }
 
 async function putPersonalDispatchPolicy(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {

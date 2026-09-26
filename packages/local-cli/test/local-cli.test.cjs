@@ -1504,4 +1504,18 @@ it("reviews overdue personal follow-ups through the local CLI", async () => {
   assert.equal(followUps.length, 1);
   assert.equal(followUps[0].event.id, result.records[1].event_id);
   assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
+  const threadId = followUps[0].candidate.thread_id;
+  assert.deepEqual(await run([
+    "follow-up-snooze", "--database", database, "--org", "local-owner",
+    "--thread", threadId, "--until", "2099-01-01T00:00:00.000Z",
+  ]), { thread_id: threadId, snoozed_until: "2099-01-01T00:00:00.000Z" });
+  assert.deepEqual(await run([
+    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
+  ]), []);
+  assert.deepEqual(await run([
+    "follow-up-unsnooze", "--database", database, "--org", "local-owner", "--thread", threadId,
+  ]), { thread_id: threadId, snoozed_until: null });
+  assert.equal((await run([
+    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
+  ])).length, 1);
 });

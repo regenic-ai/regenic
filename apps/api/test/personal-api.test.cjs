@@ -489,6 +489,18 @@ describe("personal /v1/me", () => {
       assert.equal(followUps[0].candidate.outbound_external_id, "thread-1:out-1");
       assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
       assert.equal(followUps[0].body_text, "I will confirm it today.");
+      const threadId = encodeURIComponent(followUps[0].candidate.thread_id);
+      const snoozed = await (
+        await fetch(`${origin}/v1/me/follow-ups/${threadId}/snooze`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ until: "2099-01-01T00:00:00.000Z" }),
+        })
+      ).json();
+      assert.equal(snoozed.snoozed_until, "2099-01-01T00:00:00.000Z");
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-ups`)).json(), []);
+      await fetch(`${origin}/v1/me/follow-ups/${threadId}/snooze`, { method: "DELETE" });
+      assert.equal((await (await fetch(`${origin}/v1/me/follow-ups`)).json()).length, 1);
     } finally {
       await app.close();
     }
