@@ -302,6 +302,13 @@ pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
 pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
 	--policy ./dispatch-policy.json
 
+# Explicitly reapply the saved policy to one existing inbox event.
+pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --event <event-id>
+
+# Review events held for explicit attention without widening the work inbox.
+pnpm local inbox-pending --database ./regenic.db --org local-owner
+
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending

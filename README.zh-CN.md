@@ -302,6 +302,13 @@ pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
 pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
 	--policy ./dispatch-policy.json
 
+# 对一个已存在的 inbox event 显式重新应用已保存的 policy。
+pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --event <event-id>
+
+# 复核等待明确关注的 event，不扩大默认工作 inbox。
+pnpm local inbox-pending --database ./regenic.db --org local-owner
+
 # 人工 triage 覆盖当前工作分层，但不会修改 Event。
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending

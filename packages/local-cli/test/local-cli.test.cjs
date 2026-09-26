@@ -1188,6 +1188,29 @@ describe("regenic-local", () => {
     ]);
     assert.equal(reset.disposition, "current_work");
     assert.deepEqual(reset.reason_codes, ["actionable"]);
+    const policyPath = join(root, "pending-policy.json");
+    await writeFile(policyPath, JSON.stringify({
+      version: 1,
+      high_hint_disposition: "current_work",
+      actionable_disposition: "pending",
+      short_text_disposition: "pending",
+      default_disposition: "current_work",
+    }));
+    await run([
+      "dispatch-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
+    ]);
+    const reapplied = await run([
+      "inbox-dispatch-reapply", "--database", database, "--blob-root", blobRoot,
+      "--org", "local-owner", "--event", inbox[0].event.id,
+    ]);
+    assert.equal(reapplied.disposition, "pending");
+    assert.ok(reapplied.reason_codes.includes("policy_actionable"));
+    assert.ok(reapplied.reason_codes.includes("personal_dispatch_policy"));
+    assert.deepEqual(await run(["inbox", "--database", database, "--org", "local-owner"]), []);
+    const pending = await run(["inbox-pending", "--database", database, "--org", "local-owner"]);
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].event.id, inbox[0].event.id);
+    assert.equal(pending[0].decision.disposition, "pending");
   });
 
   it("exports append-only Event metadata as JSONL without content bodies", async () => {
