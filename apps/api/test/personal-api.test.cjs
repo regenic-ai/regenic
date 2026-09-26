@@ -115,6 +115,24 @@ async function ingestActionable(database, blobRoot) {
   return result.records[0].event_id;
 }
 
+async function ingestFollowUpThread(database, blobRoot) {
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const result = await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "native-local",
+    org_id: "local-owner",
+    delivery_id: "follow-up-1",
+    received_at: "2020-01-01T12:00:00.000Z",
+    records: [
+      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2020-01-01T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
+      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2020-01-01T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
+    ],
+  });
+  authority.close();
+  return result.records[1].event_id;
+}
+
 async function startSlackHistoryStub() {
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
@@ -453,6 +471,24 @@ describe("personal /v1/me", () => {
       ).json();
       assert.deepEqual(updated, policy);
       assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-up-policy`)).json(), policy);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reviews overdue personal follow-ups without changing inbox disposition", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestFollowUpThread(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const followUps = await (await fetch(`${origin}/v1/me/follow-ups`)).json();
+      assert.equal(followUps.length, 1);
+      assert.equal(followUps[0].event.id, eventId);
+      assert.equal(followUps[0].candidate.outbound_external_id, "thread-1:out-1");
+      assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
+      assert.equal(followUps[0].body_text, "I will confirm it today.");
     } finally {
       await app.close();
     }

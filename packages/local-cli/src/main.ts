@@ -45,6 +45,8 @@ import {
   foldByHuman,
   unfold,
   arrangeMessage,
+  collectFollowUpCandidates,
+  conversationId,
   bodyTextFromStored,
   parseStoredContentParts,
   surfaceFromParts,
@@ -174,6 +176,9 @@ export async function runLocalCli(
       return;
     case "inbox-pending":
       await showPendingInbox(commandOptions, stdout);
+      return;
+    case "follow-ups":
+      await showFollowUps(commandOptions, stdout, now);
       return;
     case "inbox-triage":
       await triageInbox(commandOptions, stdout, now);
@@ -689,6 +694,42 @@ async function showPendingInbox(options: CommandOptions, stdout: CliOutput): Pro
   await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
     writeJson(stdout, await host.get("authority").listInbox(requireOption(options, "org"), {
       disposition: "pending",
+    }));
+  });
+}
+
+async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root") }, async (host) => {
+    const authority = host.get("authority");
+    const events = await authority.listEvents(orgId);
+    const items = await Promise.all(events.map(async (event) => {
+      const blob = event.content_hash ? await authority.findBlob(event.content_hash) : null;
+      const bytes = blob && event.content_hash ? await host.get("blobs").get(event.content_hash) : undefined;
+      const parts = bytes ? parseStoredContentParts(bytes) : undefined;
+      const surface = parts ? surfaceFromParts(parts) : undefined;
+      return {
+        event,
+        scan: {
+          thread_id: conversationId(event.source, event.external_id, event.id),
+          external_id: event.external_id,
+          occurred_at: event.occurred_at,
+          direction: surface?.direction,
+          kind: surface?.kind,
+          operation: event.operation,
+          activity: surface?.activity,
+        },
+      };
+    }));
+    const value = await authority.getUiPref(orgId, PERSONAL_FOLLOW_UP_POLICY_PREF_KEY);
+    const policy = value
+      ? validatePersonalFollowUpPolicy(JSON.parse(value))
+      : DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
+    const candidates = collectFollowUpCandidates({ items: items.map((item) => item.scan), policy, now: now() });
+    const byIdentity = new Map(items.map((item) => [`${item.scan.thread_id}\u0000${item.scan.external_id}`, item.event]));
+    writeJson(stdout, candidates.flatMap((candidate) => {
+      const event = byIdentity.get(`${candidate.thread_id}\u0000${candidate.outbound_external_id}`);
+      return event ? [{ event, candidate }] : [];
     }));
   });
 }

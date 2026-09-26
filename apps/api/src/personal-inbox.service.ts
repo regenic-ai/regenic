@@ -9,6 +9,7 @@ import {
   type CopyLocale,
   attentionOf,
   arrangeMessage,
+  collectFollowUpCandidates,
   collectLatestInbound,
   computeThreadUnread,
   conversationId,
@@ -39,6 +40,7 @@ import {
   type ConversationPref,
   type ConversationThread,
   type EventRecord,
+  type FollowUpCandidate,
   type InboxItem,
   type InboxQuery,
   type IngestAttempt,
@@ -233,6 +235,12 @@ export interface InboxListQuery {
   list?: string;
   disposition?: "current_work" | "pending";
   locale?: CopyLocale;
+}
+
+export interface PersonalFollowUpView {
+  event: EventRecord;
+  candidate: FollowUpCandidate;
+  body_text?: string;
 }
 
 export type InboxHeadsCursor = { before: string; before_id: string };
@@ -903,6 +911,48 @@ export class PersonalInboxService {
     this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
     this.touchInboxDigest({ immediate: true });
     return decision;
+  }
+
+  async listFollowUps(): Promise<PersonalFollowUpView[]> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const events = await authority.listEvents(this.runtime.orgId());
+    const bodies = await resolveInboxBodies(
+      authority,
+      host.get("blobs"),
+      events.map((event) => event.content_hash),
+      "meta",
+    );
+    const candidates = collectFollowUpCandidates({
+      items: events.map((event) => {
+        const surface = event.content_hash ? bodies.get(event.content_hash)?.surface : undefined;
+        return {
+          thread_id: conversationId(event.source, event.external_id, event.id),
+          external_id: event.external_id,
+          occurred_at: event.occurred_at,
+          direction: surface?.direction,
+          kind: surface?.kind,
+          operation: event.operation,
+          activity: surface?.activity,
+        };
+      }),
+      policy: await this.work.getPersonalFollowUpPolicy(),
+      now: new Date().toISOString(),
+    });
+    const byIdentity = new Map(
+      events.map((event) => [`${conversationId(event.source, event.external_id, event.id)}\u0000${event.external_id}`, event]),
+    );
+    return candidates.flatMap((candidate) => {
+      const event = byIdentity.get(`${candidate.thread_id}\u0000${candidate.outbound_external_id}`);
+      if (!event) {
+        return [];
+      }
+      return [{
+        event,
+        candidate,
+        ...(event.content_hash ? { body_text: bodies.get(event.content_hash)?.body_text } : {}),
+      }];
+    });
   }
 
   async listInbox(

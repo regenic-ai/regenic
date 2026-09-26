@@ -139,6 +139,11 @@ export class PersonalController {
     return this.guard(async () => this.inbox.listInbox(query));
   }
 
+  @Get("follow-ups")
+  listFollowUps() {
+    return this.guard(() => this.inbox.listFollowUps());
+  }
+
   @Post("inbox/:eventId/triage")
   triageInboxEvent(
     @Param("eventId") eventId: string,

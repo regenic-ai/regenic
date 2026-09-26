@@ -7,7 +7,7 @@ const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService } = require("@regenic/domain");
+const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
 const { runLocalCli } = require("../dist/main");
 
 const roots = [];
@@ -1478,4 +1478,30 @@ it("stores a personal follow-up policy through the local CLI", async () => {
     "follow-up-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
   ]), policy);
   assert.deepEqual(await run(["follow-up-policy-get", "--database", database, "--org", "local-owner"]), policy);
+});
+
+it("reviews overdue personal follow-ups through the local CLI", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const blobRoot = join(root, "blobs");
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const result = await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "native-local",
+    org_id: "local-owner",
+    delivery_id: "follow-up-1",
+    received_at: "2020-01-01T12:00:00.000Z",
+    records: [
+      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2020-01-01T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
+      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2020-01-01T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
+    ],
+  });
+  authority.close();
+  const followUps = await run([
+    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
+  ]);
+  assert.equal(followUps.length, 1);
+  assert.equal(followUps[0].event.id, result.records[1].event_id);
+  assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
 });
