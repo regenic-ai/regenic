@@ -522,6 +522,16 @@ export class PersonalController {
     return this.guard(() => this.work.putPersonalDispatchPolicy(body?.policy));
   }
 
+  @Get("follow-up-policy")
+  getPersonalFollowUpPolicy() {
+    return this.guard(() => this.work.getPersonalFollowUpPolicy());
+  }
+
+  @Post("follow-up-policy")
+  putPersonalFollowUpPolicy(@Body() body: { policy?: unknown } | undefined) {
+    return this.guard(() => this.work.putPersonalFollowUpPolicy(body?.policy));
+  }
+
   @Post("prefs")
   putPrefs(
     @Body()

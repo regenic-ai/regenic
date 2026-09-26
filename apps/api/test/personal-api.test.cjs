@@ -434,6 +434,30 @@ describe("personal /v1/me", () => {
     }
   });
 
+  it("reads and updates a personal follow-up policy", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const defaults = await (await fetch(`${origin}/v1/me/follow-up-policy`)).json();
+      assert.equal(defaults.version, 1);
+      assert.equal(defaults.wait_minutes, 1440);
+      const policy = { ...defaults, wait_minutes: 120, include_initial_outbound: true };
+      const updated = await (
+        await fetch(`${origin}/v1/me/follow-up-policy`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ policy }),
+        })
+      ).json();
+      assert.deepEqual(updated, policy);
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-up-policy`)).json(), policy);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("reapplies the saved dispatch policy to an inbox event", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

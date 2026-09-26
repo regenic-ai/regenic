@@ -31,10 +31,12 @@ import {
   AGENT_RUN_SCHEMA_VERSION,
   STANDARD_DRIFT_DETECTOR_VERSION,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
+  DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
   validatePersonalDispatchPolicy,
+  validatePersonalFollowUpPolicy,
   validateStandardScope,
   validateTrialConfig,
   validateUpgradeEvidence,
@@ -199,6 +201,12 @@ export async function runLocalCli(
       return;
     case "dispatch-policy-set":
       await putPersonalDispatchPolicy(commandOptions, stdout, now);
+      return;
+    case "follow-up-policy-get":
+      await getPersonalFollowUpPolicy(commandOptions, stdout);
+      return;
+    case "follow-up-policy-set":
+      await putPersonalFollowUpPolicy(commandOptions, stdout, now);
       return;
     case "inbox-dispatch-reapply":
       await reapplyInboxDispatchPolicy(commandOptions, stdout, now);
@@ -796,6 +804,7 @@ async function setInboxEventPinned(
 }
 
 const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
+const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 
 async function getPersonalDispatchPolicy(options: CommandOptions, stdout: CliOutput): Promise<void> {
   const orgId = requireOption(options, "org");
@@ -822,6 +831,38 @@ async function putPersonalDispatchPolicy(options: CommandOptions, stdout: CliOut
     await host.get("authority").putUiPref(
       orgId,
       PERSONAL_DISPATCH_POLICY_PREF_KEY,
+      JSON.stringify(policy),
+      now(),
+    );
+    writeJson(stdout, policy);
+  });
+}
+
+async function getPersonalFollowUpPolicy(options: CommandOptions, stdout: CliOutput): Promise<void> {
+  const orgId = requireOption(options, "org");
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    const value = await host.get("authority").getUiPref(orgId, PERSONAL_FOLLOW_UP_POLICY_PREF_KEY);
+    if (!value) {
+      writeJson(stdout, DEFAULT_PERSONAL_FOLLOW_UP_POLICY);
+      return;
+    }
+    try {
+      writeJson(stdout, validatePersonalFollowUpPolicy(JSON.parse(value)));
+    } catch {
+      throw new Error("Stored personal follow-up policy is invalid");
+    }
+  });
+}
+
+async function putPersonalFollowUpPolicy(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const policy = validatePersonalFollowUpPolicy(
+    await readJsonObject(requirePath(options, "policy"), "Personal follow-up policy") as never,
+  );
+  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
+    await host.get("authority").putUiPref(
+      orgId,
+      PERSONAL_FOLLOW_UP_POLICY_PREF_KEY,
       JSON.stringify(policy),
       now(),
     );

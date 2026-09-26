@@ -1464,3 +1464,18 @@ describe("regenic-local", () => {
     }
   });
 });
+
+it("stores a personal follow-up policy through the local CLI", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const policyPath = join(root, "follow-up-policy.json");
+  const authority = new SqliteAuthorityStore(database);
+  authority.close();
+  const defaults = await run(["follow-up-policy-get", "--database", database, "--org", "local-owner"]);
+  const policy = { ...defaults, wait_minutes: 120, include_initial_outbound: true };
+  await writeFile(policyPath, JSON.stringify(policy));
+  assert.deepEqual(await run([
+    "follow-up-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
+  ]), policy);
+  assert.deepEqual(await run(["follow-up-policy-get", "--database", database, "--org", "local-owner"]), policy);
+});
