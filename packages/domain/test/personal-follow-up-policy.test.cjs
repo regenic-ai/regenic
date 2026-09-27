@@ -2,8 +2,20 @@ const assert = require("node:assert/strict");
 const { it } = require("node:test");
 const {
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
+  followUpScanSince,
   validatePersonalFollowUpPolicy,
 } = require("../dist");
+
+it("bounds a follow-up scan to at least one day before now", () => {
+  assert.equal(
+    followUpScanSince({ wait_minutes: 60 }, "2026-09-26T12:00:00.000Z"),
+    "2026-09-25T12:00:00.000Z",
+  );
+  assert.equal(
+    followUpScanSince({ wait_minutes: 3 * 24 * 60 }, "2026-09-26T12:00:00.000Z"),
+    "2026-09-23T12:00:00.000Z",
+  );
+});
 
 it("validates a versioned personal follow-up policy", () => {
   assert.deepEqual(

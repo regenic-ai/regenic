@@ -870,4 +870,11 @@ export const MIGRATIONS = [
         ON standard_usage (org_id, standard_id, version_id, cited_at, id);
     `,
   },
+  {
+    version: 40,
+    sql: `
+      CREATE INDEX events_org_occurred_idx
+        ON events (org_id, occurred_at, id);
+    `,
+  },
 ] as const;

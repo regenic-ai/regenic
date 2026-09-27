@@ -1,4 +1,13 @@
 export const PERSONAL_FOLLOW_UP_POLICY_VERSION = 1;
+export const PERSONAL_FOLLOW_UP_SCAN_LIMIT = 2_000;
+
+export function followUpScanSince(
+  policy: Pick<PersonalFollowUpPolicy, "wait_minutes">,
+  now: string,
+): string {
+  const at = new Date(now).getTime() - Math.max(policy.wait_minutes, 24 * 60) * 60_000;
+  return new Date(at).toISOString();
+}
 
 export interface PersonalFollowUpPolicy {
   version: typeof PERSONAL_FOLLOW_UP_POLICY_VERSION;

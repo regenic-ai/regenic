@@ -580,6 +580,9 @@ export class PostgresAuthorityStore
         `(ingested_at > ${p(query.since)} OR (ingested_at = ${p(query.since)} AND id > ${p(query.since_id ?? "")}))`,
       );
     }
+    if (query?.occurred_since) {
+      clauses.push(`occurred_at >= ${p(query.occurred_since)}`);
+    }
     const limit =
       typeof query?.limit === "number" &&
       Number.isInteger(query.limit) &&

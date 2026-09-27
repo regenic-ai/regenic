@@ -589,6 +589,10 @@ export class SqliteAuthorityStore
       clauses.push("(ingested_at > ? OR (ingested_at = ? AND id > ?))");
       params.push(query.since, query.since, query.since_id ?? "");
     }
+    if (query?.occurred_since) {
+      clauses.push("occurred_at >= ?");
+      params.push(query.occurred_since);
+    }
     const limit =
       typeof query?.limit === "number" &&
       Number.isInteger(query.limit) &&
