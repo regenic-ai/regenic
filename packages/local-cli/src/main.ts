@@ -724,6 +724,9 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
           kind: surface?.kind,
           operation: event.operation,
           activity: surface?.activity,
+          conversation_kind: surface?.conversation_kind,
+          type: surface?.type,
+          actor_label: surface?.actor_label,
         },
       };
     }));

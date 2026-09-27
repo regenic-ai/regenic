@@ -97,7 +97,7 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 - 人工 triage 可以显式覆盖 Event 的分层；disposition 会保留先前 reason code、记录 `human_triage`，且绝不修改 Event
 - 重置人工 triage 会从持久化的 Event、body、surface 与 weight hint 重新运行自动分层；它替换人工决策，而不是保留 `human_triage`
 - 版本化个人 dispatch policy 记录 high hint、actionable message、short text 与 fallback path 的目标 disposition；显式 reapply 操作可将它用于已存在的 inbox event，但在启用自动应用前，新 ingest decision 仍使用默认 policy
-- 版本化个人 follow-up policy 从持久化 inbound/outbound thread history 派生超时未回复；follow-up review 为只读，用户可暂停或恢复一个线程而不改变其 Event 或 Inbox disposition
+- 版本化个人 follow-up policy 从持久化 inbound/outbound thread history 派生超时未回复。群聊、机器人、系统消息、tombstone、revision 以及之后的 inbound reply 不进入 review。follow-up review 为只读，用户可暂停或恢复一个线程而不改变其 Event 或 Inbox disposition
 - 标准的应用与修订钩子
 - 调度：不进入当前工作 vs pending
 - 读与发的审计
