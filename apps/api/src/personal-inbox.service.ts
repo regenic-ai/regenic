@@ -9,6 +9,7 @@ import {
   type CopyLocale,
   attentionOf,
   arrangeMessage,
+  collectFollowUpCandidates,
   collectLatestInbound,
   computeThreadUnread,
   conversationId,
@@ -39,6 +40,7 @@ import {
   type ConversationPref,
   type ConversationThread,
   type EventRecord,
+  type FollowUpCandidate,
   type InboxItem,
   type InboxQuery,
   type IngestAttempt,
@@ -234,6 +236,14 @@ export interface InboxListQuery {
   disposition?: "current_work" | "pending";
   locale?: CopyLocale;
 }
+
+export interface PersonalFollowUpView {
+  event: EventRecord;
+  candidate: FollowUpCandidate;
+  body_text?: string;
+}
+
+const PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY = "personal_follow_up_snoozes_v1";
 
 export type InboxHeadsCursor = { before: string; before_id: string };
 
@@ -903,6 +913,94 @@ export class PersonalInboxService {
     this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
     this.touchInboxDigest({ immediate: true });
     return decision;
+  }
+
+  async listFollowUps(): Promise<PersonalFollowUpView[]> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const events = await authority.listEvents(this.runtime.orgId());
+    const bodies = await resolveInboxBodies(
+      authority,
+      host.get("blobs"),
+      events.map((event) => event.content_hash),
+      "meta",
+    );
+    const now = new Date().toISOString();
+    const candidates = collectFollowUpCandidates({
+      items: events.map((event) => {
+        const surface = event.content_hash ? bodies.get(event.content_hash)?.surface : undefined;
+        return {
+          thread_id: conversationId(event.source, event.external_id, event.id),
+          external_id: event.external_id,
+          occurred_at: event.occurred_at,
+          direction: surface?.direction,
+          kind: surface?.kind,
+          operation: event.operation,
+          activity: surface?.activity,
+        };
+      }),
+      policy: await this.work.getPersonalFollowUpPolicy(),
+      now,
+    });
+    const snoozes = await this.getFollowUpSnoozes();
+    const byIdentity = new Map(
+      events.map((event) => [`${conversationId(event.source, event.external_id, event.id)}\u0000${event.external_id}`, event]),
+    );
+    return candidates.flatMap((candidate) => {
+      if ((snoozes[candidate.thread_id] ?? "") > now) {
+        return [];
+      }
+      const event = byIdentity.get(`${candidate.thread_id}\u0000${candidate.outbound_external_id}`);
+      if (!event) {
+        return [];
+      }
+      return [{
+        event,
+        candidate,
+        ...(event.content_hash ? { body_text: bodies.get(event.content_hash)?.body_text } : {}),
+      }];
+    });
+  }
+
+  async snoozeFollowUp(threadId: string, until: string): Promise<{ thread_id: string; snoozed_until: string }> {
+    const id = threadIdOf(requireThreadId(threadId));
+    const timestamp = normalizeFollowUpSnooze(until);
+    const snoozes = await this.getFollowUpSnoozes();
+    snoozes[id] = timestamp;
+    await this.putFollowUpSnoozes(snoozes);
+    return { thread_id: id, snoozed_until: timestamp };
+  }
+
+  async unsnoozeFollowUp(threadId: string): Promise<{ thread_id: string; snoozed_until: null }> {
+    const id = threadIdOf(requireThreadId(threadId));
+    const snoozes = await this.getFollowUpSnoozes();
+    delete snoozes[id];
+    await this.putFollowUpSnoozes(snoozes);
+    return { thread_id: id, snoozed_until: null };
+  }
+
+  private async getFollowUpSnoozes(): Promise<Record<string, string>> {
+    const value = await this.runtime.requireHost().get("authority").getUiPref(
+      this.runtime.orgId(),
+      PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY,
+    );
+    if (!value) {
+      return {};
+    }
+    try {
+      return parseFollowUpSnoozes(JSON.parse(value));
+    } catch {
+      throw new PersonalConnectorError("invalid_config", "Stored personal follow-up snoozes are invalid", 409);
+    }
+  }
+
+  private async putFollowUpSnoozes(snoozes: Record<string, string>): Promise<void> {
+    await this.runtime.requireHost().get("authority").putUiPref(
+      this.runtime.orgId(),
+      PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY,
+      JSON.stringify(snoozes),
+      new Date().toISOString(),
+    );
   }
 
   async listInbox(
@@ -2398,6 +2496,29 @@ function parseThreadQuery(
   } catch {
     return undefined;
   }
+}
+
+function parseFollowUpSnoozes(input: unknown): Record<string, string> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("Invalid follow-up snoozes");
+  }
+  return Object.fromEntries(
+    Object.entries(input).map(([threadId, until]) => [
+      threadIdOf(requireThreadId(threadId)),
+      normalizeFollowUpSnooze(until),
+    ]),
+  );
+}
+
+function normalizeFollowUpSnooze(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new PersonalConnectorError("invalid_config", "Invalid follow-up snooze time", 400);
+  }
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new PersonalConnectorError("invalid_config", "Invalid follow-up snooze time", 400);
+  }
+  return timestamp.toISOString();
 }
 
 async function pinnedInboxHeadExtras(

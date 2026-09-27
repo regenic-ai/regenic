@@ -7,6 +7,7 @@ import {
   INBOX_MEMBERSHIP_PREF_KEY,
   INBOX_SORT_PREF_KEY,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
+  DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   cancelWorkRun,
   foldThreadByPolicy,
   deliveryAbandoned,
@@ -18,6 +19,7 @@ import {
   normalizeUnitKind,
   parseConversationThread,
   validatePersonalDispatchPolicy,
+  validatePersonalFollowUpPolicy,
   projectThreadFacet,
   recipeMatches,
   recordClassFromType,
@@ -27,6 +29,7 @@ import {
   type InboxListView,
   type InboxSortMode,
   type PersonalDispatchPolicy,
+  type PersonalFollowUpPolicy,
   type PromptAnswer,
   type Recipe,
   type ThreadPrompt,
@@ -59,6 +62,7 @@ export type { WorkInboxFace } from "./personal-work-faces";
 
 const WORK_TICK_MS = 3_000;
 export const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
+export const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
@@ -217,6 +221,43 @@ export class PersonalWorkService implements OnModuleDestroy {
     await host.get("authority").putUiPref(
       this.runtime.orgId(),
       PERSONAL_DISPATCH_POLICY_PREF_KEY,
+      JSON.stringify(policy),
+      new Date().toISOString(),
+    );
+    return policy;
+  }
+
+  async getPersonalFollowUpPolicy(): Promise<PersonalFollowUpPolicy> {
+    const host = this.runtime.requireHost();
+    const value = await host.get("authority").getUiPref(
+      this.runtime.orgId(),
+      PERSONAL_FOLLOW_UP_POLICY_PREF_KEY,
+    );
+    if (!value) {
+      return DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
+    }
+    try {
+      return validatePersonalFollowUpPolicy(JSON.parse(value) as PersonalFollowUpPolicy);
+    } catch {
+      throw new PersonalConnectorError("invalid_config", "Stored personal follow-up policy is invalid", 409);
+    }
+  }
+
+  async putPersonalFollowUpPolicy(input: unknown): Promise<PersonalFollowUpPolicy> {
+    let policy: PersonalFollowUpPolicy;
+    try {
+      policy = validatePersonalFollowUpPolicy(input as PersonalFollowUpPolicy);
+    } catch (error) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        error instanceof Error ? error.message : "Invalid personal follow-up policy",
+        400,
+      );
+    }
+    const host = this.runtime.requireHost();
+    await host.get("authority").putUiPref(
+      this.runtime.orgId(),
+      PERSONAL_FOLLOW_UP_POLICY_PREF_KEY,
       JSON.stringify(policy),
       new Date().toISOString(),
     );

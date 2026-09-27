@@ -115,6 +115,24 @@ async function ingestActionable(database, blobRoot) {
   return result.records[0].event_id;
 }
 
+async function ingestFollowUpThread(database, blobRoot) {
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const result = await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "native-local",
+    org_id: "local-owner",
+    delivery_id: "follow-up-1",
+    received_at: "2020-01-01T12:00:00.000Z",
+    records: [
+      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2020-01-01T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
+      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2020-01-01T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
+    ],
+  });
+  authority.close();
+  return result.records[1].event_id;
+}
+
 async function startSlackHistoryStub() {
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
@@ -429,6 +447,60 @@ describe("personal /v1/me", () => {
       ).json();
       assert.deepEqual(updated, policy);
       assert.deepEqual(await (await fetch(`${origin}/v1/me/dispatch-policy`)).json(), policy);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reads and updates a personal follow-up policy", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const defaults = await (await fetch(`${origin}/v1/me/follow-up-policy`)).json();
+      assert.equal(defaults.version, 1);
+      assert.equal(defaults.wait_minutes, 1440);
+      const policy = { ...defaults, wait_minutes: 120, include_initial_outbound: true };
+      const updated = await (
+        await fetch(`${origin}/v1/me/follow-up-policy`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ policy }),
+        })
+      ).json();
+      assert.deepEqual(updated, policy);
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-up-policy`)).json(), policy);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reviews overdue personal follow-ups without changing inbox disposition", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestFollowUpThread(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const followUps = await (await fetch(`${origin}/v1/me/follow-ups`)).json();
+      assert.equal(followUps.length, 1);
+      assert.equal(followUps[0].event.id, eventId);
+      assert.equal(followUps[0].candidate.outbound_external_id, "thread-1:out-1");
+      assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
+      assert.equal(followUps[0].body_text, "I will confirm it today.");
+      const threadId = encodeURIComponent(followUps[0].candidate.thread_id);
+      const snoozed = await (
+        await fetch(`${origin}/v1/me/follow-ups/${threadId}/snooze`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ until: "2099-01-01T00:00:00.000Z" }),
+        })
+      ).json();
+      assert.equal(snoozed.snoozed_until, "2099-01-01T00:00:00.000Z");
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-ups`)).json(), []);
+      await fetch(`${origin}/v1/me/follow-ups/${threadId}/snooze`, { method: "DELETE" });
+      assert.equal((await (await fetch(`${origin}/v1/me/follow-ups`)).json()).length, 1);
     } finally {
       await app.close();
     }

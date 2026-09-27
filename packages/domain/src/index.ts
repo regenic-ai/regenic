@@ -26,6 +26,8 @@ export * from "./canonicalization";
 export * from "./arrangement";
 export * from "./arrangement-service";
 export * from "./personal-dispatch-policy";
+export * from "./personal-follow-up-policy";
+export * from "./personal-follow-up";
 export * from "./ingestion-service";
 export * from "./connector-runner";
 export * from "./deadline";
