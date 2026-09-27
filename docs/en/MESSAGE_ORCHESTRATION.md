@@ -97,7 +97,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 - Human triage may explicitly override an Event's layer; the disposition keeps its prior reason codes, records `human_triage`, and never mutates the Event
 - Resetting a human triage re-runs the automatic arrangement from the persisted Event, body, surface, and weight hints; it replaces the manual decision rather than retaining `human_triage`
 - A versioned personal dispatch policy records the intended dispositions for high hints, actionable messages, short text, and the fallback path; an explicit reapply operation can use it for an existing inbox event, while new ingest decisions retain the default policy until automatic application is enabled
-- A versioned personal follow-up policy derives overdue replies from persisted inbound/outbound thread history; follow-up review is read-only and a person may snooze or resume a thread without changing its Event or Inbox disposition
+- A versioned personal follow-up policy derives overdue replies from persisted inbound/outbound thread history. Follow-up review is read-only. A snooze binds to one outbound message, while an older thread-level snooze still hides the current candidate. A later outbound can become a new candidate without changing its Event or Inbox disposition
 - Standards application and revision hooks
 - Dispatch: outside current work vs pending
 - Audit of reads and sends

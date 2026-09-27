@@ -3,6 +3,8 @@ const { it } = require("node:test");
 const {
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   collectFollowUpCandidates,
+  followUpSnoozeKey,
+  isFollowUpSnoozed,
 } = require("../dist");
 
 const policy = {
@@ -44,6 +46,26 @@ it("does not follow up initial outbound, answered, working, or bot threads", () 
     ],
   });
   assert.deepEqual(candidates, []);
+});
+
+it("keeps a message snooze from hiding a later outbound", () => {
+  const snoozes = {
+    [followUpSnoozeKey("slack:dm-1", "out-1")]: "2099-01-01T00:00:00.000Z",
+  };
+  assert.equal(isFollowUpSnoozed(snoozes, {
+    thread_id: "slack:dm-1",
+    outbound_external_id: "out-1",
+  }, "2026-09-26T12:00:00.000Z"), true);
+  assert.equal(isFollowUpSnoozed(snoozes, {
+    thread_id: "slack:dm-1",
+    outbound_external_id: "out-2",
+  }, "2026-09-26T12:00:00.000Z"), false);
+  assert.equal(isFollowUpSnoozed({
+    "slack:dm-1": "2099-01-01T00:00:00.000Z",
+  }, {
+    thread_id: "slack:dm-1",
+    outbound_external_id: "out-2",
+  }, "2026-09-26T12:00:00.000Z"), true);
 });
 
 it("can include an overdue initial outbound when configured", () => {
