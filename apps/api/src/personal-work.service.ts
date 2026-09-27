@@ -61,7 +61,7 @@ export type { RecipeInput } from "./personal-work-recipe";
 export type { WorkInboxFace } from "./personal-work-faces";
 
 const WORK_TICK_MS = 3_000;
-export const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
+export { PERSONAL_DISPATCH_POLICY_PREF_KEY } from "@regenic/domain";
 export const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 
 export interface UiPrefsView {
