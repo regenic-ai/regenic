@@ -255,6 +255,14 @@ export class ConnectorRunner {
         recordSyncDuration(this.metrics, "settle_ms", settleStartedAt, labels);
       }
     } catch (error) {
+      if (isLostLease(error)) {
+        this.metrics.record({ name: "lease_conflicts", value: 1, labels });
+        return {
+          status: "lease_unavailable",
+          installation_id: input.installation_id,
+          stream_key: input.stream_key,
+        };
+      }
       try {
         await this.commitPage({
           attempt,
@@ -464,6 +472,12 @@ function pollOptions(
   return options.older || options.latest || options.media === false
     ? options
     : undefined;
+}
+
+function isLostLease(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("lease is not held")
+  );
 }
 
 function isRateLimitError(error: unknown): boolean {

@@ -253,14 +253,30 @@ export class LarkCliClient implements FeishuImClient {
   }
 
   async listMessages(input: FeishuListInput): Promise<FeishuHistoryPage> {
+    try {
+      return await this.listMessagesOnce(input, true);
+    } catch (error) {
+      if (!isRejectedSenderNameParam(error)) {
+        throw error;
+      }
+      return this.listMessagesOnce(input, false);
+    }
+  }
+
+  private async listMessagesOnce(
+    input: FeishuListInput,
+    withSenderName: boolean,
+  ): Promise<FeishuHistoryPage> {
     const params: Record<string, string | number> = {
       container_id_type: "chat",
       container_id: input.chat_id,
       sort_type: input.sort_type ?? "ByCreateTimeAsc",
       page_size: input.page_size,
       user_id_type: "open_id",
-      with_sender_name: "true",
     };
+    if (withSenderName) {
+      params.with_sender_name = "true";
+    }
     if (input.page_token) {
       params.page_token = input.page_token;
     }
@@ -1091,6 +1107,22 @@ export class LarkCliClient implements FeishuImClient {
       return new Map();
     }
   }
+}
+
+function isRejectedSenderNameParam(error: unknown): boolean {
+  if (!(error instanceof FeishuApiError)) {
+    return false;
+  }
+  if (
+    error.code === "400" ||
+    error.code === "230001" ||
+    error.code === "99992402"
+  ) {
+    return true;
+  }
+  return /with_sender_name|field validation|invalid (request )?param/i.test(
+    error.message,
+  );
 }
 
 export function resolveLarkCommand(configured?: string): string {

@@ -3219,12 +3219,12 @@ export class PostgresAuthorityStore
     }
     const advancesCursor =
       input.retryable_failure_count === 0 && input.next_cursor !== undefined;
-    await this.execute(
+    const updated = await this.execute(
       `
         UPDATE connector_cursors
         SET cursor_value = $1, cursor_version = $2, lease_owner = NULL,
             lease_expires_at = NULL, updated_at = $3
-        WHERE installation_id = $4 AND stream_key = $5
+        WHERE installation_id = $4 AND stream_key = $5 AND lease_owner = $6
       `,
       [
         advancesCursor ? input.next_cursor : cursor.cursor_value,
@@ -3234,9 +3234,13 @@ export class PostgresAuthorityStore
         input.finished_at,
         input.installation_id,
         input.stream_key,
+        input.lease_owner,
       ],
       client,
     );
+    if (updated !== 1) {
+      throw new Error("Connector lease is not held by the attempt owner");
+    }
     return (await this.findAttempt(input.attempt_id, client))!;
   }
 

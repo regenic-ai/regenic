@@ -136,7 +136,7 @@ const LIVE_KICK_COOLDOWN_MS = 3_000;
 const LIVE_KICK_WAIT_MS = 12_000;
 const FOLLOW_TRIES = 6;
 const FOLLOW_WAIT_MS = 750;
-const DEFAULT_PULL_MS = 10_000;
+const DEFAULT_PULL_MS = 2_000;
 const DEFAULT_CATALOG_PULL_MS = 45_000;
 const START_PULL_DELAY_MS = 1_000;
 const LEASE_MS = 60_000;
@@ -4011,7 +4011,7 @@ function dueWorkStreamIdleMs(
     return idleMs;
   }
   // Quiet chats still need a list-freshness pass. History keeps the long cold idle.
-  return Math.min(idleMs, 10 * 60 * 1000);
+  return Math.min(idleMs, 2 * 60 * 1000);
 }
 
 function pollRunsHadPressure(runs: ConnectorPollRunResult[]): boolean {

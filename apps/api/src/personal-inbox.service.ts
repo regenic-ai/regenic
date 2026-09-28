@@ -177,9 +177,30 @@ export interface ConversationPromptInput {
 }
 
 const MAX_TITLE_LENGTH = 120;
+const ATTENTION_CACHE_MAX = 500;
+const RECEIPT_CACHE_MAX = 4_000;
+
+function rememberBounded<T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  max: number,
+): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  }
+  cache.set(key, value);
+  while (cache.size > max) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    cache.delete(oldest);
+  }
+}
 
 function cachedAttention(
-  cache: ReadonlyMap<string, ThreadAttention>,
+  cache: Map<string, ThreadAttention>,
   threads: readonly { source: string; target: string }[],
 ): Map<string, ThreadAttention> {
   const found = new Map<string, ThreadAttention>();
@@ -187,6 +208,7 @@ function cachedAttention(
     const id = threadIdOf(thread);
     const value = cache.get(id);
     if (value) {
+      rememberBounded(cache, id, value, ATTENTION_CACHE_MAX);
       found.set(id, value);
     }
   }
@@ -194,9 +216,19 @@ function cachedAttention(
 }
 
 function cachedReceipts(
-  cache: ReadonlyMap<string, MessageReceipt>,
+  cache: Map<string, MessageReceipt>,
+  rows: readonly { item: { event: { external_id: string } } }[],
 ): Map<string, MessageReceipt> {
-  return new Map(cache);
+  const found = new Map<string, MessageReceipt>();
+  for (const row of rows) {
+    const id = row.item.event.external_id;
+    const value = cache.get(id);
+    if (value) {
+      rememberBounded(cache, id, value, RECEIPT_CACHE_MAX);
+      found.set(id, value);
+    }
+  }
+  return found;
 }
 
 export type { EngineInstallationView } from "./personal-connector-view";
@@ -896,10 +928,20 @@ export class PersonalInboxService {
           }),
         ]);
         for (const [threadId, value] of attention) {
-          this.attentionCache.set(threadId, value);
+          rememberBounded(
+            this.attentionCache,
+            threadId,
+            value,
+            ATTENTION_CACHE_MAX,
+          );
         }
         for (const [externalId, receipt] of receiptPage.receipts) {
-          this.receiptCache.set(externalId, receipt);
+          rememberBounded(
+            this.receiptCache,
+            externalId,
+            receipt,
+            RECEIPT_CACHE_MAX,
+          );
         }
         for (const threadId of input.threadIds) {
           this.publishThreadUpdated(threadId);
@@ -1623,20 +1665,15 @@ export class PersonalInboxService {
         : inboundFromPage;
     const awaitingUser = awaitingUserThreads(resolved);
     const inboxTier = personalInboxReadTierSpec(personalInboxReadTier(query));
-    const liveChannel = inboxTier.channel_overlays;
     const livePrompts = inboxTier.connector_prompts
       ? await this.drivers.listPromptsForThreads(installations, threads, host)
       : new Map<string, ThreadPrompt[]>();
-    const attention = liveChannel
-      ? cachedAttention(this.attentionCache, threads)
-      : new Map<string, ThreadAttention>();
-    const receiptPage = liveChannel
-      ? { receipts: cachedReceipts(this.receiptCache), extras: [] as InboxResolvedRow[] }
-      : {
-          receipts: new Map<string, MessageReceipt>(),
-          extras: [] as InboxResolvedRow[],
-        };
-    if (liveChannel) {
+    const attention = cachedAttention(this.attentionCache, threads);
+    const receiptPage = {
+      receipts: cachedReceipts(this.receiptCache, resolved),
+      extras: [] as InboxResolvedRow[],
+    };
+    if (query.live === true) {
       const threadIds = threads.map((item) => threadIdOf(item));
       this.scheduleChannelOverlays({
         installations,

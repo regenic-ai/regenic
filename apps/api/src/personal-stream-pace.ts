@@ -1,10 +1,10 @@
 import type { SyncLane } from "@regenic/domain";
 
 export const CATCH_UP_STREAMS_PER_TICK = 1;
-export const LIVE_STREAM_CONCURRENCY = 8;
+export const LIVE_STREAM_CONCURRENCY = 16;
 export const IDLE_STREAM_CONCURRENCY = 2;
 /** Background latest pulls while nobody is in a thread. */
-export const IDLE_LIVE_STREAM_CONCURRENCY = 4;
+export const IDLE_LIVE_STREAM_CONCURRENCY = 16;
 /** Background history pulls while nobody is in a thread. */
 export const IDLE_HISTORY_STREAM_CONCURRENCY = 2;
 export const BUSY_STREAM_CONCURRENCY = 1;

@@ -3233,13 +3233,13 @@ export class SqliteAuthorityStore
     }
     const advancesCursor =
       input.retryable_failure_count === 0 && input.next_cursor !== undefined;
-    this.database
+    const updated = this.database
       .prepare(
         `
           UPDATE connector_cursors
           SET cursor_value = ?, cursor_version = ?, lease_owner = NULL,
               lease_expires_at = NULL, updated_at = ?
-          WHERE installation_id = ? AND stream_key = ?
+          WHERE installation_id = ? AND stream_key = ? AND lease_owner = ?
         `,
       )
       .run(
@@ -3248,7 +3248,11 @@ export class SqliteAuthorityStore
         input.finished_at,
         input.installation_id,
         input.stream_key,
+        input.lease_owner,
       );
+    if (updated.changes !== 1) {
+      throw new Error("Connector lease is not held by the attempt owner");
+    }
     return this.findAttempt(input.attempt_id)!;
   }
 
