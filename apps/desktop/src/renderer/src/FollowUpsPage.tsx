@@ -69,7 +69,9 @@ export function FollowUpsPage() {
           <p className="page-eyebrow">{t("followUps.eyebrow")}</p>
           <h1>{t("followUps.title")}</h1>
         </div>
-        <button type="button" className="ghost" disabled={busy || loading} onClick={() => void run(async () => {})}>
+        <button type="button" className="ghost" disabled={busy || loading} onClick={() => void run(async () => {
+          if (!policy) setPolicy(await fetchFollowUpPolicy());
+        })}>
           {t("followUps.refresh")}
         </button>
       </header>
@@ -80,7 +82,7 @@ export function FollowUpsPage() {
           <span className="chip">{items.length}</span>
         </div>
         {loading ? <p className="muted">{t("followUps.loading")}</p> : null}
-        {!loading && items.length === 0 ? <p className="muted">{t("followUps.empty")}</p> : null}
+        {!loading && !error && items.length === 0 ? <p className="muted">{t("followUps.empty")}</p> : null}
         <ul className="follow-ups-list">
           {items.map((item) => (
             <li className="follow-ups-row" key={item.event.id}>
@@ -101,7 +103,7 @@ export function FollowUpsPage() {
           <h2>{t("followUps.paused")}</h2>
           <span className="chip">{activeSnoozes.length}</span>
         </div>
-        {!loading && activeSnoozes.length === 0 ? <p className="muted">{t("followUps.nonePaused")}</p> : null}
+        {!loading && !error && activeSnoozes.length === 0 ? <p className="muted">{t("followUps.nonePaused")}</p> : null}
         <ul className="follow-ups-list">
           {activeSnoozes.map(([threadId, until]) => (
             <li className="follow-ups-row" key={threadId}>
