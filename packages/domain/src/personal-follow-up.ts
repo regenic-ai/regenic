@@ -35,9 +35,10 @@ export function isFollowUpSnoozed(
   candidate: Pick<FollowUpCandidate, "thread_id" | "outbound_external_id">,
   now: string,
 ): boolean {
-  const until = snoozes[followUpSnoozeKey(candidate.thread_id, candidate.outbound_external_id)]
-    ?? snoozes[candidate.thread_id];
-  return (until ?? "") > now;
+  return (
+    (snoozes[followUpSnoozeKey(candidate.thread_id, candidate.outbound_external_id)] ?? "") > now
+    || (snoozes[candidate.thread_id] ?? "") > now
+  );
 }
 
 export function collectFollowUpCandidates(input: {
