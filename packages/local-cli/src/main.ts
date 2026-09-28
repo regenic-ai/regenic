@@ -718,6 +718,7 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
     const events = await authority.listEvents(orgId, {
       occurred_since: followUpScanSince(policy, at),
       limit: PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+      order: "recent",
     });
     const items = await Promise.all(events.map(async (event) => {
       const blob = event.content_hash ? await authority.findBlob(event.content_hash) : null;
