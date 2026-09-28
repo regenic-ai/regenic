@@ -6,14 +6,14 @@ const {
   validatePersonalFollowUpPolicy,
 } = require("../dist");
 
-it("bounds a follow-up scan to at least one day before now", () => {
+it("scans one day beyond the follow-up wait", () => {
   assert.equal(
     followUpScanSince({ wait_minutes: 60 }, "2026-09-26T12:00:00.000Z"),
-    "2026-09-25T12:00:00.000Z",
+    "2026-09-25T11:00:00.000Z",
   );
   assert.equal(
     followUpScanSince({ wait_minutes: 3 * 24 * 60 }, "2026-09-26T12:00:00.000Z"),
-    "2026-09-23T12:00:00.000Z",
+    "2026-09-22T12:00:00.000Z",
   );
 });
 

@@ -926,6 +926,7 @@ export class PersonalInboxService {
     const events = await authority.listEvents(orgId, {
       occurred_since: followUpScanSince(policy, now),
       limit: PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+      order: "recent",
     });
     const bodies = await resolveInboxBodies(
       authority,
@@ -933,7 +934,6 @@ export class PersonalInboxService {
       events.map((event) => event.content_hash),
       "meta",
     );
-    const now = new Date().toISOString();
     const candidates = collectFollowUpCandidates({
       items: events.map((event) => {
         const surface = event.content_hash ? bodies.get(event.content_hash)?.surface : undefined;

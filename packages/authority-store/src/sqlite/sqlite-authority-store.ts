@@ -606,7 +606,7 @@ export class SqliteAuthorityStore
                parent_event_id, thread_id, actor_id, required_scope_ids_json,
                direction_tags_json, weight_hints_json, attrs_json,
                occurred_at, ingested_at
-          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
+          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${query?.order === "recent" ? "DESC" : "ASC"}
           ${limit === undefined ? "" : "LIMIT ?"}
         `,
       )

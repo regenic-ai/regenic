@@ -5,7 +5,7 @@ export function followUpScanSince(
   policy: Pick<PersonalFollowUpPolicy, "wait_minutes">,
   now: string,
 ): string {
-  const at = new Date(now).getTime() - Math.max(policy.wait_minutes, 24 * 60) * 60_000;
+  const at = new Date(now).getTime() - (policy.wait_minutes + 24 * 60) * 60_000;
   return new Date(at).toISOString();
 }
 

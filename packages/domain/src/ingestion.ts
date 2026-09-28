@@ -367,6 +367,7 @@ export interface EventListQuery {
   occurred_since?: string;
   thread_ids?: string[];
   limit?: number;
+  order?: "recent";
 }
 
 export interface InboxQuery extends EventListQuery {
