@@ -979,6 +979,10 @@ export class PersonalInboxService {
     return { thread_id: id, snoozed_until: null };
   }
 
+  async listFollowUpSnoozes(): Promise<Record<string, string>> {
+    return this.getFollowUpSnoozes();
+  }
+
   private async getFollowUpSnoozes(): Promise<Record<string, string>> {
     const value = await this.runtime.requireHost().get("authority").getUiPref(
       this.runtime.orgId(),

@@ -15,6 +15,8 @@ import type {
   Locale,
   MessageReceipt,
   PersonalEngineView,
+  PersonalFollowUpPolicy,
+  PersonalFollowUpView,
   PersonalHeartbeatView,
   PluginInventoryItem,
   PromptAnswerItem,
@@ -1222,6 +1224,68 @@ export async function clearStore(): Promise<StoreClearView> {
     );
   }
   return body as StoreClearView;
+}
+
+export async function fetchFollowUps(): Promise<PersonalFollowUpView[]> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups`);
+  if (!response.ok) {
+    throw new Error(`follow-ups ${response.status}`);
+  }
+  const items = (await response.json()) as PersonalFollowUpView[];
+  if (!Array.isArray(items)) {
+    throw new Error("follow-ups");
+  }
+  return items;
+}
+
+export async function fetchFollowUpPolicy(): Promise<PersonalFollowUpPolicy> {
+  const response = await fetch(`${origin()}/v1/me/follow-up-policy`);
+  if (!response.ok) {
+    throw new Error(`follow-up policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalFollowUpPolicy>;
+}
+
+export async function fetchFollowUpSnoozes(): Promise<Record<string, string>> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups/snoozes`);
+  if (!response.ok) {
+    throw new Error(`follow-up snoozes ${response.status}`);
+  }
+  return response.json() as Promise<Record<string, string>>;
+}
+
+export async function saveFollowUpPolicy(
+  policy: PersonalFollowUpPolicy,
+): Promise<PersonalFollowUpPolicy> {
+  const response = await fetch(`${origin()}/v1/me/follow-up-policy`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ policy }),
+  });
+  if (!response.ok) {
+    throw new Error(`follow-up policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalFollowUpPolicy>;
+}
+
+export async function snoozeFollowUp(threadId: string, until: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups/${encodeURIComponent(threadId)}/snooze`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ until }),
+  });
+  if (!response.ok) {
+    throw new Error(`follow-up snooze ${response.status}`);
+  }
+}
+
+export async function unsnoozeFollowUp(threadId: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups/${encodeURIComponent(threadId)}/snooze`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`follow-up unsnooze ${response.status}`);
+  }
 }
 
 export async function fetchUiPrefs(): Promise<UiPrefsView> {

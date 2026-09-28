@@ -144,6 +144,11 @@ export class PersonalController {
     return this.guard(() => this.inbox.listFollowUps());
   }
 
+  @Get("follow-ups/snoozes")
+  listFollowUpSnoozes() {
+    return this.guard(() => this.inbox.listFollowUpSnoozes());
+  }
+
   @Post("follow-ups/:threadId/snooze")
   snoozeFollowUp(
     @Param("threadId") threadId: string,
