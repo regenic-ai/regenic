@@ -98,17 +98,18 @@ export class SyncSlotPool {
     if (this.active >= this.options.total) {
       return false;
     }
-    if (this.reservedFor(lane) > 0) {
-      return true;
-    }
-    let reservedOthers = 0;
+    // Keep each lane's unused reservation free. A reserved lane must not
+    // spend interactive or live slots just because it has a reservation.
+    let protectedOthers = 0;
     for (const other of SYNC_LANES) {
       if (other === lane) {
         continue;
       }
-      reservedOthers += this.reservedFor(other);
+      const reserved = this.reservedFor(other);
+      const used = this.byLane.get(other) ?? 0;
+      protectedOthers += Math.max(0, reserved - used);
     }
-    return this.active < this.options.total - reservedOthers;
+    return this.active + protectedOthers < this.options.total;
   }
 
   private flushWaiters(): void {

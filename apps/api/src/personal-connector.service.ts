@@ -62,6 +62,9 @@ import {
   looksLikeSyncPressure,
   MAX_DUE_WORK_CLAIM_LIMIT,
   MIN_DUE_WORK_CLAIM_LIMIT,
+  membersMissingBootstrapSeed,
+  membersMissingLane,
+  membersMissingLatestWork,
   needsCatalogDueWork,
   planDueSyncWork,
   processSyncMetrics,
@@ -72,7 +75,6 @@ import {
   syncRunWorkLanes,
   syncRunWorkPlane,
   type DueWorkHeat,
-  uncoveredCatalogMembers,
   type SyncCatalogMember,
   type SyncLane,
   type SyncRun,
@@ -108,6 +110,7 @@ import {
   capSelectedStreams,
   catalogRefreshPages,
   IDLE_STREAM_CONCURRENCY,
+  IDLE_HISTORY_STREAM_CONCURRENCY,
   LIVE_STREAM_CONCURRENCY,
   shouldKeepCatchingUp,
   syncExecutionBudget,
@@ -619,6 +622,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         run.installation_id,
         plane,
         catalog.members,
+        { reconcileBootstrap: plane === "bootstrap" },
       );
       if (plane === "bootstrap") {
         await this.enqueueDueWorkFromCatalog(
@@ -2028,6 +2032,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
               installation.id,
               "bootstrap",
               view.members,
+              { reconcileBootstrap: true },
             );
           }
           void this.refreshSyncSnapshot(installation.id);
@@ -2120,16 +2125,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
       ) {
         continue;
       }
-      if (
-        await store.hasUnassignedSyncWork({
-          installation_id: installation.id,
-          lanes: coverageLanes,
-        })
-      ) {
-        continue;
-      }
       const catalog = await store.getSyncCatalog(installation.id);
-      if (needsCatalogDueWork(catalog)) {
+      const queueHasWork = await store.hasUnassignedSyncWork({
+        installation_id: installation.id,
+        lanes: coverageLanes,
+      });
+      if (!queueHasWork && needsCatalogDueWork(catalog)) {
         if (
           !(await store.hasUnassignedSyncWork({
             installation_id: installation.id,
@@ -2164,12 +2165,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
     installationId: string,
     plane: "steady" | "bootstrap",
     members: readonly SyncCatalogMember[],
+    options?: { reconcileBootstrap?: boolean },
   ): Promise<number> {
     this.catalogSizeByInstall.set(installationId, members.length);
     const existing = await store.listUnassignedSyncWorkIdentities({
       installation_id: installationId,
     });
-    const uncovered = uncoveredCatalogMembers(members, existing);
+    const uncovered =
+      plane === "steady"
+        ? membersMissingLatestWork(members, existing)
+        : options?.reconcileBootstrap
+          ? membersMissingLane(members, existing, "history")
+          : membersMissingBootstrapSeed(members, existing);
     if (uncovered.length === 0) {
       return 0;
     }
@@ -2190,10 +2197,19 @@ export class PersonalConnectorService implements OnModuleDestroy {
       coldIdleMs: streamIdleTiersFromEnv().coldIdleMs,
       firstSeedLimit: firstSeedHeadFromEnv(),
     });
-    if (items.length === 0) {
+    const occupied = new Set(
+      existing.map(
+        (item) => `${item.generation}:${item.lane}:${item.stream_key}`,
+      ),
+    );
+    const fresh = items.filter(
+      (item) =>
+        !occupied.has(`${item.generation}:${item.lane}:${item.stream_key}`),
+    );
+    if (fresh.length === 0) {
       return 0;
     }
-    return store.enqueueSyncWorkMany(items);
+    return store.enqueueSyncWorkMany(fresh);
   }
 
   private async loadStatesForMembers(
@@ -2278,7 +2294,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
             streamWork,
             input,
           ),
-          connectorSyncTimeoutMs(),
+          dueWorkBatchTimeoutMs(streamWork),
           `due-work ${input.plane} ${installationId}`,
         );
         if (polled.pressure) {
@@ -2290,14 +2306,20 @@ export class PersonalConnectorService implements OnModuleDestroy {
         if (looksLikeSyncPressure(error)) {
           pressure = true;
         }
+        // The batch clock ran out before every wave finished. Reschedule those
+        // rows immediately; this is not a connector failure.
+        const timedOut = error instanceof DeadlineExceededError;
+        const retryAt = new Date().toISOString();
         for (const item of work) {
           await store.settleSyncWork({
             id: item.id,
             owner: this.dueWorkOwner,
-            now,
+            now: retryAt,
             outcome: "retry",
-            next_due_at: nextDueAfterFailure(item.attempts, now),
-            error_code: safeErrorCode(error),
+            next_due_at: timedOut
+              ? retryAt
+              : nextDueAfterFailure(item.attempts, retryAt),
+            error_code: timedOut ? undefined : safeErrorCode(error),
           });
         }
       }
@@ -2769,6 +2791,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       installation.id,
       "bootstrap",
       members,
+      { reconcileBootstrap: true },
     );
   }
 
@@ -3846,6 +3869,24 @@ function catalogPullIntervalMs(): number {
 function dueWorkEnabled(): boolean {
   const raw = process.env.REGENIC_SYNC_DUE_WORK?.trim().toLowerCase();
   return raw !== "0" && raw !== "false";
+}
+
+function dueWorkBatchTimeoutMs(
+  work: readonly { lane: string }[],
+): number {
+  const pollMs = connectorPollTimeoutMs();
+  const live = work.filter(
+    (item) => item.lane === "live" || item.lane === "interactive",
+  ).length;
+  const history = work.filter((item) => item.lane === "history").length;
+  const waves = Math.max(
+    Math.ceil(live / Math.max(1, LIVE_STREAM_CONCURRENCY)),
+    Math.ceil(history / Math.max(1, IDLE_HISTORY_STREAM_CONCURRENCY)),
+    1,
+  );
+  // Each list already stops at the poll timeout. The batch clock has to
+  // cover every wave of this claim; a flat 30s cuts the later waves.
+  return Math.max(connectorSyncTimeoutMs(), waves * pollMs + 5_000);
 }
 
 function dueWorkClaimLimit(plane: "steady" | "bootstrap"): number {

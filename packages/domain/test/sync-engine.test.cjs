@@ -440,6 +440,36 @@ describe("sync slot pool", () => {
     pool.reset();
   });
 
+  it("does not let a reserved lane spend another lane's slot", () => {
+    const pool = new SyncSlotPool({
+      total: 4,
+      reserved: { interactive: 1, live: 2, history: 1 },
+    });
+    assert.equal(pool.tryAcquire("live"), true);
+    assert.equal(pool.tryAcquire("live"), true);
+    assert.equal(pool.tryAcquire("live"), false);
+    assert.equal(pool.tryAcquire("interactive"), true);
+    assert.equal(pool.tryAcquire("history"), true);
+    pool.reset();
+  });
+
+  it("keeps an interactive slot beside 8 latest and 4 history", () => {
+    const pool = new SyncSlotPool({
+      total: 13,
+      reserved: { interactive: 1, live: 8, history: 4 },
+    });
+    for (let i = 0; i < 8; i += 1) {
+      assert.equal(pool.tryAcquire("live"), true);
+    }
+    assert.equal(pool.tryAcquire("live"), false);
+    for (let i = 0; i < 4; i += 1) {
+      assert.equal(pool.tryAcquire("history"), true);
+    }
+    assert.equal(pool.tryAcquire("history"), false);
+    assert.equal(pool.tryAcquire("interactive"), true);
+    pool.reset();
+  });
+
   it("propagates the current lane through async context", async () => {
     assert.equal(currentSyncLane(), "live");
     await runInSyncLane("interactive", async () => {

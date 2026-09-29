@@ -1,12 +1,16 @@
 import type { SyncLane } from "@regenic/domain";
 
 export const CATCH_UP_STREAMS_PER_TICK = 1;
-export const LIVE_STREAM_CONCURRENCY = 16;
+/** How many background latest polls this host runs at once. */
+export const LIVE_STREAM_CONCURRENCY = 8;
 export const IDLE_STREAM_CONCURRENCY = 2;
 /** Background latest pulls while nobody is in a thread. */
-export const IDLE_LIVE_STREAM_CONCURRENCY = 16;
-/** Background history pulls while nobody is in a thread. */
-export const IDLE_HISTORY_STREAM_CONCURRENCY = 2;
+export const IDLE_LIVE_STREAM_CONCURRENCY = 8;
+/**
+ * How many history polls this host runs at once.
+ * A connector's own process pool may queue inside that width.
+ */
+export const IDLE_HISTORY_STREAM_CONCURRENCY = 4;
 export const BUSY_STREAM_CONCURRENCY = 1;
 export const IDLE_MEDIA_CONCURRENCY = 1;
 export const BUSY_MEDIA_CONCURRENCY = 1;
@@ -180,8 +184,11 @@ export function syncExecutionBudget(input: {
       concurrency: input.humanIdle ? IDLE_MEDIA_CONCURRENCY : BUSY_MEDIA_CONCURRENCY,
     };
   }
+  if (input.lane === "history") {
+    return { pages, concurrency: IDLE_HISTORY_STREAM_CONCURRENCY };
+  }
   // Live/interactive must stay responsive while the human is present; only
-  // history/catalog pay the busy catch-up tax.
+  // catalog pays the busy catch-up tax.
   if (input.lane === "live" || input.lane === "interactive") {
     return {
       pages,
@@ -191,9 +198,7 @@ export function syncExecutionBudget(input: {
     };
   }
   const concurrency = input.humanIdle
-    ? input.lane === "history"
-      ? IDLE_HISTORY_STREAM_CONCURRENCY
-      : IDLE_STREAM_CONCURRENCY
+    ? IDLE_STREAM_CONCURRENCY
     : input.capCatchUp
       ? BUSY_STREAM_CONCURRENCY
       : LIVE_STREAM_CONCURRENCY;

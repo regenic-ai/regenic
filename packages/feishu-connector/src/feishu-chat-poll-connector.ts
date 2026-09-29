@@ -708,7 +708,7 @@ export function planFeishuHistoryRequest(
     Boolean(state.head_time) &&
     state.start_time !== state.head_time;
   if (state.recent_seeded && (historyParked || !state.page_token)) {
-    const liveStart = state.head_time ?? state.start_time;
+    const liveStart = laterTime(state.head_time, state.start_time);
     return {
       chat_id: chatId,
       page_size: pageSize,

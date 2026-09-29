@@ -422,6 +422,28 @@ describe("FeishuChatPollConnector", () => {
     });
   });
 
+  it("polls latest from the newer watermark while history is still open", () => {
+    const state = {
+      start_time: "1788155027",
+      head_time: "1786935878",
+      recent_seeded: true,
+      history_token: "older",
+    };
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: undefined,
+      start_time: "1788155027",
+      sort_type: "ByCreateTimeAsc",
+    });
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state, { older: true }), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: "older",
+      sort_type: "ByCreateTimeDesc",
+    });
+  });
+
   it("seeds recent messages without dropping a mid-history asc cursor", async () => {
     const calls = [];
     const connector = createConnector({

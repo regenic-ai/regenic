@@ -5,6 +5,9 @@ const {
   dueWorkCoverageLanes,
   firstSeedHeadFromEnv,
   firstSeedStaggerDelayMs,
+  membersMissingBootstrapSeed,
+  membersMissingLane,
+  membersMissingLatestWork,
   needsCatalogDueWork,
   planDueSyncWork,
   selectQuickStartStreamKeys,
@@ -70,11 +73,81 @@ describe("due-work planner", () => {
       planned.map((item) => [item.lane, item.stream_key, item.next_due_at]),
       [
         ["interactive", "hot", "2026-09-21T00:00:00.000Z"],
+        ["live", "old", "2026-09-21T00:00:00.000Z"],
         ["live", "cold", "2026-09-21T00:03:00.000Z"],
         ["live", "quiet", "2026-09-21T01:00:00.000Z"],
       ],
     );
     assert.ok(planned[0].priority > planned[1].priority);
+  });
+
+  it("keeps a history chat on the latest queue beside media", () => {
+    const planned = planDueSyncWork({
+      installation_id: "install-1",
+      now: "2026-09-21T00:00:00.000Z",
+      plane: "steady",
+      members: [member("backfill", { thread_id: "slack:C-backfill" })],
+      states: new Map([
+        state("backfill", { phase: "history", media_pending: true }),
+      ]),
+    });
+    assert.deepEqual(
+      planned.map((item) => [item.lane, item.stream_key, item.next_due_at]),
+      [
+        ["live", "backfill", "2026-09-21T00:00:00.000Z"],
+        ["media", "backfill", "2026-09-21T00:00:00.000Z"],
+      ],
+    );
+    const missing = membersMissingLatestWork(
+      [member("backfill"), member("caught-up")],
+      [
+        { stream_key: "backfill", generation: 1, lane: "media" },
+        { stream_key: "backfill", generation: 1, lane: "history" },
+        { stream_key: "caught-up", generation: 1, lane: "live" },
+      ],
+    );
+    assert.deepEqual(
+      missing.map((item) => item.stream_key),
+      ["backfill"],
+    );
+    const owingHistory = membersMissingLane(
+      [member("backfill"), member("caught-up"), member("media-only")],
+      [
+        { stream_key: "backfill", generation: 1, lane: "live" },
+        { stream_key: "caught-up", generation: 1, lane: "history" },
+        { stream_key: "media-only", generation: 1, lane: "media" },
+      ],
+      "history",
+    );
+    assert.deepEqual(
+      owingHistory.map((item) => item.stream_key),
+      ["backfill", "media-only"],
+    );
+    assert.deepEqual(
+      membersMissingBootstrapSeed(
+        [member("backfill"), member("media-only"), member("fresh")],
+        [
+          { stream_key: "backfill", generation: 1, lane: "live" },
+          { stream_key: "media-only", generation: 1, lane: "media" },
+        ],
+      ).map((item) => item.stream_key),
+      ["media-only", "fresh"],
+    );
+  });
+
+  it("schedules history backfill beside the open thread's latest row", () => {
+    const planned = planDueSyncWork({
+      installation_id: "install-1",
+      now: "2026-09-21T00:00:00.000Z",
+      plane: "bootstrap",
+      preferredThreadId: "slack:C-backfill",
+      members: [member("backfill", { thread_id: "slack:C-backfill" })],
+      states: new Map([state("backfill", { phase: "history" })]),
+    });
+    assert.deepEqual(
+      planned.map((item) => [item.lane, item.stream_key]),
+      [["history", "backfill"]],
+    );
   });
 
   it("schedules bootstrap history without touching idle live streams", () => {
@@ -188,13 +261,25 @@ describe("due-work planner", () => {
       states,
     });
     const elapsed = Date.now() - started;
-    assert.ok(planned.length > 8_000);
+    assert.equal(planned.length, 10_000);
     assert.ok(planned.every((item) => item.lane !== "history"));
     assert.equal(planned[0].lane, "interactive");
     assert.equal(planned[0].stream_key, "channel:C1");
     assert.equal(planned[0].next_due_at, now);
     const dueNow = planned.filter((item) => item.next_due_at === now);
-    assert.equal(dueNow.length, 1);
+    const historyCount = members.filter(
+      (_, index) => index % 20 === 0,
+    ).length;
+    assert.equal(dueNow.length, 1 + historyCount);
+    assert.ok(
+      dueNow.every(
+        (item) =>
+          item.lane === "interactive" ||
+          members.findIndex((member) => member.stream_key === item.stream_key) %
+            20 ===
+            0,
+      ),
+    );
     const quiet = planned.find((item) => item.stream_key === "channel:C2");
     assert.equal(quiet.next_due_at, "2026-09-21T04:00:00.000Z");
     assert.ok(

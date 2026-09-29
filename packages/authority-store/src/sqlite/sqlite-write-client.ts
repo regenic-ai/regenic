@@ -136,24 +136,24 @@ export class SqliteWriteClient {
       this.pageTimer = undefined;
     }
     const pages = this.pageBatch.splice(0);
-    if (pages.length === 0) {
-      return;
+    // One transaction per page. A preempted lease must not roll back the
+    // other chats that landed in the same 20ms batch.
+    for (const page of pages) {
+      const id = this.nextId;
+      this.nextId += 1;
+      this.pending.set(id, {
+        method: "commitSyncPage",
+        startedAt: page.startedAt,
+        resolve: page.resolve,
+        reject: page.reject,
+      });
+      const request: SqliteWriteRequest = {
+        id,
+        method: "commitSyncPage",
+        args: [page.input],
+      };
+      this.worker.postMessage(request);
     }
-    const id = this.nextId;
-    this.nextId += 1;
-    this.pending.set(id, {
-      method: "commitSyncPages",
-      startedAt: pages[0]?.startedAt ?? Date.now(),
-      resolve: () => undefined,
-      reject: () => undefined,
-      pages,
-    });
-    const request: SqliteWriteRequest = {
-      id,
-      method: pages.length === 1 ? "commitSyncPage" : "commitSyncPages",
-      args: pages.length === 1 ? [pages[0]?.input] : [pages.map((page) => page.input)],
-    };
-    this.worker.postMessage(request);
   }
 
   private settlePageBatch(pending: PendingCall, message: SqliteWriteResponse): void {

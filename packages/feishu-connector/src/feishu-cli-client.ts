@@ -147,13 +147,21 @@ export interface LarkCliClientOptions {
   fetch?: typeof fetch;
 }
 
-/** Open thread keeps one process. Batch latest and batch history each keep their own. */
-export const LARK_CLI_CONCURRENCY = 4;
+/** Open thread keeps one process. Latest uses 8, matching lark-cli's own GET /messages fan-out. History uses 4. */
+export const LARK_CLI_INTERACTIVE_SLOTS = 1;
+export const LARK_CLI_LIVE_SLOTS = 8;
+export const LARK_CLI_HISTORY_SLOTS = 4;
+export const LARK_CLI_CONCURRENCY =
+  LARK_CLI_INTERACTIVE_SLOTS + LARK_CLI_LIVE_SLOTS + LARK_CLI_HISTORY_SLOTS;
 export const LARK_CLI_RETRIES = 2;
 
 const larkCliSlots = new SyncSlotPool({
   total: LARK_CLI_CONCURRENCY,
-  reserved: { interactive: 1, live: 2, history: 1 },
+  reserved: {
+    interactive: LARK_CLI_INTERACTIVE_SLOTS,
+    live: LARK_CLI_LIVE_SLOTS,
+    history: LARK_CLI_HISTORY_SLOTS,
+  },
 });
 
 const readStatusInflight = new Map<string, Promise<Map<string, boolean>>>();

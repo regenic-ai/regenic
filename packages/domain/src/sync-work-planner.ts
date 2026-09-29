@@ -93,6 +93,93 @@ export function syncWorkCoverageKey(
 }
 
 /**
+ * Steady latest is owed even while history or media work already exists.
+ * A media-only or history-only row does not cover the latest queue.
+ */
+export function membersMissingLatestWork(
+  members: readonly SyncCatalogMember[],
+  existing: readonly Pick<SyncWorkIdentity, "stream_key" | "generation" | "lane">[],
+): SyncCatalogMember[] {
+  const covered = new Set(
+    existing
+      .filter(
+        (item) =>
+          item.stream_key &&
+          item.stream_key !== SYNC_CATALOG_STREAM &&
+          (item.lane === "live" || item.lane === "interactive"),
+      )
+      .map((item) => syncWorkCoverageKey(item.stream_key, item.generation)),
+  );
+  return members.filter((member) => {
+    if (!member.stream_key || member.stream_key === SYNC_CATALOG_STREAM) {
+      return false;
+    }
+    return !covered.has(
+      syncWorkCoverageKey(member.stream_key, member.generation || 1),
+    );
+  });
+}
+
+function lanesByCoverageKey(
+  existing: readonly Pick<SyncWorkIdentity, "stream_key" | "generation" | "lane">[],
+): Map<string, Set<SyncLane>> {
+  const lanesByKey = new Map<string, Set<SyncLane>>();
+  for (const item of existing) {
+    if (!item.stream_key || item.stream_key === SYNC_CATALOG_STREAM || !item.lane) {
+      continue;
+    }
+    const key = syncWorkCoverageKey(item.stream_key, item.generation);
+    const lanes = lanesByKey.get(key) ?? new Set<SyncLane>();
+    lanes.add(item.lane);
+    lanesByKey.set(key, lanes);
+  }
+  return lanesByKey;
+}
+
+/** Members with no unassigned row on `lane` at this generation. */
+export function membersMissingLane(
+  members: readonly SyncCatalogMember[],
+  existing: readonly Pick<SyncWorkIdentity, "stream_key" | "generation" | "lane">[],
+  lane: SyncLane,
+): SyncCatalogMember[] {
+  const lanesByKey = lanesByCoverageKey(existing);
+  return members.filter((member) => {
+    if (!member.stream_key || member.stream_key === SYNC_CATALOG_STREAM) {
+      return false;
+    }
+    const lanes = lanesByKey.get(
+      syncWorkCoverageKey(member.stream_key, member.generation || 1),
+    );
+    return !lanes?.has(lane);
+  });
+}
+
+/**
+ * Bootstrap gap-fill between reconciles. A live or media row is not coverage.
+ * Members that already have latest work wait for a phase reconcile.
+ */
+export function membersMissingBootstrapSeed(
+  members: readonly SyncCatalogMember[],
+  existing: readonly Pick<SyncWorkIdentity, "stream_key" | "generation" | "lane">[],
+): SyncCatalogMember[] {
+  const lanesByKey = lanesByCoverageKey(existing);
+  return members.filter((member) => {
+    if (!member.stream_key || member.stream_key === SYNC_CATALOG_STREAM) {
+      return false;
+    }
+    const lanes = lanesByKey.get(
+      syncWorkCoverageKey(member.stream_key, member.generation || 1),
+    );
+    if (!lanes || lanes.size === 0) {
+      return true;
+    }
+    return (
+      !lanes.has("history") && !lanes.has("live") && !lanes.has("interactive")
+    );
+  });
+}
+
+/**
  * Members that do not yet have an unassigned work row at this generation.
  * Catalog refresh uses this so already-scheduled streams keep their due time.
  */
@@ -149,56 +236,59 @@ export function planDueSyncWork(
       continue;
     }
     const state = input.states.get(member.stream_key);
-    const lane = dueWorkLane({
+    const lanes = dueWorkLanes({
       plane: input.plane,
       member,
       state,
       preferredThreadId: preferred,
     });
-    if (!lane) {
+    if (lanes.length === 0) {
       continue;
     }
     const generation = member.generation || state?.generation || 1;
-    const heat = classifyDueWorkHeat({
-      preferred: lane === "interactive",
-      eager: dueWorkIsEager({
-        plane: input.plane,
-        state,
-        streamKey: member.stream_key,
-        firstSeedKeys,
-      }),
-    });
     const stagger = coldUnseededIndex.get(member.stream_key);
-    planned.push({
-      id: dueSyncWorkId(
-        input.installation_id,
-        member.stream_key,
+    for (const lane of lanes) {
+      const heat = classifyDueWorkHeat({
+        preferred: lane === "interactive",
+        eager: dueWorkIsEager({
+          plane: input.plane,
+          state,
+          streamKey: member.stream_key,
+          firstSeedKeys,
+          lane,
+        }),
+      });
+      planned.push({
+        id: dueSyncWorkId(
+          input.installation_id,
+          member.stream_key,
+          lane,
+          generation,
+        ),
+        installation_id: input.installation_id,
+        stream_key: member.stream_key,
         lane,
-        generation,
-      ),
-      installation_id: input.installation_id,
-      stream_key: member.stream_key,
-      lane,
-      priority: syncWorkPriority(lane),
-      next_due_at:
-        stagger != null
-          ? addIdleMs(
-              input.now,
-              firstSeedStaggerDelayMs({
-                index: stagger.index,
-                count: stagger.count,
-                windowMs: coldIdleMs,
+        priority: syncWorkPriority(lane),
+        next_due_at:
+          stagger != null
+            ? addIdleMs(
+                input.now,
+                firstSeedStaggerDelayMs({
+                  index: stagger.index,
+                  count: stagger.count,
+                  windowMs: coldIdleMs,
+                }),
+              )
+            : nextDueAtForDueWork({
+                now: input.now,
+                idleUntil: state?.idle_until,
+                heat,
+                coldIdleMs,
               }),
-            )
-          : nextDueAtForDueWork({
-              now: input.now,
-              idleUntil: state?.idle_until,
-              heat,
-              coldIdleMs,
-            }),
-      generation,
-      now: input.now,
-    });
+        generation,
+        now: input.now,
+      });
+    }
   }
   return planned.sort(
     (left, right) =>
@@ -342,29 +432,32 @@ export function selectQuickStartStreamKeys(input: {
   return selected;
 }
 
-function dueWorkLane(input: {
+function dueWorkLanes(input: {
   plane: DueWorkPlane;
   member: SyncCatalogMember;
   state?: SyncStreamState;
   preferredThreadId: string | null;
-}): SyncLane | null {
+}): SyncLane[] {
   const phase = input.state?.phase ?? "unseeded";
   const preferred =
     Boolean(input.preferredThreadId) &&
     input.member.thread_id === input.preferredThreadId;
   if (input.plane === "steady") {
-    if (input.state?.media_pending) {
-      return preferred ? "interactive" : "media";
+    // History backfill stays on the bootstrap plane. Latest still runs.
+    const lanes: SyncLane[] = [preferred ? "interactive" : "live"];
+    if (input.state?.media_pending && !preferred) {
+      lanes.push("media");
     }
-    if (phase === "history") {
-      return null;
-    }
-    return preferred ? "interactive" : "live";
+    return lanes;
   }
-  if (phase === "history" || phase === "unseeded") {
-    return preferred ? "interactive" : phase === "unseeded" ? "live" : "history";
+  if (phase === "history") {
+    // Latest for this chat is a steady live/interactive row. Backfill stays here.
+    return ["history"];
   }
-  return null;
+  if (phase === "unseeded") {
+    return [preferred ? "interactive" : "live"];
+  }
+  return [];
 }
 
 function dueWorkIsEager(input: {
@@ -372,9 +465,16 @@ function dueWorkIsEager(input: {
   state?: SyncStreamState;
   streamKey: string;
   firstSeedKeys: ReadonlySet<string>;
+  lane: SyncLane;
 }): boolean {
   const phase = input.state?.phase ?? "unseeded";
-  if (input.state?.media_pending) {
+  if (input.lane === "media") {
+    return true;
+  }
+  if (
+    (input.lane === "live" || input.lane === "interactive") &&
+    (phase === "history" || input.state?.media_pending === true)
+  ) {
     return true;
   }
   if (phase === "unseeded") {
@@ -434,12 +534,12 @@ function coldUnseededIndexByKey(input: {
         return false;
       }
       return (
-        dueWorkLane({
+        dueWorkLanes({
           plane: input.plane,
           member,
           state: input.states.get(member.stream_key),
           preferredThreadId: input.preferredThreadId,
-        }) != null
+        }).length > 0
       );
     })
     .map((member) => member.stream_key)
