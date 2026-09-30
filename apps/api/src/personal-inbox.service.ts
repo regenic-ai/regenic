@@ -10,6 +10,8 @@ import {
   attentionOf,
   arrangeMessage,
   collectFollowUpCandidates,
+  followUpScanSince,
+  PERSONAL_FOLLOW_UP_SCAN_LIMIT,
   collectLatestInbound,
   computeThreadUnread,
   conversationId,
@@ -918,14 +920,20 @@ export class PersonalInboxService {
   async listFollowUps(): Promise<PersonalFollowUpView[]> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
-    const events = await authority.listEvents(this.runtime.orgId());
+    const orgId = this.runtime.orgId();
+    const policy = await this.work.getPersonalFollowUpPolicy();
+    const now = new Date().toISOString();
+    const events = await authority.listEvents(orgId, {
+      occurred_since: followUpScanSince(policy, now),
+      limit: PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+      order: "recent",
+    });
     const bodies = await resolveInboxBodies(
       authority,
       host.get("blobs"),
       events.map((event) => event.content_hash),
       "meta",
     );
-    const now = new Date().toISOString();
     const candidates = collectFollowUpCandidates({
       items: events.map((event) => {
         const surface = event.content_hash ? bodies.get(event.content_hash)?.surface : undefined;
@@ -942,7 +950,7 @@ export class PersonalInboxService {
           actor_label: surface?.actor_label,
         };
       }),
-      policy: await this.work.getPersonalFollowUpPolicy(),
+      policy,
       now,
     });
     const snoozes = await this.getFollowUpSnoozes();

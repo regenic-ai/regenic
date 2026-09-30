@@ -364,8 +364,10 @@ export interface EventListQuery {
   since_id?: string;
   before?: string;
   before_id?: string;
+  occurred_since?: string;
   thread_ids?: string[];
   limit?: number;
+  order?: "recent";
 }
 
 export interface InboxQuery extends EventListQuery {

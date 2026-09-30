@@ -32,6 +32,8 @@ import {
   STANDARD_DRIFT_DETECTOR_VERSION,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
+  followUpScanSince,
+  PERSONAL_FOLLOW_UP_SCAN_LIMIT,
   PERSONAL_DISPATCH_POLICY_PREF_KEY,
   hashCanonicalContext,
   hashStandardVersionBody,
@@ -709,7 +711,16 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
   const orgId = requireOption(options, "org");
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root") }, async (host) => {
     const authority = host.get("authority");
-    const events = await authority.listEvents(orgId);
+    const policyValue = await authority.getUiPref(orgId, PERSONAL_FOLLOW_UP_POLICY_PREF_KEY);
+    const policy = policyValue
+      ? validatePersonalFollowUpPolicy(JSON.parse(policyValue))
+      : DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
+    const at = now();
+    const events = await authority.listEvents(orgId, {
+      occurred_since: followUpScanSince(policy, at),
+      limit: PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+      order: "recent",
+    });
     const items = await Promise.all(events.map(async (event) => {
       const blob = event.content_hash ? await authority.findBlob(event.content_hash) : null;
       const bytes = blob && event.content_hash ? await host.get("blobs").get(event.content_hash) : undefined;
@@ -731,11 +742,6 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
         },
       };
     }));
-    const value = await authority.getUiPref(orgId, PERSONAL_FOLLOW_UP_POLICY_PREF_KEY);
-    const policy = value
-      ? validatePersonalFollowUpPolicy(JSON.parse(value))
-      : DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
-    const at = now();
     const snoozes = await getFollowUpSnoozes(authority, orgId);
     const candidates = collectFollowUpCandidates({ items: items.map((item) => item.scan), policy, now: at })
       .filter((candidate) => (snoozes[candidate.thread_id] ?? "") <= at);

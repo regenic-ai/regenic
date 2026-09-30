@@ -50,6 +50,9 @@ export function matchesEventQuery(
   if (query?.before && !isBeforeEvent(event, query.before, query.before_id ?? "")) {
     return false;
   }
+  if (query?.occurred_since && event.occurred_at < query.occurred_since) {
+    return false;
+  }
   return true;
 }
 

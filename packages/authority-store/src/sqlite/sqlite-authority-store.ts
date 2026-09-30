@@ -589,6 +589,10 @@ export class SqliteAuthorityStore
       clauses.push("(ingested_at > ? OR (ingested_at = ? AND id > ?))");
       params.push(query.since, query.since, query.since_id ?? "");
     }
+    if (query?.occurred_since) {
+      clauses.push("occurred_at >= ?");
+      params.push(query.occurred_since);
+    }
     const limit =
       typeof query?.limit === "number" &&
       Number.isInteger(query.limit) &&
@@ -602,7 +606,7 @@ export class SqliteAuthorityStore
                parent_event_id, thread_id, actor_id, required_scope_ids_json,
                direction_tags_json, weight_hints_json, attrs_json,
                occurred_at, ingested_at
-          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
+          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${query?.order === "recent" ? "DESC" : "ASC"}
           ${limit === undefined ? "" : "LIMIT ?"}
         `,
       )
