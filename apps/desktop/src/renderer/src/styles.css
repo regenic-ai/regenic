@@ -4059,6 +4059,19 @@ button {
   word-break: break-all;
 }
 
+.pending-review-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.pending-review-item .kv {
+  grid-template-columns: minmax(0, 120px) minmax(0, 1fr);
+}
+
+.pending-review-item strong {
+  overflow-wrap: anywhere;
+}
+
 .install {
   display: flex;
   justify-content: space-between;
