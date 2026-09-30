@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ArrangementService } from "./arrangement-service";
+import type { PersonalDispatchPolicy } from "./personal-dispatch-policy";
 import {
   blobsForCanonical,
   canonicalizeRecordContent,
@@ -119,17 +120,18 @@ export class IngestionService {
     const records: IngestRecordResult[] = new Array(batch.records.length);
     const overlay = new PendingIngestOverlay();
     const pendingCreates: PlannedCreate[] = [];
+    const dispatchPolicy = await this.arrangement.policyFor(batch.org_id);
 
     const flushCreates = async () => {
       if (pendingCreates.length === 0) {
         return;
       }
       const planned = pendingCreates.splice(0, pendingCreates.length);
-      await this.commitCreates(planned, records);
+      await this.commitCreates(planned, records, dispatchPolicy);
     };
 
     for (const [index, record] of batch.records.entries()) {
-      const inspected = await this.inspectRecord(batch.org_id, record, overlay);
+      const inspected = await this.inspectRecord(batch.org_id, record, overlay, dispatchPolicy);
       if (inspected.kind === "result") {
         records[index] = inspected.result;
         continue;
@@ -151,7 +153,7 @@ export class IngestionService {
         continue;
       }
       await flushCreates();
-      records[index] = await this.ingestRecord(batch.org_id, record);
+      records[index] = await this.ingestRecord(batch.org_id, record, dispatchPolicy);
     }
     await flushCreates();
 
@@ -172,18 +174,21 @@ export class IngestionService {
   private async ingestRecord(
     orgId: string,
     record: IngestRecord,
+    dispatchPolicy?: PersonalDispatchPolicy,
   ): Promise<IngestRecordResult> {
-    const inspected = await this.inspectRecord(orgId, record);
+    const policy = dispatchPolicy ?? await this.arrangement.policyFor(orgId);
+    const inspected = await this.inspectRecord(orgId, record, undefined, policy);
     if (inspected.kind === "result") {
       return inspected.result;
     }
-    return this.persistInspected(inspected);
+    return this.persistInspected(inspected, policy);
   }
 
   private async inspectRecord(
     orgId: string,
     record: IngestRecord,
     overlay?: PendingIngestOverlay,
+    dispatchPolicy?: PersonalDispatchPolicy,
   ): Promise<InspectedRecord> {
     const identity: SourceIdentity = {
       org_id: orgId,
@@ -200,12 +205,12 @@ export class IngestionService {
       current.external_id !== record.external_id
     ) {
       // Channel-native id aliased to a local `:out:` Event — identity bind wins.
-      return this.replayedInspected(record, current, overlayCurrent);
+      return this.replayedInspected(record, current, overlayCurrent, dispatchPolicy);
     }
 
     if (record.operation === "tombstone") {
       if (current?.operation === "tombstone") {
-        return this.replayedInspected(record, current, overlayCurrent);
+        return this.replayedInspected(record, current, overlayCurrent, dispatchPolicy);
       }
       return { kind: "tombstone", identity, record, current };
     }
@@ -229,7 +234,7 @@ export class IngestionService {
     }
 
     if (current?.content_hash === canonical.hash) {
-      return this.replayedInspected(record, current, overlayCurrent);
+      return this.replayedInspected(record, current, overlayCurrent, dispatchPolicy);
     }
 
     const overlayEcho = overlay?.findEcho(record);
@@ -243,7 +248,11 @@ export class IngestionService {
     if (echoed) {
       return {
         kind: "result",
-        result: await this.replayed(record, echoed),
+        result: await this.replayed(
+          record,
+          echoed,
+          dispatchPolicy ?? await this.arrangement.policyFor(orgId),
+        ),
       };
     }
 
@@ -262,7 +271,7 @@ export class IngestionService {
       const existing = await this.existingResolution(current);
       const incoming = resolutionFromCanonical(canonical);
       if (incomingWorsensAttachments(existing, incoming)) {
-        return this.replayedInspected(record, current, overlayCurrent);
+        return this.replayedInspected(record, current, overlayCurrent, dispatchPolicy);
       }
       if (record.operation === "revise") {
         return { kind: "revise", identity, record: merged, canonical, current };
@@ -275,7 +284,7 @@ export class IngestionService {
           return { kind: "revise", identity, record: merged, canonical, current };
         }
         if (existing.unresolvedCount > 0 || incoming.unresolvedCount > 0) {
-          return this.replayedInspected(record, current, overlayCurrent);
+          return this.replayedInspected(record, current, overlayCurrent, dispatchPolicy);
         }
         if (await this.sameBodySurfaceCorrection(current, merged)) {
           return {
@@ -341,6 +350,7 @@ export class IngestionService {
     record: IngestRecord,
     event: EventRecord,
     overlayCurrent: EventRecord | undefined,
+    dispatchPolicy?: PersonalDispatchPolicy,
   ): Promise<InspectedRecord> {
     if (overlayCurrent) {
       return {
@@ -350,13 +360,18 @@ export class IngestionService {
     }
     return {
       kind: "result",
-      result: await this.replayed(record, event),
+      result: await this.replayed(
+        record,
+        event,
+        dispatchPolicy ?? await this.arrangement.policyFor(event.org_id),
+      ),
     };
   }
 
   private async commitCreates(
     creates: PlannedCreate[],
     records: IngestRecordResult[],
+    dispatchPolicy: PersonalDispatchPolicy,
   ): Promise<void> {
     const blobs = new Map<string, BlobObject>();
     for (const item of creates) {
@@ -383,6 +398,8 @@ export class IngestionService {
       this.arrangement.decide(
         previewCreate(item.eventId, item.identity, item.record, item.canonical),
         item.record,
+        undefined,
+        dispatchPolicy,
       ),
     );
 
@@ -404,6 +421,7 @@ export class IngestionService {
           records[item.index] = await this.ingestRecord(
             item.identity.org_id,
             item.record,
+            dispatchPolicy,
           );
         }
         return;
@@ -414,12 +432,14 @@ export class IngestionService {
 
   private async persistInspected(
     inspected: Exclude<InspectedRecord, { kind: "result" }>,
+    dispatchPolicy: PersonalDispatchPolicy,
   ): Promise<IngestRecordResult> {
     if (inspected.kind === "tombstone") {
       return this.ingestTombstone(
         inspected.identity,
         inspected.record,
         inspected.current,
+        dispatchPolicy,
       );
     }
 
@@ -440,7 +460,7 @@ export class IngestionService {
           parent_event_id: inspected.current.id,
           revision_id: inspected.record.revision_id,
         });
-        return this.accepted(inspected.record, event);
+        return this.accepted(inspected.record, event, dispatchPolicy);
       }
 
       const event = await this.authorityStore.append({
@@ -464,10 +484,10 @@ export class IngestionService {
           occurred_at: inspected.current.occurred_at,
           expected_head_id: event.id,
         });
-        return this.accepted(inspected.record, tombstone);
+        return this.accepted(inspected.record, tombstone, dispatchPolicy);
       }
 
-      return this.accepted(inspected.record, event);
+      return this.accepted(inspected.record, event, dispatchPolicy);
     } catch (error) {
       if (error instanceof AuthorityConflictError) {
         return this.concurrentUpdate(inspected.record);
@@ -480,9 +500,10 @@ export class IngestionService {
     identity: SourceIdentity,
     record: IngestRecord,
     current: EventRecord | null,
+    dispatchPolicy: PersonalDispatchPolicy,
   ): Promise<IngestRecordResult> {
     if (current?.operation === "tombstone") {
-      return this.replayed(record, current);
+      return this.replayed(record, current, dispatchPolicy);
     }
 
     try {
@@ -492,7 +513,7 @@ export class IngestionService {
         occurred_at: record.occurred_at,
         expected_head_id: current?.id ?? null,
       });
-      return this.accepted(record, event);
+      return this.accepted(record, event, dispatchPolicy);
     } catch (error) {
       if (error instanceof AuthorityConflictError) {
         return this.concurrentUpdate(record);
@@ -504,8 +525,9 @@ export class IngestionService {
   private async accepted(
     record: IngestRecord,
     event: EventRecord,
+    dispatchPolicy: PersonalDispatchPolicy,
   ): Promise<IngestRecordResult> {
-    await this.arrangement.remember(event, record);
+    await this.arrangement.remember(event, record, undefined, dispatchPolicy);
     return {
       external_id: record.external_id,
       status: "accepted",
@@ -516,9 +538,10 @@ export class IngestionService {
   private async replayed(
     record: IngestRecord,
     event: EventRecord,
+    dispatchPolicy: PersonalDispatchPolicy,
   ): Promise<IngestRecordResult> {
     if (!(await this.authorityStore.getDisposition(event.id))) {
-      await this.arrangement.remember(event, record);
+      await this.arrangement.remember(event, record, undefined, dispatchPolicy);
     }
     return duplicateResult(record, event);
   }
