@@ -18,6 +18,8 @@ export const DEFAULT_PERSONAL_DISPATCH_POLICY: PersonalDispatchPolicy = {
   default_disposition: "current_work",
 };
 
+export const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
+
 const DISPOSITIONS: readonly MessageDisposition[] = [
   "current_work",
   "outside_current_work",

@@ -96,7 +96,7 @@ Capabilities are looked up by `ctx` key, not by importing a driver:
 - Pinning an Inbox Event applies a human conversation preference to its derived thread; pinned conversations lead the normal and attention list views without changing the Event or work state
 - Human triage may explicitly override an Event's layer; the disposition keeps its prior reason codes, records `human_triage`, and never mutates the Event
 - Resetting a human triage re-runs the automatic arrangement from the persisted Event, body, surface, and weight hints; it replaces the manual decision rather than retaining `human_triage`
-- A versioned personal dispatch policy records the intended dispositions for high hints, actionable messages, short text, and the fallback path; an explicit reapply operation can use it for an existing inbox event, while new ingest decisions retain the default policy until automatic application is enabled
+- A versioned personal dispatch policy records the intended dispositions for high hints, actionable messages, short text, and the fallback path. Each new ingest batch reads and validates the saved policy once and applies it to new decisions. A missing or invalid policy keeps the default. Replay fills a missing disposition with that policy and leaves an existing disposition, including `human_triage`, unchanged. An explicit reapply remains the way to apply a later policy to an existing inbox event
 - A versioned personal follow-up policy derives overdue replies from persisted inbound/outbound thread history; follow-up review is read-only and a person may snooze or resume a thread without changing its Event or Inbox disposition
 - Standards application and revision hooks
 - Dispatch: outside current work vs pending

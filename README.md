@@ -298,6 +298,7 @@ pnpm local inbox-unpin --database ./regenic.db --org local-owner \
 	--event <event-id>
 
 # Inspect or update the versioned personal dispatch policy.
+# A saved policy applies to the next ingest batch. It does not rewrite existing dispositions.
 pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
 pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
 	--policy ./dispatch-policy.json

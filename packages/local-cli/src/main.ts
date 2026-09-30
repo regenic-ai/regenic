@@ -32,6 +32,7 @@ import {
   STANDARD_DRIFT_DETECTOR_VERSION,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
+  PERSONAL_DISPATCH_POLICY_PREF_KEY,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -853,7 +854,6 @@ async function setInboxEventPinned(
   });
 }
 
-const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
 const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 const PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY = "personal_follow_up_snoozes_v1";
 

@@ -269,6 +269,159 @@ describe("IngestionService arrangement", () => {
     );
   });
 
+  it("applies a saved dispatch policy to a new ingest batch", async () => {
+    const authorityStore = new MemoryAuthorityStore();
+    await authorityStore.putUiPref(
+      "local-owner",
+      "personal_dispatch_policy_v1",
+      JSON.stringify({
+        version: 1,
+        high_hint_disposition: "pending",
+        actionable_disposition: "pending",
+        short_text_disposition: "outside_current_work",
+        default_disposition: "outside_current_work",
+      }),
+      "2026-08-21T00:00:00.000Z",
+    );
+    const service = new IngestionService(new MemoryBlobStore(), authorityStore);
+
+    const accepted = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "delivery-policy",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [
+        {
+          operation: "create",
+          source: "regenic",
+          external_id: "ask-policy",
+          occurred_at: "2026-08-21T00:00:00.000Z",
+          actor: { id: "local-owner" },
+          scope: { id: "personal" },
+          type: "message",
+          content: [{ role: "body", media_type: "text/plain", text: "Please confirm the release." }],
+        },
+        {
+          operation: "create",
+          source: "regenic",
+          external_id: "noise-policy",
+          occurred_at: "2026-08-21T00:01:00.000Z",
+          actor: { id: "local-owner" },
+          scope: { id: "personal" },
+          type: "message",
+          content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+        },
+      ],
+    });
+
+    assert.equal(accepted.valid, true);
+    assert.equal(
+      (await authorityStore.getDisposition(accepted.records[0].event_id)).disposition,
+      "pending",
+    );
+    assert.deepEqual(
+      (await authorityStore.getDisposition(accepted.records[0].event_id)).reason_codes,
+      ["policy_actionable"],
+    );
+    assert.equal(
+      (await authorityStore.getDisposition(accepted.records[1].event_id)).disposition,
+      "outside_current_work",
+    );
+    assert.deepEqual(
+      (await authorityStore.getDisposition(accepted.records[1].event_id)).reason_codes,
+      ["noise"],
+    );
+  });
+
+  it("keeps the default policy when the saved dispatch policy is invalid", async () => {
+    const authorityStore = new MemoryAuthorityStore();
+    await authorityStore.putUiPref(
+      "local-owner",
+      "personal_dispatch_policy_v1",
+      "{",
+      "2026-08-21T00:00:00.000Z",
+    );
+    const service = new IngestionService(new MemoryBlobStore(), authorityStore);
+    const accepted = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "delivery-invalid-policy",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [{
+        operation: "create",
+        source: "regenic",
+        external_id: "ask-default",
+        occurred_at: "2026-08-21T00:00:00.000Z",
+        actor: { id: "local-owner" },
+        scope: { id: "personal" },
+        type: "message",
+        content: [{ role: "body", media_type: "text/plain", text: "Please confirm the release." }],
+      }],
+    });
+
+    assert.deepEqual(
+      (await authorityStore.getDisposition(accepted.records[0].event_id)).reason_codes,
+      ["actionable"],
+    );
+  });
+
+  it("does not replace a human triage when a duplicate is replayed", async () => {
+    const authorityStore = new MemoryAuthorityStore();
+    const service = new IngestionService(new MemoryBlobStore(), authorityStore);
+    const record = {
+      operation: "create",
+      source: "regenic",
+      external_id: "ask-triage",
+      occurred_at: "2026-08-21T00:00:00.000Z",
+      actor: { id: "local-owner" },
+      scope: { id: "personal" },
+      type: "message",
+      content: [{ role: "body", media_type: "text/plain", text: "Please confirm the release." }],
+    };
+    const accepted = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "delivery-triage",
+      received_at: "2026-08-21T00:00:00.000Z",
+      records: [record],
+    });
+    const current = await authorityStore.getDisposition(accepted.records[0].event_id);
+    await authorityStore.putDisposition({
+      ...current,
+      disposition: "outside_current_work",
+      reason_codes: [...current.reason_codes, "human_triage"],
+    });
+    await authorityStore.putUiPref(
+      "local-owner",
+      "personal_dispatch_policy_v1",
+      JSON.stringify({
+        version: 1,
+        high_hint_disposition: "pending",
+        actionable_disposition: "pending",
+        short_text_disposition: "pending",
+        default_disposition: "pending",
+      }),
+      "2026-08-21T00:01:00.000Z",
+    );
+
+    const replayed = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "native-local",
+      org_id: "local-owner",
+      delivery_id: "delivery-triage-replay",
+      received_at: "2026-08-21T00:02:00.000Z",
+      records: [record],
+    });
+
+    assert.equal(replayed.records[0].status, "duplicate");
+    const decision = await authorityStore.getDisposition(accepted.records[0].event_id);
+    assert.equal(decision.disposition, "outside_current_work");
+    assert.ok(decision.reason_codes.includes("human_triage"));
+  });
+
   it("arranges a duplicate replay when the current head has no disposition", async () => {
     const authorityStore = new MemoryAuthorityStore();
     const blobStore = new MemoryBlobStore();
