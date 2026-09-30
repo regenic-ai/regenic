@@ -75,6 +75,44 @@ it("keeps a message snooze from hiding a later outbound", () => {
   }, "2026-09-26T12:00:00.000Z"), true);
 });
 
+it("excludes groups, bots, system messages, tombstones, revisions, and later inbound replies", () => {
+  const base = {
+    thread_id: "slack:dm-1",
+    external_id: "out-1",
+    occurred_at: "2026-09-26T10:00:00.000Z",
+    direction: "outbound",
+    kind: "user",
+  };
+  const excluded = [
+    { ...base, conversation_kind: "group" },
+    { ...base, actor_label: "release bot" },
+    { ...base, kind: "system" },
+    { ...base, type: "thread_status" },
+    { ...base, operation: "tombstone" },
+    { ...base, operation: "revise" },
+  ];
+  for (const item of excluded) {
+    assert.deepEqual(collectFollowUpCandidates({
+      policy: { ...policy, include_initial_outbound: true },
+      now: "2026-09-26T12:00:00.000Z",
+      items: [
+        { thread_id: item.thread_id, external_id: "in-1", occurred_at: "2026-09-26T09:00:00.000Z", direction: "inbound", kind: "user" },
+        item,
+      ],
+    }), []);
+  }
+  const answered = collectFollowUpCandidates({
+    policy,
+    now: "2026-09-26T12:00:00.000Z",
+    items: [
+      { thread_id: "slack:dm-1", external_id: "in-1", occurred_at: "2026-09-26T09:00:00.000Z", direction: "inbound", kind: "user" },
+      base,
+      { thread_id: "slack:dm-1", external_id: "in-2", occurred_at: "2026-09-26T11:30:00.000Z", direction: "inbound", kind: "user" },
+    ],
+  });
+  assert.deepEqual(answered, []);
+});
+
 it("can include an overdue initial outbound when configured", () => {
   const candidates = collectFollowUpCandidates({
     policy: { ...policy, include_initial_outbound: true },

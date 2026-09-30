@@ -298,6 +298,7 @@ pnpm local inbox-unpin --database ./regenic.db --org local-owner \
 	--event <event-id>
 
 # 查看或更新版本化的个人 dispatch policy。
+# 已保存的 policy 作用于下一批 ingest，不会改写已有 disposition。
 pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
 pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
 	--policy ./dispatch-policy.json
