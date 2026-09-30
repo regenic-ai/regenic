@@ -298,6 +298,7 @@ pnpm local inbox-unpin --database ./regenic.db --org local-owner \
 	--event <event-id>
 
 # 查看或更新版本化的个人 dispatch policy。
+# 已保存的 policy 作用于下一批 ingest，不会改写已有 disposition。
 pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
 pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
 	--policy ./dispatch-policy.json
@@ -309,10 +310,10 @@ pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
 # 复核等待明确关注的 event，不扩大默认工作 inbox。
 pnpm local inbox-pending --database ./regenic.db --org local-owner
 
-# 复核超时未回复的线程，或将一个线程暂停提醒到指定时间。
+# 复核超时未回复，或将一条 outbound message 暂停提醒到指定时间。
 pnpm local follow-ups --database ./regenic.db --blob-root ./blobs --org local-owner
 pnpm local follow-up-snooze --database ./regenic.db --org local-owner \
-	--thread <thread-id> --until 2026-10-01T09:00:00.000Z
+	--thread <thread-id> --outbound <external-id> --until 2026-10-01T09:00:00.000Z
 
 # 人工 triage 覆盖当前工作分层，但不会修改 Event。
 pnpm local inbox-triage --database ./regenic.db --org local-owner \

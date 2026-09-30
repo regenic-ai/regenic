@@ -379,6 +379,16 @@ export interface PersonalFollowUpView {
   body_text?: string;
 }
 
+export type MessageDisposition = "current_work" | "outside_current_work" | "pending";
+
+export interface PersonalDispatchPolicy {
+  version: 1;
+  high_hint_disposition: MessageDisposition;
+  actionable_disposition: MessageDisposition;
+  short_text_disposition: MessageDisposition;
+  default_disposition: MessageDisposition;
+}
+
 export interface IngestAttempt {
   id: string;
   status: "running" | "succeeded" | "failed";

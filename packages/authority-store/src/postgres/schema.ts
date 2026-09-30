@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 40;
+export const PG_SCHEMA_VERSION = 41;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -374,6 +374,13 @@ CREATE INDEX standard_usage_query_idx
   ON standard_usage (org_id, standard_id, version_id, cited_at, id);
 `,
   },
+  {
+    version: 41,
+    sql: `
+CREATE INDEX events_org_occurred_idx
+  ON events (org_id, occurred_at, id);
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -411,6 +418,8 @@ CREATE INDEX events_content_hash_idx ON events (content_hash);
 CREATE INDEX events_org_ingested_idx ON events (org_id, ingested_at, id);
 CREATE INDEX events_org_thread_occurred_idx
   ON events (org_id, thread_id, occurred_at, id);
+CREATE INDEX events_org_occurred_idx
+  ON events (org_id, occurred_at, id);
 
 CREATE TABLE source_heads (
   org_id TEXT NOT NULL,

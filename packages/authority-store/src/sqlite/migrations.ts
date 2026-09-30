@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 39;
+export const LATEST_SCHEMA_VERSION = 40;
 
 export const MIGRATIONS = [
   {
@@ -868,6 +868,13 @@ export const MIGRATIONS = [
       );
       CREATE INDEX standard_usage_query_idx
         ON standard_usage (org_id, standard_id, version_id, cited_at, id);
+    `,
+  },
+  {
+    version: 40,
+    sql: `
+      CREATE INDEX events_org_occurred_idx
+        ON events (org_id, occurred_at, id);
     `,
   },
 ] as const;

@@ -32,6 +32,9 @@ import {
   STANDARD_DRIFT_DETECTOR_VERSION,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
+  followUpScanSince,
+  PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+  PERSONAL_DISPATCH_POLICY_PREF_KEY,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -46,6 +49,8 @@ import {
   unfold,
   arrangeMessage,
   collectFollowUpCandidates,
+  followUpSnoozeKey,
+  isFollowUpSnoozed,
   conversationId,
   bodyTextFromStored,
   parseStoredContentParts,
@@ -708,7 +713,16 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
   const orgId = requireOption(options, "org");
   await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root") }, async (host) => {
     const authority = host.get("authority");
-    const events = await authority.listEvents(orgId);
+    const policyValue = await authority.getUiPref(orgId, PERSONAL_FOLLOW_UP_POLICY_PREF_KEY);
+    const policy = policyValue
+      ? validatePersonalFollowUpPolicy(JSON.parse(policyValue))
+      : DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
+    const at = now();
+    const events = await authority.listEvents(orgId, {
+      occurred_since: followUpScanSince(policy, at),
+      limit: PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+      order: "recent",
+    });
     const items = await Promise.all(events.map(async (event) => {
       const blob = event.content_hash ? await authority.findBlob(event.content_hash) : null;
       const bytes = blob && event.content_hash ? await host.get("blobs").get(event.content_hash) : undefined;
@@ -724,17 +738,15 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
           kind: surface?.kind,
           operation: event.operation,
           activity: surface?.activity,
+          conversation_kind: surface?.conversation_kind,
+          type: surface?.type,
+          actor_label: surface?.actor_label,
         },
       };
     }));
-    const value = await authority.getUiPref(orgId, PERSONAL_FOLLOW_UP_POLICY_PREF_KEY);
-    const policy = value
-      ? validatePersonalFollowUpPolicy(JSON.parse(value))
-      : DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
-    const at = now();
     const snoozes = await getFollowUpSnoozes(authority, orgId);
     const candidates = collectFollowUpCandidates({ items: items.map((item) => item.scan), policy, now: at })
-      .filter((candidate) => (snoozes[candidate.thread_id] ?? "") <= at);
+      .filter((candidate) => !isFollowUpSnoozed(snoozes, candidate, at));
     const byIdentity = new Map(items.map((item) => [`${item.scan.thread_id}\u0000${item.scan.external_id}`, item.event]));
     writeJson(stdout, candidates.flatMap((candidate) => {
       const event = byIdentity.get(`${candidate.thread_id}\u0000${candidate.outbound_external_id}`);
@@ -853,7 +865,6 @@ async function setInboxEventPinned(
   });
 }
 
-const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
 const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 const PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY = "personal_follow_up_snoozes_v1";
 
@@ -876,26 +887,47 @@ async function getPersonalDispatchPolicy(options: CommandOptions, stdout: CliOut
 async function snoozeFollowUp(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
   const orgId = requireOption(options, "org");
   const threadId = requireOption(options, "thread");
+  const outbound = normalizeFollowUpOutbound(optionString(options, "outbound"));
   const until = normalizeFollowUpSnooze(requireOption(options, "until"));
   await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
     const authority = host.get("authority");
     const snoozes = await getFollowUpSnoozes(authority, orgId);
-    snoozes[threadId] = until;
+    snoozes[followUpSnoozeKey(threadId, outbound)] = until;
     await authority.putUiPref(orgId, PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY, JSON.stringify(snoozes), now());
-    writeJson(stdout, { thread_id: threadId, snoozed_until: until });
+    writeJson(stdout, {
+      thread_id: threadId,
+      ...(outbound ? { outbound_external_id: outbound } : {}),
+      snoozed_until: until,
+    });
   });
 }
 
 async function unsnoozeFollowUp(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
   const orgId = requireOption(options, "org");
   const threadId = requireOption(options, "thread");
+  const outbound = normalizeFollowUpOutbound(optionString(options, "outbound"));
   await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
     const authority = host.get("authority");
     const snoozes = await getFollowUpSnoozes(authority, orgId);
-    delete snoozes[threadId];
+    delete snoozes[followUpSnoozeKey(threadId, outbound)];
     await authority.putUiPref(orgId, PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY, JSON.stringify(snoozes), now());
-    writeJson(stdout, { thread_id: threadId, snoozed_until: null });
+    writeJson(stdout, {
+      thread_id: threadId,
+      ...(outbound ? { outbound_external_id: outbound } : {}),
+      snoozed_until: null,
+    });
   });
+}
+
+function normalizeFollowUpOutbound(value: string | undefined): string | undefined {
+  const outbound = value?.trim();
+  if (!outbound) {
+    return undefined;
+  }
+  if (outbound.includes("\u0000")) {
+    throw new Error("Invalid follow-up outbound id");
+  }
+  return outbound;
 }
 
 async function getFollowUpSnoozes(

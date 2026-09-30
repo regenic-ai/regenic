@@ -6,6 +6,7 @@ import {
   INBOX_LIST_PREF_KEY,
   INBOX_MEMBERSHIP_PREF_KEY,
   INBOX_SORT_PREF_KEY,
+  PERSONAL_DISPATCH_POLICY_PREF_KEY,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   cancelWorkRun,
@@ -61,7 +62,7 @@ export type { RecipeInput } from "./personal-work-recipe";
 export type { WorkInboxFace } from "./personal-work-faces";
 
 const WORK_TICK_MS = 3_000;
-export const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
+export { PERSONAL_DISPATCH_POLICY_PREF_KEY } from "@regenic/domain";
 export const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 
 export interface UiPrefsView {

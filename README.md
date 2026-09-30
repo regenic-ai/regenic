@@ -298,6 +298,7 @@ pnpm local inbox-unpin --database ./regenic.db --org local-owner \
 	--event <event-id>
 
 # Inspect or update the versioned personal dispatch policy.
+# A saved policy applies to the next ingest batch. It does not rewrite existing dispositions.
 pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
 pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
 	--policy ./dispatch-policy.json
@@ -309,10 +310,10 @@ pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
 # Review events held for explicit attention without widening the work inbox.
 pnpm local inbox-pending --database ./regenic.db --org local-owner
 
-# Review overdue replies, or snooze one conversation until a specific time.
+# Review overdue replies, or snooze one outbound message until a specific time.
 pnpm local follow-ups --database ./regenic.db --blob-root ./blobs --org local-owner
 pnpm local follow-up-snooze --database ./regenic.db --org local-owner \
-	--thread <thread-id> --until 2026-10-01T09:00:00.000Z
+	--thread <thread-id> --outbound <external-id> --until 2026-10-01T09:00:00.000Z
 
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \

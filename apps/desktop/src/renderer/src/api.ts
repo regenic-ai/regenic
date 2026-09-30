@@ -14,6 +14,7 @@ import type {
   KernelSettingsView,
   Locale,
   MessageReceipt,
+  PersonalDispatchPolicy,
   PersonalEngineView,
   PersonalFollowUpPolicy,
   PersonalFollowUpView,
@@ -1285,6 +1286,55 @@ export async function unsnoozeFollowUp(threadId: string): Promise<void> {
   });
   if (!response.ok) {
     throw new Error(`follow-up unsnooze ${response.status}`);
+  }
+}
+
+export async function fetchDispatchPolicy(): Promise<PersonalDispatchPolicy> {
+  const response = await fetch(`${origin()}/v1/me/dispatch-policy`);
+  if (!response.ok) {
+    throw new Error(`dispatch policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalDispatchPolicy>;
+}
+
+export async function saveDispatchPolicy(
+  policy: PersonalDispatchPolicy,
+): Promise<PersonalDispatchPolicy> {
+  const response = await fetch(`${origin()}/v1/me/dispatch-policy`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ policy }),
+  });
+  if (!response.ok) {
+    throw new Error(`dispatch policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalDispatchPolicy>;
+}
+
+export async function fetchPendingInbox(): Promise<InboxViewItem[]> {
+  const params = new URLSearchParams({ disposition: "pending", locale: activeLocale() });
+  const response = await fetch(`${origin()}/v1/me/inbox?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(`pending inbox ${response.status}`);
+  }
+  const items = (await response.json()) as InboxViewItem[];
+  if (!Array.isArray(items)) {
+    throw new Error("pending inbox");
+  }
+  return items.map(normalizeInboxItem);
+}
+
+export async function triagePendingInbox(
+  eventId: string,
+  disposition: "current_work" | "outside_current_work",
+): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/inbox/${encodeURIComponent(eventId)}/triage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ disposition }),
+  });
+  if (!response.ok) {
+    throw new Error(`inbox triage ${response.status}`);
   }
 }
 

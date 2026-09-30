@@ -118,15 +118,18 @@ async function ingestActionable(database, blobRoot) {
 async function ingestFollowUpThread(database, blobRoot) {
   const authority = new SqliteAuthorityStore(database);
   const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const now = Date.now();
+  const inboundAt = new Date(now - 27 * 60 * 60_000).toISOString();
+  const outboundAt = new Date(now - 26 * 60 * 60_000).toISOString();
   const result = await service.ingest({
     schema_version: INGEST_SCHEMA_VERSION,
     connector_id: "native-local",
     org_id: "local-owner",
     delivery_id: "follow-up-1",
-    received_at: "2020-01-01T12:00:00.000Z",
+    received_at: new Date(now).toISOString(),
     records: [
-      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2020-01-01T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
-      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2020-01-01T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
+      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: inboundAt, actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
+      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: outboundAt, actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
     ],
   });
   authority.close();

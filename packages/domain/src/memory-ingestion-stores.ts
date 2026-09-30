@@ -206,6 +206,9 @@ export class MemoryAuthorityStore
     const matched = this.events
       .filter((event) => matchesEventQuery(event, orgId, query))
       .map(cloneEvent);
+    if (query?.order === "recent") {
+      matched.reverse();
+    }
     const limit = query?.limit;
     if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
       return matched.slice(0, limit);
