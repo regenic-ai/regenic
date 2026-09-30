@@ -1009,6 +1009,10 @@ export class PersonalInboxService {
     };
   }
 
+  async listFollowUpSnoozes(): Promise<Record<string, string>> {
+    return this.getFollowUpSnoozes();
+  }
+
   private async getFollowUpSnoozes(): Promise<Record<string, string>> {
     const value = await this.runtime.requireHost().get("authority").getUiPref(
       this.runtime.orgId(),

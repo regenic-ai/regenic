@@ -1,4 +1,4 @@
-export type NavId = "inbox" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "follow-ups" | "recipes" | "engine" | "settings";
 
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
@@ -359,6 +359,24 @@ export interface RecipeConversationOption {
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
   inbox_list: InboxListView;
+}
+
+export interface PersonalFollowUpPolicy {
+  version: 1;
+  wait_minutes: number;
+  include_initial_outbound: boolean;
+}
+
+export interface PersonalFollowUpView {
+  event: EventRecord;
+  candidate: {
+    thread_id: string;
+    outbound_external_id: string;
+    outbound_at: string;
+    due_at: string;
+    reason_codes: string[];
+  };
+  body_text?: string;
 }
 
 export type MessageDisposition = "current_work" | "outside_current_work" | "pending";

@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 39;
+export const LATEST_SCHEMA_VERSION = 40;
 
 export const MIGRATIONS = [
   {
