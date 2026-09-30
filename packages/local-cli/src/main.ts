@@ -34,6 +34,7 @@ import {
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   followUpScanSince,
   PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+  PERSONAL_DISPATCH_POLICY_PREF_KEY,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -735,6 +736,9 @@ async function showFollowUps(options: CommandOptions, stdout: CliOutput, now: ()
           kind: surface?.kind,
           operation: event.operation,
           activity: surface?.activity,
+          conversation_kind: surface?.conversation_kind,
+          type: surface?.type,
+          actor_label: surface?.actor_label,
         },
       };
     }));
@@ -859,7 +863,6 @@ async function setInboxEventPinned(
   });
 }
 
-const PERSONAL_DISPATCH_POLICY_PREF_KEY = "personal_dispatch_policy_v1";
 const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 const PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY = "personal_follow_up_snoozes_v1";
 
