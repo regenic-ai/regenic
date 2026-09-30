@@ -10,6 +10,8 @@ import {
   attentionOf,
   arrangeMessage,
   collectFollowUpCandidates,
+  followUpSnoozeKey,
+  isFollowUpSnoozed,
   followUpScanSince,
   PERSONAL_FOLLOW_UP_SCAN_LIMIT,
   collectLatestInbound,
@@ -958,7 +960,7 @@ export class PersonalInboxService {
       events.map((event) => [`${conversationId(event.source, event.external_id, event.id)}\u0000${event.external_id}`, event]),
     );
     return candidates.flatMap((candidate) => {
-      if ((snoozes[candidate.thread_id] ?? "") > now) {
+      if (isFollowUpSnoozed(snoozes, candidate, now)) {
         return [];
       }
       const event = byIdentity.get(`${candidate.thread_id}\u0000${candidate.outbound_external_id}`);
@@ -973,21 +975,38 @@ export class PersonalInboxService {
     });
   }
 
-  async snoozeFollowUp(threadId: string, until: string): Promise<{ thread_id: string; snoozed_until: string }> {
+  async snoozeFollowUp(
+    threadId: string,
+    until: string,
+    outboundExternalId?: string,
+  ): Promise<{ thread_id: string; outbound_external_id?: string; snoozed_until: string }> {
     const id = threadIdOf(requireThreadId(threadId));
+    const outbound = normalizeFollowUpOutbound(outboundExternalId);
     const timestamp = normalizeFollowUpSnooze(until);
     const snoozes = await this.getFollowUpSnoozes();
-    snoozes[id] = timestamp;
+    snoozes[followUpSnoozeKey(id, outbound)] = timestamp;
     await this.putFollowUpSnoozes(snoozes);
-    return { thread_id: id, snoozed_until: timestamp };
+    return {
+      thread_id: id,
+      ...(outbound ? { outbound_external_id: outbound } : {}),
+      snoozed_until: timestamp,
+    };
   }
 
-  async unsnoozeFollowUp(threadId: string): Promise<{ thread_id: string; snoozed_until: null }> {
+  async unsnoozeFollowUp(
+    threadId: string,
+    outboundExternalId?: string,
+  ): Promise<{ thread_id: string; outbound_external_id?: string; snoozed_until: null }> {
     const id = threadIdOf(requireThreadId(threadId));
+    const outbound = normalizeFollowUpOutbound(outboundExternalId);
     const snoozes = await this.getFollowUpSnoozes();
-    delete snoozes[id];
+    delete snoozes[followUpSnoozeKey(id, outbound)];
     await this.putFollowUpSnoozes(snoozes);
-    return { thread_id: id, snoozed_until: null };
+    return {
+      thread_id: id,
+      ...(outbound ? { outbound_external_id: outbound } : {}),
+      snoozed_until: null,
+    };
   }
 
   private async getFollowUpSnoozes(): Promise<Record<string, string>> {
@@ -2519,6 +2538,17 @@ function parseFollowUpSnoozes(input: unknown): Record<string, string> {
       normalizeFollowUpSnooze(until),
     ]),
   );
+}
+
+function normalizeFollowUpOutbound(value: string | undefined): string | undefined {
+  const outbound = value?.trim();
+  if (!outbound) {
+    return undefined;
+  }
+  if (outbound.includes("\u0000")) {
+    throw new PersonalConnectorError("invalid_config", "Invalid follow-up outbound id", 400);
+  }
+  return outbound;
 }
 
 function normalizeFollowUpSnooze(value: unknown): string {

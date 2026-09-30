@@ -23,6 +23,27 @@ export interface FollowUpCandidate {
   reason_codes: ["awaiting_reply"];
 }
 
+export interface FollowUpSnooze {
+  thread_id: string;
+  outbound_external_id?: string;
+  snoozed_until: string;
+}
+
+export function followUpSnoozeKey(threadId: string, outboundExternalId?: string): string {
+  return outboundExternalId ? `${threadId}\u0000${outboundExternalId}` : threadId;
+}
+
+export function isFollowUpSnoozed(
+  snoozes: Readonly<Record<string, string>>,
+  candidate: Pick<FollowUpCandidate, "thread_id" | "outbound_external_id">,
+  now: string,
+): boolean {
+  return (
+    (snoozes[followUpSnoozeKey(candidate.thread_id, candidate.outbound_external_id)] ?? "") > now
+    || (snoozes[candidate.thread_id] ?? "") > now
+  );
+}
+
 export function collectFollowUpCandidates(input: {
   items: readonly FollowUpScan[];
   policy: PersonalFollowUpPolicy;
