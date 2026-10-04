@@ -33,7 +33,7 @@ async function createRoot() {
   return root;
 }
 
-async function ingestEvidence(database, blobRoot, suffix = "") {
+async function ingestEvidence(database, blobRoot, suffix = "", threadId = "chat-1") {
   const authority = new SqliteAuthorityStore(database);
   const service = new IngestionService(new FsBlobStore(blobRoot), authority);
   const result = await service.ingest({
@@ -45,10 +45,10 @@ async function ingestEvidence(database, blobRoot, suffix = "") {
     records: [{
       operation: "create",
       source: "synthetic-chat",
-      external_id: `chat-1:message-1${suffix ? `-${suffix}` : ""}`,
+      external_id: `${threadId}:message-1${suffix ? `-${suffix}` : ""}`,
       occurred_at: "2026-08-30T00:00:00.000Z",
       actor: { id: "person-1" },
-      scope: { id: "chat-1" },
+      scope: { id: threadId },
       type: "message",
       direction_tags: ["product"],
       weight_hints: { urgency: 1, importance: 1 },
@@ -1013,6 +1013,50 @@ describe("personal context API", () => {
     });
     assert.equal(invalidBudget.response.status, 400);
     assert.equal(JSON.parse(invalidBudget.text).error.code, "invalid_request");
+  });
+
+  it("keeps a desktop thread preview scoped to its thread and replays its snapshot", async () => {
+    const root = await createRoot();
+    const { origin, eventId } = await startApi(root);
+    const otherEventId = await ingestEvidence(
+      join(root, "authority.db"),
+      join(root, "blobs"),
+      "other-thread",
+      "chat-2",
+    );
+    const request = {
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context for the open personal conversation",
+      allowed_uses: ["display"],
+      filters: { thread_ids: ["synthetic-chat:chat-1"] },
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    };
+    const assembledResponse = await postJson(`${origin}/v1/me/context/assemble`, request);
+    assert.equal(assembledResponse.response.status, 201, assembledResponse.text);
+    const assembled = JSON.parse(assembledResponse.text);
+    const selectedEventIds = assembled.bundle.sections.flatMap((section) =>
+      section.items.flatMap((item) => item.evidence.map((evidence) => evidence.event_id)),
+    );
+    assert.deepEqual(selectedEventIds, [eventId]);
+    assert.equal(selectedEventIds.includes(otherEventId), false);
+
+    const replayResponse = await postJson(`${origin}/v1/me/context/replay`, {
+      snapshot_id: assembled.snapshot.id,
+      consumer_id: request.consumer_id,
+      purpose: request.purpose,
+      allowed_uses: request.allowed_uses,
+    });
+    assert.equal(replayResponse.response.status, 201, replayResponse.text);
+    const replayed = JSON.parse(replayResponse.text);
+    assert.equal(replayed.snapshot_id, assembled.snapshot.id);
+    assert.equal(replayed.content_hash, assembled.bundle.content_hash);
   });
 
   it("rejects model citations outside the assembled bundle", async () => {

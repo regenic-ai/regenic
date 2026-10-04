@@ -18,6 +18,8 @@ import type {
   PersonalEngineView,
   PersonalFollowUpPolicy,
   PersonalFollowUpView,
+  PersonalContextBundle,
+  PersonalContextView,
   PersonalHeartbeatView,
   PluginInventoryItem,
   PromptAnswerItem,
@@ -1225,6 +1227,59 @@ export async function clearStore(): Promise<StoreClearView> {
     );
   }
   return body as StoreClearView;
+}
+
+const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
+const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
+
+export async function assemblePersonalContext(
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<PersonalContextView> {
+  const response = await kernelFetch("/v1/me/context/assemble", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
+      allowed_uses: ["display"],
+      filters: { thread_ids: [threadId] },
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`context assemble ${response.status}`);
+  }
+  return response.json() as Promise<PersonalContextView>;
+}
+
+export async function replayPersonalContext(
+  snapshotId: string,
+  signal?: AbortSignal,
+): Promise<PersonalContextBundle> {
+  const response = await kernelFetch("/v1/me/context/replay", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      snapshot_id: snapshotId,
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
+      allowed_uses: ["display"],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`context replay ${response.status}`);
+  }
+  return response.json() as Promise<PersonalContextBundle>;
 }
 
 export async function fetchFollowUps(): Promise<PersonalFollowUpView[]> {

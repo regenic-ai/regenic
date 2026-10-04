@@ -21,6 +21,7 @@ import { nextMessageSelection, selectedInOrder } from "./message-selection";
 import type { CreateTarget } from "./inbox-drafts";
 import { WorkContextStrip } from "./WorkContextStrip";
 import { WorkResultCard } from "./WorkResultCard";
+import { ThreadContextPanel } from "./ThreadContextPanel";
 import { PromptHandoffDock } from "./PromptHandoffDock";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
@@ -611,6 +612,7 @@ export const ThreadPane = memo(function ThreadPane({
           {workHint ? <p className="work-hint">{workHint}</p> : null}
           {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
           {!conversationClosed && !awaitingPrompt ? workResult : null}
+          <ThreadContextPanel threadId={thread.id} />
         </div>
       </header>
       <ThreadMessageList
