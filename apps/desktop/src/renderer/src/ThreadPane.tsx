@@ -411,6 +411,9 @@ export const ThreadPane = memo(function ThreadPane({
         ? workNextStepCopy(thread)
         : null;
   const heading = threadTitle(thread);
+  const contextSourceRevision = merged
+    .map((item) => `${item.event.id}:${item.event.content_hash ?? ""}:${item.event.operation}`)
+    .join("|");
   const workResult = resultSummary ? (
     <WorkResultCard key={`${thread.id}:${resultSummary}`} text={resultSummary} />
   ) : null;
@@ -612,7 +615,11 @@ export const ThreadPane = memo(function ThreadPane({
           {workHint ? <p className="work-hint">{workHint}</p> : null}
           {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
           {!conversationClosed && !awaitingPrompt ? workResult : null}
-          <ThreadContextPanel threadId={thread.id} />
+          <ThreadContextPanel
+            threadId={thread.id}
+            sourceRevision={contextSourceRevision}
+            onLocateEvidence={(eventId) => listRef.current?.scrollToEvent(eventId) ?? false}
+          />
         </div>
       </header>
       <ThreadMessageList
