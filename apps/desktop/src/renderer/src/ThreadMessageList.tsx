@@ -42,6 +42,7 @@ import {
 
 export interface ThreadMessageListHandle {
   scrollToEnd: () => void;
+  scrollToEvent: (eventId: string) => boolean;
 }
 
 export const ThreadMessageList = memo(
@@ -96,6 +97,7 @@ export const ThreadMessageList = memo(
   const openingRef = useRef(opening);
   const [layout, setLayout] = useState({ start: 0, end: 0, total: 0 });
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
@@ -162,7 +164,21 @@ export const ThreadMessageList = memo(
     snapToCommittedEnd();
   }, [snapToCommittedEnd, syncLayout]);
 
-  useImperativeHandle(ref, () => ({ scrollToEnd }), [scrollToEnd]);
+  const scrollToEvent = useCallback((eventId: string) => {
+    const index = itemsRef.current.findIndex((item) => item.event.id === eventId);
+    const node = scrollRef.current;
+    if (index < 0 || !node) {
+      return false;
+    }
+    stickRef.current = false;
+    node.scrollTop = Math.max(0, offsetsRef.current[index] ?? 0);
+    setHighlightedId(eventId);
+    syncLayout(false);
+    window.setTimeout(() => setHighlightedId((current) => current === eventId ? null : current), 1_800);
+    return true;
+  }, [syncLayout]);
+
+  useImperativeHandle(ref, () => ({ scrollToEnd, scrollToEvent }), [scrollToEnd, scrollToEvent]);
 
   useLayoutEffect(() => {
     sizesRef.current = new Map();
@@ -381,6 +397,7 @@ export const ThreadMessageList = memo(
               id={item.event.id}
               top={offsetsRef.current[index] ?? 0}
               follow={follow}
+              highlighted={item.event.id === highlightedId}
               index={index}
               size={items.length}
               onMeasure={onMeasure}
@@ -487,6 +504,7 @@ function WindowItem({
   id,
   top,
   follow,
+  highlighted,
   index,
   size,
   onMeasure,
@@ -495,6 +513,7 @@ function WindowItem({
   id: string;
   top: number;
   follow: boolean;
+  highlighted: boolean;
   index: number;
   size: number;
   onMeasure: (id: string, height: number) => void;
@@ -517,7 +536,7 @@ function WindowItem({
   return (
     <li
       ref={ref}
-      className={`thread-window-item${follow ? " is-follow" : ""}`}
+      className={`thread-window-item${follow ? " is-follow" : ""}${highlighted ? " is-context-evidence" : ""}`}
       style={{ top: `${top}px` }}
       aria-setsize={size}
       aria-posinset={index + 1}

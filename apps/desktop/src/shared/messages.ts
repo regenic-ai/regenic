@@ -153,6 +153,9 @@ export const en = {
   "thread.contextDegraded": "Limited by {flags}",
   "thread.contextReplay": "Replay snapshot",
   "thread.contextError": "Could not load context",
+  "thread.contextStale": "New message content is available. Generate fresh context.",
+  "thread.contextHistory": "This session",
+  "thread.contextEvidenceUnavailable": "This evidence is outside the loaded message window.",
 
   "work.hint.task": "This looks like work. Set a rule so an assistant can take it.",
   "work.hint.open":
@@ -919,6 +922,9 @@ export const zh: Record<MessageKey, string> = {
   "thread.contextDegraded": "受 {flags} 限制",
   "thread.contextReplay": "重放快照",
   "thread.contextError": "无法加载上下文",
+  "thread.contextStale": "会话出现了新内容，请重新生成上下文。",
+  "thread.contextHistory": "本次会话",
+  "thread.contextEvidenceUnavailable": "这条证据不在当前已加载的消息窗口中。",
 
   "work.hint.task": "这像是一项工作。设一条规则，交给助手。",
   "work.hint.open": "已有规则对上这条会话。有新消息会自己开始。要现在处理，点「立即处理」。",

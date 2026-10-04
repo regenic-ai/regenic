@@ -2280,6 +2280,36 @@ button {
   max-width: none;
 }
 
+.thread-context-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.thread-context-evidence button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ai);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.thread-context-history {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.thread-window-item.is-context-evidence > * {
+  outline: 2px solid var(--ai);
+  outline-offset: 3px;
+}
+
 .thread-scroll {
   flex: 1;
   min-height: 0;
