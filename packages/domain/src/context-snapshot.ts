@@ -1,5 +1,7 @@
 import type { ContextBudgetLedger } from "./context-budget";
 import type { ContextCandidateKind } from "./context-candidate";
+import type { ActorRef } from "./actor";
+import type { ContextAllowedUse } from "./context-request";
 
 export const CONTEXT_SNAPSHOT_SCHEMA_VERSION = "1.0" as const;
 
@@ -37,4 +39,24 @@ export interface ContextSnapshot {
   degradation_flags: string[];
   content_hash: string;
   created_at: string;
+}
+
+/** Stable thread-to-snapshot association; does not alter immutable snapshot content. */
+export interface ContextSnapshotIndexEntry {
+  org_id: string;
+  thread_id: string;
+  snapshot_id: string;
+  principal: ActorRef;
+  consumer_id: string;
+  purpose: string;
+  allowed_uses: ContextAllowedUse[];
+  created_at: string;
+}
+
+export interface ContextSnapshotIndexQuery {
+  org_id: string;
+  thread_id: string;
+  principal: ActorRef;
+  consumer_id: string;
+  limit?: number;
 }
