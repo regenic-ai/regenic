@@ -389,6 +389,45 @@ export interface PersonalDispatchPolicy {
   default_disposition: MessageDisposition;
 }
 
+export interface PersonalContextEvidence {
+  event_id: string;
+}
+
+export interface PersonalContextBundleItem {
+  candidate_id: string;
+  resource_id: string;
+  kind: string;
+  status?: "current" | "superseded" | "retracted";
+  text?: string;
+  content_hash?: string;
+  evidence: PersonalContextEvidence[];
+  estimated_tokens: number;
+}
+
+export interface PersonalContextBundle {
+  snapshot_id: string;
+  sections: Array<{
+    kind: string;
+    items: PersonalContextBundleItem[];
+    tokens: number;
+  }>;
+  citations: PersonalContextEvidence[];
+  conflicts: Array<{ code: string; message?: string }>;
+  redactions: Array<{ category: string; count: number }>;
+  degradation_flags: string[];
+  content_hash: string;
+}
+
+export interface PersonalContextSnapshot {
+  id: string;
+  created_at: string;
+}
+
+export interface PersonalContextView {
+  snapshot: PersonalContextSnapshot;
+  bundle: PersonalContextBundle;
+}
+
 export interface IngestAttempt {
   id: string;
   status: "running" | "succeeded" | "failed";
