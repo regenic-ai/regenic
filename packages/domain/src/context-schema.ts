@@ -37,6 +37,8 @@ import {
 } from "./context-request";
 import {
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+  type ContextSnapshotIndexEntry,
+  type ContextSnapshotIndexQuery,
   type ContextSnapshot,
 } from "./context-snapshot";
 import { JsonValueSchema } from "./ingestion-schema";
@@ -429,6 +431,30 @@ export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
     }
   });
 
+export const ContextSnapshotIndexEntrySchema: z.ZodType<ContextSnapshotIndexEntry> = z
+  .object({
+    org_id: nonEmptyStringSchema,
+    thread_id: nonEmptyStringSchema,
+    snapshot_id: nonEmptyStringSchema,
+    principal: ActorRefSchema,
+    consumer_id: nonEmptyStringSchema,
+    purpose: nonEmptyStringSchema,
+    allowed_uses: z.array(z.enum(CONTEXT_ALLOWED_USES)).min(1).max(CONTEXT_ALLOWED_USES.length)
+      .refine((values) => !hasDuplicates(values), "Allowed uses must be unique"),
+    created_at: timestampSchema,
+  })
+  .strict();
+
+export const ContextSnapshotIndexQuerySchema: z.ZodType<ContextSnapshotIndexQuery> = z
+  .object({
+    org_id: nonEmptyStringSchema,
+    thread_id: nonEmptyStringSchema,
+    principal: ActorRefSchema,
+    consumer_id: nonEmptyStringSchema,
+    limit: nonNegativeIntegerSchema.min(1).max(100).optional(),
+  })
+  .strict();
+
 const ContextBundleItemSchema: z.ZodType<ContextBundleItem> = z
   .object({
     candidate_id: nonEmptyStringSchema,
@@ -600,6 +626,14 @@ export function validateContextCandidate(input: unknown): ContextValidationResul
 
 export function validateContextSnapshot(input: unknown): ContextValidationResult<ContextSnapshot> {
   return validate(ContextSnapshotSchema, input);
+}
+
+export function validateContextSnapshotIndexEntry(input: unknown): ContextValidationResult<ContextSnapshotIndexEntry> {
+  return validate(ContextSnapshotIndexEntrySchema, input);
+}
+
+export function validateContextSnapshotIndexQuery(input: unknown): ContextValidationResult<ContextSnapshotIndexQuery> {
+  return validate(ContextSnapshotIndexQuerySchema, input);
 }
 
 export function validateContextBundle(input: unknown): ContextValidationResult<ContextBundle> {

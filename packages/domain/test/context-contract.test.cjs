@@ -17,6 +17,8 @@ const {
   validateContextCandidate,
   validateContextRequest,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
 } = require("../dist");
 
 const HASH_A = "a".repeat(64);
@@ -85,6 +87,20 @@ function request(overrides = {}) {
     temporal: { mode: "current" },
     budget: budget(),
     requested_kinds: ["event", "claim"],
+    ...overrides,
+  };
+}
+
+function snapshotIndexEntry(overrides = {}) {
+  return {
+    org_id: "example-org",
+    thread_id: "example-chat:conversation-1",
+    snapshot_id: "snapshot-1",
+    principal: { actor_type: "human", actor_id: "person-1" },
+    consumer_id: "desktop-context-pilot",
+    purpose: "display context for one conversation",
+    allowed_uses: ["display"],
+    created_at: "2026-08-30T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -380,5 +396,26 @@ describe("context contracts", () => {
   it("rejects values that cannot participate in canonical JSON", () => {
     assert.throws(() => canonicalContextJson({ value: Number.NaN }), /Non-finite number/);
     assert.throws(() => canonicalContextJson({ value: new Date() }), /Unsupported object/);
+  });
+
+  it("validates a scoped thread Snapshot index entry and query", () => {
+    assert.equal(validateContextSnapshotIndexEntry(snapshotIndexEntry()).success, true);
+    assert.equal(validateContextSnapshotIndexQuery({
+      org_id: "example-org",
+      thread_id: "example-chat:conversation-1",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "desktop-context-pilot",
+      limit: 8,
+    }).success, true);
+    assert.equal(validateContextSnapshotIndexEntry(snapshotIndexEntry({
+      allowed_uses: ["display", "display"],
+    })).success, false);
+    assert.equal(validateContextSnapshotIndexQuery({
+      org_id: "example-org",
+      thread_id: "example-chat:conversation-1",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "desktop-context-pilot",
+      limit: 0,
+    }).success, false);
   });
 });
