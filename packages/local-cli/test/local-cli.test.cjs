@@ -118,12 +118,31 @@ describe("regenic-local", () => {
       "context-assemble",
       ...common,
       "--query", "release approved",
+      "--thread", "synthetic-chat:chat-1",
     ], { env: { REGENIC_MODEL_DRIVER: "none" } });
     assert.equal(
       assembled.bundle.sections[0].items[0].text,
       "The release is approved for Monday.",
     );
     assert.ok(!assembled.bundle.degradation_flags.includes("lexical_index_unbuilt"));
+    assert.deepEqual(await run([
+      "context-snapshot-history",
+      ...common,
+      "--thread", "synthetic-chat:chat-1",
+    ]), [{
+      org_id: "local-owner",
+      thread_id: "synthetic-chat:chat-1",
+      snapshot_id: assembled.snapshot.id,
+      principal: { actor_type: "human", actor_id: "local-owner" },
+      consumer_id: "local-cli",
+      purpose: "inspect authorized local context",
+      allowed_uses: ["display", "reason"],
+      created_at: assembled.snapshot.created_at,
+    }]);
+    await assert.rejects(
+      run(["context-snapshot-history", ...common, "--thread", "synthetic-chat:chat-1", "--limit", "101"]),
+      /--limit must not exceed 100/,
+    );
 
     const digest = await run([
       "context-daily-digest-project",
