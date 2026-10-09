@@ -264,8 +264,13 @@ describe("context ports", () => {
       snapshot_id: "snapshot-new",
       created_at: "2026-08-30T01:00:00.000Z",
     });
+    const sameTime = snapshotIndex({
+      snapshot_id: "snapshot-same-time",
+      created_at: "2026-08-30T01:00:00.000Z",
+    });
     await store.putSnapshotIndex(older);
     await store.putSnapshotIndex(newer);
+    await store.putSnapshotIndex(sameTime);
     await store.putSnapshotIndex(newer);
     await store.putSnapshotIndex(snapshotIndex({
       snapshot_id: "snapshot-other-thread",
@@ -288,11 +293,23 @@ describe("context ports", () => {
     };
     assert.deepEqual(
       (await store.listSnapshotIndex(query)).map(({ snapshot_id }) => snapshot_id),
-      ["snapshot-new", "snapshot-old"],
+      ["snapshot-same-time", "snapshot-new", "snapshot-old"],
     );
     assert.deepEqual(
       (await store.listSnapshotIndex({ ...query, limit: 1 })).map(({ snapshot_id }) => snapshot_id),
-      ["snapshot-new"],
+      ["snapshot-same-time"],
+    );
+    const firstPage = await store.listSnapshotIndex({ ...query, limit: 1 });
+    const secondPage = await store.listSnapshotIndex({
+      ...query,
+      limit: 1,
+      before_created_at: firstPage[0].created_at,
+      before_snapshot_id: firstPage[0].snapshot_id,
+    });
+    assert.deepEqual(secondPage.map(({ snapshot_id }) => snapshot_id), ["snapshot-new"]);
+    await assert.rejects(
+      store.listSnapshotIndex({ ...query, before_created_at: firstPage[0].created_at }),
+      /Invalid context snapshot index query/,
     );
     assert.deepEqual(await store.listSnapshotIndex({ ...query, org_id: "other-org" }), []);
     await assert.rejects(

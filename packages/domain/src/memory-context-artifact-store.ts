@@ -171,6 +171,12 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
         && entry.principal.actor_id === stableQuery.principal.actor_id
         && entry.consumer_id === stableQuery.consumer_id
       )
+      .filter((entry) => !stableQuery.before_created_at
+        || entry.created_at < stableQuery.before_created_at
+        || (
+          entry.created_at === stableQuery.before_created_at
+          && entry.snapshot_id < stableQuery.before_snapshot_id!
+        ))
       .sort((left, right) =>
         compare(
           `${right.created_at}\u0000${right.snapshot_id}`,

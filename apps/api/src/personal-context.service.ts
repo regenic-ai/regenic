@@ -116,13 +116,29 @@ export class PersonalContextService {
     return snapshot;
   }
 
-  async listSnapshots(threadId?: string, limit?: string) {
+  async listSnapshots(
+    threadId?: string,
+    limit?: string,
+    beforeCreatedAt?: string,
+    beforeSnapshotId?: string,
+  ) {
+    if ((beforeCreatedAt === undefined) !== (beforeSnapshotId === undefined)) {
+      throw new PersonalContextError(
+        "invalid_request",
+        HttpStatus.BAD_REQUEST,
+        "before_created_at and before_snapshot_id must be provided together",
+      );
+    }
     return this.runtime.requireHost().get("context-artifacts").listSnapshotIndex({
       org_id: this.runtime.orgId(),
       thread_id: requiredString(threadId, "thread_id"),
       principal: this.principal(),
       consumer_id: DESKTOP_CONTEXT_CONSUMER,
       limit: querySafeInteger(limit, "limit", 20, 1, 100),
+      ...(beforeCreatedAt === undefined ? {} : {
+        before_created_at: requiredTimestamp(beforeCreatedAt, "before_created_at"),
+        before_snapshot_id: requiredString(beforeSnapshotId, "before_snapshot_id"),
+      }),
     });
   }
 

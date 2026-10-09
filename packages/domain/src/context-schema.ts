@@ -452,8 +452,14 @@ export const ContextSnapshotIndexQuerySchema: z.ZodType<ContextSnapshotIndexQuer
     principal: ActorRefSchema,
     consumer_id: nonEmptyStringSchema,
     limit: nonNegativeIntegerSchema.min(1).max(100).optional(),
+    before_created_at: timestampSchema.optional(),
+    before_snapshot_id: nonEmptyStringSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => Boolean(value.before_created_at) === Boolean(value.before_snapshot_id),
+    "before_created_at and before_snapshot_id must be provided together",
+  );
 
 const ContextBundleItemSchema: z.ZodType<ContextBundleItem> = z
   .object({

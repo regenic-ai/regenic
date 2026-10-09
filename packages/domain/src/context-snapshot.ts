@@ -59,4 +59,6 @@ export interface ContextSnapshotIndexQuery {
   principal: ActorRef;
   consumer_id: string;
   limit?: number;
+  before_created_at?: string;
+  before_snapshot_id?: string;
 }
