@@ -55,6 +55,29 @@ function createBatch(externalId = "source-event-1") {
 }
 
 describe("sqlite read/write split", () => {
+  it("routes snapshot index writes and reads through the RPC allowlists", async () => {
+    const root = await createRoot();
+    const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    const entry = {
+      org_id: "local-owner",
+      thread_id: "thread-1",
+      snapshot_id: "snapshot-1",
+      principal: { actor_type: "human", actor_id: "local-owner" },
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context",
+      allowed_uses: ["display"],
+      created_at: "2026-08-30T00:00:00.000Z",
+    };
+    await store.putSnapshotIndex(entry);
+    assert.deepEqual(await store.listSnapshotIndex({
+      org_id: entry.org_id,
+      thread_id: entry.thread_id,
+      principal: entry.principal,
+      consumer_id: entry.consumer_id,
+    }), [entry]);
+    await store.close();
+  });
+
   it("opens a readonly connection after the writer migrates", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

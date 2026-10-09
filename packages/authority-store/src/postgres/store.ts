@@ -22,6 +22,8 @@ import {
   validateContextBundle,
   validateContextProjectionCheckpoint,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
   validateDailyDigestPolicy,
   validateProposal,
   validateDecision,
@@ -98,6 +100,8 @@ import type {
   FailContextProjectionJob,
   RenewContextProjectionJob,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   EventListQuery,
   EventRecord,
   EventRevision,
@@ -873,6 +877,69 @@ export class PostgresAuthorityStore
       "org_id = $1 AND id = $2",
       [orgId, id],
     );
+  }
+
+  async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
+    requireContextValue(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
+    const payload = canonicalContextJson(entry);
+    const params = [
+      entry.org_id, entry.thread_id, entry.snapshot_id,
+      entry.principal.actor_type, entry.principal.actor_id, entry.consumer_id,
+      entry.created_at, payload,
+    ];
+    await this.withTx(async (client) => {
+      await this.execute(
+        `
+        INSERT INTO context_snapshot_index (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id, created_at, payload_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id
+        ) DO NOTHING
+        `,
+        params,
+        client,
+      );
+      const current = await this.queryOne<{ payload_json: unknown }>(
+        `
+          SELECT payload_json FROM context_snapshot_index
+          WHERE org_id = $1 AND thread_id = $2 AND snapshot_id = $3
+            AND principal_actor_type = $4 AND principal_actor_id = $5 AND consumer_id = $6
+        `,
+        params.slice(0, 6),
+        client,
+      );
+      if (!current || canonicalContextJson(parseContextJson(current.payload_json)) !== payload) {
+        throw new Error("Cannot replace immutable context snapshot index entry");
+      }
+    });
+  }
+
+  async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    const validation = validateContextSnapshotIndexQuery(query);
+    requireContextValue(validation, "snapshot index query");
+    const stableQuery = validation.success ? validation.data : query;
+    const rows = await this.query<{ payload_json: unknown }>(
+      `
+        SELECT payload_json
+        FROM context_snapshot_index
+        WHERE org_id = $1 AND thread_id = $2
+          AND principal_actor_type = $3 AND principal_actor_id = $4 AND consumer_id = $5
+        ORDER BY created_at DESC, snapshot_id DESC
+        LIMIT $6
+      `,
+      [
+        stableQuery.org_id,
+        stableQuery.thread_id,
+        stableQuery.principal.actor_type,
+        stableQuery.principal.actor_id,
+        stableQuery.consumer_id,
+        stableQuery.limit ?? 100,
+      ],
+    );
+    return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));
   }
 
   async putBundle(bundle: ContextBundle): Promise<void> {
@@ -2057,6 +2124,7 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM context_snapshot_index WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_bundles WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshots WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_artifact_states WHERE org_id = $1`, [orgId], client);

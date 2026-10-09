@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 41;
+export const PG_SCHEMA_VERSION = 42;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -381,6 +381,30 @@ CREATE INDEX events_org_occurred_idx
   ON events (org_id, occurred_at, id);
 `,
   },
+  {
+    version: 42,
+    sql: `
+CREATE TABLE context_snapshot_index (
+  org_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  principal_actor_type TEXT NOT NULL,
+  principal_actor_id TEXT NOT NULL,
+  consumer_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  payload_json JSONB NOT NULL,
+  PRIMARY KEY (
+    org_id, thread_id, snapshot_id, principal_actor_type,
+    principal_actor_id, consumer_id
+  )
+);
+CREATE INDEX context_snapshot_index_query_idx
+  ON context_snapshot_index (
+    org_id, thread_id, principal_actor_type, principal_actor_id,
+    consumer_id, created_at DESC, snapshot_id DESC
+  );
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -701,6 +725,26 @@ CREATE TABLE context_snapshots (
   payload_json JSONB NOT NULL,
   PRIMARY KEY (org_id, id)
 );
+
+CREATE TABLE context_snapshot_index (
+  org_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  principal_actor_type TEXT NOT NULL,
+  principal_actor_id TEXT NOT NULL,
+  consumer_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  payload_json JSONB NOT NULL,
+  PRIMARY KEY (
+    org_id, thread_id, snapshot_id, principal_actor_type,
+    principal_actor_id, consumer_id
+  )
+);
+CREATE INDEX context_snapshot_index_query_idx
+  ON context_snapshot_index (
+    org_id, thread_id, principal_actor_type, principal_actor_id,
+    consumer_id, created_at DESC, snapshot_id DESC
+  );
 
 CREATE TABLE context_bundles (
   org_id TEXT NOT NULL,
