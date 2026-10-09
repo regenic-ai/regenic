@@ -1202,6 +1202,7 @@ export async function fetchStore(): Promise<StoreView> {
     blobs: Number(body.blobs) || 0,
     context_artifacts: Number(body.context_artifacts) || 0,
     context_snapshots: Number(body.context_snapshots) || 0,
+    context_snapshot_index: Number(body.context_snapshot_index) || 0,
     context_bundles: Number(body.context_bundles) || 0,
     context_checkpoints: Number(body.context_checkpoints) || 0,
     recipes: Number(body.recipes) || 0,

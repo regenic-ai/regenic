@@ -680,6 +680,7 @@ export interface StoreView {
   blobs: number;
   context_artifacts: number;
   context_snapshots: number;
+  context_snapshot_index: number;
   context_bundles: number;
   context_checkpoints: number;
   recipes: number;
@@ -695,6 +696,7 @@ export interface StoreClearView {
     blobs: number;
     context_artifacts: number;
     context_snapshots: number;
+    context_snapshot_index: number;
     context_bundles: number;
     context_checkpoints: number;
   };

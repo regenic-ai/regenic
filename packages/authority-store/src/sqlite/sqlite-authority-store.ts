@@ -2220,6 +2220,7 @@ export class SqliteAuthorityStore
           blobs: before.blobs,
           context_artifacts: before.context_artifacts,
           context_snapshots: before.context_snapshots,
+          context_snapshot_index: before.context_snapshot_index,
           context_bundles: before.context_bundles,
           context_checkpoints: before.context_checkpoints,
         },
@@ -2264,6 +2265,10 @@ export class SqliteAuthorityStore
       ),
       context_snapshots: count(
         `SELECT COUNT(*) AS n FROM context_snapshots WHERE org_id = ?`,
+        orgId,
+      ),
+      context_snapshot_index: count(
+        `SELECT COUNT(*) AS n FROM context_snapshot_index WHERE org_id = ?`,
         orgId,
       ),
       context_bundles: count(

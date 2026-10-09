@@ -1416,14 +1416,16 @@ describe("SQLite context artifact store", () => {
     await store.putArtifact(artifactValue);
     await store.putSnapshot(snapshotValue);
     await store.putBundle(bundleValue);
+    await store.putSnapshotIndex(snapshotIndex(snapshotValue));
     await store.putCheckpoint(checkpoint);
     const before = await store.summarizeStore("example-org");
     assert.deepEqual({
       artifacts: before.context_artifacts,
       snapshots: before.context_snapshots,
+      index: before.context_snapshot_index,
       bundles: before.context_bundles,
       checkpoints: before.context_checkpoints,
-    }, { artifacts: 1, snapshots: 1, bundles: 1, checkpoints: 1 });
+    }, { artifacts: 1, snapshots: 1, index: 1, bundles: 1, checkpoints: 1 });
 
     const result = await store.clearOperationalData(
       "example-org",
@@ -1432,9 +1434,10 @@ describe("SQLite context artifact store", () => {
     assert.deepEqual({
       artifacts: result.cleared.context_artifacts,
       snapshots: result.cleared.context_snapshots,
+      index: result.cleared.context_snapshot_index,
       bundles: result.cleared.context_bundles,
       checkpoints: result.cleared.context_checkpoints,
-    }, { artifacts: 1, snapshots: 1, bundles: 1, checkpoints: 1 });
+    }, { artifacts: 1, snapshots: 1, index: 1, bundles: 1, checkpoints: 1 });
     store.close();
 
     store = new SqliteAuthorityStore(path);
@@ -1442,9 +1445,10 @@ describe("SQLite context artifact store", () => {
     assert.deepEqual({
       artifacts: after.context_artifacts,
       snapshots: after.context_snapshots,
+      index: after.context_snapshot_index,
       bundles: after.context_bundles,
       checkpoints: after.context_checkpoints,
-    }, { artifacts: 0, snapshots: 0, bundles: 0, checkpoints: 0 });
+    }, { artifacts: 0, snapshots: 0, index: 0, bundles: 0, checkpoints: 0 });
     assert.equal(await store.getArtifact("example-org", artifactValue.id), null);
     assert.equal(await store.getSnapshot("example-org", snapshotValue.id), null);
     assert.equal(await store.getBundle({
