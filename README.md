@@ -548,7 +548,8 @@ POST /v1/me/context/ask
 
 Thread snapshot history is scoped to the current organization and principal and to
 the `desktop-context-pilot` consumer. Results are newest-first with a default limit
-of 20 and a maximum of 100.
+of 20 and a maximum of 100. To read the next stable page, pass the final entry's
+`created_at` and `snapshot_id` as `before_created_at` and `before_snapshot_id`.
 
 Evidence text is sent as untrusted user data, never as model instructions. A
 model answer is returned only when every submitted citation names a candidate

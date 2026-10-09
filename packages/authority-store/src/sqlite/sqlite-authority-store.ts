@@ -925,11 +925,19 @@ export class SqliteAuthorityStore
     const validation = validateContextSnapshotIndexQuery(query);
     requireContextValue(validation, "snapshot index query");
     const stableQuery = validation.success ? validation.data : query;
+    const cursor = stableQuery.before_created_at
+      ? `
+        AND (
+          created_at < ? OR (created_at = ? AND snapshot_id < ?)
+        )
+      `
+      : "";
     const rows = this.database.prepare(`
       SELECT payload_json
       FROM context_snapshot_index
       WHERE org_id = ? AND thread_id = ?
         AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+        ${cursor}
       ORDER BY created_at DESC, snapshot_id DESC
       LIMIT ?
     `).all(
@@ -938,6 +946,13 @@ export class SqliteAuthorityStore
       stableQuery.principal.actor_type,
       stableQuery.principal.actor_id,
       stableQuery.consumer_id,
+      ...(stableQuery.before_created_at
+        ? [
+          stableQuery.before_created_at,
+          stableQuery.before_created_at,
+          stableQuery.before_snapshot_id!,
+        ]
+        : []),
       stableQuery.limit ?? 100,
     ) as Array<{ payload_json: string }>;
     return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));

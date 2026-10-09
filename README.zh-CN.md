@@ -542,6 +542,8 @@ POST /v1/me/context/ask
 
 线程 Snapshot 历史绑定当前组织、当前 principal 与 `desktop-context-pilot`
 consumer，按时间倒序返回；默认最多 20 条，最大 100 条。
+要稳定读取下一页，请把末条记录的 `created_at` 和 `snapshot_id` 分别作为
+`before_created_at` 与 `before_snapshot_id` 传入。
 
 证据正文作为不可信 user data 发送给模型，绝不作为模型 instruction。只有当模型提交的每条
 citation 都指向授权 bundle 中已有的 candidate 与 Event 时，回答才会返回。模型输出不会

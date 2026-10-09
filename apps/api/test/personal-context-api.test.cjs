@@ -1113,13 +1113,31 @@ describe("personal context API", () => {
       snapshot_id: "snapshot-other-consumer",
       consumer_id: "other-consumer",
     });
+    const olderEntry = {
+      ...visibleEntry,
+      snapshot_id: "snapshot-older",
+      created_at: new Date(Date.parse(visibleEntry.created_at) - 1_000).toISOString(),
+    };
+    await authority.putSnapshotIndex(olderEntry);
     authority.close();
 
     const listed = await getJson(
       `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=10`,
     );
     assert.equal(listed.response.status, 200, listed.text);
-    assert.deepEqual(JSON.parse(listed.text), [visibleEntry]);
+    assert.deepEqual(JSON.parse(listed.text), [visibleEntry, olderEntry]);
+    const firstPage = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=1`,
+    );
+    assert.equal(firstPage.response.status, 200, firstPage.text);
+    assert.deepEqual(JSON.parse(firstPage.text), [visibleEntry]);
+    const secondPage = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}`
+      + `&limit=1&before_created_at=${encodeURIComponent(visibleEntry.created_at)}`
+      + `&before_snapshot_id=${encodeURIComponent(visibleEntry.snapshot_id)}`,
+    );
+    assert.equal(secondPage.response.status, 200, secondPage.text);
+    assert.deepEqual(JSON.parse(secondPage.text), [olderEntry]);
     const otherThread = await getJson(
       `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-2")}`,
     );
@@ -1130,6 +1148,11 @@ describe("personal context API", () => {
       `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=101`,
     );
     assert.equal(invalid.response.status, 400);
+    const incompleteCursor = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}`
+      + `&before_created_at=${encodeURIComponent(visibleEntry.created_at)}`,
+    );
+    assert.equal(incompleteCursor.response.status, 400);
   });
 
   it("rejects model citations outside the assembled bundle", async () => {
