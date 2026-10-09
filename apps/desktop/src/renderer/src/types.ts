@@ -423,6 +423,14 @@ export interface PersonalContextSnapshot {
   created_at: string;
 }
 
+export interface PersonalContextSnapshotIndexEntry {
+  thread_id: string;
+  snapshot_id: string;
+  purpose: string;
+  allowed_uses: string[];
+  created_at: string;
+}
+
 export interface PersonalContextView {
   snapshot: PersonalContextSnapshot;
   bundle: PersonalContextBundle;

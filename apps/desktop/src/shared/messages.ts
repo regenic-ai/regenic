@@ -154,7 +154,10 @@ export const en = {
   "thread.contextReplay": "Replay snapshot",
   "thread.contextError": "Could not load context",
   "thread.contextStale": "New message content is available. Generate fresh context.",
-  "thread.contextHistory": "This session",
+  "thread.contextHistory": "Saved history",
+  "thread.contextHistorySelect": "Choose a saved snapshot",
+  "thread.contextHistoryEntry": "{date} · Snapshot {id}",
+  "thread.contextHistoryError": "Could not load saved context history",
   "thread.contextEvidenceUnavailable": "This evidence is outside the loaded message window.",
 
   "work.hint.task": "This looks like work. Set a rule so an assistant can take it.",
@@ -923,7 +926,10 @@ export const zh: Record<MessageKey, string> = {
   "thread.contextReplay": "重放快照",
   "thread.contextError": "无法加载上下文",
   "thread.contextStale": "会话出现了新内容，请重新生成上下文。",
-  "thread.contextHistory": "本次会话",
+  "thread.contextHistory": "保存的历史",
+  "thread.contextHistorySelect": "选择已保存的快照",
+  "thread.contextHistoryEntry": "{date} · 快照 {id}",
+  "thread.contextHistoryError": "无法加载保存的上下文历史",
   "thread.contextEvidenceUnavailable": "这条证据不在当前已加载的消息窗口中。",
 
   "work.hint.task": "这像是一项工作。设一条规则，交给助手。",

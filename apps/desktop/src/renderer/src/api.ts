@@ -19,6 +19,7 @@ import type {
   PersonalFollowUpPolicy,
   PersonalFollowUpView,
   PersonalContextBundle,
+  PersonalContextSnapshotIndexEntry,
   PersonalContextView,
   PersonalHeartbeatView,
   PluginInventoryItem,
@@ -1280,6 +1281,22 @@ export async function replayPersonalContext(
     throw new Error(`context replay ${response.status}`);
   }
   return response.json() as Promise<PersonalContextBundle>;
+}
+
+export async function fetchPersonalContextHistory(
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<PersonalContextSnapshotIndexEntry[]> {
+  const query = new URLSearchParams({ thread_id: threadId, limit: "20" });
+  const response = await kernelFetch(`/v1/me/context/snapshots?${query}`, { signal });
+  if (!response.ok) {
+    throw new Error(`context history ${response.status}`);
+  }
+  const entries = await response.json() as PersonalContextSnapshotIndexEntry[];
+  if (!Array.isArray(entries)) {
+    throw new Error("context history");
+  }
+  return entries;
 }
 
 export async function fetchFollowUps(): Promise<PersonalFollowUpView[]> {
