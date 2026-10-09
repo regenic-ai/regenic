@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { assemblePersonalContext, replayPersonalContext } from "./api";
+import {
+  assemblePersonalContext,
+  fetchPersonalContextHistory,
+  replayPersonalContext,
+} from "./api";
 import { MessageBody } from "./MessageBody";
 import { useLocale } from "./LocaleContext";
-import type { PersonalContextBundle, PersonalContextSnapshot } from "./types";
+import type {
+  PersonalContextBundle,
+  PersonalContextSnapshot,
+  PersonalContextSnapshotIndexEntry,
+} from "./types";
 
 type ContextState = {
   snapshot: PersonalContextSnapshot;
@@ -26,8 +34,8 @@ export function ThreadContextPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [evidenceNotice, setEvidenceNotice] = useState<string | null>(null);
+  const [history, setHistory] = useState<PersonalContextSnapshotIndexEntry[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const historyRef = useRef(new Map<string, ContextState[]>());
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -39,13 +47,26 @@ export function ThreadContextPanel({
     return () => abortRef.current?.abort();
   }, [threadId]);
 
-  const remember = (next: ContextState) => {
-    const history = historyRef.current.get(threadId) ?? [];
-    historyRef.current.set(threadId, [next, ...history.filter((entry) => entry.snapshot.id !== next.snapshot.id)].slice(0, 8));
-  };
+  useEffect(() => {
+    const controller = new AbortController();
+    setHistory([]);
+    void fetchPersonalContextHistory(threadId, controller.signal)
+      .then((entries) => {
+        if (!controller.signal.aborted) setHistory(entries);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) {
+          setError(caught instanceof Error ? caught.message : t("thread.contextHistoryError"));
+        }
+      });
+    return () => controller.abort();
+  }, [threadId, t]);
 
-  const start = async (mode: "fresh" | "replayed") => {
-    const snapshotId = context?.snapshot.id;
+  const start = async (
+    mode: "fresh" | "replayed",
+    replay?: PersonalContextSnapshotIndexEntry,
+  ) => {
+    const snapshotId = replay?.snapshot_id ?? context?.snapshot.id;
     if (busy || (mode === "replayed" && !snapshotId)) {
       return;
     }
@@ -59,18 +80,24 @@ export function ThreadContextPanel({
         const result = await assemblePersonalContext(threadId, controller.signal);
         if (!controller.signal.aborted) {
           const next = { ...result, mode, loadedAt: new Date().toISOString(), sourceRevision };
-          remember(next);
           setContext(next);
+          const entries = await fetchPersonalContextHistory(threadId, controller.signal);
+          if (!controller.signal.aborted) setHistory(entries);
         }
       } else {
         const bundle = await replayPersonalContext(snapshotId!, controller.signal);
         if (!controller.signal.aborted) {
-          setContext((current) => current && {
-            ...current,
+          const entry = replay ?? history.find((item) => item.snapshot_id === snapshotId);
+          setContext((current) => ({
+            snapshot: {
+              id: snapshotId!,
+              created_at: entry?.created_at ?? current?.snapshot.created_at ?? new Date().toISOString(),
+            },
             bundle,
             mode,
             loadedAt: new Date().toISOString(),
-          });
+            sourceRevision: current?.sourceRevision ?? sourceRevision,
+          }));
         }
       }
     } catch (caught) {
@@ -84,7 +111,6 @@ export function ThreadContextPanel({
     }
   };
 
-  const history = historyRef.current.get(threadId) ?? [];
   const stale = Boolean(context && context.sourceRevision !== sourceRevision);
   const locateEvidence = (eventId: string) => {
     setEvidenceNotice(onLocateEvidence(eventId) ? null : t("thread.contextEvidenceUnavailable"));
@@ -108,32 +134,35 @@ export function ThreadContextPanel({
       </div>
       {error ? <p className="action-error" role="alert">{error}</p> : null}
       {evidenceNotice ? <p className="action-hint" role="status">{evidenceNotice}</p> : null}
+      {history.length > 0 ? (
+        <label className="thread-context-history">
+          {t("thread.contextHistory")}
+          <select
+            value={context?.snapshot.id ?? ""}
+            disabled={busy}
+            onChange={(event) => {
+              const selected = history.find((entry) => entry.snapshot_id === event.target.value);
+              if (selected) void start("replayed", selected);
+            }}
+          >
+            <option value="" disabled>{t("thread.contextHistorySelect")}</option>
+            {history.map((entry) => (
+              <option key={entry.snapshot_id} value={entry.snapshot_id}>
+                {t("thread.contextHistoryEntry", {
+                  id: entry.snapshot_id.slice(0, 12),
+                  date: new Date(entry.created_at).toLocaleString(),
+                })}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {!context ? null : (
         <div className="thread-context-result">
           <div className="thread-context-meta">
             <span>{t("thread.contextSnapshot", { id: context.snapshot.id.slice(0, 12) })}</span>
             <span>{t("thread.contextHash", { hash: context.bundle.content_hash.slice(0, 12) })}</span>
           </div>
-          {history.length > 1 ? (
-            <label className="thread-context-history">
-              {t("thread.contextHistory")}
-              <select
-                value={context.snapshot.id}
-                onChange={(event) => {
-                  const selected = history.find((entry) => entry.snapshot.id === event.target.value);
-                  if (selected) {
-                    setContext(selected);
-                  }
-                }}
-              >
-                {history.map((entry) => (
-                  <option key={entry.snapshot.id} value={entry.snapshot.id}>
-                    {entry.snapshot.id.slice(0, 12)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
           {context.bundle.sections.flatMap((section) => section.items).length === 0 ? (
             <p className="muted">{t("thread.contextEmpty")}</p>
           ) : context.bundle.sections.map((section) => (

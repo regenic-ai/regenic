@@ -52,6 +52,12 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "edit.copy"), "Copy");
     assert.equal(translate("en", "thread.forward"), "Forward");
     assert.equal(translate("zh", "thread.forwardConversation"), "转发会话");
+    assert.equal(translate("en", "thread.contextHistory"), "Saved history");
+    assert.equal(translate("zh", "thread.contextHistory"), "保存的历史");
+    assert.equal(
+      translate("en", "thread.contextHistoryEntry", { date: "today", id: "snapshot-123" }),
+      "today · Snapshot snapshot-123",
+    );
     assert.equal(translate("en", "thread.startRun"), "Handle now");
     assert.match(translate("en", "work.hint.running"), /chat reply/);
     assert.equal(translate("en", "work.hint.running").includes("DSH"), false);
