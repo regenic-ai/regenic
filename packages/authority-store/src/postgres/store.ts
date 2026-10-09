@@ -2244,6 +2244,7 @@ export class PostgresAuthorityStore
           blobs: before.blobs,
           context_artifacts: before.context_artifacts,
           context_snapshots: before.context_snapshots,
+          context_snapshot_index: before.context_snapshot_index,
           context_bundles: before.context_bundles,
           context_checkpoints: before.context_checkpoints,
         },
@@ -2295,6 +2296,10 @@ export class PostgresAuthorityStore
       ),
       context_snapshots: await count(
         `SELECT COUNT(*)::int AS n FROM context_snapshots WHERE org_id = $1`,
+        [orgId],
+      ),
+      context_snapshot_index: await count(
+        `SELECT COUNT(*)::int AS n FROM context_snapshot_index WHERE org_id = $1`,
         [orgId],
       ),
       context_bundles: await count(

@@ -35,6 +35,7 @@ const emptyStore: StoreView = {
   blobs: 0,
   context_artifacts: 0,
   context_snapshots: 0,
+  context_snapshot_index: 0,
   context_bundles: 0,
   context_checkpoints: 0,
   recipes: 0,
@@ -58,6 +59,7 @@ function storeHasData(store: StoreView): boolean {
     store.blobs > 0 ||
     store.context_artifacts > 0 ||
     store.context_snapshots > 0 ||
+    store.context_snapshot_index > 0 ||
     store.context_bundles > 0 ||
     store.context_checkpoints > 0
   );
@@ -66,12 +68,13 @@ function storeHasData(store: StoreView): boolean {
 function contextRecordCount(
   store: Pick<
     StoreView,
-    "context_artifacts" | "context_snapshots" | "context_bundles" | "context_checkpoints"
+    "context_artifacts" | "context_snapshots" | "context_snapshot_index" | "context_bundles" | "context_checkpoints"
   >,
 ): number {
   return store.context_artifacts +
     store.context_snapshots +
-    store.context_bundles +
+  store.context_snapshot_index +
+  store.context_bundles +
     store.context_checkpoints;
 }
 
@@ -362,6 +365,7 @@ export function SettingsPage({
         blobs: 0,
         context_artifacts: 0,
         context_snapshots: 0,
+        context_snapshot_index: 0,
         context_bundles: 0,
         context_checkpoints: 0,
         recipes: result.kept.recipes,
