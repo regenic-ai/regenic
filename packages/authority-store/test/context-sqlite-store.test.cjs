@@ -149,6 +149,20 @@ function bundle(snapshotValue, overrides = {}) {
   return value;
 }
 
+function snapshotIndex(snapshotValue, overrides = {}) {
+  return {
+    org_id: snapshotValue.org_id,
+    thread_id: "thread-1",
+    snapshot_id: snapshotValue.id,
+    principal: { actor_type: "human", actor_id: "person-1" },
+    consumer_id: "desktop-context-pilot",
+    purpose: "display context",
+    allowed_uses: ["display"],
+    created_at: snapshotValue.created_at,
+    ...overrides,
+  };
+}
+
 describe("SQLite context artifact store", () => {
   it("transitions artifact decisions and atomically supersedes an accepted artifact", async () => {
     const root = await createRoot();
@@ -1131,16 +1145,24 @@ describe("SQLite context artifact store", () => {
     const artifactValue = artifact();
     const snapshotValue = snapshot();
     const bundleValue = bundle(snapshotValue);
+    const indexValue = snapshotIndex(snapshotValue);
 
     let store = new SqliteAuthorityStore(path);
     await store.putArtifact(artifactValue);
     await store.putSnapshot(snapshotValue);
     await store.putBundle(bundleValue);
+    await store.putSnapshotIndex(indexValue);
     store.close();
 
     store = new SqliteAuthorityStore(path);
     assert.deepEqual(await store.getArtifact("example-org", "artifact-1"), artifactValue);
     assert.deepEqual(await store.getSnapshot("example-org", snapshotValue.id), snapshotValue);
+    assert.deepEqual(await store.listSnapshotIndex({
+      org_id: "example-org",
+      thread_id: "thread-1",
+      principal: indexValue.principal,
+      consumer_id: indexValue.consumer_id,
+    }), [indexValue]);
     assert.deepEqual(await store.getBundle({
       org_id: "example-org",
       snapshot_id: snapshotValue.id,
@@ -1153,6 +1175,20 @@ describe("SQLite context artifact store", () => {
       /Cannot replace immutable context artifact/,
     );
     store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.deepEqual(await split.listSnapshotIndex({
+      org_id: "example-org",
+      thread_id: "thread-1",
+      principal: indexValue.principal,
+      consumer_id: indexValue.consumer_id,
+    }), [indexValue]);
+    await split.putSnapshotIndex(indexValue);
+    await assert.rejects(
+      split.putSnapshotIndex({ ...indexValue, purpose: "changed purpose" }),
+      /Cannot replace immutable context snapshot index entry/,
+    );
+    await split.close();
   });
 
   it("filters artifacts deterministically", async () => {

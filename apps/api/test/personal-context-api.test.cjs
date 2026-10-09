@@ -135,7 +135,7 @@ async function startApi(root, model = { driver: "none" }) {
   const app = await createHttpApp({ logger: false });
   await app.listen(0, "127.0.0.1");
   apps.push(app);
-  return { origin: await app.getUrl(), eventId };
+  return { origin: await app.getUrl(), eventId, database };
 }
 
 function assembleBody() {
@@ -161,6 +161,11 @@ async function postJson(url, body) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+  return { response, text: await response.text() };
+}
+
+async function getJson(url) {
+  const response = await fetch(url);
   return { response, text: await response.text() };
 }
 
@@ -1057,6 +1062,74 @@ describe("personal context API", () => {
     const replayed = JSON.parse(replayResponse.text);
     assert.equal(replayed.snapshot_id, assembled.snapshot.id);
     assert.equal(replayed.content_hash, assembled.bundle.content_hash);
+  });
+
+  it("lists only the current principal's desktop snapshot history for one thread", async () => {
+    const root = await createRoot();
+    const { origin, database } = await startApi(root);
+    await ingestEvidence(database, join(root, "blobs"), "other-thread", "chat-2");
+    const request = {
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context for the open personal conversation",
+      allowed_uses: ["display"],
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    };
+    const first = await postJson(`${origin}/v1/me/context/assemble`, {
+      ...request,
+      filters: { thread_ids: ["synthetic-chat:chat-1"] },
+    });
+    const second = await postJson(`${origin}/v1/me/context/assemble`, {
+      ...request,
+      filters: { thread_ids: ["synthetic-chat:chat-2"] },
+    });
+    assert.equal(first.response.status, 201, first.text);
+    assert.equal(second.response.status, 201, second.text);
+
+    const authority = new SqliteAuthorityStore(database);
+    const visibleEntry = {
+      org_id: "local-owner",
+      thread_id: "synthetic-chat:chat-1",
+      snapshot_id: JSON.parse(first.text).snapshot.id,
+      principal: { actor_type: "human", actor_id: "local-owner" },
+      consumer_id: "desktop-context-pilot",
+      purpose: request.purpose,
+      allowed_uses: request.allowed_uses,
+      created_at: JSON.parse(first.text).snapshot.created_at,
+    };
+    await authority.putSnapshotIndex({
+      ...visibleEntry,
+      snapshot_id: "snapshot-other-principal",
+      principal: { actor_type: "human", actor_id: "other-person" },
+    });
+    await authority.putSnapshotIndex({
+      ...visibleEntry,
+      snapshot_id: "snapshot-other-consumer",
+      consumer_id: "other-consumer",
+    });
+    authority.close();
+
+    const listed = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=10`,
+    );
+    assert.equal(listed.response.status, 200, listed.text);
+    assert.deepEqual(JSON.parse(listed.text), [visibleEntry]);
+    const otherThread = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-2")}`,
+    );
+    assert.equal(otherThread.response.status, 200, otherThread.text);
+    assert.equal(JSON.parse(otherThread.text).length, 1);
+    assert.equal(JSON.parse(otherThread.text)[0].snapshot_id, JSON.parse(second.text).snapshot.id);
+    const invalid = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=101`,
+    );
+    assert.equal(invalid.response.status, 400);
   });
 
   it("rejects model citations outside the assembled bundle", async () => {

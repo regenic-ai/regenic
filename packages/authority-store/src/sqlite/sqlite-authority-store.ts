@@ -24,6 +24,8 @@ import {
   validateContextBundle,
   validateContextProjectionCheckpoint,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
   validateDailyDigestPolicy,
   validateProposal,
   validateDecision,
@@ -100,6 +102,8 @@ import type {
   FailContextProjectionJob,
   RenewContextProjectionJob,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   EventListQuery,
   EventRecord,
   EventRevision,
@@ -884,6 +888,59 @@ export class SqliteAuthorityStore
       "org_id = ? AND id = ?",
       [orgId, id],
     );
+  }
+
+  async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
+    requireContextValue(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
+    this.assertWritable();
+    const payload = canonicalContextJson(entry);
+    const lookup = [
+      entry.org_id,
+      entry.thread_id,
+      entry.snapshot_id,
+      entry.principal.actor_type,
+      entry.principal.actor_id,
+      entry.consumer_id,
+    ];
+    this.putImmutableContextJson(
+      "context_snapshot_index",
+      `
+        org_id = ? AND thread_id = ? AND snapshot_id = ?
+        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+      `,
+      lookup,
+      payload,
+      "snapshot index entry",
+      `
+        INSERT INTO context_snapshot_index (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id, created_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [...lookup, entry.created_at, payload],
+    );
+  }
+
+  async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    const validation = validateContextSnapshotIndexQuery(query);
+    requireContextValue(validation, "snapshot index query");
+    const stableQuery = validation.success ? validation.data : query;
+    const rows = this.database.prepare(`
+      SELECT payload_json
+      FROM context_snapshot_index
+      WHERE org_id = ? AND thread_id = ?
+        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+      ORDER BY created_at DESC, snapshot_id DESC
+      LIMIT ?
+    `).all(
+      stableQuery.org_id,
+      stableQuery.thread_id,
+      stableQuery.principal.actor_type,
+      stableQuery.principal.actor_id,
+      stableQuery.consumer_id,
+      stableQuery.limit ?? 100,
+    ) as Array<{ payload_json: string }>;
+    return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));
   }
 
   async putBundle(bundle: ContextBundle): Promise<void> {
@@ -2063,6 +2120,7 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifact_states WHERE org_id = ?`).run(orgId);

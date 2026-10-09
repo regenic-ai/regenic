@@ -12,7 +12,11 @@ import type { ContextSectionKind } from "./context-budget";
 import type { ContextCandidate, ContextCandidateKind } from "./context-candidate";
 import type { EvidenceReference } from "./context-consumer";
 import type { ContextRequest } from "./context-request";
-import type { ContextSnapshot } from "./context-snapshot";
+import type {
+  ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
+} from "./context-snapshot";
 import type { EventRecord, JsonValue, WeightHints } from "./ingestion";
 
 export interface ContextProjectionCapabilities {
@@ -72,6 +76,8 @@ export interface ContextArtifactStore extends ContextArtifactLifecycleStore {
   }>;
   putSnapshot(snapshot: ContextSnapshot): Promise<void>;
   getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null>;
+  putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void>;
+  listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]>;
   putBundle(bundle: ContextBundle): Promise<void>;
   getBundle(query: ContextBundleLookup): Promise<ContextBundle | null>;
   putCheckpoint(checkpoint: ContextProjectionCheckpoint): Promise<void>;

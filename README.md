@@ -540,10 +540,15 @@ The Personal API exposes the same durable path:
 
 ```http
 POST /v1/me/context/assemble
+GET  /v1/me/context/snapshots?thread_id=...&limit=...
 GET  /v1/me/context/snapshots/:snapshot_id
 POST /v1/me/context/replay
 POST /v1/me/context/ask
 ```
+
+Thread snapshot history is scoped to the current organization and principal and to
+the `desktop-context-pilot` consumer. Results are newest-first with a default limit
+of 20 and a maximum of 100.
 
 Evidence text is sent as untrusted user data, never as model instructions. A
 model answer is returned only when every submitted citation names a candidate

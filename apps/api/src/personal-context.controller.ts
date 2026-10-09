@@ -36,6 +36,14 @@ export class PersonalContextController {
     return this.guard(() => this.context.getSnapshot(snapshotId));
   }
 
+  @Get("snapshots")
+  listSnapshots(
+    @Query("thread_id") threadId?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.guard(() => this.context.listSnapshots(threadId, limit));
+  }
+
   @Get("artifacts")
   listArtifacts() {
     return this.guard(() => this.context.listArtifacts());

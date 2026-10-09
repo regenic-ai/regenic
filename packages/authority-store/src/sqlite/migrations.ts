@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 40;
+export const LATEST_SCHEMA_VERSION = 41;
 
 export const MIGRATIONS = [
   {
@@ -875,6 +875,30 @@ export const MIGRATIONS = [
     sql: `
       CREATE INDEX events_org_occurred_idx
         ON events (org_id, occurred_at, id);
+    `,
+  },
+  {
+    version: 41,
+    sql: `
+      CREATE TABLE context_snapshot_index (
+        org_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        snapshot_id TEXT NOT NULL,
+        principal_actor_type TEXT NOT NULL,
+        principal_actor_id TEXT NOT NULL,
+        consumer_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        PRIMARY KEY (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id
+        )
+      );
+      CREATE INDEX context_snapshot_index_query_idx
+        ON context_snapshot_index (
+          org_id, thread_id, principal_actor_type, principal_actor_id,
+          consumer_id, created_at DESC, snapshot_id DESC
+        );
     `,
   },
 ] as const;

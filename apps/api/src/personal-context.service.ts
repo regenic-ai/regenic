@@ -71,6 +71,7 @@ const ASK_KEYS = new Set([
   "budget",
   "requested_kinds",
 ]);
+const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
 
 export class PersonalContextError extends Error {
   constructor(
@@ -113,6 +114,16 @@ export class PersonalContextService {
       throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context snapshot was not found");
     }
     return snapshot;
+  }
+
+  async listSnapshots(threadId?: string, limit?: string) {
+    return this.runtime.requireHost().get("context-artifacts").listSnapshotIndex({
+      org_id: this.runtime.orgId(),
+      thread_id: requiredString(threadId, "thread_id"),
+      principal: this.principal(),
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      limit: querySafeInteger(limit, "limit", 20, 1, 100),
+    });
   }
 
   async listArtifacts(): Promise<ContextArtifact[]> {
@@ -1751,4 +1762,3 @@ function asRecord(value: unknown): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
-
