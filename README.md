@@ -550,6 +550,41 @@ Thread snapshot history is scoped to the current organization and principal and 
 the `desktop-context-pilot` consumer. Results are newest-first with a default limit
 of 20 and a maximum of 100.
 
+### Context Pilot thread history
+
+To create a history entry, assemble Context for exactly one thread with the desktop
+consumer. A Snapshot is immutable, so a repeated request with the same authorized
+inputs converges on the same Snapshot rather than replacing it.
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/assemble \
+  -H "content-type: application/json" \
+  -d '{
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"],
+    "filters": { "thread_ids": ["synthetic-chat:chat-1"] },
+    "temporal": { "mode": "current" },
+    "budget": {
+      "profile": "desktop-thread-preview-v1",
+      "max_tokens": 2000,
+      "max_items": 20,
+      "max_raw_evidence": 20
+    },
+    "requested_kinds": ["event"]
+  }'
+```
+
+Then list saved history for that thread:
+
+```bash
+curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Achat-1"
+```
+
+Each result is an association, not a new grant. To replay a selected Snapshot,
+use its `snapshot_id` with the same consumer, purpose, and allowed uses that
+created it. The history endpoint does not expand replay permissions.
+
 Evidence text is sent as untrusted user data, never as model instructions. A
 model answer is returned only when every submitted citation names a candidate
 and Event already present in the authorized bundle. Model output is not written

@@ -543,6 +543,39 @@ POST /v1/me/context/ask
 线程 Snapshot 历史绑定当前组织、当前 principal 与 `desktop-context-pilot`
 consumer，按时间倒序返回；默认最多 20 条，最大 100 条。
 
+### Context Pilot 线程历史
+
+要创建一条历史记录，请使用 desktop consumer 且只针对一个线程 assemble Context。
+Snapshot 不可变：相同的授权输入会收敛到同一个 Snapshot，而不会覆盖它。
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/assemble \
+  -H "content-type: application/json" \
+  -d '{
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"],
+    "filters": { "thread_ids": ["synthetic-chat:chat-1"] },
+    "temporal": { "mode": "current" },
+    "budget": {
+      "profile": "desktop-thread-preview-v1",
+      "max_tokens": 2000,
+      "max_items": 20,
+      "max_raw_evidence": 20
+    },
+    "requested_kinds": ["event"]
+  }'
+```
+
+然后读取该线程已保存的历史：
+
+```bash
+curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Achat-1"
+```
+
+每条结果都是关联关系，不是新的授权。重放某个 Snapshot 时，使用其 `snapshot_id`，
+并保持创建时的 consumer、purpose 与 allowed uses。历史 API 不会扩大 replay 权限。
+
 证据正文作为不可信 user data 发送给模型，绝不作为模型 instruction。只有当模型提交的每条
 citation 都指向授权 bundle 中已有的 candidate 与 Event 时，回答才会返回。模型输出不会
 写回 Event、Artifact、Claim，也不会直接成为已接受事实。
