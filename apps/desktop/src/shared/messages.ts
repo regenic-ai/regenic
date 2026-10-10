@@ -160,6 +160,7 @@ export const en = {
   "thread.contextHistoryError": "Could not load saved context history",
   "thread.contextHistoryLoadMore": "Load older snapshots",
   "thread.contextHistoryLoading": "Loading history…",
+  "thread.contextHistoryRetry": "Retry",
   "thread.contextEvidenceUnavailable": "This evidence is outside the loaded message window.",
 
   "work.hint.task": "This looks like work. Set a rule so an assistant can take it.",
@@ -934,6 +935,7 @@ export const zh: Record<MessageKey, string> = {
   "thread.contextHistoryError": "无法加载保存的上下文历史",
   "thread.contextHistoryLoadMore": "加载更早的快照",
   "thread.contextHistoryLoading": "正在加载历史…",
+  "thread.contextHistoryRetry": "重试",
   "thread.contextEvidenceUnavailable": "这条证据不在当前已加载的消息窗口中。",
 
   "work.hint.task": "这像是一项工作。设一条规则，交给助手。",
