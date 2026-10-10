@@ -170,6 +170,7 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
         && entry.principal.actor_type === stableQuery.principal.actor_type
         && entry.principal.actor_id === stableQuery.principal.actor_id
         && entry.consumer_id === stableQuery.consumer_id
+        && (!stableQuery.purpose || entry.purpose === stableQuery.purpose)
       )
       .filter((entry) => !stableQuery.before_created_at
         || entry.created_at < stableQuery.before_created_at

@@ -1113,6 +1113,11 @@ describe("personal context API", () => {
       snapshot_id: "snapshot-other-consumer",
       consumer_id: "other-consumer",
     });
+    await authority.putSnapshotIndex({
+      ...visibleEntry,
+      snapshot_id: "snapshot-other-purpose",
+      purpose: "another desktop operation",
+    });
     const olderEntry = {
       ...visibleEntry,
       snapshot_id: "snapshot-older",

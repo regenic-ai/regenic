@@ -921,20 +921,25 @@ export class PostgresAuthorityStore
     const validation = validateContextSnapshotIndexQuery(query);
     requireContextValue(validation, "snapshot index query");
     const stableQuery = validation.success ? validation.data : query;
+    const purpose = stableQuery.purpose
+      ? "AND payload_json ->> 'purpose' = $6"
+      : "";
+    const cursorParameter = stableQuery.purpose ? 7 : 6;
     const cursor = stableQuery.before_created_at
       ? `
           AND (
-            created_at < $6 OR (created_at = $6 AND snapshot_id < $7)
+            created_at < $${cursorParameter} OR (created_at = $${cursorParameter} AND snapshot_id < $${cursorParameter + 1})
           )
         `
       : "";
-    const limitParameter = stableQuery.before_created_at ? "$8" : "$6";
+    const limitParameter = `$${cursorParameter + (stableQuery.before_created_at ? 2 : 0)}`;
     const rows = await this.query<{ payload_json: unknown }>(
       `
         SELECT payload_json
         FROM context_snapshot_index
         WHERE org_id = $1 AND thread_id = $2
           AND principal_actor_type = $3 AND principal_actor_id = $4 AND consumer_id = $5
+          ${purpose}
           ${cursor}
         ORDER BY created_at DESC, snapshot_id DESC
         LIMIT ${limitParameter}
@@ -945,6 +950,7 @@ export class PostgresAuthorityStore
         stableQuery.principal.actor_type,
         stableQuery.principal.actor_id,
         stableQuery.consumer_id,
+        ...(stableQuery.purpose ? [stableQuery.purpose] : []),
         ...(stableQuery.before_created_at
           ? [stableQuery.before_created_at, stableQuery.before_snapshot_id!]
           : []),

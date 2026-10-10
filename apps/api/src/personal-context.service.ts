@@ -72,6 +72,7 @@ const ASK_KEYS = new Set([
   "requested_kinds",
 ]);
 const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
+const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
 
 export class PersonalContextError extends Error {
   constructor(
@@ -134,6 +135,7 @@ export class PersonalContextService {
       thread_id: requiredString(threadId, "thread_id"),
       principal: this.principal(),
       consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
       limit: querySafeInteger(limit, "limit", 20, 1, 100),
       ...(beforeCreatedAt === undefined ? {} : {
         before_created_at: requiredTimestamp(beforeCreatedAt, "before_created_at"),

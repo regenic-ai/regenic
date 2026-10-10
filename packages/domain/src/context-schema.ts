@@ -451,6 +451,7 @@ export const ContextSnapshotIndexQuerySchema: z.ZodType<ContextSnapshotIndexQuer
     thread_id: nonEmptyStringSchema,
     principal: ActorRefSchema,
     consumer_id: nonEmptyStringSchema,
+    purpose: nonEmptyStringSchema.optional(),
     limit: nonNegativeIntegerSchema.min(1).max(100).optional(),
     before_created_at: timestampSchema.optional(),
     before_snapshot_id: nonEmptyStringSchema.optional(),
