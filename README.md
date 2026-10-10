@@ -586,6 +586,20 @@ Each result is an association, not a new grant. To replay a selected Snapshot,
 use its `snapshot_id` with the same consumer, purpose, and allowed uses that
 created it. The history endpoint does not expand replay permissions.
 
+#### Troubleshooting empty thread history
+
+History is intentionally empty unless the original assemble request used exactly
+one `filters.thread_ids` value. Requests without a thread filter or with multiple
+threads still create usable Snapshots, but do not create a thread-history
+association. Existing Snapshots are not backfilled because their source thread
+cannot be inferred reliably.
+
+The list is also isolated by organization, principal, and consumer. Confirm that
+the request is using the same Personal API identity and
+`desktop-context-pilot` consumer as the assemble request. For a local
+diagnostic, run `context-snapshot-history --thread <thread-id>` with the same
+local org, principal, and consumer options used to create the Snapshot.
+
 Evidence text is sent as untrusted user data, never as model instructions. A
 model answer is returned only when every submitted citation names a candidate
 and Event already present in the authorized bundle. Model output is not written
