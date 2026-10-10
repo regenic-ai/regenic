@@ -1286,10 +1286,19 @@ export async function replayPersonalContext(
 
 export async function fetchPersonalContextHistory(
   threadId: string,
-  signal?: AbortSignal,
+  options?: {
+    before?: Pick<PersonalContextSnapshotIndexEntry, "created_at" | "snapshot_id">;
+    signal?: AbortSignal;
+  },
 ): Promise<PersonalContextSnapshotIndexEntry[]> {
   const query = new URLSearchParams({ thread_id: threadId, limit: "20" });
-  const response = await kernelFetch(`/v1/me/context/snapshots?${query}`, { signal });
+  if (options?.before) {
+    query.set("before_created_at", options.before.created_at);
+    query.set("before_snapshot_id", options.before.snapshot_id);
+  }
+  const response = await kernelFetch(`/v1/me/context/snapshots?${query}`, {
+    signal: options?.signal,
+  });
   if (!response.ok) {
     throw new Error(`context history ${response.status}`);
   }
