@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 43;
+export const PG_SCHEMA_VERSION = 44;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -451,6 +451,14 @@ CREATE INDEX connector_sync_state_gap_idx
   );
 `,
   },
+  {
+    version: 44,
+    sql: `
+CREATE INDEX IF NOT EXISTS events_parent_event_idx
+  ON events (parent_event_id)
+  WHERE parent_event_id IS NOT NULL;
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -488,6 +496,9 @@ CREATE INDEX events_content_hash_idx ON events (content_hash);
 CREATE INDEX events_org_ingested_idx ON events (org_id, ingested_at, id);
 CREATE INDEX events_org_thread_occurred_idx
   ON events (org_id, thread_id, occurred_at, id);
+CREATE INDEX events_parent_event_idx
+  ON events (parent_event_id)
+  WHERE parent_event_id IS NOT NULL;
 
 CREATE TABLE source_heads (
   org_id TEXT NOT NULL,

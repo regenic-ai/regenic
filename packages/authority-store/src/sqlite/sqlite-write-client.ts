@@ -258,20 +258,32 @@ function resolveWorkerPath(): string {
 
 function waitForReady(worker: Worker): Promise<void> {
   return new Promise((resolve, reject) => {
-    const onMessage = (message: { type?: string }) => {
-      if (message?.type !== "ready") {
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) {
         return;
       }
+      settled = true;
       cleanup();
-      resolve();
+      settle();
     };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
+    const onMessage = (message: { type?: string; message?: string; code?: string }) => {
+      if (message?.type === "ready") {
+        finish(() => resolve());
+        return;
+      }
+      if (message?.type === "fatal") {
+        finish(() => {
+          worker.terminate();
+          reject(fatalWorkerError(message));
+        });
+      }
+    };
+    const onError = (error: unknown) => {
+      finish(() => reject(describeWorkerError(error)));
     };
     const onExit = (code: number) => {
-      cleanup();
-      reject(new Error(`Authority write worker exited before ready (${code})`));
+      finish(() => reject(new Error(`Authority write worker exited before ready (${code})`)));
     };
     const cleanup = () => {
       worker.off("message", onMessage);
@@ -282,4 +294,43 @@ function waitForReady(worker: Worker): Promise<void> {
     worker.on("error", onError);
     worker.on("exit", onExit);
   });
+}
+
+function fatalWorkerError(message: { message?: string; code?: string }): Error {
+  const text =
+    message.message?.trim() ||
+    (message.code
+      ? `Authority database failed to open (${message.code})`
+      : "Authority database failed to open");
+  const error = new Error(text);
+  if (message.code) {
+    (error as Error & { code?: string }).code = message.code;
+  }
+  return error;
+}
+
+function describeWorkerError(error: unknown): Error {
+  if (
+    error instanceof Error &&
+    error.message.trim().length > 0 &&
+    !error.message.includes("[object Object]")
+  ) {
+    return error;
+  }
+  const record =
+    error && typeof error === "object"
+      ? (error as { code?: unknown; message?: unknown })
+      : undefined;
+  const code = typeof record?.code === "string" ? record.code : undefined;
+  const message =
+    typeof record?.message === "string" && record.message.trim().length > 0
+      ? record.message
+      : code
+        ? `Authority write worker failed (${code})`
+        : "Authority write worker failed";
+  const wrapped = new Error(message);
+  if (code) {
+    (wrapped as Error & { code?: string }).code = code;
+  }
+  return wrapped;
 }

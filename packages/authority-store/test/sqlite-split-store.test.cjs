@@ -273,6 +273,19 @@ describe("sqlite read/write split", () => {
     await store.close();
   });
 
+  it("reports the sqlite message when the write worker cannot open the database", async () => {
+    const root = await createRoot();
+    await assert.rejects(
+      () => SqliteSplitAuthorityStore.open(root),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.doesNotMatch(error.message, /\[object Object\]/);
+        assert.match(error.message, /database|SQLITE|unable to open/i);
+        return true;
+      },
+    );
+  });
+
   it("revives an authority conflict from the write worker", async () => {
     const root = await createRoot();
     const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));

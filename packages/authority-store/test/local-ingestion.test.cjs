@@ -934,6 +934,17 @@ describe("local ingestion persistence", () => {
       generation: 1,
       updated_at: "2026-08-26T00:00:00.000Z",
     });
+    const seeded = await authorityStore.listInbox("local-owner", { limit: 1 });
+    await authorityStore.putDailyDigestCoverageAlert({
+      id: "alert-clear",
+      org_id: "local-owner",
+      local_date: "2026-08-26",
+      generation: "generation-1",
+      event_id: seeded[0].event.id,
+      reason_code: "omitted_high_signal",
+      status: "open",
+      created_at: "2026-08-26T00:00:00.000Z",
+    });
     const before = await authorityStore.summarizeStore("local-owner");
     assert.ok(before.events >= 1);
     assert.ok(before.conversations >= 1);
@@ -978,6 +989,10 @@ describe("local ingestion persistence", () => {
     assert.equal(syncCatalog.members.length, 0);
     assert.equal(syncCatalog.catalog, null);
     assert.equal(syncState, null);
+    assert.deepEqual(
+      await authorityStore.listDailyDigestCoverageAlerts({ org_id: "local-owner" }),
+      [],
+    );
     authorityStore.close();
   });
 });

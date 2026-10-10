@@ -2159,6 +2159,11 @@ export class PostgresAuthorityStore
       );
       await this.execute(`DELETE FROM source_heads WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM thread_heads WHERE org_id = $1`, [orgId], client);
+      await this.execute(
+        `DELETE FROM daily_digest_coverage_alerts WHERE org_id = $1`,
+        [orgId],
+        client,
+      );
       await this.execute(`DELETE FROM events WHERE org_id = $1`, [orgId], client);
       await this.execute(
         `

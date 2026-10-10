@@ -2155,6 +2155,9 @@ export class SqliteAuthorityStore
         .run(orgId);
       this.database.prepare(`DELETE FROM source_heads WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM thread_heads WHERE org_id = ?`).run(orgId);
+      this.database
+        .prepare(`DELETE FROM daily_digest_coverage_alerts WHERE org_id = ?`)
+        .run(orgId);
       this.database.prepare(`DELETE FROM events WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(

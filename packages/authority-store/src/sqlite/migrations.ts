@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 42;
+export const LATEST_SCHEMA_VERSION = 43;
 
 export const MIGRATIONS = [
   {
@@ -952,6 +952,14 @@ export const MIGRATIONS = [
         ON connector_sync_state (
           installation_id, phase, stream_key, generation, media_pending, idle_until
         );
+    `,
+  },
+  {
+    version: 43,
+    sql: `
+      CREATE INDEX events_parent_event_idx
+        ON events (parent_event_id)
+        WHERE parent_event_id IS NOT NULL;
     `,
   },
 ] as const;
