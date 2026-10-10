@@ -925,6 +925,9 @@ export class SqliteAuthorityStore
     const validation = validateContextSnapshotIndexQuery(query);
     requireContextValue(validation, "snapshot index query");
     const stableQuery = validation.success ? validation.data : query;
+    const purpose = stableQuery.purpose
+      ? "AND json_extract(payload_json, '$.purpose') = ?"
+      : "";
     const cursor = stableQuery.before_created_at
       ? `
         AND (
@@ -937,6 +940,7 @@ export class SqliteAuthorityStore
       FROM context_snapshot_index
       WHERE org_id = ? AND thread_id = ?
         AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+        ${purpose}
         ${cursor}
       ORDER BY created_at DESC, snapshot_id DESC
       LIMIT ?
@@ -946,6 +950,7 @@ export class SqliteAuthorityStore
       stableQuery.principal.actor_type,
       stableQuery.principal.actor_id,
       stableQuery.consumer_id,
+      ...(stableQuery.purpose ? [stableQuery.purpose] : []),
       ...(stableQuery.before_created_at
         ? [
           stableQuery.before_created_at,
