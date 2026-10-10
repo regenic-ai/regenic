@@ -14,14 +14,14 @@
       "default": "./dist/kernel-reachability.js"
     }
   },
-
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/connector-contract build && pnpm --filter @regenic/connector-test-utils build && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm --filter @regenic/plugin-host build && pnpm run build && node --test test/*.test.cjs"
+    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/connector-contract build && pnpm --filter @regenic/connector-test-utils build && pnpm run build && node --test test/*.test.cjs"
   },
   "dependencies": {
     "@regenic/connector-contract": "workspace:*",
+    "@regenic/connector-test-utils": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
     "zod": "^3.24.1"
   },

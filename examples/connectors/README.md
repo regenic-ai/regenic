@@ -13,4 +13,4 @@ A package is a plugin when `package.json` has `regenic.plugin`, `engines.regenic
 
 Drivers receive `ConnectorHost`: `connectors`, `egress`, `plugin`, `now`, `secrets`. They do not get `authority` or `ingest`, including inside `plugin()` apply. Secret catalog fields are stored in the keychain; `config` keeps no token.
 
-Peer the in-repo `@regenic/domain` for types, `channelRecord`, `verifyChannelDriverConformance`, `probeLocalHttp`, `probeLocalCommand`, and `createMemoryEgressQueue`.
+Install `@regenic/plugin-host` and `@regenic/connector-contract` for `channelRecord`, `probeLocalHttp`, `probeLocalCommand`, and `createMemoryEgressQueue`. Dev-depend on `@regenic/connector-test-utils` for `MemoryConnectorRegistry`, `MemoryEgressRegistry`, and `verifyChannelDriverConformance`.

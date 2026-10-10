@@ -13,6 +13,7 @@ COPY packages/authority-store/package.json packages/authority-store/
 COPY packages/blob-store/package.json packages/blob-store/
 COPY packages/config/package.json packages/config/
 COPY packages/connector-contract/package.json packages/connector-contract/
+COPY packages/connector-test-utils/package.json packages/connector-test-utils/
 COPY packages/connector-host/package.json packages/connector-host/
 COPY packages/context-engine/package.json packages/context-engine/
 COPY packages/cursor-connector/package.json packages/cursor-connector/
@@ -34,8 +35,9 @@ COPY tsconfig.base.json ./
 COPY packages ./packages
 COPY apps ./apps
 RUN pnpm --filter @regenic/plugin-host build \
-  && pnpm --filter @regenic/domain build \
   && pnpm --filter @regenic/connector-contract build \
+  && pnpm --filter @regenic/connector-test-utils build \
+  && pnpm --filter @regenic/domain build \
   && pnpm --filter @regenic/config build \
   && pnpm --filter @regenic/blob-store build \
   && pnpm --filter @regenic/authority-store build \

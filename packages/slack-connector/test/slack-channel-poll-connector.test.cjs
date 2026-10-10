@@ -1,13 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const {
-  ConnectorRunner,
-  IngestionService,
-  MemoryAuthorityStore,
-  MemoryBlobStore,
-  MemoryConnectorRuntimeStore,
-  verifyPollConnectorConformance,
-} = require("@regenic/domain");
+const { verifyPollConnectorConformance } = require("@regenic/connector-test-utils");
 const {
   SlackApiError,
   SlackChannelPollConnector,
@@ -60,45 +53,6 @@ describe("SlackChannelPollConnector", () => {
       live_seeded: true,
       history_pending: true,
     });
-  });
-
-  it("settles a Slack page through the shared connector runtime", async () => {
-    const connector = createConnector({
-      async conversationsHistory() {
-        return {
-          ok: true,
-          messages: [{ ts: "1723420800.000001", user: "U123", text: "Message" }],
-          response_metadata: { next_cursor: "cursor-2" },
-        };
-      },
-    });
-    const runtime = new MemoryConnectorRuntimeStore();
-    await runtime.createInstallation({
-      id: "slack-installation",
-      org_id: "local-owner",
-      connector_type: "slack-channel",
-      status: "enabled",
-      config: { channel_id: "C123" },
-      created_at: "2026-08-12T00:00:00.000Z",
-    });
-    const runner = new ConnectorRunner(
-      connector,
-      new IngestionService(new MemoryBlobStore(), new MemoryAuthorityStore()),
-      runtime,
-      () => "2026-08-12T00:00:00.000Z",
-    );
-
-    const run = await runner.poll({
-      installation_id: "slack-installation",
-      stream_key: "channel:C123",
-      lease_owner: "worker-a",
-      lease_duration_ms: 30_000,
-    });
-    const cursor = await runtime.getCursor("slack-installation", "channel:C123");
-
-    assert.equal(run.status, "completed");
-    assert.equal(run.result.records[0].status, "accepted");
-    assert.equal(cursor.cursor, "cursor-2");
   });
 
   it("raises a named error when Slack rejects conversations.history", async () => {

@@ -1,16 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
-import {
-  currentSyncLane,
-  DeadlineExceededError,
-  runInSyncLane,
-  SyncSlotPool,
-  withDeadline,
-  type SyncLane,
-} from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
@@ -155,7 +148,108 @@ export const LARK_CLI_CONCURRENCY =
   LARK_CLI_INTERACTIVE_SLOTS + LARK_CLI_LIVE_SLOTS + LARK_CLI_HISTORY_SLOTS;
 export const LARK_CLI_RETRIES = 2;
 
-const larkCliSlots = new SyncSlotPool({
+/** Process-local CLI slots. The host does not pass a lane; callers pick one from poll options. */
+export type LarkCliSlot = "interactive" | "live" | "history";
+
+const LARK_CLI_SLOTS: readonly LarkCliSlot[] = ["interactive", "live", "history"];
+const larkSlotContext = new AsyncLocalStorage<LarkCliSlot>();
+const hostAbortContext = new AsyncLocalStorage<AbortSignal>();
+
+export function runWithHostAbort<T>(signal: AbortSignal, work: () => T): T {
+  return hostAbortContext.run(signal, work);
+}
+
+function currentHostAbort(): AbortSignal | undefined {
+  return hostAbortContext.getStore();
+}
+
+class LarkCliSlotPool {
+  private active = 0;
+  private readonly bySlot = new Map<LarkCliSlot, number>();
+  private readonly waiters: Array<{ slot: LarkCliSlot; resolve: () => void }> = [];
+
+  constructor(
+    private readonly options: {
+      total: number;
+      reserved: Record<LarkCliSlot, number>;
+    },
+  ) {}
+
+  async withSlot<T>(slot: LarkCliSlot, work: () => Promise<T>): Promise<T> {
+    await this.acquire(slot);
+    try {
+      return await work();
+    } finally {
+      this.release(slot);
+    }
+  }
+
+  reset(): void {
+    this.active = 0;
+    this.bySlot.clear();
+    this.waiters.length = 0;
+  }
+
+  private async acquire(slot: LarkCliSlot): Promise<void> {
+    if (this.tryAcquire(slot)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.waiters.push({ slot, resolve });
+    });
+  }
+
+  private tryAcquire(slot: LarkCliSlot): boolean {
+    if (!this.canAcquire(slot)) {
+      return false;
+    }
+    this.active += 1;
+    this.bySlot.set(slot, (this.bySlot.get(slot) ?? 0) + 1);
+    return true;
+  }
+
+  private release(slot: LarkCliSlot): void {
+    this.active = Math.max(0, this.active - 1);
+    const count = this.bySlot.get(slot) ?? 0;
+    if (count <= 1) {
+      this.bySlot.delete(slot);
+    } else {
+      this.bySlot.set(slot, count - 1);
+    }
+    this.flushWaiters();
+  }
+
+  private canAcquire(slot: LarkCliSlot): boolean {
+    if (this.active >= this.options.total) {
+      return false;
+    }
+    let protectedOthers = 0;
+    for (const other of LARK_CLI_SLOTS) {
+      if (other === slot) {
+        continue;
+      }
+      const reserved = this.options.reserved[other];
+      const used = this.bySlot.get(other) ?? 0;
+      protectedOthers += Math.max(0, reserved - used);
+    }
+    return this.active + protectedOthers < this.options.total;
+  }
+
+  private flushWaiters(): void {
+    for (let index = 0; index < this.waiters.length; ) {
+      const waiter = this.waiters[index];
+      if (!waiter || !this.canAcquire(waiter.slot)) {
+        index += 1;
+        continue;
+      }
+      this.waiters.splice(index, 1);
+      this.tryAcquire(waiter.slot);
+      waiter.resolve();
+    }
+  }
+}
+
+const larkCliSlots = new LarkCliSlotPool({
   total: LARK_CLI_CONCURRENCY,
   reserved: {
     interactive: LARK_CLI_INTERACTIVE_SLOTS,
@@ -166,20 +260,68 @@ const larkCliSlots = new SyncSlotPool({
 
 const readStatusInflight = new Map<string, Promise<Map<string, boolean>>>();
 
-/** Catalog and media share the history process so they do not take a latest slot. */
-function larkCliSlotLane(): SyncLane {
-  const lane = currentSyncLane();
-  if (lane === "interactive") {
+export function runInLarkSlot<T>(slot: LarkCliSlot, work: () => T): T {
+  return larkSlotContext.run(slot, work);
+}
+
+function currentLarkSlot(): LarkCliSlot {
+  return larkSlotContext.getStore() ?? "live";
+}
+
+export function larkSlotForPoll(options?: {
+  older?: boolean;
+  latest?: boolean;
+  media?: boolean;
+}): LarkCliSlot {
+  if (options?.latest === true && options.older !== true) {
     return "interactive";
   }
-  if (lane === "history" || lane === "media" || lane === "catalog") {
+  if (options?.media === true || options?.older === true) {
     return "history";
   }
   return "live";
 }
 
 export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
-  return larkCliSlots.withSlot(larkCliSlotLane(), work);
+  return larkCliSlots.withSlot(currentLarkSlot(), work);
+}
+
+class LarkDeadlineError extends Error {
+  readonly code = "deadline_exceeded";
+
+  constructor(label: string) {
+    super(`${label} timed out`);
+    this.name = "LarkDeadlineError";
+  }
+}
+
+function withLocalDeadline<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return work;
+  }
+  const signal = AbortSignal.timeout(timeoutMs);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new LarkDeadlineError(label));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export function resetLarkCliSlot(): void {
@@ -519,7 +661,7 @@ export class LarkCliClient implements FeishuImClient {
         break;
       }
       try {
-        const result = await withDeadline(
+        const result = await withLocalDeadline(
           this.listChats({
             page_size: 50,
             page_token: pageToken,
@@ -535,7 +677,7 @@ export class LarkCliClient implements FeishuImClient {
         }
         pageToken = result.page_token;
       } catch (error) {
-        if (deadline && error instanceof DeadlineExceededError) {
+        if (deadline && error instanceof LarkDeadlineError) {
           break;
         }
         throw error;
@@ -1093,7 +1235,7 @@ export class LarkCliClient implements FeishuImClient {
       return new Map();
     }
     try {
-      const result = await runInSyncLane("live", () =>
+      const result = await runInLarkSlot("live", () =>
         this.runCli({
           command: [
             this.command,
@@ -1460,24 +1602,50 @@ export async function spawnLarkProcess(input: {
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr.push(chunk);
     });
+    let settled = false;
+    const hostAbort = currentHostAbort();
+    const finish = (settle: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      hostAbort?.removeEventListener("abort", onHostAbort);
+      settle();
+    };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new FeishuApiError(`lark-cli timed out after ${input.timeout_ms}ms`));
+      finish(() => {
+        reject(new FeishuApiError(`lark-cli timed out after ${input.timeout_ms}ms`));
+      });
     }, input.timeout_ms);
+    const onHostAbort = () => {
+      child.kill("SIGKILL");
+      finish(() => {
+        reject(new FeishuApiError("lark-cli aborted"));
+      });
+    };
+    if (hostAbort?.aborted) {
+      onHostAbort();
+      return;
+    }
+    hostAbort?.addEventListener("abort", onHostAbort, { once: true });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(
-        new FeishuApiError(
-          `Unable to start lark-cli (is it on PATH?): ${error.message}`,
-        ),
-      );
+      finish(() => {
+        reject(
+          new FeishuApiError(
+            `Unable to start lark-cli (is it on PATH?): ${error.message}`,
+          ),
+        );
+      });
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        exit_code: code ?? 1,
+      finish(() => {
+        resolve({
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+          exit_code: code ?? 1,
+        });
       });
     });
   });

@@ -31,23 +31,49 @@ for (const entry of readdirSync(path.join(root, "packages"), {
   ) {
     continue;
   }
-  const relative = path.join("packages", entry.name, "src");
-  scan(relative, (file, source) => {
-    for (const spec of importedSpecs(source)) {
-      if (
-        spec === "@regenic/authority-store" ||
-        spec === "@regenic/blob-store" ||
-        spec.startsWith("@regenic/authority-store/") ||
-        spec.startsWith("@regenic/blob-store/") ||
-        spec === "@regenic/api"
-      ) {
-        violations.push(
-          `${relativePath(file)}: Connector imports Core persistence ${spec}`,
-        );
+  for (const folder of ["src", "test"]) {
+    const relative = path.join("packages", entry.name, folder);
+    scan(relative, (file, source) => {
+      for (const spec of importedSpecs(source)) {
+        if (spec === "@regenic/domain" || spec.startsWith("@regenic/domain/")) {
+          violations.push(
+            `${relativePath(file)}: Connector imports kernel package ${spec}`,
+          );
+        }
+        if (
+          spec === "@regenic/authority-store" ||
+          spec === "@regenic/blob-store" ||
+          spec.startsWith("@regenic/authority-store/") ||
+          spec.startsWith("@regenic/blob-store/") ||
+          spec === "@regenic/api"
+        ) {
+          violations.push(
+            `${relativePath(file)}: Connector imports Core persistence ${spec}`,
+          );
+        }
       }
-    }
-  });
+    });
+  }
 }
+
+scan("packages/connector-test-utils/src", (file, source) => {
+  for (const spec of importedSpecs(source)) {
+    if (
+      spec === "@regenic/domain" ||
+      spec.startsWith("@regenic/domain/") ||
+      spec === "@regenic/authority-store" ||
+      spec === "@regenic/blob-store" ||
+      spec.startsWith("@regenic/authority-store/") ||
+      spec.startsWith("@regenic/blob-store/") ||
+      /^@regenic\/.+-connector$/.test(spec) ||
+      spec === "@regenic/whatsapp-personal"
+    ) {
+      violations.push(
+        `${relativePath(file)}: Connector test SDK imports kernel or connector package ${spec}`,
+      );
+    }
+  }
+});
 
 if (violations.length > 0) {
   console.error("Dependency boundary violations:");

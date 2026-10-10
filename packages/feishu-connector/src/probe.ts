@@ -1,7 +1,7 @@
 import {
   DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
   type CopyRef,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import {
   FeishuApiError,
   LarkCliClient,

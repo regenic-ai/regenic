@@ -2,13 +2,14 @@ import {
   shouldDeferWorkForSync,
   type SyncCatalogMember,
   type SyncPhase,
-  type SyncStreamState,
 } from "@regenic/domain";
 
 type SyncPhaseAuthority = {
   listInstallations(orgId: string): Promise<Array<{ id: string; status: string }>>;
   getSyncCatalog(installationId: string): Promise<{ members: SyncCatalogMember[] }>;
-  listSyncStates(installationId: string): Promise<SyncStreamState[]>;
+  listSyncPhaseHeads(
+    installationId: string,
+  ): Promise<Array<{ stream_key: string; phase: SyncPhase }>>;
 };
 
 export type OrgSyncPhaseIndex = Map<string, SyncPhase>;
@@ -51,16 +52,16 @@ export async function loadOrgSyncPhaseIndex(
       continue;
     }
     const catalog = await authority.getSyncCatalog(installation.id);
-    const states = new Map<string, SyncStreamState>();
-    for (const state of await authority.listSyncStates(installation.id)) {
-      states.set(state.stream_key, state);
+    const states = new Map<string, SyncPhase>();
+    for (const state of await authority.listSyncPhaseHeads(installation.id)) {
+      states.set(state.stream_key, state.phase);
     }
     for (const member of catalog.members) {
       const threadId = member.thread_id?.trim();
       if (!threadId || index.has(threadId)) {
         continue;
       }
-      const phase = states.get(member.stream_key)?.phase;
+      const phase = states.get(member.stream_key);
       if (phase) {
         index.set(threadId, phase);
       }

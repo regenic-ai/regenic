@@ -7,13 +7,16 @@ import {
   type IngestBatch,
   type PollResult,
   type SyncPollHint,
-} from "@regenic/domain";
-import type {
-  FeishuChatMode,
-  FeishuHistoryItem,
-  FeishuImClient,
-  FeishuListInput,
-  FeishuSortType,
+} from "@regenic/connector-contract";
+import {
+  larkSlotForPoll,
+  runInLarkSlot,
+  runWithHostAbort,
+  type FeishuChatMode,
+  type FeishuHistoryItem,
+  type FeishuImClient,
+  type FeishuListInput,
+  type FeishuSortType,
 } from "./feishu-cli-client";
 import { rememberFeishuInbound } from "./feishu-attention";
 import {
@@ -137,6 +140,22 @@ export class FeishuChatPollConnector {
   }
 
   async poll(
+    cursor: ConnectorCursor | null,
+    options?: {
+      older?: boolean;
+      latest?: boolean;
+      media?: boolean;
+      signal?: AbortSignal;
+    },
+  ): Promise<PollResult> {
+    const run = () =>
+      runInLarkSlot(larkSlotForPoll(options), () =>
+        this.pollInSlot(cursor, options),
+      );
+    return options?.signal ? runWithHostAbort(options.signal, run) : run();
+  }
+
+  private async pollInSlot(
     cursor: ConnectorCursor | null,
     options?: { older?: boolean; latest?: boolean; media?: boolean },
   ): Promise<PollResult> {

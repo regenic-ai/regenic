@@ -1,23 +1,14 @@
 /** Opaque work-unit type stamped by a connector. Kernel equality-matches only. */
 
 import type { CopyRef } from "./copy";
+import {
+  normalizeUnitKind,
+  type SubjectCatalog,
+  type UnitKindEntry,
+} from "@regenic/connector-contract";
 
-export interface UnitKindEntry {
-  id: string;
-  label: CopyRef;
-}
-
-export interface SubjectCatalog {
-  kinds: UnitKindEntry[];
-}
-
-export function normalizeUnitKind(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const id = value.trim();
-  return id.length > 0 ? id : undefined;
-}
+export { normalizeUnitKind };
+export type { SubjectCatalog, UnitKindEntry };
 
 export function labelForUnitKind(
   catalogs: ReadonlyArray<{

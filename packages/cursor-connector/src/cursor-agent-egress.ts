@@ -1,4 +1,4 @@
-import type { DeliveryReceipt, EgressAdapter, EgressCapabilities, SendIntent } from "@regenic/domain";
+import type { DeliveryReceipt, EgressAdapter, EgressCapabilities, SendIntent } from "@regenic/connector-contract";
 import { CursorApiError } from "./cursor-api-client";
 import { CURSOR_SOURCE } from "./cursor-agent-poll-connector";
 

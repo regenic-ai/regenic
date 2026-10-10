@@ -1,14 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const {
-  ConnectorRunner,
-  IngestionService,
-  MemoryAuthorityStore,
-  MemoryBlobStore,
-  MemoryConnectorRuntimeStore,
-  SURFACE_MEDIA_TYPE,
-  verifyPollConnectorConformance,
-} = require("@regenic/domain");
+const { SURFACE_MEDIA_TYPE, conversationId } = require("@regenic/connector-contract");
+const { verifyPollConnectorConformance } = require("@regenic/connector-test-utils");
 const {
   CursorAgentPollConnector,
   classifyCursorMessage,
@@ -158,40 +151,6 @@ describe("CursorAgentPollConnector", () => {
     });
     assert.equal(report.record_count, 3);
     assert.equal(report.next_cursor, "msg-2");
-  });
-
-  it("settles a page through the shared connector runtime", async () => {
-    const connector = createConnector({
-      async getAgent() {
-        return agent();
-      },
-      async getConversation() {
-        return { id: "bc-1", messages: messages() };
-      },
-    });
-    const runtime = new MemoryConnectorRuntimeStore();
-    await runtime.createInstallation({
-      id: "cursor-installation",
-      org_id: "local-owner",
-      connector_type: "cursor-agent",
-      status: "enabled",
-      config: { agent_id: "bc-1" },
-      created_at: "2026-08-21T00:00:00.000Z",
-    });
-    const runner = new ConnectorRunner(
-      connector,
-      new IngestionService(new MemoryBlobStore(), new MemoryAuthorityStore()),
-      runtime,
-      () => "2026-08-21T00:06:00.000Z",
-    );
-    const run = await runner.poll({
-      installation_id: "cursor-installation",
-      stream_key: "agent:bc-1",
-      lease_owner: "worker-a",
-      lease_duration_ms: 30_000,
-    });
-    assert.equal(run.status, "completed");
-    assert.equal(run.result.records[0].status, "accepted");
   });
 
   it("drops empty and unknown conversation nodes", () => {
@@ -356,7 +315,6 @@ describe("CursorAgentPollConnector", () => {
   });
 
   it("keeps local SDK turn ids on the same inbox conversation as the agent", async () => {
-    const { conversationId } = require("@regenic/domain");
     const agentId = "agent-90c1d4ef-ad4c-4e48-a6bb-bb9ad3baca92";
     const connector = new CursorAgentPollConnector(
       {

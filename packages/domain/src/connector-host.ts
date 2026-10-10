@@ -1,11 +1,13 @@
-import type { Host, HostContext, Plugin, PluginHandle } from "@regenic/plugin-host";
+import type { Host, HostContext, Plugin } from "@regenic/plugin-host";
+import type { ConnectorHost, ConnectorSecrets } from "@regenic/connector-contract";
 import type { ConnectorRegistry } from "./connector-registry";
 import type { EgressRegistry } from "./egress";
 import {
   readInstallSecret,
   writeKeychainSecret,
-  type KeychainSecretRef,
 } from "./keychain";
+
+export type { ConnectorHost, ConnectorSecrets };
 
 const WRAPPED = Symbol("regenic.connectorHost");
 const DRIVER_SERVICES = new Set(["connectors", "egress"]);
@@ -16,24 +18,11 @@ const KERNEL_SERVICES = new Set([
   "executors",
 ]);
 
-export interface ConnectorSecrets {
-  read(connectorType: string, installationId: string, field: string): Promise<string | undefined>;
-  write(ref: KeychainSecretRef, secret: string): void;
-}
-
 /**
  * What a ChannelDriver may use. Kernel services (authority, ingest, blobs,
  * executors) stay off this surface so extra packages cannot write Events.
  * `plugin()` apply() sees the same narrow `get`.
  */
-export interface ConnectorHost {
-  get(name: "connectors"): ConnectorRegistry;
-  get(name: "egress"): EgressRegistry;
-  plugin<C>(plugin: Plugin<C>, config?: C): Promise<PluginHandle>;
-  now(): string;
-  secrets: ConnectorSecrets;
-}
-
 export function asConnectorHost(host: Host | ConnectorHost): ConnectorHost {
   if (isConnectorHost(host)) {
     return host;

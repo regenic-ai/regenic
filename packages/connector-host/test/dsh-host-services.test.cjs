@@ -7,7 +7,8 @@ const {
   ingestPlugin,
 } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
-const { DshApiError, createDshHostRpcServices } = require("../dist");
+const { DshApiError } = require("@regenic/dsh-connector");
+const { createDshHostRpcServices } = require("../dist");
 
 const HISTORY_EVENTS = [
   {
@@ -257,6 +258,13 @@ function memoryAuthority() {
     get(_target, prop) {
       if (prop === "then") {
         return undefined;
+      }
+      if (prop === "commitSyncPage") {
+        return async (input) => {
+          const committed = await events.commitSyncPage(input);
+          await runtime.commitSyncPage(input);
+          return committed;
+        };
       }
       const runtimeValue = runtime[prop];
       if (typeof runtimeValue === "function") {

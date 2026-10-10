@@ -1,6 +1,13 @@
+import type {
+  ResultEnvelope,
+  WorkRun,
+  WorkRunStatus,
+} from "@regenic/connector-contract";
 import type { ContentPart, JsonValue } from "./ingestion";
 import type { RecordClass } from "./record-class";
 import type { ThreadFacet } from "./thread-facet";
+
+export type { ResultEnvelope, WorkRun, WorkRunStatus };
 
 export const WORK_ITEM_STATUSES = [
   "open",
@@ -90,33 +97,6 @@ export interface WorkItem {
   thread_facet: ThreadFacet;
   status: WorkItemStatus;
   recipe_id?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export type WorkRunStatus =
-  | "running"
-  | "waiting_human"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export interface ResultEnvelope {
-  summary: string;
-  content?: ContentPart[];
-  evidence_event_ids?: string[];
-}
-
-export interface WorkRun {
-  id: string;
-  org_id: string;
-  work_item_id: string;
-  recipe_id: string;
-  executor_type: string;
-  external_run_id?: string;
-  agent_thread_id?: string;
-  status: WorkRunStatus;
-  result?: ResultEnvelope;
   created_at: string;
   updated_at: string;
 }

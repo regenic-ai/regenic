@@ -1,5 +1,5 @@
 import type { JsonValue } from "./ingestion";
-import type { SyncLane } from "./sync-contracts";
+import type { SyncLane, SyncPhase } from "./sync-contracts";
 
 export type SyncRunMode = "quick_start" | "continuous" | "archive";
 export type SyncRunStatus =
@@ -140,6 +140,16 @@ export interface SyncWorkIdentity {
   generation: number;
 }
 
+/** A lane owed by the current phase that has no pending or running row. */
+export interface SyncWorkGap {
+  stream_key: string;
+  phase: SyncPhase;
+  media_pending: boolean;
+  idle_until?: string;
+  generation: number;
+  missing_lane: SyncLane;
+}
+
 export interface WakeUnassignedSyncWork {
   installation_id: string;
   stream_keys: readonly string[];
@@ -162,6 +172,11 @@ export interface SyncWorkStore {
       installation_id: string;
     },
   ): Promise<SyncWorkIdentity[]>;
+  /**
+   * Phase rows whose owed lanes are missing. The result is the gap only:
+   * no cursor payload.
+   */
+  listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]>;
   wakeUnassignedSyncWork(input: WakeUnassignedSyncWork): Promise<number>;
 }
 

@@ -43,6 +43,8 @@ import {
   validateStandardUsage,
   processSyncMetrics,
   recordSyncDuration,
+  dueSyncWorkId,
+  syncWorkEnsurePlan,
   syncWorkPriority,
   validateSyncRunOptions,
 } from "@regenic/domain";
@@ -137,6 +139,7 @@ import type {
   SyncCatalogSnapshot,
   SyncCatalogView,
   SyncPhase,
+  SyncPhaseHead,
   SyncStreamState,
   ClaimSyncWork,
   CommandSyncRun,
@@ -148,6 +151,7 @@ import type {
   RenewSyncWork,
   SettleSyncWork,
   SyncRun,
+  SyncWorkGap,
   SyncWorkIdentity,
   SyncWorkRecord,
   UnassignedSyncWorkQuery,
@@ -3975,6 +3979,30 @@ export class PostgresAuthorityStore
     });
   }
 
+  async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
+    const rows = await this.query<{
+      stream_key: string;
+      phase: SyncPhase;
+      media_pending: boolean;
+      generation: number;
+      idle_until: string | null;
+    }>(
+      `
+        SELECT stream_key, phase, media_pending, generation, idle_until
+        FROM connector_sync_state
+        WHERE installation_id = $1
+      `,
+      [installationId],
+    );
+    return rows.map((row) => ({
+      stream_key: row.stream_key,
+      phase: row.phase,
+      media_pending: Boolean(row.media_pending),
+      generation: Number(row.generation),
+      idle_until: row.idle_until ?? undefined,
+    }));
+  }
+
   async listSyncStates(installationId: string): Promise<SyncStreamState[]> {
     const rows = await this.query<SyncStateRow>(
       `
@@ -4006,34 +4034,176 @@ export class PostgresAuthorityStore
   }
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
-    await this.execute(
-      `
-        INSERT INTO connector_sync_state (
-          installation_id, stream_key, phase, live_cursor, history_cursor,
-          media_pending, idle_until, generation, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        ON CONFLICT (installation_id, stream_key) DO UPDATE SET
-          phase = EXCLUDED.phase,
-          live_cursor = EXCLUDED.live_cursor,
-          history_cursor = EXCLUDED.history_cursor,
-          media_pending = EXCLUDED.media_pending,
-          idle_until = EXCLUDED.idle_until,
-          generation = EXCLUDED.generation,
-          updated_at = EXCLUDED.updated_at
-      `,
-      [
-        state.installation_id,
-        state.stream_key,
-        state.phase,
-        state.live_cursor ?? null,
-        state.history_cursor ?? null,
-        state.media_pending,
-        state.idle_until ?? null,
-        state.generation,
-        state.updated_at,
-      ],
-    );
+    await this.withTx(async (client) => {
+      await client.query(
+        `
+          INSERT INTO connector_sync_state (
+            installation_id, stream_key, phase, live_cursor, history_cursor,
+            media_pending, idle_until, generation, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (installation_id, stream_key) DO UPDATE SET
+            phase = EXCLUDED.phase,
+            live_cursor = EXCLUDED.live_cursor,
+            history_cursor = EXCLUDED.history_cursor,
+            media_pending = EXCLUDED.media_pending,
+            idle_until = EXCLUDED.idle_until,
+            generation = EXCLUDED.generation,
+            updated_at = EXCLUDED.updated_at
+        `,
+        [
+          state.installation_id,
+          state.stream_key,
+          state.phase,
+          state.live_cursor ?? null,
+          state.history_cursor ?? null,
+          state.media_pending,
+          state.idle_until ?? null,
+          state.generation,
+          state.updated_at,
+        ],
+      );
+      await this.ensureOwedSyncWork(client, state);
+    });
     return { ...state };
+  }
+
+  async listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]> {
+    const rows = await this.query<SyncWorkGap & { idle_until: string | null }>(
+      `
+        SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
+               'live' AS missing_lane
+        FROM connector_sync_state s
+        WHERE s.installation_id = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM connector_sync_work w
+            WHERE w.installation_id = s.installation_id
+              AND w.stream_key = s.stream_key
+              AND w.generation = s.generation
+              AND w.lane IN ('live', 'interactive')
+              AND (
+                w.status IN ('pending', 'running')
+                OR w.run_id IS NOT NULL
+              )
+          )
+        UNION ALL
+        SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
+               'history' AS missing_lane
+        FROM connector_sync_state s
+        WHERE s.installation_id = $1
+          AND s.phase = 'history'
+          AND NOT EXISTS (
+            SELECT 1 FROM connector_sync_work w
+            WHERE w.installation_id = s.installation_id
+              AND w.stream_key = s.stream_key
+              AND w.generation = s.generation
+              AND w.lane = 'history'
+              AND (
+                w.status IN ('pending', 'running')
+                OR w.run_id IS NOT NULL
+              )
+          )
+        UNION ALL
+        SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
+               'media' AS missing_lane
+        FROM connector_sync_state s
+        WHERE s.installation_id = $1
+          AND s.media_pending
+          AND NOT EXISTS (
+            SELECT 1 FROM connector_sync_work w
+            WHERE w.installation_id = s.installation_id
+              AND w.stream_key = s.stream_key
+              AND w.generation = s.generation
+              AND w.lane = 'media'
+              AND (
+                w.status IN ('pending', 'running')
+                OR w.run_id IS NOT NULL
+              )
+          )
+      `,
+      [installationId],
+    );
+    return rows.map((row) => ({
+      stream_key: row.stream_key,
+      phase: row.phase,
+      media_pending: Boolean(row.media_pending),
+      idle_until: row.idle_until ?? undefined,
+      generation: Number(row.generation),
+      missing_lane: row.missing_lane,
+    }));
+  }
+
+  private async ensureOwedSyncWork(
+    client: PoolClient,
+    state: SyncStreamState,
+  ): Promise<void> {
+    const existing = await client.query<{
+      lane: SyncWorkGap["missing_lane"];
+      status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+      run_id: string | null;
+    }>(
+      `
+        SELECT lane, status, run_id
+        FROM connector_sync_work
+        WHERE installation_id = $1 AND stream_key = $2 AND generation = $3
+      `,
+      [state.installation_id, state.stream_key, state.generation],
+    );
+    const plan = syncWorkEnsurePlan({ state, existing: existing.rows });
+    for (const lane of plan.enqueue) {
+      await client.query(
+        `
+          INSERT INTO connector_sync_work (
+            id, run_id, installation_id, stream_key, lane, priority,
+            next_due_at, status, attempts, generation, created_at, updated_at
+          ) VALUES ($1, NULL, $2, $3, $4, $5, $6, 'pending', 0, $7, $8, $8)
+          ON CONFLICT (installation_id, stream_key, lane, generation) DO UPDATE SET
+            status = 'pending',
+            next_due_at = EXCLUDED.next_due_at,
+            run_id = NULL,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            last_error = NULL,
+            updated_at = EXCLUDED.updated_at
+          WHERE connector_sync_work.run_id IS NULL
+            AND connector_sync_work.status NOT IN ('pending', 'running')
+        `,
+        [
+          dueSyncWorkId(
+            state.installation_id,
+            state.stream_key,
+            lane,
+            state.generation,
+          ),
+          state.installation_id,
+          state.stream_key,
+          lane,
+          syncWorkPriority(lane),
+          state.updated_at,
+          state.generation,
+          state.updated_at,
+        ],
+      );
+    }
+    for (const lane of plan.cancel) {
+      await client.query(
+        `
+          UPDATE connector_sync_work
+          SET status = 'cancelled',
+              lease_owner = NULL,
+              lease_expires_at = NULL,
+              updated_at = $1
+          WHERE installation_id = $2 AND stream_key = $3 AND generation = $4
+            AND lane = $5 AND run_id IS NULL AND status = 'pending'
+        `,
+        [
+          state.updated_at,
+          state.installation_id,
+          state.stream_key,
+          state.generation,
+          lane,
+        ],
+      );
+    }
   }
 
   private async transitionableArtifact(

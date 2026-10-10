@@ -45,6 +45,8 @@ import {
   validateStandardUsage,
   processSyncMetrics,
   recordSyncDuration,
+  dueSyncWorkId,
+  syncWorkEnsurePlan,
   syncWorkPriority,
   validateSyncRunOptions,
 } from "@regenic/domain";
@@ -139,6 +141,7 @@ import type {
   SyncCatalogSnapshot,
   SyncCatalogView,
   SyncPhase,
+  SyncPhaseHead,
   SyncStreamState,
   ClaimSyncWork,
   CommandSyncRun,
@@ -150,6 +153,7 @@ import type {
   RenewSyncWork,
   SettleSyncWork,
   SyncRun,
+  SyncWorkGap,
   SyncWorkIdentity,
   SyncWorkRecord,
   UnassignedSyncWorkQuery,
@@ -4071,6 +4075,31 @@ export class SqliteAuthorityStore
     return apply.immediate();
   }
 
+  async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
+    const rows = this.database
+      .prepare(
+        `
+          SELECT stream_key, phase, media_pending, generation, idle_until
+          FROM connector_sync_state
+          WHERE installation_id = ?
+        `,
+      )
+      .all(installationId) as Array<{
+      stream_key: string;
+      phase: SyncPhase;
+      media_pending: number;
+      generation: number;
+      idle_until: string | null;
+    }>;
+    return rows.map((row) => ({
+      stream_key: row.stream_key,
+      phase: row.phase,
+      media_pending: row.media_pending !== 0,
+      generation: row.generation,
+      idle_until: row.idle_until ?? undefined,
+    }));
+  }
+
   async listSyncStates(installationId: string): Promise<SyncStreamState[]> {
     const rows = this.database
       .prepare(
@@ -4105,35 +4134,165 @@ export class SqliteAuthorityStore
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
     this.assertWritable();
-    this.database
+    const write = this.database.transaction(() => {
+      this.database
+        .prepare(
+          `
+            INSERT INTO connector_sync_state (
+              installation_id, stream_key, phase, live_cursor, history_cursor,
+              media_pending, idle_until, generation, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(installation_id, stream_key) DO UPDATE SET
+              phase = excluded.phase,
+              live_cursor = excluded.live_cursor,
+              history_cursor = excluded.history_cursor,
+              media_pending = excluded.media_pending,
+              idle_until = excluded.idle_until,
+              generation = excluded.generation,
+              updated_at = excluded.updated_at
+          `,
+        )
+        .run(
+          state.installation_id,
+          state.stream_key,
+          state.phase,
+          state.live_cursor ?? null,
+          state.history_cursor ?? null,
+          state.media_pending ? 1 : 0,
+          state.idle_until ?? null,
+          state.generation,
+          state.updated_at,
+        );
+      this.ensureOwedSyncWorkUnlocked(state);
+    });
+    write.immediate();
+    return { ...state };
+  }
+
+  async listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]> {
+    const rows = this.database
       .prepare(
         `
-          INSERT INTO connector_sync_state (
-            installation_id, stream_key, phase, live_cursor, history_cursor,
-            media_pending, idle_until, generation, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(installation_id, stream_key) DO UPDATE SET
-            phase = excluded.phase,
-            live_cursor = excluded.live_cursor,
-            history_cursor = excluded.history_cursor,
-            media_pending = excluded.media_pending,
-            idle_until = excluded.idle_until,
-            generation = excluded.generation,
-            updated_at = excluded.updated_at
+          SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
+                 'live' AS missing_lane
+          FROM connector_sync_state s
+          WHERE s.installation_id = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM connector_sync_work w
+              WHERE w.installation_id = s.installation_id
+                AND w.stream_key = s.stream_key
+                AND w.generation = s.generation
+                AND w.lane IN ('live', 'interactive')
+                AND (
+                  w.status IN ('pending', 'running')
+                  OR w.run_id IS NOT NULL
+                )
+            )
+          UNION ALL
+          SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
+                 'history' AS missing_lane
+          FROM connector_sync_state s
+          WHERE s.installation_id = ?
+            AND s.phase = 'history'
+            AND NOT EXISTS (
+              SELECT 1 FROM connector_sync_work w
+              WHERE w.installation_id = s.installation_id
+                AND w.stream_key = s.stream_key
+                AND w.generation = s.generation
+                AND w.lane = 'history'
+                AND (
+                  w.status IN ('pending', 'running')
+                  OR w.run_id IS NOT NULL
+                )
+            )
+          UNION ALL
+          SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
+                 'media' AS missing_lane
+          FROM connector_sync_state s
+          WHERE s.installation_id = ?
+            AND s.media_pending != 0
+            AND NOT EXISTS (
+              SELECT 1 FROM connector_sync_work w
+              WHERE w.installation_id = s.installation_id
+                AND w.stream_key = s.stream_key
+                AND w.generation = s.generation
+                AND w.lane = 'media'
+                AND (
+                  w.status IN ('pending', 'running')
+                  OR w.run_id IS NOT NULL
+                )
+            )
         `,
       )
-      .run(
+      .all(installationId, installationId, installationId) as Array<{
+      stream_key: string;
+      phase: SyncPhase;
+      media_pending: number;
+      idle_until: string | null;
+      generation: number;
+      missing_lane: SyncWorkGap["missing_lane"];
+    }>;
+    return rows.map((row) => ({
+      stream_key: row.stream_key,
+      phase: row.phase,
+      media_pending: row.media_pending !== 0,
+      idle_until: row.idle_until ?? undefined,
+      generation: row.generation,
+      missing_lane: row.missing_lane,
+    }));
+  }
+
+  private ensureOwedSyncWorkUnlocked(state: SyncStreamState): void {
+    const existing = this.database
+      .prepare(
+        `
+          SELECT lane, status, run_id
+          FROM connector_sync_work
+          WHERE installation_id = ? AND stream_key = ? AND generation = ?
+        `,
+      )
+      .all(state.installation_id, state.stream_key, state.generation) as Array<{
+      lane: SyncWorkGap["missing_lane"];
+      status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+      run_id: string | null;
+    }>;
+    const plan = syncWorkEnsurePlan({ state, existing });
+    for (const lane of plan.enqueue) {
+      this.enqueueSyncWorkUnlocked({
+        id: dueSyncWorkId(
+          state.installation_id,
+          state.stream_key,
+          lane,
+          state.generation,
+        ),
+        installation_id: state.installation_id,
+        stream_key: state.stream_key,
+        lane,
+        next_due_at: state.updated_at,
+        generation: state.generation,
+        now: state.updated_at,
+      });
+    }
+    const cancel = this.database.prepare(
+      `
+        UPDATE connector_sync_work
+        SET status = 'cancelled',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = ?
+        WHERE installation_id = ? AND stream_key = ? AND generation = ?
+          AND lane = ? AND run_id IS NULL AND status = 'pending'
+      `,
+    );
+    for (const lane of plan.cancel) {
+      cancel.run(
+        state.updated_at,
         state.installation_id,
         state.stream_key,
-        state.phase,
-        state.live_cursor ?? null,
-        state.history_cursor ?? null,
-        state.media_pending ? 1 : 0,
-        state.idle_until ?? null,
         state.generation,
-        state.updated_at,
+        lane,
       );
-    return { ...state };
+    }
   }
 
   close(): void {

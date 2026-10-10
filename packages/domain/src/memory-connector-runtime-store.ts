@@ -23,6 +23,10 @@ import type {
   SyncStreamState,
 } from "./sync-contracts";
 import {
+  dueSyncWorkId,
+  syncWorkEnsurePlan,
+} from "./sync-work-planner";
+import {
   syncRunIsClaimable,
   syncWorkPriority,
   isUnassignedSyncWork,
@@ -35,6 +39,7 @@ import {
   type RenewSyncWork,
   type SettleSyncWork,
   type SyncRun,
+  type SyncWorkGap,
   type SyncWorkIdentity,
   type SyncWorkRecord,
   type UnassignedSyncWorkQuery,
@@ -603,6 +608,25 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     );
   }
 
+  async listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]> {
+    const states = await this.sync.listSyncStates(installationId);
+    const gaps: SyncWorkGap[] = [];
+    for (const state of states) {
+      const existing = this.workForStream(state);
+      for (const lane of syncWorkEnsurePlan({ state, existing }).enqueue) {
+        gaps.push({
+          stream_key: state.stream_key,
+          phase: state.phase,
+          media_pending: state.media_pending,
+          idle_until: state.idle_until,
+          generation: state.generation,
+          missing_lane: lane,
+        });
+      }
+    }
+    return gaps;
+  }
+
   async listUnassignedSyncWorkIdentities(query: {
     installation_id: string;
   }): Promise<SyncWorkIdentity[]> {
@@ -657,6 +681,10 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return this.sync.listSyncStates(installationId);
   }
 
+  listSyncPhaseHeads(installationId: string) {
+    return this.sync.listSyncPhaseHeads(installationId);
+  }
+
   getSyncState(
     installationId: string,
     streamKey: string,
@@ -664,8 +692,63 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return this.sync.getSyncState(installationId, streamKey);
   }
 
-  putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
-    return this.sync.putSyncState(state);
+  async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
+    const saved = await this.sync.putSyncState(state);
+    await this.ensureOwedSyncWork(saved);
+    return saved;
+  }
+
+  private workForStream(state: Pick<
+    SyncStreamState,
+    "installation_id" | "stream_key" | "generation"
+  >): SyncWorkRecord[] {
+    return [...this.syncWork.values()].filter(
+      (work) =>
+        work.installation_id === state.installation_id &&
+        work.stream_key === state.stream_key &&
+        work.generation === state.generation,
+    );
+  }
+
+  private async ensureOwedSyncWork(state: SyncStreamState): Promise<void> {
+    const plan = syncWorkEnsurePlan({
+      state,
+      existing: this.workForStream(state),
+    });
+    for (const lane of plan.enqueue) {
+      await this.enqueueSyncWork({
+        id: dueSyncWorkId(
+          state.installation_id,
+          state.stream_key,
+          lane,
+          state.generation,
+        ),
+        installation_id: state.installation_id,
+        stream_key: state.stream_key,
+        lane,
+        next_due_at: state.updated_at,
+        generation: state.generation,
+        now: state.updated_at,
+      });
+    }
+    for (const lane of plan.cancel) {
+      for (const work of this.syncWork.values()) {
+        if (
+          work.installation_id !== state.installation_id ||
+          work.stream_key !== state.stream_key ||
+          work.generation !== state.generation ||
+          work.lane !== lane ||
+          work.run_id ||
+          work.status !== "pending"
+        ) {
+          continue;
+        }
+        work.status = "cancelled";
+        work.lease_owner = undefined;
+        work.lease_expires_at = undefined;
+        work.updated_at = state.updated_at;
+      }
+    }
   }
 
   private copyInstallation(

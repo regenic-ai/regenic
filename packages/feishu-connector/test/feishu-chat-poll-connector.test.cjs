@@ -1,13 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const {
-  ConnectorRunner,
-  IngestionService,
-  MemoryAuthorityStore,
-  MemoryBlobStore,
-  MemoryConnectorRuntimeStore,
-  verifyPollConnectorConformance,
-} = require("@regenic/domain");
+const { verifyPollConnectorConformance } = require("@regenic/connector-test-utils");
 const {
   FeishuApiError,
   FeishuChatEgress,
@@ -510,50 +503,6 @@ describe("FeishuChatPollConnector", () => {
     });
     assert.equal(result.batch.records[0].external_id, "oc_1:om_recent");
     assert.equal(result.has_more, true);
-  });
-
-  it("settles a Feishu page through the shared connector runtime", async () => {
-    const connector = createConnector({
-      async listMessages() {
-        return {
-          items: [textItem()],
-          has_more: false,
-        };
-      },
-    });
-    const runtime = new MemoryConnectorRuntimeStore();
-    await runtime.createInstallation({
-      id: "feishu-installation",
-      org_id: "local-owner",
-      connector_type: "feishu-chat",
-      status: "enabled",
-      config: { chat_id: "oc_1" },
-      created_at: "2026-08-12T00:00:00.000Z",
-    });
-    const runner = new ConnectorRunner(
-      connector,
-      new IngestionService(new MemoryBlobStore(), new MemoryAuthorityStore()),
-      runtime,
-      () => "2026-08-12T00:00:00.000Z",
-    );
-
-    const run = await runner.poll({
-      installation_id: "feishu-installation",
-      stream_key: "chat:oc_1",
-      lease_owner: "worker-a",
-      lease_duration_ms: 30_000,
-    });
-    const cursor = await runtime.getCursor("feishu-installation", "chat:oc_1");
-
-    assert.equal(run.status, "completed");
-    assert.equal(run.result.records[0].status, "accepted");
-    assert.equal(
-      cursor.cursor,
-      JSON.stringify({
-        start_time: "1723420800",
-        recent_seeded: true,
-      }),
-    );
   });
 
   it("passes the reusable poll connector conformance suite", async () => {

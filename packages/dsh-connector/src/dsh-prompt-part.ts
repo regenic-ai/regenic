@@ -1,4 +1,4 @@
-import type { ContentPart } from "@regenic/domain";
+import type { ContentPart } from "@regenic/connector-contract";
 
 export const DSH_IMAGE_MEDIA = [
   "image/png",

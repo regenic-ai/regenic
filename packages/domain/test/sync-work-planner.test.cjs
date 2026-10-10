@@ -9,8 +9,11 @@ const {
   membersMissingLane,
   membersMissingLatestWork,
   needsCatalogDueWork,
+  owedSyncLanes,
   planDueSyncWork,
+  planSyncWorkGaps,
   selectQuickStartStreamKeys,
+  syncWorkEnsurePlan,
   selectSyncRunWakeKeys,
   SYNC_CATALOG_STREAM,
   syncRunWorkLanes,
@@ -465,5 +468,69 @@ describe("sync run due-work selection", () => {
       Date.now() - started < 250,
       "selecting wake keys should not scan-sleep 10k members",
     );
+  });
+});
+
+describe("owed sync lanes", () => {
+  it("owes latest beside history and media", () => {
+    assert.deepEqual(
+      owedSyncLanes({ phase: "history", media_pending: true }),
+      ["live", "history", "media"],
+    );
+    assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), [
+      "live",
+    ]);
+  });
+
+  it("keeps a pending due time and lets interactive cover latest", () => {
+    const pending = syncWorkEnsurePlan({
+      state: { phase: "history", media_pending: true },
+      existing: [
+        { lane: "live", status: "pending", run_id: null },
+        { lane: "history", status: "running", run_id: null },
+      ],
+    });
+    assert.deepEqual(pending, { enqueue: ["media"], cancel: [] });
+
+    const covered = syncWorkEnsurePlan({
+      state: { phase: "steady", media_pending: false },
+      existing: [{ lane: "interactive", status: "pending", run_id: null }],
+    });
+    assert.deepEqual(covered, { enqueue: [], cancel: [] });
+  });
+
+  it("cancels pending history and media once the phase no longer owes them", () => {
+    assert.deepEqual(
+      syncWorkEnsurePlan({
+        state: { phase: "steady", media_pending: false },
+        existing: [
+          { lane: "live", status: "pending", run_id: null },
+          { lane: "history", status: "pending", run_id: null },
+          { lane: "history", status: "running", run_id: null },
+          { lane: "media", status: "pending", run_id: null },
+        ],
+      }),
+      { enqueue: [], cancel: ["history", "media"] },
+    );
+  });
+
+  it("plans a gap repair without a cursor", () => {
+    const [item] = planSyncWorkGaps({
+      installation_id: "install-1",
+      now: "2026-09-21T00:00:05.000Z",
+      gaps: [
+        {
+          stream_key: "chat:1",
+          phase: "history",
+          media_pending: false,
+          generation: 2,
+          missing_lane: "history",
+        },
+      ],
+    });
+    assert.equal(item.lane, "history");
+    assert.equal(item.next_due_at, "2026-09-21T00:00:05.000Z");
+    assert.equal(item.id, "due:install-1:history:2:chat:1");
+    assert.equal("live_cursor" in item, false);
   });
 });

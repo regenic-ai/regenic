@@ -1,4 +1,4 @@
-import type { SyncCatalogMember, SyncStreamState } from "./sync-contracts";
+import type { SyncCatalogMember, SyncPhaseHead } from "./sync-contracts";
 import {
   emptySyncProgress,
   scopeSyncCatalogMembers,
@@ -55,7 +55,7 @@ export function syncProgressViewFromCounts(
 
 export function countSyncProgress(
   members: readonly SyncCatalogMember[],
-  states: readonly SyncStreamState[],
+  states: readonly SyncPhaseHead[],
   catalogComplete: boolean,
 ): SyncProgressCounts {
   const progress = summarizeSyncProgress(
@@ -88,7 +88,7 @@ export function countSyncProgress(
 export function buildSyncProgressSnapshot(input: {
   installation_id: string;
   members: readonly SyncCatalogMember[];
-  states: readonly SyncStreamState[];
+  states: readonly SyncPhaseHead[];
   catalog_complete: boolean;
   mountedStreamKeys?: ReadonlySet<string>;
   fallbackMembers?: readonly SyncCatalogMember[];

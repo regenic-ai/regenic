@@ -7,9 +7,13 @@
     "catalogOrder": 50,
     "id": "@regenic/whatsapp-personal",
     "displayName": "WhatsApp",
-    "engines": { "regenic": "1.0" },
+    "engines": {
+      "regenic": "1.0"
+    },
     "contributes": {
-      "drivers": ["whatsappWebLiveDriver"]
+      "drivers": [
+        "whatsappWebLiveDriver"
+      ]
     }
   },
   "main": "./dist/index.js",
@@ -22,15 +26,16 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/domain build && pnpm run build && node --test test/*.test.cjs",
+    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/connector-contract build && pnpm --filter @regenic/connector-test-utils build && pnpm run build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@regenic/domain": "workspace:*",
-    "csv-parse": "7.0.2"
+    "csv-parse": "7.0.2",
+    "@regenic/connector-contract": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "@regenic/connector-test-utils": "workspace:*"
   }
 }

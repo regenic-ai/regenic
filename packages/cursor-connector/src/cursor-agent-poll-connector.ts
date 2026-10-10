@@ -6,7 +6,7 @@ import {
   type IngestBatch,
   type IngestRecord,
   type PollResult,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import type {
   CursorAgentSummary,
   CursorConversationMessage,

@@ -11,7 +11,7 @@ import {
   type PollResult,
   type SyncPollHint,
   type ThreadActivity,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import { DshApiError, type DshHistoryEvent, type DshHistoryPage } from "./dsh-cli-client";
 import type { DshSessionLiveHub } from "./dsh-session-live";
 

@@ -1,17 +1,11 @@
 import { createHash } from "node:crypto";
+import type { ForwardedFrom, ForwardedTo } from "@regenic/connector-contract";
+
+export type { ForwardedFrom, ForwardedTo } from "@regenic/connector-contract";
 
 export const FORWARD_MAX_TEXT = 32_000;
 export const FORWARD_MODES = ["messages", "transcript"] as const;
 export type ForwardMode = (typeof FORWARD_MODES)[number];
-
-export interface ForwardedFrom {
-  thread_id: string;
-  event_ids: string[];
-  source: string;
-  channel_label?: string;
-}
-
-export type ForwardedTo = ForwardedFrom;
 
 export interface ForwardUtterance {
   event_id: string;
@@ -50,26 +44,7 @@ export function isForwardMode(value: unknown): value is ForwardMode {
   return value === "messages" || value === "transcript";
 }
 
-export function readForwardedFrom(value: unknown): ForwardedFrom | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = value as ForwardedFrom;
-  const threadId = typeof raw.thread_id === "string" ? raw.thread_id.trim() : "";
-  const source = typeof raw.source === "string" ? raw.source.trim() : "";
-  if (!threadId || !source || !Array.isArray(raw.event_ids)) {
-    return undefined;
-  }
-  const eventIds = raw.event_ids
-    .map((id) => (typeof id === "string" ? id.trim() : ""))
-    .filter((id) => id.length > 0);
-  if (eventIds.length === 0) {
-    return undefined;
-  }
-  return { thread_id: threadId, event_ids: eventIds, source };
-}
-
-export const readForwardedTo = readForwardedFrom;
+export { readForwardedFrom, readForwardedTo } from "@regenic/connector-contract";
 
 export function latestForwardedTo(
   traces: Array<{

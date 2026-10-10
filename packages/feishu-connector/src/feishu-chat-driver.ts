@@ -5,7 +5,6 @@ import {
   keychainCredentialsRef,
   parseSyncMode,
   requireConnectorStream,
-  runInSyncLane,
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
@@ -16,10 +15,11 @@ import {
   type NewConnectorInstallation,
   type ResolveStreamsOptions,
   type SyncCatalogMember,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import {
   LarkCliClient,
   feishuChatOptionLabel,
+  runInLarkSlot,
   spawnLarkProcess,
   type FeishuChat,
   type FeishuChatMode,
@@ -471,7 +471,7 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   async probeCatalog({ env }) {
-    return runInSyncLane("interactive", async () => {
+    return runInLarkSlot("interactive", async () => {
       const lark = await probeLarkCli({ env });
       return {
         services: {
@@ -485,7 +485,7 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   async listCatalogFieldOptions({ env }) {
-    return runInSyncLane("interactive", async () => {
+    return runInLarkSlot("interactive", async () => {
       const chats = await listFeishuCatalogChats({ env });
       return {
         chat_ids: chats.map((chat) => ({

@@ -1,5 +1,10 @@
-import type { SyncDirectoryPage, SyncSource } from "@regenic/domain";
-import type { FeishuChat, FeishuChatMode, FeishuImClient } from "./feishu-cli-client";
+import type { SyncDirectoryPage, SyncSource } from "@regenic/connector-contract";
+import {
+  runInLarkSlot,
+  type FeishuChat,
+  type FeishuChatMode,
+  type FeishuImClient,
+} from "./feishu-cli-client";
 import { FEISHU_SOURCE } from "./feishu-message";
 import { feishuStreamKey } from "./feishu-streams";
 
@@ -20,7 +25,9 @@ export function createFeishuRecentSyncSource(
 ): SyncSource {
   return {
     async listDirectory(): Promise<SyncDirectoryPage> {
-      const chats = await listRecentFeishuCatalogChats(client, kinds);
+      const chats = await runInLarkSlot("history", () =>
+        listRecentFeishuCatalogChats(client, kinds),
+      );
       return {
         members: chats.map((chat) => ({
           stream_key: feishuStreamKey(chat.chat_id),
@@ -41,18 +48,20 @@ export function createFeishuSyncSource(
   const wantsGroup = kinds.includes("group");
   const wantsP2p = kinds.includes("p2p");
   return {
-    async listDirectory(cursor: string | null): Promise<SyncDirectoryPage> {
-      if (typeof client.listChats !== "function") {
-        return { members: [], complete: true };
-      }
-      const state = parseDirectoryCursor(cursor, wantsGroup, wantsP2p);
-      if (state.phase === "mixed") {
-        return listPhase(client, kinds, state.token, "mixed", false);
-      }
-      if (state.phase === "group") {
-        return listPhase(client, ["group"], state.token, "group", wantsP2p);
-      }
-      return listPhase(client, ["p2p"], state.token, "p2p", false);
+    listDirectory(cursor: string | null): Promise<SyncDirectoryPage> {
+      return runInLarkSlot("history", () => {
+        if (typeof client.listChats !== "function") {
+          return Promise.resolve({ members: [], complete: true });
+        }
+        const state = parseDirectoryCursor(cursor, wantsGroup, wantsP2p);
+        if (state.phase === "mixed") {
+          return listPhase(client, kinds, state.token, "mixed", false);
+        }
+        if (state.phase === "group") {
+          return listPhase(client, ["group"], state.token, "group", wantsP2p);
+        }
+        return listPhase(client, ["p2p"], state.token, "p2p", false);
+      });
     },
   };
 }

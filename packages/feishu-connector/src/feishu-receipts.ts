@@ -1,4 +1,4 @@
-import type { MessageReceipt } from "@regenic/domain";
+import type { MessageReceipt } from "@regenic/connector-contract";
 
 const receiptCache = new Map<string, { at: number; receipt: MessageReceipt }>();
 const RECEIPT_TTL_MS = 15_000;

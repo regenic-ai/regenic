@@ -1,4 +1,4 @@
-import { defineLocaleTables } from "@regenic/domain";
+import { defineLocaleTables } from "@regenic/connector-contract";
 
 export const slackLocaleTables = defineLocaleTables({
   en: {

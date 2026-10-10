@@ -221,6 +221,13 @@ importers:
         version: 5.9.3
 
   packages/connector-contract:
+    dependencies:
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -243,12 +250,31 @@ importers:
       '@regenic/feishu-connector':
         specifier: workspace:*
         version: link:../feishu-connector
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
       '@regenic/slack-connector':
         specifier: workspace:*
         version: link:../slack-connector
       '@regenic/whatsapp-personal':
         specifier: workspace:*
         version: link:../whatsapp-personal
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/connector-test-utils:
+    dependencies:
+      '@regenic/connector-contract':
+        specifier: workspace:*
+        version: link:../connector-contract
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -284,13 +310,16 @@ importers:
       '@cursor/sdk':
         specifier: ^1.0.30
         version: 1.0.30
-      '@regenic/domain':
+      '@regenic/connector-contract':
         specifier: workspace:*
-        version: link:../domain
+        version: link:../connector-contract
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
     devDependencies:
+      '@regenic/connector-test-utils':
+        specifier: workspace:*
+        version: link:../connector-test-utils
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -303,6 +332,9 @@ importers:
       '@regenic/connector-contract':
         specifier: workspace:*
         version: link:../connector-contract
+      '@regenic/connector-test-utils':
+        specifier: workspace:*
+        version: link:../connector-test-utils
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
@@ -319,13 +351,16 @@ importers:
 
   packages/dsh-connector:
     dependencies:
-      '@regenic/domain':
+      '@regenic/connector-contract':
         specifier: workspace:*
-        version: link:../domain
+        version: link:../connector-contract
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
     devDependencies:
+      '@regenic/connector-test-utils':
+        specifier: workspace:*
+        version: link:../connector-test-utils
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -335,13 +370,16 @@ importers:
 
   packages/feishu-connector:
     dependencies:
-      '@regenic/domain':
+      '@regenic/connector-contract':
         specifier: workspace:*
-        version: link:../domain
+        version: link:../connector-contract
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
     devDependencies:
+      '@regenic/connector-test-utils':
+        specifier: workspace:*
+        version: link:../connector-test-utils
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -442,13 +480,16 @@ importers:
 
   packages/slack-connector:
     dependencies:
-      '@regenic/domain':
+      '@regenic/connector-contract':
         specifier: workspace:*
-        version: link:../domain
+        version: link:../connector-contract
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
     devDependencies:
+      '@regenic/connector-test-utils':
+        specifier: workspace:*
+        version: link:../connector-test-utils
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -460,13 +501,16 @@ importers:
 
   packages/whatsapp-personal:
     dependencies:
-      '@regenic/domain':
+      '@regenic/connector-contract':
         specifier: workspace:*
-        version: link:../domain
+        version: link:../connector-contract
       csv-parse:
         specifier: 7.0.2
         version: 7.0.2
     devDependencies:
+      '@regenic/connector-test-utils':
+        specifier: workspace:*
+        version: link:../connector-test-utils
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1

@@ -1,7 +1,6 @@
 import type { ChannelDriver, TaskExecutor } from "@regenic/domain";
 import { cursorAgentDriver } from "@regenic/cursor-connector";
 import {
-  createDshHostRpcServices,
   dshPromptStoreFor,
   dshSessionDriver,
   dshTaskExecutor,
@@ -11,6 +10,9 @@ import {
   type DshRpcHttpResult,
 } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
+import { createDshHostRpcServices } from "./dsh-host-services";
+
+export { createDshHostRpcServices };
 import { slackChannelDriver } from "@regenic/slack-connector";
 import {
   createPurrWhatsAppImport,
@@ -44,9 +46,9 @@ export function builtinTaskExecutors(): TaskExecutor[] {
 }
 
 /**
- * Compatibility bridge for the DSH public transport. It remains outside
- * Core; callers should migrate to the generic connector-host capability
- * transport before this bridge is removed.
+ * Compatibility bridge for the DSH public transport. The protocol handler
+ * stays in the connector. Creating services lists installations and polls,
+ * so that half lives here.
  */
 export const dshPublicTransport = {
   createServices: createDshHostRpcServices,

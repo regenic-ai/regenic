@@ -43,6 +43,8 @@ describe("connector invocation contract", () => {
     assert.doesNotThrow(() => assertConnectorRequestEnvelope(request));
     assert.doesNotThrow(() => assertConnectorResponseEnvelope(response));
     assert.deepEqual(JSON.parse(JSON.stringify(request)), request);
+    assert.deepEqual(JSON.parse(JSON.stringify(response)), response);
+    assert.equal(JSON.stringify(request).includes("signal"), false);
   });
 
   it("rejects callback-bearing stream descriptors", () => {

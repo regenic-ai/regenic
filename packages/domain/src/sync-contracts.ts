@@ -1,3 +1,19 @@
+import type {
+  SyncCatalogMember,
+  SyncDirectoryMember,
+  SyncDirectoryPage,
+  SyncPollHint,
+  SyncSource,
+} from "@regenic/connector-contract";
+
+export type {
+  SyncCatalogMember,
+  SyncDirectoryMember,
+  SyncDirectoryPage,
+  SyncPollHint,
+  SyncSource,
+} from "@regenic/connector-contract";
+
 /** Opaque connector cursor. Encoding stays in the channel adapter. */
 export type SyncCursorValue = string;
 
@@ -10,14 +26,6 @@ export type SyncLane =
 
 export type SyncPhase = "unseeded" | "live" | "history" | "steady";
 
-/** Connector-declared lifecycle; core must not parse wire cursors when this is set. */
-export interface SyncPollHint {
-  /** Recent/live tail has been seeded at least once. */
-  live_seeded?: boolean;
-  /** History backfill still has older pages. */
-  history_pending?: boolean;
-}
-
 export const SYNC_LANES: readonly SyncLane[] = [
   "interactive",
   "live",
@@ -27,17 +35,6 @@ export const SYNC_LANES: readonly SyncLane[] = [
 ] as const;
 
 export const SYNC_CATALOG_STREAM = "__catalog__";
-
-export interface SyncCatalogMember {
-  installation_id: string;
-  stream_key: string;
-  thread_id?: string;
-  label?: string;
-  kind?: string;
-  generation: number;
-  discovered_at: string;
-  last_seen_at: string;
-}
 
 export interface SyncCatalogSnapshot {
   installation_id: string;
@@ -50,23 +47,6 @@ export interface SyncCatalogSnapshot {
 export interface SyncCatalogView {
   members: SyncCatalogMember[];
   catalog: SyncCatalogSnapshot | null;
-}
-
-export interface SyncDirectoryMember {
-  stream_key: string;
-  thread_id?: string;
-  label?: string;
-  kind?: string;
-}
-
-export interface SyncDirectoryPage {
-  members: SyncDirectoryMember[];
-  next_cursor?: string;
-  complete: boolean;
-}
-
-export interface SyncSource {
-  listDirectory?(cursor: string | null): Promise<SyncDirectoryPage>;
 }
 
 export interface SyncStreamState {
@@ -124,10 +104,20 @@ export interface SyncPageOutcome {
   now: string;
 }
 
+/** Phase fields only. Callers that do not need cursors use this. */
+export interface SyncPhaseHead {
+  stream_key: string;
+  phase: SyncPhase;
+  media_pending: boolean;
+  generation: number;
+  idle_until?: string;
+}
+
 export interface SyncStore {
   getSyncCatalog(installationId: string): Promise<SyncCatalogView>;
   applySyncCatalogPage(input: ApplySyncCatalogPageInput): Promise<SyncCatalogView>;
   listSyncStates(installationId: string): Promise<SyncStreamState[]>;
+  listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]>;
   getSyncState(
     installationId: string,
     streamKey: string,

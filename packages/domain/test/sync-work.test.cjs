@@ -317,4 +317,74 @@ describe("durable sync work", () => {
     );
     assert.ok(elapsed < 1_000, `claimSyncWork(10k) took ${elapsed}ms`);
   });
+
+  it("writes owed lanes with the phase and leaves a pending due time", async () => {
+    const store = await createStore();
+    const first = "2026-09-21T00:00:00.000Z";
+    await store.putSyncState({
+      installation_id: "install-1",
+      stream_key: "chat:1",
+      phase: "history",
+      media_pending: true,
+      generation: 1,
+      live_cursor: "{\"page\":1}",
+      history_cursor: "{\"token\":\"abc\"}",
+      updated_at: first,
+    });
+    assert.deepEqual(await store.listSyncWorkGaps("install-1"), []);
+    const history = await store.claimSyncWork({
+      owner: "history",
+      now: first,
+      lease_ms: 60_000,
+      limit: 1,
+      lanes: ["history"],
+      unassigned: true,
+    });
+    assert.equal(history.length, 1);
+    const later = "2026-09-21T00:00:10.000Z";
+    await store.putSyncState({
+      installation_id: "install-1",
+      stream_key: "chat:1",
+      phase: "history",
+      media_pending: true,
+      generation: 1,
+      updated_at: later,
+    });
+    const live = await store.claimSyncWork({
+      owner: "live",
+      now: later,
+      lease_ms: 60_000,
+      limit: 4,
+      lanes: ["live"],
+      unassigned: true,
+    });
+    assert.equal(live.length, 1);
+    assert.equal(live[0].next_due_at, first);
+    await store.settleSyncWork({
+      id: live[0].id,
+      owner: "live",
+      now: later,
+      outcome: "succeeded",
+    });
+    const gaps = await store.listSyncWorkGaps("install-1");
+    assert.equal(gaps.length, 1);
+    assert.equal(gaps[0].missing_lane, "live");
+    assert.equal("live_cursor" in gaps[0], false);
+    assert.equal("history_cursor" in gaps[0], false);
+    await store.putSyncState({
+      installation_id: "install-1",
+      stream_key: "chat:1",
+      phase: "steady",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-09-21T00:00:20.000Z",
+    });
+    const identities = await store.listUnassignedSyncWorkIdentities({
+      installation_id: "install-1",
+    });
+    assert.deepEqual(
+      identities.map((item) => item.lane).sort(),
+      ["history", "live"],
+    );
+  });
 });

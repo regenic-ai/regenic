@@ -156,13 +156,15 @@ export class ConnectorRunner {
 
     let pollResult;
     const pollStartedAt = Date.now();
+    const timeoutMs = input.timeout_ms ?? 0;
+    const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
     try {
       pollResult = await withDeadline(
         poll(
           lease.cursor ? { value: lease.cursor } : null,
-          pollOptions(input),
+          pollOptions(input, signal),
         ),
-        input.timeout_ms ?? 0,
+        timeoutMs,
         `poll ${input.installation_id}:${input.stream_key}`,
       );
     } catch (error) {
@@ -458,6 +460,7 @@ function webhookWakeThreadIds(batch: IngestBatch): string[] {
 
 function pollOptions(
   input: Pick<RunConnectorPollInput, "older" | "latest" | "media">,
+  signal?: AbortSignal,
 ): ConnectorPollOptions | undefined {
   const options: ConnectorPollOptions = {};
   if (input.older === true) {
@@ -469,7 +472,10 @@ function pollOptions(
   if (input.media === false) {
     options.media = false;
   }
-  return options.older || options.latest || options.media === false
+  if (signal) {
+    options.signal = signal;
+  }
+  return options.older || options.latest || options.media === false || options.signal
     ? options
     : undefined;
 }

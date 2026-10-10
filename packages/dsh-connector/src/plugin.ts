@@ -1,4 +1,3 @@
-import "@regenic/domain";
 import { definePlugin } from "@regenic/plugin-host";
 import { DshCliClient, type DshSpawn } from "./dsh-cli-client";
 import { DshCliSessionClient } from "./dsh-cli-session-client";

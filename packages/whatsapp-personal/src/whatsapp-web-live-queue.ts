@@ -1,4 +1,4 @@
-import { createMemoryEgressQueue, type EgressQueueItem } from "@regenic/domain";
+import { createMemoryEgressQueue, type EgressQueueItem } from "@regenic/connector-contract";
 import { whatsappThreadId } from "./whatsapp-ids";
 
 const SEND_RATE_LIMIT_MS = 2_000;

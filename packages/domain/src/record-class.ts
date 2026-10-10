@@ -1,3 +1,12 @@
+import {
+  INGEST_RECORD_TYPES,
+  isIngestRecordType,
+  type IngestRecordType,
+} from "@regenic/connector-contract";
+
+export { INGEST_RECORD_TYPES, isIngestRecordType };
+export type { IngestRecordType };
+
 export const RECORD_CLASSES = [
   "utterance",
   "task",
@@ -7,16 +16,6 @@ export const RECORD_CLASSES = [
 
 export type RecordClass = (typeof RECORD_CLASSES)[number];
 
-export const INGEST_RECORD_TYPES = [
-  "message",
-  "thread_reply",
-  "task",
-  "thread_status",
-  "prompt",
-] as const;
-
-export type IngestRecordType = (typeof INGEST_RECORD_TYPES)[number];
-
 const TYPE_TO_CLASS: Record<IngestRecordType, RecordClass> = {
   message: "utterance",
   thread_reply: "utterance",
@@ -24,16 +23,6 @@ const TYPE_TO_CLASS: Record<IngestRecordType, RecordClass> = {
   thread_status: "status",
   prompt: "prompt",
 };
-
-export function isIngestRecordType(value: unknown): value is IngestRecordType {
-  return (
-    value === "message" ||
-    value === "thread_reply" ||
-    value === "task" ||
-    value === "thread_status" ||
-    value === "prompt"
-  );
-}
 
 export function isRecordClass(value: unknown): value is RecordClass {
   return (

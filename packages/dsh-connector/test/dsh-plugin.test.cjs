@@ -4,7 +4,7 @@ const {
   MemoryConnectorRegistry,
   MemoryEgressRegistry,
   verifyChannelDriverConformance,
-} = require("@regenic/domain");
+} = require("@regenic/connector-test-utils");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const {
   dshSessionPlugin,
@@ -12,7 +12,7 @@ const {
   resolveDshTransport,
   resolveEffectiveDshTransport,
 } = require("../dist/plugin");
-const { ChannelDriverError } = require("@regenic/domain");
+const { ChannelDriverError } = require("@regenic/connector-contract");
 const { createDshConversation, dshSessionDriver } = require("../dist/dsh-session-driver");
 const { loopbackHttpUrl, operatorHttpUrl, resolveOperatorDshBaseUrl } = require("../dist/dsh-url");
 

@@ -3,6 +3,7 @@ import type {
   SyncCatalogMember,
   SyncCatalogView,
   SyncPageOutcome,
+  SyncPhaseHead,
   SyncSource,
   SyncStore,
   SyncStreamState,
@@ -295,6 +296,18 @@ export class MemorySyncStore implements SyncStore {
     return [...this.states.values()]
       .filter((state) => state.installation_id === installationId)
       .map((state) => ({ ...state }));
+  }
+
+  async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
+    return [...this.states.values()]
+      .filter((state) => state.installation_id === installationId)
+      .map((state) => ({
+        stream_key: state.stream_key,
+        phase: state.phase,
+        media_pending: state.media_pending,
+        generation: state.generation,
+        idle_until: state.idle_until,
+      }));
   }
 
   async getSyncState(

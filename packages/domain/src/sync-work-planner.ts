@@ -3,6 +3,7 @@ import {
   UNSEEN_SEED_PER_TICK,
   type SyncCatalogMember,
   type SyncLane,
+  type SyncPhaseHead,
   type SyncStreamState,
 } from "./sync-contracts";
 import {
@@ -12,7 +13,12 @@ import {
   DEFAULT_COLD_STREAM_IDLE_MS,
   nextDueAtForDueWork,
 } from "./sync-idle";
-import type { EnqueueSyncWork, SyncRunMode, SyncWorkIdentity } from "./sync-work";
+import type {
+  EnqueueSyncWork,
+  SyncRunMode,
+  SyncWorkGap,
+  SyncWorkIdentity,
+} from "./sync-work";
 import { syncWorkPriority } from "./sync-work";
 
 export type DueWorkPlane = "steady" | "bootstrap";
@@ -20,7 +26,7 @@ export type DueWorkPlane = "steady" | "bootstrap";
 export interface PlanDueSyncWorkInput {
   installation_id: string;
   members: readonly SyncCatalogMember[];
-  states: ReadonlyMap<string, SyncStreamState>;
+  states: ReadonlyMap<string, SyncPhaseHead>;
   now: string;
   plane: DueWorkPlane;
   preferredThreadId?: string | null;
@@ -29,6 +35,101 @@ export interface PlanDueSyncWorkInput {
   coldIdleMs?: number;
   /** Unseeded streams due now besides the preferred thread. */
   firstSeedLimit?: number;
+}
+
+export interface OpenSyncWorkLane {
+  lane: SyncLane;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  run_id?: string | null;
+}
+
+/** Lanes a phase write owes. Interactive is coverage for live, not an owed lane. */
+export function owedSyncLanes(
+  state: Pick<SyncStreamState, "phase" | "media_pending">,
+): SyncLane[] {
+  const lanes: SyncLane[] = ["live"];
+  if (state.phase === "history") {
+    lanes.push("history");
+  }
+  if (state.media_pending) {
+    lanes.push("media");
+  }
+  return lanes;
+}
+
+function laneBlocksEnqueue(
+  existing: readonly OpenSyncWorkLane[],
+  lane: SyncLane,
+): boolean {
+  return existing.some((item) => {
+    if (lane === "live" && item.lane === "interactive") {
+      return item.status === "pending" || item.status === "running";
+    }
+    if (item.lane !== lane) {
+      return false;
+    }
+    return (
+      Boolean(item.run_id) ||
+      item.status === "pending" ||
+      item.status === "running"
+    );
+  });
+}
+
+/**
+ * What a phase write should add or drop. Pending and running rows keep their
+ * due time. A running lease is left alone. Interactive pending/running covers live.
+ */
+export function syncWorkEnsurePlan(input: {
+  state: Pick<SyncStreamState, "phase" | "media_pending">;
+  existing: readonly OpenSyncWorkLane[];
+}): { enqueue: SyncLane[]; cancel: SyncLane[] } {
+  const enqueue = owedSyncLanes(input.state).filter(
+    (lane) => !laneBlocksEnqueue(input.existing, lane),
+  );
+  const cancel: SyncLane[] = [];
+  if (
+    input.state.phase !== "history" &&
+    input.existing.some(
+      (item) =>
+        !item.run_id && item.lane === "history" && item.status === "pending",
+    )
+  ) {
+    cancel.push("history");
+  }
+  if (
+    !input.state.media_pending &&
+    input.existing.some(
+      (item) =>
+        !item.run_id && item.lane === "media" && item.status === "pending",
+    )
+  ) {
+    cancel.push("media");
+  }
+  return { enqueue, cancel };
+}
+
+/** Repair rows for lanes the phase write should already have inserted. */
+export function planSyncWorkGaps(input: {
+  installation_id: string;
+  gaps: readonly SyncWorkGap[];
+  now: string;
+}): EnqueueSyncWork[] {
+  return input.gaps.map((gap) => ({
+    id: dueSyncWorkId(
+      input.installation_id,
+      gap.stream_key,
+      gap.missing_lane,
+      gap.generation,
+    ),
+    installation_id: input.installation_id,
+    stream_key: gap.stream_key,
+    lane: gap.missing_lane,
+    priority: syncWorkPriority(gap.missing_lane),
+    next_due_at: input.now,
+    generation: gap.generation,
+    now: input.now,
+  }));
 }
 
 export function dueSyncWorkId(
@@ -318,7 +419,7 @@ export function firstSeedHeadFromEnv(
 /** Preferred thread is excluded; it is already due now on the interactive lane. */
 export function selectFirstSeedKeys(input: {
   members: readonly SyncCatalogMember[];
-  states: ReadonlyMap<string, SyncStreamState>;
+  states: ReadonlyMap<string, SyncPhaseHead>;
   preferredThreadId?: string | null;
   limit?: number;
 }): Set<string> {
@@ -435,7 +536,7 @@ export function selectQuickStartStreamKeys(input: {
 function dueWorkLanes(input: {
   plane: DueWorkPlane;
   member: SyncCatalogMember;
-  state?: SyncStreamState;
+  state?: SyncPhaseHead;
   preferredThreadId: string | null;
 }): SyncLane[] {
   const phase = input.state?.phase ?? "unseeded";
@@ -462,7 +563,7 @@ function dueWorkLanes(input: {
 
 function dueWorkIsEager(input: {
   plane: DueWorkPlane;
-  state?: SyncStreamState;
+  state?: SyncPhaseHead;
   streamKey: string;
   firstSeedKeys: ReadonlySet<string>;
   lane: SyncLane;
@@ -485,7 +586,7 @@ function dueWorkIsEager(input: {
 
 function isFirstSeedCandidate(
   member: SyncCatalogMember,
-  states: ReadonlyMap<string, SyncStreamState>,
+  states: ReadonlyMap<string, SyncPhaseHead>,
   preferredThreadId: string | null,
 ): boolean {
   if (!member.stream_key || member.stream_key === SYNC_CATALOG_STREAM) {
@@ -521,7 +622,7 @@ function compareFirstSeedMembers(
 function coldUnseededIndexByKey(input: {
   plane: DueWorkPlane;
   members: readonly SyncCatalogMember[];
-  states: ReadonlyMap<string, SyncStreamState>;
+  states: ReadonlyMap<string, SyncPhaseHead>;
   preferredThreadId: string | null;
   firstSeedKeys: ReadonlySet<string>;
 }): Map<string, { index: number; count: number }> {

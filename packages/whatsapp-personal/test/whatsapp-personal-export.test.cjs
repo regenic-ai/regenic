@@ -4,7 +4,7 @@ const {
   createPurrWhatsAppImport,
   createWhatsAppPersonalImport,
 } = require("../dist");
-const { surfaceFromParts } = require("@regenic/domain");
+const { surfaceFromParts } = require("@regenic/connector-contract");
 
 function message(overrides = {}) {
   return {

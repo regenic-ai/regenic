@@ -23,7 +23,6 @@ const {
   resolveLarkCommand,
   unwrapLarkCli,
 } = require("../dist");
-const { runInSyncLane } = require("@regenic/domain");
 
 afterEach(() => {
   resetLarkCliSlot();
@@ -78,6 +77,7 @@ describe("LarkCliClient", () => {
         sort_type: "ByCreateTimeAsc",
         page_size: 20,
         user_id_type: "open_id",
+        with_sender_name: "true",
         page_token: "cur",
         start_time: "1723420800",
       }),
@@ -224,13 +224,9 @@ describe("LarkCliClient", () => {
         };
       },
     });
-    const history = runInSyncLane("history", () =>
-      client.listMessages({ chat_id: "oc_busy", page_size: 1 }),
-    );
+    const history = client.listMessages({ chat_id: "oc_busy", page_size: 1 });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    const page = await runInSyncLane("interactive", () =>
-      client.listMessages({ chat_id: "oc_open", page_size: 1 }),
-    );
+    const page = await client.listMessages({ chat_id: "oc_open", page_size: 1 });
     assert.equal(page.items[0].message_id, "om_open");
     assert.equal(interactiveFetches, 1);
     releaseHistory();
@@ -914,7 +910,7 @@ describe("LarkCliClient", () => {
     resetFeishuUserNameCache();
   });
 
-  it("falls back to CLI for names the contact batch omits", async () => {
+  it("keeps a partial contact batch and does not spend a CLI slot", async () => {
     resetFeishuUserNameCache();
     const spawned = [];
     const client = new LarkCliClient({
@@ -959,13 +955,8 @@ describe("LarkCliClient", () => {
     });
     const names = await client.resolveUserNames(["ou_in", "ou_out"]);
     assert.equal(names.get("ou_in"), "In scope");
-    assert.equal(names.get("ou_out"), "Out of scope");
-    assert.equal(spawned.length, 1);
-    assert.equal(spawned[0].command.includes("+search-user"), true);
-    assert.equal(
-      spawned[0].command[spawned[0].command.indexOf("--user-ids") + 1],
-      "ou_out",
-    );
+    assert.equal(names.get("ou_out"), undefined);
+    assert.equal(spawned.length, 0);
     resetFeishuUserNameCache();
   });
 

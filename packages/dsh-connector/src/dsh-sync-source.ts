@@ -1,4 +1,4 @@
-import type { SyncDirectoryPage, SyncSource } from "@regenic/domain";
+import type { SyncDirectoryPage, SyncSource } from "@regenic/connector-contract";
 import type { DshWebRpcClient } from "./dsh-rpc-client";
 import { dshStreamKey } from "./plugin";
 

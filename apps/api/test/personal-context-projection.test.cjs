@@ -83,6 +83,9 @@ function fixture(
     async listSyncStates() {
       return [];
     },
+    async listSyncPhaseHeads() {
+      return [];
+    },
   };
   const connectors = {
     listStreams() {
@@ -362,6 +365,15 @@ describe("PersonalContextProjectionService", () => {
             updated_at: "2026-08-30T00:00:00.000Z",
             live_cursor: "{}",
             history_cursor: "{}",
+          },
+        ];
+      },
+      async listSyncPhaseHeads() {
+        return [
+          {
+            stream_key: "chat:1",
+            phase: "history",
+            media_pending: false,
           },
         ];
       },

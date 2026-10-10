@@ -1,4 +1,4 @@
-import type { ConnectorInstallation, ConnectorStream } from "@regenic/domain";
+import type { ConnectorInstallation, ConnectorStream } from "@regenic/connector-contract";
 import type { FeishuChat, FeishuImClient } from "./feishu-cli-client";
 import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
 import { FEISHU_SOURCE } from "./feishu-message";

@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { conversationId } = require("@regenic/domain");
+const { conversationId } = require("@regenic/connector-contract");
 const {
   cursorExternalId,
   isLocalCursorAgentId,

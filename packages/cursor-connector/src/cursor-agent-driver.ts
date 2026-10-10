@@ -13,7 +13,7 @@ import {
   type JsonValue,
   type NewConnectorInstallation,
   type SyncSource,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import {
   CURSOR_API_KEY_ENV,
   CursorApiError,

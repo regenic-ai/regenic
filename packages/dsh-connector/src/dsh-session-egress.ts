@@ -1,4 +1,4 @@
-import type { DeliveryReceipt, EgressAdapter, EgressCapabilities, SendIntent } from "@regenic/domain";
+import type { DeliveryReceipt, EgressAdapter, EgressCapabilities, SendIntent } from "@regenic/connector-contract";
 import { DshApiError } from "./dsh-cli-client";
 import { promptFromContentParts, type DshPromptPart } from "./dsh-prompt-part";
 import type { DshSessionPromptInput } from "./dsh-rpc-client";

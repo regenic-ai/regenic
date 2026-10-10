@@ -3,7 +3,14 @@
  * and optionally hint via `pace.idle_ms`; they must not encode active/inactive.
  */
 
-export type SyncMode = "conversation" | "balanced" | "context";
+import {
+  DEFAULT_SYNC_MODE,
+  parseSyncMode,
+  type SyncMode,
+} from "@regenic/connector-contract";
+
+export { DEFAULT_SYNC_MODE, parseSyncMode };
+export type { SyncMode };
 
 export interface SyncModePreset {
   activeIdleMs: number;
@@ -27,19 +34,6 @@ export const SYNC_MODE_CONTEXT: SyncModePreset = {
   activeIdleMs: 30_000,
   inactiveIdleMs: 600_000,
 };
-
-export const DEFAULT_SYNC_MODE: SyncMode = "conversation";
-
-export function parseSyncMode(raw: unknown): SyncMode | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const value = raw.trim().toLowerCase();
-  if (value === "conversation" || value === "balanced" || value === "context") {
-    return value;
-  }
-  return null;
-}
 
 export function syncModePreset(mode: SyncMode): SyncModePreset {
   switch (mode) {

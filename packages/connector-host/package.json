@@ -12,11 +12,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm --filter @regenic/domain build && pnpm --filter @regenic/feishu-connector build && pnpm --filter @regenic/slack-connector build && pnpm --filter @regenic/cursor-connector build && pnpm --filter @regenic/dsh-connector build && pnpm run build && node --test test/*.test.cjs"
   },
   "dependencies": {
     "@regenic/cursor-connector": "workspace:*",
     "@regenic/domain": "workspace:*",
+    "@regenic/plugin-host": "workspace:*",
     "@regenic/dsh-connector": "workspace:*",
     "@regenic/feishu-connector": "workspace:*",
     "@regenic/slack-connector": "workspace:*",

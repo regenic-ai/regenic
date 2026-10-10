@@ -69,7 +69,7 @@ export const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
 /** Ceiling for `probeCatalog` (local CLI / HTTP readiness). */
 export const DEFAULT_CATALOG_PROBE_TIMEOUT_MS = 2_500;
 /** Ceiling for install-form field options (chat lists, etc.). */
-export const DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS = 8_000;
+export { DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS } from "@regenic/connector-contract";
 
 export function connectorPollTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,

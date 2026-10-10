@@ -477,3 +477,97 @@ describePg("postgres concurrent sync work claim", () => {
     assert.equal(ids[0], "work-1");
   });
 });
+
+describe("phase writes owe their lanes", () => {
+  it("inserts latest beside history without rereading cursors on the gap query", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await seedInstallation(store);
+    const first = "2026-09-21T00:00:00.000Z";
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:1",
+      phase: "history",
+      media_pending: true,
+      generation: 1,
+      live_cursor: "{\"blob\":\"cursor\"}",
+      history_cursor: "{\"token\":\"page\"}",
+      updated_at: first,
+    });
+    assert.deepEqual(await store.listSyncWorkGaps(installation.id), []);
+    const claimed = await store.claimSyncWork({
+      owner: "worker",
+      now: first,
+      lease_ms: 60_000,
+      limit: 8,
+      installation_id: installation.id,
+      unassigned: true,
+    });
+    assert.deepEqual(
+      claimed.map((work) => work.lane).sort(),
+      ["history", "live", "media"],
+    );
+    assert.ok(claimed.every((work) => work.next_due_at === first));
+    await store.settleSyncWork({
+      id: claimed.find((work) => work.lane === "live").id,
+      owner: "worker",
+      now: first,
+      outcome: "succeeded",
+    });
+    const gaps = await store.listSyncWorkGaps(installation.id);
+    assert.deepEqual(
+      gaps.map((gap) => gap.missing_lane),
+      ["live"],
+    );
+    assert.equal("live_cursor" in gaps[0], false);
+    assert.equal("history_cursor" in gaps[0], false);
+    const later = "2026-09-21T00:00:30.000Z";
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:1",
+      phase: "steady",
+      media_pending: false,
+      generation: 1,
+      updated_at: later,
+    });
+    const pending = await store.claimSyncWork({
+      owner: "worker-b",
+      now: later,
+      lease_ms: 60_000,
+      limit: 8,
+      installation_id: installation.id,
+      unassigned: true,
+    });
+    assert.deepEqual(
+      pending.map((work) => work.lane).sort(),
+      ["live"],
+    );
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:2",
+      phase: "history",
+      media_pending: true,
+      generation: 1,
+      updated_at: later,
+    });
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:2",
+      phase: "steady",
+      media_pending: false,
+      generation: 1,
+      updated_at: later,
+    });
+    const dropped = await store.claimSyncWork({
+      owner: "worker-c",
+      now: later,
+      lease_ms: 60_000,
+      limit: 8,
+      installation_id: installation.id,
+      lanes: ["history", "media"],
+      unassigned: true,
+    });
+    assert.deepEqual(dropped, []);
+    store.close();
+  });
+});

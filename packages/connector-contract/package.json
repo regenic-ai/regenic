@@ -1,7 +1,16 @@
 {
   "name": "@regenic/connector-contract",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Serializable types and pure helpers for Regenic connectors.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/regenic-ai/regenic.git",
+    "directory": "packages/connector-contract"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -10,8 +19,19 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@regenic/plugin-host": "workspace:*",
+    "zod": "^3.24.1"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build",
     "test": "pnpm run build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

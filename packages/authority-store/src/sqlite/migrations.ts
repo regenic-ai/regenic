@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 41;
+export const LATEST_SCHEMA_VERSION = 42;
 
 export const MIGRATIONS = [
   {
@@ -943,6 +943,15 @@ export const MIGRATIONS = [
       CREATE INDEX connector_sync_work_unassigned_idx
         ON connector_sync_work (installation_id, status, lane)
         WHERE run_id IS NULL;
+    `,
+  },
+  {
+    version: 42,
+    sql: `
+      CREATE INDEX connector_sync_state_gap_idx
+        ON connector_sync_state (
+          installation_id, phase, stream_key, generation, media_pending, idle_until
+        );
     `,
   },
 ] as const;

@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 42;
+export const PG_SCHEMA_VERSION = 43;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -442,6 +442,15 @@ CREATE INDEX connector_sync_work_unassigned_idx
   WHERE run_id IS NULL;
 `,
   },
+  {
+    version: 43,
+    sql: `
+CREATE INDEX connector_sync_state_gap_idx
+  ON connector_sync_state (
+    installation_id, phase, stream_key, generation, media_pending, idle_until
+  );
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -727,6 +736,10 @@ CREATE TABLE connector_sync_state (
   updated_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (installation_id, stream_key)
 );
+CREATE INDEX connector_sync_state_gap_idx
+  ON connector_sync_state (
+    installation_id, phase, stream_key, generation, media_pending, idle_until
+  );
 
 CREATE TABLE context_artifacts (
   org_id TEXT NOT NULL,

@@ -1,23 +1,22 @@
 import { asConnectorHost, ConnectorRunner } from "@regenic/domain";
+import type { ConnectorInstallation } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
-import { DshApiError, type DshSpawn } from "./dsh-cli-client";
-import type { DshFetch } from "./dsh-rpc-client";
-import type { DshListedSession, DshRpcServices } from "./dsh-rpc-handler";
 import {
+  DshApiError,
   DshSessionPollConnector,
-  type DshHistoryQuery,
-} from "./dsh-session-poll-connector";
-import {
   createDshConversation,
   dshSessionDriver,
-  dshWebRpcClient,
-  mountDshSessions,
-} from "./dsh-session-driver";
-import {
   dshSessionKey,
   dshStreamKey,
+  dshWebRpcClient,
+  mountDshSessions,
   resolveEffectiveDshTransport,
-} from "./plugin";
+  type DshFetch,
+  type DshHistoryQuery,
+  type DshListedSession,
+  type DshRpcServices,
+  type DshSpawn,
+} from "@regenic/dsh-connector";
 
 export interface DshHostServiceOptions {
   org_id: string;
@@ -30,11 +29,24 @@ export interface DshHostServiceOptions {
   lease_owner?: string;
 }
 
+interface DshInstallationStore {
+  listInstallations(orgId: string): Promise<ConnectorInstallation[]>;
+}
+
+function installationStore(host: Host): DshInstallationStore {
+  return host.get("authority") as DshInstallationStore;
+}
+
+/**
+ * Host implementation of the DSH public RPC. The connector package owns the
+ * protocol and the session driver. This file is the only place that lists
+ * installations and asks Sync Core to poll.
+ */
 export function createDshHostRpcServices(
   host: Host,
   options: DshHostServiceOptions,
 ): DshRpcServices {
-  const store = host.get("authority");
+  const store = installationStore(host);
   const now = options.now ?? (() => new Date().toISOString());
   const createId = options.createId ?? (() => "dsh-api");
   const env = options.env ?? process.env;
@@ -42,6 +54,7 @@ export function createDshHostRpcServices(
     fetch: options.fetch,
     access_token: options.access_token,
   };
+  const driverHost = asConnectorHost(host);
 
   return {
     async listSessions(): Promise<DshListedSession[]> {
@@ -94,15 +107,20 @@ export function createDshHostRpcServices(
         sessionId,
       );
       const connector = await connectorForSession(
+        driverHost,
         host,
         installation,
         sessionId,
         options,
       );
       const page = await connector.historyPage(query);
-      const runner = new ConnectorRunner(connector, host.get("ingest"), store, now);
       try {
-        const run = await runner.poll({
+        const run = await new ConnectorRunner(
+          connector,
+          host.get("ingest"),
+          host.get("authority"),
+          now,
+        ).poll({
           installation_id: installation.id,
           stream_key: `session:${sessionId}`,
           lease_owner: options.lease_owner ?? `dsh-api:${createId()}`,
@@ -125,6 +143,7 @@ export function createDshHostRpcServices(
         sessionId,
       );
       const egress = await mountedSessionEgress(
+        driverHost,
         host,
         installation,
         sessionId,
@@ -155,12 +174,12 @@ export function createDshHostRpcServices(
   };
 }
 
-export async function requireDshInstallation(
+async function requireDshInstallation(
   host: Host,
   orgId: string,
   sessionId: string,
 ) {
-  const store = host.get("authority");
+  const store = installationStore(host);
   const installations = (await store.listInstallations(orgId)).filter(
     (item) => item.connector_type === "dsh-session",
   );
@@ -188,6 +207,7 @@ export async function requireDshInstallation(
 }
 
 async function connectorForSession(
+  driverHost: ReturnType<typeof asConnectorHost>,
   host: Host,
   installation: { id: string; org_id: string; config: Record<string, unknown> },
   sessionId: string,
@@ -195,7 +215,7 @@ async function connectorForSession(
 ): Promise<DshSessionPollConnector> {
   const env = options.env ?? process.env;
   const streams = await mountDshSessions(
-    asConnectorHost(host),
+    driverHost,
     installation,
     env,
     [sessionId],
@@ -215,13 +235,14 @@ async function connectorForSession(
 }
 
 async function mountedSessionEgress(
+  driverHost: ReturnType<typeof asConnectorHost>,
   host: Host,
   installation: { id: string; org_id: string; config: Record<string, unknown> },
   sessionId: string,
   options: DshHostServiceOptions,
 ) {
   await mountDshSessions(
-    asConnectorHost(host),
+    driverHost,
     installation,
     options.env ?? process.env,
     [sessionId],
