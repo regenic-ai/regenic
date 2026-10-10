@@ -1332,6 +1332,11 @@ async function listContextSnapshotHistory(
   if (limit > 100) {
     throw new Error("--limit must not exceed 100");
   }
+  const beforeCreatedAt = optionString(options, "before-created-at");
+  const beforeSnapshotId = optionString(options, "before-snapshot-id");
+  if ((beforeCreatedAt === undefined) !== (beforeSnapshotId === undefined)) {
+    throw new Error("--before-created-at and --before-snapshot-id must be provided together");
+  }
   await withLocalHost({
     database: requirePath(options, "database"),
     blobRoot: requirePath(options, "blob-root"),
@@ -1344,6 +1349,10 @@ async function listContextSnapshotHistory(
       principal: { actor_type: "human", actor_id: orgId },
       consumer_id: optionString(options, "consumer") ?? "local-cli",
       limit,
+      ...(beforeCreatedAt === undefined ? {} : {
+        before_created_at: beforeCreatedAt,
+        before_snapshot_id: beforeSnapshotId,
+      }),
     }));
   });
 }
