@@ -578,6 +578,17 @@ curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Ac
 每条结果都是关联关系，不是新的授权。重放某个 Snapshot 时，使用其 `snapshot_id`，
 并保持创建时的 consumer、purpose 与 allowed uses。历史 API 不会扩大 replay 权限。
 
+#### 排查线程历史为空
+
+只有原始 assemble 请求的 `filters.thread_ids` 恰好包含一个线程时，才会登记历史。
+无线程 filter 或包含多个线程的请求仍会创建可用的 Snapshot，但不会建立线程历史关联。
+由于无法可靠推断旧 Snapshot 的来源线程，已有 Snapshot 不会被回填。
+
+历史还按组织、principal 和 consumer 隔离。请确认请求使用的 Personal API 身份以及
+`desktop-context-pilot` consumer 与 assemble 请求一致。本地排查时，使用创建 Snapshot
+时相同的本地 org、principal、consumer 选项运行
+`context-snapshot-history --thread <thread-id>`。
+
 证据正文作为不可信 user data 发送给模型，绝不作为模型 instruction。只有当模型提交的每条
 citation 都指向授权 bundle 中已有的 candidate 与 Event 时，回答才会返回。模型输出不会
 写回 Event、Artifact、Claim，也不会直接成为已接受事实。
