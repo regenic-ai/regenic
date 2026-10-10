@@ -1098,6 +1098,28 @@ describe("LarkCliClient", () => {
     assert.throws(
       () =>
         unwrapLarkCli({
+          stdout: "",
+          stderr: JSON.stringify({
+            ok: false,
+            identity: "user",
+            error: {
+              type: "authentication",
+              subtype: "token_missing",
+              message: "need_user_authorization (user: ou_example)",
+            },
+            _notice: { update: { current: "1.0.89", latest: "1.0.97" } },
+          }),
+          exit_code: 3,
+        }),
+      (error) =>
+        error instanceof FeishuApiError &&
+        error.code === "token_missing" &&
+        error.message ===
+          "Feishu is not signed in. Run: lark-cli auth login --recommend",
+    );
+    assert.throws(
+      () =>
+        unwrapLarkCli({
           stdout: JSON.stringify({ code: 99991663, msg: "token invalid" }),
           stderr: "",
           exit_code: 0,
@@ -1147,6 +1169,28 @@ describe("LarkCliClient", () => {
     assert.equal(
       larkCliUserReady(JSON.stringify({ ok: true, identity: "bot" }), 0),
       false,
+    );
+    assert.equal(
+      larkCliUserReady(
+        JSON.stringify({
+          identity: "bot",
+          identities: {
+            user: { status: "missing", available: false, openId: "ou_example" },
+          },
+        }),
+        0,
+      ),
+      false,
+    );
+    assert.equal(
+      larkCliUserReady(
+        JSON.stringify({
+          identity: "bot",
+          identities: { user: { status: "ready", available: true } },
+        }),
+        0,
+      ),
+      true,
     );
     assert.equal(larkCliUserReady("{}", 1), false);
   });

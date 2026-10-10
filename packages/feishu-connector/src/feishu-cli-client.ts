@@ -1283,6 +1283,9 @@ export function resolveLarkCommand(configured?: string): string {
   return command;
 }
 
+const LARK_CLI_SIGN_IN_MESSAGE =
+  "Feishu is not signed in. Run: lark-cli auth login --recommend";
+
 export function unwrapLarkCli(result: FeishuSpawnResult): unknown {
   const stdout = result.stdout.trim();
   let parsed: unknown;
@@ -1294,15 +1297,11 @@ export function unwrapLarkCli(result: FeishuSpawnResult): unknown {
         result.stderr.trim() || "lark-cli returned invalid JSON",
       );
     }
+  } else {
+    parsed = parseCliJson(result.stderr);
   }
   if (isObject(parsed) && parsed.ok === false) {
-    const error = isObject(parsed.error) ? parsed.error : undefined;
-    throw new FeishuApiError(
-      stringValue(error?.message) ??
-        (result.stderr.trim() || "lark-cli request failed"),
-      stringValue(error?.subtype) ??
-        (typeof error?.code === "number" ? String(error.code) : undefined),
-    );
+    throw larkCliNotOk(parsed, result);
   }
   if (result.exit_code !== 0) {
     throw new FeishuApiError(
@@ -1319,6 +1318,47 @@ export function unwrapLarkCli(result: FeishuSpawnResult): unknown {
     return parsed.data;
   }
   return parsed;
+}
+
+function parseCliJson(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function larkCliNotOk(
+  parsed: Record<string, unknown>,
+  result: FeishuSpawnResult,
+): FeishuApiError {
+  const error = isObject(parsed.error) ? parsed.error : undefined;
+  const subtype = stringValue(error?.subtype);
+  const code =
+    subtype ??
+    (typeof error?.code === "number" ? String(error.code) : undefined);
+  if (subtype === "token_missing") {
+    return new FeishuApiError(LARK_CLI_SIGN_IN_MESSAGE, "token_missing");
+  }
+  return new FeishuApiError(
+    stringValue(error?.message) ??
+      (result.stderr.trim() || "lark-cli request failed"),
+    code,
+  );
+}
+
+function larkCliUserIdentityReady(user: Record<string, unknown>): boolean {
+  if (typeof user.status === "string") {
+    return user.status === "ready";
+  }
+  if (typeof user.available === "boolean") {
+    return user.available;
+  }
+  return true;
 }
 
 export function parseChatPage(value: unknown): FeishuChatPage {
@@ -1484,7 +1524,7 @@ export function larkCliUserReady(stdout: string, exitCode: number): boolean {
       return true;
     }
     if (isObject(parsed.identities) && isObject(parsed.identities.user)) {
-      return true;
+      return larkCliUserIdentityReady(parsed.identities.user);
     }
     return false;
   } catch {
