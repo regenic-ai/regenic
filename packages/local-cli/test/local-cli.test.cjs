@@ -143,6 +143,41 @@ describe("regenic-local", () => {
       run(["context-snapshot-history", ...common, "--thread", "synthetic-chat:chat-1", "--limit", "101"]),
       /--limit must not exceed 100/,
     );
+    const laterSnapshot = await run([
+      "context-assemble",
+      ...common,
+      "--query", "what was approved",
+      "--thread", "synthetic-chat:chat-1",
+    ], { env: { REGENIC_MODEL_DRIVER: "none" } });
+    const firstPage = await run([
+      "context-snapshot-history",
+      ...common,
+      "--thread", "synthetic-chat:chat-1",
+      "--limit", "1",
+    ]);
+    assert.equal(firstPage.length, 1);
+    const secondPage = await run([
+      "context-snapshot-history",
+      ...common,
+      "--thread", "synthetic-chat:chat-1",
+      "--limit", "1",
+      "--before-created-at", firstPage[0].created_at,
+      "--before-snapshot-id", firstPage[0].snapshot_id,
+    ]);
+    assert.equal(secondPage.length, 1);
+    assert.notEqual(secondPage[0].snapshot_id, firstPage[0].snapshot_id);
+    assert.ok(
+      [assembled.snapshot.id, laterSnapshot.snapshot.id].includes(secondPage[0].snapshot_id),
+    );
+    await assert.rejects(
+      run([
+        "context-snapshot-history",
+        ...common,
+        "--thread", "synthetic-chat:chat-1",
+        "--before-created-at", firstPage[0].created_at,
+      ]),
+      /--before-created-at and --before-snapshot-id must be provided together/,
+    );
 
     const digest = await run([
       "context-daily-digest-project",
