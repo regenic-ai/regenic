@@ -20,6 +20,8 @@ type ContextState = {
   sourceRevision: string;
 };
 
+const HISTORY_PAGE_SIZE = 20;
+
 export function ThreadContextPanel({
   threadId,
   sourceRevision,
@@ -35,32 +37,84 @@ export function ThreadContextPanel({
   const [error, setError] = useState<string | null>(null);
   const [evidenceNotice, setEvidenceNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<PersonalContextSnapshotIndexEntry[]>([]);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyCanLoadMore, setHistoryCanLoadMore] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const historyAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = null;
     setContext(null);
     setBusy(false);
     setError(null);
     setEvidenceNotice(null);
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      historyAbortRef.current?.abort();
+    };
   }, [threadId]);
 
   useEffect(() => {
     const controller = new AbortController();
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = controller;
     setHistory([]);
-    void fetchPersonalContextHistory(threadId, controller.signal)
+    setHistoryCanLoadMore(false);
+    setHistoryBusy(true);
+    void fetchPersonalContextHistory(threadId, { signal: controller.signal })
       .then((entries) => {
-        if (!controller.signal.aborted) setHistory(entries);
+        if (!controller.signal.aborted) {
+          setHistory(entries);
+          setHistoryCanLoadMore(entries.length === HISTORY_PAGE_SIZE);
+        }
       })
       .catch((caught) => {
         if (!controller.signal.aborted) {
           setError(caught instanceof Error ? caught.message : t("thread.contextHistoryError"));
         }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setHistoryBusy(false);
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (historyAbortRef.current === controller) historyAbortRef.current = null;
+    };
   }, [threadId, t]);
+
+  const loadOlderHistory = async () => {
+    const before = history.at(-1);
+    if (!before || historyBusy || !historyCanLoadMore) return;
+    const controller = new AbortController();
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = controller;
+    setHistoryBusy(true);
+    setError(null);
+    try {
+      const entries = await fetchPersonalContextHistory(threadId, {
+        before,
+        signal: controller.signal,
+      });
+      if (!controller.signal.aborted) {
+        setHistory((current) => [
+          ...current,
+          ...entries.filter((entry) =>
+            !current.some((existing) => existing.snapshot_id === entry.snapshot_id),
+          ),
+        ]);
+        setHistoryCanLoadMore(entries.length === HISTORY_PAGE_SIZE);
+      }
+    } catch (caught) {
+      if (!controller.signal.aborted) {
+        setError(caught instanceof Error ? caught.message : t("thread.contextHistoryError"));
+      }
+    } finally {
+      if (!controller.signal.aborted) setHistoryBusy(false);
+    }
+  };
 
   const start = async (
     mode: "fresh" | "replayed",
@@ -81,8 +135,11 @@ export function ThreadContextPanel({
         if (!controller.signal.aborted) {
           const next = { ...result, mode, loadedAt: new Date().toISOString(), sourceRevision };
           setContext(next);
-          const entries = await fetchPersonalContextHistory(threadId, controller.signal);
-          if (!controller.signal.aborted) setHistory(entries);
+          const entries = await fetchPersonalContextHistory(threadId, { signal: controller.signal });
+          if (!controller.signal.aborted) {
+            setHistory(entries);
+            setHistoryCanLoadMore(entries.length === HISTORY_PAGE_SIZE);
+          }
         }
       } else {
         const bundle = await replayPersonalContext(snapshotId!, controller.signal);
@@ -135,27 +192,39 @@ export function ThreadContextPanel({
       {error ? <p className="action-error" role="alert">{error}</p> : null}
       {evidenceNotice ? <p className="action-hint" role="status">{evidenceNotice}</p> : null}
       {history.length > 0 ? (
-        <label className="thread-context-history">
-          {t("thread.contextHistory")}
-          <select
-            value={context?.snapshot.id ?? ""}
-            disabled={busy}
-            onChange={(event) => {
-              const selected = history.find((entry) => entry.snapshot_id === event.target.value);
-              if (selected) void start("replayed", selected);
-            }}
-          >
-            <option value="" disabled>{t("thread.contextHistorySelect")}</option>
-            {history.map((entry) => (
-              <option key={entry.snapshot_id} value={entry.snapshot_id}>
-                {t("thread.contextHistoryEntry", {
-                  id: entry.snapshot_id.slice(0, 12),
-                  date: new Date(entry.created_at).toLocaleString(),
-                })}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="thread-context-history">
+          <label>
+            {t("thread.contextHistory")}
+            <select
+              value={context?.snapshot.id ?? ""}
+              disabled={busy}
+              onChange={(event) => {
+                const selected = history.find((entry) => entry.snapshot_id === event.target.value);
+                if (selected) void start("replayed", selected);
+              }}
+            >
+              <option value="" disabled>{t("thread.contextHistorySelect")}</option>
+              {history.map((entry) => (
+                <option key={entry.snapshot_id} value={entry.snapshot_id}>
+                  {t("thread.contextHistoryEntry", {
+                    id: entry.snapshot_id.slice(0, 12),
+                    date: new Date(entry.created_at).toLocaleString(),
+                  })}
+                </option>
+              ))}
+            </select>
+          </label>
+          {historyCanLoadMore ? (
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || historyBusy}
+              onClick={() => void loadOlderHistory()}
+            >
+              {historyBusy ? t("thread.contextHistoryLoading") : t("thread.contextHistoryLoadMore")}
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {!context ? null : (
         <div className="thread-context-result">

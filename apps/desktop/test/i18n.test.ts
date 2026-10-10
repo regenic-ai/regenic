@@ -58,6 +58,8 @@ describe("desktop locale", () => {
       translate("en", "thread.contextHistoryEntry", { date: "today", id: "snapshot-123" }),
       "today · Snapshot snapshot-123",
     );
+    assert.equal(translate("en", "thread.contextHistoryLoadMore"), "Load older snapshots");
+    assert.equal(translate("zh", "thread.contextHistoryLoadMore"), "加载更早的快照");
     assert.equal(translate("en", "thread.startRun"), "Handle now");
     assert.match(translate("en", "work.hint.running"), /chat reply/);
     assert.equal(translate("en", "work.hint.running").includes("DSH"), false);
