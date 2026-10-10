@@ -54,6 +54,8 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "thread.forwardConversation"), "转发会话");
     assert.equal(translate("en", "thread.contextHistory"), "Saved history");
     assert.equal(translate("zh", "thread.contextHistory"), "保存的历史");
+    assert.equal(translate("en", "thread.contextHistoryRetry"), "Retry");
+    assert.equal(translate("zh", "thread.contextHistoryRetry"), "重试");
     assert.equal(
       translate("en", "thread.contextHistoryEntry", { date: "today", id: "snapshot-123" }),
       "today · Snapshot snapshot-123",

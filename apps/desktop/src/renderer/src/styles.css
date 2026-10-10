@@ -2305,6 +2305,12 @@ button {
   font-size: 12px;
 }
 
+.thread-context-history-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .thread-context-history label {
   display: flex;
   align-items: center;

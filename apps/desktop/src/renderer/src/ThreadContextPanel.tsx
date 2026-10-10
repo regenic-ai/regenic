@@ -39,6 +39,8 @@ export function ThreadContextPanel({
   const [history, setHistory] = useState<PersonalContextSnapshotIndexEntry[]>([]);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyCanLoadMore, setHistoryCanLoadMore] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyReload, setHistoryReload] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const historyAbortRef = useRef<AbortController | null>(null);
 
@@ -69,11 +71,12 @@ export function ThreadContextPanel({
         if (!controller.signal.aborted) {
           setHistory(entries);
           setHistoryCanLoadMore(entries.length === HISTORY_PAGE_SIZE);
+          setHistoryError(null);
         }
       })
       .catch((caught) => {
         if (!controller.signal.aborted) {
-          setError(caught instanceof Error ? caught.message : t("thread.contextHistoryError"));
+          setHistoryError(caught instanceof Error ? caught.message : t("thread.contextHistoryError"));
         }
       })
       .finally(() => {
@@ -83,7 +86,7 @@ export function ThreadContextPanel({
       controller.abort();
       if (historyAbortRef.current === controller) historyAbortRef.current = null;
     };
-  }, [threadId, t]);
+  }, [historyReload, threadId, t]);
 
   const loadOlderHistory = async () => {
     const before = history.at(-1);
@@ -92,7 +95,7 @@ export function ThreadContextPanel({
     historyAbortRef.current?.abort();
     historyAbortRef.current = controller;
     setHistoryBusy(true);
-    setError(null);
+    setHistoryError(null);
     try {
       const entries = await fetchPersonalContextHistory(threadId, {
         before,
@@ -109,7 +112,7 @@ export function ThreadContextPanel({
       }
     } catch (caught) {
       if (!controller.signal.aborted) {
-        setError(caught instanceof Error ? caught.message : t("thread.contextHistoryError"));
+        setHistoryError(caught instanceof Error ? caught.message : t("thread.contextHistoryError"));
       }
     } finally {
       if (!controller.signal.aborted) setHistoryBusy(false);
@@ -139,6 +142,7 @@ export function ThreadContextPanel({
           if (!controller.signal.aborted) {
             setHistory(entries);
             setHistoryCanLoadMore(entries.length === HISTORY_PAGE_SIZE);
+            setHistoryError(null);
           }
         }
       } else {
@@ -191,6 +195,14 @@ export function ThreadContextPanel({
       </div>
       {error ? <p className="action-error" role="alert">{error}</p> : null}
       {evidenceNotice ? <p className="action-hint" role="status">{evidenceNotice}</p> : null}
+      {historyError ? (
+        <div className="thread-context-history-error" role="alert">
+          <span>{historyError}</span>
+          <button type="button" className="ghost" disabled={busy} onClick={() => setHistoryReload((value) => value + 1)}>
+            {t("thread.contextHistoryRetry")}
+          </button>
+        </div>
+      ) : null}
       {history.length > 0 ? (
         <div className="thread-context-history">
           <label>
