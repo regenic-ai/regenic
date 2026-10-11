@@ -540,6 +540,7 @@ The Personal API exposes the same durable path:
 
 ```http
 POST /v1/me/context/assemble
+POST /v1/me/context/diff
 GET  /v1/me/context/snapshots?thread_id=...&limit=...
 GET  /v1/me/context/snapshots/:snapshot_id
 POST /v1/me/context/replay
@@ -585,6 +586,11 @@ curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Ac
 Each result is an association, not a new grant. To replay a selected Snapshot,
 use its `snapshot_id` with the same consumer, purpose, and allowed uses that
 created it. The history endpoint does not expand replay permissions.
+
+`POST /v1/me/context/diff` compares two Snapshot IDs using one shared replay
+grant. Both Snapshots must be replayable by the current organization and
+principal with the submitted consumer, purpose, and allowed uses. The response
+contains stable candidate references and hashes, never evidence text.
 
 #### Troubleshooting empty thread history
 

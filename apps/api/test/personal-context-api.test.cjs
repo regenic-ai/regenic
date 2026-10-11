@@ -1064,6 +1064,73 @@ describe("personal context API", () => {
     assert.equal(replayed.content_hash, assembled.bundle.content_hash);
   });
 
+  it("diffs two snapshots only through their shared replay grant", async () => {
+    const root = await createRoot();
+    const { origin, database } = await startApi(root);
+    const grant = {
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context for the open personal conversation",
+      allowed_uses: ["display"],
+    };
+    const request = {
+      ...grant,
+      filters: { thread_ids: ["synthetic-chat:chat-1"] },
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    };
+    const firstResponse = await postJson(`${origin}/v1/me/context/assemble`, request);
+    assert.equal(firstResponse.response.status, 201, firstResponse.text);
+    const first = JSON.parse(firstResponse.text);
+
+    const addedEventId = await ingestEvidence(
+      database,
+      join(root, "blobs"),
+      "later",
+      "chat-1",
+    );
+    const secondResponse = await postJson(`${origin}/v1/me/context/assemble`, request);
+    assert.equal(secondResponse.response.status, 201, secondResponse.text);
+    const second = JSON.parse(secondResponse.text);
+
+    const diffResponse = await postJson(`${origin}/v1/me/context/diff`, {
+      from_snapshot_id: first.snapshot.id,
+      to_snapshot_id: second.snapshot.id,
+      ...grant,
+    });
+    assert.equal(diffResponse.response.status, 201, diffResponse.text);
+    const diff = JSON.parse(diffResponse.text);
+    assert.equal(diff.from_snapshot_id, first.snapshot.id);
+    assert.equal(diff.to_snapshot_id, second.snapshot.id);
+    assert.deepEqual(diff.added.map((item) => item.resource_id), [addedEventId]);
+    assert.equal(diff.removed.length, 0);
+    assert.equal(diff.unchanged.length, 1);
+    assert.equal(diffResponse.text.includes("Additional release evidence"), false);
+
+    const forbidden = await postJson(`${origin}/v1/me/context/diff`, {
+      from_snapshot_id: first.snapshot.id,
+      to_snapshot_id: second.snapshot.id,
+      ...grant,
+      consumer_id: "another-consumer",
+    });
+    assert.equal(forbidden.response.status, 404, forbidden.text);
+    assert.equal(JSON.parse(forbidden.text).error.code, "not_found");
+
+    const invalid = await postJson(`${origin}/v1/me/context/diff`, {
+      from_snapshot_id: first.snapshot.id,
+      to_snapshot_id: second.snapshot.id,
+      ...grant,
+      principal: { actor_type: "human", actor_id: "other" },
+    });
+    assert.equal(invalid.response.status, 400, invalid.text);
+    assert.equal(JSON.parse(invalid.text).error.code, "invalid_request");
+  });
+
   it("lists only the current principal's desktop snapshot history for one thread", async () => {
     const root = await createRoot();
     const { origin, database } = await startApi(root);
