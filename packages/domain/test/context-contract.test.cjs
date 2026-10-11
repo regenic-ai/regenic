@@ -6,6 +6,7 @@ const {
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
   EVIDENCE_BUNDLE_SCHEMA_VERSION,
   canonicalContextJson,
+  diffContextBundles,
   hashCanonicalContext,
   hashContextArtifactInputs,
   hashContextBundle,
@@ -178,6 +179,153 @@ describe("context contracts", () => {
   it("keeps EvidenceBundle v1 separate from ContextBundle v2", () => {
     assert.equal(EVIDENCE_BUNDLE_SCHEMA_VERSION, "1.0");
     assert.equal(CONTEXT_BUNDLE_SCHEMA_VERSION, "2.0");
+  });
+
+  it("diffs authorized Context bundles deterministically without exposing text", () => {
+    const before = bundle({
+      snapshot_id: "snapshot-before",
+      sections: [
+        {
+          kind: "facts",
+          items: [
+            {
+              candidate_id: "candidate-retained",
+              resource_id: "event-retained",
+              kind: "event",
+              text: "Retained text.",
+              content_hash: HASH_A,
+              evidence: [evidence({ event_id: "event-retained" })],
+              estimated_tokens: 40,
+            },
+            {
+              candidate_id: "candidate-removed",
+              resource_id: "event-removed",
+              kind: "event",
+              text: "Removed text.",
+              content_hash: HASH_A,
+              evidence: [evidence({ event_id: "event-removed" })],
+              estimated_tokens: 60,
+            },
+          ],
+          tokens: 100,
+        },
+      ],
+      budget_ledger: ledger({
+        selected_items: 2,
+        sections: [{
+          kind: "facts",
+          requested_tokens: 500,
+          selected_tokens: 100,
+          reserved_tokens: 50,
+          selected_items: 2,
+          truncated_items: 0,
+        }],
+      }),
+    });
+    const after = bundle({
+      snapshot_id: "snapshot-after",
+      sections: [
+        {
+          kind: "facts",
+          items: [
+            {
+              candidate_id: "candidate-retained",
+              resource_id: "event-retained",
+              kind: "event",
+              text: "Retained text.",
+              content_hash: HASH_A,
+              evidence: [evidence({ event_id: "event-retained" })],
+              estimated_tokens: 40,
+            },
+            {
+              candidate_id: "candidate-added",
+              resource_id: "event-added",
+              kind: "event",
+              text: "Added text.",
+              content_hash: HASH_B,
+              evidence: [evidence({ event_id: "event-added", content_hash: HASH_B })],
+              estimated_tokens: 60,
+            },
+          ],
+          tokens: 100,
+        },
+      ],
+      budget_ledger: ledger({
+        selected_items: 2,
+        sections: [{
+          kind: "facts",
+          requested_tokens: 500,
+          selected_tokens: 100,
+          reserved_tokens: 50,
+          selected_items: 2,
+          truncated_items: 0,
+        }],
+      }),
+    });
+
+    const diff = diffContextBundles(before, after);
+
+    assert.deepEqual(diff, {
+      from_snapshot_id: "snapshot-before",
+      to_snapshot_id: "snapshot-after",
+      added: [{
+        candidate_id: "candidate-added",
+        resource_id: "event-added",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_B,
+      }],
+      removed: [{
+        candidate_id: "candidate-removed",
+        resource_id: "event-removed",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_A,
+      }],
+      changed: [],
+      unchanged: [{
+        candidate_id: "candidate-retained",
+        resource_id: "event-retained",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_A,
+      }],
+    });
+    assert.equal(canonicalContextJson(diff).includes("Retained text."), false);
+  });
+
+  it("reports changed candidates and rejects different authorization scopes", () => {
+    const before = bundle({ snapshot_id: "snapshot-before" });
+    const changedItem = {
+      ...before.sections[0].items[0],
+      text: "Updated text.",
+      content_hash: HASH_B,
+    };
+    const after = bundle({
+      snapshot_id: "snapshot-after",
+      sections: [{ ...before.sections[0], items: [changedItem] }],
+    });
+
+    assert.deepEqual(diffContextBundles(before, after).changed, [{
+      before: {
+        candidate_id: "candidate-1",
+        resource_id: "event-1",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_A,
+      },
+      after: {
+        candidate_id: "candidate-1",
+        resource_id: "event-1",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_B,
+      },
+    }]);
+    assert.throws(
+      () => diffContextBundles(before, bundle({ principal: { actor_type: "human", actor_id: "person-2" } })),
+      /different authorization scopes/,
+    );
   });
 
   it("projects a deterministic body-free EvidenceBundle v1 from ContextBundle citations", () => {
