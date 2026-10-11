@@ -48,6 +48,11 @@ export class PersonalContextController {
     ));
   }
 
+  @Post("diff")
+  diff(@Body() body: unknown) {
+    return this.guard(() => this.context.diff(body));
+  }
+
   @Get("artifacts")
   listArtifacts() {
     return this.guard(() => this.context.listArtifacts());
