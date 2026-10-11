@@ -81,6 +81,7 @@ export * from "./context-artifact-lifecycle";
 export * from "./context-snapshot";
 export * from "./context-bundle";
 export * from "./context-canonical";
+export * from "./context-diff";
 export * from "./context-compatibility";
 export * from "./context-lexical";
 export * from "./context-projection-outbox";
