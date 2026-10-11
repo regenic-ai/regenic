@@ -13,6 +13,7 @@ import {
   STANDARD_GAP_SCHEMA_VERSION,
   AGENT_RUN_SCHEMA_VERSION,
   STANDARD_DRIFT_DETECTOR_VERSION,
+  diffContextBundles,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -22,6 +23,7 @@ import {
   detectStandardDrift,
   detectStandardHealth,
   type ContextBundle,
+  type ContextBundleDiff,
   type ContextArtifact,
   type ContextReplayRequest,
   type ContextRequest,
@@ -70,6 +72,13 @@ const ASK_KEYS = new Set([
   "temporal",
   "budget",
   "requested_kinds",
+]);
+const DIFF_KEYS = new Set([
+  "from_snapshot_id",
+  "to_snapshot_id",
+  "consumer_id",
+  "purpose",
+  "allowed_uses",
 ]);
 const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
 const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
@@ -142,6 +151,24 @@ export class PersonalContextService {
         before_snapshot_id: requiredString(beforeSnapshotId, "before_snapshot_id"),
       }),
     });
+  }
+
+  async diff(input: unknown): Promise<ContextBundleDiff> {
+    const body = strictBody(input, DIFF_KEYS);
+    const grant = {
+      consumer_id: body.consumer_id,
+      purpose: body.purpose,
+      allowed_uses: body.allowed_uses,
+    };
+    const from = await this.replay({
+      ...grant,
+      snapshot_id: requiredString(body.from_snapshot_id, "from_snapshot_id"),
+    });
+    const to = await this.replay({
+      ...grant,
+      snapshot_id: requiredString(body.to_snapshot_id, "to_snapshot_id"),
+    });
+    return diffContextBundles(from, to);
   }
 
   async listArtifacts(): Promise<ContextArtifact[]> {

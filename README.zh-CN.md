@@ -534,6 +534,7 @@ Personal API 提供同一条持久化路径：
 
 ```http
 POST /v1/me/context/assemble
+POST /v1/me/context/diff
 GET  /v1/me/context/snapshots?thread_id=...&limit=...
 GET  /v1/me/context/snapshots/:snapshot_id
 POST /v1/me/context/replay
@@ -577,6 +578,10 @@ curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Ac
 
 每条结果都是关联关系，不是新的授权。重放某个 Snapshot 时，使用其 `snapshot_id`，
 并保持创建时的 consumer、purpose 与 allowed uses。历史 API 不会扩大 replay 权限。
+
+`POST /v1/me/context/diff` 使用同一份 replay grant 比较两个 Snapshot ID。
+两个 Snapshot 都必须能由当前组织和 principal 使用提交的 consumer、purpose 与
+allowed uses 重放。响应只包含稳定的 candidate 引用与 hash，不返回证据正文。
 
 #### 排查线程历史为空
 
