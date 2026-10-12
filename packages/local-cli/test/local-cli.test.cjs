@@ -169,6 +169,28 @@ describe("regenic-local", () => {
     assert.ok(
       [assembled.snapshot.id, laterSnapshot.snapshot.id].includes(secondPage[0].snapshot_id),
     );
+    const snapshotDiff = await run([
+      "context-snapshot-diff",
+      ...common,
+      "--from-snapshot", assembled.snapshot.id,
+      "--to-snapshot", laterSnapshot.snapshot.id,
+    ]);
+    assert.equal(snapshotDiff.from_snapshot_id, assembled.snapshot.id);
+    assert.equal(snapshotDiff.to_snapshot_id, laterSnapshot.snapshot.id);
+    assert.equal(snapshotDiff.added.length, 0);
+    assert.equal(snapshotDiff.removed.length, 0);
+    assert.equal(snapshotDiff.changed.length, 0);
+    assert.equal(snapshotDiff.unchanged.length, 1);
+    await assert.rejects(
+      run([
+        "context-snapshot-diff",
+        ...common,
+        "--from-snapshot", assembled.snapshot.id,
+        "--to-snapshot", laterSnapshot.snapshot.id,
+        "--consumer", "other-consumer",
+      ]),
+      /Context bundle was not found/,
+    );
     await assert.rejects(
       run([
         "context-snapshot-history",

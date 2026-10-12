@@ -32,6 +32,7 @@ import {
   STANDARD_DRIFT_DETECTOR_VERSION,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
+  diffContextBundles,
   followUpScanSince,
   PERSONAL_FOLLOW_UP_SCAN_LIMIT,
   PERSONAL_DISPATCH_POLICY_PREF_KEY,
@@ -236,6 +237,9 @@ export async function runLocalCli(
     case "context-snapshot-history":
       await listContextSnapshotHistory(commandOptions, stdout);
       return;
+    case "context-snapshot-diff":
+      await diffContextSnapshots(commandOptions, stdout);
+      return;
     case "context-replay":
       await replayContext(commandOptions, stdout);
       return;
@@ -412,7 +416,7 @@ export async function runLocalCli(
       await listStandardHealthCommand(commandOptions, stdout, now);
       return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-snapshot, context-snapshot-history, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-snapshot, context-snapshot-history, context-snapshot-diff, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
   }
 }
 
@@ -1376,6 +1380,38 @@ async function replayContext(
       purpose: optionString(options, "purpose") ?? "inspect authorized local context",
       allowed_uses: ["display"],
     }));
+  });
+}
+
+async function diffContextSnapshots(
+  options: CommandOptions,
+  stdout: CliOutput,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const grant = {
+    principal: { actor_type: "human" as const, actor_id: orgId },
+    consumer_id: optionString(options, "consumer") ?? "local-cli",
+    purpose: optionString(options, "purpose") ?? "inspect authorized local context",
+    allowed_uses: ["display" as const],
+  };
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    const context = host.get("context");
+    const from = await context.replay({
+      org_id: orgId,
+      snapshot_id: requireOption(options, "from-snapshot"),
+      ...grant,
+    });
+    const to = await context.replay({
+      org_id: orgId,
+      snapshot_id: requireOption(options, "to-snapshot"),
+      ...grant,
+    });
+    writeJson(stdout, diffContextBundles(from, to));
   });
 }
 
