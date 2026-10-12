@@ -268,6 +268,7 @@ describe("context contracts", () => {
     assert.deepEqual(diff, {
       from_snapshot_id: "snapshot-before",
       to_snapshot_id: "snapshot-after",
+      summary: { added: 1, removed: 1, changed: 0, unchanged: 1 },
       added: [{
         candidate_id: "candidate-added",
         resource_id: "event-added",
@@ -321,6 +322,7 @@ describe("context contracts", () => {
         section: "facts",
         content_hash: HASH_B,
       },
+      reasons: ["content_changed"],
     }]);
     assert.throws(
       () => diffContextBundles(before, bundle({ principal: { actor_type: "human", actor_id: "person-2" } })),
