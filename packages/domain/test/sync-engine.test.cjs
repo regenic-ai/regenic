@@ -98,6 +98,32 @@ describe("sync catalog apply", () => {
     );
     assert.equal(done.catalog.complete, true);
   });
+
+  it("drops an in-progress census when a directory page replaces it", () => {
+    const census = applySyncCatalogMembers(emptySyncCatalog("feishu-1"), {
+      installation_id: "feishu-1",
+      members: [
+        { stream_key: "chat:a", thread_id: "feishu:a" },
+        { stream_key: "chat:b", thread_id: "feishu:b" },
+      ],
+      now: "2026-08-31T00:00:00.000Z",
+      next_cursor: "p2",
+      complete: false,
+    });
+    const picked = applySyncCatalogMembers(census, {
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:a", thread_id: "feishu:a" }],
+      now: "2026-08-31T00:01:00.000Z",
+      complete: true,
+      replaces: true,
+    });
+    assert.deepEqual(
+      picked.members.map((item) => item.stream_key),
+      ["chat:a"],
+    );
+    assert.equal(picked.catalog.complete, true);
+    assert.equal(picked.catalog.cursor, undefined);
+  });
 });
 
 describe("sync phase", () => {

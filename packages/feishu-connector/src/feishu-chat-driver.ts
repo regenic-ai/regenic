@@ -59,7 +59,7 @@ import {
   listFeishuCatalogChats,
   probeLarkCli,
 } from "./probe";
-import { createFeishuRecentSyncSource, createFeishuSyncSource } from "./feishu-sync-source";
+import { createFeishuPickedSyncSource, createFeishuRecentSyncSource, createFeishuSyncSource } from "./feishu-sync-source";
 import { clearAllFeishuMediaJobs } from "./feishu-media-job-store";
 
 export const feishuChatDriver: ChannelDriver = {
@@ -256,9 +256,21 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   async bindSyncSource(installation, _host, env) {
+    const config = installation.config;
+    const selection = feishuSelection(config);
+    if (selection === "pick") {
+      const ids = feishuPickedChatIds(config);
+      const names = pickedChatNames(config, ids);
+      return createFeishuPickedSyncSource(
+        ids.map((chat_id, index) => ({
+          chat_id,
+          name: names[index],
+        })),
+      );
+    }
     const client = larkClient(env);
-    const kinds = feishuKinds(installation.config);
-    if (feishuSelection(installation.config) === "recent") {
+    const kinds = feishuKinds(config);
+    if (selection === "recent") {
       return createFeishuRecentSyncSource(client, kinds);
     }
     return createFeishuSyncSource(client, kinds);

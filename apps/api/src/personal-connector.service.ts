@@ -58,10 +58,7 @@ import {
   looksLikeSyncPressure,
   MAX_DUE_WORK_CLAIM_LIMIT,
   MIN_DUE_WORK_CLAIM_LIMIT,
-  membersMissingBootstrapSeed,
-  membersMissingLatestWork,
   needsCatalogDueWork,
-  planDueSyncWork,
   planSyncWorkGaps,
   processSyncMetrics,
   recordPollFreshness,
@@ -71,9 +68,7 @@ import {
   syncRunWorkLanes,
   syncRunWorkPlane,
   type DueWorkHeat,
-  type SyncCatalogMember,
   type SyncLane,
-  type SyncPhaseHead,
   type SyncRun,
   type SyncWorkRecord,
   type SyncRunMode,
@@ -541,7 +536,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
         store,
         run.installation_id,
         plane,
-        catalog.members,
         { reconcileBootstrap: plane === "bootstrap" },
       );
       if (plane === "bootstrap") {
@@ -549,7 +543,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
           store,
           run.installation_id,
           "steady",
-          catalog.members,
         );
       }
     }
@@ -915,13 +908,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
-  async pullOlderForThread(threadId: string): Promise<void> {
+  async pullOlderForThread(
+    threadId: string,
+    anchor?: { before?: string; before_external_id?: string },
+  ): Promise<{ history_pending: boolean }> {
     if (this.maintenanceHold) {
-      return;
+      return { history_pending: true };
     }
     const id = threadId.trim();
     if (!id || !shouldPullOlderFocus({ thread_id: id, pull_older: true, before: "1" })) {
-      return;
+      return { history_pending: true };
     }
     noteHumanActivity();
     preferThread(id);
@@ -933,16 +929,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
       try {
         await Promise.race([this.focusSlot.promise, delay(HYDRATE_WAIT_MS)]);
       } catch {
-        return;
+        return { history_pending: true };
       }
     }
+    let historyPending = true;
     try {
-      await this.takeFocus(id, "older", (signal, generation) =>
-        this.runPullOlderThread(id, signal, generation),
-      );
+      await this.takeFocus(id, "older", async (signal, generation) => {
+        historyPending = await this.runPullOlderThread(id, signal, generation, anchor);
+      });
     } catch {
-      return;
+      return { history_pending: true };
     }
+    return { history_pending: historyPending };
   }
 
   private takeFocus(
@@ -958,6 +956,22 @@ export class PersonalConnectorService implements OnModuleDestroy {
         (isRecentFocusKind(kind) && isRecentFocusKind(this.focusSlot.kind)))
     ) {
       return this.focusSlot.promise;
+    }
+    // Scroll-up and a latest refresh share one cursor. Neither cancels the other.
+    if (
+      this.focusSlot &&
+      this.focusSlot.threadId === threadId &&
+      !this.focusSlot.abort.signal.aborted &&
+      (this.focusSlot.kind === "older" || kind === "older") &&
+      this.focusSlot.kind !== kind
+    ) {
+      const current = this.focusSlot;
+      return current.promise.finally(() => {
+        if (this.focusSlot && this.focusSlot.generation !== current.generation) {
+          return;
+        }
+        return this.takeFocus(threadId, kind, work);
+      });
     }
     // A receipt or media drain must not cancel the live page the click just started.
     if (
@@ -1019,21 +1033,22 @@ export class PersonalConnectorService implements OnModuleDestroy {
     threadId: string,
     signal: AbortSignal,
     generation: number,
-  ): Promise<void> {
+    anchor?: { before?: string; before_external_id?: string },
+  ): Promise<boolean> {
     if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
-      return;
+      return true;
     }
     let thread: ConversationThread;
     try {
       thread = parseConversationThread(threadId);
     } catch {
-      return;
+      return true;
     }
     const host = this.runtime.requireHost();
     const store = host.get("authority");
     const installations = await store.listInstallations(this.runtime.orgId());
     if (!this.focusAlive(generation, signal)) {
-      return;
+      return true;
     }
     for (const installation of installations) {
       if (installation.status !== "enabled") {
@@ -1055,7 +1070,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         continue;
       }
       if (!this.focusAlive(generation, signal)) {
-        return;
+        return true;
       }
       const key = streamPaceKey(installation.id, stream.stream_key);
       this.rememberStreamMeta(key, stream);
@@ -1077,14 +1092,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
                 installation,
                 stream,
                 1,
-                { older: true },
+                {
+                  older: true,
+                  before: anchor?.before,
+                  before_external_id: anchor?.before_external_id,
+                },
                 this.quota,
               ),
             );
           },
         );
         if (pages === undefined || !this.focusAlive(generation, signal)) {
-          return;
+          return true;
         }
         this.rememberStreamPace({
           key,
@@ -1092,6 +1111,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
           pagesBudget: 1,
           idleMs: streamIdleMs(stream, installation.config),
         });
+        return historyPendingFromRuns(pages);
       } catch (error) {
         this.rememberStreamPace({
           key,
@@ -1106,8 +1126,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         this.streamPullingHistory.delete(key);
         this.publishStreams();
       }
-      return;
     }
+    return true;
   }
 
   private async runRecentLiveForThread(
@@ -1861,7 +1881,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
             process.env,
           );
           const engine = new SyncEngine(store);
-          const view = await engine.refreshCatalog({
+          await engine.refreshCatalogIfStale({
             installation_id: installation.id,
             source,
             pages: catalogRefreshPages({ catalogTick: true }),
@@ -1871,13 +1891,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
             store,
             installation.id,
             "steady",
-            view.members,
           );
           await this.enqueueDueWorkFromCatalog(
             store,
             installation.id,
             "bootstrap",
-            view.members,
             { reconcileBootstrap: true },
           );
           void this.refreshSyncSnapshot(installation.id);
@@ -1970,12 +1988,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
       ) {
         continue;
       }
-      const catalog = await store.getSyncCatalog(installation.id);
+      const head = await store.getSyncCatalogHead(installation.id);
       const queueHasWork = await store.hasUnassignedSyncWork({
         installation_id: installation.id,
         lanes: coverageLanes,
       });
-      if (!queueHasWork && needsCatalogDueWork(catalog)) {
+      if (
+        !queueHasWork &&
+        needsCatalogDueWork({
+          member_count: head.member_count,
+          catalog: head.has_cursor ? { complete: head.complete } : null,
+        })
+      ) {
         if (
           !(await store.hasUnassignedSyncWork({
             installation_id: installation.id,
@@ -1986,20 +2010,19 @@ export class PersonalConnectorService implements OnModuleDestroy {
             catalogDueWork({
               installation_id: installation.id,
               now: new Date().toISOString(),
-              generation: catalog.catalog?.generation ?? 1,
+              generation: head.generation,
             }),
           );
           planned += 1;
         }
       }
-      if (catalog.members.length === 0) {
+      if (head.member_count === 0) {
         continue;
       }
       planned += await this.enqueueDueWorkFromCatalog(
         store,
         installation.id,
         plane,
-        catalog.members,
       );
     }
     return planned;
@@ -2009,100 +2032,47 @@ export class PersonalConnectorService implements OnModuleDestroy {
     store: ConnectorRuntimeStore,
     installationId: string,
     plane: "steady" | "bootstrap",
-    members: readonly SyncCatalogMember[],
     options?: { reconcileBootstrap?: boolean },
   ): Promise<number> {
-    this.catalogSizeByInstall.set(installationId, members.length);
     if (plane === "bootstrap" && options?.reconcileBootstrap) {
       return this.enqueueSyncWorkGaps(store, installationId);
     }
-    const existing = await store.listUnassignedSyncWorkIdentities({
-      installation_id: installationId,
+    return this.enqueueSyncWorkGaps(store, installationId, {
+      lanes: plane === "steady" ? ["live", "media"] : ["history"],
+      unseededLimit: plane === "steady" ? firstSeedHeadFromEnv() : 0,
     });
-    const uncovered =
-      plane === "steady"
-        ? membersMissingLatestWork(members, existing)
-        : membersMissingBootstrapSeed(members, existing);
-    if (uncovered.length === 0) {
-      return 0;
-    }
-    const states = await this.loadStatesForMembers(
-      store,
-      installationId,
-      uncovered,
-      members.length,
-    );
-    const items = planDueSyncWork({
-      installation_id: installationId,
-      members: uncovered,
-      states,
-      now: new Date().toISOString(),
-      plane,
-      preferredThreadId: preferredThreadId(),
-      catalogSize: members.length,
-      coldIdleMs: streamIdleTiersFromEnv().coldIdleMs,
-      firstSeedLimit: firstSeedHeadFromEnv(),
-    });
-    const occupied = new Set(
-      existing.map(
-        (item) => `${item.generation}:${item.lane}:${item.stream_key}`,
-      ),
-    );
-    const fresh = items.filter(
-      (item) =>
-        !occupied.has(`${item.generation}:${item.lane}:${item.stream_key}`),
-    );
-    if (fresh.length === 0) {
-      return 0;
-    }
-    return store.enqueueSyncWorkMany(fresh);
   }
 
   private async enqueueSyncWorkGaps(
     store: ConnectorRuntimeStore,
     installationId: string,
+    options?: {
+      lanes?: readonly SyncLane[];
+      unseededLimit?: number;
+    },
   ): Promise<number> {
-    const gaps = await store.listSyncWorkGaps(installationId);
-    if (gaps.length === 0) {
+    const head = await store.getSyncCatalogHead(installationId);
+    this.catalogSizeByInstall.set(installationId, head.member_count);
+    const gaps = await store.listSyncWorkGaps(installationId, {
+      unseeded_limit: options?.unseededLimit ?? 0,
+    });
+    const selected = options?.lanes
+      ? gaps.filter((gap) => options.lanes?.includes(gap.missing_lane))
+      : gaps;
+    if (selected.length === 0) {
       return 0;
     }
     return store.enqueueSyncWorkMany(
       planSyncWorkGaps({
         installation_id: installationId,
-        gaps,
+        gaps: selected,
         now: new Date().toISOString(),
+        coldIdleMs: coldIdleMsForCatalogSize(
+          head.member_count,
+          streamIdleTiersFromEnv().coldIdleMs,
+        ),
+        preferredThreadId: preferredThreadId(),
       }),
-    );
-  }
-
-  private async loadStatesForMembers(
-    store: ConnectorRuntimeStore,
-    installationId: string,
-    uncovered: readonly SyncCatalogMember[],
-    memberCount: number,
-  ): Promise<Map<string, SyncPhaseHead>> {
-    if (uncovered.length === 0) {
-      return new Map();
-    }
-    if (uncovered.length < memberCount && uncovered.length <= 64) {
-      const states = new Map<string, SyncPhaseHead>();
-      for (const member of uncovered) {
-        const state = await store.getSyncState(
-          installationId,
-          member.stream_key,
-        );
-        if (state) {
-          states.set(member.stream_key, state);
-        }
-      }
-      return states;
-    }
-    const listed = await store.listSyncPhaseHeads(installationId);
-    const wanted = new Set(uncovered.map((member) => member.stream_key));
-    return new Map(
-      listed
-        .filter((state) => wanted.has(state.stream_key))
-        .map((state) => [state.stream_key, state] as const),
     );
   }
 
@@ -2555,9 +2525,9 @@ export class PersonalConnectorService implements OnModuleDestroy {
     if (cached != null) {
       return cached;
     }
-    const catalog = await store.getSyncCatalog(installationId);
-    this.catalogSizeByInstall.set(installationId, catalog.members.length);
-    return catalog.members.length;
+    const head = await store.getSyncCatalogHead(installationId);
+    this.catalogSizeByInstall.set(installationId, head.member_count);
+    return head.member_count;
   }
 
   private async settleDueWork(
@@ -2593,20 +2563,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return;
     }
     const engine = new SyncEngine(store);
-    let members: readonly SyncCatalogMember[] = [];
     if (driver.bindSyncSource) {
       const source = await driver.bindSyncSource(
         installation,
         asConnectorHost(host),
         process.env,
       );
-      const view = await engine.refreshCatalog({
+      await engine.refreshCatalog({
         installation_id: installation.id,
         source,
         pages: catalogRefreshPages({ catalogTick: true }),
         force: plane === "bootstrap",
       });
-      members = view.members;
     } else {
       const resolved = await driver.resolveStreams(
         installation,
@@ -2626,7 +2594,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       );
       const fallbackMembers = catalogMembersFromStreams(installation.id, resolved);
       if (fallbackMembers.length > 0) {
-        const view = await store.applySyncCatalogPage({
+        await store.applySyncCatalogPage({
           installation_id: installation.id,
           members: fallbackMembers.map((member) => ({
             stream_key: member.stream_key,
@@ -2637,25 +2605,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
           now: new Date().toISOString(),
           complete: true,
         });
-        members = view.members;
       }
     }
-    if (members.length === 0) {
+    const head = await store.getSyncCatalogHead(installation.id);
+    if (head.member_count === 0) {
       return;
     }
-    await this.enqueueDueWorkFromCatalog(
-      store,
-      installation.id,
-      "steady",
-      members,
-    );
-    await this.enqueueDueWorkFromCatalog(
-      store,
-      installation.id,
-      "bootstrap",
-      members,
-      { reconcileBootstrap: true },
-    );
+    await this.enqueueDueWorkFromCatalog(store, installation.id, "steady");
+    await this.enqueueDueWorkFromCatalog(store, installation.id, "bootstrap", {
+      reconcileBootstrap: true,
+    });
   }
 
   private async catchUp(installationId: string): Promise<void> {
@@ -3221,13 +3180,35 @@ function httpStatusFor(code: string): number {
   }
 }
 
+function historyPendingFromRuns(pages: ConnectorPollRunResult[]): boolean {
+  const completed = pages.filter(
+    (page) => "poll_hint" in page || "has_more" in page,
+  );
+  if (completed.length === 0) {
+    return true;
+  }
+  for (let index = completed.length - 1; index >= 0; index -= 1) {
+    const page = completed[index];
+    if (page && "poll_hint" in page && page.poll_hint) {
+      return page.poll_hint.history_pending === true;
+    }
+  }
+  return completed.some((page) => "has_more" in page && page.has_more === true);
+}
+
 async function pollStream(
   host: Host,
   store: ConnectorRuntimeStore,
   installation: ConnectorInstallation,
   stream: ConnectorStream,
   maxPages: number,
-  options?: { older?: boolean; latest?: boolean; media?: boolean },
+  options?: {
+    older?: boolean;
+    latest?: boolean;
+    media?: boolean;
+    before?: string;
+    before_external_id?: string;
+  },
   quota?: InstallationQuotaBook,
 ): Promise<ConnectorPollRunResult[]> {
   const runner = new ConnectorRunner(
@@ -3248,6 +3229,8 @@ async function pollStream(
       older: options?.older === true,
       latest: options?.latest === true,
       media: options?.media,
+      before: options?.before,
+      before_external_id: options?.before_external_id,
       timeout_ms: connectorPollTimeoutMs(),
     });
     runs.push(run);

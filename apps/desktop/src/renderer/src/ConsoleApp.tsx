@@ -79,6 +79,7 @@ import {
 } from "./inbox-list-sync.ts";
 import {
   hasOlderPage,
+  scrollOlderHasMore,
   inboxCursor,
   mergeInboxDelta,
   mergeOlderInbox,
@@ -614,11 +615,8 @@ export function ConsoleApp() {
     setLoadingOlderId(threadId);
     const epoch = workspaceEpoch.current;
     const signal = focusSignal();
-    try {
-      await focusConversation(
-        pullOlderFocusRequest(threadId, cursor.before, cursor.before_id),
-      );
-      const page = await fetchInbox(
+    const readOlder = () =>
+      fetchInbox(
         {
           thread_id: threadId,
           before: cursor.before,
@@ -627,6 +625,26 @@ export function ConsoleApp() {
         },
         { signal, timeoutMs: OPEN_FETCH_MS },
       );
+    try {
+      let page = await readOlder();
+      let sourceSettled = false;
+      let historyPending = false;
+      if (!hasOlderPage(page.length)) {
+        const focused = await focusConversation(
+          pullOlderFocusRequest(
+            threadId,
+            cursor.before,
+            cursor.before_id,
+            cursor.before_external_id,
+          ),
+        );
+        if (workspaceEpoch.current !== epoch || selectedIdRef.current !== threadId) {
+          return;
+        }
+        historyPending = focused.history_pending === true;
+        page = await readOlder();
+        sourceSettled = true;
+      }
       if (workspaceEpoch.current !== epoch) {
         return;
       }
@@ -635,7 +653,11 @@ export function ConsoleApp() {
       }
       setHasOlderByThread((prev) => ({
         ...prev,
-        [threadId]: hasOlderPage(page.length),
+        [threadId]: scrollOlderHasMore({
+          pageLength: page.length,
+          sourceSettled,
+          historyPending,
+        }),
       }));
       if (page.length === 0) {
         return;

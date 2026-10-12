@@ -29,6 +29,11 @@ export interface SyncDirectoryPage {
   members: SyncDirectoryMember[];
   next_cursor?: string;
   complete: boolean;
+  /**
+   * This page is the whole directory. Core starts a new generation and drops
+   * members that are not in it, including an in-progress census.
+   */
+  replaces?: boolean;
 }
 
 export interface SyncSource {

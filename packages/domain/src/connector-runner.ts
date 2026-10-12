@@ -51,6 +51,8 @@ export interface RunConnectorPollInput {
   older?: boolean;
   latest?: boolean;
   media?: boolean;
+  before?: string;
+  before_external_id?: string;
   timeout_ms?: number;
 }
 
@@ -231,6 +233,7 @@ export class ConnectorRunner {
         next_cursor: nextCursor,
         has_more: pollResult.has_more,
         media_pending: pollResult.media_pending,
+        poll_hint: pollResult.poll_hint,
       };
     }
 
@@ -459,7 +462,10 @@ function webhookWakeThreadIds(batch: IngestBatch): string[] {
 }
 
 function pollOptions(
-  input: Pick<RunConnectorPollInput, "older" | "latest" | "media">,
+  input: Pick<
+    RunConnectorPollInput,
+    "older" | "latest" | "media" | "before" | "before_external_id"
+  >,
   signal?: AbortSignal,
 ): ConnectorPollOptions | undefined {
   const options: ConnectorPollOptions = {};
@@ -472,10 +478,22 @@ function pollOptions(
   if (input.media === false) {
     options.media = false;
   }
+  const before = input.before?.trim();
+  if (before) {
+    options.before = before;
+  }
+  const beforeExternalId = input.before_external_id?.trim();
+  if (beforeExternalId) {
+    options.before_external_id = beforeExternalId;
+  }
   if (signal) {
     options.signal = signal;
   }
-  return options.older || options.latest || options.media === false || options.signal
+  return options.older ||
+    options.latest ||
+    options.media === false ||
+    options.signal ||
+    options.before
     ? options
     : undefined;
 }

@@ -372,6 +372,154 @@ describe("FeishuChatPollConnector", () => {
     assert.match(older.next_cursor ?? "", /"start_time":"1723500000"/);
   });
 
+  it("keeps a history walk when the newest page is refreshed", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (input.page_token === "older-5") {
+          return {
+            items: [textItem({ message_id: "om_old", create_time: "1723000000000" })],
+            has_more: true,
+            page_token: "older-6",
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_new", create_time: "1723600000000" })],
+          has_more: true,
+          page_token: "older",
+        };
+      },
+    });
+    const seeded = JSON.stringify({
+      start_time: "1723500000",
+      recent_seeded: true,
+      history_token: "older-5",
+    });
+    const live = await connector.poll({ value: seeded }, { latest: true });
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      sort_type: "ByCreateTimeDesc",
+      timeout_ms: 8000,
+    });
+    assert.match(live.next_cursor ?? "", /"history_token":"older-5"/);
+    assert.equal(live.has_more, true);
+    const older = await connector.poll({ value: live.next_cursor }, { older: true });
+    assert.equal(calls[1].page_token, "older-5");
+    assert.equal(calls[1].sort_type, "ByCreateTimeDesc");
+    assert.equal(older.batch.records[0].external_id, "oc_1:om_old");
+    assert.match(older.next_cursor ?? "", /"history_token":"older-6"/);
+  });
+
+  it("does not reopen a finished history walk from the newest page token", async () => {
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [textItem({ message_id: "om_new", create_time: "1723600000000" })],
+          has_more: true,
+          page_token: "older",
+        };
+      },
+    });
+    const caughtUp = JSON.stringify({
+      start_time: "1723500000",
+      recent_seeded: true,
+    });
+    const live = await connector.poll({ value: caughtUp }, { latest: true });
+    assert.equal(/history_token/.test(live.next_cursor ?? ""), false);
+    assert.equal(live.has_more, false);
+    assert.equal(live.poll_hint.history_pending, false);
+  });
+
+  it("loads messages before the on-screen anchor without moving the history token", async () => {
+    const calls = [];
+    const anchorMs = 1723500000500;
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        return {
+          items: [
+            textItem({ message_id: "om_boundary", create_time: String(anchorMs) }),
+            textItem({ message_id: "om_earlier", create_time: String(anchorMs - 400) }),
+            textItem({ message_id: "om_older", create_time: "1723400000000" }),
+          ],
+          has_more: true,
+          page_token: "shallow",
+        };
+      },
+    });
+    const seeded = JSON.stringify({
+      start_time: "1723600000",
+      recent_seeded: true,
+      history_token: "older-5",
+    });
+    const older = await connector.poll(
+      { value: seeded },
+      {
+        older: true,
+        before: new Date(anchorMs).toISOString(),
+        before_external_id: "oc_1:om_boundary",
+      },
+    );
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      end_time: "1723500000",
+      sort_type: "ByCreateTimeDesc",
+    });
+    assert.deepEqual(
+      older.batch.records.map((record) => record.external_id),
+      ["oc_1:om_earlier", "oc_1:om_older"],
+    );
+    assert.match(older.next_cursor ?? "", /"history_token":"older-5"/);
+    assert.equal(/shallow/.test(older.next_cursor ?? ""), false);
+    assert.equal(older.has_more, true);
+    assert.equal(older.poll_hint.history_pending, true);
+  });
+
+  it("follows an anchored page past the boundary row and then closes history", async () => {
+    const calls = [];
+    const anchorMs = 1723500000500;
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (!input.page_token) {
+          return {
+            items: [textItem({ message_id: "om_boundary", create_time: String(anchorMs) })],
+            has_more: true,
+            page_token: "next-older",
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_older", create_time: "1723400000000" })],
+          has_more: false,
+        };
+      },
+    });
+    const older = await connector.poll(
+      {
+        value: JSON.stringify({
+          start_time: "1723600000",
+          recent_seeded: true,
+          history_token: "older-5",
+        }),
+      },
+      {
+        older: true,
+        before: new Date(anchorMs).toISOString(),
+        before_external_id: "oc_1:om_boundary",
+      },
+    );
+    assert.equal(calls[1].page_token, "next-older");
+    assert.equal(calls[1].end_time, "1723500000");
+    assert.equal(older.batch.records[0].external_id, "oc_1:om_older");
+    assert.equal(older.has_more, false);
+    assert.equal(older.poll_hint.history_pending, false);
+    assert.equal(/history_token/.test(older.next_cursor ?? ""), false);
+    assert.match(older.next_cursor ?? "", /"start_time":"1723600000"/);
+  });
+
   it("does not turn a scroll-up into a live pull when history is already caught up", async () => {
     const calls = [];
     const connector = createConnector({

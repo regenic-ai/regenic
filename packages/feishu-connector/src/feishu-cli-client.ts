@@ -88,6 +88,7 @@ export interface FeishuListInput {
   page_size: number;
   page_token?: string;
   start_time?: string;
+  end_time?: string;
   sort_type?: FeishuSortType;
   timeout_ms?: number;
 }
@@ -433,6 +434,9 @@ export class LarkCliClient implements FeishuImClient {
     if (input.start_time) {
       params.start_time = input.start_time;
     }
+    if (input.end_time) {
+      params.end_time = input.end_time;
+    }
     const request = {
       method: "GET" as const,
       path: "/open-apis/im/v1/messages",
@@ -485,8 +489,9 @@ export class LarkCliClient implements FeishuImClient {
       path: "/open-apis/im/v1/chats",
       params,
     };
+    // User-token HTTP does not take a CLI process slot.
     const viaHttp = this.options.userToken
-      ? await withLarkCliSlot(() => this.requestViaHttp(request))
+      ? await this.requestViaHttp(request)
       : undefined;
     const page = parseChatPage(
       viaHttp !== undefined ? viaHttp : await this.requestViaCli(request),
@@ -638,14 +643,13 @@ export class LarkCliClient implements FeishuImClient {
     deadline?: number,
   ): Promise<FeishuChat[]> {
     const normalized = normalizeChatTypes(types);
-    const chats: FeishuChat[] = [];
-    if (normalized.includes("group")) {
-      chats.push(...(await this.fetchChatPages(maxPages, ["group"], deadline)));
-    }
-    if (normalized.includes("p2p")) {
-      chats.push(...(await this.fetchChatPages(maxPages, ["p2p"], deadline)));
-    }
-    return chats;
+    const kinds = (["group", "p2p"] as const).filter((kind) =>
+      normalized.includes(kind),
+    );
+    const pages = await Promise.all(
+      kinds.map((kind) => this.fetchChatPages(maxPages, [kind], deadline)),
+    );
+    return pages.flat();
   }
 
   private async fetchChatPages(
@@ -677,7 +681,7 @@ export class LarkCliClient implements FeishuImClient {
         }
         pageToken = result.page_token;
       } catch (error) {
-        if (deadline && error instanceof LarkDeadlineError) {
+        if (chats.length > 0 || (deadline && error instanceof LarkDeadlineError)) {
           break;
         }
         throw error;
@@ -1352,13 +1356,19 @@ function larkCliNotOk(
 }
 
 function larkCliUserIdentityReady(user: Record<string, unknown>): boolean {
-  if (typeof user.status === "string") {
-    return user.status === "ready";
-  }
   if (typeof user.available === "boolean") {
     return user.available;
   }
+  if (typeof user.status === "string") {
+    return larkCliIdentityStatusUsable(user.status);
+  }
   return true;
+}
+
+/** Usable when the CLI still has a user identity, including one it will refresh. */
+function larkCliIdentityStatusUsable(status: string): boolean {
+  const normalized = status.trim().toLowerCase().replace(/[_-]+/g, " ");
+  return normalized === "ready" || normalized.startsWith("needs refresh");
 }
 
 export function parseChatPage(value: unknown): FeishuChatPage {
@@ -1520,11 +1530,11 @@ export function larkCliUserReady(stdout: string, exitCode: number): boolean {
     if (!isObject(parsed) || parsed.ok === false) {
       return false;
     }
-    if (parsed.identity === "user") {
-      return true;
-    }
     if (isObject(parsed.identities) && isObject(parsed.identities.user)) {
       return larkCliUserIdentityReady(parsed.identities.user);
+    }
+    if (parsed.identity === "user") {
+      return true;
     }
     return false;
   } catch {

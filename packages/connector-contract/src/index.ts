@@ -85,6 +85,10 @@ export interface ConnectorPollPayload {
   /** Ask the connector for the newest page. Hosts must forward this; it is not lane state. */
   latest?: boolean;
   media?: boolean;
+  /** Oldest shown occurred_at. Hosts forward it; connectors interpret it. */
+  before?: string;
+  /** Source external id of that record. Opaque to core. */
+  before_external_id?: string;
 }
 
 export interface ConnectorPollResultPayload<TBatch extends ConnectorJson = ConnectorJson> {

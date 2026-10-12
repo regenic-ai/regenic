@@ -6,6 +6,7 @@ export type ThreadFocusRequest = {
   pull_older?: boolean;
   before?: string;
   before_id?: string;
+  before_external_id?: string;
   media?: boolean;
   present?: boolean;
 };
@@ -33,12 +34,14 @@ export function pullOlderFocusRequest(
   threadId: string,
   before: string,
   beforeId?: string,
+  beforeExternalId?: string,
 ): ThreadFocusRequest {
   return {
     thread_id: threadId,
     pull_older: true,
     before,
     ...(beforeId ? { before_id: beforeId } : {}),
+    ...(beforeExternalId ? { before_external_id: beforeExternalId } : {}),
   };
 }
 

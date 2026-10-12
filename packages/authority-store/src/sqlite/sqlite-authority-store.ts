@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import {
   AuthorityConflictError,
   applySyncCatalogMembers,
+  catalogStreamKeysLeft,
   canonicalContextJson,
   conversationId,
   formatInboxDigest,
@@ -46,6 +47,7 @@ import {
   processSyncMetrics,
   recordSyncDuration,
   dueSyncWorkId,
+  SYNC_CATALOG_STREAM,
   syncWorkEnsurePlan,
   syncWorkPriority,
   validateSyncRunOptions,
@@ -149,9 +151,11 @@ import type {
   CommitSyncPageResult,
   EnqueueSyncWork,
   ListSyncRunsQuery,
+  ListSyncWorkGapsOptions,
   NewSyncRun,
   RenewSyncWork,
   SettleSyncWork,
+  SyncCatalogHead,
   SyncRun,
   SyncWorkGap,
   SyncWorkIdentity,
@@ -4021,6 +4025,36 @@ export class SqliteAuthorityStore
     return this.loadSyncCatalog(installationId);
   }
 
+  async getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    const count = this.database
+      .prepare(
+        `
+          SELECT COUNT(*) AS n
+          FROM connector_stream_members
+          WHERE installation_id = ? AND stream_key != ?
+        `,
+      )
+      .get(installationId, SYNC_CATALOG_STREAM) as { n: number };
+    const cursor = this.database
+      .prepare(
+        `
+          SELECT complete, generation, updated_at
+          FROM connector_catalog_cursors
+          WHERE installation_id = ?
+        `,
+      )
+      .get(installationId) as
+      | { complete: number; generation: number; updated_at: string }
+      | undefined;
+    return {
+      member_count: Number(count.n),
+      has_cursor: cursor != null,
+      complete: cursor?.complete === 1,
+      generation: cursor?.generation ?? 1,
+      ...(cursor ? { updated_at: cursor.updated_at } : {}),
+    };
+  }
+
   async applySyncCatalogPage(
     input: ApplySyncCatalogPageInput,
   ): Promise<SyncCatalogView> {
@@ -4072,6 +4106,13 @@ export class SqliteAuthorityStore
             next.catalog.generation,
             next.catalog.updated_at,
           );
+      }
+      if (input.complete) {
+        this.dropStreamsLeftCatalog(
+          input.installation_id,
+          catalogStreamKeysLeft(current, next),
+          input.now,
+        );
       }
       return next;
     });
@@ -4138,6 +4179,19 @@ export class SqliteAuthorityStore
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
     this.assertWritable();
     const write = this.database.transaction(() => {
+      if (
+        this.streamOutsideCompleteCatalog(
+          state.installation_id,
+          state.stream_key,
+        )
+      ) {
+        this.dropStreamsLeftCatalog(
+          state.installation_id,
+          [state.stream_key],
+          state.updated_at,
+        );
+        return;
+      }
       this.database
         .prepare(
           `
@@ -4172,10 +4226,76 @@ export class SqliteAuthorityStore
     return { ...state };
   }
 
-  async listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]> {
+  private streamOutsideCompleteCatalog(
+    installationId: string,
+    streamKey: string,
+  ): boolean {
+    const cursor = this.database
+      .prepare(
+        `
+          SELECT complete
+          FROM connector_catalog_cursors
+          WHERE installation_id = ?
+        `,
+      )
+      .get(installationId) as { complete: number } | undefined;
+    if (!cursor || cursor.complete !== 1) {
+      return false;
+    }
+    const member = this.database
+      .prepare(
+        `
+          SELECT 1 AS found
+          FROM connector_stream_members
+          WHERE installation_id = ? AND stream_key = ?
+        `,
+      )
+      .get(installationId, streamKey) as { found: number } | undefined;
+    return !member;
+  }
+
+  private dropStreamsLeftCatalog(
+    installationId: string,
+    streamKeys: readonly string[],
+    now: string,
+  ): void {
+    for (let offset = 0; offset < streamKeys.length; offset += 200) {
+      const chunk = streamKeys.slice(offset, offset + 200);
+      const marks = chunk.map(() => "?").join(", ");
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_sync_state
+            WHERE installation_id = ? AND stream_key IN (${marks})
+          `,
+        )
+        .run(installationId, ...chunk);
+      this.database
+        .prepare(
+          `
+            UPDATE connector_sync_work
+            SET status = 'cancelled',
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                updated_at = ?
+            WHERE installation_id = ?
+              AND run_id IS NULL
+              AND status IN ('pending', 'running')
+              AND stream_key IN (${marks})
+          `,
+        )
+        .run(now, installationId, ...chunk);
+    }
+  }
+
+  async listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
     const rows = this.database
       .prepare(
         `
+          WITH gaps AS (
           SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
                  'live' AS missing_lane
           FROM connector_sync_state s
@@ -4225,24 +4345,96 @@ export class SqliteAuthorityStore
                   OR w.run_id IS NOT NULL
                 )
             )
+          )
+          SELECT g.stream_key, g.phase, g.media_pending, g.idle_until, g.generation,
+                 g.missing_lane, m.thread_id
+          FROM gaps g
+          LEFT JOIN connector_stream_members m
+            ON m.installation_id = ? AND m.stream_key = g.stream_key
         `,
       )
-      .all(installationId, installationId, installationId) as Array<{
+      .all(installationId, installationId, installationId, installationId) as Array<{
       stream_key: string;
       phase: SyncPhase;
       media_pending: number;
       idle_until: string | null;
       generation: number;
       missing_lane: SyncWorkGap["missing_lane"];
+      thread_id: string | null;
+    }>;
+    return rows
+      .map((row) => this.toSyncWorkGap(row))
+      .concat(this.listUnseededSyncWorkGaps(installationId, options));
+  }
+
+  private listUnseededSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): SyncWorkGap[] {
+    const limit = Math.max(0, Math.floor(options?.unseeded_limit ?? 0));
+    if (limit === 0) {
+      return [];
+    }
+    const rows = this.database
+      .prepare(
+        `
+          SELECT m.stream_key, m.generation, m.thread_id
+          FROM connector_stream_members m
+          WHERE m.installation_id = ?
+            AND m.stream_key != ?
+            AND NOT EXISTS (
+              SELECT 1 FROM connector_sync_state s
+              WHERE s.installation_id = m.installation_id
+                AND s.stream_key = m.stream_key
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM connector_sync_work w
+              WHERE w.installation_id = m.installation_id
+                AND w.stream_key = m.stream_key
+                AND w.generation = m.generation
+                AND w.lane IN ('live', 'interactive')
+                AND (
+                  w.status IN ('pending', 'running')
+                  OR w.run_id IS NOT NULL
+                )
+            )
+          ORDER BY m.last_seen_at DESC, m.discovered_at DESC, m.stream_key ASC
+          LIMIT ?
+        `,
+      )
+      .all(installationId, SYNC_CATALOG_STREAM, limit) as Array<{
+      stream_key: string;
+      generation: number;
+      thread_id: string | null;
     }>;
     return rows.map((row) => ({
+      stream_key: row.stream_key,
+      phase: "unseeded" as const,
+      media_pending: false,
+      generation: row.generation,
+      missing_lane: "live" as const,
+      ...(row.thread_id ? { thread_id: row.thread_id } : {}),
+    }));
+  }
+
+  private toSyncWorkGap(row: {
+    stream_key: string;
+    phase: SyncPhase;
+    media_pending: number;
+    idle_until: string | null;
+    generation: number;
+    missing_lane: SyncWorkGap["missing_lane"];
+    thread_id: string | null;
+  }): SyncWorkGap {
+    return {
       stream_key: row.stream_key,
       phase: row.phase,
       media_pending: row.media_pending !== 0,
       idle_until: row.idle_until ?? undefined,
       generation: row.generation,
       missing_lane: row.missing_lane,
-    }));
+      ...(row.thread_id ? { thread_id: row.thread_id } : {}),
+    };
   }
 
   private ensureOwedSyncWorkUnlocked(state: SyncStreamState): void {

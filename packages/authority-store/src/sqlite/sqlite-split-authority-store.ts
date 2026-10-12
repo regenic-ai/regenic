@@ -64,6 +64,7 @@ import type {
   OutboundAttemptPut,
   OutboundAttemptRecord,
   ApplySyncCatalogPageInput,
+  SyncCatalogHead,
   SyncCatalogView,
   SyncPhaseHead,
   SyncStreamState,
@@ -95,6 +96,7 @@ import type {
   RenewSyncWork,
   SettleSyncWork,
   SyncRun,
+  ListSyncWorkGapsOptions,
   SyncWorkGap,
   SyncWorkIdentity,
   SyncWorkRecord,
@@ -600,8 +602,11 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listUnassignedSyncWorkIdentities", [query]);
   }
 
-  async listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]> {
-    return this.reader.call("listSyncWorkGaps", [installationId]);
+  async listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
+    return this.reader.call("listSyncWorkGaps", [installationId, options]);
   }
 
   async wakeUnassignedSyncWork(
@@ -612,6 +617,10 @@ export class SqliteSplitAuthorityStore
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
     return this.reader.call("getSyncCatalog", [installationId]);
+  }
+
+  async getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    return this.reader.call("getSyncCatalogHead", [installationId]);
   }
 
   async applySyncCatalogPage(

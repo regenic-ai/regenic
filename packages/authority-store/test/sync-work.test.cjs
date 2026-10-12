@@ -570,4 +570,111 @@ describe("phase writes owe their lanes", () => {
     assert.deepEqual(dropped, []);
     store.close();
   });
+
+  it("pages unseeded catalog members without loading phase cursors", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await seedInstallation(store);
+    const now = "2026-09-21T00:00:00.000Z";
+    await store.applySyncCatalogPage({
+      installation_id: installation.id,
+      members: [
+        { stream_key: "chat:new", thread_id: "t-new" },
+        { stream_key: "chat:older", thread_id: "t-old" },
+      ],
+      now,
+      complete: true,
+    });
+    const head = await store.getSyncCatalogHead(installation.id);
+    assert.equal(head.member_count, 2);
+    assert.equal(head.complete, true);
+    assert.equal(head.has_cursor, true);
+    assert.deepEqual(await store.listSyncWorkGaps(installation.id), []);
+    const page = await store.listSyncWorkGaps(installation.id, {
+      unseeded_limit: 1,
+    });
+    assert.equal(page.length, 1);
+    assert.equal(page[0].phase, "unseeded");
+    assert.equal(page[0].missing_lane, "live");
+    assert.equal("live_cursor" in page[0], false);
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: page[0].stream_key,
+      phase: "steady",
+      media_pending: false,
+      generation: 1,
+      updated_at: now,
+    });
+    const after = await store.listSyncWorkGaps(installation.id, {
+      unseeded_limit: 8,
+    });
+    assert.equal(
+      after.some((gap) => gap.stream_key === page[0].stream_key && gap.phase === "unseeded"),
+      false,
+    );
+    assert.equal(after.filter((gap) => gap.phase === "unseeded").length, 1);
+    store.close();
+  });
+});
+
+describe("a completed directory drops streams that left", () => {
+  it("stops sync for chats a replacement page removed", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await seedInstallation(store);
+    const now = "2026-10-12T00:00:00.000Z";
+    await store.applySyncCatalogPage({
+      installation_id: installation.id,
+      members: [
+        { stream_key: "chat:keep", thread_id: "t-keep" },
+        { stream_key: "chat:drop", thread_id: "t-drop" },
+      ],
+      now,
+      next_cursor: "page-2",
+      complete: false,
+    });
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:drop",
+      phase: "history",
+      media_pending: false,
+      generation: 1,
+      updated_at: now,
+    });
+    await store.applySyncCatalogPage({
+      installation_id: installation.id,
+      members: [{ stream_key: "chat:keep", thread_id: "t-keep" }],
+      now: "2026-10-12T00:01:00.000Z",
+      complete: true,
+      replaces: true,
+    });
+    assert.equal(await store.getSyncState(installation.id, "chat:drop"), null);
+    const claimed = await store.claimSyncWork({
+      owner: "worker",
+      now: "2026-10-12T00:01:00.000Z",
+      lease_ms: 60_000,
+      limit: 10,
+      installation_id: installation.id,
+      unassigned: true,
+    });
+    assert.equal(
+      claimed.some((work) => work.stream_key === "chat:drop"),
+      false,
+    );
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:drop",
+      phase: "history",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-10-12T00:02:00.000Z",
+    });
+    assert.equal(await store.getSyncState(installation.id, "chat:drop"), null);
+    const catalog = await store.getSyncCatalog(installation.id);
+    assert.deepEqual(
+      catalog.members.map((member) => member.stream_key),
+      ["chat:keep"],
+    );
+    store.close();
+  });
 });

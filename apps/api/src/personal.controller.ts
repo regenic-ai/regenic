@@ -200,6 +200,7 @@ export class PersonalController {
           pull_older?: boolean;
           before?: string;
           before_id?: string;
+          before_external_id?: string;
           media?: boolean;
           present?: boolean;
         }
@@ -224,13 +225,22 @@ export class PersonalController {
       } else if (input.hydrate) {
         void this.connectors.hydrateOpenedThread(threadId);
       }
+      let historyPending: boolean | undefined;
       if (shouldPullOlderFocus(input)) {
-        void this.connectors.pullOlderForThread(threadId);
+        const pulled = await this.connectors.pullOlderForThread(threadId, {
+          before: input.before,
+          before_external_id: input.before_external_id,
+        });
+        historyPending = pulled.history_pending;
       }
       if (shouldDrainMediaFocus(input)) {
         void this.connectors.drainMediaForThread(threadId);
       }
-      return { accepted: true as const, thread_id: threadId };
+      return {
+        accepted: true as const,
+        thread_id: threadId,
+        ...(historyPending !== undefined ? { history_pending: historyPending } : {}),
+      };
     });
   }
 

@@ -9,6 +9,8 @@ export type ConversationFocusInput = {
   pull_older?: boolean;
   before?: string;
   before_id?: string;
+  /** Source external id of the oldest shown record. Opaque; forwarded to the connector. */
+  before_external_id?: string;
   /** Drain queued attachment downloads for this thread. */
   media?: boolean;
   /** Opt-in activity pulse. Desktop presence uses POST /v1/me/presence instead. */

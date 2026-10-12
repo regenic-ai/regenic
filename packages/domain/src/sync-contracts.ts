@@ -84,6 +84,7 @@ export interface ApplySyncCatalogPageInput {
   now: string;
   next_cursor?: string;
   complete: boolean;
+  replaces?: boolean;
 }
 
 export interface SyncPageOutcome {
@@ -113,8 +114,18 @@ export interface SyncPhaseHead {
   idle_until?: string;
 }
 
+/** Catalog size and cursor freshness. No member rows and no cursor payload. */
+export interface SyncCatalogHead {
+  member_count: number;
+  has_cursor: boolean;
+  complete: boolean;
+  generation: number;
+  updated_at?: string;
+}
+
 export interface SyncStore {
   getSyncCatalog(installationId: string): Promise<SyncCatalogView>;
+  getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead>;
   applySyncCatalogPage(input: ApplySyncCatalogPageInput): Promise<SyncCatalogView>;
   listSyncStates(installationId: string): Promise<SyncStreamState[]>;
   listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]>;

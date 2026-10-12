@@ -206,6 +206,17 @@ describe("due-work planner", () => {
       }),
       true,
     );
+    assert.equal(
+      needsCatalogDueWork({
+        member_count: 4,
+        catalog: { complete: true },
+      }),
+      false,
+    );
+    assert.equal(
+      needsCatalogDueWork({ member_count: 0, catalog: { complete: true } }),
+      true,
+    );
     const item = catalogDueWork({
       installation_id: "install-1",
       now: "2026-09-21T00:00:00.000Z",
@@ -532,5 +543,58 @@ describe("owed sync lanes", () => {
     assert.equal(item.next_due_at, "2026-09-21T00:00:05.000Z");
     assert.equal(item.id, "due:install-1:history:2:chat:1");
     assert.equal("live_cursor" in item, false);
+  });
+
+  it("holds a steady live gap until idle and keeps history latest due now", () => {
+    const now = "2026-09-21T00:00:05.000Z";
+    const planned = planSyncWorkGaps({
+      installation_id: "install-1",
+      now,
+      coldIdleMs: 3_600_000,
+      preferredThreadId: "thread-open",
+      gaps: [
+        {
+          stream_key: "chat:cold",
+          phase: "steady",
+          media_pending: false,
+          idle_until: "2026-09-21T01:00:00.000Z",
+          generation: 1,
+          missing_lane: "live",
+        },
+        {
+          stream_key: "chat:open",
+          phase: "steady",
+          media_pending: false,
+          idle_until: "2026-09-21T01:00:00.000Z",
+          generation: 1,
+          missing_lane: "live",
+          thread_id: "thread-open",
+        },
+        {
+          stream_key: "chat:history",
+          phase: "history",
+          media_pending: false,
+          idle_until: "2026-09-21T01:00:00.000Z",
+          generation: 1,
+          missing_lane: "live",
+        },
+      ],
+    });
+    assert.equal(
+      planned.find((item) => item.stream_key === "chat:cold").next_due_at,
+      "2026-09-21T01:00:00.000Z",
+    );
+    assert.equal(
+      planned.find((item) => item.stream_key === "chat:open").lane,
+      "interactive",
+    );
+    assert.equal(
+      planned.find((item) => item.stream_key === "chat:open").next_due_at,
+      now,
+    );
+    assert.equal(
+      planned.find((item) => item.stream_key === "chat:history").next_due_at,
+      now,
+    );
   });
 });

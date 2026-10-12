@@ -3,6 +3,7 @@ import { Pool, types, type PoolClient } from "pg";
 import {
   AuthorityConflictError,
   applySyncCatalogMembers,
+  catalogStreamKeysLeft,
   canonicalContextJson,
   conversationId,
   formatInboxDigest,
@@ -44,6 +45,7 @@ import {
   processSyncMetrics,
   recordSyncDuration,
   dueSyncWorkId,
+  SYNC_CATALOG_STREAM,
   syncWorkEnsurePlan,
   syncWorkPriority,
   validateSyncRunOptions,
@@ -147,9 +149,11 @@ import type {
   CommitSyncPageResult,
   EnqueueSyncWork,
   ListSyncRunsQuery,
+  ListSyncWorkGapsOptions,
   NewSyncRun,
   RenewSyncWork,
   SettleSyncWork,
+  SyncCatalogHead,
   SyncRun,
   SyncWorkGap,
   SyncWorkIdentity,
@@ -3926,6 +3930,36 @@ export class PostgresAuthorityStore
     return this.loadSyncCatalog(installationId);
   }
 
+  async getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    const count = await this.queryOne<{ n: string | number }>(
+      `
+        SELECT COUNT(*) AS n
+        FROM connector_stream_members
+        WHERE installation_id = $1 AND stream_key <> $2
+      `,
+      [installationId, SYNC_CATALOG_STREAM],
+    );
+    const cursor = await this.queryOne<{
+      complete: unknown;
+      generation: number;
+      updated_at: unknown;
+    }>(
+      `
+        SELECT complete, generation, updated_at
+        FROM connector_catalog_cursors
+        WHERE installation_id = $1
+      `,
+      [installationId],
+    );
+    return {
+      member_count: Number(count?.n ?? 0),
+      has_cursor: cursor != null,
+      complete: cursor ? asBool(cursor.complete) : false,
+      generation: cursor ? asNumber(cursor.generation) : 1,
+      ...(cursor ? { updated_at: toIso(cursor.updated_at) } : {}),
+    };
+  }
+
   async applySyncCatalogPage(
     input: ApplySyncCatalogPageInput,
   ): Promise<SyncCatalogView> {
@@ -3978,6 +4012,14 @@ export class PostgresAuthorityStore
             next.catalog.updated_at,
           ],
           client,
+        );
+      }
+      if (input.complete) {
+        await this.dropStreamsLeftCatalog(
+          client,
+          input.installation_id,
+          catalogStreamKeysLeft(current, next),
+          input.now,
         );
       }
       return next;
@@ -4040,6 +4082,21 @@ export class PostgresAuthorityStore
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
     await this.withTx(async (client) => {
+      if (
+        await this.streamOutsideCompleteCatalog(
+          client,
+          state.installation_id,
+          state.stream_key,
+        )
+      ) {
+        await this.dropStreamsLeftCatalog(
+          client,
+          state.installation_id,
+          [state.stream_key],
+          state.updated_at,
+        );
+        return;
+      }
       await client.query(
         `
           INSERT INTO connector_sync_state (
@@ -4072,9 +4129,74 @@ export class PostgresAuthorityStore
     return { ...state };
   }
 
-  async listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]> {
-    const rows = await this.query<SyncWorkGap & { idle_until: string | null }>(
+  private async streamOutsideCompleteCatalog(
+    client: PoolClient,
+    installationId: string,
+    streamKey: string,
+  ): Promise<boolean> {
+    const cursor = await client.query<{ complete: unknown }>(
       `
+        SELECT complete
+        FROM connector_catalog_cursors
+        WHERE installation_id = $1
+      `,
+      [installationId],
+    );
+    if (!asBool(cursor.rows[0]?.complete)) {
+      return false;
+    }
+    const member = await client.query(
+      `
+        SELECT 1
+        FROM connector_stream_members
+        WHERE installation_id = $1 AND stream_key = $2
+      `,
+      [installationId, streamKey],
+    );
+    return (member.rowCount ?? 0) === 0;
+  }
+
+  private async dropStreamsLeftCatalog(
+    client: PoolClient,
+    installationId: string,
+    streamKeys: readonly string[],
+    now: string,
+  ): Promise<void> {
+    if (streamKeys.length === 0) {
+      return;
+    }
+    await client.query(
+      `
+        DELETE FROM connector_sync_state
+        WHERE installation_id = $1 AND stream_key = ANY($2::text[])
+      `,
+      [installationId, streamKeys],
+    );
+    await client.query(
+      `
+        UPDATE connector_sync_work
+        SET status = 'cancelled',
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = $3
+        WHERE installation_id = $1
+          AND run_id IS NULL
+          AND status IN ('pending', 'running')
+          AND stream_key = ANY($2::text[])
+      `,
+      [installationId, streamKeys, now],
+    );
+  }
+
+  async listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
+    const rows = await this.query<
+      SyncWorkGap & { idle_until: string | null; thread_id: string | null }
+    >(
+      `
+        WITH gaps AS (
         SELECT s.stream_key, s.phase, s.media_pending, s.idle_until, s.generation,
                'live' AS missing_lane
         FROM connector_sync_state s
@@ -4124,17 +4246,80 @@ export class PostgresAuthorityStore
                 OR w.run_id IS NOT NULL
               )
           )
+        )
+        SELECT g.stream_key, g.phase, g.media_pending, g.idle_until, g.generation,
+               g.missing_lane, m.thread_id
+        FROM gaps g
+        LEFT JOIN connector_stream_members m
+          ON m.installation_id = $1 AND m.stream_key = g.stream_key
       `,
       [installationId],
     );
+    const gaps = rows.map((row) => this.toSyncWorkGap(row));
+    return gaps.concat(await this.listUnseededSyncWorkGaps(installationId, options));
+  }
+
+  private async listUnseededSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
+    const limit = Math.max(0, Math.floor(options?.unseeded_limit ?? 0));
+    if (limit === 0) {
+      return [];
+    }
+    const rows = await this.query<{
+      stream_key: string;
+      generation: number;
+      thread_id: string | null;
+    }>(
+      `
+        SELECT m.stream_key, m.generation, m.thread_id
+        FROM connector_stream_members m
+        WHERE m.installation_id = $1
+          AND m.stream_key <> $2
+          AND NOT EXISTS (
+            SELECT 1 FROM connector_sync_state s
+            WHERE s.installation_id = m.installation_id
+              AND s.stream_key = m.stream_key
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM connector_sync_work w
+            WHERE w.installation_id = m.installation_id
+              AND w.stream_key = m.stream_key
+              AND w.generation = m.generation
+              AND w.lane IN ('live', 'interactive')
+              AND (
+                w.status IN ('pending', 'running')
+                OR w.run_id IS NOT NULL
+              )
+          )
+        ORDER BY m.last_seen_at DESC, m.discovered_at DESC, m.stream_key ASC
+        LIMIT $3
+      `,
+      [installationId, SYNC_CATALOG_STREAM, limit],
+    );
     return rows.map((row) => ({
+      stream_key: row.stream_key,
+      phase: "unseeded",
+      media_pending: false,
+      generation: Number(row.generation),
+      missing_lane: "live",
+      ...(row.thread_id ? { thread_id: row.thread_id } : {}),
+    }));
+  }
+
+  private toSyncWorkGap(
+    row: SyncWorkGap & { idle_until: string | null; thread_id: string | null },
+  ): SyncWorkGap {
+    return {
       stream_key: row.stream_key,
       phase: row.phase,
       media_pending: Boolean(row.media_pending),
       idle_until: row.idle_until ?? undefined,
       generation: Number(row.generation),
       missing_lane: row.missing_lane,
-    }));
+      ...(row.thread_id ? { thread_id: row.thread_id } : {}),
+    };
   }
 
   private async ensureOwedSyncWork(

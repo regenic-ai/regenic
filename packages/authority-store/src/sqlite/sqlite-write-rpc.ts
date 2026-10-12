@@ -55,6 +55,7 @@ export const AUTHORITY_READ_METHODS = [
   "getSyncRun",
   "listSyncRuns",
   "getSyncCatalog",
+  "getSyncCatalogHead",
   "listSyncStates",
   "listSyncPhaseHeads",
   "getSyncState",

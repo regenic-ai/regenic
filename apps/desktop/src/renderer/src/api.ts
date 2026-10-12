@@ -908,16 +908,17 @@ export async function focusConversation(input: {
   pull_older?: boolean;
   before?: string;
   before_id?: string;
+  before_external_id?: string;
   media?: boolean;
   present?: boolean;
-}): Promise<{ accepted: true; thread_id: string }> {
+}): Promise<{ accepted: true; thread_id: string; history_pending?: boolean }> {
   const response = await fetch(`${origin()}/v1/me/conversations/focus`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
   const body = (await response.json()) as
-    | { accepted: true; thread_id: string }
+    | { accepted: true; thread_id: string; history_pending?: boolean }
     | { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(
@@ -926,7 +927,7 @@ export async function focusConversation(input: {
         : `conversation focus ${response.status}`,
     );
   }
-  return body as { accepted: true; thread_id: string };
+  return body as { accepted: true; thread_id: string; history_pending?: boolean };
 }
 
 export async function updateConversationPrefs(input: {
@@ -1263,6 +1264,14 @@ export async function dismissWorkItem(id: string): Promise<void> {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `work dismiss ${response.status}`);
   }
+}
+
+export async function fetchContextArtifacts(): Promise<unknown> {
+  const response = await fetch(`${origin()}/v1/me/context/artifacts`);
+  if (!response.ok) {
+    throw new Error(`context artifacts ${response.status}`);
+  }
+  return response.json() as Promise<unknown>;
 }
 
 export async function fetchStore(): Promise<StoreView> {

@@ -7,9 +7,11 @@ import {
   LarkCliClient,
   resetFeishuChatListCache,
   resetFeishuUserNameCache,
+  spawnLarkProcess,
   type FeishuChat,
   type FeishuSpawn,
 } from "./feishu-cli-client";
+import { createLarkUserTokenSource } from "./feishu-user-token";
 
 const PROBE_TTL_MS = 20_000;
 

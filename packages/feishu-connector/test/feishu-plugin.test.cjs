@@ -784,6 +784,28 @@ describe("createFeishuRecentSyncSource", () => {
   });
 });
 
+describe("createFeishuPickedSyncSource", () => {
+  it("returns only the chosen chats as the whole directory", async () => {
+    const { createFeishuPickedSyncSource } = require("../dist/feishu-sync-source");
+    const source = createFeishuPickedSyncSource([
+      { chat_id: "oc_a", name: "Ada" },
+      { chat_id: "  ", name: "blank" },
+      { chat_id: "oc_b" },
+    ]);
+    const page = await source.listDirectory("leftover-census");
+    assert.equal(page.complete, true);
+    assert.equal(page.replaces, true);
+    assert.equal(page.next_cursor, undefined);
+    assert.deepEqual(
+      page.members.map((member) => [member.stream_key, member.label]),
+      [
+        ["chat:oc_a", "Ada"],
+        ["chat:oc_b", undefined],
+      ],
+    );
+  });
+});
+
 describe("createFeishuSyncSource", () => {
   it("pages groups first then p2p so the group census can stay on HTTP", async () => {
     const calls = [];

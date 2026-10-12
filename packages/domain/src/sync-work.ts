@@ -148,6 +148,15 @@ export interface SyncWorkGap {
   idle_until?: string;
   generation: number;
   missing_lane: SyncLane;
+  thread_id?: string;
+}
+
+export interface ListSyncWorkGapsOptions {
+  /**
+   * Catalog members with no phase row to append as live gaps.
+   * Omitted or zero leaves the result to phase rows only.
+   */
+  unseeded_limit?: number;
 }
 
 export interface WakeUnassignedSyncWork {
@@ -173,10 +182,13 @@ export interface SyncWorkStore {
     },
   ): Promise<SyncWorkIdentity[]>;
   /**
-   * Phase rows whose owed lanes are missing. The result is the gap only:
-   * no cursor payload.
+   * Owed lanes that have no open row, plus a bounded page of catalog members
+   * that have no phase yet. The result is the gap only: no cursor payload.
    */
-  listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]>;
+  listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]>;
   wakeUnassignedSyncWork(input: WakeUnassignedSyncWork): Promise<number>;
 }
 

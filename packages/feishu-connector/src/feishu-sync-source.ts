@@ -36,6 +36,34 @@ export function createFeishuRecentSyncSource(
           kind: chat.chat_mode,
         })),
         complete: true,
+        replaces: true,
+      };
+    },
+  };
+}
+
+export function createFeishuPickedSyncSource(
+  chats: readonly { chat_id: string; name?: string }[],
+): SyncSource {
+  return {
+    async listDirectory(): Promise<SyncDirectoryPage> {
+      return {
+        members: chats.flatMap((chat) => {
+          const chatId = chat.chat_id.trim();
+          if (!chatId) {
+            return [];
+          }
+          const name = chat.name?.trim();
+          return [
+            {
+              stream_key: feishuStreamKey(chatId),
+              thread_id: `${FEISHU_SOURCE}:${chatId}`,
+              ...(name ? { label: name } : {}),
+            },
+          ];
+        }),
+        complete: true,
+        replaces: true,
       };
     },
   };

@@ -109,27 +109,65 @@ export function syncWorkEnsurePlan(input: {
   return { enqueue, cancel };
 }
 
-/** Repair rows for lanes the phase write should already have inserted. */
+/**
+ * Repair rows for lanes the phase write should already have inserted.
+ * History, media, and a history-phase latest row are due now. A steady live
+ * row waits for `idle_until`, then the cold idle. The preferred thread's
+ * latest row is interactive.
+ */
 export function planSyncWorkGaps(input: {
   installation_id: string;
   gaps: readonly SyncWorkGap[];
   now: string;
+  coldIdleMs?: number;
+  preferredThreadId?: string | null;
 }): EnqueueSyncWork[] {
-  return input.gaps.map((gap) => ({
-    id: dueSyncWorkId(
-      input.installation_id,
-      gap.stream_key,
-      gap.missing_lane,
-      gap.generation,
-    ),
-    installation_id: input.installation_id,
-    stream_key: gap.stream_key,
-    lane: gap.missing_lane,
-    priority: syncWorkPriority(gap.missing_lane),
-    next_due_at: input.now,
-    generation: gap.generation,
-    now: input.now,
-  }));
+  const preferred = input.preferredThreadId?.trim() || null;
+  const planned: EnqueueSyncWork[] = [];
+  for (const gap of input.gaps) {
+    const focused = Boolean(preferred) && gap.thread_id === preferred;
+    if (focused && gap.missing_lane === "media") {
+      continue;
+    }
+    const lane =
+      focused && gap.missing_lane === "live" ? "interactive" : gap.missing_lane;
+    const heat = classifyDueWorkHeat({
+      preferred: focused && lane === "interactive",
+      eager: syncGapRepairIsEager(gap),
+    });
+    planned.push({
+      id: dueSyncWorkId(
+        input.installation_id,
+        gap.stream_key,
+        lane,
+        gap.generation,
+      ),
+      installation_id: input.installation_id,
+      stream_key: gap.stream_key,
+      lane,
+      priority: syncWorkPriority(lane),
+      next_due_at: nextDueAtForDueWork({
+        now: input.now,
+        idleUntil: gap.idle_until,
+        heat,
+        coldIdleMs: input.coldIdleMs,
+      }),
+      generation: gap.generation,
+      now: input.now,
+    });
+  }
+  return planned;
+}
+
+function syncGapRepairIsEager(
+  gap: Pick<SyncWorkGap, "missing_lane" | "phase" | "media_pending">,
+): boolean {
+  if (gap.missing_lane === "history" || gap.missing_lane === "media") {
+    return true;
+  }
+  return (
+    gap.phase === "history" || gap.phase === "unseeded" || gap.media_pending
+  );
 }
 
 export function dueSyncWorkId(
@@ -166,17 +204,16 @@ export function catalogDueWork(input: {
 }
 
 export function needsCatalogDueWork(view: {
-  members: readonly Pick<SyncCatalogMember, "stream_key">[];
+  members?: readonly Pick<SyncCatalogMember, "stream_key">[];
+  member_count?: number;
   catalog?: { complete: boolean } | null;
 }): boolean {
-  const streamMembers = view.members.filter(
-    (member) => member.stream_key && member.stream_key !== SYNC_CATALOG_STREAM,
-  );
-  return (
-    streamMembers.length === 0 ||
-    view.catalog == null ||
-    view.catalog.complete !== true
-  );
+  const count =
+    view.member_count ??
+    (view.members ?? []).filter(
+      (member) => member.stream_key && member.stream_key !== SYNC_CATALOG_STREAM,
+    ).length;
+  return count === 0 || view.catalog == null || view.catalog.complete !== true;
 }
 
 /** Lanes that mean this plane already has durable work and must not re-plan. */

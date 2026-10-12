@@ -10,6 +10,7 @@ import {
   prefixOffsets,
   appendHeadPages,
   hasOlderPage,
+  scrollOlderHasMore,
   inboxCursor,
   mergeInboxDelta,
   mergeOlderInbox,
@@ -355,9 +356,33 @@ describe("thread window", () => {
     assert.deepEqual(olderInboxCursor(merged), {
       before: "2026-08-23T09:00:00.000Z",
       before_id: "m1",
+      before_external_id: "feishu:oc_1:m1",
     });
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE), true);
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE - 1), false);
+  });
+
+  it("keeps scroll-up open until a short page has been pulled", () => {
+    assert.equal(
+      scrollOlderHasMore({ pageLength: THREAD_PAGE_SIZE, sourceSettled: false }),
+      true,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: THREAD_PAGE_SIZE - 1, sourceSettled: false }),
+      true,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: 0, sourceSettled: true }),
+      false,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: 0, sourceSettled: true, historyPending: true }),
+      true,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: THREAD_PAGE_SIZE, sourceSettled: true }),
+      true,
+    );
   });
 
   it("keeps prepended history when a recent page is refetched", () => {

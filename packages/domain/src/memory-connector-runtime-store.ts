@@ -16,12 +16,15 @@ import type {
   CommitSyncPage,
   CommitSyncPageResult,
 } from "./ingestion";
+import { catalogStreamKeysLeft } from "./sync-catalog";
 import { MemorySyncStore } from "./sync-engine";
 import type {
   ApplySyncCatalogPageInput,
+  SyncCatalogHead,
   SyncCatalogView,
   SyncStreamState,
 } from "./sync-contracts";
+import { SYNC_CATALOG_STREAM } from "./sync-contracts";
 import {
   dueSyncWorkId,
   syncWorkEnsurePlan,
@@ -39,6 +42,7 @@ import {
   type RenewSyncWork,
   type SettleSyncWork,
   type SyncRun,
+  type ListSyncWorkGapsOptions,
   type SyncWorkGap,
   type SyncWorkIdentity,
   type SyncWorkRecord,
@@ -608,11 +612,19 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     );
   }
 
-  async listSyncWorkGaps(installationId: string): Promise<SyncWorkGap[]> {
+  async listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
     const states = await this.sync.listSyncStates(installationId);
+    const catalog = await this.sync.getSyncCatalog(installationId);
+    const threadByKey = new Map(
+      catalog.members.map((member) => [member.stream_key, member.thread_id] as const),
+    );
     const gaps: SyncWorkGap[] = [];
     for (const state of states) {
       const existing = this.workForStream(state);
+      const threadId = threadByKey.get(state.stream_key);
       for (const lane of syncWorkEnsurePlan({ state, existing }).enqueue) {
         gaps.push({
           stream_key: state.stream_key,
@@ -621,8 +633,55 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
           idle_until: state.idle_until,
           generation: state.generation,
           missing_lane: lane,
+          ...(threadId ? { thread_id: threadId } : {}),
         });
       }
+    }
+    const limit = Math.max(0, Math.floor(options?.unseeded_limit ?? 0));
+    if (limit === 0) {
+      return gaps;
+    }
+    const seeded = new Set(states.map((state) => state.stream_key));
+    const unseeded = catalog.members
+      .filter((member) => {
+        if (
+          !member.stream_key ||
+          member.stream_key === SYNC_CATALOG_STREAM ||
+          seeded.has(member.stream_key)
+        ) {
+          return false;
+        }
+        return !this.latestWorkCovers(
+          installationId,
+          member.stream_key,
+          member.generation || 1,
+        );
+      })
+      .sort((left, right) => {
+        const seen = (right.last_seen_at || "").localeCompare(
+          left.last_seen_at || "",
+        );
+        if (seen !== 0) {
+          return seen;
+        }
+        const discovered = (right.discovered_at || "").localeCompare(
+          left.discovered_at || "",
+        );
+        if (discovered !== 0) {
+          return discovered;
+        }
+        return left.stream_key.localeCompare(right.stream_key);
+      })
+      .slice(0, limit);
+    for (const member of unseeded) {
+      gaps.push({
+        stream_key: member.stream_key,
+        phase: "unseeded",
+        media_pending: false,
+        generation: member.generation || 1,
+        missing_lane: "live",
+        ...(member.thread_id ? { thread_id: member.thread_id } : {}),
+      });
     }
     return gaps;
   }
@@ -673,8 +732,12 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return this.sync.getSyncCatalog(installationId);
   }
 
+  getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    return this.sync.getSyncCatalogHead(installationId);
+  }
+
   applySyncCatalogPage(input: ApplySyncCatalogPageInput): Promise<SyncCatalogView> {
-    return this.sync.applySyncCatalogPage(input);
+    return this.applyCatalogPage(input);
   }
 
   listSyncStates(installationId: string): Promise<SyncStreamState[]> {
@@ -693,9 +756,79 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   }
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
+    const view = await this.sync.getSyncCatalog(state.installation_id);
+    if (
+      view.catalog?.complete === true &&
+      !view.members.some((member) => member.stream_key === state.stream_key)
+    ) {
+      this.sync.dropSyncState(state.installation_id, state.stream_key);
+      this.cancelUnassignedStreams(
+        state.installation_id,
+        [state.stream_key],
+        state.updated_at,
+      );
+      return { ...state };
+    }
     const saved = await this.sync.putSyncState(state);
     await this.ensureOwedSyncWork(saved);
     return saved;
+  }
+
+  private async applyCatalogPage(
+    input: ApplySyncCatalogPageInput,
+  ): Promise<SyncCatalogView> {
+    const current = await this.sync.getSyncCatalog(input.installation_id);
+    const next = await this.sync.applySyncCatalogPage(input);
+    if (input.complete) {
+      const left = catalogStreamKeysLeft(current, next);
+      for (const streamKey of left) {
+        this.sync.dropSyncState(input.installation_id, streamKey);
+      }
+      this.cancelUnassignedStreams(input.installation_id, left, input.now);
+    }
+    return next;
+  }
+
+  private cancelUnassignedStreams(
+    installationId: string,
+    streamKeys: readonly string[],
+    now: string,
+  ): void {
+    if (streamKeys.length === 0) {
+      return;
+    }
+    const keys = new Set(streamKeys);
+    for (const work of this.syncWork.values()) {
+      if (
+        work.installation_id !== installationId ||
+        work.run_id ||
+        (work.status !== "pending" && work.status !== "running") ||
+        !keys.has(work.stream_key)
+      ) {
+        continue;
+      }
+      work.status = "cancelled";
+      work.lease_owner = undefined;
+      work.lease_expires_at = undefined;
+      work.updated_at = now;
+    }
+  }
+
+  private latestWorkCovers(
+    installationId: string,
+    streamKey: string,
+    generation: number,
+  ): boolean {
+    return [...this.syncWork.values()].some(
+      (work) =>
+        work.installation_id === installationId &&
+        work.stream_key === streamKey &&
+        work.generation === generation &&
+        (work.lane === "live" || work.lane === "interactive") &&
+        (Boolean(work.run_id) ||
+          work.status === "pending" ||
+          work.status === "running"),
+    );
   }
 
   private workForStream(state: Pick<

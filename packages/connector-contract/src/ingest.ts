@@ -151,6 +151,14 @@ export interface ConnectorPollOptions {
    * - omitted: text page and drain (legacy connectors / tests).
    */
   media?: boolean;
+  /**
+   * Oldest record already on screen, as occurred_at.
+   * With `older`, the connector asks for the page before this instant.
+   * Core forwards the string and does not interpret it.
+   */
+  before?: string;
+  /** Source external id of that record. Connectors drop the boundary row. */
+  before_external_id?: string;
 }
 
 export interface PollResult {

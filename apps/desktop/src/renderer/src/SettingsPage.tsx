@@ -10,6 +10,7 @@ import {
   resolveSourceRetention,
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
+import { ContextRecordsDialog } from "./ContextRecordsDialog";
 import { useLocale } from "./LocaleContext";
 import type {
   DataDirectoryAction,
@@ -97,6 +98,7 @@ export function SettingsPage({
   const [dataDone, setDataDone] = useState<string | null>(null);
   const [reclaimConfirming, setReclaimConfirming] = useState(false);
   const [reclaimBusy, setReclaimBusy] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
 
   useEffect(() => {
     void fetchKernelSettings()
@@ -655,8 +657,20 @@ export function SettingsPage({
           <StoreStat
             label={t("settings.storeContext")}
             value={contextRecordCount(currentStore)}
+            ariaLabel={t("settings.contextOpen")}
+            onClick={() => setContextOpen(true)}
           />
         </div>
+        {contextOpen ? (
+          <ContextRecordsDialog
+            otherCount={
+              currentStore.context_snapshots +
+              currentStore.context_bundles +
+              currentStore.context_checkpoints
+            }
+            onClose={() => setContextOpen(false)}
+          />
+        ) : null}
         {!canClear ? <p className="muted">{t("settings.storeEmpty")}</p> : null}
         {confirming ? (
           <div className="store-confirm">
@@ -702,11 +716,34 @@ export function SettingsPage({
   );
 }
 
-function StoreStat({ label, value }: { label: string; value: number }) {
+function StoreStat({
+  label,
+  value,
+  onClick,
+  ariaLabel,
+}: {
+  label: string;
+  value: number;
+  onClick?: () => void;
+  ariaLabel?: string;
+}) {
+  if (!onClick) {
+    return (
+      <div className="store-stat">
+        <span className="store-stat-value">{value}</span>
+        <span className="store-stat-label">{label}</span>
+      </div>
+    );
+  }
   return (
-    <div className="store-stat">
+    <button
+      type="button"
+      className="store-stat"
+      aria-label={ariaLabel ?? label}
+      onClick={onClick}
+    >
       <span className="store-stat-value">{value}</span>
       <span className="store-stat-label">{label}</span>
-    </div>
+    </button>
   );
 }

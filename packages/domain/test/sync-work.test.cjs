@@ -387,4 +387,26 @@ describe("durable sync work", () => {
       ["history", "live"],
     );
   });
+
+  it("returns only a page of catalog members that have no phase", async () => {
+    const store = await createStore();
+    const now = "2026-09-21T00:00:00.000Z";
+    await store.applySyncCatalogPage({
+      installation_id: "install-1",
+      members: [
+        { stream_key: "chat:new", thread_id: "t-new" },
+        { stream_key: "chat:older", thread_id: "t-old" },
+      ],
+      now,
+      complete: true,
+    });
+    assert.deepEqual(await store.listSyncWorkGaps("install-1"), []);
+    const page = await store.listSyncWorkGaps("install-1", { unseeded_limit: 1 });
+    assert.equal(page.length, 1);
+    assert.equal(page[0].phase, "unseeded");
+    assert.equal(page[0].missing_lane, "live");
+    const head = await store.getSyncCatalogHead("install-1");
+    assert.equal(head.member_count, 2);
+    assert.equal(head.complete, true);
+  });
 });

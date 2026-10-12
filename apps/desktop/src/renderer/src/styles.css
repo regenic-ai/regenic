@@ -4454,6 +4454,67 @@ button {
   font-size: 11px;
 }
 
+button.store-stat {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.store-stat:hover,
+button.store-stat:focus-visible {
+  border-color: var(--accent);
+}
+
+.context-dialog {
+  width: min(720px, 100%);
+}
+
+.context-records {
+  display: grid;
+  gap: 4px;
+  padding: 8px 16px 16px;
+}
+
+.context-record {
+  border-top: 1px solid var(--line);
+  padding: 10px 0;
+}
+
+.context-record summary {
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.context-record-title {
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.context-record-meta,
+.context-message time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-record-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.context-message {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.context-message time {
+  display: block;
+  margin-bottom: 2px;
+}
+
 .store-confirm {
   margin-top: 12px;
   padding: 12px;

@@ -5,6 +5,7 @@ import type {
   SyncCatalogView,
   SyncDirectoryMember,
 } from "./sync-contracts";
+import { SYNC_CATALOG_STREAM } from "./sync-contracts";
 
 export function emptySyncCatalog(installationId: string): SyncCatalogView {
   return { members: [], catalog: null };
@@ -12,14 +13,15 @@ export function emptySyncCatalog(installationId: string): SyncCatalogView {
 
 /**
  * Apply one directory page. A new census starts when the previous snapshot
- * has no in-flight cursor. Members from the previous generation stay until
- * the new census completes, then they are pruned.
+ * has no in-flight cursor, or when the page is the whole directory
+ * (`replaces`). Members from the previous generation stay until the new
+ * census completes, then they are pruned.
  */
 export function applySyncCatalogMembers(
   current: SyncCatalogView,
   input: ApplySyncCatalogPageInput,
 ): SyncCatalogView {
-  const starting = !current.catalog?.cursor;
+  const starting = input.replaces === true || !current.catalog?.cursor;
   const generation = starting
     ? (current.catalog?.generation ?? 0) + 1
     : current.catalog?.generation ?? 1;
@@ -58,6 +60,25 @@ export function applySyncCatalogMembers(
     updated_at: input.now,
   };
   return { members, catalog };
+}
+
+/** Stream keys a completed directory page removed. Incomplete pages keep them. */
+export function catalogStreamKeysLeft(
+  current: SyncCatalogView,
+  next: SyncCatalogView,
+): string[] {
+  const kept = new Set(next.members.map((member) => member.stream_key));
+  const seen = new Set<string>();
+  const left: string[] = [];
+  for (const member of current.members) {
+    const key = member.stream_key;
+    if (!key || key === SYNC_CATALOG_STREAM || kept.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    left.push(key);
+  }
+  return left;
 }
 
 export function mergeDirectoryMembers(

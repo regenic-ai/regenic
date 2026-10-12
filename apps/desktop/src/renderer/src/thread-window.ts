@@ -147,14 +147,16 @@ export function mergeOlderInbox(
 
 export function olderInboxCursor(
   items: InboxViewItem[],
-): { before: string; before_id: string } | null {
+): { before: string; before_id: string; before_external_id?: string } | null {
   const first = items[0];
   if (!first) {
     return null;
   }
+  const externalId = first.event.external_id?.trim();
   return {
     before: first.event.occurred_at,
     before_id: first.event.id,
+    ...(externalId ? { before_external_id: externalId } : {}),
   };
 }
 
@@ -224,6 +226,26 @@ export function hasOlderPage(
   limit = THREAD_PAGE_SIZE,
 ): boolean {
   return pageLength >= limit;
+}
+
+/**
+ * A full local page can keep scrolling.
+ * A short page is the end only after the source pull for it has finished.
+ */
+export function scrollOlderHasMore(input: {
+  pageLength: number;
+  sourceSettled: boolean;
+  /** Source still has older records after this pull. */
+  historyPending?: boolean;
+  limit?: number;
+}): boolean {
+  if (hasOlderPage(input.pageLength, input.limit ?? THREAD_PAGE_SIZE)) {
+    return true;
+  }
+  if (!input.sourceSettled) {
+    return true;
+  }
+  return input.historyPending === true;
 }
 
 function isBeforeEvent(

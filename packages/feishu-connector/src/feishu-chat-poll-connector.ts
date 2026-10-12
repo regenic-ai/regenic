@@ -3,6 +3,7 @@ import {
   INGEST_SCHEMA_VERSION,
   channelRecord,
   type ConnectorCursor,
+  type ConnectorPollOptions,
   type ContentPart,
   type IngestBatch,
   type PollResult,
@@ -29,6 +30,7 @@ import {
   extractFeishuMedia,
   extractFeishuText,
   feishuConversationKind,
+  feishuCreateTimeMs,
   feishuCreateTimeToIso,
   feishuCreateTimeToStartSeconds,
   feishuMentionNames,
@@ -42,6 +44,8 @@ export const MAX_FEISHU_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_FEISHU_MEDIA_JOBS = 40;
 export const MAX_FEISHU_MEDIA_ATTEMPTS = 5;
 export const MAX_FEISHU_MEDIA_JOBS_PER_POLL = 8;
+/** How many end_time pages one scroll may follow to pass the boundary row. */
+const ANCHORED_HISTORY_HOPS = 4;
 
 export interface FeishuMediaJob {
   message_id: string;
@@ -141,12 +145,7 @@ export class FeishuChatPollConnector {
 
   async poll(
     cursor: ConnectorCursor | null,
-    options?: {
-      older?: boolean;
-      latest?: boolean;
-      media?: boolean;
-      signal?: AbortSignal;
-    },
+    options?: ConnectorPollOptions,
   ): Promise<PollResult> {
     const run = () =>
       runInLarkSlot(larkSlotForPoll(options), () =>
@@ -157,7 +156,7 @@ export class FeishuChatPollConnector {
 
   private async pollInSlot(
     cursor: ConnectorCursor | null,
-    options?: { older?: boolean; latest?: boolean; media?: boolean },
+    options?: ConnectorPollOptions,
   ): Promise<PollResult> {
     const state = decodeFeishuCursor(cursor);
     const mediaJobs = this.hydrateMediaJobs(state);
@@ -167,20 +166,28 @@ export class FeishuChatPollConnector {
     if (mediaOnly) {
       return this.pollMediaOnly(state, mediaJobs, cursor, nowMs);
     }
+    const anchor = feishuHistoryAnchor(options);
     const interactiveTip =
-      options?.latest === true && options?.older !== true;
-    const request = interactiveTip
+      !anchor && options?.latest === true && options?.older !== true;
+    const request = anchor
       ? {
           chat_id: this.options.chat_id,
           page_size: this.pageSize,
+          end_time: anchor.endTime,
           sort_type: "ByCreateTimeDesc" as const,
         }
-      : planFeishuHistoryRequest(
-          this.options.chat_id,
-          this.pageSize,
-          state,
-          { older: options?.older === true },
-        );
+      : interactiveTip
+        ? {
+            chat_id: this.options.chat_id,
+            page_size: this.pageSize,
+            sort_type: "ByCreateTimeDesc" as const,
+          }
+        : planFeishuHistoryRequest(
+            this.options.chat_id,
+            this.pageSize,
+            state,
+            { older: options?.older === true },
+          );
     if (!request && !(wantMedia && hasDueMediaJobs(mediaJobs, nowMs))) {
       this.persistMediaJobs(mediaJobs);
       const nextCursor = encodeFeishuCursor(state);
@@ -200,11 +207,13 @@ export class FeishuChatPollConnector {
         poll_hint: feishuPollHint(state),
       };
     }
-    const page = request
-      ? await this.client.listMessages(
-          interactiveTip ? { ...request, timeout_ms: 8_000 } : request,
-        )
-      : { items: [], has_more: false };
+    const page = anchor
+      ? await this.walkAnchoredHistory(anchor)
+      : request
+        ? await this.client.listMessages(
+            interactiveTip ? { ...request, timeout_ms: 8_000 } : request,
+          )
+        : { items: [], has_more: false };
     // Name lookup can outlive the interactive poll budget and discard the page.
     const names = await this.resolveNames(page.items, { network: !interactiveTip });
     const selfId = await this.selfUserId();
@@ -224,17 +233,21 @@ export class FeishuChatPollConnector {
       : { records: [], jobs };
     records.push(...drained.records);
     this.persistMediaJobs(drained.jobs);
-    const nextState = nextFeishuCursor(
-      state,
-      page,
-      request?.sort_type ?? "ByCreateTimeAsc",
-    );
+    const sort = request?.sort_type ?? "ByCreateTimeAsc";
+    // History moves only when this call continued a desc page token.
+    // A newest-page refresh must not replace that token with its own.
+    // An anchored scroll does not write that token at all.
+    const continuation =
+      !anchor && sort === "ByCreateTimeDesc" && Boolean(request?.page_token);
+    const nextState = anchor
+      ? feishuCursorAfterAnchor(state, page.has_more)
+      : nextFeishuCursor(state, page, sort, { continuation });
     const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: this.options.connector_id,
       org_id: this.options.org_id,
-      delivery_id: this.deliveryId(cursor?.value, nextCursor),
+      delivery_id: this.deliveryId(cursor?.value, nextCursor, anchor?.before),
       received_at: this.now(),
       next_cursor: nextCursor,
       records,
@@ -242,12 +255,54 @@ export class FeishuChatPollConnector {
     return {
       batch,
       next_cursor: nextCursor,
-      has_more:
-        Boolean(request) &&
-        feishuHistoryHasMore(state, page, request?.sort_type, nextState),
+      has_more: anchor
+        ? page.has_more
+        : Boolean(request) &&
+          feishuHistoryHasMore(state, page, sort, nextState, { continuation }),
       media_pending: drained.jobs.length > 0,
-      poll_hint: feishuPollHint(nextState),
+      poll_hint: anchor
+        ? {
+            live_seeded: state.recent_seeded === true,
+            history_pending: page.has_more,
+          }
+        : feishuPollHint(nextState),
     };
+  }
+
+  /** One scroll: messages strictly before the anchor. The stored walk stays put. */
+  private async walkAnchoredHistory(
+    anchor: FeishuHistoryAnchor,
+  ): Promise<{ items: FeishuHistoryItem[]; has_more: boolean }> {
+    const kept: FeishuHistoryItem[] = [];
+    let token: string | undefined;
+    let hasMore = false;
+    for (let hop = 0; hop < ANCHORED_HISTORY_HOPS; hop += 1) {
+      const page = await this.client.listMessages({
+        chat_id: this.options.chat_id,
+        page_size: this.pageSize,
+        end_time: anchor.endTime,
+        sort_type: "ByCreateTimeDesc",
+        ...(token ? { page_token: token } : {}),
+      });
+      for (const item of page.items) {
+        if (
+          feishuItemBeforeAnchor(
+            item,
+            anchor.anchorMs,
+            anchor.externalId,
+            this.options.chat_id,
+          )
+        ) {
+          kept.push(item);
+        }
+      }
+      hasMore = page.has_more === true && Boolean(page.page_token);
+      if (kept.length > 0 || !hasMore) {
+        return { items: kept, has_more: hasMore };
+      }
+      token = page.page_token;
+    }
+    return { items: kept, has_more: true };
   }
 
   /** Drain queued attachment downloads without touching the text watermark. */
@@ -615,11 +670,16 @@ export class FeishuChatPollConnector {
     return undefined;
   }
 
-  private deliveryId(cursor: string | undefined, nextCursor: string | undefined): string {
+  private deliveryId(
+    cursor: string | undefined,
+    nextCursor: string | undefined,
+    anchor?: string,
+  ): string {
     const pageIdentity = [
       this.options.chat_id,
       cursor ?? "initial",
       nextCursor ?? "complete",
+      ...(anchor ? [anchor] : []),
     ].join("\u0000");
     const hash = createHash("sha256").update(pageIdentity).digest("hex");
     return `feishu-history:${this.options.chat_id}:${hash}`;
@@ -684,6 +744,80 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
 
 export function needsRecentSeed(state: FeishuCursorState): boolean {
   return !state.recent_seeded && state.sort !== "desc";
+}
+
+export interface FeishuHistoryAnchor {
+  before: string;
+  anchorMs: number;
+  endTime: string;
+  externalId?: string;
+}
+
+/** Scroll-up anchor. Absent when this older pull is the background page walk. */
+export function feishuHistoryAnchor(
+  options?: { older?: boolean; before?: string; before_external_id?: string },
+): FeishuHistoryAnchor | null {
+  if (options?.older !== true) {
+    return null;
+  }
+  const before = options.before?.trim();
+  if (!before) {
+    return null;
+  }
+  const anchorMs = Date.parse(before);
+  const endTime = Number.isFinite(anchorMs) ? String(Math.floor(anchorMs / 1000)) : "";
+  if (!endTime || anchorMs <= 0) {
+    return null;
+  }
+  const externalId = options.before_external_id?.trim();
+  return {
+    before,
+    anchorMs,
+    endTime,
+    ...(externalId ? { externalId } : {}),
+  };
+}
+
+export function feishuItemBeforeAnchor(
+  item: FeishuHistoryItem,
+  anchorMs: number,
+  boundaryExternalId: string | undefined,
+  chatId: string,
+): boolean {
+  if (
+    item.message_id &&
+    boundaryExternalId &&
+    `${chatId}:${item.message_id}` === boundaryExternalId
+  ) {
+    return false;
+  }
+  const ms = feishuCreateTimeMs(item.create_time);
+  if (ms === undefined) {
+    return false;
+  }
+  return ms < anchorMs;
+}
+
+/**
+ * Anchored scroll does not advance the background page token.
+ * The chat has no older messages when this page says so.
+ */
+export function feishuCursorAfterAnchor(
+  state: FeishuCursorState,
+  hasMore: boolean,
+): FeishuCursorState {
+  if (hasMore) {
+    return state;
+  }
+  return {
+    ...(state.page_token && state.sort !== "desc" ? { page_token: state.page_token } : {}),
+    ...(state.start_time ? { start_time: state.start_time } : {}),
+    ...(state.head_time && state.head_time !== state.start_time
+      ? { head_time: state.head_time }
+      : {}),
+    ...(state.recent_seeded ? { recent_seeded: true } : {}),
+    ...(state.sort === "asc" ? { sort: "asc" as const } : {}),
+  };
 }
 
 export function planFeishuHistoryRequest(
@@ -763,6 +897,7 @@ export function feishuHistoryHasMore(
   page: { has_more: boolean },
   sort: FeishuSortType = "ByCreateTimeAsc",
   nextState?: FeishuCursorState,
+  options: { continuation?: boolean } = {},
 ): boolean {
   if (nextState && deferredHistoryToken(nextState)) {
     return true;
@@ -774,6 +909,10 @@ export function feishuHistoryHasMore(
   ) {
     return true;
   }
+  // The newest page's has_more means "older messages exist", not "page this walk".
+  if (sort === "ByCreateTimeDesc" && !options.continuation) {
+    return false;
+  }
   return page.has_more;
 }
 
@@ -781,6 +920,7 @@ export function nextFeishuCursor(
   current: FeishuCursorState,
   page: { items: FeishuHistoryItem[]; has_more: boolean; page_token?: string },
   sort: FeishuSortType = "ByCreateTimeAsc",
+  options: { continuation?: boolean } = {},
 ): FeishuCursorState {
   const newest = newestStartTime(page.items);
   const head = laterTime(current.head_time, newest);
@@ -807,13 +947,25 @@ export function nextFeishuCursor(
   }
   if (sort === "ByCreateTimeDesc") {
     const live = current.start_time ?? current.head_time ?? head;
-    if (page.has_more && page.page_token) {
+    const existing = deferredHistoryToken(current);
+    // A newest-page refresh includes a shallow page_token. Writing that
+    // token restarts scroll-up at the latest page. Continue only when this
+    // request already carried the history token. has_more false here means
+    // the chat fits in the newest page, so the walk is finished.
+    const history = options.continuation
+      ? page.has_more && page.page_token
+        ? page.page_token
+        : undefined
+      : page.has_more
+        ? existing
+        : undefined;
+    if (history) {
       return {
         ...(live ? { start_time: live } : {}),
         ...(current.head_time || head
           ? { head_time: laterTime(current.head_time, head) }
           : {}),
-        history_token: page.page_token,
+        history_token: history,
         recent_seeded: true,
       };
     }

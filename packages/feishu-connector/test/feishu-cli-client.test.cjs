@@ -132,11 +132,13 @@ describe("LarkCliClient", () => {
       chat_id: "oc_1",
       page_size: 50,
       sort_type: "ByCreateTimeDesc",
+      end_time: "1723500000",
     });
     assert.equal(spawned.length, 0);
     assert.equal(page.items[0].message_id, "om_http");
     assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/im\/v1\/messages/);
     assert.match(fetched[0].url, /sort_type=ByCreateTimeDesc/);
+    assert.match(fetched[0].url, /end_time=1723500000/);
     assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
   });
 
@@ -1192,6 +1194,38 @@ describe("LarkCliClient", () => {
       ),
       true,
     );
+    assert.equal(
+      larkCliUserReady(
+        JSON.stringify({
+          identity: "user",
+          identities: {
+            user: { status: "needs refresh", available: true },
+          },
+        }),
+        0,
+      ),
+      true,
+    );
+    assert.equal(
+      larkCliUserReady(
+        JSON.stringify({
+          identity: "user",
+          identities: { user: { status: "needs_refresh" } },
+        }),
+        0,
+      ),
+      true,
+    );
+    assert.equal(
+      larkCliUserReady(
+        JSON.stringify({
+          identity: "user",
+          identities: { user: { status: "missing" } },
+        }),
+        0,
+      ),
+      false,
+    );
     assert.equal(larkCliUserReady("{}", 1), false);
   });
 
@@ -1302,6 +1336,16 @@ describe("LarkCliClient", () => {
             exit_code: 0,
           };
         }
+        if (input.command.includes("+chat-list")) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: { chats: [], has_more: false },
+            }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
         const paramsIdx = input.command.indexOf("--params");
         let pageToken;
         if (paramsIdx >= 0) {
@@ -1335,6 +1379,78 @@ describe("LarkCliClient", () => {
     assert.deepEqual(
       chats.map((chat) => chat.chat_id),
       ["oc_recent"],
+    );
+    resetLarkCliProbeCache();
+    resetFeishuChatListCache();
+  });
+
+  it("keeps direct chats when group paging uses up the catalog budget", async () => {
+    resetLarkCliProbeCache();
+    resetFeishuChatListCache();
+    const chats = await listFeishuCatalogChats({
+      now: () => 1,
+      budget_ms: 400,
+      async spawn(input) {
+        if (input.command.includes("auth")) {
+          return {
+            stdout: JSON.stringify({ ok: true, identity: "user" }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
+        if (input.command.includes("+chat-list")) {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                chats: [
+                  {
+                    chat_id: "oc_p2p",
+                    name: "Ada",
+                    chat_mode: "p2p",
+                    chat_status: "normal",
+                  },
+                ],
+                has_more: false,
+              },
+            }),
+            stderr: "",
+            exit_code: 0,
+          };
+        }
+        const paramsIdx = input.command.indexOf("--params");
+        let pageToken;
+        if (paramsIdx >= 0) {
+          const params = JSON.parse(input.command[paramsIdx + 1]);
+          pageToken = params.page_token;
+        }
+        if (pageToken === "p2") {
+          await new Promise(() => {});
+        }
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              items: [
+                {
+                  chat_id: "oc_group",
+                  name: "Eng",
+                  chat_mode: "group",
+                  chat_status: "normal",
+                },
+              ],
+              has_more: true,
+              page_token: "p2",
+            },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    assert.deepEqual(
+      chats.map((chat) => chat.chat_id).sort(),
+      ["oc_group", "oc_p2p"],
     );
     resetLarkCliProbeCache();
     resetFeishuChatListCache();
