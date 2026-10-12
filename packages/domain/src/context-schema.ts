@@ -9,6 +9,10 @@ import {
   type ContextBundle,
   type ContextBundleItem,
 } from "./context-bundle";
+import type {
+  ContextBundleDiff,
+  ContextBundleDiffItem,
+} from "./context-diff";
 import {
   CONTEXT_SECTION_KINDS,
   type ContextBudget,
@@ -577,6 +581,53 @@ export const ContextBundleSchema: z.ZodType<ContextBundle> = z
     }
   });
 
+const ContextBundleDiffItemSchema: z.ZodType<ContextBundleDiffItem> = z
+  .object({
+    candidate_id: nonEmptyStringSchema,
+    resource_id: nonEmptyStringSchema,
+    kind: z.enum(CONTEXT_CANDIDATE_KINDS),
+    section: z.enum(CONTEXT_SECTION_KINDS),
+    content_hash: contentHashSchema.optional(),
+  })
+  .strict();
+
+export const ContextBundleDiffSchema: z.ZodType<ContextBundleDiff> = z
+  .object({
+    from_snapshot_id: nonEmptyStringSchema,
+    to_snapshot_id: nonEmptyStringSchema,
+    added: z.array(ContextBundleDiffItemSchema).max(10_000),
+    removed: z.array(ContextBundleDiffItemSchema).max(10_000),
+    changed: z.array(z.object({
+      before: ContextBundleDiffItemSchema,
+      after: ContextBundleDiffItemSchema,
+    }).strict()).max(10_000),
+    unchanged: z.array(ContextBundleDiffItemSchema).max(10_000),
+  })
+  .strict()
+  .superRefine((diff, context) => {
+    diff.changed.forEach((change, index) => {
+      if (change.before.candidate_id !== change.after.candidate_id) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["changed", index],
+          message: "Changed entries must preserve candidate_id",
+        });
+      }
+    });
+    const candidateIds = [
+      ...diff.added.map((item) => item.candidate_id),
+      ...diff.removed.map((item) => item.candidate_id),
+      ...diff.changed.map((change) => change.before.candidate_id),
+      ...diff.unchanged.map((item) => item.candidate_id),
+    ];
+    if (hasDuplicates(candidateIds)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Diff candidates must appear in exactly one classification",
+      });
+    }
+  });
+
 export interface ContextValidationIssue {
   path: Array<string | number>;
   message: string;
@@ -645,4 +696,8 @@ export function validateContextSnapshotIndexQuery(input: unknown): ContextValida
 
 export function validateContextBundle(input: unknown): ContextValidationResult<ContextBundle> {
   return validate(ContextBundleSchema, input);
+}
+
+export function validateContextBundleDiff(input: unknown): ContextValidationResult<ContextBundleDiff> {
+  return validate(ContextBundleDiffSchema, input);
 }
