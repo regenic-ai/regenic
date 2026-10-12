@@ -19,6 +19,7 @@ import type {
   PersonalFollowUpPolicy,
   PersonalFollowUpView,
   PersonalContextBundle,
+  PersonalContextDiff,
   PersonalContextSnapshotIndexEntry,
   PersonalContextView,
   PersonalHeartbeatView,
@@ -1282,6 +1283,29 @@ export async function replayPersonalContext(
     throw new Error(`context replay ${response.status}`);
   }
   return response.json() as Promise<PersonalContextBundle>;
+}
+
+export async function diffPersonalContext(
+  fromSnapshotId: string,
+  toSnapshotId: string,
+  signal?: AbortSignal,
+): Promise<PersonalContextDiff> {
+  const response = await kernelFetch("/v1/me/context/diff", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      from_snapshot_id: fromSnapshotId,
+      to_snapshot_id: toSnapshotId,
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
+      allowed_uses: ["display"],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`context diff ${response.status}`);
+  }
+  return response.json() as Promise<PersonalContextDiff>;
 }
 
 export async function fetchPersonalContextHistory(

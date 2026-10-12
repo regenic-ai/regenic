@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   assemblePersonalContext,
+  diffPersonalContext,
   fetchPersonalContextHistory,
   replayPersonalContext,
 } from "./api";
@@ -8,6 +9,7 @@ import { MessageBody } from "./MessageBody";
 import { useLocale } from "./LocaleContext";
 import type {
   PersonalContextBundle,
+  PersonalContextDiff,
   PersonalContextSnapshot,
   PersonalContextSnapshotIndexEntry,
 } from "./types";
@@ -41,21 +43,31 @@ export function ThreadContextPanel({
   const [historyCanLoadMore, setHistoryCanLoadMore] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyReload, setHistoryReload] = useState(0);
+  const [compareSnapshotId, setCompareSnapshotId] = useState("");
+  const [comparison, setComparison] = useState<PersonalContextDiff | null>(null);
+  const [comparisonBusy, setComparisonBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const historyAbortRef = useRef<AbortController | null>(null);
+  const comparisonAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     historyAbortRef.current?.abort();
     historyAbortRef.current = null;
+    comparisonAbortRef.current?.abort();
+    comparisonAbortRef.current = null;
     setContext(null);
     setBusy(false);
     setError(null);
     setEvidenceNotice(null);
+    setCompareSnapshotId("");
+    setComparison(null);
+    setComparisonBusy(false);
     return () => {
       abortRef.current?.abort();
       historyAbortRef.current?.abort();
+      comparisonAbortRef.current?.abort();
     };
   }, [threadId]);
 
@@ -130,8 +142,12 @@ export function ThreadContextPanel({
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
+    comparisonAbortRef.current?.abort();
+    comparisonAbortRef.current = null;
     setBusy(true);
     setError(null);
+    setComparison(null);
+    setComparisonBusy(false);
     try {
       if (mode === "fresh") {
         const result = await assemblePersonalContext(threadId, controller.signal);
@@ -169,6 +185,25 @@ export function ThreadContextPanel({
       if (!controller.signal.aborted) {
         setBusy(false);
       }
+    }
+  };
+
+  const compare = async () => {
+    if (!context || !compareSnapshotId || comparisonBusy) return;
+    const controller = new AbortController();
+    comparisonAbortRef.current?.abort();
+    comparisonAbortRef.current = controller;
+    setComparisonBusy(true);
+    setError(null);
+    try {
+      const result = await diffPersonalContext(compareSnapshotId, context.snapshot.id, controller.signal);
+      if (!controller.signal.aborted) setComparison(result);
+    } catch (caught) {
+      if (!controller.signal.aborted) {
+        setError(caught instanceof Error ? caught.message : t("thread.contextCompareError"));
+      }
+    } finally {
+      if (!controller.signal.aborted) setComparisonBusy(false);
     }
   };
 
@@ -235,6 +270,49 @@ export function ThreadContextPanel({
             >
               {historyBusy ? t("thread.contextHistoryLoading") : t("thread.contextHistoryLoadMore")}
             </button>
+          ) : null}
+          {context && history.some((entry) => entry.snapshot_id !== context.snapshot.id) ? (
+            <div className="thread-context-compare">
+              <label>
+                {t("thread.contextCompareWith")}
+                <select
+                  value={compareSnapshotId}
+                  disabled={busy || comparisonBusy}
+                  onChange={(event) => {
+                    setCompareSnapshotId(event.target.value);
+                    setComparison(null);
+                  }}
+                >
+                  <option value="">{t("thread.contextCompareSelect")}</option>
+                  {history.filter((entry) => entry.snapshot_id !== context.snapshot.id).map((entry) => (
+                    <option key={entry.snapshot_id} value={entry.snapshot_id}>
+                      {t("thread.contextHistoryEntry", {
+                        id: entry.snapshot_id.slice(0, 12),
+                        date: new Date(entry.created_at).toLocaleString(),
+                      })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="ghost"
+                disabled={!compareSnapshotId || busy || comparisonBusy}
+                onClick={() => void compare()}
+              >
+                {comparisonBusy ? t("thread.contextComparing") : t("thread.contextCompare")}
+              </button>
+            </div>
+          ) : null}
+          {comparison ? (
+            <p className="action-hint" role="status">
+              {t("thread.contextCompareResult", {
+                added: comparison.added.length,
+                removed: comparison.removed.length,
+                changed: comparison.changed.length,
+                unchanged: comparison.unchanged.length,
+              })}
+            </p>
           ) : null}
         </div>
       ) : null}

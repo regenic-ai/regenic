@@ -431,6 +431,23 @@ export interface PersonalContextSnapshotIndexEntry {
   created_at: string;
 }
 
+export interface PersonalContextDiffItem {
+  candidate_id: string;
+  resource_id: string;
+  kind: string;
+  section: string;
+  content_hash?: string;
+}
+
+export interface PersonalContextDiff {
+  from_snapshot_id: string;
+  to_snapshot_id: string;
+  added: PersonalContextDiffItem[];
+  removed: PersonalContextDiffItem[];
+  changed: Array<{ before: PersonalContextDiffItem; after: PersonalContextDiffItem }>;
+  unchanged: PersonalContextDiffItem[];
+}
+
 export interface PersonalContextView {
   snapshot: PersonalContextSnapshot;
   bundle: PersonalContextBundle;

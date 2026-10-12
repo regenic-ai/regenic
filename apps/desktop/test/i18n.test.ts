@@ -57,6 +57,16 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "thread.contextHistoryRetry"), "Retry");
     assert.equal(translate("zh", "thread.contextHistoryRetry"), "重试");
     assert.equal(
+      translate("en", "thread.contextCompareResult", {
+        added: 1,
+        removed: 2,
+        changed: 3,
+        unchanged: 4,
+      }),
+      "1 added · 2 removed · 3 changed · 4 unchanged",
+    );
+    assert.equal(translate("zh", "thread.contextCompare"), "对比");
+    assert.equal(
       translate("en", "thread.contextHistoryEntry", { date: "today", id: "snapshot-123" }),
       "today · Snapshot snapshot-123",
     );
