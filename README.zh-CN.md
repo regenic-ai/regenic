@@ -583,6 +583,34 @@ curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Ac
 两个 Snapshot 都必须能由当前组织和 principal 使用提交的 consumer、purpose 与
 allowed uses 重放。响应只包含稳定的 candidate 引用与 hash，不返回证据正文。
 
+#### 比较两个已保存的 Snapshot
+
+把较早的 Snapshot 作为 `from_snapshot_id`，较新的 Snapshot 作为
+`to_snapshot_id`。Replay grant 必须与创建两个 bundle 时使用的 grant 完全一致：
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/diff \
+  -H "content-type: application/json" \
+  -d '{
+    "from_snapshot_id": "context-snapshot:older",
+    "to_snapshot_id": "context-snapshot:newer",
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"]
+  }'
+```
+
+结果按以下类别整理 candidate：
+
+- `added`：只有较新的 Snapshot 选中；
+- `removed`：只有较早的 Snapshot 选中；
+- `changed`：相同 candidate identity 的选中正文或元数据不同；
+- `unchanged`：两个授权 bundle 中的 candidate 完全一致。
+
+Candidate 引用按确定性顺序返回。Consumer 不匹配与 bundle 不存在使用相同的
+not-found 响应，调用方不能探测其他 grant 下的 Snapshot 是否存在。Diff 不读取当前
+来源数据、不修改任一 Snapshot，也不会授予 replay 权限。
+
 #### 排查线程历史为空
 
 只有原始 assemble 请求的 `filters.thread_ids` 恰好包含一个线程时，才会登记历史。
