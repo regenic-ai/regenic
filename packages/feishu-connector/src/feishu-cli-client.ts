@@ -273,11 +273,9 @@ export function larkSlotForPoll(options?: {
   older?: boolean;
   latest?: boolean;
   media?: boolean;
-  before?: string;
 }): LarkCliSlot {
-  if (options?.older === true && Boolean(options.before?.trim())) {
-    return "interactive";
-  }
+  // Latest owns the single open-thread slot. Scroll-up is a separate
+  // end_time query and uses a history slot so the two do not queue.
   if (options?.latest === true && options.older !== true) {
     return "interactive";
   }
@@ -1087,6 +1085,7 @@ export class LarkCliClient implements FeishuImClient {
       base_url: feishuOpenApiBaseUrl(brand),
       fetch: this.options.fetch,
       timeout_ms: input.timeout_ms ?? Math.min(this.timeoutMs, 20_000),
+      signal: currentHostAbort(),
     });
   }
 

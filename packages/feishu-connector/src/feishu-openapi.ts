@@ -67,6 +67,7 @@ export async function callFeishuOpenApi(input: {
   base_url?: string;
   fetch?: typeof fetch;
   timeout_ms?: number;
+  signal?: AbortSignal;
 }): Promise<unknown> {
   const fetchFn = input.fetch ?? fetch;
   const url = new URL(input.path, input.base_url ?? FEISHU_OPEN_API_CN);
@@ -79,10 +80,7 @@ export async function callFeishuOpenApi(input: {
     headers["Content-Type"] = "application/json";
   }
   const timeoutMs = input.timeout_ms ?? 20_000;
-  const signal =
-    timeoutMs > 0 && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
-      ? AbortSignal.timeout(timeoutMs)
-      : undefined;
+  const signal = feishuHttpSignal(timeoutMs, input.signal);
   let response: Response;
   try {
     response = await fetchFn(url.toString(), {
@@ -93,6 +91,9 @@ export async function callFeishuOpenApi(input: {
     });
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
+    if (input.signal?.aborted) {
+      throw new FeishuApiError("Feishu HTTP aborted");
+    }
     if (/aborted|timeout|TimeoutError/i.test(text)) {
       throw new FeishuApiError(`Feishu HTTP timed out after ${timeoutMs}ms`);
     }
@@ -258,4 +259,23 @@ function contentDispositionFilename(header: string): string | undefined {
   }
   const plain = header.match(/filename="?([^"]+)"?/i);
   return plain?.[1]?.trim() || undefined;
+}
+
+function feishuHttpSignal(
+  timeoutMs: number,
+  cancel?: AbortSignal,
+): AbortSignal | undefined {
+  const timeout =
+    timeoutMs > 0 && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+      ? AbortSignal.timeout(timeoutMs)
+      : undefined;
+  if (!cancel) {
+    return timeout;
+  }
+  if (!timeout) {
+    return cancel;
+  }
+  return typeof AbortSignal.any === "function"
+    ? AbortSignal.any([timeout, cancel])
+    : timeout;
 }

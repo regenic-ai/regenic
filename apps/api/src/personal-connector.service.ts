@@ -957,13 +957,36 @@ export class PersonalConnectorService implements OnModuleDestroy {
     ) {
       return this.focusSlot.promise;
     }
-    // Scroll-up and a latest refresh share one cursor. Neither cancels the other.
+    // Latest is start_time + asc. Scroll-up is end_time + desc. Feishu treats
+    // those as different queries, so a scroll the user is waiting on does not
+    // sit behind the latest refresh. The refresh runs again after the page lands.
     if (
       this.focusSlot &&
       this.focusSlot.threadId === threadId &&
       !this.focusSlot.abort.signal.aborted &&
-      (this.focusSlot.kind === "older" || kind === "older") &&
-      this.focusSlot.kind !== kind
+      kind === "older" &&
+      isRecentFocusKind(this.focusSlot.kind)
+    ) {
+      const preempted = this.focusSlot;
+      this.releaseLivePull(threadId);
+      preempted.abort.abort();
+      this.focusSlot = null;
+      void preempted.promise.catch(() => undefined);
+      const olderTask = this.takeFocus(threadId, kind, work);
+      void olderTask.finally(() => {
+        if (preferredThreadId() !== threadId || this.focusSlot?.threadId === threadId) {
+          return;
+        }
+        void this.kickInteractiveLive(threadId);
+      });
+      return olderTask;
+    }
+    if (
+      this.focusSlot &&
+      this.focusSlot.threadId === threadId &&
+      !this.focusSlot.abort.signal.aborted &&
+      this.focusSlot.kind === "older" &&
+      kind !== "older"
     ) {
       const current = this.focusSlot;
       return current.promise.finally(() => {
