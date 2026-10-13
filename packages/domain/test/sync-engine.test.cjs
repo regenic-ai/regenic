@@ -124,6 +124,33 @@ describe("sync catalog apply", () => {
     assert.equal(picked.catalog.complete, true);
     assert.equal(picked.catalog.cursor, undefined);
   });
+
+  it("keeps earlier chats when a finished page is not the whole directory", () => {
+    const seeded = applySyncCatalogMembers(emptySyncCatalog("feishu-1"), {
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:quiet", thread_id: "feishu:quiet" }],
+      now: "2026-08-31T00:00:00.000Z",
+      complete: true,
+    });
+    const again = applySyncCatalogMembers(seeded, {
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:hot", thread_id: "feishu:hot", label: "Hot" }],
+      now: "2026-08-31T00:05:00.000Z",
+      complete: true,
+    });
+    assert.equal(again.catalog.generation, seeded.catalog.generation);
+    assert.deepEqual(
+      again.members.map((item) => item.stream_key).sort(),
+      ["chat:hot", "chat:quiet"],
+    );
+    const missed = applySyncCatalogMembers(again, {
+      installation_id: "feishu-1",
+      members: [],
+      now: "2026-08-31T00:10:00.000Z",
+      complete: true,
+    });
+    assert.equal(missed.members.length, 2);
+  });
 });
 
 describe("sync phase", () => {

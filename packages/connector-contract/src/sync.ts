@@ -28,6 +28,7 @@ export interface SyncDirectoryMember {
 export interface SyncDirectoryPage {
   members: SyncDirectoryMember[];
   next_cursor?: string;
+  /** This round is finished. Members not listed stay unless `replaces` is set. */
   complete: boolean;
   /**
    * This page is the whole directory. Core starts a new generation and drops

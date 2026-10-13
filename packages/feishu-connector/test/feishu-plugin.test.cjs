@@ -777,10 +777,24 @@ describe("createFeishuRecentSyncSource", () => {
     const page = await source.listDirectory(null);
     assert.equal(all, 0);
     assert.equal(page.complete, true);
+    assert.equal(page.replaces, undefined);
     assert.deepEqual(
       page.members.map((member) => member.thread_id),
       ["feishu:oc_hot"],
     );
+  });
+
+  it("reports a recent-list failure instead of an empty directory", async () => {
+    const { createFeishuRecentSyncSource } = require("../dist/feishu-sync-source");
+    const source = createFeishuRecentSyncSource(
+      {
+        async listRecentChats() {
+          throw new Error("directory down");
+        },
+      },
+      ["group"],
+    );
+    await assert.rejects(() => source.listDirectory(null), /directory down/);
   });
 });
 
@@ -844,7 +858,29 @@ describe("createFeishuSyncSource", () => {
     );
     assert.equal(p2p.members[0].label, "Ada");
     assert.equal(p2p.complete, true);
+    assert.equal(p2p.replaces, undefined);
     assert.deepEqual(calls[1].types, ["p2p"]);
     assert.equal(calls[1].names, true);
+  });
+
+  it("treats a single finished page as the whole directory", async () => {
+    const source = createFeishuSyncSource(
+      {
+        async listChats() {
+          return {
+            items: [{ chat_id: "oc_only", name: "Only", chat_mode: "p2p" }],
+            has_more: false,
+          };
+        },
+      },
+      ["p2p"],
+    );
+    const page = await source.listDirectory(null);
+    assert.equal(page.complete, true);
+    assert.equal(page.replaces, true);
+    assert.deepEqual(
+      page.members.map((member) => member.thread_id),
+      ["feishu:oc_only"],
+    );
   });
 });

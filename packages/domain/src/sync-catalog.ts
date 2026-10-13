@@ -12,16 +12,19 @@ export function emptySyncCatalog(installationId: string): SyncCatalogView {
 }
 
 /**
- * Apply one directory page. A new census starts when the previous snapshot
- * has no in-flight cursor, or when the page is the whole directory
- * (`replaces`). Members from the previous generation stay until the new
- * census completes, then they are pruned.
+ * Apply one directory page.
+ * `complete` ends the round. A page that is not the whole directory only
+ * upserts. A new census starts when `replaces` marks a full snapshot, or
+ * when an idle catalog receives an unfinished page. Members from the
+ * previous generation stay until that census completes, then they are pruned.
  */
 export function applySyncCatalogMembers(
   current: SyncCatalogView,
   input: ApplySyncCatalogPageInput,
 ): SyncCatalogView {
-  const starting = input.replaces === true || !current.catalog?.cursor;
+  const starting =
+    input.replaces === true ||
+    (!current.catalog?.cursor && input.complete !== true);
   const generation = starting
     ? (current.catalog?.generation ?? 0) + 1
     : current.catalog?.generation ?? 1;

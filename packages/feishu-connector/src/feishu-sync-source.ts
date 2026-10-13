@@ -36,7 +36,6 @@ export function createFeishuRecentSyncSource(
           kind: chat.chat_mode,
         })),
         complete: true,
-        replaces: true,
       };
     },
   };
@@ -77,18 +76,20 @@ export function createFeishuSyncSource(
   const wantsP2p = kinds.includes("p2p");
   return {
     listDirectory(cursor: string | null): Promise<SyncDirectoryPage> {
-      return runInLarkSlot("history", () => {
+      return runInLarkSlot("history", async () => {
         if (typeof client.listChats !== "function") {
-          return Promise.resolve({ members: [], complete: true });
+          return { members: [], complete: true };
         }
         const state = parseDirectoryCursor(cursor, wantsGroup, wantsP2p);
-        if (state.phase === "mixed") {
-          return listPhase(client, kinds, state.token, "mixed", false);
+        const page = state.phase === "mixed"
+          ? await listPhase(client, kinds, state.token, "mixed", false)
+          : state.phase === "group"
+            ? await listPhase(client, ["group"], state.token, "group", wantsP2p)
+            : await listPhase(client, ["p2p"], state.token, "p2p", false);
+        if (!cursor && page.complete && !page.next_cursor) {
+          return { ...page, replaces: true };
         }
-        if (state.phase === "group") {
-          return listPhase(client, ["group"], state.token, "group", wantsP2p);
-        }
-        return listPhase(client, ["p2p"], state.token, "p2p", false);
+        return page;
       });
     },
   };
@@ -172,22 +173,18 @@ async function listRecentFeishuCatalogChats(
   client: FeishuRecentCatalogClient,
   kinds: FeishuChatMode[],
 ): Promise<FeishuChat[]> {
-  try {
-    if (client.listRecentChats) {
-      return (await client.listRecentChats(kinds, { names: true })).filter((chat) =>
-        chatMatchesKinds(chat, kinds),
-      );
-    }
-    if (client.listChats) {
-      const page = await client.listChats({
-        page_size: 50,
-        types: kinds,
-        names: kinds.includes("p2p"),
-      });
-      return page.items.filter((chat) => chatMatchesKinds(chat, kinds));
-    }
-  } catch {
-    // Keep the install usable when the directory misses.
+  if (client.listRecentChats) {
+    return (await client.listRecentChats(kinds, { names: true })).filter((chat) =>
+      chatMatchesKinds(chat, kinds),
+    );
+  }
+  if (client.listChats) {
+    const page = await client.listChats({
+      page_size: 50,
+      types: kinds,
+      names: kinds.includes("p2p"),
+    });
+    return page.items.filter((chat) => chatMatchesKinds(chat, kinds));
   }
   return [];
 }
