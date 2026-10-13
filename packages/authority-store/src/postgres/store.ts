@@ -303,9 +303,12 @@ import {
   getWorkDeliveryByItem,
   getWorkItem,
   getWorkItemByThread,
+  getWorkItemByUnitKey,
   getWorkRun,
   listExecutorInstallations,
   listRecipes,
+  listDueWorkDeliveries,
+  listHiddenExecutorThreadIds,
   listWorkDeliveries,
   listWorkItems,
   listWorkRuns,
@@ -1084,8 +1087,11 @@ export class PostgresAuthorityStore
     return deleteRecipe(this.sql, orgId, id);
   }
 
-  async listWorkItems(orgId: string): Promise<WorkItem[]> {
-    return listWorkItems(this.sql, orgId);
+  async listWorkItems(
+    orgId: string,
+    options?: { statuses?: readonly import("@regenic/domain").WorkItemStatus[] },
+  ): Promise<WorkItem[]> {
+    return listWorkItems(this.sql, orgId, options);
   }
 
   async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
@@ -1097,6 +1103,14 @@ export class PostgresAuthorityStore
     threadId: string,
   ): Promise<WorkItem | null> {
     return getWorkItemByThread(this.sql, orgId, threadId);
+  }
+
+  async getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
+  ): Promise<WorkItem | null> {
+    return getWorkItemByUnitKey(this.sql, orgId, threadId, unitKey);
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {
@@ -1118,12 +1132,20 @@ export class PostgresAuthorityStore
     return getActiveWorkRun(this.sql, orgId, workItemId);
   }
 
+  async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {
+    return listHiddenExecutorThreadIds(this.sql, orgId);
+  }
+
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return putWorkRun(this.sql, run);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return listWorkDeliveries(this.sql, orgId);
+  }
+
+  async listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]> {
+    return listDueWorkDeliveries(this.sql, orgId, now);
   }
 
   async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {

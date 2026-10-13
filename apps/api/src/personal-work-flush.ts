@@ -30,7 +30,7 @@ export class PersonalWorkFlush {
     const authority = host.get("authority");
     const now = new Date().toISOString();
     const [deliveries, recipes] = await Promise.all([
-      authority.listWorkDeliveries(orgId),
+      authority.listDueWorkDeliveries(orgId, now),
       authority.listRecipes(orgId),
     ]);
     const recipesById = new Map(recipes.map((recipe) => [recipe.id, recipe]));

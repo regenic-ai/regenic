@@ -257,9 +257,12 @@ import {
   getWorkDeliveryByItem,
   getWorkItem,
   getWorkItemByThread,
+  getWorkItemByUnitKey,
   getWorkRun,
   listExecutorInstallations,
   listRecipes,
+  listDueWorkDeliveries,
+  listHiddenExecutorThreadIds,
   listWorkDeliveries,
   listWorkItems,
   listWorkRuns,
@@ -1112,8 +1115,8 @@ export class SqliteAuthorityStore
     return deleteRecipe(this.database, orgId, id);
   }
 
-  async listWorkItems(orgId: string): Promise<WorkItem[]> {
-    return listWorkItems(this.database, orgId);
+  async listWorkItems(orgId: string, options?: { statuses?: readonly import("@regenic/domain").WorkItemStatus[] }): Promise<WorkItem[]> {
+    return listWorkItems(this.database, orgId, options);
   }
 
   async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
@@ -1125,6 +1128,14 @@ export class SqliteAuthorityStore
     threadId: string,
   ): Promise<WorkItem | null> {
     return getWorkItemByThread(this.database, orgId, threadId);
+  }
+
+  async getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
+  ): Promise<WorkItem | null> {
+    return getWorkItemByUnitKey(this.database, orgId, threadId, unitKey);
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {
@@ -1147,6 +1158,10 @@ export class SqliteAuthorityStore
     return getActiveWorkRun(this.database, orgId, workItemId);
   }
 
+  async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {
+    return listHiddenExecutorThreadIds(this.database, orgId);
+  }
+
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     this.assertWritable();
     return putWorkRun(this.database, run);
@@ -1154,6 +1169,10 @@ export class SqliteAuthorityStore
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return listWorkDeliveries(this.database, orgId);
+  }
+
+  async listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]> {
+    return listDueWorkDeliveries(this.database, orgId, now);
   }
 
   async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {

@@ -31,6 +31,7 @@ import {
   type EventRecord,
   type InboxItem,
   type InboxQuery,
+  type InboxSummary,
   type IngestAttempt,
   type PromptAnswer,
   type MessageReceipt,
@@ -332,6 +333,8 @@ export interface StoreClearView {
 export class PersonalInboxService {
   private readonly catalogProbes = new CatalogProbeCache();
   private digestPublishTimer: ReturnType<typeof setTimeout> | undefined;
+  /** One inbox count at a time. Overlapping heartbeats share it. */
+  private summaryFlight: Promise<InboxSummary> | undefined;
   /** Channel overlays filled off the inbox read. Keyed by thread id / outbound id. */
   private readonly attentionCache = new Map<string, ThreadAttention>();
   private readonly receiptCache = new Map<string, MessageReceipt>();
@@ -400,19 +403,42 @@ export class PersonalInboxService {
     orgId: string,
     authority: Pick<AuthorityStore, "summarizeInbox">,
   ): Promise<{ count: number; hidden_count: number; digest: string }> {
-    const cached = this.kernelRuntime.inboxSummary.summary(orgId);
-    if (cached) {
-      return cached;
+    return this.loadInboxSummary(orgId, authority, false);
+  }
+
+  /**
+   * Shown and hidden counts are an inbox projection. Reads share one scan.
+   * `fresh` still joins a scan that is already running instead of starting another.
+   */
+  private loadInboxSummary(
+    orgId: string,
+    authority: Pick<AuthorityStore, "summarizeInbox">,
+    fresh: boolean,
+  ): Promise<InboxSummary> {
+    if (!fresh) {
+      const cached = this.kernelRuntime.inboxSummary.summary(orgId);
+      if (cached) {
+        return Promise.resolve(cached);
+      }
     }
-    const inbox = await authority.summarizeInbox(orgId);
-    this.kernelRuntime.inboxSummary.publish({
-      org_id: orgId,
-      count: inbox.count,
-      hidden_count: inbox.hidden_count,
-      digest: inbox.digest,
-      updated_at: new Date().toISOString(),
-    });
-    return inbox;
+    if (!this.summaryFlight) {
+      this.summaryFlight = authority
+        .summarizeInbox(orgId)
+        .then((summary) => {
+          this.kernelRuntime.inboxSummary.publish({
+            org_id: orgId,
+            count: summary.count,
+            hidden_count: summary.hidden_count,
+            digest: summary.digest,
+            updated_at: new Date().toISOString(),
+          });
+          return summary;
+        })
+        .finally(() => {
+          this.summaryFlight = undefined;
+        });
+    }
+    return this.summaryFlight;
   }
 
   /** Coalesce digest refreshes; keep serving the last snapshot until republish. */
@@ -448,16 +474,7 @@ export class PersonalInboxService {
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
     const [inbox, installations] = await Promise.all([
-      authority.summarizeInbox(orgId).then((summary) => {
-        this.kernelRuntime.inboxSummary.publish({
-          org_id: orgId,
-          count: summary.count,
-          hidden_count: summary.hidden_count,
-          digest: summary.digest,
-          updated_at: new Date().toISOString(),
-        });
-        return summary;
-      }),
+      this.loadInboxSummary(orgId, authority, true),
       authority.listInstallations(orgId),
     ]);
     this.events.inboxDigest(
@@ -959,7 +976,8 @@ export class PersonalInboxService {
     });
     const countChanged =
       collected.ids.length === 0 && !collected.tooMany
-        ? (await authority.summarizeInbox(orgId)).count !== previous.count
+        ? (await this.loadInboxSummary(orgId, authority, false)).count !==
+          previous.count
         : false;
     if (shouldFallbackChangedInboxHeads({ ...collected, countChanged })) {
       return this.loadThreadInbox({

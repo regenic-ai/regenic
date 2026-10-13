@@ -14,6 +14,8 @@ import {
   headsScanQuery,
   threadExternalIdLike,
   normalizeInboxLimit,
+  TASK_INBOX_REASON,
+  WORK_OBSERVE_AGAIN_STATUSES,
 } from "@regenic/domain";
 import {
   EventRow,
@@ -154,26 +156,30 @@ export async function summarizeInbox(db: Database.Database, orgId: string): Prom
           FROM thread_heads th
           WHERE th.org_id = ?
             AND th.has_current_work = 1
-            AND th.thread_id NOT IN (
-              SELECT p.thread_id FROM conversation_prefs p
-              WHERE p.org_id = ? AND p.hidden = 1
+            AND NOT EXISTS (
+              SELECT 1 FROM conversation_prefs p
+              WHERE p.org_id = th.org_id
+                AND p.thread_id = th.thread_id
+                AND p.hidden = 1
             )
         `,
       )
-      .get(orgId, orgId) as { count: number };
+      .get(orgId) as { count: number };
     const hiddenCounted = db
       .prepare(
         `
           SELECT COUNT(*) AS count
           FROM thread_heads th
           WHERE th.org_id = ?
-            AND th.thread_id IN (
-              SELECT p.thread_id FROM conversation_prefs p
-              WHERE p.org_id = ? AND p.hidden = 1
+            AND EXISTS (
+              SELECT 1 FROM conversation_prefs p
+              WHERE p.org_id = th.org_id
+                AND p.thread_id = th.thread_id
+                AND p.hidden = 1
             )
         `,
       )
-      .get(orgId, orgId) as { count: number };
+      .get(orgId) as { count: number };
     const prefs = db
       .prepare(
         `
@@ -388,6 +394,17 @@ function inboxSql(db: Database.Database, orgId: string, query?: InboxQuery): { s
         visible.clauses.push(notHiddenSql("e"));
         visible.params.push(orgId);
       }
+      if (query?.needs_work) {
+        const marks = WORK_OBSERVE_AGAIN_STATUSES.map(() => "?").join(", ");
+        visible.clauses.push(`NOT EXISTS (
+          SELECT 1 FROM work_items w
+          WHERE w.org_id = th.org_id
+            AND w.thread_id = th.thread_id
+            AND w.unit_key = e.id
+            AND w.status NOT IN (${marks})
+        )`);
+        visible.params.push(...WORK_OBSERVE_AGAIN_STATUSES);
+      }
       const page = materialHeadsPageTail(query);
       return {
         sql: `
@@ -460,6 +477,23 @@ function inboxSql(db: Database.Database, orgId: string, query?: InboxQuery): { s
     if (!scoped) {
       clauses.push(notHiddenSql("e"));
       params.push(orgId);
+    }
+    if (query?.tasks) {
+      clauses.push(
+        `EXISTS (SELECT 1 FROM json_each(d.reason_codes_json) WHERE value = ?)`,
+      );
+      params.push(TASK_INBOX_REASON);
+    }
+    if (query?.needs_work) {
+      const marks = WORK_OBSERVE_AGAIN_STATUSES.map(() => "?").join(", ");
+      clauses.push(`NOT EXISTS (
+          SELECT 1 FROM work_items w
+          WHERE w.org_id = e.org_id
+            AND w.thread_id = e.thread_id
+            AND w.unit_key = e.id
+            AND w.status NOT IN (${marks})
+        )`);
+      params.push(...WORK_OBSERVE_AGAIN_STATUSES);
     }
     const tail = inboxTail(query);
     return {

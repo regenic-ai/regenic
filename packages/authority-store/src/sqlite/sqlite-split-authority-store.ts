@@ -709,8 +709,11 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("deleteRecipe", [orgId, id]);
   }
 
-  async listWorkItems(orgId: string): Promise<WorkItem[]> {
-    return this.reader.call("listWorkItems", [orgId]);
+  async listWorkItems(
+    orgId: string,
+    options?: { statuses?: readonly import("@regenic/domain").WorkItemStatus[] },
+  ): Promise<WorkItem[]> {
+    return this.reader.call("listWorkItems", [orgId, options]);
   }
 
   async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
@@ -722,6 +725,14 @@ export class SqliteSplitAuthorityStore
     threadId: string,
   ): Promise<WorkItem | null> {
     return this.reader.call("getWorkItemByThread", [orgId, threadId]);
+  }
+
+  async getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
+  ): Promise<WorkItem | null> {
+    return this.reader.call("getWorkItemByUnitKey", [orgId, threadId, unitKey]);
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {
@@ -743,12 +754,20 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getActiveWorkRun", [orgId, workItemId]);
   }
 
+  async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {
+    return this.reader.call("listHiddenExecutorThreadIds", [orgId]);
+  }
+
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return this.writer.call("putWorkRun", [run]);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return this.reader.call("listWorkDeliveries", [orgId]);
+  }
+
+  async listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]> {
+    return this.reader.call("listDueWorkDeliveries", [orgId, now]);
   }
 
   async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {

@@ -197,6 +197,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       if (!this.runtime.isReady()) {
         return;
       }
+      await this.dispatch.fillOpenSlots();
       await this.dispatch.reconcileInbox();
       await this.dispatch.dispatchPullRecipes();
     } catch (error) {

@@ -8,6 +8,15 @@ import type {
 import { normalizeInboxListView } from "./list-surface";
 import { conversationId } from "./message-contract";
 
+/** Arrangement reason that marks a task row. Connectors do not interpret it. */
+export const TASK_INBOX_REASON = "task";
+
+export function isTaskInboxItem(item: {
+  decision: { reason_codes: readonly string[] };
+}): boolean {
+  return item.decision.reason_codes.includes(TASK_INBOX_REASON);
+}
+
 export function eventThreadId(event: EventRecord): string {
   return event.thread_id ?? conversationId(event.source, event.external_id, event.id);
 }
@@ -426,6 +435,9 @@ export function selectInboxItems(
         selected.filter((item) => openThreads.has(eventThreadId(item.event))),
       );
     }
+  }
+  if (query?.tasks) {
+    selected = selected.filter((item) => isTaskInboxItem(item));
   }
   return takeRecentInboxItems(selected, query);
 }

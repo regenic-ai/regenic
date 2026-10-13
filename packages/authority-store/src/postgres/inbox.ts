@@ -16,6 +16,8 @@ import {
   headsScanQuery,
   threadExternalIdLike,
   normalizeInboxLimit,
+  TASK_INBOX_REASON,
+  WORK_OBSERVE_AGAIN_STATUSES,
 } from "@regenic/domain";
 import {
   EventRow,
@@ -162,24 +164,28 @@ export async function summarizeInbox(db: PgSql, orgId: string): Promise<InboxSum
         FROM thread_heads th
         WHERE th.org_id = $1
           AND th.has_current_work = TRUE
-          AND th.thread_id NOT IN (
-            SELECT p.thread_id FROM conversation_prefs p
-            WHERE p.org_id = $2 AND p.hidden = TRUE
+          AND NOT EXISTS (
+            SELECT 1 FROM conversation_prefs p
+            WHERE p.org_id = th.org_id
+              AND p.thread_id = th.thread_id
+              AND p.hidden = TRUE
           )
       `,
-      [orgId, orgId],
+      [orgId],
     );
     const hiddenCounted = await db.queryOne<{ count: unknown }>(
       `
         SELECT COUNT(*)::int AS count
         FROM thread_heads th
         WHERE th.org_id = $1
-          AND th.thread_id IN (
-            SELECT p.thread_id FROM conversation_prefs p
-            WHERE p.org_id = $2 AND p.hidden = TRUE
+          AND EXISTS (
+            SELECT 1 FROM conversation_prefs p
+            WHERE p.org_id = th.org_id
+              AND p.thread_id = th.thread_id
+              AND p.hidden = TRUE
           )
       `,
-      [orgId, orgId],
+      [orgId],
     );
     const prefs = await db.queryOne<{
       pref_count: unknown;
@@ -396,6 +402,16 @@ function inboxSql(db: PgSql, orgId: string, query?: InboxQuery): { sql: string; 
       if (!scoped) {
         visible.push(notHiddenSql(p(orgId), "e"));
       }
+      if (query?.needs_work) {
+        const marks = WORK_OBSERVE_AGAIN_STATUSES.map((status) => p(status)).join(", ");
+        visible.push(`NOT EXISTS (
+          SELECT 1 FROM work_items w
+          WHERE w.org_id = th.org_id
+            AND w.thread_id = th.thread_id
+            AND w.unit_key = e.id
+            AND w.status NOT IN (${marks})
+        )`);
+      }
       const page = materialHeadsPageTail(query, p);
       return {
         sql: `
@@ -461,6 +477,19 @@ function inboxSql(db: PgSql, orgId: string, query?: InboxQuery): { sql: string; 
     const clauses = inboxClauses(db, orgId, query, "current_work", {}, p);
     if (!scoped) {
       clauses.push(notHiddenSql(p(orgId), "e"));
+    }
+    if (query?.tasks) {
+      clauses.push(`d.reason_codes ? ${p(TASK_INBOX_REASON)}`);
+    }
+    if (query?.needs_work) {
+      const marks = WORK_OBSERVE_AGAIN_STATUSES.map((status) => p(status)).join(", ");
+      clauses.push(`NOT EXISTS (
+          SELECT 1 FROM work_items w
+          WHERE w.org_id = e.org_id
+            AND w.thread_id = e.thread_id
+            AND w.unit_key = e.id
+            AND w.status NOT IN (${marks})
+        )`);
     }
     const tail = inboxTail(query, p);
     return {

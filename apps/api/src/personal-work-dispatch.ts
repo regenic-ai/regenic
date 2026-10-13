@@ -6,18 +6,22 @@ import {
   conversationId,
   deliveryErrorMessage,
   failedWorkStart,
-  findWorkItemByUnitKey,
   formatWorkEvidence,
-  hiddenExecutorThreadIds,
   isActiveWorkStatus,
   isPullDue,
   openOrUpdateWorkItem,
   parseConversationThread,
   pullUnitKey,
+  ACTIVE_WORK_STATUSES,
+  OCCUPIED_RECIPE_STATUSES,
+  WORK_OBSERVE_AGAIN_STATUSES,
   recipeAllowsPullDispatch,
   recipeAllowsPushDispatch,
   recipeHasStartCapacity,
+  recipeStartInflight,
   recipeWantsContext,
+  isOccupiedRecipeSlot,
+  isTaskInboxItem,
   selectRecipeForSubject,
   shouldAcceptPushRecord,
   shouldRetryFailedPush,
@@ -40,6 +44,9 @@ import { shouldDeferWorkForThread } from "./personal-sync-phase";
 
 export class PersonalWorkDispatch {
   private readonly starting = new Map<string, string>();
+  /** Per-recipe claim order so parallel starts reserve slots one at a time. */
+  private readonly startLanes = new Map<string, Promise<void>>();
+  private autoWork: Promise<void>[] = [];
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -49,21 +56,68 @@ export class PersonalWorkDispatch {
   ) {}
 
   async reconcileInbox(): Promise<void> {
+    try {
+      await this.observeInbox();
+    } finally {
+      await this.drainAutoWork();
+    }
+  }
+
+  /**
+   * Start work already opened, up to each recipe cap, before the inbox walk.
+   * The walk decides new rows. It does not have to finish before slots fill.
+   */
+  async fillOpenSlots(): Promise<void> {
+    try {
+      const host = this.runtime.requireHost();
+      const orgId = this.runtime.orgId();
+      const authority = host.get("authority");
+      const [recipes, items, hiddenIds] = await Promise.all([
+        authority.listRecipes(orgId),
+        authority.listWorkItems(orgId, {
+          statuses: [...WORK_OBSERVE_AGAIN_STATUSES],
+        }),
+        authority.listHiddenExecutorThreadIds(orgId),
+      ]);
+      const hidden = new Set(hiddenIds);
+      for (const item of items) {
+        if (hidden.has(item.thread_id) || !item.recipe_id) {
+          continue;
+        }
+        const recipe = recipes.find((row) => row.id === item.recipe_id);
+        if (
+          !recipe ||
+          (!recipeAllowsPushDispatch(recipe) && !recipeAllowsPullDispatch(recipe))
+        ) {
+          continue;
+        }
+        await this.retryOrResume(
+          item,
+          recipe,
+          undefined,
+          recipe.max_concurrent !== undefined,
+        );
+      }
+    } finally {
+      await this.drainAutoWork();
+    }
+  }
+
+  private async observeInbox(): Promise<void> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [recipes, items, runs, heads, currentWork] = await Promise.all([
+    const [recipes, items, hiddenIds, heads, taskRows] = await Promise.all([
       authority.listRecipes(orgId),
-      authority.listWorkItems(orgId),
-      authority.listWorkRuns(orgId),
-      authority.listInbox(orgId, { heads: true }),
-      authority.listInbox(orgId),
+      authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
+      authority.listHiddenExecutorThreadIds(orgId),
+      authority.listInbox(orgId, { heads: true, needs_work: true }),
+      authority.listInbox(orgId, { tasks: true, needs_work: true }),
     ]);
-    if (heads.length === 0 && currentWork.length === 0 && items.length === 0) {
+    if (heads.length === 0 && taskRows.length === 0 && items.length === 0) {
       return;
     }
-    const hidden = hiddenExecutorThreadIds(items, runs);
-    const taskRows = currentWork.filter(isTaskInboxItem);
+    const hidden = new Set(hiddenIds);
     const observeRows = uniqueInboxItems([...taskRows, ...heads]);
     const bodies = await resolveInboxBodies(
       authority,
@@ -87,7 +141,6 @@ export class PersonalWorkDispatch {
         threadId,
         body,
         recipes,
-        items,
         installations,
         fallbackType: isTaskInboxItem(row) ? "task" : undefined,
       });
@@ -99,7 +152,7 @@ export class PersonalWorkDispatch {
       ) {
         continue;
       }
-      if (!isActiveWorkStatus(item.status) || !item.head_event_id) {
+      if (isOccupiedRecipeSlot(item.status) || !item.head_event_id) {
         continue;
       }
       const event = await authority.getEvent(orgId, item.head_event_id);
@@ -117,19 +170,26 @@ export class PersonalWorkDispatch {
         threadId: item.thread_id,
         body: event.content_hash ? (body.get(event.content_hash) ?? {}) : {},
         recipes,
-        items,
         installations,
       });
     }
   }
 
   async dispatchPullRecipes(): Promise<void> {
+    try {
+      await this.dispatchDuePulls();
+    } finally {
+      await this.drainAutoWork();
+    }
+  }
+
+  private async dispatchDuePulls(): Promise<void> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
     const [recipes, items] = await Promise.all([
       authority.listRecipes(orgId),
-      authority.listWorkItems(orgId),
+      authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
     ]);
     const now = new Date();
     for (const recipe of recipes) {
@@ -162,9 +222,18 @@ export class PersonalWorkDispatch {
       }
       const fireAt = recipe.next_run_at ?? nowIso;
       const unit_key = pullUnitKey(recipe.id, fireAt);
-      const existing = findWorkItemByUnitKey(items, threadId, unit_key);
+      const existing = await authority.getWorkItemByUnitKey(
+        orgId,
+        threadId,
+        unit_key,
+      );
       if (existing) {
-        await this.retryOrResume(existing, recipe);
+        await this.retryOrResume(
+          existing,
+          recipe,
+          undefined,
+          recipe.max_concurrent !== undefined,
+        );
       } else {
         const subject = workSubjectFromEvent({
           type: recipe.match.record_class === "task" ? "task" : "message",
@@ -189,7 +258,12 @@ export class PersonalWorkDispatch {
           updated_at: nowIso,
         });
         items.push(opened);
-        await this.startItem(opened, recipe);
+        await this.beginStart(
+          opened,
+          recipe,
+          undefined,
+          recipe.max_concurrent !== undefined,
+        );
       }
       await authority.putRecipe({
         ...recipe,
@@ -202,6 +276,7 @@ export class PersonalWorkDispatch {
     item: WorkItem,
     recipe: Recipe,
     evidenceText?: string,
+    schedule = false,
   ): Promise<void> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
@@ -230,7 +305,7 @@ export class PersonalWorkDispatch {
       ) {
         return;
       }
-      await this.startItem(item, recipe, evidenceText);
+      await this.beginStart(item, recipe, evidenceText, schedule);
       return;
     }
     if (
@@ -251,7 +326,58 @@ export class PersonalWorkDispatch {
       recipe_id: recipe.id,
       updated_at: new Date().toISOString(),
     });
-    await this.startItem(opened, recipe, evidenceText);
+    await this.beginStart(opened, recipe, evidenceText, schedule);
+  }
+
+  private beginStart(
+    item: WorkItem,
+    recipe: Recipe,
+    evidenceText: string | undefined,
+    schedule: boolean,
+  ): Promise<void> {
+    if (schedule && recipe.max_concurrent !== undefined) {
+      const job = this.startItem(item, recipe, evidenceText, "auto").then(
+        () => undefined,
+      );
+      this.autoWork.push(job);
+      return Promise.resolve();
+    }
+    return this.startItem(item, recipe, evidenceText, "auto").then(
+      () => undefined,
+    );
+  }
+
+  private async drainAutoWork(): Promise<void> {
+    const pending = this.autoWork.splice(0);
+    if (pending.length === 0) {
+      return;
+    }
+    await Promise.all(pending);
+  }
+
+  private async withRecipeTurn<T>(
+    recipeId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.startLanes.get(recipeId) ?? Promise.resolve();
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const settled = previous.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.startLanes.set(
+      recipeId,
+      settled.then(() => gate),
+    );
+    await settled;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   async startItem(
@@ -286,10 +412,10 @@ export class PersonalWorkDispatch {
     if (this.starting.has(item.id)) {
       return undefined;
     }
-    if (mode === "auto" && !(await this.hasStartCapacity(recipe, item.id))) {
+    const acquired = await this.acquireStart(recipe, item.id, mode);
+    if (!acquired) {
       return undefined;
     }
-    this.starting.set(item.id, recipe.id);
     try {
       return await this.startClaimedItem(
         item,
@@ -301,6 +427,37 @@ export class PersonalWorkDispatch {
     } finally {
       this.starting.delete(item.id);
     }
+  }
+
+  private async acquireStart(
+    recipe: Recipe,
+    itemId: string,
+    mode: "auto" | "manual",
+  ): Promise<boolean> {
+    if (mode !== "auto") {
+      this.starting.set(itemId, recipe.id);
+      return true;
+    }
+    if (recipe.max_concurrent === undefined) {
+      if (!(await this.hasStartCapacity(recipe, itemId))) {
+        return false;
+      }
+      if (this.starting.has(itemId)) {
+        return false;
+      }
+      this.starting.set(itemId, recipe.id);
+      return true;
+    }
+    return this.withRecipeTurn(recipe.id, async () => {
+      if (this.starting.has(itemId)) {
+        return false;
+      }
+      if (!(await this.hasStartCapacity(recipe, itemId))) {
+        return false;
+      }
+      this.starting.set(itemId, recipe.id);
+      return true;
+    });
   }
 
   private async startClaimedItem(
@@ -391,13 +548,20 @@ export class PersonalWorkDispatch {
     const items = await this.runtime
       .requireHost()
       .get("authority")
-      .listWorkItems(this.runtime.orgId());
-    let inflight = 0;
-    for (const [itemId, recipeId] of this.starting) {
-      if (recipeId === recipe.id && itemId !== exceptItemId) {
-        inflight += 1;
-      }
-    }
+      .listWorkItems(this.runtime.orgId(), {
+        statuses: [...OCCUPIED_RECIPE_STATUSES],
+      });
+    const inflight = recipeStartInflight({
+      recipeId: recipe.id,
+      starting: [...this.starting].map(([item_id, recipe_id]) => ({
+        item_id,
+        recipe_id,
+      })),
+      occupiedItemIds: items
+        .filter((row) => row.recipe_id === recipe.id)
+        .map((row) => row.id),
+      exceptItemId,
+    });
     return recipeHasStartCapacity({
       recipe,
       items,
@@ -411,7 +575,6 @@ export class PersonalWorkDispatch {
     threadId: string;
     body: InboxBody;
     recipes: Recipe[];
-    items: WorkItem[];
     installations: ConnectorInstallation[];
     fallbackType?: string;
   }): Promise<void> {
@@ -451,14 +614,19 @@ export class PersonalWorkDispatch {
       return;
     }
     const recipe = selectRecipeForSubject(input.recipes, subject);
-    const byUnit = findWorkItemByUnitKey(
-      input.items,
+    const byUnit = await authority.getWorkItemByUnitKey(
+      orgId,
       input.threadId,
       input.event.id,
     );
-    if (byUnit) {
+      if (byUnit) {
       if (recipe && recipeAllowsPushDispatch(recipe)) {
-        await this.retryOrResume(byUnit, recipe, input.body.body_text);
+        await this.retryOrResume(
+          byUnit,
+          recipe,
+          input.body.body_text,
+          recipe.max_concurrent !== undefined,
+        );
       }
       return;
     }
@@ -475,7 +643,12 @@ export class PersonalWorkDispatch {
     }
     const saved = await authority.putWorkItem(next);
     if (saved.status === "open" && recipe && recipeAllowsPushDispatch(recipe)) {
-      await this.retryOrResume(saved, recipe, input.body.body_text);
+      await this.retryOrResume(
+        saved,
+        recipe,
+        input.body.body_text,
+        recipe.max_concurrent !== undefined,
+      );
     }
   }
 
@@ -503,10 +676,6 @@ export class PersonalWorkDispatch {
 
 function failedRunCount(runs: WorkRun[]): number {
   return runs.filter((run) => run.status === "failed").length;
-}
-
-function isTaskInboxItem(row: InboxItem): boolean {
-  return row.decision.reason_codes.includes("task");
 }
 
 function uniqueInboxItems(rows: InboxItem[]): InboxItem[] {

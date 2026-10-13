@@ -11,6 +11,7 @@ import {
   isPullIntervalMs,
   isWorkDeliveryStatus,
   isWorkWriteBackState,
+  type WorkItemStatus,
 } from "@regenic/domain";
 import {
   PgSql,
@@ -94,7 +95,16 @@ export async function deleteRecipe(db: PgSql, orgId: string, id: string): Promis
     return rowCount > 0;
   }
 
-export async function listWorkItems(db: PgSql, orgId: string): Promise<WorkItem[]> {
+export async function listWorkItems(db: PgSql, orgId: string, options?: { statuses?: readonly WorkItemStatus[] }): Promise<WorkItem[]> {
+    const statuses = options?.statuses;
+    if (statuses?.length) {
+      const marks = statuses.map((_, index) => `$${index + 2}`).join(", ");
+      const rows = await db.query<WorkItemRow>(
+        `SELECT * FROM work_items WHERE org_id = $1 AND status IN (${marks}) ORDER BY updated_at DESC, id`,
+        [orgId, ...statuses],
+      );
+      return rows.map(toWorkItem);
+    }
     const rows = await db.query<WorkItemRow>(
       `SELECT * FROM work_items WHERE org_id = $1 ORDER BY updated_at DESC, id`,
       [orgId],
@@ -117,6 +127,16 @@ export async function getWorkItemByThread(db: PgSql, orgId: string, threadId: st
                 created_at DESC, id DESC
        LIMIT 1`,
       [orgId, threadId],
+    );
+    return row ? toWorkItem(row) : null;
+  }
+
+export async function getWorkItemByUnitKey(db: PgSql, orgId: string, threadId: string, unitKey: string): Promise<WorkItem | null> {
+    const row = await db.queryOne<WorkItemRow>(
+      `SELECT * FROM work_items WHERE org_id = $1 AND thread_id = $2 AND unit_key = $3
+       ORDER BY updated_at DESC, id DESC
+       LIMIT 1`,
+      [orgId, threadId, unitKey],
     );
     return row ? toWorkItem(row) : null;
   }
@@ -189,6 +209,24 @@ export async function getActiveWorkRun(db: PgSql, orgId: string, workItemId: str
     return row ? toWorkRun(row) : null;
   }
 
+export async function listHiddenExecutorThreadIds(db: PgSql, orgId: string): Promise<string[]> {
+    const rows = await db.query<{ thread_id: string }>(
+      `
+        SELECT DISTINCT r.agent_thread_id AS thread_id
+        FROM work_runs r
+        WHERE r.org_id = $1
+          AND r.agent_thread_id IS NOT NULL
+          AND r.agent_thread_id <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM work_items w
+            WHERE w.org_id = r.org_id AND w.thread_id = r.agent_thread_id
+          )
+      `,
+      [orgId],
+    );
+    return rows.map((row) => row.thread_id);
+  }
+
 export async function putWorkRun(db: PgSql, run: WorkRun): Promise<WorkRun> {
     await db.execute(
       `
@@ -226,6 +264,39 @@ export async function listWorkDeliveries(db: PgSql, orgId: string): Promise<Work
     const rows = await db.query<WorkDeliveryRow>(
       `SELECT * FROM work_deliveries WHERE org_id = $1 ORDER BY updated_at DESC, id`,
       [orgId],
+    );
+    return rows.map(toWorkDelivery);
+  }
+
+export async function listDueWorkDeliveries(db: PgSql, orgId: string, now: string): Promise<WorkDelivery[]> {
+    const rows = await db.query<WorkDeliveryRow>(
+      `
+        SELECT * FROM work_deliveries
+        WHERE org_id = $1
+          AND payload_json IS NOT NULL
+          AND status NOT IN ('acked', 'dead')
+          AND (
+            (
+              status = 'queued'
+              AND (
+                write_back IS NULL
+                OR write_back <> 'failed'
+                OR next_retry_at IS NULL
+                OR next_retry_at <= $2
+              )
+            )
+            OR (
+              write_back = 'failed'
+              AND (next_retry_at IS NULL OR next_retry_at <= $2)
+            )
+            OR (
+              status IN ('running', 'write_back')
+              AND (lease_expires_at IS NULL OR lease_expires_at <= $2)
+            )
+          )
+        ORDER BY updated_at, id
+      `,
+      [orgId, now],
     );
     return rows.map(toWorkDelivery);
   }

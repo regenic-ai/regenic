@@ -12,6 +12,7 @@ import {
   isPullIntervalMs,
   isWorkDeliveryStatus,
   isWorkWriteBackState,
+  type WorkItemStatus,
 } from "@regenic/domain";
 
 export async function listRecipes(db: Database.Database, orgId: string): Promise<Recipe[]> {
@@ -86,12 +87,19 @@ export async function deleteRecipe(db: Database.Database, orgId: string, id: str
     return result.changes > 0;
   }
 
-export async function listWorkItems(db: Database.Database, orgId: string): Promise<WorkItem[]> {
-    const rows = db
-      .prepare(
-        `SELECT * FROM work_items WHERE org_id = ? ORDER BY updated_at DESC, id`,
-      )
-      .all(orgId) as WorkItemRow[];
+export async function listWorkItems(db: Database.Database, orgId: string, options?: { statuses?: readonly WorkItemStatus[] }): Promise<WorkItem[]> {
+    const statuses = options?.statuses;
+    const rows = statuses?.length
+      ? (db
+          .prepare(
+            `SELECT * FROM work_items WHERE org_id = ? AND status IN (${statuses.map(() => "?").join(", ")}) ORDER BY updated_at DESC, id`,
+          )
+          .all(orgId, ...statuses) as WorkItemRow[])
+      : (db
+          .prepare(
+            `SELECT * FROM work_items WHERE org_id = ? ORDER BY updated_at DESC, id`,
+          )
+          .all(orgId) as WorkItemRow[]);
     return rows.map(toWorkItem);
   }
 
@@ -111,6 +119,17 @@ export async function getWorkItemByThread(db: Database.Database, orgId: string, 
          LIMIT 1`,
       )
       .get(orgId, threadId) as WorkItemRow | undefined;
+    return row ? toWorkItem(row) : null;
+  }
+
+export async function getWorkItemByUnitKey(db: Database.Database, orgId: string, threadId: string, unitKey: string): Promise<WorkItem | null> {
+    const row = db
+      .prepare(
+        `SELECT * FROM work_items WHERE org_id = ? AND thread_id = ? AND unit_key = ?
+         ORDER BY updated_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(orgId, threadId, unitKey) as WorkItemRow | undefined;
     return row ? toWorkItem(row) : null;
   }
 
@@ -186,6 +205,25 @@ export async function getActiveWorkRun(db: Database.Database, orgId: string, wor
     return row ? toWorkRun(row) : null;
   }
 
+export async function listHiddenExecutorThreadIds(db: Database.Database, orgId: string): Promise<string[]> {
+    const rows = db
+      .prepare(
+        `
+          SELECT DISTINCT r.agent_thread_id AS thread_id
+          FROM work_runs r
+          WHERE r.org_id = ?
+            AND r.agent_thread_id IS NOT NULL
+            AND r.agent_thread_id <> ''
+            AND NOT EXISTS (
+              SELECT 1 FROM work_items w
+              WHERE w.org_id = r.org_id AND w.thread_id = r.agent_thread_id
+            )
+        `,
+      )
+      .all(orgId) as Array<{ thread_id: string }>;
+    return rows.map((row) => row.thread_id);
+  }
+
 export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<WorkRun> {
     
     db
@@ -227,6 +265,40 @@ export async function listWorkDeliveries(db: Database.Database, orgId: string): 
         `SELECT * FROM work_deliveries WHERE org_id = ? ORDER BY updated_at DESC, id`,
       )
       .all(orgId) as WorkDeliveryRow[];
+    return rows.map(toWorkDelivery);
+  }
+
+export async function listDueWorkDeliveries(db: Database.Database, orgId: string, now: string): Promise<WorkDelivery[]> {
+    const rows = db
+      .prepare(
+        `
+          SELECT * FROM work_deliveries
+          WHERE org_id = ?
+            AND payload_json IS NOT NULL
+            AND status NOT IN ('acked', 'dead')
+            AND (
+              (
+                status = 'queued'
+                AND (
+                  write_back IS NULL
+                  OR write_back <> 'failed'
+                  OR next_retry_at IS NULL
+                  OR next_retry_at <= ?
+                )
+              )
+              OR (
+                write_back = 'failed'
+                AND (next_retry_at IS NULL OR next_retry_at <= ?)
+              )
+              OR (
+                status IN ('running', 'write_back')
+                AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+              )
+            )
+          ORDER BY updated_at, id
+        `,
+      )
+      .all(orgId, now, now, now) as WorkDeliveryRow[];
     return rows.map(toWorkDelivery);
   }
 

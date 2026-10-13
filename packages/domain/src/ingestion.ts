@@ -265,6 +265,17 @@ export interface EventListQuery {
 
 export interface InboxQuery extends EventListQuery {
   heads?: boolean;
+  /**
+   * With `heads` or `tasks`, only rows that still need a work decision.
+   * A row already tied to a settled work item stays in the inbox for people.
+   */
+  needs_work?: boolean;
+  /**
+   * Current-work rows whose arrangement reason is a task.
+   * Conversation faces stay on `heads`. Background observe reads the two
+   * lists separately so a task is not a scan of every current-work row.
+   */
+  tasks?: boolean;
   siblings?: boolean;
   /** Default `shown`. `hidden` is the folded list, not deleted Events. */
   list?: "shown" | "hidden";

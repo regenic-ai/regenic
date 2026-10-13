@@ -26,6 +26,12 @@ export const ACTIVE_WORK_STATUSES: readonly WorkItemStatus[] = [
   "waiting_human",
 ];
 
+/** Statuses a background observe pass may still retry. Settled rows stay in the table. */
+export const WORK_OBSERVE_AGAIN_STATUSES: readonly WorkItemStatus[] = [
+  "open",
+  "failed",
+];
+
 export function isActiveWorkStatus(status: WorkItemStatus): boolean {
   return ACTIVE_WORK_STATUSES.includes(status);
 }
@@ -180,12 +186,20 @@ export interface WorkStore {
   getRecipe(orgId: string, id: string): Promise<Recipe | null>;
   putRecipe(recipe: Recipe): Promise<Recipe>;
   deleteRecipe(orgId: string, id: string): Promise<boolean>;
-  listWorkItems(orgId: string): Promise<WorkItem[]>;
+  listWorkItems(
+    orgId: string,
+    options?: { statuses?: readonly WorkItemStatus[] },
+  ): Promise<WorkItem[]>;
   getWorkItem(orgId: string, id: string): Promise<WorkItem | null>;
   /** Foreground job on the session, not a unique thread identity. */
   getWorkItemByThread(
     orgId: string,
     threadId: string,
+  ): Promise<WorkItem | null>;
+  getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
   ): Promise<WorkItem | null>;
   putWorkItem(item: WorkItem): Promise<WorkItem>;
   listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]>;
@@ -194,8 +208,12 @@ export interface WorkStore {
     orgId: string,
     workItemId: string,
   ): Promise<WorkRun | null>;
+  /** Executor sessions that are not themselves a work thread. */
+  listHiddenExecutorThreadIds(orgId: string): Promise<string[]>;
   putWorkRun(run: WorkRun): Promise<WorkRun>;
   listWorkDeliveries(orgId: string): Promise<WorkDelivery[]>;
+  /** Deliveries a flush tick may still send. Acked and dead rows stay out. */
+  listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]>;
   getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null>;
   getWorkDeliveryByItem(
     orgId: string,

@@ -162,8 +162,11 @@ export function normalizeRecipeMaxConcurrent(value: unknown): number | undefined
   return Math.min(Math.floor(n), RECIPE_MAX_CONCURRENT_CAP);
 }
 
+/** Statuses that already use a recipe concurrency slot. */
+export const OCCUPIED_RECIPE_STATUSES = ["running", "waiting_human"] as const satisfies readonly WorkItemStatus[];
+
 export function isOccupiedRecipeSlot(status: WorkItemStatus): boolean {
-  return status === "running" || status === "waiting_human";
+  return (OCCUPIED_RECIPE_STATUSES as readonly WorkItemStatus[]).includes(status);
 }
 
 export function occupiedRecipeSlots(
@@ -177,6 +180,30 @@ export function occupiedRecipeSlots(
       item.id !== exceptItemId &&
       isOccupiedRecipeSlot(item.status),
   ).length;
+}
+
+/**
+ * Local reservations that are not already counted as occupied rows.
+ * A start that has been written as running occupies one slot, not two.
+ */
+export function recipeStartInflight(input: {
+  recipeId: string;
+  starting: readonly { item_id: string; recipe_id: string }[];
+  occupiedItemIds: readonly string[];
+  exceptItemId?: string;
+}): number {
+  const occupied = new Set(input.occupiedItemIds);
+  let count = 0;
+  for (const slot of input.starting) {
+    if (slot.recipe_id !== input.recipeId || slot.item_id === input.exceptItemId) {
+      continue;
+    }
+    if (occupied.has(slot.item_id)) {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
 }
 
 export function recipeHasStartCapacity(input: {

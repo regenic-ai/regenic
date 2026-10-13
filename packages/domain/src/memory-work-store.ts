@@ -8,6 +8,8 @@ import type {
   WorkStore,
 } from "./work";
 import { isActiveWorkStatus } from "./work";
+import type { WorkItemStatus } from "./work";
+import { shouldFlushDelivery } from "./work-delivery";
 
 export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly recipes = new Map<string, Recipe>();
@@ -42,9 +44,17 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     return true;
   }
 
-  async listWorkItems(orgId: string): Promise<WorkItem[]> {
+  async listWorkItems(
+    orgId: string,
+    options?: { statuses?: readonly WorkItemStatus[] },
+  ): Promise<WorkItem[]> {
+    const allowed = options?.statuses ? new Set(options.statuses) : null;
     return [...this.items.values()]
-      .filter((item) => item.org_id === orgId)
+      .filter(
+        (item) =>
+          item.org_id === orgId &&
+          (allowed === null || allowed.has(item.status)),
+      )
       .map((item) => ({ ...item }));
   }
 
@@ -60,6 +70,20 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const found = currentJobOnSession(
       [...this.items.values()].filter((item) => item.org_id === orgId),
       threadId,
+    );
+    return found ? { ...found } : null;
+  }
+
+  async getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
+  ): Promise<WorkItem | null> {
+    const found = [...this.items.values()].find(
+      (item) =>
+        item.org_id === orgId &&
+        item.thread_id === threadId &&
+        item.unit_key === unitKey,
     );
     return found ? { ...found } : null;
   }
@@ -105,9 +129,39 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     return cloneRun(run);
   }
 
+  async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {
+    const sources = new Set(
+      [...this.items.values()]
+        .filter((item) => item.org_id === orgId)
+        .map((item) => item.thread_id),
+    );
+    const hidden = new Set<string>();
+    for (const run of this.runs.values()) {
+      if (
+        run.org_id === orgId &&
+        run.agent_thread_id &&
+        !sources.has(run.agent_thread_id)
+      ) {
+        hidden.add(run.agent_thread_id);
+      }
+    }
+    return [...hidden];
+  }
+
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return [...this.deliveries.values()]
       .filter((item) => item.org_id === orgId)
+      .map((item) => cloneDelivery(item));
+  }
+
+  async listDueWorkDeliveries(
+    orgId: string,
+    now: string,
+  ): Promise<WorkDelivery[]> {
+    return [...this.deliveries.values()]
+      .filter(
+        (item) => item.org_id === orgId && shouldFlushDelivery(item, now),
+      )
       .map((item) => cloneDelivery(item));
   }
 
