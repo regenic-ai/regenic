@@ -1267,10 +1267,29 @@ export async function dismissWorkItem(id: string): Promise<void> {
   }
 }
 
-export async function fetchContextArtifacts(): Promise<unknown> {
-  const response = await fetch(`${origin()}/v1/me/context/artifacts`);
+export async function fetchContextArtifactSummaries(): Promise<unknown> {
+  const response = await fetch(`${origin()}/v1/me/context/artifact-summaries`);
   if (!response.ok) {
     throw new Error(`context artifacts ${response.status}`);
+  }
+  return response.json() as Promise<unknown>;
+}
+
+export async function fetchContextArtifactRecord(
+  id: string,
+  range?: { offset: number; limit: number },
+): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (range) {
+    params.set("offset", String(range.offset));
+    params.set("limit", String(range.limit));
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await fetch(
+    `${origin()}/v1/me/context/artifacts/${encodeURIComponent(id)}/record${query}`,
+  );
+  if (!response.ok) {
+    throw new Error(`context record ${response.status}`);
   }
   return response.json() as Promise<unknown>;
 }

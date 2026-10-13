@@ -9,11 +9,14 @@ import type {
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
+  ContextArtifactSummary,
   SyncCatalogSnapshot,
 } from "@regenic/domain";
 import {
   validateContextArtifact,
   canonicalContextJson,
+  contextArtifactPreview,
+  contextArtifactSummaryFromPreview,
   validateContextArtifactQuery,
   validateContextSnapshot,
   validateContextBundle,
@@ -52,8 +55,8 @@ export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise
       "artifact",
       `
         INSERT INTO context_artifacts (
-          org_id, id, kind, status, generation, recorded_at, payload_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          org_id, id, kind, status, generation, recorded_at, payload_json, preview_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `,
       [
         artifact.org_id,
@@ -63,6 +66,7 @@ export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise
         artifact.generation,
         artifact.recorded_at,
         payload,
+        canonicalContextJson(contextArtifactPreview(artifact)),
       ],
     );
     await db.execute(
@@ -81,51 +85,104 @@ export async function getArtifact(db: PgSql, orgId: string, id: string): Promise
   }
 
 export async function listArtifacts(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifact[]> {
-    const validation = validateContextArtifactQuery(query);
-    requireContextValue(validation, "artifact query");
-    const stableQuery = validation.success ? validation.data : query;
-    const params: unknown[] = [];
-    const p = (value: unknown): string => {
-      params.push(value);
-      return `$${params.length}`;
-    };
-    const clauses = [`a.org_id = ${p(stableQuery.org_id)}`];
-    if (stableQuery.kinds) {
-      if (stableQuery.kinds.length === 0) {
-        return [];
-      }
-      clauses.push(
-        `a.kind IN (${stableQuery.kinds.map((kind) => p(kind)).join(", ")})`,
-      );
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
     }
-    if (stableQuery.statuses) {
-      if (stableQuery.statuses.length === 0) {
-        return [];
-      }
-      clauses.push(
-        `s.status IN (${stableQuery.statuses.map((status) => p(status)).join(", ")})`,
-      );
-    }
-    if (stableQuery.generation) {
-      clauses.push(`a.generation = ${p(stableQuery.generation)}`);
-    }
-    const limit = stableQuery.limit;
-    const limitSql =
-      typeof limit === "number" && Number.isFinite(limit)
-        ? `LIMIT ${p(limit)}`
-        : "";
     const rows = await db.query<{ payload_json: unknown; lifecycle_status: ContextArtifact["status"] }>(
       `
         SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
         JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
-        WHERE ${clauses.join(" AND ")}
+        WHERE ${parts.clauses.join(" AND ")}
         ORDER BY a.recorded_at ASC, a.id ASC
-        ${limitSql}
+        ${parts.limitSql}
       `,
-      params,
+      parts.params,
     );
     return rows.map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status }));
   }
+
+export async function listArtifactSummaries(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
+    }
+    const rows = await db.query<{
+      id: string;
+      kind: string;
+      recorded_at: unknown;
+      preview_json: unknown;
+      lifecycle_status: string;
+    }>(
+      `
+        SELECT a.id, a.kind, a.recorded_at, a.preview_json, s.status AS lifecycle_status
+        FROM context_artifacts a
+        JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
+        WHERE ${parts.clauses.join(" AND ")}
+      `,
+      parts.params,
+    );
+    return rows
+      .map((row) => ({
+        recorded_at: toIso(row.recorded_at),
+        summary: contextArtifactSummaryFromPreview(
+          {
+            id: row.id,
+            kind: row.kind,
+            status: row.lifecycle_status,
+            recorded_at: toIso(row.recorded_at),
+          },
+          row.preview_json,
+        ),
+      }))
+      .sort((left, right) => compareRecordedId(left.recorded_at, left.summary.id, right.recorded_at, right.summary.id))
+      .slice(0, parts.limit)
+      .map((row) => row.summary);
+  }
+
+function artifactListParts(query: ContextArtifactQuery): {
+  clauses: string[];
+  params: unknown[];
+  limit: number;
+  limitSql: string;
+} | null {
+  const validation = validateContextArtifactQuery(query);
+  requireContextValue(validation, "artifact query");
+  const stableQuery = validation.success ? validation.data : query;
+  const params: unknown[] = [];
+  const p = (value: unknown): string => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const clauses = [`a.org_id = ${p(stableQuery.org_id)}`];
+  if (stableQuery.kinds) {
+    if (stableQuery.kinds.length === 0) {
+      return null;
+    }
+    clauses.push(`a.kind IN (${stableQuery.kinds.map((kind) => p(kind)).join(", ")})`);
+  }
+  if (stableQuery.statuses) {
+    if (stableQuery.statuses.length === 0) {
+      return null;
+    }
+    clauses.push(`s.status IN (${stableQuery.statuses.map((status) => p(status)).join(", ")})`);
+  }
+  if (stableQuery.generation) {
+    clauses.push(`a.generation = ${p(stableQuery.generation)}`);
+  }
+  const limit = stableQuery.limit ?? Number.POSITIVE_INFINITY;
+  const limitSql =
+    typeof stableQuery.limit === "number" && Number.isFinite(stableQuery.limit)
+      ? `LIMIT ${p(stableQuery.limit)}`
+      : "";
+  return { clauses, params, limit, limitSql };
+}
+
+function compareRecordedId(leftAt: string, leftId: string, rightAt: string, rightId: string): number {
+  const leftKey = `${leftAt}\u0000${leftId}`;
+  const rightKey = `${rightAt}\u0000${rightId}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
 
 export async function getArtifactState(db: PgSql, orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
     const row = await db.queryOne<ArtifactStateRow>(

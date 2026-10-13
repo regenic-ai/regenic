@@ -17,6 +17,7 @@ import type {
   ContextAuthorityRead,
   ContextArtifact,
   ContextArtifactQuery,
+  ContextArtifactSummary,
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
@@ -151,6 +152,7 @@ import {
   getCheckpoint,
   getSnapshot,
   listArtifacts,
+  listArtifactSummaries,
   putArtifact,
   putBundle,
   putCheckpoint,
@@ -453,6 +455,10 @@ export class SqliteAuthorityStore
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
     return listArtifacts(this.database, query);
+  }
+
+  async listArtifactSummaries(query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
+    return listArtifactSummaries(this.database, query);
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {

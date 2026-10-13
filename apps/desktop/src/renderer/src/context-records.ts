@@ -3,36 +3,56 @@ export interface ContextMessageView {
   occurred_at?: string;
 }
 
-export interface ContextRecordView {
+export interface ContextRecordSummary {
   id: string;
   kind: string;
   status: string;
   recorded_at: string;
-  thread_id?: string;
   title: string;
   message_count: number;
-  messages: ContextMessageView[];
+  thread_id?: string;
 }
 
-const TITLE_LIMIT = 80;
+export interface ContextRecordPage {
+  messages: ContextMessageView[];
+  message_offset: number;
+  message_total: number;
+}
 
-export function contextRecordsFromArtifacts(input: unknown): ContextRecordView[] {
+export function contextSummariesFromResponse(input: unknown): ContextRecordSummary[] {
   if (!Array.isArray(input)) {
     return [];
   }
-  const records: ContextRecordView[] = [];
+  const records: ContextRecordSummary[] = [];
   for (const item of input) {
-    const record = contextRecordFromArtifact(item);
+    const record = contextSummaryFromRow(item);
     if (record) {
       records.push(record);
     }
   }
-  records.sort((left, right) => right.recorded_at.localeCompare(left.recorded_at) || right.id.localeCompare(left.id));
+  records.sort((left, right) => compareNewest(left, right));
   return records;
 }
 
-function contextRecordFromArtifact(input: unknown): ContextRecordView | null {
-  if (!input || typeof input !== "object") {
+export function contextRecordPageFromResponse(input: unknown): ContextRecordPage | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+  const row = input as Record<string, unknown>;
+  const offset = countValue(row.message_offset);
+  const total = countValue(row.message_total);
+  if (offset === undefined || total === undefined) {
+    return null;
+  }
+  return {
+    messages: contextMessages(row.messages),
+    message_offset: offset,
+    message_total: total,
+  };
+}
+
+function contextSummaryFromRow(input: unknown): ContextRecordSummary | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
     return null;
   }
   const row = input as Record<string, unknown>;
@@ -40,26 +60,17 @@ function contextRecordFromArtifact(input: unknown): ContextRecordView | null {
   if (!id) {
     return null;
   }
-  const attrs =
-    row.attrs && typeof row.attrs === "object" && !Array.isArray(row.attrs)
-      ? (row.attrs as Record<string, unknown>)
-      : {};
-  const messages = contextMessages(attrs.messages);
-  const threadId = typeof attrs.thread_id === "string" ? attrs.thread_id.trim() : "";
-  const counted = attrs.message_count;
-  const messageCount =
-    typeof counted === "number" && Number.isFinite(counted)
-      ? counted
-      : messages.length;
+  const threadId = typeof row.thread_id === "string" ? row.thread_id.trim() : "";
+  const kind = typeof row.kind === "string" && row.kind.trim() ? row.kind : "context";
+  const title = typeof row.title === "string" && row.title.trim() ? row.title.trim() : kind;
   return {
     id,
-    kind: typeof row.kind === "string" && row.kind.trim() ? row.kind : "context",
+    kind,
     status: typeof row.status === "string" ? row.status : "",
     recorded_at: typeof row.recorded_at === "string" ? row.recorded_at : "",
+    title,
+    message_count: countValue(row.message_count) ?? 0,
     ...(threadId ? { thread_id: threadId } : {}),
-    title: contextRecordTitle(messages, threadId),
-    message_count: messageCount,
-    messages,
   };
 }
 
@@ -69,7 +80,7 @@ function contextMessages(input: unknown): ContextMessageView[] {
   }
   const messages: ContextMessageView[] = [];
   for (const item of input) {
-    if (!item || typeof item !== "object") {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
       continue;
     }
     const row = item as Record<string, unknown>;
@@ -83,20 +94,19 @@ function contextMessages(input: unknown): ContextMessageView[] {
       ...(occurredAt ? { occurred_at: occurredAt } : {}),
     });
   }
-  messages.sort((left, right) =>
-    (left.occurred_at ?? "").localeCompare(right.occurred_at ?? ""),
-  );
   return messages;
 }
 
-function contextRecordTitle(
-  messages: readonly ContextMessageView[],
-  threadId: string,
-): string {
-  const newest = [...messages].reverse().find((message) => message.text);
-  const line = newest?.text.replace(/\s+/g, " ").trim() ?? "";
-  if (line) {
-    return line.length > TITLE_LIMIT ? `${line.slice(0, TITLE_LIMIT)}…` : line;
+function countValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function compareNewest(left: ContextRecordSummary, right: ContextRecordSummary): number {
+  if (left.recorded_at !== right.recorded_at) {
+    return left.recorded_at < right.recorded_at ? 1 : -1;
   }
-  return threadId || "context";
+  if (left.id !== right.id) {
+    return left.id < right.id ? 1 : -1;
+  }
+  return 0;
 }

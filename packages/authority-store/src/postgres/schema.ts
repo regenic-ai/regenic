@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 44;
+export const PG_SCHEMA_VERSION = 45;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -459,6 +459,30 @@ CREATE INDEX IF NOT EXISTS events_parent_event_idx
   WHERE parent_event_id IS NOT NULL;
 `,
   },
+  {
+    version: 45,
+    sql: `
+ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '{}';
+UPDATE context_artifacts SET preview_json = (
+  jsonb_build_object(
+    'thread_id', payload_json #> '{attrs,thread_id}',
+    'utc_date', payload_json #> '{attrs,utc_date}',
+    'last_text', CASE
+      WHEN jsonb_typeof(payload_json #> '{attrs,messages}') = 'array'
+      THEN (payload_json #> '{attrs,messages}')->-1->'text'
+      ELSE NULL
+    END,
+    'message_count', payload_json #> '{attrs,message_count}',
+    'item_count', payload_json #> '{attrs,item_count}',
+    'stored_message_length', CASE
+      WHEN jsonb_typeof(payload_json #> '{attrs,messages}') = 'array'
+      THEN to_jsonb(jsonb_array_length(payload_json #> '{attrs,messages}'))
+      ELSE NULL
+    END
+  )
+)::text;
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -760,6 +784,7 @@ CREATE TABLE context_artifacts (
   generation TEXT NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   payload_json JSONB NOT NULL,
+  preview_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (org_id, id)
 );
 

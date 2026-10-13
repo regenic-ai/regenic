@@ -23,6 +23,10 @@ import {
   detectStandardHealth,
   type ContextBundle,
   type ContextArtifact,
+  type ContextArtifactRecord,
+  type ContextArtifactSummary,
+  CONTEXT_RECORD_PAGE_MAX,
+  readContextArtifactRecord,
   type ContextReplayRequest,
   type ContextRequest,
   type ContextSnapshot,
@@ -118,6 +122,33 @@ export class PersonalContextService {
   async listArtifacts(): Promise<ContextArtifact[]> {
     return this.runtime.requireHost().get("context-artifacts").listArtifacts({
       org_id: this.runtime.orgId(),
+    });
+  }
+
+  async listArtifactSummaries(): Promise<ContextArtifactSummary[]> {
+    return this.runtime.requireHost().get("context-artifacts").listArtifactSummaries({
+      org_id: this.runtime.orgId(),
+    });
+  }
+
+  async getArtifactRecord(
+    artifactId: string,
+    offset?: string,
+    limit?: string,
+  ): Promise<ContextArtifactRecord> {
+    const id = requiredString(artifactId, "artifact_id");
+    const parsedOffset = optionalBoundedInt(offset, "offset", 1_000_000_000, 0);
+    const parsedLimit = optionalBoundedInt(limit, "limit", CONTEXT_RECORD_PAGE_MAX, 1);
+    const artifact = await this.runtime
+      .requireHost()
+      .get("context-artifacts")
+      .getArtifact(this.runtime.orgId(), id);
+    if (!artifact) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context record was not found");
+    }
+    return readContextArtifactRecord(artifact, {
+      ...(parsedOffset === undefined ? {} : { offset: parsedOffset }),
+      ...(parsedLimit === undefined ? {} : { limit: parsedLimit }),
     });
   }
 
@@ -1355,6 +1386,33 @@ function modelError(error: unknown): PersonalContextError {
     HttpStatus.BAD_GATEWAY,
     "Model provider request failed",
   );
+}
+
+function optionalBoundedInt(
+  value: string | undefined,
+  name: string,
+  max: number,
+  min: number,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new PersonalContextError(
+      "invalid_request",
+      HttpStatus.BAD_REQUEST,
+      `${name} must be an integer`,
+    );
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new PersonalContextError(
+      "invalid_request",
+      HttpStatus.BAD_REQUEST,
+      `${name} is out of range`,
+    );
+  }
+  return parsed;
 }
 
 function requiredString(value: unknown, name: string): string {

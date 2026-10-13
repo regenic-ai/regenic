@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 43;
+export const LATEST_SCHEMA_VERSION = 44;
 
 export const MIGRATIONS = [
   {
@@ -960,6 +960,21 @@ export const MIGRATIONS = [
       CREATE INDEX events_parent_event_idx
         ON events (parent_event_id)
         WHERE parent_event_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 44,
+    sql: `
+      ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '';
+      UPDATE context_artifacts
+      SET preview_json = json_object(
+        'thread_id', json_extract(payload_json, '$.attrs.thread_id'),
+        'utc_date', json_extract(payload_json, '$.attrs.utc_date'),
+        'last_text', json_extract(payload_json, '$.attrs.messages[#-1].text'),
+        'message_count', json_extract(payload_json, '$.attrs.message_count'),
+        'item_count', json_extract(payload_json, '$.attrs.item_count'),
+        'stored_message_length', json_array_length(json_extract(payload_json, '$.attrs.messages'))
+      );
     `,
   },
 ] as const;

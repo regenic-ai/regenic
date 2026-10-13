@@ -809,29 +809,56 @@ button.store-stat:focus-visible {
 }
 
 .context-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(720px, 100%);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.context-dialog .dialog-head {
+  flex: none;
+  padding-bottom: 12px;
 }
 
 .context-records {
   display: grid;
-  gap: 4px;
-  padding: 8px 16px 16px;
+  align-content: start;
+  gap: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 16px 16px;
 }
 
 .context-record {
   border-top: 1px solid var(--line);
-  padding: 10px 0;
+  min-width: 0;
 }
 
-.context-record summary {
+.context-record-toggle {
   display: grid;
   gap: 4px;
+  width: 100%;
+  margin: 0;
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
 .context-record-title {
+  overflow: hidden;
   color: var(--text);
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-record.is-superseded .context-record-title {
+  color: var(--muted);
 }
 
 .context-record-meta,
@@ -843,12 +870,24 @@ button.store-stat:focus-visible {
 .context-record-body {
   display: grid;
   gap: 10px;
-  margin-top: 10px;
+  margin: 0 0 12px;
+}
+
+.context-earlier {
+  justify-self: start;
+}
+
+.context-message-list {
+  display: grid;
+  gap: 10px;
+  max-height: 280px;
+  overflow: auto;
 }
 
 .context-message {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.45;
 }
 

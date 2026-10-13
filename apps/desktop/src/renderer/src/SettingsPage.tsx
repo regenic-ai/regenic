@@ -57,16 +57,8 @@ function storeHasData(store: StoreView): boolean {
   );
 }
 
-function contextRecordCount(
-  store: Pick<
-    StoreView,
-    "context_artifacts" | "context_snapshots" | "context_bundles" | "context_checkpoints"
-  >,
-): number {
-  return store.context_artifacts +
-    store.context_snapshots +
-    store.context_bundles +
-    store.context_checkpoints;
+function contextRecordCount(store: Pick<StoreView, "context_artifacts">): number {
+  return store.context_artifacts;
 }
 
 export function SettingsPage({
@@ -662,14 +654,7 @@ export function SettingsPage({
           />
         </div>
         {contextOpen ? (
-          <ContextRecordsDialog
-            otherCount={
-              currentStore.context_snapshots +
-              currentStore.context_bundles +
-              currentStore.context_checkpoints
-            }
-            onClose={() => setContextOpen(false)}
-          />
+          <ContextRecordsDialog onClose={() => setContextOpen(false)} />
         ) : null}
         {!canClear ? <p className="muted">{t("settings.storeEmpty")}</p> : null}
         {confirming ? (

@@ -1,5 +1,6 @@
 import type { ActorRef } from "./actor";
 import type { ContextArtifact, ContextArtifactKind, ContextArtifactStatus } from "./context-artifact";
+import type { ContextArtifactSummary } from "./context-artifact-summary";
 import type {
   ContextArtifactDecision,
   ContextArtifactLifecycleStore,
@@ -60,6 +61,7 @@ export interface ContextArtifactStore extends ContextArtifactLifecycleStore {
   putArtifact(artifact: ContextArtifact): Promise<ContextArtifact>;
   getArtifact(orgId: string, id: string): Promise<ContextArtifact | null>;
   listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]>;
+  listArtifactSummaries(query: ContextArtifactQuery): Promise<ContextArtifactSummary[]>;
   getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null>;
   decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState>;
   supersedeArtifact(input: ContextArtifactSupersession): Promise<{

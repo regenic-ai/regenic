@@ -10,11 +10,14 @@ import type {
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
+  ContextArtifactSummary,
   SyncCatalogSnapshot,
 } from "@regenic/domain";
 import {
   validateContextArtifact,
   canonicalContextJson,
+  contextArtifactPreview,
+  contextArtifactSummaryFromPreview,
   validateContextArtifactQuery,
   validateContextSnapshot,
   validateContextBundle,
@@ -37,8 +40,8 @@ export async function putArtifact(db: Database.Database, artifact: ContextArtifa
       "artifact",
       `
         INSERT INTO context_artifacts (
-          org_id, id, kind, status, generation, recorded_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          org_id, id, kind, status, generation, recorded_at, payload_json, preview_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         artifact.org_id,
@@ -48,6 +51,7 @@ export async function putArtifact(db: Database.Database, artifact: ContextArtifa
         artifact.generation,
         artifact.recorded_at,
         payload,
+        canonicalContextJson(contextArtifactPreview(artifact)),
       ],
     );
     db.prepare(
@@ -69,43 +73,94 @@ export async function getArtifact(db: Database.Database, orgId: string, id: stri
   }
 
 export async function listArtifacts(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifact[]> {
-    const validation = validateContextArtifactQuery(query);
-    requireContextValue(validation, "artifact query");
-    const stableQuery = validation.success ? validation.data : query;
-    const clauses = ["a.org_id = ?"];
-    const params: unknown[] = [stableQuery.org_id];
-    if (stableQuery.kinds) {
-      if (stableQuery.kinds.length === 0) {
-        return [];
-      }
-      clauses.push(`a.kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
-      params.push(...stableQuery.kinds);
-    }
-    if (stableQuery.statuses) {
-      if (stableQuery.statuses.length === 0) {
-        return [];
-      }
-      clauses.push(`s.status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
-      params.push(...stableQuery.statuses);
-    }
-    if (stableQuery.generation) {
-      clauses.push("a.generation = ?");
-      params.push(stableQuery.generation);
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
     }
     const rows = db
       .prepare(
         `
           SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
           JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
-          WHERE ${clauses.join(" AND ")}
+          WHERE ${parts.clauses.join(" AND ")}
         `,
       )
-      .all(...params) as Array<{ payload_json: string; lifecycle_status: ContextArtifact["status"] }>;
+      .all(...parts.params) as Array<{ payload_json: string; lifecycle_status: ContextArtifact["status"] }>;
     return rows
       .map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status as ContextArtifact["status"] }))
       .sort((left, right) => compareContextArtifactOrder(left, right))
-      .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY);
+      .slice(0, parts.limit);
   }
+
+export async function listArtifactSummaries(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
+    }
+    const rows = db
+      .prepare(
+        `
+          SELECT a.id, a.kind, a.recorded_at, a.preview_json, s.status AS lifecycle_status
+          FROM context_artifacts a
+          JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
+          WHERE ${parts.clauses.join(" AND ")}
+        `,
+      )
+      .all(...parts.params) as Array<{
+        id: string;
+        kind: string;
+        recorded_at: string;
+        preview_json: string;
+        lifecycle_status: string;
+      }>;
+    return rows
+      .sort((left, right) => compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id))
+      .slice(0, parts.limit)
+      .map((row) => contextArtifactSummaryFromPreview(
+        {
+          id: row.id,
+          kind: row.kind,
+          status: row.lifecycle_status,
+          recorded_at: row.recorded_at,
+        },
+        row.preview_json,
+      ));
+  }
+
+function artifactListParts(query: ContextArtifactQuery): {
+  clauses: string[];
+  params: unknown[];
+  limit: number;
+} | null {
+  const validation = validateContextArtifactQuery(query);
+  requireContextValue(validation, "artifact query");
+  const stableQuery = validation.success ? validation.data : query;
+  const clauses = ["a.org_id = ?"];
+  const params: unknown[] = [stableQuery.org_id];
+  if (stableQuery.kinds) {
+    if (stableQuery.kinds.length === 0) {
+      return null;
+    }
+    clauses.push(`a.kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
+    params.push(...stableQuery.kinds);
+  }
+  if (stableQuery.statuses) {
+    if (stableQuery.statuses.length === 0) {
+      return null;
+    }
+    clauses.push(`s.status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
+    params.push(...stableQuery.statuses);
+  }
+  if (stableQuery.generation) {
+    clauses.push("a.generation = ?");
+    params.push(stableQuery.generation);
+  }
+  return {
+    clauses,
+    params,
+    limit: stableQuery.limit ?? Number.POSITIVE_INFINITY,
+  };
+}
 
 export async function getArtifactState(db: Database.Database, orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
     const row = db.prepare(
@@ -370,8 +425,12 @@ function requireContextValue(
 }
 
 function compareContextArtifactOrder(left: ContextArtifact, right: ContextArtifact): number {
-  const leftKey = `${left.recorded_at}\u0000${left.id}`;
-  const rightKey = `${right.recorded_at}\u0000${right.id}`;
+  return compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id);
+}
+
+function compareRecordedId(leftAt: string, leftId: string, rightAt: string, rightId: string): number {
+  const leftKey = `${leftAt}\u0000${leftId}`;
+  const rightKey = `${rightAt}\u0000${rightId}`;
   return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 

@@ -1187,9 +1187,75 @@ describe("SQLite context artifact store", () => {
     }
     const query = { org_id: "example-org", limit: 1 };
     assert.deepEqual(await sqlite.listArtifacts(query), await memory.listArtifacts(query));
+    assert.deepEqual(await sqlite.listArtifactSummaries(query), await memory.listArtifactSummaries(query));
     await assert.rejects(sqlite.listArtifacts({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
     await assert.rejects(memory.listArtifacts({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
+    await assert.rejects(sqlite.listArtifactSummaries({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
     sqlite.close();
+  });
+
+  it("lists context summaries from a preview and backfills older rows", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const Database = require("better-sqlite3");
+    let store = new SqliteAuthorityStore(path);
+    store.close();
+    const legacy = new Database(path);
+    legacy.exec("ALTER TABLE context_artifacts DROP COLUMN preview_json");
+    legacy.pragma("user_version = 43");
+    const payload = JSON.stringify({
+      id: "legacy-summary",
+      kind: "thread_summary",
+      recorded_at: "2026-08-30T00:01:00.000Z",
+      attrs: {
+        thread_id: "chat-legacy",
+        message_count: 2,
+        messages: [
+          { text: "time-newest", occurred_at: "2026-08-30T02:00:00.000Z" },
+          { text: "  stored last  ", occurred_at: "2026-08-30T01:00:00.000Z" },
+        ],
+      },
+    });
+    legacy.prepare(`
+      INSERT INTO context_artifacts (
+        org_id, id, kind, status, generation, recorded_at, payload_json
+      ) VALUES (?, ?, 'thread_summary', 'proposed', 'generation-1', ?, ?)
+    `).run("example-org", "legacy-summary", "2026-08-30T00:01:00.000Z", payload);
+    legacy.prepare(`
+      INSERT INTO context_artifact_states (org_id, artifact_id, status, decided_at)
+      VALUES (?, ?, 'proposed', ?)
+    `).run("example-org", "legacy-summary", "2026-08-30T00:01:00.000Z");
+    legacy.close();
+
+    store = new SqliteAuthorityStore(path);
+    const legacySummary = (await store.listArtifactSummaries({ org_id: "example-org" }))[0];
+    assert.equal(legacySummary.title, "stored last");
+    assert.equal(legacySummary.message_count, 2);
+    assert.equal(legacySummary.thread_id, "chat-legacy");
+    assert.equal(JSON.stringify(legacySummary).includes("time-newest"), false);
+
+    const digest = artifact({
+      id: "digest-1",
+      kind: "daily_digest",
+      recorded_at: "2026-08-30T00:03:00.000Z",
+      attrs: {
+        utc_date: "2026-08-30",
+        item_count: 1,
+        directions: [{ items: [{ text: "digest line", occurred_at: "2026-08-30T00:00:00.000Z" }] }],
+      },
+    });
+    const memory = new MemoryContextArtifactStore();
+    await store.putArtifact(digest);
+    await memory.putArtifact(digest);
+    assert.deepEqual(
+      await store.listArtifactSummaries({ org_id: "example-org", kinds: ["daily_digest"] }),
+      await memory.listArtifactSummaries({ org_id: "example-org", kinds: ["daily_digest"] }),
+    );
+    assert.equal(
+      (await store.listArtifactSummaries({ org_id: "example-org", kinds: ["daily_digest"] }))[0].title,
+      "2026-08-30",
+    );
+    store.close();
   });
 
   it("keeps delimiter-bearing bundle identities isolated", async () => {
@@ -1333,6 +1399,10 @@ describe("SQLite context artifact store", () => {
     let split = await SqliteSplitAuthorityStore.open(path);
     await split.putArtifact(artifactValue);
     assert.deepEqual(await split.getArtifact("example-org", "artifact-1"), artifactValue);
+    assert.equal(
+      (await split.listArtifactSummaries({ org_id: "example-org" }))[0].title,
+      "thread_summary",
+    );
     await split.close();
 
     const host = await createHost();

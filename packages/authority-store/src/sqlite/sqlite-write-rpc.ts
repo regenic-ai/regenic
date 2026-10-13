@@ -15,6 +15,7 @@ export const AUTHORITY_READ_METHODS = [
   "getArtifact",
   "getArtifactState",
   "listArtifacts",
+  "listArtifactSummaries",
   "getSnapshot",
   "getBundle",
   "getCheckpoint",

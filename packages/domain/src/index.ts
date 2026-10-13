@@ -82,6 +82,7 @@ export * from "./standard-health";
 export * from "./context-candidate";
 export * from "./context-request";
 export * from "./context-artifact";
+export * from "./context-artifact-summary";
 export * from "./context-artifact-lifecycle";
 export * from "./context-snapshot";
 export * from "./context-bundle";
