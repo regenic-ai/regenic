@@ -109,6 +109,50 @@ describePg("postgres authority store", () => {
     await authority.ping();
   });
 
+  it("stores immutable snapshot index entries with isolated stable queries", async () => {
+    const store = await openStore();
+    const orgId = `org-${randomUUID()}`;
+    const base = {
+      org_id: orgId,
+      thread_id: "thread-1",
+      snapshot_id: "snapshot-old",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context",
+      allowed_uses: ["display"],
+      created_at: "2026-08-30T00:00:00.000Z",
+    };
+    const newer = {
+      ...base,
+      snapshot_id: "snapshot-new",
+      created_at: "2026-08-30T01:00:00.000Z",
+    };
+    await store.putSnapshotIndex(base);
+    await Promise.all([
+      store.putSnapshotIndex(newer),
+      store.putSnapshotIndex(newer),
+    ]);
+    const query = {
+      org_id: orgId,
+      thread_id: "thread-1",
+      principal: base.principal,
+      consumer_id: base.consumer_id,
+    };
+    assert.deepEqual(
+      (await store.listSnapshotIndex(query)).map(({ snapshot_id }) => snapshot_id),
+      ["snapshot-new", "snapshot-old"],
+    );
+    assert.deepEqual(
+      (await store.listSnapshotIndex({ ...query, limit: 1 })).map(({ snapshot_id }) => snapshot_id),
+      ["snapshot-new"],
+    );
+    assert.deepEqual(await store.listSnapshotIndex({ ...query, thread_id: "thread-2" }), []);
+    await assert.rejects(
+      store.putSnapshotIndex({ ...newer, purpose: "changed purpose" }),
+      /Cannot replace immutable context snapshot index entry/,
+    );
+  });
+
   it("rolls back a conflicting ingest page", async () => {
     const store = await openStore();
     const orgId = `org-${randomUUID()}`;

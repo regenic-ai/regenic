@@ -291,6 +291,30 @@ pnpm local inbox-fold --database ./regenic.db --org local-owner \
 pnpm local inbox-unfold --database ./regenic.db --org local-owner \
 	--event <event-id>
 
+# Pin or unpin this Event's conversation above the live message list.
+pnpm local inbox-pin --database ./regenic.db --org local-owner \
+	--event <event-id>
+pnpm local inbox-unpin --database ./regenic.db --org local-owner \
+	--event <event-id>
+
+# Inspect or update the versioned personal dispatch policy.
+# A saved policy applies to the next ingest batch. It does not rewrite existing dispositions.
+pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
+pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
+	--policy ./dispatch-policy.json
+
+# Explicitly reapply the saved policy to one existing inbox event.
+pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --event <event-id>
+
+# Review events held for explicit attention without widening the work inbox.
+pnpm local inbox-pending --database ./regenic.db --org local-owner
+
+# Review overdue replies, or snooze one outbound message until a specific time.
+pnpm local follow-ups --database ./regenic.db --blob-root ./blobs --org local-owner
+pnpm local follow-up-snooze --database ./regenic.db --org local-owner \
+	--thread <thread-id> --outbound <external-id> --until 2026-10-01T09:00:00.000Z
+
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
@@ -516,10 +540,102 @@ The Personal API exposes the same durable path:
 
 ```http
 POST /v1/me/context/assemble
+POST /v1/me/context/diff
+GET  /v1/me/context/snapshots?thread_id=...&limit=...
 GET  /v1/me/context/snapshots/:snapshot_id
 POST /v1/me/context/replay
 POST /v1/me/context/ask
 ```
+
+Thread snapshot history is scoped to the current organization and principal and to
+the `desktop-context-pilot` consumer. Results are newest-first with a default limit
+of 20 and a maximum of 100. To read the next stable page, pass the final entry's
+`created_at` and `snapshot_id` as `before_created_at` and `before_snapshot_id`.
+
+### Context Pilot thread history
+
+To create a history entry, assemble Context for exactly one thread with the desktop
+consumer. A Snapshot is immutable, so a repeated request with the same authorized
+inputs converges on the same Snapshot rather than replacing it.
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/assemble \
+  -H "content-type: application/json" \
+  -d '{
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"],
+    "filters": { "thread_ids": ["synthetic-chat:chat-1"] },
+    "temporal": { "mode": "current" },
+    "budget": {
+      "profile": "desktop-thread-preview-v1",
+      "max_tokens": 2000,
+      "max_items": 20,
+      "max_raw_evidence": 20
+    },
+    "requested_kinds": ["event"]
+  }'
+```
+
+Then list saved history for that thread:
+
+```bash
+curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Achat-1"
+```
+
+Each result is an association, not a new grant. To replay a selected Snapshot,
+use its `snapshot_id` with the same consumer, purpose, and allowed uses that
+created it. The history endpoint does not expand replay permissions.
+
+`POST /v1/me/context/diff` compares two Snapshot IDs using one shared replay
+grant. Both Snapshots must be replayable by the current organization and
+principal with the submitted consumer, purpose, and allowed uses. The response
+contains stable candidate references and hashes, never evidence text.
+
+#### Compare two saved Snapshots
+
+Use the older Snapshot as `from_snapshot_id` and the newer Snapshot as
+`to_snapshot_id`. The replay grant must exactly match the grant used to create
+both bundles:
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/diff \
+  -H "content-type: application/json" \
+  -d '{
+    "from_snapshot_id": "context-snapshot:older",
+    "to_snapshot_id": "context-snapshot:newer",
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"]
+  }'
+```
+
+The result classifies candidates as:
+
+- `added`: selected only by the newer Snapshot;
+- `removed`: selected only by the older Snapshot;
+- `changed`: the same candidate identity has different selected content or
+  metadata;
+- `unchanged`: the candidate is identical in both authorized bundles.
+
+Candidate references are sorted deterministically. A consumer mismatch returns
+the same not-found response as a missing bundle, so callers cannot probe whether
+a Snapshot exists under another grant. A diff does not read current source data,
+modify either Snapshot, or grant replay access.
+
+#### Troubleshooting empty thread history
+
+History is intentionally empty unless the original assemble request used exactly
+one `filters.thread_ids` value. Requests without a thread filter or with multiple
+threads still create usable Snapshots, but do not create a thread-history
+association. Existing Snapshots are not backfilled because their source thread
+cannot be inferred reliably.
+
+The list is also isolated by organization, principal, and consumer. Confirm that
+the request is using the same Personal API identity and
+`desktop-context-pilot` consumer as the assemble request. For a local
+diagnostic, run `context-snapshot-history --thread <thread-id>` with the same
+local org, principal, and consumer options used to create the Snapshot.
 
 Evidence text is sent as untrusted user data, never as model instructions. A
 model answer is returned only when every submitted citation names a candidate

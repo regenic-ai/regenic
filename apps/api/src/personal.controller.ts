@@ -117,6 +117,7 @@ export class PersonalController {
     @Query("limit") limit?: string,
     @Query("list") list?: string,
     @Query("membership") membership?: string,
+    @Query("disposition") disposition?: string,
     @Query("locale") locale?: string,
     @Headers("accept-language") acceptLanguage?: string,
   ) {
@@ -133,9 +134,36 @@ export class PersonalController {
       thread_id: threadId?.trim() || undefined,
       limit: limit?.trim() ? Number(limit) : undefined,
       list: list?.trim() || membership?.trim() || undefined,
+      disposition: disposition === "pending" ? ("pending" as const) : undefined,
       locale: requestLocale(locale, acceptLanguage),
     };
     return this.guard(async () => this.inbox.listInbox(query));
+  }
+
+  @Get("follow-ups")
+  listFollowUps() {
+    return this.guard(() => this.inbox.listFollowUps());
+  }
+
+  @Get("follow-ups/snoozes")
+  listFollowUpSnoozes() {
+    return this.guard(() => this.inbox.listFollowUpSnoozes());
+  }
+
+  @Post("follow-ups/:threadId/snooze")
+  snoozeFollowUp(
+    @Param("threadId") threadId: string,
+    @Body() body: { until?: string; outbound_external_id?: string } | undefined,
+  ) {
+    return this.guard(() => this.inbox.snoozeFollowUp(threadId, body?.until ?? "", body?.outbound_external_id));
+  }
+
+  @Delete("follow-ups/:threadId/snooze")
+  unsnoozeFollowUp(
+    @Param("threadId") threadId: string,
+    @Body() body: { outbound_external_id?: string } | undefined,
+  ) {
+    return this.guard(() => this.inbox.unsnoozeFollowUp(threadId, body?.outbound_external_id));
   }
 
   @Post("inbox/:eventId/triage")
@@ -165,9 +193,24 @@ export class PersonalController {
     return this.guard(() => this.inbox.setInboxEventHidden(eventId, false));
   }
 
+  @Post("inbox/:eventId/pin")
+  pinInboxEvent(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.setInboxEventPinned(eventId, true));
+  }
+
+  @Post("inbox/:eventId/unpin")
+  unpinInboxEvent(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.setInboxEventPinned(eventId, false));
+  }
+
   @Post("inbox/:eventId/triage/reset")
   resetInboxTriage(@Param("eventId") eventId: string) {
     return this.guard(() => this.inbox.resetInboxTriage(eventId));
+  }
+
+  @Post("inbox/:eventId/dispatch-policy/reapply")
+  reapplyInboxDispatchPolicy(@Param("eventId") eventId: string) {
+    return this.guard(() => this.inbox.reapplyInboxDispatchPolicy(eventId));
   }
 
   @Post("presence")
@@ -509,6 +552,26 @@ export class PersonalController {
   @Get("prefs")
   getPrefs() {
     return this.guard(() => this.work.getPrefs());
+  }
+
+  @Get("dispatch-policy")
+  getPersonalDispatchPolicy() {
+    return this.guard(() => this.work.getPersonalDispatchPolicy());
+  }
+
+  @Post("dispatch-policy")
+  putPersonalDispatchPolicy(@Body() body: { policy?: unknown } | undefined) {
+    return this.guard(() => this.work.putPersonalDispatchPolicy(body?.policy));
+  }
+
+  @Get("follow-up-policy")
+  getPersonalFollowUpPolicy() {
+    return this.guard(() => this.work.getPersonalFollowUpPolicy());
+  }
+
+  @Post("follow-up-policy")
+  putPersonalFollowUpPolicy(@Body() body: { policy?: unknown } | undefined) {
+    return this.guard(() => this.work.putPersonalFollowUpPolicy(body?.policy));
   }
 
   @Post("prefs")

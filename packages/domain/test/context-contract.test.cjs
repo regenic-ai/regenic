@@ -6,6 +6,7 @@ const {
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
   EVIDENCE_BUNDLE_SCHEMA_VERSION,
   canonicalContextJson,
+  diffContextBundles,
   hashCanonicalContext,
   hashContextArtifactInputs,
   hashContextBundle,
@@ -14,9 +15,12 @@ const {
   projectEvidenceBundleV1,
   validateContextArtifact,
   validateContextBundle,
+  validateContextBundleDiff,
   validateContextCandidate,
   validateContextRequest,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
 } = require("../dist");
 
 const HASH_A = "a".repeat(64);
@@ -85,6 +89,20 @@ function request(overrides = {}) {
     temporal: { mode: "current" },
     budget: budget(),
     requested_kinds: ["event", "claim"],
+    ...overrides,
+  };
+}
+
+function snapshotIndexEntry(overrides = {}) {
+  return {
+    org_id: "example-org",
+    thread_id: "example-chat:conversation-1",
+    snapshot_id: "snapshot-1",
+    principal: { actor_type: "human", actor_id: "person-1" },
+    consumer_id: "desktop-context-pilot",
+    purpose: "display context for one conversation",
+    allowed_uses: ["display"],
+    created_at: "2026-08-30T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -162,6 +180,189 @@ describe("context contracts", () => {
   it("keeps EvidenceBundle v1 separate from ContextBundle v2", () => {
     assert.equal(EVIDENCE_BUNDLE_SCHEMA_VERSION, "1.0");
     assert.equal(CONTEXT_BUNDLE_SCHEMA_VERSION, "2.0");
+  });
+
+  it("diffs authorized Context bundles deterministically without exposing text", () => {
+    const before = bundle({
+      snapshot_id: "snapshot-before",
+      sections: [
+        {
+          kind: "facts",
+          items: [
+            {
+              candidate_id: "candidate-retained",
+              resource_id: "event-retained",
+              kind: "event",
+              text: "Retained text.",
+              content_hash: HASH_A,
+              evidence: [evidence({ event_id: "event-retained" })],
+              estimated_tokens: 40,
+            },
+            {
+              candidate_id: "candidate-removed",
+              resource_id: "event-removed",
+              kind: "event",
+              text: "Removed text.",
+              content_hash: HASH_A,
+              evidence: [evidence({ event_id: "event-removed" })],
+              estimated_tokens: 60,
+            },
+          ],
+          tokens: 100,
+        },
+      ],
+      budget_ledger: ledger({
+        selected_items: 2,
+        sections: [{
+          kind: "facts",
+          requested_tokens: 500,
+          selected_tokens: 100,
+          reserved_tokens: 50,
+          selected_items: 2,
+          truncated_items: 0,
+        }],
+      }),
+    });
+    const after = bundle({
+      snapshot_id: "snapshot-after",
+      sections: [
+        {
+          kind: "facts",
+          items: [
+            {
+              candidate_id: "candidate-retained",
+              resource_id: "event-retained",
+              kind: "event",
+              text: "Retained text.",
+              content_hash: HASH_A,
+              evidence: [evidence({ event_id: "event-retained" })],
+              estimated_tokens: 40,
+            },
+            {
+              candidate_id: "candidate-added",
+              resource_id: "event-added",
+              kind: "event",
+              text: "Added text.",
+              content_hash: HASH_B,
+              evidence: [evidence({ event_id: "event-added", content_hash: HASH_B })],
+              estimated_tokens: 60,
+            },
+          ],
+          tokens: 100,
+        },
+      ],
+      budget_ledger: ledger({
+        selected_items: 2,
+        sections: [{
+          kind: "facts",
+          requested_tokens: 500,
+          selected_tokens: 100,
+          reserved_tokens: 50,
+          selected_items: 2,
+          truncated_items: 0,
+        }],
+      }),
+    });
+
+    const diff = diffContextBundles(before, after);
+
+    assert.deepEqual(diff, {
+      from_snapshot_id: "snapshot-before",
+      to_snapshot_id: "snapshot-after",
+      summary: { added: 1, removed: 1, changed: 0, unchanged: 1 },
+      added: [{
+        candidate_id: "candidate-added",
+        resource_id: "event-added",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_B,
+      }],
+      removed: [{
+        candidate_id: "candidate-removed",
+        resource_id: "event-removed",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_A,
+      }],
+      changed: [],
+      unchanged: [{
+        candidate_id: "candidate-retained",
+        resource_id: "event-retained",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_A,
+      }],
+    });
+    assert.equal(canonicalContextJson(diff).includes("Retained text."), false);
+  });
+
+  it("reports changed candidates and rejects different authorization scopes", () => {
+    const before = bundle({ snapshot_id: "snapshot-before" });
+    const changedItem = {
+      ...before.sections[0].items[0],
+      text: "Updated text.",
+      content_hash: HASH_B,
+    };
+    const after = bundle({
+      snapshot_id: "snapshot-after",
+      sections: [{ ...before.sections[0], items: [changedItem] }],
+    });
+
+    assert.deepEqual(diffContextBundles(before, after).changed, [{
+      before: {
+        candidate_id: "candidate-1",
+        resource_id: "event-1",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_A,
+      },
+      after: {
+        candidate_id: "candidate-1",
+        resource_id: "event-1",
+        kind: "event",
+        section: "facts",
+        content_hash: HASH_B,
+      },
+      reasons: ["content_changed"],
+    }]);
+    assert.throws(
+      () => diffContextBundles(before, bundle({ principal: { actor_type: "human", actor_id: "person-2" } })),
+      /different authorization scopes/,
+    );
+  });
+
+  it("strictly validates Context bundle diff classifications", () => {
+    const item = {
+      candidate_id: "candidate-1",
+      resource_id: "event-1",
+      kind: "event",
+      section: "facts",
+      content_hash: HASH_A,
+    };
+    const value = {
+      from_snapshot_id: "snapshot-before",
+      to_snapshot_id: "snapshot-after",
+      summary: { added: 1, removed: 0, changed: 0, unchanged: 0 },
+      added: [item],
+      removed: [],
+      changed: [],
+      unchanged: [],
+    };
+
+    assert.equal(validateContextBundleDiff(value).success, true);
+    assert.equal(validateContextBundleDiff({ ...value, unexpected: true }).success, false);
+    assert.equal(validateContextBundleDiff({
+      ...value,
+      unchanged: [item],
+    }).success, false);
+    assert.equal(validateContextBundleDiff({
+      ...value,
+      added: [],
+      changed: [{
+        before: item,
+        after: { ...item, candidate_id: "candidate-2" },
+      }],
+    }).success, false);
   });
 
   it("projects a deterministic body-free EvidenceBundle v1 from ContextBundle citations", () => {
@@ -380,5 +581,26 @@ describe("context contracts", () => {
   it("rejects values that cannot participate in canonical JSON", () => {
     assert.throws(() => canonicalContextJson({ value: Number.NaN }), /Non-finite number/);
     assert.throws(() => canonicalContextJson({ value: new Date() }), /Unsupported object/);
+  });
+
+  it("validates a scoped thread Snapshot index entry and query", () => {
+    assert.equal(validateContextSnapshotIndexEntry(snapshotIndexEntry()).success, true);
+    assert.equal(validateContextSnapshotIndexQuery({
+      org_id: "example-org",
+      thread_id: "example-chat:conversation-1",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "desktop-context-pilot",
+      limit: 8,
+    }).success, true);
+    assert.equal(validateContextSnapshotIndexEntry(snapshotIndexEntry({
+      allowed_uses: ["display", "display"],
+    })).success, false);
+    assert.equal(validateContextSnapshotIndexQuery({
+      org_id: "example-org",
+      thread_id: "example-chat:conversation-1",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "desktop-context-pilot",
+      limit: 0,
+    }).success, false);
   });
 });

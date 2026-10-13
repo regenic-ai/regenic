@@ -48,6 +48,8 @@ import type {
   FailContextProjectionJob,
   RenewContextProjectionJob,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ConversationPref,
   ConversationPrefPatch,
   EventListQuery,
@@ -246,6 +248,14 @@ export class SqliteSplitAuthorityStore
 
   async getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null> {
     return this.reader.call("getSnapshot", [orgId, id]);
+  }
+
+  async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
+    await this.writer.call("putSnapshotIndex", [entry]);
+  }
+
+  async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    return this.reader.call("listSnapshotIndex", [query]);
   }
 
   async putBundle(bundle: ContextBundle): Promise<void> {

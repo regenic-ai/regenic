@@ -6,6 +6,8 @@ import type {
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
@@ -19,6 +21,8 @@ import {
   contextArtifactPreviewFromStored,
   validateContextArtifactQuery,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
   validateContextBundle,
   validateContextProjectionCheckpoint,
 } from "@regenic/domain";
@@ -287,6 +291,80 @@ export async function getSnapshot(db: PgSql, orgId: string, id: string): Promise
       "org_id = $1 AND id = $2",
       [orgId, id],
     );
+  }
+
+export async function putSnapshotIndex(db: PgSql, entry: ContextSnapshotIndexEntry): Promise<void> {
+    requireContextValue(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
+    const payload = canonicalContextJson(entry);
+    const lookup = [
+      entry.org_id,
+      entry.thread_id,
+      entry.snapshot_id,
+      entry.principal.actor_type,
+      entry.principal.actor_id,
+      entry.consumer_id,
+    ];
+    await putImmutableContextJson(
+      db,
+      "context_snapshot_index",
+      `
+        org_id = $1 AND thread_id = $2 AND snapshot_id = $3
+        AND principal_actor_type = $4 AND principal_actor_id = $5 AND consumer_id = $6
+      `,
+      lookup,
+      payload,
+      "snapshot index entry",
+      `
+        INSERT INTO context_snapshot_index (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id, created_at, payload_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [...lookup, entry.created_at, payload],
+    );
+  }
+
+export async function listSnapshotIndex(db: PgSql, query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    const validation = validateContextSnapshotIndexQuery(query);
+    requireContextValue(validation, "snapshot index query");
+    const stableQuery = validation.success ? validation.data : query;
+    const purpose = stableQuery.purpose
+      ? "AND payload_json ->> 'purpose' = $6"
+      : "";
+    const cursorParameter = stableQuery.purpose ? 7 : 6;
+    const cursor = stableQuery.before_created_at
+      ? `
+          AND (
+            created_at < $${cursorParameter} OR (created_at = $${cursorParameter} AND snapshot_id < $${cursorParameter + 1})
+          )
+        `
+      : "";
+    const limitParameter = `$${cursorParameter + (stableQuery.before_created_at ? 2 : 0)}`;
+    const rows = await db.query<{ payload_json: unknown }>(
+      `
+        SELECT payload_json
+        FROM context_snapshot_index
+        WHERE org_id = $1 AND thread_id = $2
+          AND principal_actor_type = $3 AND principal_actor_id = $4 AND consumer_id = $5
+          ${purpose}
+          ${cursor}
+        ORDER BY created_at DESC, snapshot_id DESC
+        LIMIT ${limitParameter}
+      `,
+      [
+        stableQuery.org_id,
+        stableQuery.thread_id,
+        stableQuery.principal.actor_type,
+        stableQuery.principal.actor_id,
+        stableQuery.consumer_id,
+        ...(stableQuery.purpose ? [stableQuery.purpose] : []),
+        ...(stableQuery.before_created_at
+          ? [stableQuery.before_created_at, stableQuery.before_snapshot_id!]
+          : []),
+        stableQuery.limit ?? 100,
+      ],
+    );
+    return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));
   }
 
 export async function putBundle(db: PgSql, bundle: ContextBundle): Promise<void> {

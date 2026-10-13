@@ -7,6 +7,8 @@ import type {
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
@@ -20,6 +22,8 @@ import {
   contextArtifactPreviewFromStored,
   validateContextArtifactQuery,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
   validateContextBundle,
   validateContextProjectionCheckpoint,
 } from "@regenic/domain";
@@ -271,6 +275,79 @@ export async function getSnapshot(db: Database.Database, orgId: string, id: stri
       "org_id = ? AND id = ?",
       [orgId, id],
     );
+  }
+
+export async function putSnapshotIndex(db: Database.Database, entry: ContextSnapshotIndexEntry): Promise<void> {
+    requireContextValue(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
+    const payload = canonicalContextJson(entry);
+    const lookup = [
+      entry.org_id,
+      entry.thread_id,
+      entry.snapshot_id,
+      entry.principal.actor_type,
+      entry.principal.actor_id,
+      entry.consumer_id,
+    ];
+    putImmutableContextJson(
+      db,
+      "context_snapshot_index",
+      `
+        org_id = ? AND thread_id = ? AND snapshot_id = ?
+        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+      `,
+      lookup,
+      payload,
+      "snapshot index entry",
+      `
+        INSERT INTO context_snapshot_index (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id, created_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [...lookup, entry.created_at, payload],
+    );
+  }
+
+export async function listSnapshotIndex(db: Database.Database, query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    const validation = validateContextSnapshotIndexQuery(query);
+    requireContextValue(validation, "snapshot index query");
+    const stableQuery = validation.success ? validation.data : query;
+    const purpose = stableQuery.purpose
+      ? "AND json_extract(payload_json, '$.purpose') = ?"
+      : "";
+    const cursor = stableQuery.before_created_at
+      ? `
+        AND (
+          created_at < ? OR (created_at = ? AND snapshot_id < ?)
+        )
+      `
+      : "";
+    const rows = db.prepare(`
+      SELECT payload_json
+      FROM context_snapshot_index
+      WHERE org_id = ? AND thread_id = ?
+        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+        ${purpose}
+        ${cursor}
+      ORDER BY created_at DESC, snapshot_id DESC
+      LIMIT ?
+    `).all(
+      stableQuery.org_id,
+      stableQuery.thread_id,
+      stableQuery.principal.actor_type,
+      stableQuery.principal.actor_id,
+      stableQuery.consumer_id,
+      ...(stableQuery.purpose ? [stableQuery.purpose] : []),
+      ...(stableQuery.before_created_at
+        ? [
+          stableQuery.before_created_at,
+          stableQuery.before_created_at,
+          stableQuery.before_snapshot_id!,
+        ]
+        : []),
+      stableQuery.limit ?? 100,
+    ) as Array<{ payload_json: string }>;
+    return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));
   }
 
 export async function putBundle(db: Database.Database, bundle: ContextBundle): Promise<void> {

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   app,
   BrowserWindow,
@@ -113,7 +113,8 @@ function currentDataPaths(): ResolvedDataPaths {
 }
 
 function nodeBinary(): string {
-  return process.env.npm_node_execpath ?? process.env.NODE_BINARY ?? "node";
+  const npmBinary = process.env.npm_node_execpath;
+  return process.env.NODE_BINARY ?? (npmBinary && /^node(?:\.exe)?$/i.test(basename(npmBinary)) ? npmBinary : "node");
 }
 
 function preloadPath(): string {

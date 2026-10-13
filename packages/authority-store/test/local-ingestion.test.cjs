@@ -120,6 +120,8 @@ describe("local ingestion persistence", () => {
     const events = await authorityStore.listEvents("local-owner");
 
     assert.deepEqual(events.map((event) => event.operation), ["create", "revise", "tombstone"]);
+    const recent = await authorityStore.listEvents("local-owner", { order: "recent", limit: 1 });
+    assert.deepEqual(recent.map((event) => event.id), [events[2].id]);
     assert.equal(events[1].parent_event_id, events[0].id);
     assert.equal(events[2].parent_event_id, events[1].id);
     authorityStore.close();

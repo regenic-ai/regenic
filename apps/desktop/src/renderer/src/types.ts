@@ -1,4 +1,4 @@
-export type NavId = "inbox" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "follow-ups" | "recipes" | "engine" | "settings";
 
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
@@ -361,6 +361,98 @@ export interface UiPrefsView {
   inbox_list: InboxListView;
 }
 
+export interface PersonalFollowUpPolicy {
+  version: 1;
+  wait_minutes: number;
+  include_initial_outbound: boolean;
+}
+
+export interface PersonalFollowUpView {
+  event: EventRecord;
+  candidate: {
+    thread_id: string;
+    outbound_external_id: string;
+    outbound_at: string;
+    due_at: string;
+    reason_codes: string[];
+  };
+  body_text?: string;
+}
+
+export type MessageDisposition = "current_work" | "outside_current_work" | "pending";
+
+export interface PersonalDispatchPolicy {
+  version: 1;
+  high_hint_disposition: MessageDisposition;
+  actionable_disposition: MessageDisposition;
+  short_text_disposition: MessageDisposition;
+  default_disposition: MessageDisposition;
+}
+
+export interface PersonalContextEvidence {
+  event_id: string;
+}
+
+export interface PersonalContextBundleItem {
+  candidate_id: string;
+  resource_id: string;
+  kind: string;
+  status?: "current" | "superseded" | "retracted";
+  text?: string;
+  content_hash?: string;
+  evidence: PersonalContextEvidence[];
+  estimated_tokens: number;
+}
+
+export interface PersonalContextBundle {
+  snapshot_id: string;
+  sections: Array<{
+    kind: string;
+    items: PersonalContextBundleItem[];
+    tokens: number;
+  }>;
+  citations: PersonalContextEvidence[];
+  conflicts: Array<{ code: string; message?: string }>;
+  redactions: Array<{ category: string; count: number }>;
+  degradation_flags: string[];
+  content_hash: string;
+}
+
+export interface PersonalContextSnapshot {
+  id: string;
+  created_at: string;
+}
+
+export interface PersonalContextSnapshotIndexEntry {
+  thread_id: string;
+  snapshot_id: string;
+  purpose: string;
+  allowed_uses: string[];
+  created_at: string;
+}
+
+export interface PersonalContextDiffItem {
+  candidate_id: string;
+  resource_id: string;
+  kind: string;
+  section: string;
+  content_hash?: string;
+}
+
+export interface PersonalContextDiff {
+  from_snapshot_id: string;
+  to_snapshot_id: string;
+  added: PersonalContextDiffItem[];
+  removed: PersonalContextDiffItem[];
+  changed: Array<{ before: PersonalContextDiffItem; after: PersonalContextDiffItem }>;
+  unchanged: PersonalContextDiffItem[];
+}
+
+export interface PersonalContextView {
+  snapshot: PersonalContextSnapshot;
+  bundle: PersonalContextBundle;
+}
+
 export interface IngestAttempt {
   id: string;
   status: "running" | "succeeded" | "failed";
@@ -686,6 +778,7 @@ export interface StoreView {
   blobs: number;
   context_artifacts: number;
   context_snapshots: number;
+  context_snapshot_index: number;
   context_bundles: number;
   context_checkpoints: number;
   recipes: number;
@@ -701,6 +794,7 @@ export interface StoreClearView {
     blobs: number;
     context_artifacts: number;
     context_snapshots: number;
+    context_snapshot_index: number;
     context_bundles: number;
     context_checkpoints: number;
   };

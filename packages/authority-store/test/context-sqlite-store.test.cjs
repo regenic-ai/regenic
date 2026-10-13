@@ -149,6 +149,20 @@ function bundle(snapshotValue, overrides = {}) {
   return value;
 }
 
+function snapshotIndex(snapshotValue, overrides = {}) {
+  return {
+    org_id: snapshotValue.org_id,
+    thread_id: "thread-1",
+    snapshot_id: snapshotValue.id,
+    principal: { actor_type: "human", actor_id: "person-1" },
+    consumer_id: "desktop-context-pilot",
+    purpose: "display context",
+    allowed_uses: ["display"],
+    created_at: snapshotValue.created_at,
+    ...overrides,
+  };
+}
+
 describe("SQLite context artifact store", () => {
   it("transitions artifact decisions and atomically supersedes an accepted artifact", async () => {
     const root = await createRoot();
@@ -1131,16 +1145,24 @@ describe("SQLite context artifact store", () => {
     const artifactValue = artifact();
     const snapshotValue = snapshot();
     const bundleValue = bundle(snapshotValue);
+    const indexValue = snapshotIndex(snapshotValue);
 
     let store = new SqliteAuthorityStore(path);
     await store.putArtifact(artifactValue);
     await store.putSnapshot(snapshotValue);
     await store.putBundle(bundleValue);
+    await store.putSnapshotIndex(indexValue);
     store.close();
 
     store = new SqliteAuthorityStore(path);
     assert.deepEqual(await store.getArtifact("example-org", "artifact-1"), artifactValue);
     assert.deepEqual(await store.getSnapshot("example-org", snapshotValue.id), snapshotValue);
+    assert.deepEqual(await store.listSnapshotIndex({
+      org_id: "example-org",
+      thread_id: "thread-1",
+      principal: indexValue.principal,
+      consumer_id: indexValue.consumer_id,
+    }), [indexValue]);
     assert.deepEqual(await store.getBundle({
       org_id: "example-org",
       snapshot_id: snapshotValue.id,
@@ -1153,6 +1175,20 @@ describe("SQLite context artifact store", () => {
       /Cannot replace immutable context artifact/,
     );
     store.close();
+
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.deepEqual(await split.listSnapshotIndex({
+      org_id: "example-org",
+      thread_id: "thread-1",
+      principal: indexValue.principal,
+      consumer_id: indexValue.consumer_id,
+    }), [indexValue]);
+    await split.putSnapshotIndex(indexValue);
+    await assert.rejects(
+      split.putSnapshotIndex({ ...indexValue, purpose: "changed purpose" }),
+      /Cannot replace immutable context snapshot index entry/,
+    );
+    await split.close();
   });
 
   it("filters artifacts deterministically", async () => {
@@ -1202,7 +1238,8 @@ describe("SQLite context artifact store", () => {
     store.close();
     const legacy = new Database(path);
     legacy.exec("ALTER TABLE context_artifacts DROP COLUMN preview_json");
-    legacy.pragma("user_version = 43");
+    // Last migration before preview_json (46) and the preview rebuild (47).
+    legacy.pragma("user_version = 45");
     const payload = JSON.stringify({
       id: "legacy-summary",
       kind: "thread_summary",
@@ -1450,14 +1487,16 @@ describe("SQLite context artifact store", () => {
     await store.putArtifact(artifactValue);
     await store.putSnapshot(snapshotValue);
     await store.putBundle(bundleValue);
+    await store.putSnapshotIndex(snapshotIndex(snapshotValue));
     await store.putCheckpoint(checkpoint);
     const before = await store.summarizeStore("example-org");
     assert.deepEqual({
       artifacts: before.context_artifacts,
       snapshots: before.context_snapshots,
+      index: before.context_snapshot_index,
       bundles: before.context_bundles,
       checkpoints: before.context_checkpoints,
-    }, { artifacts: 1, snapshots: 1, bundles: 1, checkpoints: 1 });
+    }, { artifacts: 1, snapshots: 1, index: 1, bundles: 1, checkpoints: 1 });
 
     const result = await store.clearOperationalData(
       "example-org",
@@ -1466,9 +1505,10 @@ describe("SQLite context artifact store", () => {
     assert.deepEqual({
       artifacts: result.cleared.context_artifacts,
       snapshots: result.cleared.context_snapshots,
+      index: result.cleared.context_snapshot_index,
       bundles: result.cleared.context_bundles,
       checkpoints: result.cleared.context_checkpoints,
-    }, { artifacts: 1, snapshots: 1, bundles: 1, checkpoints: 1 });
+    }, { artifacts: 1, snapshots: 1, index: 1, bundles: 1, checkpoints: 1 });
     store.close();
 
     store = new SqliteAuthorityStore(path);
@@ -1476,9 +1516,10 @@ describe("SQLite context artifact store", () => {
     assert.deepEqual({
       artifacts: after.context_artifacts,
       snapshots: after.context_snapshots,
+      index: after.context_snapshot_index,
       bundles: after.context_bundles,
       checkpoints: after.context_checkpoints,
-    }, { artifacts: 0, snapshots: 0, bundles: 0, checkpoints: 0 });
+    }, { artifacts: 0, snapshots: 0, index: 0, bundles: 0, checkpoints: 0 });
     assert.equal(await store.getArtifact("example-org", artifactValue.id), null);
     assert.equal(await store.getSnapshot("example-org", snapshotValue.id), null);
     assert.equal(await store.getBundle({

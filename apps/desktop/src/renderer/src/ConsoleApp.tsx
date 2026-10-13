@@ -56,7 +56,8 @@ import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
-import { EngineIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
+import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
+import { FollowUpsPage } from "./FollowUpsPage";
 import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
@@ -1631,6 +1632,13 @@ export function ConsoleApp() {
             <RecipesIcon />
           </RailButton>
           <RailButton
+            label={t("nav.followUps")}
+            active={nav === "follow-ups"}
+            onClick={() => setNav("follow-ups")}
+          >
+            <FollowUpIcon />
+          </RailButton>
+          <RailButton
             label={t("nav.engine")}
             active={nav === "engine"}
             onClick={() => setNav("engine")}
@@ -1766,6 +1774,7 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
+        {nav === "follow-ups" ? <FollowUpsPage /> : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
         ) : null}

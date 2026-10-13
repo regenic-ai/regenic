@@ -9,6 +9,10 @@ import {
   type ContextBundle,
   type ContextBundleItem,
 } from "./context-bundle";
+import type {
+  ContextBundleDiff,
+  ContextBundleDiffItem,
+} from "./context-diff";
 import {
   CONTEXT_SECTION_KINDS,
   type ContextBudget,
@@ -37,6 +41,8 @@ import {
 } from "./context-request";
 import {
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+  type ContextSnapshotIndexEntry,
+  type ContextSnapshotIndexQuery,
   type ContextSnapshot,
 } from "./context-snapshot";
 import { JsonValueSchema } from "./ingestion-schema";
@@ -429,6 +435,37 @@ export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
     }
   });
 
+export const ContextSnapshotIndexEntrySchema: z.ZodType<ContextSnapshotIndexEntry> = z
+  .object({
+    org_id: nonEmptyStringSchema,
+    thread_id: nonEmptyStringSchema,
+    snapshot_id: nonEmptyStringSchema,
+    principal: ActorRefSchema,
+    consumer_id: nonEmptyStringSchema,
+    purpose: nonEmptyStringSchema,
+    allowed_uses: z.array(z.enum(CONTEXT_ALLOWED_USES)).min(1).max(CONTEXT_ALLOWED_USES.length)
+      .refine((values) => !hasDuplicates(values), "Allowed uses must be unique"),
+    created_at: timestampSchema,
+  })
+  .strict();
+
+export const ContextSnapshotIndexQuerySchema: z.ZodType<ContextSnapshotIndexQuery> = z
+  .object({
+    org_id: nonEmptyStringSchema,
+    thread_id: nonEmptyStringSchema,
+    principal: ActorRefSchema,
+    consumer_id: nonEmptyStringSchema,
+    purpose: nonEmptyStringSchema.optional(),
+    limit: nonNegativeIntegerSchema.min(1).max(100).optional(),
+    before_created_at: timestampSchema.optional(),
+    before_snapshot_id: nonEmptyStringSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) => Boolean(value.before_created_at) === Boolean(value.before_snapshot_id),
+    "before_created_at and before_snapshot_id must be provided together",
+  );
+
 const ContextBundleItemSchema: z.ZodType<ContextBundleItem> = z
   .object({
     candidate_id: nonEmptyStringSchema,
@@ -544,6 +581,84 @@ export const ContextBundleSchema: z.ZodType<ContextBundle> = z
     }
   });
 
+const ContextBundleDiffItemSchema: z.ZodType<ContextBundleDiffItem> = z
+  .object({
+    candidate_id: nonEmptyStringSchema,
+    resource_id: nonEmptyStringSchema,
+    kind: z.enum(CONTEXT_CANDIDATE_KINDS),
+    section: z.enum(CONTEXT_SECTION_KINDS),
+    content_hash: contentHashSchema.optional(),
+  })
+  .strict();
+
+const contextBundleDiffChangeReasonSchema = z.enum([
+  "section_changed",
+  "resource_changed",
+  "kind_changed",
+  "content_changed",
+  "evidence_changed",
+  "status_changed",
+  "token_estimate_changed",
+]);
+
+const contextBundleDiffCountSchema = z.number().int().nonnegative();
+
+export const ContextBundleDiffSchema: z.ZodType<ContextBundleDiff> = z
+  .object({
+    from_snapshot_id: nonEmptyStringSchema,
+    to_snapshot_id: nonEmptyStringSchema,
+    summary: z.object({
+      added: contextBundleDiffCountSchema,
+      removed: contextBundleDiffCountSchema,
+      changed: contextBundleDiffCountSchema,
+      unchanged: contextBundleDiffCountSchema,
+    }).strict(),
+    added: z.array(ContextBundleDiffItemSchema).max(10_000),
+    removed: z.array(ContextBundleDiffItemSchema).max(10_000),
+    changed: z.array(z.object({
+      before: ContextBundleDiffItemSchema,
+      after: ContextBundleDiffItemSchema,
+      reasons: z.array(contextBundleDiffChangeReasonSchema),
+    }).strict()).max(10_000),
+    unchanged: z.array(ContextBundleDiffItemSchema).max(10_000),
+  })
+  .strict()
+  .superRefine((diff, context) => {
+    if (
+      diff.summary.added !== diff.added.length ||
+      diff.summary.removed !== diff.removed.length ||
+      diff.summary.changed !== diff.changed.length ||
+      diff.summary.unchanged !== diff.unchanged.length
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["summary"],
+        message: "Diff summary does not match classifications",
+      });
+    }
+    diff.changed.forEach((change, index) => {
+      if (change.before.candidate_id !== change.after.candidate_id) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["changed", index],
+          message: "Changed entries must preserve candidate_id",
+        });
+      }
+    });
+    const candidateIds = [
+      ...diff.added.map((item) => item.candidate_id),
+      ...diff.removed.map((item) => item.candidate_id),
+      ...diff.changed.map((change) => change.before.candidate_id),
+      ...diff.unchanged.map((item) => item.candidate_id),
+    ];
+    if (hasDuplicates(candidateIds)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Diff candidates must appear in exactly one classification",
+      });
+    }
+  });
+
 export interface ContextValidationIssue {
   path: Array<string | number>;
   message: string;
@@ -602,6 +717,18 @@ export function validateContextSnapshot(input: unknown): ContextValidationResult
   return validate(ContextSnapshotSchema, input);
 }
 
+export function validateContextSnapshotIndexEntry(input: unknown): ContextValidationResult<ContextSnapshotIndexEntry> {
+  return validate(ContextSnapshotIndexEntrySchema, input);
+}
+
+export function validateContextSnapshotIndexQuery(input: unknown): ContextValidationResult<ContextSnapshotIndexQuery> {
+  return validate(ContextSnapshotIndexQuerySchema, input);
+}
+
 export function validateContextBundle(input: unknown): ContextValidationResult<ContextBundle> {
   return validate(ContextBundleSchema, input);
+}
+
+export function validateContextBundleDiff(input: unknown): ContextValidationResult<ContextBundleDiff> {
+  return validate(ContextBundleDiffSchema, input);
 }

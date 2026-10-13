@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 46;
+export const PG_SCHEMA_VERSION = 48;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -377,6 +377,37 @@ CREATE INDEX standard_usage_query_idx
   {
     version: 41,
     sql: `
+CREATE INDEX events_org_occurred_idx
+  ON events (org_id, occurred_at, id);
+`,
+  },
+  {
+    version: 42,
+    sql: `
+CREATE TABLE context_snapshot_index (
+  org_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  principal_actor_type TEXT NOT NULL,
+  principal_actor_id TEXT NOT NULL,
+  consumer_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  payload_json JSONB NOT NULL,
+  PRIMARY KEY (
+    org_id, thread_id, snapshot_id, principal_actor_type,
+    principal_actor_id, consumer_id
+  )
+);
+CREATE INDEX context_snapshot_index_query_idx
+  ON context_snapshot_index (
+    org_id, thread_id, principal_actor_type, principal_actor_id,
+    consumer_id, created_at DESC, snapshot_id DESC
+  );
+`,
+  },
+  {
+    version: 43,
+    sql: `
 CREATE TABLE sync_runs (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
@@ -435,7 +466,7 @@ CREATE INDEX connector_sync_work_run_idx
 `,
   },
   {
-    version: 42,
+    version: 44,
     sql: `
 CREATE INDEX connector_sync_work_unassigned_idx
   ON connector_sync_work (installation_id, status, lane)
@@ -443,7 +474,7 @@ CREATE INDEX connector_sync_work_unassigned_idx
 `,
   },
   {
-    version: 43,
+    version: 45,
     sql: `
 CREATE INDEX connector_sync_state_gap_idx
   ON connector_sync_state (
@@ -452,7 +483,7 @@ CREATE INDEX connector_sync_state_gap_idx
 `,
   },
   {
-    version: 44,
+    version: 46,
     sql: `
 CREATE INDEX IF NOT EXISTS events_parent_event_idx
   ON events (parent_event_id)
@@ -460,13 +491,13 @@ CREATE INDEX IF NOT EXISTS events_parent_event_idx
 `,
   },
   {
-    version: 45,
+    version: 47,
     sql: `
 ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '{}';
 `,
   },
   {
-    version: 46,
+    version: 48,
     sql: `
 SELECT 1;
 `,
@@ -511,6 +542,8 @@ CREATE INDEX events_org_thread_occurred_idx
 CREATE INDEX events_parent_event_idx
   ON events (parent_event_id)
   WHERE parent_event_id IS NOT NULL;
+CREATE INDEX events_org_occurred_idx
+  ON events (org_id, occurred_at, id);
 
 CREATE TABLE source_heads (
   org_id TEXT NOT NULL,
@@ -797,6 +830,26 @@ CREATE TABLE context_snapshots (
   payload_json JSONB NOT NULL,
   PRIMARY KEY (org_id, id)
 );
+
+CREATE TABLE context_snapshot_index (
+  org_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  snapshot_id TEXT NOT NULL,
+  principal_actor_type TEXT NOT NULL,
+  principal_actor_id TEXT NOT NULL,
+  consumer_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  payload_json JSONB NOT NULL,
+  PRIMARY KEY (
+    org_id, thread_id, snapshot_id, principal_actor_type,
+    principal_actor_id, consumer_id
+  )
+);
+CREATE INDEX context_snapshot_index_query_idx
+  ON context_snapshot_index (
+    org_id, thread_id, principal_actor_type, principal_actor_id,
+    consumer_id, created_at DESC, snapshot_id DESC
+  );
 
 CREATE TABLE context_bundles (
   org_id TEXT NOT NULL,

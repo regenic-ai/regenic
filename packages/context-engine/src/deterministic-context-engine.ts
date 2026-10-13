@@ -194,6 +194,18 @@ export class DeterministicContextEngine implements ContextEngine {
     assertValidResult(snapshot, bundle);
     await this.artifacts.putSnapshot(snapshot);
     await this.artifacts.putBundle(bundle);
+    if (stableRequest.filters?.thread_ids?.length === 1) {
+      await this.artifacts.putSnapshotIndex({
+        org_id: stableRequest.org_id,
+        thread_id: stableRequest.filters.thread_ids[0],
+        snapshot_id: snapshot.id,
+        principal: stableRequest.principal,
+        consumer_id: stableRequest.consumer_id,
+        purpose: stableRequest.purpose,
+        allowed_uses: stableRequest.allowed_uses,
+        created_at: snapshot.created_at,
+      });
+    }
     return { snapshot, bundle };
   }
 

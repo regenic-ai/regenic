@@ -23,6 +23,8 @@ import type {
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
@@ -151,6 +153,7 @@ import {
   getBundle,
   getCheckpoint,
   getSnapshot,
+  listSnapshotIndex,
   listArtifacts,
   listArtifactIndexes,
   putArtifact,
@@ -158,6 +161,7 @@ import {
   putBundle,
   putCheckpoint,
   putSnapshot,
+  putSnapshotIndex,
   supersedeArtifact,
   supersedeProposedArtifact,
 } from "./context-artifacts";
@@ -488,6 +492,15 @@ export class SqliteAuthorityStore
 
   async getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null> {
     return getSnapshot(this.database, orgId, id);
+  }
+
+  async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
+    this.assertWritable();
+    return putSnapshotIndex(this.database, entry);
+  }
+
+  async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    return listSnapshotIndex(this.database, query);
   }
 
   async putBundle(bundle: ContextBundle): Promise<void> {
@@ -918,6 +931,7 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifact_states WHERE org_id = ?`).run(orgId);
@@ -1038,6 +1052,7 @@ export class SqliteAuthorityStore
           blobs: before.blobs,
           context_artifacts: before.context_artifacts,
           context_snapshots: before.context_snapshots,
+          context_snapshot_index: before.context_snapshot_index,
           context_bundles: before.context_bundles,
           context_checkpoints: before.context_checkpoints,
         },
@@ -1082,6 +1097,10 @@ export class SqliteAuthorityStore
       ),
       context_snapshots: count(
         `SELECT COUNT(*) AS n FROM context_snapshots WHERE org_id = ?`,
+        orgId,
+      ),
+      context_snapshot_index: count(
+        `SELECT COUNT(*) AS n FROM context_snapshot_index WHERE org_id = ?`,
         orgId,
       ),
       context_bundles: count(
@@ -1583,7 +1602,7 @@ export class SqliteAuthorityStore
           return;
         }
         this.database.exec(migration.sql);
-        if (migration.version === 45) {
+        if (migration.version === 47) {
           rebuildArtifactPreviews(this.database);
         }
         this.database.pragma(`user_version = ${migration.version}`);

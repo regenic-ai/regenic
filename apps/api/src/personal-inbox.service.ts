@@ -7,6 +7,11 @@ import {
   resolveCopy,
   type CopyLocale,
   arrangeMessage,
+  collectFollowUpCandidates,
+  followUpSnoozeKey,
+  isFollowUpSnoozed,
+  followUpScanSince,
+  PERSONAL_FOLLOW_UP_SCAN_LIMIT,
   collectLatestInbound,
   conversationId,
   inboxDigest,
@@ -29,6 +34,7 @@ import {
   type ConversationPref,
   type ConversationThread,
   type EventRecord,
+  type FollowUpCandidate,
   type InboxItem,
   type InboxQuery,
   type InboxSummary,
@@ -283,6 +289,13 @@ export interface PersonalHeartbeatView {
   installations: PersonalHeartbeatInstallationPulse[];
 }
 
+export interface PersonalFollowUpView {
+  event: EventRecord;
+  candidate: FollowUpCandidate;
+  body_text?: string;
+}
+
+const PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY = "personal_follow_up_snoozes_v1";
 /** Coalesce ingest-driven digest COUNT scans while sync pages land. */
 export const INBOX_DIGEST_DEBOUNCE_MS = 250;
 
@@ -304,6 +317,7 @@ export interface StoreView {
   blobs: number;
   context_artifacts: number;
   context_snapshots: number;
+  context_snapshot_index: number;
   context_bundles: number;
   context_checkpoints: number;
   recipes: number;
@@ -319,6 +333,7 @@ export interface StoreClearView {
     blobs: number;
     context_artifacts: number;
     context_snapshots: number;
+    context_snapshot_index: number;
     context_bundles: number;
     context_checkpoints: number;
   };
@@ -592,6 +607,154 @@ export class PersonalInboxService {
     this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
     this.touchInboxDigest({ immediate: true });
     return decision;
+  }
+
+  async reapplyInboxDispatchPolicy(eventId: string): Promise<ArrangementDecision> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    const current = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !current) {
+      throw new PersonalConnectorError("not_found", "Inbox event was not found", 404);
+    }
+    const body = await resolveInboxBody(authority, host.get("blobs"), event.content_hash, "meta");
+    const policy = await this.work.getPersonalDispatchPolicy();
+    const arranged = arrangeMessage({
+      event,
+      type: body.surface?.type,
+      kind: body.surface?.kind,
+      text: body.body_text,
+      weight_hints: event.weight_hints,
+      dispatch_policy: policy,
+      now: new Date().toISOString(),
+    });
+    const decision: ArrangementDecision = {
+      ...arranged,
+      reason_codes: [...new Set([...arranged.reason_codes, "personal_dispatch_policy"])],
+    };
+    await authority.putDisposition(decision);
+    this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
+    this.touchInboxDigest({ immediate: true });
+    return decision;
+  }
+
+  async listFollowUps(): Promise<PersonalFollowUpView[]> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const policy = await this.work.getPersonalFollowUpPolicy();
+    const now = new Date().toISOString();
+    const events = await authority.listEvents(orgId, {
+      occurred_since: followUpScanSince(policy, now),
+      limit: PERSONAL_FOLLOW_UP_SCAN_LIMIT,
+      order: "recent",
+    });
+    const bodies = await resolveInboxBodies(
+      authority,
+      host.get("blobs"),
+      events.map((event) => event.content_hash),
+      "meta",
+    );
+    const candidates = collectFollowUpCandidates({
+      items: events.map((event) => {
+        const surface = event.content_hash ? bodies.get(event.content_hash)?.surface : undefined;
+        return {
+          thread_id: conversationId(event.source, event.external_id, event.id),
+          external_id: event.external_id,
+          occurred_at: event.occurred_at,
+          direction: surface?.direction,
+          kind: surface?.kind,
+          operation: event.operation,
+          activity: surface?.activity,
+          conversation_kind: surface?.conversation_kind,
+          type: surface?.type,
+          actor_label: surface?.actor_label,
+        };
+      }),
+      policy,
+      now,
+    });
+    const snoozes = await this.getFollowUpSnoozes();
+    const byIdentity = new Map(
+      events.map((event) => [`${conversationId(event.source, event.external_id, event.id)}\u0000${event.external_id}`, event]),
+    );
+    return candidates.flatMap((candidate) => {
+      if (isFollowUpSnoozed(snoozes, candidate, now)) {
+        return [];
+      }
+      const event = byIdentity.get(`${candidate.thread_id}\u0000${candidate.outbound_external_id}`);
+      if (!event) {
+        return [];
+      }
+      return [{
+        event,
+        candidate,
+        ...(event.content_hash ? { body_text: bodies.get(event.content_hash)?.body_text } : {}),
+      }];
+    });
+  }
+
+  async snoozeFollowUp(
+    threadId: string,
+    until: string,
+    outboundExternalId?: string,
+  ): Promise<{ thread_id: string; outbound_external_id?: string; snoozed_until: string }> {
+    const id = threadIdOf(requireThreadId(threadId));
+    const outbound = normalizeFollowUpOutbound(outboundExternalId);
+    const timestamp = normalizeFollowUpSnooze(until);
+    const snoozes = await this.getFollowUpSnoozes();
+    snoozes[followUpSnoozeKey(id, outbound)] = timestamp;
+    await this.putFollowUpSnoozes(snoozes);
+    return {
+      thread_id: id,
+      ...(outbound ? { outbound_external_id: outbound } : {}),
+      snoozed_until: timestamp,
+    };
+  }
+
+  async unsnoozeFollowUp(
+    threadId: string,
+    outboundExternalId?: string,
+  ): Promise<{ thread_id: string; outbound_external_id?: string; snoozed_until: null }> {
+    const id = threadIdOf(requireThreadId(threadId));
+    const outbound = normalizeFollowUpOutbound(outboundExternalId);
+    const snoozes = await this.getFollowUpSnoozes();
+    delete snoozes[followUpSnoozeKey(id, outbound)];
+    await this.putFollowUpSnoozes(snoozes);
+    return {
+      thread_id: id,
+      ...(outbound ? { outbound_external_id: outbound } : {}),
+      snoozed_until: null,
+    };
+  }
+
+  async listFollowUpSnoozes(): Promise<Record<string, string>> {
+    return this.getFollowUpSnoozes();
+  }
+
+  private async getFollowUpSnoozes(): Promise<Record<string, string>> {
+    const value = await this.runtime.requireHost().get("authority").getUiPref(
+      this.runtime.orgId(),
+      PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY,
+    );
+    if (!value) {
+      return {};
+    }
+    try {
+      return parseFollowUpSnoozes(JSON.parse(value));
+    } catch {
+      throw new PersonalConnectorError("invalid_config", "Stored personal follow-up snoozes are invalid", 409);
+    }
+  }
+
+  private async putFollowUpSnoozes(snoozes: Record<string, string>): Promise<void> {
+    await this.runtime.requireHost().get("authority").putUiPref(
+      this.runtime.orgId(),
+      PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY,
+      JSON.stringify(snoozes),
+      new Date().toISOString(),
+    );
   }
 
   async listInbox(
@@ -1519,6 +1682,24 @@ export class PersonalInboxService {
     });
   }
 
+  async setInboxEventPinned(
+    eventId: string,
+    pinned: boolean,
+  ): Promise<ConversationPrefView> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    const decision = event ? await authority.getDisposition(event.id) : null;
+    if (!event || !decision) {
+      throw new PersonalConnectorError("not_found", "Inbox event was not found", 404);
+    }
+    return this.updateConversationPrefs({
+      thread_id: conversationId(event.source, event.external_id, event.id),
+      pinned,
+    });
+  }
+
   async answerConversationPrompt(
     input: ConversationPromptInput,
   ): Promise<{ accepted: true; thread_id: string; prompt_id: string }> {
@@ -1829,6 +2010,40 @@ function parseThreadQuery(
   }
 }
 
+function parseFollowUpSnoozes(input: unknown): Record<string, string> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("Invalid follow-up snoozes");
+  }
+  return Object.fromEntries(
+    Object.entries(input).map(([threadId, until]) => [
+      threadIdOf(requireThreadId(threadId)),
+      normalizeFollowUpSnooze(until),
+    ]),
+  );
+}
+
+function normalizeFollowUpOutbound(value: string | undefined): string | undefined {
+  const outbound = value?.trim();
+  if (!outbound) {
+    return undefined;
+  }
+  if (outbound.includes("\u0000")) {
+    throw new PersonalConnectorError("invalid_config", "Invalid follow-up outbound id", 400);
+  }
+  return outbound;
+}
+
+function normalizeFollowUpSnooze(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new PersonalConnectorError("invalid_config", "Invalid follow-up snooze time", 400);
+  }
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new PersonalConnectorError("invalid_config", "Invalid follow-up snooze time", 400);
+  }
+  return timestamp.toISOString();
+}
+
 async function pinnedInboxHeadExtras(
   selected: InboxItem[],
   prefs: ConversationPref[],
@@ -1942,7 +2157,8 @@ export function inboxStoreQuery(
     before: query.before,
     before_id: query.before_id,
     limit: query.limit,
-    siblings: true,
+    siblings: !query.disposition,
+    disposition: query.disposition,
     list: normalizeInboxListView(query.list),
   };
 }

@@ -54,7 +54,7 @@ export async function migratePostgresAuthority(pool: Pool): Promise<void> {
         .filter((part) => part.length > 0)) {
         await client.query(statement);
       }
-      if (step.version === 46) {
+      if (step.version === 48) {
         await rebuildArtifactPreviews(client);
       }
       await client.query(

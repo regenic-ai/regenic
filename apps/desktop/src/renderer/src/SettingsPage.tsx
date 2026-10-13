@@ -6,6 +6,10 @@ import {
   currentApiOrigin,
   fetchKernelSettings,
   fetchStore,
+  fetchDispatchPolicy,
+  fetchPendingInbox,
+  saveDispatchPolicy,
+  triagePendingInbox,
   pickDataDirectory,
   resolveSourceRetention,
 } from "./api";
@@ -18,6 +22,9 @@ import type {
   DataDirectoryView,
   KernelMode,
   Locale,
+  InboxViewItem,
+  MessageDisposition,
+  PersonalDispatchPolicy,
   SourceRetentionView,
   StoreView,
 } from "./types";
@@ -29,6 +36,7 @@ const emptyStore: StoreView = {
   blobs: 0,
   context_artifacts: 0,
   context_snapshots: 0,
+  context_snapshot_index: 0,
   context_bundles: 0,
   context_checkpoints: 0,
   recipes: 0,
@@ -52,6 +60,7 @@ function storeHasData(store: StoreView): boolean {
     store.blobs > 0 ||
     store.context_artifacts > 0 ||
     store.context_snapshots > 0 ||
+    store.context_snapshot_index > 0 ||
     store.context_bundles > 0 ||
     store.context_checkpoints > 0
   );
@@ -91,6 +100,70 @@ export function SettingsPage({
   const [reclaimConfirming, setReclaimConfirming] = useState(false);
   const [reclaimBusy, setReclaimBusy] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [dispatchPolicy, setDispatchPolicy] = useState<PersonalDispatchPolicy | null>(null);
+  const [dispatchBusy, setDispatchBusy] = useState(false);
+  const [dispatchMessage, setDispatchMessage] = useState<string | null>(null);
+  const [pending, setPending] = useState<InboxViewItem[]>([]);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [triagingId, setTriagingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchDispatchPolicy()
+      .then((policy) => {
+        if (!cancelled) setDispatchPolicy(policy);
+      })
+      .catch(() => {
+        if (!cancelled) setDispatchMessage(t("settings.dispatchError"));
+      });
+    void fetchPendingInbox()
+      .then((items) => {
+        if (!cancelled) setPending(items);
+      })
+      .catch(() => {
+        if (!cancelled) setPendingError(t("settings.pendingError"));
+      });
+    return () => { cancelled = true; };
+  }, [activeOrigin, t]);
+
+  const savePersonalDispatch = async () => {
+    if (!dispatchPolicy) return;
+    setDispatchBusy(true);
+    setDispatchMessage(null);
+    try {
+      setDispatchPolicy(await saveDispatchPolicy(dispatchPolicy));
+      setDispatchMessage(t("settings.dispatchSaved"));
+    } catch {
+      setDispatchMessage(t("settings.dispatchError"));
+    } finally {
+      setDispatchBusy(false);
+    }
+  };
+
+  const refreshPending = async () => {
+    try {
+      setPending(await fetchPendingInbox());
+      setPendingError(null);
+    } catch {
+      setPendingError(t("settings.pendingError"));
+    }
+  };
+
+  const triagePending = async (
+    eventId: string,
+    disposition: "current_work" | "outside_current_work",
+  ) => {
+    setTriagingId(eventId);
+    try {
+      await triagePendingInbox(eventId, disposition);
+      await refreshPending();
+      await onChanged();
+    } catch {
+      setPendingError(t("settings.pendingTriageError"));
+    } finally {
+      setTriagingId(null);
+    }
+  };
 
   useEffect(() => {
     void fetchKernelSettings()
@@ -285,6 +358,7 @@ export function SettingsPage({
         blobs: 0,
         context_artifacts: 0,
         context_snapshots: 0,
+        context_snapshot_index: 0,
         context_bundles: 0,
         context_checkpoints: 0,
         recipes: result.kept.recipes,
@@ -346,6 +420,64 @@ export function SettingsPage({
             </span>
           </button>
         </div>
+      </section>
+
+      <section className="card">
+        <h2>{t("settings.dispatch")}</h2>
+        <p className="muted">{t("settings.dispatchLead")}</p>
+        {dispatchPolicy && (
+          <>
+            {([
+              ["high_hint_disposition", "settings.dispatchHigh"],
+              ["actionable_disposition", "settings.dispatchActionable"],
+              ["short_text_disposition", "settings.dispatchShort"],
+              ["default_disposition", "settings.dispatchDefault"],
+            ] as const).map(([field, label]) => (
+              <label className="field" key={field}>
+                <span>{t(label)}</span>
+                <select value={dispatchPolicy[field]}
+                  onChange={(event) => setDispatchPolicy({
+                    ...dispatchPolicy, [field]: event.target.value as MessageDisposition,
+                  })}>
+                  <option value="current_work">{t("settings.dispatchCurrent")}</option>
+                  <option value="pending">{t("settings.dispatchPending")}</option>
+                  <option value="outside_current_work">{t("settings.dispatchOutside")}</option>
+                </select>
+              </label>
+            ))}
+            <div className="install-actions">
+              <button type="button" onClick={() => void savePersonalDispatch()} disabled={dispatchBusy}>
+                {dispatchBusy ? t("settings.dispatchSaving") : t("settings.dispatchSave")}
+              </button>
+            </div>
+          </>
+        )}
+        {dispatchMessage && <p className="muted" role="status">{dispatchMessage}</p>}
+      </section>
+
+      <section className="card">
+        <h2>{t("settings.pending")}</h2>
+        <button type="button" onClick={() => void refreshPending()}>{t("settings.pendingRefresh")}</button>
+        {pendingError && <p className="muted" role="alert">{pendingError}</p>}
+        {!pendingError && pending.length === 0 && <p className="muted">{t("settings.pendingEmpty")}</p>}
+        {pending.map((item) => (
+          <div className="pending-review-item" key={item.event.id}>
+            <div className="kv">
+              <span>{item.conversation_label || item.title || item.channel_label}</span>
+              <strong>{item.body_text || item.event.external_id}</strong>
+            </div>
+            <div className="install-actions">
+              <button type="button" disabled={triagingId !== null}
+                onClick={() => void triagePending(item.event.id, "current_work")}>
+                {t("settings.dispatchCurrent")}
+              </button>
+              <button type="button" disabled={triagingId !== null}
+                onClick={() => void triagePending(item.event.id, "outside_current_work")}>
+                {t("settings.dispatchOutside")}
+              </button>
+            </div>
+          </div>
+        ))}
       </section>
 
       <section className="card">

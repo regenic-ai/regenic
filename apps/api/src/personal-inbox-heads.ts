@@ -22,6 +22,7 @@ export interface InboxListQuery {
   thread_ids?: string[];
   limit?: number;
   list?: string;
+  disposition?: "current_work" | "pending";
   locale?: CopyLocale;
 }
 

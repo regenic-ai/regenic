@@ -36,6 +36,23 @@ export class PersonalContextController {
     return this.guard(() => this.context.getSnapshot(snapshotId));
   }
 
+  @Get("snapshots")
+  listSnapshots(
+    @Query("thread_id") threadId?: string,
+    @Query("limit") limit?: string,
+    @Query("before_created_at") beforeCreatedAt?: string,
+    @Query("before_snapshot_id") beforeSnapshotId?: string,
+  ) {
+    return this.guard(() => this.context.listSnapshots(
+      threadId, limit, beforeCreatedAt, beforeSnapshotId,
+    ));
+  }
+
+  @Post("diff")
+  diff(@Body() body: unknown) {
+    return this.guard(() => this.context.diff(body));
+  }
+
   @Get("artifacts")
   listArtifacts() {
     return this.guard(() => this.context.listArtifacts());

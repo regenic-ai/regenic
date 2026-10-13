@@ -93,8 +93,13 @@ L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTrans
 - D0 过滤与分层：`current_work` / `outside_current_work` / `pending`；Event 仍留下；从不自动 defer
 - 确认 Inbox Event 会记录该 Event 的精确 inbound cursor；支持时要求 source driver 确认同一 cursor，并可能折叠已完成 work
 - 折叠 Inbox Event 会将人工 conversation preference 应用到其派生 thread；该 preference 会跨新 work 保持折叠，直到人工显式恢复
+- 置顶 Inbox Event 会将人工 conversation preference 应用到其派生 thread；置顶 conversation 在 normal 与 attention 列表中领先，且不改变 Event 或 work state
 - 人工 triage 可以显式覆盖 Event 的分层；disposition 会保留先前 reason code、记录 `human_triage`，且绝不修改 Event
 - 重置人工 triage 会从持久化的 Event、body、surface 与 weight hint 重新运行自动分层；它替换人工决策，而不是保留 `human_triage`
+- 版本化个人 dispatch policy 记录 high hint、actionable message、short text 与 fallback path 的目标 disposition。每个新 ingest batch 读取并校验一次已保存 policy，再用于新 decision。缺失或无效 policy 保持默认。重放只为缺失 disposition 补写该 policy，已有 disposition（包括 `human_triage`）保持不变。显式 reapply 仍是把后续 policy 应用到已有 inbox event 的方式
+- 版本化的个人跟进策略从持久化的会话收发历史中推导逾期未回复消息。群聊、机器人、系统消息、tombstone、revision 以及之后的 inbound reply 不进入复核。复核读取配置等待期再往前一天窗口内最近写入的最多 2000 条事件。更早的逾期会话、入站历史落在窗口之外的会话不保证出现。跟进复核只读；用户可暂停或恢复一个会话，而不改变事件或收件箱处置
+- 消息级暂停绑定到一条发出消息，之后的发出消息可形成新候选。仍有效的旧会话级暂停会继续隐藏当前候选，即使该候选的消息级暂停已过期
+- 桌面端的跟进工作区可复核到期消息、设置等待时间、暂停或恢复会话。这些操作不改变事件或收件箱处置
 - 标准的应用与修订钩子
 - 调度：不进入当前工作 vs pending
 - 读与发的审计

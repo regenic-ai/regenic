@@ -30,6 +30,20 @@ function artifact(overrides = {}) {
   };
 }
 
+function snapshotIndex(overrides = {}) {
+  return {
+    org_id: "example-org",
+    thread_id: "thread-1",
+    snapshot_id: "snapshot-1",
+    principal: { actor_type: "human", actor_id: "person-1" },
+    consumer_id: "desktop-context-pilot",
+    purpose: "display context",
+    allowed_uses: ["display"],
+    created_at: "2026-08-30T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("context ports", () => {
   it("registers context capabilities deterministically and disposes exact values", () => {
     const projectors = new MemoryContextProjectorRegistry();
@@ -241,6 +255,67 @@ describe("context ports", () => {
       principal: { actor_type: "human", actor_id: "a" },
       consumer_id: "b\u0000c",
     }), null);
+  });
+
+  it("isolates, orders, limits, and immutably stores snapshot index entries", async () => {
+    const store = new MemoryContextArtifactStore();
+    const older = snapshotIndex({ snapshot_id: "snapshot-old" });
+    const newer = snapshotIndex({
+      snapshot_id: "snapshot-new",
+      created_at: "2026-08-30T01:00:00.000Z",
+    });
+    const sameTime = snapshotIndex({
+      snapshot_id: "snapshot-same-time",
+      created_at: "2026-08-30T01:00:00.000Z",
+    });
+    await store.putSnapshotIndex(older);
+    await store.putSnapshotIndex(newer);
+    await store.putSnapshotIndex(sameTime);
+    await store.putSnapshotIndex(newer);
+    await store.putSnapshotIndex(snapshotIndex({
+      snapshot_id: "snapshot-other-thread",
+      thread_id: "thread-2",
+    }));
+    await store.putSnapshotIndex(snapshotIndex({
+      snapshot_id: "snapshot-other-principal",
+      principal: { actor_type: "human", actor_id: "person-2" },
+    }));
+    await store.putSnapshotIndex(snapshotIndex({
+      snapshot_id: "snapshot-other-consumer",
+      consumer_id: "other-consumer",
+    }));
+
+    const query = {
+      org_id: "example-org",
+      thread_id: "thread-1",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "desktop-context-pilot",
+    };
+    assert.deepEqual(
+      (await store.listSnapshotIndex(query)).map(({ snapshot_id }) => snapshot_id),
+      ["snapshot-same-time", "snapshot-new", "snapshot-old"],
+    );
+    assert.deepEqual(
+      (await store.listSnapshotIndex({ ...query, limit: 1 })).map(({ snapshot_id }) => snapshot_id),
+      ["snapshot-same-time"],
+    );
+    const firstPage = await store.listSnapshotIndex({ ...query, limit: 1 });
+    const secondPage = await store.listSnapshotIndex({
+      ...query,
+      limit: 1,
+      before_created_at: firstPage[0].created_at,
+      before_snapshot_id: firstPage[0].snapshot_id,
+    });
+    assert.deepEqual(secondPage.map(({ snapshot_id }) => snapshot_id), ["snapshot-new"]);
+    await assert.rejects(
+      store.listSnapshotIndex({ ...query, before_created_at: firstPage[0].created_at }),
+      /Invalid context snapshot index query/,
+    );
+    assert.deepEqual(await store.listSnapshotIndex({ ...query, org_id: "other-org" }), []);
+    await assert.rejects(
+      store.putSnapshotIndex({ ...newer, purpose: "changed purpose" }),
+      /Cannot replace immutable context snapshot index entry/,
+    );
   });
 
   it("mounts and removes context runtime services with the plugin fiber", async () => {

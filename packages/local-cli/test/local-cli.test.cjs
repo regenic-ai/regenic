@@ -7,7 +7,7 @@ const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService } = require("@regenic/domain");
+const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
 const { runLocalCli } = require("../dist/main");
 
 const roots = [];
@@ -22,6 +22,25 @@ async function createRoot() {
   roots.push(root);
   return root;
 }
+
+it("stores a personal dispatch policy through the local CLI", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const policyPath = join(root, "dispatch-policy.json");
+  const authority = new SqliteAuthorityStore(database);
+  authority.close();
+  const defaults = await run(["dispatch-policy-get", "--database", database, "--org", "local-owner"]);
+  const policy = {
+    ...defaults,
+    high_hint_disposition: "pending",
+    default_disposition: "outside_current_work",
+  };
+  await writeFile(policyPath, JSON.stringify(policy));
+  assert.deepEqual(await run([
+    "dispatch-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
+  ]), policy);
+  assert.deepEqual(await run(["dispatch-policy-get", "--database", database, "--org", "local-owner"]), policy);
+});
 
 async function run(args, options = {}) {
   let output = "";
@@ -99,12 +118,88 @@ describe("regenic-local", () => {
       "context-assemble",
       ...common,
       "--query", "release approved",
+      "--thread", "synthetic-chat:chat-1",
     ], { env: { REGENIC_MODEL_DRIVER: "none" } });
     assert.equal(
       assembled.bundle.sections[0].items[0].text,
       "The release is approved for Monday.",
     );
     assert.ok(!assembled.bundle.degradation_flags.includes("lexical_index_unbuilt"));
+    assert.deepEqual(await run([
+      "context-snapshot-history",
+      ...common,
+      "--thread", "synthetic-chat:chat-1",
+    ]), [{
+      org_id: "local-owner",
+      thread_id: "synthetic-chat:chat-1",
+      snapshot_id: assembled.snapshot.id,
+      principal: { actor_type: "human", actor_id: "local-owner" },
+      consumer_id: "local-cli",
+      purpose: "inspect authorized local context",
+      allowed_uses: ["display", "reason"],
+      created_at: assembled.snapshot.created_at,
+    }]);
+    await assert.rejects(
+      run(["context-snapshot-history", ...common, "--thread", "synthetic-chat:chat-1", "--limit", "101"]),
+      /--limit must not exceed 100/,
+    );
+    const laterSnapshot = await run([
+      "context-assemble",
+      ...common,
+      "--query", "what was approved",
+      "--thread", "synthetic-chat:chat-1",
+    ], { env: { REGENIC_MODEL_DRIVER: "none" } });
+    const firstPage = await run([
+      "context-snapshot-history",
+      ...common,
+      "--thread", "synthetic-chat:chat-1",
+      "--limit", "1",
+    ]);
+    assert.equal(firstPage.length, 1);
+    const secondPage = await run([
+      "context-snapshot-history",
+      ...common,
+      "--thread", "synthetic-chat:chat-1",
+      "--limit", "1",
+      "--before-created-at", firstPage[0].created_at,
+      "--before-snapshot-id", firstPage[0].snapshot_id,
+    ]);
+    assert.equal(secondPage.length, 1);
+    assert.notEqual(secondPage[0].snapshot_id, firstPage[0].snapshot_id);
+    assert.ok(
+      [assembled.snapshot.id, laterSnapshot.snapshot.id].includes(secondPage[0].snapshot_id),
+    );
+    const snapshotDiff = await run([
+      "context-snapshot-diff",
+      ...common,
+      "--from-snapshot", assembled.snapshot.id,
+      "--to-snapshot", laterSnapshot.snapshot.id,
+    ]);
+    assert.equal(snapshotDiff.from_snapshot_id, assembled.snapshot.id);
+    assert.equal(snapshotDiff.to_snapshot_id, laterSnapshot.snapshot.id);
+    assert.equal(snapshotDiff.added.length, 0);
+    assert.equal(snapshotDiff.removed.length, 0);
+    assert.equal(snapshotDiff.changed.length, 0);
+    assert.equal(snapshotDiff.unchanged.length, 1);
+    await assert.rejects(
+      run([
+        "context-snapshot-diff",
+        ...common,
+        "--from-snapshot", assembled.snapshot.id,
+        "--to-snapshot", laterSnapshot.snapshot.id,
+        "--consumer", "other-consumer",
+      ]),
+      /Context bundle was not found/,
+    );
+    await assert.rejects(
+      run([
+        "context-snapshot-history",
+        ...common,
+        "--thread", "synthetic-chat:chat-1",
+        "--before-created-at", firstPage[0].created_at,
+      ]),
+      /--before-created-at and --before-snapshot-id must be provided together/,
+    );
 
     const digest = await run([
       "context-daily-digest-project",
@@ -1153,12 +1248,45 @@ describe("regenic-local", () => {
     ]);
     assert.equal(unfolded.hidden, false);
     assert.equal(unfolded.hidden_reason, null);
+    const pinned = await run([
+      "inbox-pin", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id,
+    ]);
+    assert.equal(pinned.pinned, true);
+    const unpinned = await run([
+      "inbox-unpin", "--database", database, "--org", "local-owner",
+      "--event", inbox[0].event.id,
+    ]);
+    assert.equal(unpinned.pinned, false);
     const reset = await run([
       "inbox-triage-reset", "--database", database, "--blob-root", blobRoot,
       "--org", "local-owner", "--event", inbox[0].event.id,
     ]);
     assert.equal(reset.disposition, "current_work");
     assert.deepEqual(reset.reason_codes, ["actionable"]);
+    const policyPath = join(root, "pending-policy.json");
+    await writeFile(policyPath, JSON.stringify({
+      version: 1,
+      high_hint_disposition: "current_work",
+      actionable_disposition: "pending",
+      short_text_disposition: "pending",
+      default_disposition: "current_work",
+    }));
+    await run([
+      "dispatch-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
+    ]);
+    const reapplied = await run([
+      "inbox-dispatch-reapply", "--database", database, "--blob-root", blobRoot,
+      "--org", "local-owner", "--event", inbox[0].event.id,
+    ]);
+    assert.equal(reapplied.disposition, "pending");
+    assert.ok(reapplied.reason_codes.includes("policy_actionable"));
+    assert.ok(reapplied.reason_codes.includes("personal_dispatch_policy"));
+    assert.deepEqual(await run(["inbox", "--database", database, "--org", "local-owner"]), []);
+    const pending = await run(["inbox-pending", "--database", database, "--org", "local-owner"]);
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].event.id, inbox[0].event.id);
+    assert.equal(pending[0].decision.disposition, "pending");
   });
 
   it("exports append-only Event metadata as JSONL without content bodies", async () => {
@@ -1411,4 +1539,59 @@ describe("regenic-local", () => {
       }
     }
   });
+});
+
+it("stores a personal follow-up policy through the local CLI", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const policyPath = join(root, "follow-up-policy.json");
+  const authority = new SqliteAuthorityStore(database);
+  authority.close();
+  const defaults = await run(["follow-up-policy-get", "--database", database, "--org", "local-owner"]);
+  const policy = { ...defaults, wait_minutes: 120, include_initial_outbound: true };
+  await writeFile(policyPath, JSON.stringify(policy));
+  assert.deepEqual(await run([
+    "follow-up-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
+  ]), policy);
+  assert.deepEqual(await run(["follow-up-policy-get", "--database", database, "--org", "local-owner"]), policy);
+});
+
+it("reviews overdue personal follow-ups through the local CLI", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const blobRoot = join(root, "blobs");
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const result = await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "native-local",
+    org_id: "local-owner",
+    delivery_id: "follow-up-1",
+    received_at: "2026-08-11T12:00:00.000Z",
+    records: [
+      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2026-08-11T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
+      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2026-08-11T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
+    ],
+  });
+  authority.close();
+  const followUps = await run([
+    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
+  ]);
+  assert.equal(followUps.length, 1);
+  assert.equal(followUps[0].event.id, result.records[1].event_id);
+  assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
+  const threadId = followUps[0].candidate.thread_id;
+  assert.deepEqual(await run([
+    "follow-up-snooze", "--database", database, "--org", "local-owner",
+    "--thread", threadId, "--until", "2099-01-01T00:00:00.000Z",
+  ]), { thread_id: threadId, snoozed_until: "2099-01-01T00:00:00.000Z" });
+  assert.deepEqual(await run([
+    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
+  ]), []);
+  assert.deepEqual(await run([
+    "follow-up-unsnooze", "--database", database, "--org", "local-owner", "--thread", threadId,
+  ]), { thread_id: threadId, snoozed_until: null });
+  assert.equal((await run([
+    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
+  ])).length, 1);
 });
