@@ -15,11 +15,27 @@ export interface ContextBundleDiffItem {
 export interface ContextBundleDiffChange {
   before: ContextBundleDiffItem;
   after: ContextBundleDiffItem;
+  reasons: ContextBundleDiffChangeReason[];
 }
+
+export type ContextBundleDiffChangeReason =
+  | "section_changed"
+  | "resource_changed"
+  | "kind_changed"
+  | "content_changed"
+  | "evidence_changed"
+  | "status_changed"
+  | "token_estimate_changed";
 
 export interface ContextBundleDiff {
   from_snapshot_id: string;
   to_snapshot_id: string;
+  summary: {
+    added: number;
+    removed: number;
+    changed: number;
+    unchanged: number;
+  };
   added: ContextBundleDiffItem[];
   removed: ContextBundleDiffItem[];
   changed: ContextBundleDiffChange[];
@@ -42,6 +58,7 @@ export function diffContextBundles(from: ContextBundle, to: ContextBundle): Cont
   const diff: ContextBundleDiff = {
     from_snapshot_id: from.snapshot_id,
     to_snapshot_id: to.snapshot_id,
+    summary: { added: 0, removed: 0, changed: 0, unchanged: 0 },
     added: [],
     removed: [],
     changed: [],
@@ -61,10 +78,17 @@ export function diffContextBundles(from: ContextBundle, to: ContextBundle): Cont
       diff.changed.push({
         before: toDiffItem(previous),
         after: toDiffItem(next),
+        reasons: changeReasons(previous, next),
       });
     }
   }
 
+  diff.summary = {
+    added: diff.added.length,
+    removed: diff.removed.length,
+    changed: diff.changed.length,
+    unchanged: diff.unchanged.length,
+  };
   return diff;
 }
 
@@ -109,4 +133,26 @@ function toDiffItem(indexed: IndexedBundleItem): ContextBundleDiffItem {
     section: indexed.section,
     ...(indexed.item.content_hash ? { content_hash: indexed.item.content_hash } : {}),
   };
+}
+
+function changeReasons(
+  before: IndexedBundleItem,
+  after: IndexedBundleItem,
+): ContextBundleDiffChangeReason[] {
+  const reasons: ContextBundleDiffChangeReason[] = [];
+  if (before.section !== after.section) reasons.push("section_changed");
+  if (before.item.resource_id !== after.item.resource_id) reasons.push("resource_changed");
+  if (before.item.kind !== after.item.kind) reasons.push("kind_changed");
+  if (
+    before.item.content_hash !== after.item.content_hash ||
+    before.item.text !== after.item.text
+  ) reasons.push("content_changed");
+  if (canonicalContextJson(before.item.evidence) !== canonicalContextJson(after.item.evidence)) {
+    reasons.push("evidence_changed");
+  }
+  if (before.item.status !== after.item.status) reasons.push("status_changed");
+  if (before.item.estimated_tokens !== after.item.estimated_tokens) {
+    reasons.push("token_estimate_changed");
+  }
+  return reasons;
 }
