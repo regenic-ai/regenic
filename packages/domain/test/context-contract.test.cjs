@@ -15,6 +15,7 @@ const {
   projectEvidenceBundleV1,
   validateContextArtifact,
   validateContextBundle,
+  validateContextBundleDiff,
   validateContextCandidate,
   validateContextRequest,
   validateContextSnapshot,
@@ -326,6 +327,39 @@ describe("context contracts", () => {
       () => diffContextBundles(before, bundle({ principal: { actor_type: "human", actor_id: "person-2" } })),
       /different authorization scopes/,
     );
+  });
+
+  it("strictly validates Context bundle diff classifications", () => {
+    const item = {
+      candidate_id: "candidate-1",
+      resource_id: "event-1",
+      kind: "event",
+      section: "facts",
+      content_hash: HASH_A,
+    };
+    const value = {
+      from_snapshot_id: "snapshot-before",
+      to_snapshot_id: "snapshot-after",
+      added: [item],
+      removed: [],
+      changed: [],
+      unchanged: [],
+    };
+
+    assert.equal(validateContextBundleDiff(value).success, true);
+    assert.equal(validateContextBundleDiff({ ...value, unexpected: true }).success, false);
+    assert.equal(validateContextBundleDiff({
+      ...value,
+      unchanged: [item],
+    }).success, false);
+    assert.equal(validateContextBundleDiff({
+      ...value,
+      added: [],
+      changed: [{
+        before: item,
+        after: { ...item, candidate_id: "candidate-2" },
+      }],
+    }).success, false);
   });
 
   it("projects a deterministic body-free EvidenceBundle v1 from ContextBundle citations", () => {
