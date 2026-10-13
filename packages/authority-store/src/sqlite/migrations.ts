@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 44;
+export const LATEST_SCHEMA_VERSION = 45;
 
 export const MIGRATIONS = [
   {
@@ -966,15 +966,12 @@ export const MIGRATIONS = [
     version: 44,
     sql: `
       ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '';
-      UPDATE context_artifacts
-      SET preview_json = json_object(
-        'thread_id', json_extract(payload_json, '$.attrs.thread_id'),
-        'utc_date', json_extract(payload_json, '$.attrs.utc_date'),
-        'last_text', json_extract(payload_json, '$.attrs.messages[#-1].text'),
-        'message_count', json_extract(payload_json, '$.attrs.message_count'),
-        'item_count', json_extract(payload_json, '$.attrs.item_count'),
-        'stored_message_length', json_array_length(json_extract(payload_json, '$.attrs.messages'))
-      );
+    `,
+  },
+  {
+    version: 45,
+    sql: `
+      SELECT 1;
     `,
   },
 ] as const;

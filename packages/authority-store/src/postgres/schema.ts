@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 45;
+export const PG_SCHEMA_VERSION = 46;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -463,24 +463,12 @@ CREATE INDEX IF NOT EXISTS events_parent_event_idx
     version: 45,
     sql: `
 ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '{}';
-UPDATE context_artifacts SET preview_json = (
-  jsonb_build_object(
-    'thread_id', payload_json #> '{attrs,thread_id}',
-    'utc_date', payload_json #> '{attrs,utc_date}',
-    'last_text', CASE
-      WHEN jsonb_typeof(payload_json #> '{attrs,messages}') = 'array'
-      THEN (payload_json #> '{attrs,messages}')->-1->'text'
-      ELSE NULL
-    END,
-    'message_count', payload_json #> '{attrs,message_count}',
-    'item_count', payload_json #> '{attrs,item_count}',
-    'stored_message_length', CASE
-      WHEN jsonb_typeof(payload_json #> '{attrs,messages}') = 'array'
-      THEN to_jsonb(jsonb_array_length(payload_json #> '{attrs,messages}'))
-      ELSE NULL
-    END
-  )
-)::text;
+`,
+  },
+  {
+    version: 46,
+    sql: `
+SELECT 1;
 `,
   },
 ] as const;

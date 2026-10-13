@@ -10,8 +10,6 @@ import {
 import { formatTime } from "./format";
 import { useLocale } from "./LocaleContext";
 
-const RECORD_PAGE = 40;
-
 export function ContextRecordsDialog({
   onClose,
 }: {
@@ -112,6 +110,7 @@ function ContextRecordBody({ id }: { id: string }) {
   const alive = useRef(true);
   const [messages, setMessages] = useState<ContextMessageView[] | null>(null);
   const [offset, setOffset] = useState(0);
+  const [pageLimit, setPageLimit] = useState(0);
   const [error, setError] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
 
@@ -130,6 +129,7 @@ function ContextRecordBody({ id }: { id: string }) {
         }
         setMessages(page.messages);
         setOffset(page.message_offset);
+        setPageLimit(page.message_limit);
       })
       .catch(() => {
         if (!cancelled) {
@@ -143,10 +143,10 @@ function ContextRecordBody({ id }: { id: string }) {
   }, [id]);
 
   async function showEarlier() {
-    if (offset <= 0 || loadingEarlier) {
+    if (offset <= 0 || pageLimit < 1 || loadingEarlier) {
       return;
     }
-    const limit = Math.min(RECORD_PAGE, offset);
+    const limit = Math.min(pageLimit, offset);
     const nextOffset = offset - limit;
     setLoadingEarlier(true);
     try {
@@ -172,7 +172,7 @@ function ContextRecordBody({ id }: { id: string }) {
     }
   }
 
-  const earlier = Math.min(RECORD_PAGE, offset);
+  const earlier = pageLimit > 0 ? Math.min(pageLimit, offset) : 0;
 
   return (
     <div className="context-record-body">

@@ -7,7 +7,7 @@ import type {
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
   ContextArtifact,
-  ContextArtifactSummary,
+  ContextArtifactIndex,
   ContextArtifactDecision,
   ContextArtifactQuery,
   ContextArtifactState,
@@ -214,8 +214,8 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listArtifacts", [query]);
   }
 
-  async listArtifactSummaries(query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
-    return this.reader.call("listArtifactSummaries", [query]);
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return this.reader.call("listArtifactIndexes", [query]);
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {

@@ -1187,10 +1187,10 @@ describe("SQLite context artifact store", () => {
     }
     const query = { org_id: "example-org", limit: 1 };
     assert.deepEqual(await sqlite.listArtifacts(query), await memory.listArtifacts(query));
-    assert.deepEqual(await sqlite.listArtifactSummaries(query), await memory.listArtifactSummaries(query));
+    assert.deepEqual(await sqlite.listArtifactIndexes(query), await memory.listArtifactIndexes(query));
     await assert.rejects(sqlite.listArtifacts({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
     await assert.rejects(memory.listArtifacts({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
-    await assert.rejects(sqlite.listArtifactSummaries({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
+    await assert.rejects(sqlite.listArtifactIndexes({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
     sqlite.close();
   });
 
@@ -1228,11 +1228,11 @@ describe("SQLite context artifact store", () => {
     legacy.close();
 
     store = new SqliteAuthorityStore(path);
-    const legacySummary = (await store.listArtifactSummaries({ org_id: "example-org" }))[0];
-    assert.equal(legacySummary.title, "stored last");
-    assert.equal(legacySummary.message_count, 2);
-    assert.equal(legacySummary.thread_id, "chat-legacy");
-    assert.equal(JSON.stringify(legacySummary).includes("time-newest"), false);
+    const legacyIndex = (await store.listArtifactIndexes({ org_id: "example-org" }))[0];
+    assert.equal(legacyIndex.preview.last_text, "time-newest");
+    assert.equal(legacyIndex.preview.readable_count, 2);
+    assert.equal(legacyIndex.preview.thread_id, "chat-legacy");
+    assert.equal(JSON.stringify(legacyIndex.preview).includes("stored last"), false);
 
     const digest = artifact({
       id: "digest-1",
@@ -1248,12 +1248,12 @@ describe("SQLite context artifact store", () => {
     await store.putArtifact(digest);
     await memory.putArtifact(digest);
     assert.deepEqual(
-      await store.listArtifactSummaries({ org_id: "example-org", kinds: ["daily_digest"] }),
-      await memory.listArtifactSummaries({ org_id: "example-org", kinds: ["daily_digest"] }),
+      await store.listArtifactIndexes({ org_id: "example-org", kinds: ["daily_digest"] }),
+      await memory.listArtifactIndexes({ org_id: "example-org", kinds: ["daily_digest"] }),
     );
     assert.equal(
-      (await store.listArtifactSummaries({ org_id: "example-org", kinds: ["daily_digest"] }))[0].title,
-      "2026-08-30",
+      (await store.listArtifactIndexes({ org_id: "example-org", kinds: ["daily_digest"] }))[0].preview.last_text,
+      "digest line",
     );
     store.close();
   });
@@ -1400,8 +1400,8 @@ describe("SQLite context artifact store", () => {
     await split.putArtifact(artifactValue);
     assert.deepEqual(await split.getArtifact("example-org", "artifact-1"), artifactValue);
     assert.equal(
-      (await split.listArtifactSummaries({ org_id: "example-org" }))[0].title,
-      "thread_summary",
+      (await split.listArtifactIndexes({ org_id: "example-org" }))[0].preview.readable_count,
+      0,
     );
     await split.close();
 

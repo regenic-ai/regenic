@@ -957,6 +957,8 @@ describe("personal context API", () => {
     assert.equal(recordResponse.status, 200);
     const record = await recordResponse.json();
     assert.deepEqual(record.messages, [{ text: "Release approved" }]);
+    assert.equal(record.message_total, 1);
+    assert.equal(record.message_limit, 40);
     assert.equal(record.input_refs, undefined);
     const accepted = await postJson(`${origin}/v1/me/context/artifacts/summary-api-1/decision`, { status: "accepted" });
     assert.equal(accepted.response.status, 201, accepted.text);

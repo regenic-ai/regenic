@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { rebuildArtifactPreviews } from "./context-artifacts";
 import {
   PG_BASELINE_SQL,
   PG_MIGRATIONS,
@@ -52,6 +53,9 @@ export async function migratePostgresAuthority(pool: Pool): Promise<void> {
         .map((part) => part.trim())
         .filter((part) => part.length > 0)) {
         await client.query(statement);
+      }
+      if (step.version === 46) {
+        await rebuildArtifactPreviews(client);
       }
       await client.query(
         `INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)`,

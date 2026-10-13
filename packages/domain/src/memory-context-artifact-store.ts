@@ -1,8 +1,8 @@
 import { canonicalContextJson } from "./context-canonical";
 import type { ContextArtifact } from "./context-artifact";
 import {
-  summarizeContextArtifact,
-  type ContextArtifactSummary,
+  contextArtifactPreview,
+  type ContextArtifactIndex,
 } from "./context-artifact-summary";
 import type {
   ContextArtifactDecision,
@@ -69,8 +69,14 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
       .map(clone);
   }
 
-  async listArtifactSummaries(query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
-    return (await this.listArtifacts(query)).map((artifact) => summarizeContextArtifact(artifact));
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return (await this.listArtifacts(query)).map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      status: artifact.status,
+      recorded_at: artifact.recorded_at,
+      preview: contextArtifactPreview(artifact),
+    }));
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {

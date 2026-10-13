@@ -23,10 +23,6 @@ import {
   detectStandardHealth,
   type ContextBundle,
   type ContextArtifact,
-  type ContextArtifactRecord,
-  type ContextArtifactSummary,
-  CONTEXT_RECORD_PAGE_MAX,
-  readContextArtifactRecord,
   type ContextReplayRequest,
   type ContextRequest,
   type ContextSnapshot,
@@ -62,6 +58,13 @@ import {
   ContextQuestionError,
   type ContextAnswerResult,
 } from "@regenic/context-engine";
+import {
+  CONTEXT_RECORD_PAGE_MAX,
+  contextRecordPage,
+  contextRecordSummary,
+  type ContextRecordPage,
+  type ContextRecordSummary,
+} from "./context-record-view";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 const FORBIDDEN_PERSONAL_KEYS = new Set(["id", "org_id", "principal", "schema_version"]);
@@ -125,17 +128,18 @@ export class PersonalContextService {
     });
   }
 
-  async listArtifactSummaries(): Promise<ContextArtifactSummary[]> {
-    return this.runtime.requireHost().get("context-artifacts").listArtifactSummaries({
+  async listArtifactSummaries(): Promise<ContextRecordSummary[]> {
+    const indexes = await this.runtime.requireHost().get("context-artifacts").listArtifactIndexes({
       org_id: this.runtime.orgId(),
     });
+    return indexes.map((index) => contextRecordSummary(index));
   }
 
   async getArtifactRecord(
     artifactId: string,
     offset?: string,
     limit?: string,
-  ): Promise<ContextArtifactRecord> {
+  ): Promise<ContextRecordPage> {
     const id = requiredString(artifactId, "artifact_id");
     const parsedOffset = optionalBoundedInt(offset, "offset", 1_000_000_000, 0);
     const parsedLimit = optionalBoundedInt(limit, "limit", CONTEXT_RECORD_PAGE_MAX, 1);
@@ -146,7 +150,7 @@ export class PersonalContextService {
     if (!artifact) {
       throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context record was not found");
     }
-    return readContextArtifactRecord(artifact, {
+    return contextRecordPage(artifact, {
       ...(parsedOffset === undefined ? {} : { offset: parsedOffset }),
       ...(parsedLimit === undefined ? {} : { limit: parsedLimit }),
     });

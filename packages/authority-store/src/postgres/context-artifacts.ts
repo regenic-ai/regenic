@@ -9,14 +9,14 @@ import type {
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
-  ContextArtifactSummary,
+  ContextArtifactIndex,
   SyncCatalogSnapshot,
 } from "@regenic/domain";
 import {
   validateContextArtifact,
   canonicalContextJson,
   contextArtifactPreview,
-  contextArtifactSummaryFromPreview,
+  contextArtifactPreviewFromStored,
   validateContextArtifactQuery,
   validateContextSnapshot,
   validateContextBundle,
@@ -102,7 +102,7 @@ export async function listArtifacts(db: PgSql, query: ContextArtifactQuery): Pro
     return rows.map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status }));
   }
 
-export async function listArtifactSummaries(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
+export async function listArtifactIndexes(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
     const parts = artifactListParts(query);
     if (!parts) {
       return [];
@@ -123,22 +123,43 @@ export async function listArtifactSummaries(db: PgSql, query: ContextArtifactQue
       parts.params,
     );
     return rows
-      .map((row) => ({
-        recorded_at: toIso(row.recorded_at),
-        summary: contextArtifactSummaryFromPreview(
-          {
-            id: row.id,
-            kind: row.kind,
-            status: row.lifecycle_status,
-            recorded_at: toIso(row.recorded_at),
-          },
-          row.preview_json,
-        ),
-      }))
-      .sort((left, right) => compareRecordedId(left.recorded_at, left.summary.id, right.recorded_at, right.summary.id))
-      .slice(0, parts.limit)
-      .map((row) => row.summary);
+      .map((row) => {
+        const recordedAt = toIso(row.recorded_at);
+        return {
+          id: row.id,
+          kind: row.kind,
+          status: row.lifecycle_status,
+          recorded_at: recordedAt,
+          preview: contextArtifactPreviewFromStored(row.preview_json),
+        };
+      })
+      .sort((left, right) => compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id))
+      .slice(0, parts.limit);
   }
+
+export async function rebuildArtifactPreviews(client: PoolClient): Promise<void> {
+  const rows = await client.query<{ org_id: string; id: string; payload_json: unknown }>(
+    `SELECT org_id, id, payload_json FROM context_artifacts`,
+  );
+  for (const row of rows.rows) {
+    await client.query(
+      `UPDATE context_artifacts SET preview_json = $1 WHERE org_id = $2 AND id = $3`,
+      [previewJson(row.payload_json), row.org_id, row.id],
+    );
+  }
+}
+
+function previewJson(payload: unknown): string {
+  let parsed = payload;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed) as unknown;
+    } catch {
+      parsed = {};
+    }
+  }
+  return canonicalContextJson(contextArtifactPreview(parsed as ContextArtifact));
+}
 
 function artifactListParts(query: ContextArtifactQuery): {
   clauses: string[];

@@ -10,14 +10,14 @@ import type {
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
-  ContextArtifactSummary,
+  ContextArtifactIndex,
   SyncCatalogSnapshot,
 } from "@regenic/domain";
 import {
   validateContextArtifact,
   canonicalContextJson,
   contextArtifactPreview,
-  contextArtifactSummaryFromPreview,
+  contextArtifactPreviewFromStored,
   validateContextArtifactQuery,
   validateContextSnapshot,
   validateContextBundle,
@@ -92,7 +92,7 @@ export async function listArtifacts(db: Database.Database, query: ContextArtifac
       .slice(0, parts.limit);
   }
 
-export async function listArtifactSummaries(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
+export async function listArtifactIndexes(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
     const parts = artifactListParts(query);
     if (!parts) {
       return [];
@@ -116,16 +116,36 @@ export async function listArtifactSummaries(db: Database.Database, query: Contex
     return rows
       .sort((left, right) => compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id))
       .slice(0, parts.limit)
-      .map((row) => contextArtifactSummaryFromPreview(
-        {
-          id: row.id,
-          kind: row.kind,
-          status: row.lifecycle_status,
-          recorded_at: row.recorded_at,
-        },
-        row.preview_json,
-      ));
+      .map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        status: row.lifecycle_status,
+        recorded_at: row.recorded_at,
+        preview: contextArtifactPreviewFromStored(row.preview_json),
+      }));
   }
+
+export function rebuildArtifactPreviews(db: Database.Database): void {
+  const rows = db.prepare(
+    `SELECT org_id, id, payload_json FROM context_artifacts`,
+  ).all() as Array<{ org_id: string; id: string; payload_json: string }>;
+  const update = db.prepare(
+    `UPDATE context_artifacts SET preview_json = ? WHERE org_id = ? AND id = ?`,
+  );
+  for (const row of rows) {
+    update.run(previewJson(row.payload_json), row.org_id, row.id);
+  }
+}
+
+function previewJson(payload: string): string {
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(payload) as unknown;
+  } catch {
+    parsed = {};
+  }
+  return canonicalContextJson(contextArtifactPreview(parsed as ContextArtifact));
+}
 
 function artifactListParts(query: ContextArtifactQuery): {
   clauses: string[];

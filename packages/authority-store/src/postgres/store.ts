@@ -21,7 +21,7 @@ import type {
   ContextAuthorityRead,
   ContextArtifact,
   ContextArtifactQuery,
-  ContextArtifactSummary,
+  ContextArtifactIndex,
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
@@ -198,7 +198,7 @@ import {
   getCheckpoint,
   getSnapshot,
   listArtifacts,
-  listArtifactSummaries,
+  listArtifactIndexes,
   parseContextJson,
   putArtifact,
   putBundle,
@@ -454,8 +454,8 @@ export class PostgresAuthorityStore
     return listArtifacts(this.sql, query);
   }
 
-  async listArtifactSummaries(query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
-    return listArtifactSummaries(this.sql, query);
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return listArtifactIndexes(this.sql, query);
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {

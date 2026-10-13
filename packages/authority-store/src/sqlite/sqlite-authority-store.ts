@@ -17,7 +17,7 @@ import type {
   ContextAuthorityRead,
   ContextArtifact,
   ContextArtifactQuery,
-  ContextArtifactSummary,
+  ContextArtifactIndex,
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
@@ -152,8 +152,9 @@ import {
   getCheckpoint,
   getSnapshot,
   listArtifacts,
-  listArtifactSummaries,
+  listArtifactIndexes,
   putArtifact,
+  rebuildArtifactPreviews,
   putBundle,
   putCheckpoint,
   putSnapshot,
@@ -457,8 +458,8 @@ export class SqliteAuthorityStore
     return listArtifacts(this.database, query);
   }
 
-  async listArtifactSummaries(query: ContextArtifactQuery): Promise<ContextArtifactSummary[]> {
-    return listArtifactSummaries(this.database, query);
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return listArtifactIndexes(this.database, query);
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
@@ -1582,6 +1583,9 @@ export class SqliteAuthorityStore
           return;
         }
         this.database.exec(migration.sql);
+        if (migration.version === 45) {
+          rebuildArtifactPreviews(this.database);
+        }
         this.database.pragma(`user_version = ${migration.version}`);
       });
       if (migration.version === 10) {

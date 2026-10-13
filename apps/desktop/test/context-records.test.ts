@@ -45,6 +45,7 @@ describe("context record views", () => {
       ],
       message_offset: 4,
       message_total: 9,
+      message_limit: 40,
     });
     assert.deepEqual(page, {
       messages: [
@@ -53,6 +54,7 @@ describe("context record views", () => {
       ],
       message_offset: 4,
       message_total: 9,
+      message_limit: 40,
     });
     assert.equal(contextRecordPageFromResponse(null), null);
   });

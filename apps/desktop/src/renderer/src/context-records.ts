@@ -17,6 +17,7 @@ export interface ContextRecordPage {
   messages: ContextMessageView[];
   message_offset: number;
   message_total: number;
+  message_limit: number;
 }
 
 export function contextSummariesFromResponse(input: unknown): ContextRecordSummary[] {
@@ -41,13 +42,15 @@ export function contextRecordPageFromResponse(input: unknown): ContextRecordPage
   const row = input as Record<string, unknown>;
   const offset = countValue(row.message_offset);
   const total = countValue(row.message_total);
-  if (offset === undefined || total === undefined) {
+  const limit = countValue(row.message_limit);
+  if (offset === undefined || total === undefined || limit === undefined || limit < 1) {
     return null;
   }
   return {
     messages: contextMessages(row.messages),
     message_offset: offset,
     message_total: total,
+    message_limit: limit,
   };
 }
 
