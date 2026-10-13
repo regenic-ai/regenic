@@ -6,7 +6,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
-    "test": "pnpm --filter @regenic/connector-host... build && pnpm --filter @regenic/config build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/lexical-index build && pnpm --filter @regenic/context-engine build && pnpm --filter @regenic/model-provider build && pnpm run build && node --test test/*.test.cjs",
+    "test": "pnpm --filter @regenic/connector-host... build && pnpm --filter @regenic/config build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/lexical-index build && pnpm --filter @regenic/context-engine build && pnpm --filter @regenic/model-provider build && pnpm run build && node --test --test-concurrency=1 test/personal-api*.test.cjs && node --test $(find test -maxdepth 1 -type f -name '*.test.cjs' ! -name 'personal-api*')",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -1,0 +1,944 @@
+.page {
+  width: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 28px 32px 56px;
+}
+
+.page-wide {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.page-wide > .card,
+.page-wide .recipe-editor,
+.page-wide .recipe-saved {
+  width: 100%;
+  max-width: none;
+}
+
+.page-hero {
+  width: 100%;
+  max-width: none;
+  margin-bottom: 8px;
+}
+
+.page-eyebrow {
+  margin: 0 0 4px;
+  color: var(--g300);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.page-lead {
+  margin: 0;
+  max-width: 48em;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.step-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+  max-width: none;
+  margin: 16px 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.step-grid li {
+  display: grid;
+  gap: 6px;
+  min-height: 100%;
+  padding: 14px 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: inset 2px 0 0 var(--g700);
+}
+
+.step-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--g300);
+  font-size: 11px;
+  font-weight: 650;
+  display: grid;
+  place-items: center;
+}
+
+.step-grid strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.language-choices {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (min-width: 900px) {
+  .page-wide .choice-list {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .page-recipes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    column-gap: 16px;
+    row-gap: 12px;
+    align-items: start;
+  }
+
+  .page-recipes > .page-hero,
+  .page-recipes > .recipe-guide,
+  .page-recipes > .recipe-page-notice {
+    grid-column: 1 / -1;
+  }
+
+  .page-recipes > .card:only-of-type,
+  .page-recipes:not(:has(.recipe-saved)) > .recipe-editor {
+    grid-column: 1 / -1;
+  }
+
+  .recipe-starter-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .engine-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .step-grid,
+  .language-choices,
+  .page-wide .choice-list,
+  .seg,
+  .recipe-commit,
+  .recipe-row,
+  .recipe-name,
+  .recipe-form-foot {
+    grid-template-columns: 1fr;
+  }
+
+  .recipe-steps {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .recipe-row-label,
+  .recipe-name span {
+    padding-top: 0;
+  }
+
+  .recipe-more {
+    margin-left: 0;
+  }
+
+  .page-recipes .seg {
+    display: grid;
+    width: 100%;
+    grid-auto-flow: row;
+    grid-auto-columns: unset;
+    grid-template-columns: 1fr;
+  }
+
+  .page-recipes .seg button {
+    width: 100%;
+    padding: 0 8px;
+  }
+
+  .recipe-actions {
+    justify-content: stretch;
+  }
+
+  .recipe-actions .primary,
+  .recipe-actions .ghost {
+    flex: 1;
+  }
+
+  .engine-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .recipe-commit {
+    display: grid;
+  }
+
+  .install {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .install-actions {
+    justify-content: flex-start;
+  }
+}
+
+.brand-badge {
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.brand-badge-22 {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.brand-badge-28 {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+
+.brand-badge img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 14px;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.card.recipe-editor {
+  padding: 0;
+}
+
+.card.recipe-editor h2 {
+  margin: 0;
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.engine-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.engine-stat {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+  min-height: 78px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 42%, var(--surface));
+}
+
+.engine-stat-label {
+  color: var(--g300);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.engine-stat-value {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.engine-stat.is-emphasis .engine-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.engine-stat.is-ok {
+  box-shadow: inset 2px 0 0 var(--g700);
+}
+
+.engine-stat.is-warn {
+  box-shadow: inset 2px 0 0 var(--ai);
+}
+
+.engine-stat.is-risk {
+  box-shadow: inset 2px 0 0 var(--risk);
+}
+
+.engine-stat.is-warn .engine-stat-label {
+  color: var(--ai);
+}
+
+.engine-stat.is-risk .engine-stat-label {
+  color: var(--risk);
+}
+
+.engine-meta {
+  display: grid;
+  gap: 0;
+  margin: 16px 0 0;
+  padding: 4px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.engine-meta div {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  min-width: 0;
+  padding: 9px 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+.engine-meta div:last-child {
+  border-bottom: 0;
+  padding-bottom: 2px;
+}
+
+.engine-meta dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.engine-meta dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.engine-meta dd code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.engine-meta dd code:hover {
+  white-space: normal;
+  overflow: visible;
+  color: var(--text);
+}
+
+.engine-kernel .action-error,
+.engine-kernel .action-hint,
+.engine-connectors .action-error,
+.engine-connectors .action-hint,
+.connector-import .action-error,
+.connector-import .action-ok {
+  margin-top: 12px;
+}
+
+.connector-import {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-top: 10px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.card-head h2 {
+  margin: 0;
+}
+
+.card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 6px 12px;
+  color: var(--muted);
+}
+
+.kv strong {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.kv code {
+  word-break: break-all;
+}
+
+.install {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 0;
+}
+
+.install-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.connector-kind {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 42%, var(--surface));
+}
+
+.connector-kind:first-of-type {
+  margin-top: 12px;
+}
+
+.connector-kind.is-installed {
+  box-shadow: inset 2px 0 0 var(--g700);
+}
+
+.install-instance {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.install-block {
+  margin-top: 10px;
+}
+
+.install-form {
+  display: grid;
+  gap: 10px;
+  padding: 0 0 12px 12px;
+}
+
+.prereq-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setup-steps {
+  margin: 0 0 4px;
+}
+
+.setup-steps h3,
+.setup-steps summary {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text);
+}
+
+.setup-steps summary {
+  cursor: pointer;
+}
+
+.setup-step-list {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 10px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.setup-step-list .muted {
+  margin-top: 2px;
+}
+
+.setup-step-link {
+  color: var(--data);
+  font-weight: 550;
+}
+
+.setup-step-command {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  margin-top: 6px;
+}
+
+.setup-step-command code {
+  display: block;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 11px;
+  overflow-x: auto;
+  user-select: text;
+}
+
+.pairing-card {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.pairing-card .muted {
+  margin: 0;
+}
+
+.install-docs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.doc-link {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--data);
+  background: color-mix(in srgb, var(--data) 10%, transparent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.doc-link:hover {
+  border-color: var(--data);
+  color: var(--text);
+}
+
+.choice-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 12px;
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px;
+  align-items: start;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.choice strong,
+.choice .muted {
+  display: block;
+}
+
+.choice .muted {
+  margin-top: 2px;
+}
+
+.choice.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.choice-mark {
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+}
+
+.choice.active .choice-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--bg);
+}
+
+.card .field {
+  margin-bottom: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.field .muted,
+.field-empty {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.field input,
+.field select,
+.field textarea {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--bg);
+  font: inherit;
+  font-weight: 400;
+  user-select: text;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.menu-select-btn:focus-visible {
+  outline: none;
+  border-color: var(--g700);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 22%, transparent);
+}
+
+.field input,
+.field select {
+  height: 30px;
+  padding: 0 8px;
+}
+
+.field textarea {
+  min-height: 120px;
+  padding: 8px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.field-wide textarea {
+  min-height: 168px;
+}
+
+.field-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.check-options {
+  display: grid;
+  gap: 8px;
+}
+
+.check-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.check-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.check-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(10 10 10 / 62%);
+}
+
+.dialog {
+  width: min(560px, 100%);
+  max-height: min(84vh, 720px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 45%);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 0;
+}
+
+.dialog-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.dialog .install-form {
+  padding: 12px 16px 16px;
+}
+
+.dialog .check-list {
+  max-height: 320px;
+}
+
+.check-item input {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+
+.ghost.danger {
+  color: var(--risk);
+  border-color: #3a2a16;
+}
+
+.primary.danger {
+  background: var(--risk);
+  color: var(--on-accent);
+}
+
+.store-footprint {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+
+.store-stat {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 42%, var(--surface));
+}
+
+.store-stat-value {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.store-stat-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+button.store-stat {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.store-stat:hover,
+button.store-stat:focus-visible {
+  border-color: var(--accent);
+}
+
+.context-dialog {
+  width: min(720px, 100%);
+}
+
+.context-records {
+  display: grid;
+  gap: 4px;
+  padding: 8px 16px 16px;
+}
+
+.context-record {
+  border-top: 1px solid var(--line);
+  padding: 10px 0;
+}
+
+.context-record summary {
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.context-record-title {
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.context-record-meta,
+.context-message time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-record-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.context-message {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.context-message time {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.store-confirm {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #3a2a16;
+  border-radius: 10px;
+  background: var(--danger-soft);
+}
+
+.store-confirm p {
+  margin: 0 0 12px;
+  color: var(--text);
+}
+
+.data-dir-confirm {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 42%, var(--surface));
+}
+
+.data-dir-confirm p {
+  margin: 0 0 10px;
+}
+
+.data-dir-reclaim {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--g300) 28%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--g300) 8%, var(--surface));
+}
+
+.data-dir-reclaim p {
+  margin: 0 0 10px;
+}
+
+.data-dir-reclaim-size {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
+.action-ok {
+  color: var(--g300);
+  margin: 12px 0 0;
+}
+
+@media (max-width: 860px) {
+  .store-footprint {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.install strong {
+  color: var(--text);
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.install-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.primary:disabled,
+.ghost:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.action-error {
+  color: var(--risk);
+  margin: 12px 0 0;
+}
+
+.action-hint {
+  color: var(--risk);
+  margin: 6px 0 0;
+}
+

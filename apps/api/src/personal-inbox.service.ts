@@ -6,32 +6,23 @@ import {
   DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
   resolveCopy,
   type CopyLocale,
-  attentionOf,
   arrangeMessage,
   collectLatestInbound,
-  computeThreadUnread,
   conversationId,
   inboxDigest,
   isExecutorSysoutBody,
   headsByThread,
-  isBeforeEvent,
   isLocalOutboundId,
   isThreadStatusItem,
   parseConversationThread,
-  projectThreadFacet,
-  recordClassFromType,
   takeRecentInboxItems,
-  latestForwardedTo,
-  type ForwardedFrom,
   foldByHuman,
   normalizeInboxLimit,
   normalizeInboxListView,
   unfold,
-  resolveMessageSurface,
   threadIdOf,
   withSurfaceGeneration,
   type ArrangementDecision,
-  type AttentionClass,
   type AuthorityStore,
   type BlobStore,
   type ConnectorInstallation,
@@ -41,21 +32,13 @@ import {
   type InboxItem,
   type InboxQuery,
   type IngestAttempt,
-  type ListTitleMode,
-  type MessageDirection,
-  type MessageKind,
   type PromptAnswer,
   type MessageReceipt,
-  type RecordClass,
-  type ThreadActivity,
   type ThreadAttention,
   type ThreadAttentionQuery,
-  type ThreadFacet,
   type ThreadInboundCursor,
   type ThreadInboundScan,
   type ThreadPrompt,
-  type ThreadReceiptQuery,
-  type WorkFace,
   loadSyncProgress,
   aggregateSyncProgress,
   personalReadTierFromDetail,
@@ -73,7 +56,6 @@ import {
 import {
   resolveInboxBodies,
   resolveInboxBody,
-  type InboxAttachment,
   type InboxBody,
 } from "./inbox-body";
 import { catalogMembersFromStreams } from "./connector-sync-members";
@@ -101,50 +83,71 @@ import {
   type EngineExecutorView,
   type ExecutorKindCatalogItem,
 } from "./personal-executor.service";
-import { PersonalWorkService, type WorkInboxFace } from "./personal-work.service";
+import { PersonalWorkService } from "./personal-work.service";
 import {
   listPluginInventory,
   resolvePluginDirectory,
   type PluginInventoryItem,
 } from "./channel-plugins";
 
-export interface InboxViewItem {
-  decision: ArrangementDecision;
-  event: EventRecord;
-  body_text?: string;
-  media_type?: string;
-  attachments?: InboxAttachment[];
-  channel: string;
-  channel_label: string;
-  kind: MessageKind;
-  direction: MessageDirection;
-  can_send: boolean;
-  await_reply: boolean;
-  hold_while_working: boolean;
-  list_title: ListTitleMode;
-  thread_id: string;
-  title: string | null;
-  pinned: boolean;
-  hidden: boolean;
-  pref_updated_at: string | null;
-  conversation_label: string | null;
-  conversation_kind: string | null;
-  unit_kind: string | null;
-  unit_kind_label: string | null;
-  actor_label: string | null;
-  activity?: ThreadActivity;
-  prompts: ThreadPrompt[];
-  unread: boolean;
-  unread_count: number;
-  can_receipt: boolean;
-  receipt?: MessageReceipt;
-  record_class: RecordClass;
-  thread_facet: ThreadFacet;
-  attention: AttentionClass;
-  work?: WorkFace;
-  forwarded_from?: ForwardedFrom;
-  forwarded_to?: ForwardedFrom;
-}
+import {
+  CHANGED_INBOX_EVENT_CAP,
+  collectChangedInboxThreadIds,
+  headsLiveFetchLimit,
+  headsNextBefore,
+  parseSinceInboxDigest,
+  partitionLiveInboxHeads,
+  shouldFallbackChangedInboxHeads,
+  shouldLoadChangedInboxHeads,
+  shouldSplitInboxHeads,
+  splitChangedInboxHeads,
+  splitHeadExcludeIds,
+  splitInboxHeadViews,
+  trimInboxHead,
+  type InboxHeadsPage,
+  type InboxListQuery,
+} from "./personal-inbox-heads";
+import {
+  loadInboxReceipts,
+  receiptQueriesOf,
+  type InboxResolvedRow,
+} from "./personal-inbox-receipts";
+import {
+  byEventTime,
+  messageSurfaceOf,
+  threadOf,
+} from "./personal-inbox-surface";
+import {
+  conversationLabelsFor,
+  decorateInboxItem,
+  loadForwardedToTraces,
+  projectForwardedTo,
+  type InboxViewItem,
+} from "./personal-inbox-view";
+
+export {
+  CHANGED_INBOX_EVENT_CAP,
+  CHANGED_INBOX_THREAD_CAP,
+  collectChangedInboxThreadIds,
+  headsLiveFetchLimit,
+  headsNextBefore,
+  parseSinceInboxDigest,
+  partitionLiveInboxHeads,
+  shouldFallbackChangedInboxHeads,
+  shouldLoadChangedInboxHeads,
+  shouldSplitInboxHeads,
+  splitChangedInboxHeads,
+  splitHeadExcludeIds,
+  splitInboxHeadViews,
+  trimInboxHead,
+} from "./personal-inbox-heads";
+export type {
+  InboxHeadsCursor,
+  InboxHeadsPage,
+  InboxListQuery,
+} from "./personal-inbox-heads";
+export type { InboxViewItem } from "./personal-inbox-view";
+
 
 export interface ConversationPrefView {
   thread_id: string;
@@ -279,436 +282,9 @@ export interface PersonalHeartbeatView {
   installations: PersonalHeartbeatInstallationPulse[];
 }
 
-export interface InboxListQuery {
-  since?: string;
-  since_id?: string;
-  before?: string;
-  before_id?: string;
-  heads?: boolean;
-  live?: boolean;
-  split?: boolean;
-  changed?: boolean;
-  since_digest?: string;
-  thread_id?: string;
-  thread_ids?: string[];
-  limit?: number;
-  list?: string;
-  locale?: CopyLocale;
-}
-
-export type InboxHeadsCursor = { before: string; before_id: string };
-
-export interface InboxHeadsPage {
-  pinned: InboxViewItem[];
-  live: InboxViewItem[];
-  active_work?: InboxViewItem[];
-  next_before: InboxHeadsCursor | null;
-  has_older: boolean;
-  patch?: boolean;
-  gone?: string[];
-}
-
-export const CHANGED_INBOX_EVENT_CAP = 200;
-export const CHANGED_INBOX_THREAD_CAP = 80;
 /** Coalesce ingest-driven digest COUNT scans while sync pages land. */
 export const INBOX_DIGEST_DEBOUNCE_MS = 250;
 
-export function shouldSplitInboxHeads(query: InboxListQuery): boolean {
-  return query.heads === true && query.split === true && !query.thread_id;
-}
-
-export function shouldLoadChangedInboxHeads(query: InboxListQuery): boolean {
-  return (
-    query.heads === true &&
-    query.split === true &&
-    query.changed === true &&
-    Boolean(query.since_digest?.trim()) &&
-    !query.thread_id &&
-    !query.before
-  );
-}
-
-export function parseSinceInboxDigest(value: string): {
-  count: number;
-  latest_at: string;
-  latest_id: string;
-  pref_updated_at: string;
-} | null {
-  const trimmed = value.replace(/\s+/g, " ").trim();
-  if (!trimmed) {
-    return null;
-  }
-  const pref = peelInboxDigestTail(trimmed.split("&")[0] ?? "");
-  const prefCountSep = pref.head.lastIndexOf(":");
-  if (prefCountSep < 0) {
-    return null;
-  }
-  const prefCount = Number(pref.head.slice(prefCountSep + 1));
-  const left = pref.head.slice(0, prefCountSep);
-  const countSep = left.indexOf(":");
-  if (countSep < 0) {
-    return null;
-  }
-  const count = Number(left.slice(0, countSep));
-  const middle = left.slice(countSep + 1);
-  const idSep = middle.lastIndexOf(":");
-  if (idSep < 0) {
-    return null;
-  }
-  const latestAt = middle.slice(0, idSep);
-  if (!latestAt) {
-    return null;
-  }
-  if (!Number.isInteger(count) || count < 0) {
-    return null;
-  }
-  if (!Number.isInteger(prefCount) || prefCount < 0) {
-    return null;
-  }
-  return {
-    count,
-    latest_at: latestAt,
-    latest_id: middle.slice(idSep + 1),
-    pref_updated_at: pref.tail,
-  };
-}
-
-function peelInboxDigestTail(base: string): { head: string; tail: string } {
-  if (base.endsWith(":")) {
-    return { head: base.slice(0, -1), tail: "" };
-  }
-  const iso = base.match(
-    /^(.*):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/,
-  );
-  if (iso) {
-    return { head: iso[1] ?? "", tail: iso[2] ?? "" };
-  }
-  const last = base.lastIndexOf(":");
-  if (last < 0) {
-    return { head: "", tail: base };
-  }
-  return { head: base.slice(0, last), tail: base.slice(last + 1) };
-}
-
-export function shouldFallbackChangedInboxHeads(collected: {
-  ids: readonly string[];
-  tooMany: boolean;
-  countChanged?: boolean;
-}): boolean {
-  return (
-    collected.tooMany ||
-    (collected.ids.length === 0 && collected.countChanged === true)
-  );
-}
-
-export function collectChangedInboxThreadIds(input: {
-  events: Array<{ source: string; external_id: string; id: string }>;
-  prefs: Array<{ thread_id: string; updated_at: string }>;
-  prefSince: string;
-}): { ids: string[]; tooMany: boolean } {
-  if (input.events.length >= CHANGED_INBOX_EVENT_CAP) {
-    return { ids: [], tooMany: true };
-  }
-  const ids = new Set<string>();
-  for (const event of input.events) {
-    ids.add(conversationId(event.source, event.external_id, event.id));
-  }
-  for (const pref of input.prefs) {
-    if (!input.prefSince || pref.updated_at > input.prefSince) {
-      ids.add(pref.thread_id);
-    }
-  }
-  const list = [...ids];
-  return { ids: list, tooMany: list.length > CHANGED_INBOX_THREAD_CAP };
-}
-
-export function splitChangedInboxHeads<
-  T extends { thread_id?: string; pinned?: boolean; hidden?: boolean },
->(input: {
-  views: T[];
-  collectedIds: readonly string[];
-  prefs: Array<{ thread_id: string; hidden?: boolean }>;
-  workIds: readonly string[];
-  list?: string;
-}): {
-  pinned: T[];
-  live: T[];
-  active_work: T[];
-  gone: string[];
-} {
-  const hiddenList = normalizeInboxListView(input.list) === "hidden";
-  const work = new Set(input.workIds);
-  const loaded = new Set<string>();
-  const kept: T[] = [];
-  for (const item of input.views) {
-    const id = item.thread_id?.trim();
-    if (!id) {
-      continue;
-    }
-    loaded.add(id);
-    if (item.hidden === hiddenList) {
-      kept.push(item);
-    }
-  }
-  const returned = new Set(
-    kept.flatMap((item) => (item.thread_id ? [item.thread_id] : [])),
-  );
-  const hiddenByPref = new Map(
-    input.prefs.map((pref) => [pref.thread_id, pref.hidden] as const),
-  );
-  return {
-    pinned: kept.filter((item) => item.pinned),
-    live: kept.filter(
-      (item) => !item.pinned && !work.has(item.thread_id ?? ""),
-    ),
-    active_work: hiddenList
-      ? []
-      : kept.filter(
-          (item) => !item.pinned && work.has(item.thread_id ?? ""),
-        ),
-    gone: input.collectedIds.filter((id) => {
-      if (returned.has(id)) {
-        return false;
-      }
-      if (loaded.has(id)) {
-        return true;
-      }
-      const prefHidden = hiddenByPref.get(id);
-      if (prefHidden === true && !hiddenList) {
-        return true;
-      }
-      if (prefHidden === false && hiddenList) {
-        return true;
-      }
-      return false;
-    }),
-  };
-}
-
-export function headsNextBefore(
-  live: Array<{ event: { occurred_at: string; id: string } }>,
-): InboxHeadsCursor | null {
-  let oldest: { occurred_at: string; id: string } | undefined;
-  for (const item of live) {
-    if (!oldest || isBeforeEvent(item.event, oldest.occurred_at, oldest.id)) {
-      oldest = item.event;
-    }
-  }
-  return oldest
-    ? { before: oldest.occurred_at, before_id: oldest.id }
-    : null;
-}
-
-export function splitHeadExcludeIds(input: {
-  prefs: Array<{ thread_id: string; pinned?: boolean; hidden?: boolean }>;
-  workIds: readonly string[];
-  list?: string;
-}): { pinnedIds: string[]; workIds: string[] } {
-  const hiddenList = normalizeInboxListView(input.list) === "hidden";
-  const pinnedIds = [
-    ...new Set(
-      input.prefs
-        .filter(
-          (pref) => pref.pinned && (hiddenList ? pref.hidden : !pref.hidden),
-        )
-        .map((pref) => pref.thread_id),
-    ),
-  ];
-  const pinned = new Set(pinnedIds);
-  const workIds = hiddenList
-    ? []
-    : [...new Set(input.workIds.filter((id) => id && !pinned.has(id)))];
-  return { pinnedIds, workIds };
-}
-
-export function headsLiveFetchLimit(
-  limit: number | undefined,
-  excludeCount: number,
-): number | undefined {
-  if (typeof limit !== "number") {
-    return undefined;
-  }
-  return normalizeInboxLimit(limit + Math.max(0, excludeCount)) ?? limit;
-}
-
-export function partitionLiveInboxHeads<
-  T extends {
-    thread_id?: string;
-    event: {
-      id: string;
-      source?: string;
-      external_id?: string;
-      occurred_at: string;
-    };
-  },
->(input: {
-  items: T[];
-  pinnedIds: readonly string[];
-  workIds: readonly string[];
-  limit?: number;
-  fetchedCount: number;
-  fetchLimit?: number;
-}): {
-  live: T[];
-  pinned: T[];
-  work: T[];
-  hasOlder: boolean;
-} {
-  const pinnedSet = new Set(input.pinnedIds);
-  const workSet = new Set(input.workIds);
-  const pinned: T[] = [];
-  const work: T[] = [];
-  const liveAll: T[] = [];
-  for (const item of input.items) {
-    const id = headThreadId(item);
-    if (!id) {
-      continue;
-    }
-    if (pinnedSet.has(id)) {
-      pinned.push(item);
-    } else if (workSet.has(id)) {
-      work.push(item);
-    } else {
-      liveAll.push(item);
-    }
-  }
-  const live = takeRecentHeads(liveAll, input.limit);
-  const hasOlder =
-    (typeof input.limit === "number" && liveAll.length > live.length) ||
-    (typeof input.fetchLimit === "number" &&
-      input.fetchedCount >= input.fetchLimit);
-  return { live, pinned, work, hasOlder };
-}
-
-export function splitInboxHeadViews(
-  views: InboxViewItem[],
-  input: {
-    liveIds: readonly string[];
-    pinnedIds: readonly string[];
-    workIds: readonly string[];
-    liveCount: number;
-    limit?: number;
-    hasOlder?: boolean;
-  },
-): InboxHeadsPage {
-  const byId = new Map<string, InboxViewItem>();
-  for (const view of views) {
-    if (view.thread_id) {
-      byId.set(view.thread_id, view);
-    }
-  }
-  const take = (ids: readonly string[]) =>
-    ids.flatMap((id) => {
-      const item = byId.get(id);
-      return item ? [item] : [];
-    });
-  const workSet = new Set(input.workIds);
-  const takenLive = take(input.liveIds);
-  const pinned = uniqueHeadViews([
-    ...take(input.pinnedIds),
-    ...takenLive.filter((item) => item.pinned),
-  ]);
-  const pinnedKeys = new Set(pinned.map(headConversationKey).filter(Boolean));
-  const live = uniqueHeadViews(
-    takenLive.filter((item) => {
-      const key = headConversationKey(item);
-      return (
-        !item.pinned &&
-        !workSet.has(item.thread_id ?? "") &&
-        !(key && pinnedKeys.has(key))
-      );
-    }),
-  );
-  return {
-    pinned,
-    live,
-    active_work: uniqueHeadViews([
-      ...take(input.workIds),
-      ...takenLive.filter(
-        (item) => !item.pinned && workSet.has(item.thread_id ?? ""),
-      ),
-    ]),
-    next_before: headsNextBefore(live),
-    has_older:
-      input.hasOlder ??
-      (typeof input.limit === "number" && input.liveCount >= input.limit),
-  };
-}
-
-function takeRecentHeads<T extends { event: { occurred_at: string; id: string } }>(
-  items: T[],
-  limit?: number,
-): T[] {
-  const cap = normalizeInboxLimit(limit);
-  if (cap === undefined || items.length <= cap) {
-    return items;
-  }
-  return items
-    .map((item, index) => ({ item, index }))
-    .sort((left, right) => {
-      if (left.item.event.occurred_at !== right.item.event.occurred_at) {
-        return left.item.event.occurred_at < right.item.event.occurred_at
-          ? -1
-          : 1;
-      }
-      if (left.item.event.id !== right.item.event.id) {
-        return left.item.event.id < right.item.event.id ? -1 : 1;
-      }
-      return left.index - right.index;
-    })
-    .slice(items.length - cap)
-    .map((row) => row.item);
-}
-
-function uniqueHeadViews<T extends {
-  thread_id?: string;
-  event?: { source?: string; external_id?: string; id?: string };
-}>(items: T[]): T[] {
-  const seen = new Set<string>();
-  const next: T[] = [];
-  for (const item of items) {
-    const id = headConversationKey(item);
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    next.push(item);
-  }
-  return next;
-}
-
-function headConversationKey(item: {
-  thread_id?: string;
-  event?: { source?: string; external_id?: string; id?: string };
-}): string | undefined {
-  if (item.event?.source && item.event.external_id) {
-    return conversationId(
-      item.event.source,
-      item.event.external_id,
-      item.event.id,
-    );
-  }
-  const id = item.thread_id?.trim();
-  return id ? id : undefined;
-}
-
-function headThreadId(item: {
-  thread_id?: string;
-  event: { id: string; source?: string; external_id?: string };
-}): string | undefined {
-  const id = item.thread_id?.trim();
-  if (id) {
-    return id;
-  }
-  if (item.event.source && item.event.external_id) {
-    return conversationId(
-      item.event.source,
-      item.event.external_id,
-      item.event.id,
-    );
-  }
-  return undefined;
-}
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
   return !shouldQueryInboxChannelOverlays(query);
@@ -2033,183 +1609,6 @@ function listFaceText(text: string | undefined): string | undefined {
     : line;
 }
 
-function decorateInboxItem(
-  item: { decision: ArrangementDecision; event: EventRecord },
-  body: Awaited<ReturnType<typeof resolveInboxBody>>,
-  installations: ConnectorInstallation[],
-  drivers: ChannelDriverRegistry,
-  pref: ConversationPref | null,
-  labels: ReadonlyMap<string, string> = new Map(),
-  promptsByThread: ReadonlyMap<string, ThreadPrompt[]> = new Map(),
-  attentionByThread: ReadonlyMap<string, ThreadAttention> = new Map(),
-  inboundByThread: ReadonlyMap<string, ThreadInboundCursor> = new Map(),
-  awaitingUser: ReadonlySet<string> = new Set(),
-  receiptsByOutbound: ReadonlyMap<string, MessageReceipt> = new Map(),
-  includeReceipts = true,
-  workFace?: WorkInboxFace,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): InboxViewItem {
-  const surface = messageSurfaceOf(item.event, body);
-  const thread = threadOf(item.event);
-  const threadId = threadIdOf(thread);
-  const prompts = promptsByThread.get(threadId) ?? [];
-  const canReceipt = drivers.canReceipt(installations, thread);
-  const attention = computeThreadUnread({
-    source: attentionByThread.get(threadId),
-    pref,
-    latestInbound: inboundByThread.get(threadId),
-    activity: awaitingUser.has(threadId) ? "awaiting_user" : surface.activity,
-    prompts,
-  });
-  return {
-    ...item,
-    ...body,
-    channel: surface.channel,
-    channel_label: drivers.sourceLabel(surface.channel, process.env, locale),
-    kind: surface.kind,
-    direction: surface.direction,
-    can_send: drivers.canSend(installations, thread),
-    await_reply: drivers.awaitReply(installations, thread),
-    hold_while_working: drivers.holdWhileWorking(installations, thread),
-    list_title: drivers.listTitle(installations, thread),
-    thread_id: threadId,
-    title: pref?.title ?? null,
-    pinned: pref?.pinned === true,
-    hidden: pref?.hidden === true,
-    pref_updated_at: pref?.updated_at ?? null,
-    conversation_label:
-      surface.conversation_label ?? labels.get(threadId) ?? null,
-    conversation_kind: surface.conversation_kind ?? null,
-    unit_kind: surface.unit_kind ?? null,
-    unit_kind_label:
-      drivers.unitKindLabel(surface.channel, surface.unit_kind, locale) ?? null,
-    actor_label: surface.actor_label ?? null,
-    activity: surface.activity,
-    prompts,
-    unread: attention.unread,
-    unread_count: attention.unread_count ?? (attention.unread ? 1 : 0),
-    can_receipt: canReceipt,
-    receipt: includeReceipts
-      ? outboundReceipt(
-          surface.direction,
-          item.event.external_id,
-          canReceipt,
-          receiptsByOutbound,
-        )
-      : undefined,
-    record_class:
-      workFace?.record_class ?? recordClassFromType(surface.type) ?? "utterance",
-    thread_facet:
-      workFace?.thread_facet ??
-      projectThreadFacet({
-        type: surface.type,
-        prompts: prompts.length > 0,
-        hint: surface.thread_facet,
-      }),
-    attention: attentionOf({
-      prompts: prompts.length,
-      awaiting_user:
-        awaitingUser.has(threadId) || surface.activity === "awaiting_user",
-      unread: attention.unread,
-      work_status: workFace?.work?.status,
-      can_write_back: workFace?.work?.can_write_back,
-      has_result: workFace?.work?.has_result,
-      activity: surface.activity,
-    }),
-    work: workFace?.work,
-    ...(surface.forwarded_from
-      ? { forwarded_from: labeledForwardTrace(surface.forwarded_from, drivers, locale) }
-      : {}),
-    ...(surface.forwarded_to
-      ? { forwarded_to: labeledForwardTrace(surface.forwarded_to, drivers, locale) }
-      : {}),
-  };
-}
-
-function labeledForwardTrace(
-  trace: ForwardedFrom,
-  drivers: ChannelDriverRegistry,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): ForwardedFrom {
-  return {
-    ...trace,
-    channel_label: drivers.sourceLabel(trace.source, process.env, locale),
-  };
-}
-
-function projectForwardedTo(
-  views: InboxViewItem[],
-  drivers: ChannelDriverRegistry,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): InboxViewItem[] {
-  const traces = latestForwardedTo(
-    views.flatMap((view) => {
-      const trace = view.forwarded_to;
-      if (!trace || trace.event_ids.includes(view.event.id)) {
-        return [];
-      }
-      return [
-        {
-          id: view.event.id,
-          occurred_at: view.event.occurred_at,
-          forwarded_to: labeledForwardTrace(trace, drivers, locale),
-        },
-      ];
-    }),
-  );
-  if (traces.size === 0) {
-    return views;
-  }
-  return views.map((view) => {
-    const joined = traces.get(view.event.id);
-    if (!joined) {
-      return view;
-    }
-    return { ...view, forwarded_to: joined };
-  });
-}
-
-async function loadForwardedToTraces(
-  items: Array<{ decision: ArrangementDecision; event: EventRecord }>,
-  knownBodies: ReadonlyMap<string, InboxBody>,
-  authority: AuthorityStore,
-  blobs: BlobStore,
-  drivers: ChannelDriverRegistry,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): Promise<Map<string, ForwardedFrom>> {
-  const status = items.filter((item) => isThreadStatusItem(item));
-  if (status.length === 0) {
-    return new Map();
-  }
-  const missing = status
-    .map((item) => item.event.content_hash)
-    .filter((hash): hash is string => {
-      if (!hash) {
-        return false;
-      }
-      return !knownBodies.has(hash);
-    });
-  const extra =
-    missing.length > 0
-      ? await resolveInboxBodies(authority, blobs, missing, "meta")
-      : new Map<string, InboxBody>();
-  return latestForwardedTo(
-    status.map((item) => {
-      const hash = item.event.content_hash;
-      const body = hash
-        ? (knownBodies.get(hash) ?? extra.get(hash) ?? {})
-        : {};
-      const surface = messageSurfaceOf(item.event, body);
-      return {
-        id: item.event.id,
-        occurred_at: item.event.occurred_at,
-        forwarded_to: surface.forwarded_to
-          ? labeledForwardTrace(surface.forwarded_to, drivers, locale)
-          : undefined,
-      };
-    }),
-  );
-}
 
 function mergePromptMap(
   dest: Map<string, ThreadPrompt[]>,
@@ -2229,66 +1628,6 @@ function mergePromptMap(
   ]);
 }
 
-async function conversationLabelsFor(
-  items: Array<{
-    item: { event: EventRecord };
-    body: Awaited<ReturnType<typeof resolveInboxBody>>;
-  }>,
-  installations: ConnectorInstallation[],
-  drivers: ChannelDriverRegistry,
-  store?: Pick<SyncStore, "getSyncCatalog">,
-): Promise<Map<string, string>> {
-  const missing = items.flatMap(({ item, body }) => {
-    const surface = messageSurfaceOf(item.event, body);
-    return surface.conversation_label ? [] : [threadOf(item.event)];
-  });
-  if (missing.length === 0) {
-    return new Map();
-  }
-  const labels = await catalogConversationLabels(installations, store);
-  const stillMissing = missing.filter(
-    (thread) => !labels.has(`${thread.source}:${thread.target}`),
-  );
-  if (stillMissing.length === 0) {
-    return labels;
-  }
-  const live = await drivers.resolveConversationLabels(
-    installations,
-    stillMissing,
-  );
-  for (const [threadId, label] of live) {
-    labels.set(threadId, label);
-  }
-  return labels;
-}
-
-async function catalogConversationLabels(
-  installations: ConnectorInstallation[],
-  store?: Pick<SyncStore, "getSyncCatalog">,
-): Promise<Map<string, string>> {
-  const labels = new Map<string, string>();
-  if (!store?.getSyncCatalog) {
-    return labels;
-  }
-  await Promise.all(
-    installations.map(async (installation) => {
-      try {
-        const catalog = await store.getSyncCatalog(installation.id);
-        for (const member of catalog.members) {
-          const label = member.label?.replace(/\s+/g, " ").trim();
-          const threadId = member.thread_id?.trim();
-          if (!label || !threadId) {
-            continue;
-          }
-          labels.set(threadId, label);
-        }
-      } catch {
-        // Catalog is optional. Drivers may still fill titles.
-      }
-    }),
-  );
-  return labels;
-}
 
 const PROMPT_USER_SCAN_LIMIT = 24;
 const PROMPT_READ_LIMIT = 128;
@@ -2458,27 +1797,6 @@ async function firstUserTextIn(
   return { hide: false };
 }
 
-function byEventTime(
-  left: { event: EventRecord },
-  right: { event: EventRecord },
-): number {
-  if (left.event.occurred_at !== right.event.occurred_at) {
-    return left.event.occurred_at < right.event.occurred_at ? -1 : 1;
-  }
-  return left.event.id < right.event.id ? -1 : 1;
-}
-
-function messageSurfaceOf(
-  event: EventRecord,
-  body: Awaited<ReturnType<typeof resolveInboxBody>>,
-) {
-  return resolveMessageSurface({
-    source: event.source,
-    external_id: event.external_id,
-    body_text: body.body_text,
-    stored: body.surface,
-  });
-}
 
 function parseThreadQuery(
   threadId: string | undefined,
@@ -2704,215 +2022,6 @@ function inboundScansOf(
   });
 }
 
-const RECEIPT_SCAN_LIMIT = 8;
-
-type InboxResolvedRow = {
-  item: { decision: ArrangementDecision; event: EventRecord };
-  threadId: string;
-  body: InboxBody;
-};
-
-async function loadInboxReceipts(input: {
-  heads: boolean;
-  thread?: ConversationThread;
-  since?: string;
-  resolved: InboxResolvedRow[];
-  installations: ConnectorInstallation[];
-  drivers: ChannelDriverRegistry;
-  host: Parameters<ChannelDriverRegistry["readReceipts"]>[2];
-  authority: AuthorityStore;
-  blobs: BlobStore;
-  orgId: string;
-}): Promise<{
-  receipts: ReadonlyMap<string, MessageReceipt>;
-  extras: InboxResolvedRow[];
-}> {
-  if (input.heads) {
-    return { receipts: new Map(), extras: [] };
-  }
-  const siblings =
-    input.thread && input.drivers.canReceipt(input.installations, input.thread)
-      ? await input.authority.listInbox(input.orgId, {
-          siblings: true,
-          thread_ids: [threadIdOf(input.thread)],
-        })
-      : [];
-  const siblingOutbound =
-    siblings.length > 0
-      ? await outboundSiblingEvents(siblings, input.authority, input.blobs)
-      : [];
-  const queries = mergeReceiptQueries(
-    receiptQueriesOf(input.resolved),
-    siblingOutbound.length > 0
-      ? receiptQueriesFromOutboundEvents(siblingOutbound)
-      : [],
-  );
-  const receipts = await input.drivers.readReceipts(
-    input.installations,
-    queries,
-    input.host,
-  );
-  if (!input.since || siblingOutbound.length === 0) {
-    return { receipts, extras: [] };
-  }
-  const seen = new Set(input.resolved.map((row) => row.item.event.id));
-  const extras = siblingOutbound.filter(
-    (item) =>
-      !seen.has(item.event.id) &&
-      receipts.get(item.event.external_id)?.state === "read",
-  );
-  if (extras.length === 0) {
-    return { receipts, extras: [] };
-  }
-  const bodies = await resolveInboxBodies(
-    input.authority,
-    input.blobs,
-    extras.map((item) => item.event.content_hash),
-    "preview",
-  );
-  return {
-    receipts,
-    extras: extras.map((item) => ({
-      item,
-      threadId: conversationId(
-        item.event.source,
-        item.event.external_id,
-        item.event.id,
-      ),
-      body: item.event.content_hash
-        ? (bodies.get(item.event.content_hash) ?? {})
-        : {},
-    })),
-  };
-}
-
-function receiptQueriesOf(resolved: InboxResolvedRow[]): ThreadReceiptQuery[] {
-  const groups = new Map<string, ThreadReceiptQuery>();
-  for (const row of resolved) {
-    const surface = messageSurfaceOf(row.item.event, row.body);
-    if (surface.direction !== "outbound") {
-      continue;
-    }
-    const thread = threadOf(row.item.event);
-    const current = groups.get(row.threadId) ?? { ...thread, outbound: [] };
-    current.outbound.push({
-      external_id: row.item.event.external_id,
-      occurred_at: row.item.event.occurred_at,
-    });
-    groups.set(row.threadId, current);
-  }
-  return [...groups.values()].map((query) => ({
-    ...query,
-    outbound: newestOutbound(query.outbound),
-  }));
-}
-
-function mergeReceiptQueries(
-  ...groups: ThreadReceiptQuery[][]
-): ThreadReceiptQuery[] {
-  const merged = new Map<string, ThreadReceiptQuery>();
-  for (const group of groups) {
-    for (const query of group) {
-      const threadId = threadIdOf(query);
-      const current = merged.get(threadId);
-      if (!current) {
-        merged.set(threadId, {
-          ...query,
-          outbound: [...query.outbound],
-        });
-        continue;
-      }
-      current.outbound.push(...query.outbound);
-    }
-  }
-  return [...merged.values()].map((query) => ({
-    ...query,
-    outbound: newestOutbound(uniqueOutbound(query.outbound)),
-  }));
-}
-
-function uniqueOutbound<T extends { external_id: string }>(items: T[]): T[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (seen.has(item.external_id)) {
-      return false;
-    }
-    seen.add(item.external_id);
-    return true;
-  });
-}
-
-async function outboundSiblingEvents(
-  items: InboxItem[],
-  authority: AuthorityStore,
-  blobs: BlobStore,
-): Promise<InboxItem[]> {
-  const newest = items.slice().sort(byEventTime).reverse().slice(0, 48);
-  const hashes = newest
-    .map((item) => item.event.content_hash)
-    .filter((hash): hash is string => Boolean(hash));
-  const bodies =
-    hashes.length > 0
-      ? await resolveInboxBodies(authority, blobs, hashes, "meta")
-      : new Map<string, InboxBody>();
-  return newest
-    .filter((item) => {
-      const body = item.event.content_hash
-        ? (bodies.get(item.event.content_hash) ?? {})
-        : {};
-      return messageSurfaceOf(item.event, body).direction === "outbound";
-    })
-    .slice(0, RECEIPT_SCAN_LIMIT);
-}
-
-function receiptQueriesFromOutboundEvents(
-  items: Array<{ event: EventRecord }>,
-): ThreadReceiptQuery[] {
-  const groups = new Map<string, ThreadReceiptQuery>();
-  for (const { event } of items) {
-    const thread = threadOf(event);
-    const threadId = threadIdOf(thread);
-    const current = groups.get(threadId) ?? { ...thread, outbound: [] };
-    current.outbound.push({
-      external_id: event.external_id,
-      occurred_at: event.occurred_at,
-    });
-    groups.set(threadId, current);
-  }
-  return [...groups.values()].map((query) => ({
-    ...query,
-    outbound: newestOutbound(query.outbound),
-  }));
-}
-
-function newestOutbound<T extends { occurred_at: string; external_id: string }>(
-  items: T[],
-): T[] {
-  return items
-    .slice()
-    .sort((left, right) =>
-      left.occurred_at === right.occurred_at
-        ? left.external_id < right.external_id
-          ? 1
-          : -1
-        : left.occurred_at < right.occurred_at
-          ? 1
-          : -1,
-    )
-    .slice(0, RECEIPT_SCAN_LIMIT);
-}
-
-function outboundReceipt(
-  direction: MessageDirection,
-  externalId: string,
-  canReceipt: boolean,
-  receipts: ReadonlyMap<string, MessageReceipt>,
-): MessageReceipt | undefined {
-  if (direction !== "outbound") {
-    return undefined;
-  }
-  return receipts.get(externalId) ?? (canReceipt ? { state: "sent" } : undefined);
-}
 
 function withInboundHint(
   threads: ConversationThread[],
@@ -3037,25 +2146,5 @@ async function latestInboundByThread(
   return new Map([...fromSiblings, ...cached]);
 }
 
-function threadOf(event: EventRecord): ConversationThread {
-  const id = conversationId(event.source, event.external_id, event.id);
-  try {
-    return parseConversationThread(id);
-  } catch {
-    return { source: event.source, target: event.external_id };
-  }
-}
-
-export function trimInboxHead<T extends {
-  list_title?: string;
-  conversation_label?: string | null;
-  body_text?: string;
-  attachments?: InboxAttachment[];
-}>(item: T): T {
-  if (item.list_title === "prompt" && item.conversation_label) {
-    return { ...item, body_text: undefined, attachments: undefined };
-  }
-  return { ...item, attachments: undefined };
-}
 
 export { PersonalKernelStoppedError };
