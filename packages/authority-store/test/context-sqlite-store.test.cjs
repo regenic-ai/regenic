@@ -1230,6 +1230,36 @@ describe("SQLite context artifact store", () => {
     sqlite.close();
   });
 
+  it("opens a pre-merge sync database that already has preview_json", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const Database = require("better-sqlite3");
+    const store = new SqliteAuthorityStore(path);
+    store.close();
+    const legacy = new Database(path);
+    legacy.exec("DROP TABLE context_snapshot_index");
+    legacy.exec("DROP INDEX IF EXISTS events_org_occurred_idx");
+    legacy.pragma("user_version = 45");
+    legacy.close();
+
+    const reopened = new SqliteAuthorityStore(path);
+    assert.equal(reopened.schemaVersion, 47);
+    reopened.close();
+    const checked = new Database(path);
+    try {
+      const names = checked
+        .prepare("SELECT name FROM sqlite_master WHERE name IN ('context_snapshot_index', 'events_org_occurred_idx')")
+        .all()
+        .map((row) => row.name)
+        .sort();
+      assert.deepEqual(names, ["context_snapshot_index", "events_org_occurred_idx"]);
+      const preview = checked.prepare("PRAGMA table_info(context_artifacts)").all();
+      assert.ok(preview.some((column) => column.name === "preview_json"));
+    } finally {
+      checked.close();
+    }
+  });
+
   it("lists context summaries from a preview and backfills older rows", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
