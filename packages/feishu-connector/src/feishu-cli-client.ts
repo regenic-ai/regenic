@@ -463,25 +463,30 @@ export class LarkCliClient implements FeishuImClient {
     names?: boolean;
   }): Promise<FeishuChatPage> {
     const types = normalizeChatTypes(input.types);
-    const page =
-      types.length === 1 && types[0] === "group"
-        ? await this.listChatsViaOpenApi(input)
-        : await this.listChatsViaShortcut(input, types);
+    const page = await this.listChatsViaOpenApi(input, types);
     if (input.names !== false) {
       await this.fillP2pNames(page.items);
     }
     return page;
   }
 
-  /** Official /im/v1/chats is groups only. Used when the census does not need p2p. */
-  private async listChatsViaOpenApi(input: {
-    page_size: number;
-    page_token?: string;
-  }): Promise<FeishuChatPage> {
+  /**
+   * `lark-cli im +chat-list` is this endpoint. Omitting `types` returns groups
+   * only; `types=p2p,group` is the same list, and p2p rows already include the
+   * peer's name.
+   */
+  private async listChatsViaOpenApi(
+    input: {
+      page_size: number;
+      page_token?: string;
+    },
+    types: FeishuChatMode[],
+  ): Promise<FeishuChatPage> {
     const params: Record<string, string | number> = {
       page_size: Math.min(Math.max(1, input.page_size), 100),
       sort_type: "ByActiveTimeDesc",
       user_id_type: "open_id",
+      types: types.join(","),
     };
     if (input.page_token) {
       params.page_token = input.page_token;
@@ -498,11 +503,12 @@ export class LarkCliClient implements FeishuImClient {
     const page = parseChatPage(
       viaHttp !== undefined ? viaHttp : await this.requestViaCli(request),
     );
+    const fallback = types.length === 1 ? types[0] : undefined;
     return {
       ...page,
       items: page.items.map((chat) => ({
         ...chat,
-        chat_mode: chat.chat_mode ?? "group",
+        chat_mode: chat.chat_mode ?? fallback,
       })),
     };
   }
@@ -533,37 +539,6 @@ export class LarkCliClient implements FeishuImClient {
       chatInfoCache.set(id, { chat: null, at: now });
       return null;
     }
-  }
-
-  private async listChatsViaShortcut(
-    input: {
-      page_size: number;
-      page_token?: string;
-    },
-    types: FeishuChatMode[],
-  ): Promise<FeishuChatPage> {
-    const argv = [
-      this.command,
-      "im",
-      "+chat-list",
-      "--as",
-      "user",
-      "--types",
-      types.join(","),
-      "--page-size",
-      String(input.page_size),
-      "--format",
-      "json",
-    ];
-    if (input.page_token) {
-      argv.push("--page-token", input.page_token);
-    }
-    const result = await this.runCli({
-      command: argv,
-      env: this.options.env,
-      timeout_ms: this.timeoutMs,
-    });
-    return parseChatPage(unwrapLarkCli(result));
   }
 
   async listRecentChats(
@@ -644,14 +619,7 @@ export class LarkCliClient implements FeishuImClient {
     types?: FeishuChatMode[],
     deadline?: number,
   ): Promise<FeishuChat[]> {
-    const normalized = normalizeChatTypes(types);
-    const kinds = (["group", "p2p"] as const).filter((kind) =>
-      normalized.includes(kind),
-    );
-    const pages = await Promise.all(
-      kinds.map((kind) => this.fetchChatPages(maxPages, [kind], deadline)),
-    );
-    return pages.flat();
+    return this.fetchChatPages(maxPages, normalizeChatTypes(types), deadline);
   }
 
   private async fetchChatPages(
@@ -669,7 +637,7 @@ export class LarkCliClient implements FeishuImClient {
       try {
         const result = await withLocalDeadline(
           this.listChats({
-            page_size: 50,
+            page_size: 100,
             page_token: pageToken,
             types,
             names: types.includes("p2p"),

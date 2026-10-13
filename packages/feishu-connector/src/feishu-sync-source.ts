@@ -106,8 +106,8 @@ async function listPhase(
     page_size: phase === "group" ? GROUP_PAGE_SIZE : P2P_PAGE_SIZE,
     page_token: token,
     types,
-    // Groups already carry name on /im/v1/chats. P2p needs contact fill.
-    names: phase === "p2p" || phase === "mixed",
+    // /im/v1/chats already names groups and p2p peers. Fill only a missing name.
+    names: types.includes("p2p"),
   });
   const members = page.items
     .filter((chat) => chatMatchesKinds(chat, types))

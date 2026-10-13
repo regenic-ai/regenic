@@ -288,6 +288,7 @@ describe("LarkCliClient", () => {
     assert.equal(page.has_more, true);
     assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/im\/v1\/chats/);
     assert.match(fetched[0].url, /sort_type=ByActiveTimeDesc/);
+    assert.equal(new URL(fetched[0].url).searchParams.get("types"), "group");
     assert.equal(fetched[0].init.headers.Authorization, "Bearer u-test");
   });
 
@@ -500,38 +501,23 @@ describe("LarkCliClient", () => {
     assert.equal(isTransientLarkError(new FeishuApiError("user unauthorized", "230027")), false);
   });
 
-  it("lists groups over Open API and p2p over +chat-list", async () => {
+  it("lists groups and direct chats on one /im/v1/chats request", async () => {
     resetFeishuChatListCache();
     const calls = [];
     const client = new LarkCliClient({
       async spawn(input) {
         calls.push(input);
-        const cmd = input.command;
-        if (cmd.includes("/open-apis/im/v1/chats")) {
-          return {
-            stdout: JSON.stringify({
-              ok: true,
-              data: {
-                items: [
-                  {
-                    chat_id: "oc_1",
-                    name: "One",
-                    chat_mode: "group",
-                    chat_status: "normal",
-                  },
-                ],
-                has_more: false,
-              },
-            }),
-            stderr: "",
-            exit_code: 0,
-          };
-        }
         return {
           stdout: JSON.stringify({
             ok: true,
             data: {
-              chats: [
+              items: [
+                {
+                  chat_id: "oc_1",
+                  name: "One",
+                  chat_mode: "group",
+                  chat_status: "normal",
+                },
                 {
                   chat_id: "oc_2",
                   name: "Ada",
@@ -548,21 +534,25 @@ describe("LarkCliClient", () => {
       },
     });
     const chats = await client.listAllChats();
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 1);
     assert.equal(calls[0].command.includes("/open-apis/im/v1/chats"), true);
-    assert.equal(calls[1].command.includes("+chat-list"), true);
-    assert.equal(calls[1].command[calls[1].command.indexOf("--types") + 1], "p2p");
+    assert.equal(calls[0].command.includes("+chat-list"), false);
+    const params = JSON.parse(
+      calls[0].command[calls[0].command.indexOf("--params") + 1],
+    );
+    assert.equal(params.types, "group,p2p");
+    assert.equal(params.sort_type, "ByActiveTimeDesc");
     assert.deepEqual(chats, [
       { chat_id: "oc_1", name: "One", chat_mode: "group" },
       { chat_id: "oc_2", name: "Ada", chat_mode: "p2p" },
     ]);
     const again = await client.listAllChats();
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 1);
     assert.deepEqual(again, chats);
     resetFeishuChatListCache();
   });
 
-  it("lists recent group and p2p chats in parallel without +chat-list for groups", async () => {
+  it("lists recent groups and direct chats over HTTP with types", async () => {
     resetFeishuChatListCache();
     const spawned = [];
     const fetched = [];
@@ -570,24 +560,7 @@ describe("LarkCliClient", () => {
       command: "lark-cli",
       async spawn(input) {
         spawned.push(input);
-        return {
-          stdout: JSON.stringify({
-            ok: true,
-            data: {
-              chats: [
-                {
-                  chat_id: "oc_p2p",
-                  name: "Ada",
-                  chat_mode: "p2p",
-                  chat_status: "normal",
-                },
-              ],
-              has_more: false,
-            },
-          }),
-          stderr: "",
-          exit_code: 0,
-        };
+        throw new Error("CLI should not list chats when HTTP works");
       },
       userToken: {
         async token() {
@@ -603,23 +576,28 @@ describe("LarkCliClient", () => {
       },
       async fetch(url, init) {
         fetched.push({ url, init });
+        const types = new URL(url).searchParams.get("types");
+        const item =
+          types === "p2p"
+            ? {
+                chat_id: "oc_p2p",
+                name: "Ada",
+                chat_mode: "p2p",
+                chat_status: "normal",
+              }
+            : {
+                chat_id: "oc_group",
+                name: "Eng",
+                chat_mode: "group",
+                chat_status: "normal",
+              };
         return {
           ok: true,
           status: 200,
           async text() {
             return JSON.stringify({
               code: 0,
-              data: {
-                items: [
-                  {
-                    chat_id: "oc_group",
-                    name: "Eng",
-                    chat_mode: "group",
-                    chat_status: "normal",
-                  },
-                ],
-                has_more: false,
-              },
+              data: { items: [item], has_more: false },
             });
           },
           async json() {
@@ -629,13 +607,13 @@ describe("LarkCliClient", () => {
       },
     });
     const chats = await client.listRecentChats(["group", "p2p"], { names: false });
-    assert.equal(spawned.length, 1);
-    assert.equal(spawned[0].command.includes("+chat-list"), true);
-    assert.equal(
-      spawned[0].command[spawned[0].command.indexOf("--types") + 1],
-      "p2p",
+    assert.equal(spawned.length, 0);
+    assert.deepEqual(
+      fetched
+        .map((item) => new URL(item.url).searchParams.get("types"))
+        .sort(),
+      ["group", "p2p"],
     );
-    assert.equal(fetched.length, 1);
     assert.match(fetched[0].url, /open\.feishu\.cn\/open-apis\/im\/v1\/chats/);
     assert.deepEqual(chats, [
       { chat_id: "oc_group", name: "Eng", chat_mode: "group" },
@@ -683,7 +661,11 @@ describe("LarkCliClient", () => {
     });
     const chats = await client.listRecentChats(["p2p"], { names: false });
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].command.includes("+chat-list"), true);
+    assert.equal(calls[0].command.includes("/open-apis/im/v1/chats"), true);
+    assert.equal(
+      JSON.parse(calls[0].command[calls[0].command.indexOf("--params") + 1]).types,
+      "p2p",
+    );
     assert.deepEqual(chats, [
       {
         chat_id: "oc_bare",
@@ -732,7 +714,7 @@ describe("LarkCliClient", () => {
     const second = client.listAllChats();
     release();
     const [left, right] = await Promise.all([first, second]);
-    assert.equal(calls, 2);
+    assert.equal(calls, 1);
     assert.deepEqual(left, right);
     resetFeishuChatListCache();
   });
@@ -1279,16 +1261,6 @@ describe("LarkCliClient", () => {
             exit_code: 0,
           };
         }
-        if (input.command.includes("+chat-list")) {
-          return {
-            stdout: JSON.stringify({
-              ok: true,
-              data: { chats: [], has_more: false },
-            }),
-            stderr: "",
-            exit_code: 0,
-          };
-        }
         return {
           stdout: JSON.stringify({
             ok: true,
@@ -1314,6 +1286,12 @@ describe("LarkCliClient", () => {
       calls.some((command) => command.includes("/open-apis/im/v1/chats")),
       true,
     );
+    assert.equal(
+      calls.some((command) => command.includes("+chat-list")),
+      false,
+    );
+    const listed = calls.find((command) => command.includes("/open-apis/im/v1/chats"));
+    assert.match(listed, /"types":"group,p2p"/);
     assert.deepEqual(
       chats.map((chat) => chat.name),
       ["最近的群", "合伙"],
@@ -1332,16 +1310,6 @@ describe("LarkCliClient", () => {
         if (input.command.includes("auth")) {
           return {
             stdout: JSON.stringify({ ok: true, identity: "user" }),
-            stderr: "",
-            exit_code: 0,
-          };
-        }
-        if (input.command.includes("+chat-list")) {
-          return {
-            stdout: JSON.stringify({
-              ok: true,
-              data: { chats: [], has_more: false },
-            }),
             stderr: "",
             exit_code: 0,
           };
@@ -1384,7 +1352,7 @@ describe("LarkCliClient", () => {
     resetFeishuChatListCache();
   });
 
-  it("keeps direct chats when group paging uses up the catalog budget", async () => {
+  it("keeps the mixed page already fetched when the next page overruns the budget", async () => {
     resetLarkCliProbeCache();
     resetFeishuChatListCache();
     const chats = await listFeishuCatalogChats({
@@ -1398,31 +1366,12 @@ describe("LarkCliClient", () => {
             exit_code: 0,
           };
         }
-        if (input.command.includes("+chat-list")) {
-          return {
-            stdout: JSON.stringify({
-              ok: true,
-              data: {
-                chats: [
-                  {
-                    chat_id: "oc_p2p",
-                    name: "Ada",
-                    chat_mode: "p2p",
-                    chat_status: "normal",
-                  },
-                ],
-                has_more: false,
-              },
-            }),
-            stderr: "",
-            exit_code: 0,
-          };
-        }
         const paramsIdx = input.command.indexOf("--params");
         let pageToken;
         if (paramsIdx >= 0) {
           const params = JSON.parse(input.command[paramsIdx + 1]);
           pageToken = params.page_token;
+          assert.equal(params.types, "group,p2p");
         }
         if (pageToken === "p2") {
           await new Promise(() => {});
@@ -1436,6 +1385,12 @@ describe("LarkCliClient", () => {
                   chat_id: "oc_group",
                   name: "Eng",
                   chat_mode: "group",
+                  chat_status: "normal",
+                },
+                {
+                  chat_id: "oc_p2p",
+                  name: "Ada",
+                  chat_mode: "p2p",
                   chat_status: "normal",
                 },
               ],
