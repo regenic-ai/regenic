@@ -2317,6 +2317,13 @@ button {
   gap: 8px;
 }
 
+.thread-context-compare,
+.thread-context-compare label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .thread-window-item.is-context-evidence > * {
   outline: 2px solid var(--ai);
   outline-offset: 3px;
