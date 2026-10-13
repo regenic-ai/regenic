@@ -47,6 +47,8 @@ export * from "./sync-phase";
 export * from "./sync-scheduler";
 export * from "./sync-idle";
 export * from "./sync-mode";
+export * from "./sync-history";
+export * from "./sync-cursor-commit";
 export * from "./sync-steady-capacity";
 export * from "./sync-engine";
 export * from "./sync-progress";

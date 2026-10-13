@@ -1,6 +1,14 @@
 import type { ConnectorStream } from "./channel-driver";
 import type { ConnectorPollRunResult } from "./connector-runner";
-import type { SyncPageOutcome, SyncWorkItem } from "./sync-contracts";
+import type { SyncPageOutcome, SyncPhase, SyncWorkItem } from "./sync-contracts";
+import {
+  cursorKindFromPoll,
+  cursorWriteFor,
+  sameLaneContinues,
+  shouldSeedHistoryCursor,
+  type CursorKind,
+} from "./sync-cursor-commit";
+import type { HistoryPolicy } from "./sync-history";
 
 export interface SyncPollRunSummary {
   pages: ConnectorPollRunResult[];
@@ -12,6 +20,10 @@ export interface SyncPollRunItem {
   work: Pick<SyncWorkItem, "older" | "media">;
   idleMs?: number;
   pollHint?: SyncPageOutcome["poll_hint"];
+  cursorKind?: CursorKind;
+  historyPolicy?: HistoryPolicy;
+  phase?: SyncPhase | null;
+  historyCursor?: string | null;
 }
 
 export function summarizePollRuns(
@@ -34,6 +46,39 @@ export function summarizePollRuns(
   return { accepted_count, quarantined_count };
 }
 
+export function syncOutcomeForPoll(
+  installationId: string,
+  input: {
+    stream: SyncPollRunItem["stream"];
+    prior?: { phase?: SyncPhase | null; history_cursor?: string | null } | null;
+    policy?: HistoryPolicy;
+    older?: boolean;
+    before?: string | null;
+    media?: boolean;
+    idleMs?: number;
+  },
+  runs: SyncPollRunSummary,
+  now: string,
+): SyncPageOutcome {
+  return syncPageOutcomeFromPollRuns(
+    installationId,
+    {
+      stream: input.stream,
+      work: { older: input.older === true, media: input.media === true },
+      idleMs: input.idleMs,
+      cursorKind: cursorKindFromPoll({
+        older: input.older,
+        before: input.before,
+      }),
+      historyPolicy: input.policy ?? "backfill",
+      phase: input.prior?.phase,
+      historyCursor: input.prior?.history_cursor,
+    },
+    runs,
+    now,
+  );
+}
+
 export function syncPageOutcomeFromPollRuns(
   installationId: string,
   item: SyncPollRunItem,
@@ -50,6 +95,26 @@ export function syncPageOutcomeFromPollRuns(
   const pollHintPage = [...runs.pages]
     .reverse()
     .find((page) => "poll_hint" in page && page.poll_hint !== undefined);
+  const pollHint =
+    pollHintPage && "poll_hint" in pollHintPage
+      ? pollHintPage.poll_hint
+      : item.pollHint;
+  const rawHasMore = runs.pages.some(
+    (page) => "has_more" in page && page.has_more === true,
+  );
+  const kind = item.cursorKind ?? (item.work.older ? "history" : "live");
+  const policy = item.historyPolicy ?? "backfill";
+  const write = cursorWriteFor({
+    kind,
+    seedHistory:
+      kind === "live" &&
+      shouldSeedHistoryCursor({
+        policy,
+        phase: item.phase,
+        historyCursor: item.historyCursor,
+        historyPending: pollHint?.history_pending === true,
+      }),
+  });
   return {
     installation_id: installationId,
     stream_key: item.stream.stream_key,
@@ -58,19 +123,20 @@ export function syncPageOutcomeFromPollRuns(
     media: item.work.media,
     accepted_count: summary.accepted_count,
     quarantined_count: summary.quarantined_count,
-    has_more: runs.pages.some(
-      (page) => "has_more" in page && page.has_more === true,
-    ),
-    next_live_cursor: nextCursor,
-    next_history_cursor: nextCursor,
+    has_more: sameLaneContinues({
+      kind,
+      hasMore: rawHasMore,
+      historyPending: pollHint?.history_pending === true,
+    }),
+    ...(write.live ? { next_live_cursor: nextCursor } : {}),
+    ...(write.history ? { next_history_cursor: nextCursor } : {}),
+    cursor_kind: kind,
+    history_policy: policy,
     media_pending:
       mediaPage && "media_pending" in mediaPage
         ? mediaPage.media_pending
         : undefined,
-    poll_hint:
-      pollHintPage && "poll_hint" in pollHintPage
-        ? pollHintPage.poll_hint
-        : item.pollHint,
+    poll_hint: pollHint,
     idle_ms: item.idleMs,
     error: runs.error,
     now,

@@ -41,6 +41,9 @@ import {
   SYNC_CATALOG_STREAM,
   applySyncCatalogMembers,
   catalogStreamKeysLeft,
+  historyPolicyFromConfig,
+  DEFAULT_HISTORY_POLICY,
+  releaseHistoryPhase,
   syncWorkEnsurePlan,
   dueSyncWorkId,
 } from "@regenic/domain";
@@ -1354,19 +1357,24 @@ export async function getSyncState(db: PgSql, installationId: string, streamKey:
   }
 
 export async function putSyncState(db: PgSql, state: SyncStreamState): Promise<SyncStreamState> {
+    let stored = state;
     await db.withTx(async (client) => {
+      stored = releaseHistoryPhase(
+        state,
+        await historyPolicyForInstall(client, state.installation_id),
+      );
       if (
         await streamOutsideCompleteCatalog(db, 
           client,
-          state.installation_id,
-          state.stream_key,
+          stored.installation_id,
+          stored.stream_key,
         )
       ) {
         await dropStreamsLeftCatalog(db, 
           client,
-          state.installation_id,
-          [state.stream_key],
-          state.updated_at,
+          stored.installation_id,
+          [stored.stream_key],
+          stored.updated_at,
         );
         return;
       }
@@ -1386,20 +1394,20 @@ export async function putSyncState(db: PgSql, state: SyncStreamState): Promise<S
             updated_at = EXCLUDED.updated_at
         `,
         [
-          state.installation_id,
-          state.stream_key,
-          state.phase,
-          state.live_cursor ?? null,
-          state.history_cursor ?? null,
-          state.media_pending,
-          state.idle_until ?? null,
-          state.generation,
-          state.updated_at,
+          stored.installation_id,
+          stored.stream_key,
+          stored.phase,
+          stored.live_cursor ?? null,
+          stored.history_cursor ?? null,
+          stored.media_pending,
+          stored.idle_until ?? null,
+          stored.generation,
+          stored.updated_at,
         ],
       );
-      await ensureOwedSyncWork(db, client, state);
+      await ensureOwedSyncWork(db, client, stored);
     });
-    return { ...state };
+    return { ...stored };
   }
 
 async function streamOutsideCompleteCatalog(db: PgSql, client: PoolClient, installationId: string, streamKey: string): Promise<boolean> {
@@ -1452,6 +1460,36 @@ async function dropStreamsLeftCatalog(db: PgSql, client: PoolClient, installatio
     );
   }
 
+async function historyPolicyForInstall(client: PoolClient, installationId: string) {
+  const config = await client.query<{ config_json: string }>(
+    `SELECT config_json FROM connector_installations WHERE id = $1`,
+    [installationId],
+  );
+  const raw = config.rows[0]?.config_json;
+  const record = configRecord(raw);
+  return record ? historyPolicyFromConfig(record) : DEFAULT_HISTORY_POLICY;
+}
+
+function configRecord(value: unknown): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object"
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === "object") {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
 async function ensureOwedSyncWork(db: PgSql, client: PoolClient, state: SyncStreamState): Promise<void> {
     const existing = await client.query<{
       lane: SyncWorkGap["missing_lane"];
@@ -1465,7 +1503,11 @@ async function ensureOwedSyncWork(db: PgSql, client: PoolClient, state: SyncStre
       `,
       [state.installation_id, state.stream_key, state.generation],
     );
-    const plan = syncWorkEnsurePlan({ state, existing: existing.rows });
+    const plan = syncWorkEnsurePlan({
+      state,
+      existing: existing.rows,
+      policy: await historyPolicyForInstall(client, state.installation_id),
+    });
     for (const lane of plan.enqueue) {
       await client.query(
         `

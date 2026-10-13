@@ -101,6 +101,10 @@ export interface SyncPageOutcome {
   media_pending?: boolean;
   idle_ms?: number;
   poll_hint?: SyncPollHint;
+  /** Which call produced this page. Scroll does not move phase or cursors. */
+  cursor_kind?: "live" | "history" | "scroll";
+  /** Installation policy. Connectors never set this. */
+  history_policy?: "backfill" | "incremental";
   error?: unknown;
   now: string;
 }

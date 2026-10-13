@@ -76,7 +76,6 @@ describe("due-work planner", () => {
       planned.map((item) => [item.lane, item.stream_key, item.next_due_at]),
       [
         ["interactive", "hot", "2026-09-21T00:00:00.000Z"],
-        ["live", "old", "2026-09-21T00:00:00.000Z"],
         ["live", "cold", "2026-09-21T00:03:00.000Z"],
         ["live", "quiet", "2026-09-21T01:00:00.000Z"],
       ],
@@ -84,7 +83,7 @@ describe("due-work planner", () => {
     assert.ok(planned[0].priority > planned[1].priority);
   });
 
-  it("keeps a history chat on the latest queue beside media", () => {
+  it("keeps a history chat off the latest queue and still drains media", () => {
     const planned = planDueSyncWork({
       installation_id: "install-1",
       now: "2026-09-21T00:00:00.000Z",
@@ -96,13 +95,10 @@ describe("due-work planner", () => {
     });
     assert.deepEqual(
       planned.map((item) => [item.lane, item.stream_key, item.next_due_at]),
-      [
-        ["live", "backfill", "2026-09-21T00:00:00.000Z"],
-        ["media", "backfill", "2026-09-21T00:00:00.000Z"],
-      ],
+      [["media", "backfill", "2026-09-21T00:00:00.000Z"]],
     );
     const missing = membersMissingLatestWork(
-      [member("backfill"), member("caught-up")],
+      [member("backfill"), member("caught-up"), member("bare")],
       [
         { stream_key: "backfill", generation: 1, lane: "media" },
         { stream_key: "backfill", generation: 1, lane: "history" },
@@ -111,7 +107,7 @@ describe("due-work planner", () => {
     );
     assert.deepEqual(
       missing.map((item) => item.stream_key),
-      ["backfill"],
+      ["bare"],
     );
     const owingHistory = membersMissingLane(
       [member("backfill"), member("caught-up"), member("media-only")],
@@ -275,16 +271,16 @@ describe("due-work planner", () => {
       states,
     });
     const elapsed = Date.now() - started;
-    assert.equal(planned.length, 10_000);
+    const historyCount = members.filter(
+      (_, index) => index % 20 === 0,
+    ).length;
+    assert.equal(planned.length, 10_000 - historyCount);
     assert.ok(planned.every((item) => item.lane !== "history"));
     assert.equal(planned[0].lane, "interactive");
     assert.equal(planned[0].stream_key, "channel:C1");
     assert.equal(planned[0].next_due_at, now);
     const dueNow = planned.filter((item) => item.next_due_at === now);
-    const historyCount = members.filter(
-      (_, index) => index % 20 === 0,
-    ).length;
-    assert.equal(dueNow.length, 1 + historyCount);
+    assert.equal(dueNow.length, 1);
     assert.ok(
       dueNow.every(
         (item) =>
@@ -413,12 +409,7 @@ describe("sync run due-work selection", () => {
       "catalog",
       "media",
     ]);
-    assert.deepEqual(syncRunWorkLanes("archive"), [
-      "interactive",
-      "live",
-      "catalog",
-      "history",
-    ]);
+    assert.deepEqual(syncRunWorkLanes("archive"), ["history"]);
   });
 
   it("wakes the open thread plus a recent head, including already-seeded streams", () => {
@@ -483,10 +474,10 @@ describe("sync run due-work selection", () => {
 });
 
 describe("owed sync lanes", () => {
-  it("owes latest beside history and media", () => {
+  it("owes history and media without a latest row", () => {
     assert.deepEqual(
       owedSyncLanes({ phase: "history", media_pending: true }),
-      ["live", "history", "media"],
+      ["history", "media"],
     );
     assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), [
       "live",
@@ -501,7 +492,7 @@ describe("owed sync lanes", () => {
         { lane: "history", status: "running", run_id: null },
       ],
     });
-    assert.deepEqual(pending, { enqueue: ["media"], cancel: [] });
+    assert.deepEqual(pending, { enqueue: ["media"], cancel: ["live"] });
 
     const covered = syncWorkEnsurePlan({
       state: { phase: "steady", media_pending: false },
@@ -581,6 +572,10 @@ describe("owed sync lanes", () => {
       ],
     });
     assert.equal(
+      planned.find((item) => item.stream_key === "chat:history"),
+      undefined,
+    );
+    assert.equal(
       planned.find((item) => item.stream_key === "chat:cold").next_due_at,
       "2026-09-21T01:00:00.000Z",
     );
@@ -590,10 +585,6 @@ describe("owed sync lanes", () => {
     );
     assert.equal(
       planned.find((item) => item.stream_key === "chat:open").next_due_at,
-      now,
-    );
-    assert.equal(
-      planned.find((item) => item.stream_key === "chat:history").next_due_at,
       now,
     );
   });

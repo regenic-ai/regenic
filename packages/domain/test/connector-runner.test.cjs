@@ -477,4 +477,36 @@ describe("ConnectorRunner", () => {
     });
     assert.equal(run.status, "unsupported_mode");
   });
+
+  it("ingests a scroll without moving the lease cursor", async () => {
+    const runtime = await createRuntime();
+    const seen = [];
+    const connector = {
+      async poll(cursor) {
+        seen.push(cursor?.value ?? null);
+        return {
+          batch: batch(),
+          next_cursor: seen.length === 1 ? "cursor-2" : "scroll-blob",
+        };
+      },
+    };
+    const runner = new ConnectorRunner(
+      new InProcessConnectorInvoker(connector),
+      { async ingest() { return validResult([{ external_id: "message-1", status: "accepted", event_id: "event-1" }]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    await runner.poll(input);
+    const scrolled = await runner.poll({
+      ...input,
+      cursor: "live-blob",
+      commit_cursor: false,
+      before: "2026-10-01T00:00:00.000Z",
+    });
+    const cursor = await runtime.getCursor("installation-1", "personal");
+    assert.equal(scrolled.status, "completed");
+    assert.equal(scrolled.next_cursor, "scroll-blob");
+    assert.deepEqual(seen, [null, "live-blob"]);
+    assert.equal(cursor.cursor, "cursor-2");
+  });
 });

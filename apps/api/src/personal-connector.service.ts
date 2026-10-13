@@ -22,6 +22,9 @@ import {
   type SyncRun,
   type SyncRunMode,
   type WebhookRequest,
+  historySyncClaimLanes,
+  shouldRunHistoryTick,
+  steadySyncClaimLanes,
 } from "@regenic/domain";
 import {
   nextPickedChatNames,
@@ -38,7 +41,6 @@ import {
   resetPullStatus,
   type PullStreamStatus,
 } from "./personal-pull-status";
-import { isHumanIdle } from "./personal-human-pace";
 import { shouldKeepCatchingUp } from "./personal-stream-pace";
 import {
   backgroundSyncReleased,
@@ -454,7 +456,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       const store = this.runtime.requireHost().get("authority");
       await runDueWorkPlane(this.connectorState(), store, {
         plane: "steady",
-        lanes: ["interactive", "live", "catalog", "media"],
+        lanes: [...steadySyncClaimLanes()],
         allowHistory: false,
       });
       pullStatus.last_tick_at = new Date().toISOString();
@@ -476,10 +478,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return;
     }
     if (
-      !backgroundSyncReleased() ||
-      !isHumanIdle() ||
-      this.kernelRuntime.shouldDeferHistorySync() ||
-      this.kernelRuntime.pressureView().throttle_history
+      !shouldRunHistoryTick({
+        backgroundReleased: backgroundSyncReleased(),
+        deferHistory: this.kernelRuntime.shouldDeferHistorySync(),
+        throttleHistory: this.kernelRuntime.pressureView().throttle_history,
+      })
     ) {
       return;
     }
@@ -488,7 +491,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       const store = this.runtime.requireHost().get("authority");
       await runDueWorkPlane(this.connectorState(), store, {
         plane: "bootstrap",
-        lanes: ["interactive", "live", "catalog", "history"],
+        lanes: [...historySyncClaimLanes()],
         allowHistory: true,
       });
     } catch (error) {

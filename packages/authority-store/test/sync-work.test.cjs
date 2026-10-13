@@ -479,7 +479,7 @@ describePg("postgres concurrent sync work claim", () => {
 });
 
 describe("phase writes owe their lanes", () => {
-  it("inserts latest beside history without rereading cursors on the gap query", async () => {
+  it("owes history without a live row and does not refill live from the gap query", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));
     await seedInstallation(store);
@@ -505,11 +505,11 @@ describe("phase writes owe their lanes", () => {
     });
     assert.deepEqual(
       claimed.map((work) => work.lane).sort(),
-      ["history", "live", "media"],
+      ["history", "media"],
     );
     assert.ok(claimed.every((work) => work.next_due_at === first));
     await store.settleSyncWork({
-      id: claimed.find((work) => work.lane === "live").id,
+      id: claimed.find((work) => work.lane === "history").id,
       owner: "worker",
       now: first,
       outcome: "succeeded",
@@ -517,7 +517,7 @@ describe("phase writes owe their lanes", () => {
     const gaps = await store.listSyncWorkGaps(installation.id);
     assert.deepEqual(
       gaps.map((gap) => gap.missing_lane),
-      ["live"],
+      ["history"],
     );
     assert.equal("live_cursor" in gaps[0], false);
     assert.equal("history_cursor" in gaps[0], false);
@@ -568,6 +568,31 @@ describe("phase writes owe their lanes", () => {
       unassigned: true,
     });
     assert.deepEqual(dropped, []);
+    await store.updateInstallationConfig({
+      id: installation.id,
+      org_id: installation.org_id,
+      config: { history_policy: "incremental", sync_mode: "conversation" },
+      updated_at: later,
+    });
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "chat:3",
+      phase: "history",
+      media_pending: false,
+      generation: 1,
+      updated_at: later,
+    });
+    const incremental = await store.claimSyncWork({
+      owner: "worker-d",
+      now: later,
+      lease_ms: 60_000,
+      limit: 8,
+      installation_id: installation.id,
+      unassigned: true,
+    });
+    assert.ok(incremental.length > 0);
+    assert.ok(incremental.every((work) => work.lane === "live"));
+    assert.ok(incremental.some((work) => work.stream_key === "chat:3"));
     store.close();
   });
 

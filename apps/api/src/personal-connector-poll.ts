@@ -7,11 +7,19 @@ import {
   DeadlineExceededError,
   InstallationQuotaBook,
   connectorPollTimeoutMs,
+  cursorKindFromPoll,
+  cursorWriteFor,
+  historyPolicyFromConfig,
+  pollCursorValue,
+  sameLaneContinues,
+  SyncEngine,
+  syncOutcomeForPoll,
   yieldToEventLoop,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
   type ConnectorRuntimeStore,
   type ConnectorStream,
+  type SyncPhase,
 } from "@regenic/domain";
 import { PersonalConnectorError } from "./personal-errors";
 
@@ -112,6 +120,17 @@ export async function pollStream(
   );
   const runs: ConnectorPollRunResult[] = [];
   const seenCursors = new Set<string>();
+  const kind = cursorKindFromPoll({
+    older: options?.older,
+    before: options?.before,
+  });
+  const syncState = await store.getSyncState(installation.id, stream.stream_key);
+  const selected = pollCursorValue({
+    kind,
+    liveCursor: syncState?.live_cursor,
+    historyCursor: syncState?.history_cursor,
+  });
+  const write = cursorWriteFor({ kind, seedHistory: false });
   for (let page = 0; page < maxPages; page += 1) {
     const run = await runner.poll({
       installation_id: installation.id,
@@ -123,6 +142,8 @@ export async function pollStream(
       media: options?.media,
       before: options?.before,
       before_external_id: options?.before_external_id,
+      ...(page === 0 && selected ? { cursor: selected } : {}),
+      commit_cursor: write.lease,
       timeout_ms: connectorPollTimeoutMs(),
     });
     runs.push(run);
@@ -136,7 +157,16 @@ export async function pollStream(
     if (run.status !== "completed") {
       break;
     }
-    if (run.has_more === false || !run.next_cursor) {
+    const historyPending =
+      "poll_hint" in run && run.poll_hint?.history_pending === true;
+    if (
+      !sameLaneContinues({
+        kind,
+        hasMore: run.has_more === true,
+        historyPending,
+      }) ||
+      !run.next_cursor
+    ) {
       break;
     }
     if (seenCursors.has(run.next_cursor)) {
@@ -146,6 +176,37 @@ export async function pollStream(
     await yieldToEventLoop();
   }
   return runs;
+}
+
+export async function rememberPolledStream(
+  store: ConnectorRuntimeStore,
+  installation: ConnectorInstallation,
+  stream: ConnectorStream,
+  prior: { phase?: SyncPhase | null; history_cursor?: string | null } | null,
+  options: {
+    older?: boolean;
+    before?: string | null;
+    media?: boolean;
+    idleMs?: number;
+  },
+  pages: ConnectorPollRunResult[],
+): Promise<void> {
+  await new SyncEngine(store).rememberResult(
+    syncOutcomeForPoll(
+      installation.id,
+      {
+        stream,
+        prior,
+        policy: historyPolicyFromConfig(installation.config),
+        older: options.older,
+        before: options.before,
+        media: options.media,
+        idleMs: options.idleMs,
+      },
+      { pages },
+      new Date().toISOString(),
+    ),
+  );
 }
 
 export function safeErrorCode(error: unknown): string {

@@ -234,6 +234,7 @@ export async function listSyncWorkGaps(db: Database.Database, installationId: st
                  'live' AS missing_lane
           FROM connector_sync_state s
           WHERE s.installation_id = ?
+            AND s.phase != 'history'
             AND NOT EXISTS (
               SELECT 1 FROM connector_sync_work w
               WHERE w.installation_id = s.installation_id

@@ -25,6 +25,7 @@ import {
   wrapDriverError,
   pollStream,
   historyPendingFromRuns,
+  rememberPolledStream,
   summarizeRuns,
 } from "./personal-connector-poll";
 import {
@@ -508,6 +509,7 @@ async function runRecentLiveForThread(
       return;
     }
     const key = streamPaceKey(installation.id, stream.stream_key);
+    const prior = await store.getSyncState(installation.id, stream.stream_key);
     state.rememberStreamMeta(key, stream);
     state.streamPulling.add(key);
     state.publishStreams();
@@ -535,6 +537,22 @@ async function runRecentLiveForThread(
       );
       if (pages === undefined || !focusAlive(state, generation, signal)) {
         return;
+      }
+      const completed = pages.filter(
+        (page) => page.status === "completed" || page.status === "retryable_failure",
+      );
+      if (completed.length > 0) {
+        await rememberPolledStream(
+          store,
+          installation,
+          stream,
+          prior,
+          {
+            media: false,
+            idleMs: streamIdleMs(stream, installation.config),
+          },
+          completed,
+        );
       }
       state.rememberStreamPace({
         key,

@@ -8,7 +8,7 @@ import {
   applyKernelPressureToSyncBudget,
   buildSyncProgressSnapshot,
   streamIdleTiersFromEnv,
-  syncPageOutcomeFromPollRuns,
+  syncOutcomeForPoll,
   withDeadline,
   yieldToEventLoop,
   type ConnectorPollRunResult,
@@ -23,9 +23,13 @@ import {
   firstSeedHeadFromEnv,
   looksLikeSyncPressure,
   needsCatalogDueWork,
+  historyPolicyFromConfig,
+  historySyncClaimLanes,
+  messageDuty,
   planSyncWorkGaps,
-  syncRunWorkLanes,
+  sameLaneContinues,
   type SyncLane,
+  type SyncPhase,
   type SyncWorkRecord,
 } from "@regenic/domain";
 import {
@@ -215,6 +219,8 @@ async function enqueueSyncWorkGaps(
   const gaps = await store.listSyncWorkGaps(installationId, {
     unseeded_limit: options?.unseededLimit ?? 0,
   });
+  const installation = await store.findInstallation(installationId);
+  const policy = historyPolicyFromConfig(installation?.config);
   const selected = options?.lanes
     ? gaps.filter((gap) => options.lanes?.includes(gap.missing_lane))
     : gaps;
@@ -231,6 +237,7 @@ async function enqueueSyncWorkGaps(
         streamIdleTiersFromEnv().coldIdleMs,
       ),
       preferredThreadId: preferredThreadId(),
+      policy,
     }),
   );
 }
@@ -465,6 +472,23 @@ async function pollClaimedDueWorkStreams(
         });
         return;
       }
+      if (item.lane === "history") {
+        const prior = await store.getSyncState(installation.id, item.stream_key);
+        const policy = historyPolicyFromConfig(installation.config);
+        if (messageDuty(prior?.phase, policy) !== "history") {
+          const now = new Date().toISOString();
+          if (prior) {
+            await store.putSyncState({ ...prior, updated_at: now });
+          }
+          await store.settleSyncWork({
+            id: item.id,
+            owner: state.dueWorkOwner,
+            now,
+            outcome: "succeeded",
+          });
+          return;
+        }
+      }
       const thread = conversationThreadFromStreamKey(
         driver.source,
         item.stream_key,
@@ -500,6 +524,10 @@ async function pollClaimedDueWorkStreams(
       }
       const older = item.lane === "history";
       const media = item.lane === "media";
+      const priorState = await store.getSyncState(
+        installation.id,
+        item.stream_key,
+      );
       const key = streamPaceKey(installation.id, stream.stream_key);
       const preferred = dueWorkStreamPreferred(item.lane, stream.thread_id);
       let idleMs = dueWorkStreamIdleMs(
@@ -551,10 +579,21 @@ async function pollClaimedDueWorkStreams(
         const hasMore = polled.some(
           (run) => "has_more" in run && run.has_more === true,
         );
+        const historyPending = polled.some(
+          (run) => "poll_hint" in run && run.poll_hint?.history_pending === true,
+        );
+        const continues =
+          item.lane === "media"
+            ? hasMore
+            : sameLaneContinues({
+                kind: older ? "history" : "live",
+                hasMore,
+                historyPending,
+              });
         const heat = classifyDueWorkHeat({
           preferred,
           acceptedCount: summary.accepted_count,
-          eager: older || media || hasMore,
+          eager: older || media || continues,
         });
         idleMs = dueWorkStreamIdleMs(
           stream,
@@ -574,7 +613,15 @@ async function pollClaimedDueWorkStreams(
         await rememberEngineResult(
           engine,
           installation.id,
-          { stream, older, media, idleMs },
+          {
+            stream,
+            older,
+            media,
+            idleMs,
+            phase: priorState?.phase,
+            historyCursor: priorState?.history_cursor,
+            historyPolicy: historyPolicyFromConfig(installation.config),
+          },
           result,
         );
         accepted += summary.accepted_count;
@@ -784,7 +831,7 @@ async function catchUpDueWork(state: ConnectorState, installationId: string): Pr
   await discoverCatalogDueWork(state, store, installationId, "bootstrap");
   await runDueWorkPlane(state, store, {
     plane: "bootstrap",
-    lanes: syncRunWorkLanes("archive"),
+    lanes: [...historySyncClaimLanes()],
     allowHistory: true,
     installationId,
   });
@@ -826,15 +873,26 @@ function pollRunsHadPressure(runs: ConnectorPollRunResult[]): boolean {
 async function rememberEngineResult(
   engine: SyncEngine,
   installationId: string,
-  item: { stream: ConnectorStream; older: boolean; media: boolean; idleMs?: number },
+  item: {
+    stream: ConnectorStream;
+    older: boolean;
+    media: boolean;
+    idleMs?: number;
+    historyPolicy?: "backfill" | "incremental";
+    phase?: SyncPhase | null;
+    historyCursor?: string | null;
+  },
   result: { pages: ConnectorPollRunResult[]; error?: unknown },
 ): Promise<void> {
   await engine.rememberResult(
-    syncPageOutcomeFromPollRuns(
+    syncOutcomeForPoll(
       installationId,
       {
         stream: item.stream,
-        work: { older: item.older, media: item.media },
+        prior: { phase: item.phase, history_cursor: item.historyCursor },
+        policy: item.historyPolicy,
+        older: item.older,
+        media: item.media,
         idleMs: item.idleMs,
       },
       result,

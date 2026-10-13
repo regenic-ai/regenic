@@ -54,6 +54,13 @@ export interface RunConnectorPollInput {
   before?: string;
   before_external_id?: string;
   timeout_ms?: number;
+  /**
+   * Opaque cursor for this call. When omitted, the lease cursor is used.
+   * Regenic does not interpret the value.
+   */
+  cursor?: string;
+  /** Scroll ingests the page and leaves the lease cursor where it was. */
+  commit_cursor?: boolean;
 }
 
 export type ConnectorPollRunResult =
@@ -160,12 +167,18 @@ export class ConnectorRunner {
     const pollStartedAt = Date.now();
     const timeoutMs = input.timeout_ms ?? 0;
     const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+    const commitCursor = input.commit_cursor !== false;
+    const pollCursor =
+      input.cursor !== undefined
+        ? input.cursor
+          ? { value: input.cursor }
+          : null
+        : lease.cursor
+          ? { value: lease.cursor }
+          : null;
     try {
       pollResult = await withDeadline(
-        poll(
-          lease.cursor ? { value: lease.cursor } : null,
-          pollOptions(input, signal),
-        ),
+        poll(pollCursor, pollOptions(input, signal)),
         timeoutMs,
         `poll ${input.installation_id}:${input.stream_key}`,
       );
@@ -203,8 +216,10 @@ export class ConnectorRunner {
       lease_owner: input.lease_owner,
     };
 
+    const returnedCursor =
+      pollResult.next_cursor ?? pollResult.batch.next_cursor;
+    const storedCursor = commitCursor ? returnedCursor : undefined;
     if (pollResult.batch.records.length === 0) {
-      const nextCursor = pollResult.next_cursor ?? pollResult.batch.next_cursor;
       const settleStartedAt = Date.now();
       await this.commitPage({
         attempt,
@@ -215,7 +230,7 @@ export class ConnectorRunner {
           duplicate_count: 0,
           quarantined_count: 0,
           retryable_failure_count: 0,
-          next_cursor: nextCursor,
+          next_cursor: storedCursor,
           quarantines: [],
         },
       });
@@ -230,7 +245,7 @@ export class ConnectorRunner {
           delivery_id: pollResult.batch.delivery_id,
           records: [],
         },
-        next_cursor: nextCursor,
+        next_cursor: returnedCursor,
         has_more: pollResult.has_more,
         media_pending: pollResult.media_pending,
         poll_hint: pollResult.poll_hint,
@@ -246,7 +261,7 @@ export class ConnectorRunner {
         settle: {
           ...settleBase,
           finished_at: finishedAt,
-          next_cursor: pollResult.next_cursor ?? pollResult.batch.next_cursor,
+          next_cursor: storedCursor,
         },
       };
       const submission = await this.processor.ingest(pollResult.batch, page);
@@ -306,7 +321,7 @@ export class ConnectorRunner {
       stream_key: input.stream_key,
       attempt_id: attempt.id,
       result,
-      next_cursor: pollResult.next_cursor ?? pollResult.batch.next_cursor,
+      next_cursor: returnedCursor,
       has_more: pollResult.has_more,
       media_pending: pollResult.media_pending,
       poll_hint: pollResult.poll_hint,

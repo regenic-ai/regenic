@@ -45,7 +45,8 @@ export const MAX_FEISHU_MEDIA_JOBS = 40;
 export const MAX_FEISHU_MEDIA_ATTEMPTS = 5;
 export const MAX_FEISHU_MEDIA_JOBS_PER_POLL = 8;
 /** How many end_time pages one scroll may follow to pass the boundary row. */
-const ANCHORED_HISTORY_HOPS = 4;
+/** One older page. A second request only steps past the anchor row itself. */
+const ANCHORED_HISTORY_HOPS = 2;
 
 export interface FeishuMediaJob {
   message_id: string;
@@ -943,14 +944,9 @@ export function planFeishuHistoryRequest(
       sort_type: "ByCreateTimeDesc",
     };
   }
-  // A seeded chat whose history cursor is behind the newest watermark must
-  // poll from that watermark. A page_token that is still the live walk stays.
-  const historyParked =
-    state.recent_seeded &&
-    Boolean(state.page_token) &&
-    Boolean(state.head_time) &&
-    state.start_time !== state.head_time;
-  if (state.recent_seeded && (historyParked || !state.page_token)) {
+  // An ascending page_token belongs to this live walk. Reusing it as
+  // descending history is rejected: sort_type cannot change mid-token.
+  if (state.recent_seeded && !state.page_token) {
     const liveStart = laterTime(state.head_time, state.start_time);
     return {
       chat_id: chatId,
@@ -970,16 +966,15 @@ export function planFeishuHistoryRequest(
 }
 
 export function deferredHistoryToken(state: FeishuCursorState): string | undefined {
-  return (
-    state.history_token ??
-    (state.sort === "desc" ? state.page_token : undefined) ??
-    (state.recent_seeded &&
-    state.page_token &&
-    state.head_time &&
-    state.start_time !== state.head_time
-      ? state.page_token
-      : undefined)
-  );
+  if (state.history_token) {
+    return state.history_token;
+  }
+  // page_token is only a history cursor when this state is still a desc walk.
+  // An asc token must stay on ByCreateTimeAsc.
+  if (state.sort === "desc") {
+    return state.page_token;
+  }
+  return undefined;
 }
 
 export function feishuHistoryHasMore(
@@ -989,17 +984,8 @@ export function feishuHistoryHasMore(
   nextState?: FeishuCursorState,
   options: { continuation?: boolean } = {},
 ): boolean {
-  if (nextState && deferredHistoryToken(nextState)) {
-    return true;
-  }
-  if (
-    needsRecentSeed(current) &&
-    sort === "ByCreateTimeDesc" &&
-    current.page_token
-  ) {
-    return true;
-  }
-  // The newest page's has_more means "older messages exist", not "page this walk".
+  // Source has_more on a newest descending page means older messages exist.
+  // That fact is history_pending. This value is only "another page of this call".
   if (sort === "ByCreateTimeDesc" && !options.continuation) {
     return false;
   }
@@ -1015,17 +1001,8 @@ export function nextFeishuCursor(
   const newest = newestStartTime(page.items);
   const head = laterTime(current.head_time, newest);
   if (needsRecentSeed(current) && sort === "ByCreateTimeDesc") {
-    if (current.page_token) {
-      return {
-        history_token: current.history_token ?? current.page_token,
-        ...(head
-          ? { start_time: head, head_time: head }
-          : current.start_time
-            ? { start_time: current.start_time }
-            : {}),
-        recent_seeded: true,
-      };
-    }
+    // The previous page_token belonged to another sort. Only the token from
+    // this descending page can be sent back as ByCreateTimeDesc.
     if (page.has_more && page.page_token) {
       return {
         ...(head ? { start_time: head, head_time: head } : {}),

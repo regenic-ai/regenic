@@ -20,6 +20,12 @@ import type {
   SyncWorkIdentity,
 } from "./sync-work";
 import { syncWorkPriority } from "./sync-work";
+import {
+  DEFAULT_HISTORY_POLICY,
+  messageDuty,
+  owedSyncLanes,
+  type HistoryPolicy,
+} from "./sync-history";
 
 export type DueWorkPlane = "steady" | "bootstrap";
 
@@ -43,19 +49,7 @@ export interface OpenSyncWorkLane {
   run_id?: string | null;
 }
 
-/** Lanes a phase write owes. Interactive is coverage for live, not an owed lane. */
-export function owedSyncLanes(
-  state: Pick<SyncStreamState, "phase" | "media_pending">,
-): SyncLane[] {
-  const lanes: SyncLane[] = ["live"];
-  if (state.phase === "history") {
-    lanes.push("history");
-  }
-  if (state.media_pending) {
-    lanes.push("media");
-  }
-  return lanes;
-}
+export { owedSyncLanes };
 
 function laneBlocksEnqueue(
   existing: readonly OpenSyncWorkLane[],
@@ -83,27 +77,33 @@ function laneBlocksEnqueue(
 export function syncWorkEnsurePlan(input: {
   state: Pick<SyncStreamState, "phase" | "media_pending">;
   existing: readonly OpenSyncWorkLane[];
+  policy?: HistoryPolicy;
 }): { enqueue: SyncLane[]; cancel: SyncLane[] } {
-  const enqueue = owedSyncLanes(input.state).filter(
+  const owed = owedSyncLanes(
+    input.state,
+    input.policy ?? DEFAULT_HISTORY_POLICY,
+  );
+  const enqueue = owed.filter(
     (lane) => !laneBlocksEnqueue(input.existing, lane),
   );
+  const owedSet = new Set(owed);
   const cancel: SyncLane[] = [];
-  if (
-    input.state.phase !== "history" &&
+  const pending = (lane: SyncLane) =>
     input.existing.some(
-      (item) =>
-        !item.run_id && item.lane === "history" && item.status === "pending",
-    )
-  ) {
+      (item) => !item.run_id && item.lane === lane && item.status === "pending",
+    );
+  if (!owedSet.has("history") && pending("history")) {
     cancel.push("history");
   }
-  if (
-    !input.state.media_pending &&
-    input.existing.some(
-      (item) =>
-        !item.run_id && item.lane === "media" && item.status === "pending",
-    )
-  ) {
+  if (!owedSet.has("live")) {
+    if (pending("live")) {
+      cancel.push("live");
+    }
+    if (pending("interactive")) {
+      cancel.push("interactive");
+    }
+  }
+  if (!owedSet.has("media") && pending("media")) {
     cancel.push("media");
   }
   return { enqueue, cancel };
@@ -111,9 +111,9 @@ export function syncWorkEnsurePlan(input: {
 
 /**
  * Repair rows for lanes the phase write should already have inserted.
- * History, media, and a history-phase latest row are due now. A steady live
- * row waits for `idle_until`, then the cold idle. The preferred thread's
- * latest row is interactive.
+ * History and media are due now. A live row during history is not repaired.
+ * A steady live row waits for `idle_until`, then the cold idle. The preferred
+ * thread's latest row is interactive.
  */
 export function planSyncWorkGaps(input: {
   installation_id: string;
@@ -121,10 +121,22 @@ export function planSyncWorkGaps(input: {
   now: string;
   coldIdleMs?: number;
   preferredThreadId?: string | null;
+  policy?: HistoryPolicy;
 }): EnqueueSyncWork[] {
   const preferred = input.preferredThreadId?.trim() || null;
+  const policy = input.policy ?? DEFAULT_HISTORY_POLICY;
   const planned: EnqueueSyncWork[] = [];
   for (const gap of input.gaps) {
+    if (
+      policy === "backfill" &&
+      gap.phase === "history" &&
+      (gap.missing_lane === "live" || gap.missing_lane === "interactive")
+    ) {
+      continue;
+    }
+    if (policy === "incremental" && gap.missing_lane === "history") {
+      continue;
+    }
     const focused = Boolean(preferred) && gap.thread_id === preferred;
     if (focused && gap.missing_lane === "media") {
       continue;
@@ -162,12 +174,16 @@ export function planSyncWorkGaps(input: {
 function syncGapRepairIsEager(
   gap: Pick<SyncWorkGap, "missing_lane" | "phase" | "media_pending">,
 ): boolean {
+  if (
+    gap.phase === "history" &&
+    (gap.missing_lane === "live" || gap.missing_lane === "interactive")
+  ) {
+    return false;
+  }
   if (gap.missing_lane === "history" || gap.missing_lane === "media") {
     return true;
   }
-  return (
-    gap.phase === "history" || gap.phase === "unseeded" || gap.media_pending
-  );
+  return gap.phase === "unseeded" || gap.media_pending;
 }
 
 export function dueSyncWorkId(
@@ -231,8 +247,8 @@ export function syncWorkCoverageKey(
 }
 
 /**
- * Steady latest is owed even while history or media work already exists.
- * A media-only or history-only row does not cover the latest queue.
+ * A history row is the message duty, so it covers the latest queue.
+ * A media-only row does not.
  */
 export function membersMissingLatestWork(
   members: readonly SyncCatalogMember[],
@@ -244,7 +260,9 @@ export function membersMissingLatestWork(
         (item) =>
           item.stream_key &&
           item.stream_key !== SYNC_CATALOG_STREAM &&
-          (item.lane === "live" || item.lane === "interactive"),
+          (item.lane === "live" ||
+            item.lane === "interactive" ||
+            item.lane === "history"),
       )
       .map((item) => syncWorkCoverageKey(item.stream_key, item.generation)),
   );
@@ -489,7 +507,7 @@ export function syncRunWorkPlane(mode: SyncRunMode): DueWorkPlane {
 
 export function syncRunWorkLanes(mode: SyncRunMode): SyncLane[] {
   if (mode === "archive") {
-    return ["interactive", "live", "catalog", "history"];
+    return ["history"];
   }
   if (mode === "continuous") {
     return ["interactive", "live", "catalog", "media"];
@@ -581,15 +599,16 @@ function dueWorkLanes(input: {
     Boolean(input.preferredThreadId) &&
     input.member.thread_id === input.preferredThreadId;
   if (input.plane === "steady") {
-    // History backfill stays on the bootstrap plane. Latest still runs.
+    if (messageDuty(phase) === "history") {
+      return input.state?.media_pending && !preferred ? ["media"] : [];
+    }
     const lanes: SyncLane[] = [preferred ? "interactive" : "live"];
     if (input.state?.media_pending && !preferred) {
       lanes.push("media");
     }
     return lanes;
   }
-  if (phase === "history") {
-    // Latest for this chat is a steady live/interactive row. Backfill stays here.
+  if (messageDuty(phase) === "history") {
     return ["history"];
   }
   if (phase === "unseeded") {
@@ -611,7 +630,7 @@ function dueWorkIsEager(input: {
   }
   if (
     (input.lane === "live" || input.lane === "interactive") &&
-    (phase === "history" || input.state?.media_pending === true)
+    input.state?.media_pending === true
   ) {
     return true;
   }

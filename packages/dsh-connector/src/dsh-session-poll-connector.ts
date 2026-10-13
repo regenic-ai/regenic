@@ -149,7 +149,9 @@ export class DshSessionPollConnector {
   > {
     const collected: DshHistoryEvent[] = [];
     let beforeSeq = resumeBefore;
-    for (let hop = 0; hop < this.maxHistoryPages; hop += 1) {
+    // One source page. The resume cursor carries the rest; Regenic asks again.
+    const pageBudget = Math.min(1, this.maxHistoryPages);
+    for (let hop = 0; hop < pageBudget; hop += 1) {
       const page = await this.client.sessionHistory({
         sessionId: this.options.session_id,
         maxMessages: this.pageSize,

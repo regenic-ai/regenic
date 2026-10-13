@@ -13,6 +13,7 @@ const {
   planFeishuHistoryRequest,
   decodeFeishuCursor,
   deferredHistoryToken,
+  feishuPollHint,
   needsRecentSeed,
   resetFeishuAttention,
   clearFeishuMediaJobsForTests,
@@ -280,7 +281,8 @@ describe("FeishuChatPollConnector", () => {
         history_token: "older",
       }),
     );
-    assert.equal(result.has_more, true);
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
   });
 
   it("skips attachment downloads when opening so the first page can land as text", async () => {
@@ -317,7 +319,8 @@ describe("FeishuChatPollConnector", () => {
     assert.deepEqual(downloads, []);
     assert.equal(attachment.external_locator, "feishu:image:img_shot");
     assert.equal(attachment.bytes, undefined);
-    assert.equal(result.has_more, true);
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
     assert.equal(result.media_pending, true);
     assert.match(result.next_cursor ?? "", /"recent_seeded":true/);
     assert.equal(/"media_jobs"/.test(result.next_cursor ?? ""), false);
@@ -365,7 +368,8 @@ describe("FeishuChatPollConnector", () => {
       sort_type: "ByCreateTimeDesc",
     });
     assert.equal(live.batch.records[0].external_id, "oc_1:om_live");
-    assert.equal(live.has_more, true);
+    assert.equal(live.has_more, false);
+    assert.equal(live.poll_hint.history_pending, true);
     assert.match(live.next_cursor ?? "", /"history_token":"older"/);
     assert.equal(older.batch.records[0].external_id, "oc_1:om_old");
     assert.match(older.next_cursor ?? "", /"history_token":"older-2"/);
@@ -404,7 +408,8 @@ describe("FeishuChatPollConnector", () => {
       timeout_ms: 8000,
     });
     assert.match(live.next_cursor ?? "", /"history_token":"older-5"/);
-    assert.equal(live.has_more, true);
+    assert.equal(live.has_more, false);
+    assert.equal(live.poll_hint.history_pending, true);
     const older = await connector.poll({ value: live.next_cursor }, { older: true });
     assert.equal(calls[1].page_token, "older-5");
     assert.equal(calls[1].sort_type, "ByCreateTimeDesc");
@@ -626,7 +631,29 @@ describe("FeishuChatPollConnector", () => {
     });
   });
 
-  it("seeds recent messages without dropping a mid-history asc cursor", async () => {
+  it("does not reuse an ascending page token as descending history", () => {
+    const state = {
+      page_token: "asc-20",
+      start_time: "1723400000",
+      head_time: "1723600000",
+      recent_seeded: true,
+    };
+    assert.equal(deferredHistoryToken(state), undefined);
+    assert.equal(feishuPollHint(state).history_pending, false);
+    assert.equal(
+      planFeishuHistoryRequest("oc_1", 50, state, { older: true }),
+      null,
+    );
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: "asc-20",
+      start_time: "1723400000",
+      sort_type: "ByCreateTimeAsc",
+    });
+  });
+
+  it("keeps the descending page token from the newest page, not the old asc token", async () => {
     const calls = [];
     const connector = createConnector({
       async listMessages(input) {
@@ -656,10 +683,11 @@ describe("FeishuChatPollConnector", () => {
       JSON.stringify({
         start_time: "1723600000",
         recent_seeded: true,
-        history_token: "asc-20",
+        history_token: "desc-2",
       }),
     );
-    assert.equal(result.has_more, true);
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
     const seeded = decodeFeishuCursor({ value: result.next_cursor });
     assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, seeded), {
       chat_id: "oc_1",
@@ -691,7 +719,8 @@ describe("FeishuChatPollConnector", () => {
       sort_type: "ByCreateTimeDesc",
     });
     assert.equal(result.batch.records[0].external_id, "oc_1:om_recent");
-    assert.equal(result.has_more, true);
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
   });
 
   it("passes the reusable poll connector conformance suite", async () => {

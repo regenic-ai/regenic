@@ -358,17 +358,16 @@ describe("durable sync work", () => {
       lanes: ["live"],
       unassigned: true,
     });
-    assert.equal(live.length, 1);
-    assert.equal(live[0].next_due_at, first);
+    assert.equal(live.length, 0);
     await store.settleSyncWork({
-      id: live[0].id,
-      owner: "live",
+      id: history[0].id,
+      owner: "history",
       now: later,
       outcome: "succeeded",
     });
     const gaps = await store.listSyncWorkGaps("install-1");
     assert.equal(gaps.length, 1);
-    assert.equal(gaps[0].missing_lane, "live");
+    assert.equal(gaps[0].missing_lane, "history");
     assert.equal("live_cursor" in gaps[0], false);
     assert.equal("history_cursor" in gaps[0], false);
     await store.putSyncState({
@@ -384,7 +383,7 @@ describe("durable sync work", () => {
     });
     assert.deepEqual(
       identities.map((item) => item.lane).sort(),
-      ["history", "live"],
+      ["live"],
     );
   });
 

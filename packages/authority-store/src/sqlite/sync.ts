@@ -41,6 +41,9 @@ import {
   SYNC_CATALOG_STREAM,
   applySyncCatalogMembers,
   catalogStreamKeysLeft,
+  historyPolicyFromConfig,
+  DEFAULT_HISTORY_POLICY,
+  releaseHistoryPhase,
   syncWorkEnsurePlan,
   dueSyncWorkId,
 } from "@regenic/domain";
@@ -1416,18 +1419,21 @@ export async function getSyncState(db: Database.Database, installationId: string
   }
 
 export async function putSyncState(db: Database.Database, state: SyncStreamState): Promise<SyncStreamState> {
-    
+    const stored = releaseHistoryPhase(
+      state,
+      historyPolicyForInstall(db, state.installation_id),
+    );
     const write = db.transaction(() => {
       if (
         streamOutsideCompleteCatalog(db, 
-          state.installation_id,
-          state.stream_key,
+          stored.installation_id,
+          stored.stream_key,
         )
       ) {
         dropStreamsLeftCatalog(db, 
-          state.installation_id,
-          [state.stream_key],
-          state.updated_at,
+          stored.installation_id,
+          [stored.stream_key],
+          stored.updated_at,
         );
         return;
       }
@@ -1449,20 +1455,20 @@ export async function putSyncState(db: Database.Database, state: SyncStreamState
           `,
         )
         .run(
-          state.installation_id,
-          state.stream_key,
-          state.phase,
-          state.live_cursor ?? null,
-          state.history_cursor ?? null,
-          state.media_pending ? 1 : 0,
-          state.idle_until ?? null,
-          state.generation,
-          state.updated_at,
+          stored.installation_id,
+          stored.stream_key,
+          stored.phase,
+          stored.live_cursor ?? null,
+          stored.history_cursor ?? null,
+          stored.media_pending ? 1 : 0,
+          stored.idle_until ?? null,
+          stored.generation,
+          stored.updated_at,
         );
-      ensureOwedSyncWorkUnlocked(db, state);
+      ensureOwedSyncWorkUnlocked(db, stored);
     });
     write.immediate();
-    return { ...state };
+    return { ...stored };
   }
 
 function streamOutsideCompleteCatalog(db: Database.Database, installationId: string, streamKey: string): boolean {
@@ -1520,6 +1526,24 @@ function dropStreamsLeftCatalog(db: Database.Database, installationId: string, s
     }
   }
 
+function historyPolicyForInstall(db: Database.Database, installationId: string) {
+  const row = db
+    .prepare(
+      `SELECT config_json FROM connector_installations WHERE id = ?`,
+    )
+    .get(installationId) as { config_json: string } | undefined;
+  if (!row?.config_json) {
+    return DEFAULT_HISTORY_POLICY;
+  }
+  try {
+    return historyPolicyFromConfig(
+      JSON.parse(row.config_json) as Record<string, unknown>,
+    );
+  } catch {
+    return DEFAULT_HISTORY_POLICY;
+  }
+}
+
 function ensureOwedSyncWorkUnlocked(db: Database.Database, state: SyncStreamState): void {
     const existing = db
       .prepare(
@@ -1534,7 +1558,11 @@ function ensureOwedSyncWorkUnlocked(db: Database.Database, state: SyncStreamStat
       status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
       run_id: string | null;
     }>;
-    const plan = syncWorkEnsurePlan({ state, existing });
+    const plan = syncWorkEnsurePlan({
+      state,
+      existing,
+      policy: historyPolicyForInstall(db, state.installation_id),
+    });
     for (const lane of plan.enqueue) {
       enqueueSyncWorkUnlocked(db, {
         id: dueSyncWorkId(

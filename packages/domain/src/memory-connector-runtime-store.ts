@@ -29,6 +29,7 @@ import {
   dueSyncWorkId,
   syncWorkEnsurePlan,
 } from "./sync-work-planner";
+import { historyPolicyFromConfig, releaseHistoryPhase } from "./sync-history";
 import {
   syncRunIsClaimable,
   syncWorkPriority,
@@ -625,7 +626,13 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     for (const state of states) {
       const existing = this.workForStream(state);
       const threadId = threadByKey.get(state.stream_key);
-      for (const lane of syncWorkEnsurePlan({ state, existing }).enqueue) {
+      for (const lane of syncWorkEnsurePlan({
+        state,
+        existing,
+        policy: historyPolicyFromConfig(
+          this.installations.get(state.installation_id)?.config,
+        ),
+      }).enqueue) {
         gaps.push({
           stream_key: state.stream_key,
           phase: state.phase,
@@ -756,20 +763,24 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   }
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
-    const view = await this.sync.getSyncCatalog(state.installation_id);
+    const stored = releaseHistoryPhase(
+      state,
+      historyPolicyFromConfig(this.installations.get(state.installation_id)?.config),
+    );
+    const view = await this.sync.getSyncCatalog(stored.installation_id);
     if (
       view.catalog?.complete === true &&
-      !view.members.some((member) => member.stream_key === state.stream_key)
+      !view.members.some((member) => member.stream_key === stored.stream_key)
     ) {
-      this.sync.dropSyncState(state.installation_id, state.stream_key);
+      this.sync.dropSyncState(stored.installation_id, stored.stream_key);
       this.cancelUnassignedStreams(
-        state.installation_id,
-        [state.stream_key],
-        state.updated_at,
+        stored.installation_id,
+        [stored.stream_key],
+        stored.updated_at,
       );
-      return { ...state };
+      return { ...stored };
     }
-    const saved = await this.sync.putSyncState(state);
+    const saved = await this.sync.putSyncState(stored);
     await this.ensureOwedSyncWork(saved);
     return saved;
   }
@@ -847,6 +858,9 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     const plan = syncWorkEnsurePlan({
       state,
       existing: this.workForStream(state),
+      policy: historyPolicyFromConfig(
+        this.installations.get(state.installation_id)?.config,
+      ),
     });
     for (const lane of plan.enqueue) {
       await this.enqueueSyncWork({
