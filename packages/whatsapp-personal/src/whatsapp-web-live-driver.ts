@@ -5,9 +5,8 @@ import {
   INGEST_SCHEMA_VERSION,
   channelRecord,
   envCredentialsRef,
-  readInstallSecret,
-  writeKeychainSecret,
   installSecretRef,
+  type ConnectorSecrets,
   type ChannelDriver,
   type ConnectorImportParseResult,
   type ConnectorInstallation,
@@ -17,7 +16,7 @@ import {
   type IngestRecord,
   type VerifiedWebhook,
   type WebhookRequest,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import { whatsappLocaleTables } from "./locales";
 import { createPurrWhatsAppImport } from "./purr-wa-csv";
 import {
@@ -53,8 +52,18 @@ export const whatsappWebLiveDriver: ChannelDriver = {
   connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input) {
+    if (!input.secrets) {
+      throw new ChannelDriverError(
+        "missing_credentials",
+        "WhatsApp pairing storage is not available",
+      );
+    }
     try {
-      writeWhatsAppLivePairingCode(input.id, generateWhatsAppLivePairingCode());
+      writeWhatsAppLivePairingCode(
+        input.secrets,
+        input.id,
+        generateWhatsAppLivePairingCode(),
+      );
     } catch (error) {
       throw new ChannelDriverError(
         "missing_credentials",
@@ -105,8 +114,11 @@ export const whatsappWebLiveDriver: ChannelDriver = {
     );
   },
 
-  async readPairingCode(installation) {
-    return readWhatsAppLivePairingCode(installation.id);
+  async readPairingCode(installation, secrets) {
+    if (!secrets) {
+      return undefined;
+    }
+    return readWhatsAppLivePairingCode(secrets, installation.id);
   },
 
   async authorizeLiveAccess(installation, input) {
@@ -115,10 +127,11 @@ export const whatsappWebLiveDriver: ChannelDriver = {
       apiKey: input.apiKey,
       env: input.env,
       installation,
+      secrets: input.secrets,
     });
   },
 
-  async bindWebhook(installation, _host, env) {
+  async bindWebhook(installation, host, env) {
     return {
       source: WHATSAPP_PERSONAL_SOURCE,
       source_mode: "webhook" as const,
@@ -128,6 +141,7 @@ export const whatsappWebLiveDriver: ChannelDriver = {
           apiKey: headerValue(request.headers, "x-regenic-live-key"),
           env,
           installation,
+          secrets: host.secrets,
         });
         return { body: request.body, verified_at: request.received_at };
       },
@@ -283,10 +297,11 @@ export function generateWhatsAppLivePairingCode(): string {
 }
 
 export function writeWhatsAppLivePairingCode(
+  secrets: ConnectorSecrets,
   installationId: string,
   secret: string,
 ): void {
-  writeKeychainSecret(
+  secrets.write(
     installSecretRef(
       WHATSAPP_WEB_LIVE_CONNECTOR_TYPE,
       installationId,
@@ -297,9 +312,10 @@ export function writeWhatsAppLivePairingCode(
 }
 
 export function readWhatsAppLivePairingCode(
+  secrets: ConnectorSecrets,
   installationId: string,
 ): Promise<string | undefined> {
-  return readInstallSecret(
+  return secrets.read(
     WHATSAPP_WEB_LIVE_CONNECTOR_TYPE,
     installationId,
     WHATSAPP_WEB_LIVE_PAIRING_FIELD,
@@ -309,8 +325,11 @@ export function readWhatsAppLivePairingCode(
 export async function resolveWhatsAppLiveKeys(
   installation: Pick<ConnectorInstallation, "id">,
   env: NodeJS.ProcessEnv,
+  secrets?: ConnectorSecrets,
 ): Promise<{ pairingCode?: string; envKey?: string }> {
-  const pairingCode = await readWhatsAppLivePairingCode(installation.id);
+  const pairingCode = secrets
+    ? await readWhatsAppLivePairingCode(secrets, installation.id)
+    : undefined;
   const envKey = env[WHATSAPP_WEB_LIVE_KEY_ENV]?.trim() || undefined;
   return { pairingCode, envKey };
 }
@@ -331,6 +350,7 @@ async function assertWhatsAppLiveAccess(input: {
   apiKey?: string;
   env: NodeJS.ProcessEnv;
   installation: ConnectorInstallation;
+  secrets?: ConnectorSecrets;
 }): Promise<void> {
   const listenHost = (input.env.LISTEN_HOST ?? "127.0.0.1").trim().toLowerCase();
   if (!LOOPBACK_HOSTS.has(listenHost)) {
@@ -341,7 +361,11 @@ async function assertWhatsAppLiveAccess(input: {
   }
   const origin = input.origin?.trim();
   const apiKey = input.apiKey?.trim();
-  const allowed = await resolveWhatsAppLiveKeys(input.installation, input.env);
+  const allowed = await resolveWhatsAppLiveKeys(
+    input.installation,
+    input.env,
+    input.secrets,
+  );
   if (origin) {
     if (!whatsAppLiveKeyMatches(apiKey, allowed)) {
       throw new ChannelDriverError(

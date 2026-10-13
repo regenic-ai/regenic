@@ -5,16 +5,23 @@ import type { EngineChipState } from "./types.ts";
 
 export {
   engineChip,
+  nameSyncLabel,
+  namedPullProgress,
   pullProgressChip,
   pullStatusLabel,
   threadSyncLabel,
   threadSyncTone,
+  threadIsSyncing,
+  releaseOtherLivePulls,
 } from "./pull-copy.ts";
 
 export {
   aggregateInstallationSync,
+  syncEtaSummary,
+  syncFreshnessSummary,
   syncProgressSummary,
   syncProgressTone,
+  syncReadinessTone,
 } from "./sync-copy.ts";
 
 export function previewText(text: string | undefined, fallback: string): string {

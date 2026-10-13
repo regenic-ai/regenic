@@ -69,10 +69,12 @@ export class PersonalWorkSupervise {
   async refreshRuns(): Promise<void> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
-    const items = await host.get("authority").listWorkItems(orgId);
-    const active = items
-      .filter((item) => item.status === "running" || item.status === "waiting_human")
-      .sort((left, right) => left.created_at.localeCompare(right.created_at));
+    const items = await host.get("authority").listWorkItems(orgId, {
+      statuses: ["running", "waiting_human"],
+    });
+    const active = [...items].sort((left, right) =>
+      left.created_at.localeCompare(right.created_at),
+    );
     for (const item of active) {
       const recipe = item.recipe_id
         ? await host.get("authority").getRecipe(orgId, item.recipe_id)

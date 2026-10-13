@@ -3,9 +3,11 @@ import {
   type RecordClass,
 } from "./record-class";
 
-export const THREAD_FACETS = ["chat", "agent", "ticket"] as const;
+import type { ThreadFacet } from "@regenic/connector-contract";
 
-export type ThreadFacet = (typeof THREAD_FACETS)[number];
+export type { ThreadFacet } from "@regenic/connector-contract";
+
+export const THREAD_FACETS = ["chat", "agent", "ticket"] as const;
 
 export function isThreadFacet(value: unknown): value is ThreadFacet {
   return value === "chat" || value === "agent" || value === "ticket";

@@ -1,5 +1,4 @@
 import type {
-  ConnectorSyncView,
   ConversationPrefView,
   CreatedConversation,
   DataDirectoryAction,
@@ -30,11 +29,14 @@ import type {
   ReplyView,
   StoreClearView,
   StoreView,
+  SyncRunMode,
+  SyncRunView,
   ThreadPrompt,
   UiPrefsView,
   WhatsAppImportView,
 } from "./types";
 import { activeLocale } from "../../shared/i18n.ts";
+import { throwKernelError } from "./kernel-request.ts";
 import { normalizeListTitle } from "./types";
 
 let currentOrigin = window.regenic?.apiOrigin ?? "http://127.0.0.1:4370";
@@ -488,9 +490,12 @@ export async function fetchEngine(
       can_reply: item.can_reply === true,
       can_create: item.can_create === true,
       create_with_task: item.create_with_task === true,
+      can_pair: item.can_pair === true,
       channel: item.channel,
       channel_label: item.channel_label,
     })),
+    sync_runs: Array.isArray(engine.sync_runs) ? engine.sync_runs : [],
+    sync_readiness: engine.sync_readiness ?? undefined,
     catalog: (engine.catalog ?? []).map((item) => ({
       ...item,
       prerequisites: item.prerequisites ?? [],
@@ -537,13 +542,14 @@ export async function fetchHeartbeat(): Promise<PersonalHeartbeatView> {
       catching_up_count: heartbeat.pull?.catching_up_count ?? 0,
       last_tick_at: heartbeat.pull?.last_tick_at ?? null,
       last_accepted_count: heartbeat.pull?.last_accepted_count ?? 0,
+      streams: Array.isArray(heartbeat.pull?.streams) ? heartbeat.pull.streams : [],
     },
   };
 }
 
 export async function fetchCatalogFieldOptions(
   connectorType: string,
-): Promise<Record<string, { value: string; label: string }[]>> {
+): Promise<Record<string, { value: string; label: string; kind?: string; title?: string }[]>> {
   const type = connectorType.trim();
   if (!type) {
     return {};
@@ -561,7 +567,10 @@ export async function fetchCatalogFieldOptions(
       return {};
     }
     const body = (await response.json()) as {
-      field_options?: Record<string, { value: string; label: string }[]>;
+      field_options?: Record<
+        string,
+        { value: string; label: string; kind?: string; title?: string }[]
+      >;
     };
     return body.field_options && typeof body.field_options === "object"
       ? body.field_options
@@ -678,23 +687,96 @@ function catalogDocs(
   });
 }
 
-export async function syncConnector(id: string): Promise<ConnectorSyncView> {
+export async function syncConnector(
+  id: string,
+  options: {
+    mode?: SyncRunMode;
+    max_pages?: number;
+    stream_keys?: string[];
+    archive_from?: string;
+    archive_to?: string;
+  } = {},
+): Promise<SyncRunView> {
   const response = await fetch(`${origin()}/v1/me/connectors/${id}/sync`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: "{}",
+    body: JSON.stringify(options),
   });
   const body = (await response.json()) as
-    | ConnectorSyncView
+    | SyncRunView
+    | { error?: { code?: string; message?: string } };
+  if (!response.ok) {
+    throwKernelError(
+      "error" in body ? body : {},
+      `sync ${response.status}`,
+    );
+  }
+  return body as SyncRunView;
+}
+
+export async function listSyncRuns(
+  installationId?: string,
+): Promise<SyncRunView[]> {
+  const query = installationId
+    ? `?installation_id=${encodeURIComponent(installationId)}`
+    : "";
+  const response = await fetch(`${origin()}/v1/me/sync-runs${query}`);
+  const body = (await response.json()) as
+    | SyncRunView[]
+    | { error?: { message?: string } };
+  if (!response.ok || !Array.isArray(body)) {
+    throw new Error(
+      !Array.isArray(body) && body.error?.message
+        ? body.error.message
+        : `sync-runs ${response.status}`,
+    );
+  }
+  return body;
+}
+
+export async function commandSyncRun(
+  id: string,
+  command: "pause" | "resume" | "cancel",
+): Promise<SyncRunView> {
+  const response = await fetch(
+    `${origin()}/v1/me/sync-runs/${encodeURIComponent(id)}/${command}`,
+    { method: "POST" },
+  );
+  const body = (await response.json()) as
+    | SyncRunView
     | { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(
       "error" in body && body.error?.message
         ? body.error.message
-        : `sync ${response.status}`,
+        : `sync-run ${response.status}`,
     );
   }
-  return body as ConnectorSyncView;
+  return body as SyncRunView;
+}
+
+export async function retryConnectorQuarantines(
+  installationId: string,
+): Promise<SyncRunView> {
+  const response = await fetch(
+    `${origin()}/v1/me/connectors/${encodeURIComponent(installationId)}/quarantines/retry`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  const body = (await response.json()) as
+    | SyncRunView
+    | { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `quarantine retry ${response.status}`,
+    );
+  }
+  return body as SyncRunView;
 }
 
 export async function installConnector(
@@ -708,12 +790,11 @@ export async function installConnector(
   });
   const body = (await response.json()) as
     | EngineInstallationView
-    | { error?: { message?: string } };
+    | { error?: { code?: string; message?: string } };
   if (!response.ok) {
-    throw new Error(
-      "error" in body && body.error?.message
-        ? body.error.message
-        : `install ${response.status}`,
+    throwKernelError(
+      "error" in body ? body : {},
+      `install ${response.status}`,
     );
   }
   return body as EngineInstallationView;
@@ -725,12 +806,11 @@ export async function fetchConnectorPairingCode(id: string): Promise<string> {
   );
   const body = (await response.json()) as
     | { pairing_code?: string }
-    | { error?: { message?: string } };
+    | { error?: { code?: string; message?: string } };
   if (!response.ok || !("pairing_code" in body) || !body.pairing_code?.trim()) {
-    throw new Error(
-      "error" in body && body.error?.message
-        ? body.error.message
-        : `pairing-code ${response.status}`,
+    throwKernelError(
+      "error" in body ? body : {},
+      `pairing-code ${response.status}`,
     );
   }
   return body.pairing_code.trim();
@@ -747,12 +827,11 @@ export async function updateConnectorConfig(
   });
   const body = (await response.json()) as
     | EngineInstallationView
-    | { error?: { message?: string } };
+    | { error?: { code?: string; message?: string } };
   if (!response.ok) {
-    throw new Error(
-      "error" in body && body.error?.message
-        ? body.error.message
-        : `update ${response.status}`,
+    throwKernelError(
+      "error" in body ? body : {},
+      `update ${response.status}`,
     );
   }
   return body as EngineInstallationView;
@@ -763,8 +842,10 @@ export async function uninstallConnector(id: string): Promise<void> {
     method: "DELETE",
   });
   if (!response.ok) {
-    const body = (await response.json()) as { error?: { message?: string } };
-    throw new Error(body.error?.message ?? `uninstall ${response.status}`);
+    const body = (await response.json()) as {
+      error?: { code?: string; message?: string };
+    };
+    throwKernelError(body, `uninstall ${response.status}`);
   }
 }
 
@@ -834,16 +915,18 @@ export async function focusConversation(input: {
   pull_older?: boolean;
   before?: string;
   before_id?: string;
+  before_external_id?: string;
   media?: boolean;
   present?: boolean;
-}): Promise<{ accepted: true; thread_id: string }> {
+}): Promise<{ accepted: true; thread_id: string; history_pending?: boolean }> {
   const response = await fetch(`${origin()}/v1/me/conversations/focus`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
+    signal: input.pull_older ? AbortSignal.timeout(25_000) : undefined,
   });
   const body = (await response.json()) as
-    | { accepted: true; thread_id: string }
+    | { accepted: true; thread_id: string; history_pending?: boolean }
     | { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(
@@ -852,7 +935,7 @@ export async function focusConversation(input: {
         : `conversation focus ${response.status}`,
     );
   }
-  return body as { accepted: true; thread_id: string };
+  return body as { accepted: true; thread_id: string; history_pending?: boolean };
 }
 
 export async function updateConversationPrefs(input: {
@@ -1189,6 +1272,33 @@ export async function dismissWorkItem(id: string): Promise<void> {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `work dismiss ${response.status}`);
   }
+}
+
+export async function fetchContextArtifactSummaries(): Promise<unknown> {
+  const response = await fetch(`${origin()}/v1/me/context/artifact-summaries`);
+  if (!response.ok) {
+    throw new Error(`context artifacts ${response.status}`);
+  }
+  return response.json() as Promise<unknown>;
+}
+
+export async function fetchContextArtifactRecord(
+  id: string,
+  range?: { offset: number; limit: number },
+): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (range) {
+    params.set("offset", String(range.offset));
+    params.set("limit", String(range.limit));
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await fetch(
+    `${origin()}/v1/me/context/artifacts/${encodeURIComponent(id)}/record${query}`,
+  );
+  if (!response.ok) {
+    throw new Error(`context record ${response.status}`);
+  }
+  return response.json() as Promise<unknown>;
 }
 
 export async function fetchStore(): Promise<StoreView> {

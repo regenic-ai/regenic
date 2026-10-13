@@ -3,15 +3,17 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import {
+  installSecretRef,
+  type KeychainSecretRef,
+} from "@regenic/connector-contract";
 import type { JsonValue } from "./ingestion";
+
+export type { KeychainSecretRef };
+export { installSecretRef } from "@regenic/connector-contract";
 
 interface SecretCatalog {
   fields?: Array<{ key: string; secret?: boolean }>;
-}
-
-export interface KeychainSecretRef {
-  service: string;
-  account: string;
 }
 
 export type KeychainReader = (
@@ -35,17 +37,6 @@ export function setKeychainStoreForTests(
 ): void {
   readOverride = input.read;
   writeOverride = input.write;
-}
-
-export function installSecretRef(
-  connectorType: string,
-  installationId: string,
-  field: string,
-): KeychainSecretRef {
-  return {
-    service: `regenic-${connectorType.trim()}`,
-    account: `${installationId.trim()}:${field.trim()}`,
-  };
 }
 
 export function writeKeychainSecret(

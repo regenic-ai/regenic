@@ -1,14 +1,16 @@
 import { applySyncCatalogMembers, emptySyncCatalog } from "./sync-catalog";
 import type {
+  SyncCatalogHead,
   SyncCatalogMember,
   SyncCatalogView,
   SyncPageOutcome,
+  SyncPhaseHead,
   SyncSource,
   SyncStore,
   SyncStreamState,
   SyncWorkItem,
 } from "./sync-contracts";
-import { CATALOG_RESCAN_MS } from "./sync-contracts";
+import { CATALOG_RESCAN_MS, SYNC_CATALOG_STREAM } from "./sync-contracts";
 import { yieldToEventLoop } from "./sync-budget";
 import {
   lastHistoryWorkKey,
@@ -91,6 +93,7 @@ export class SyncEngine {
         now: this.now(),
         next_cursor: listed.next_cursor,
         complete: listed.complete,
+        replaces: listed.replaces,
       });
       if (listed.complete || !listed.next_cursor) {
         break;
@@ -261,11 +264,42 @@ export class SyncEngine {
     return lastSeedWorkKey(items);
   }
 
+  /**
+   * Directory refresh when the cursor is missing or stale.
+   * A fresh cursor does not load catalog members.
+   */
+  async refreshCatalogIfStale(input: SyncRefreshCatalogInput): Promise<void> {
+    if (!input.force && input.source.listDirectory) {
+      const head = await this.store.getSyncCatalogHead(input.installation_id);
+      if (this.catalogHeadFresh(head)) {
+        return;
+      }
+    }
+    await this.refreshCatalog(input);
+  }
+
   catalogFresh(view: SyncCatalogView, now = this.now()): boolean {
-    if (!view.catalog?.complete || !view.catalog.updated_at) {
+    return this.cursorFresh(view.catalog, now);
+  }
+
+  private catalogHeadFresh(head: SyncCatalogHead, now = this.now()): boolean {
+    if (!head.has_cursor) {
       return false;
     }
-    const updated = Date.parse(view.catalog.updated_at);
+    return this.cursorFresh(
+      { complete: head.complete, updated_at: head.updated_at ?? "" },
+      now,
+    );
+  }
+
+  private cursorFresh(
+    cursor: { complete: boolean; updated_at?: string } | null | undefined,
+    now: string,
+  ): boolean {
+    if (!cursor?.complete || !cursor.updated_at) {
+      return false;
+    }
+    const updated = Date.parse(cursor.updated_at);
     const current = Date.parse(now);
     if (!Number.isFinite(updated) || !Number.isFinite(current)) {
       return false;
@@ -280,6 +314,22 @@ export class MemorySyncStore implements SyncStore {
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
     return cloneCatalog(this.catalogs.get(installationId) ?? emptySyncCatalog(installationId));
+  }
+
+  async getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    const view = await this.getSyncCatalog(installationId);
+    return {
+      member_count: view.members.filter(
+        (member) =>
+          member.stream_key && member.stream_key !== SYNC_CATALOG_STREAM,
+      ).length,
+      has_cursor: view.catalog != null,
+      complete: view.catalog?.complete === true,
+      generation: view.catalog?.generation ?? 1,
+      ...(view.catalog?.updated_at
+        ? { updated_at: view.catalog.updated_at }
+        : {}),
+    };
   }
 
   async applySyncCatalogPage(
@@ -297,6 +347,18 @@ export class MemorySyncStore implements SyncStore {
       .map((state) => ({ ...state }));
   }
 
+  async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
+    return [...this.states.values()]
+      .filter((state) => state.installation_id === installationId)
+      .map((state) => ({
+        stream_key: state.stream_key,
+        phase: state.phase,
+        media_pending: state.media_pending,
+        generation: state.generation,
+        idle_until: state.idle_until,
+      }));
+  }
+
   async getSyncState(
     installationId: string,
     streamKey: string,
@@ -309,6 +371,10 @@ export class MemorySyncStore implements SyncStore {
     const next = { ...state };
     this.states.set(stateKey(state.installation_id, state.stream_key), next);
     return { ...next };
+  }
+
+  dropSyncState(installationId: string, streamKey: string): void {
+    this.states.delete(stateKey(installationId, streamKey));
   }
 
   clear(installationId?: string): void {

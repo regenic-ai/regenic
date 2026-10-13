@@ -97,7 +97,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | POST | `/v1/me/plugins/reload` | 扫描 extra 插件目录，只注册尚未存在的 `connector_type` / executor source。不替换已加载驱动。 |
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |
 
-不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 10 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。声明了 `pace.idle_ms` 或安装配置了通用 `sync_mode` 的流，按 Core 意图预设分层 idle：`conversation`（对话优先，新装飞书默认）/ `balanced`（均衡）/ `context`（上下文 / 自动化）。未声明 `pace` 且无 `sync_mode` 的流（DSH）仍每 tick 跟。单次 poll 触达内核 deadline（默认 20s）视为软失败：退避重试，不进「需要处理」横幅；缺凭证等硬错误仍会告警。人在操作时同 tick 串行、优先跟打开中的会话；空闲时再补一页历史。`pace.idle_ms` 与 `sync_mode` 都是通用键，内核不按渠道名分支；飞书 catalog 暴露同步模式，收取范围（selection）与模式独立。对话窗发送后会更快跟当前会话。引擎 Sync 只是漏了再追平。凭证只读环境变量。
+不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 10 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。声明了 `pace.idle_ms` 或安装配置了通用 `sync_mode` 的流，按 Core 意图预设分层 idle：`conversation`（当前会话优先，新装飞书默认）/ `balanced`（均衡）/ `context`（后台慢慢检查）。未声明 `pace` 且无 `sync_mode` 的流（DSH）仍每 tick 跟。单次 poll 触达内核 deadline（默认 20s）视为软失败：退避重试，不进「需要处理」横幅；缺凭证等硬错误仍会告警。人在操作时同 tick 串行、优先跟打开中的会话；空闲时再补一页历史。`pace.idle_ms` 与 `sync_mode` 都是通用键，内核不按渠道名分支；飞书 catalog 暴露检查频率，收取范围（selection）与频率独立。对话窗发送后会更快跟当前会话。引擎 Sync 只是漏了再追平。凭证只读环境变量。
 
 ### inbox 读请求的副作用
 
@@ -124,7 +124,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | DSH web（本机） | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 目录会探测 `dsh web`，但探测失败不挡安装。装完后要本机 `dsh web --port 3080` 在跑，内核才能拉。`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
 | DSH web（托管） | 只填可选 `session_id`；不填 `base_url` | 内核环境变量 `REGENIC_DSH_BASE_URL`（集群 DNS） | 同上；核心只走内网，不要填 Sealos 公网 URL |
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
-| 飞书 | 弹窗里默认选「最近活跃」；也可自选会话，或改成全部群和单聊（需二次确认）。安装后随时 Edit sync | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 默认只跟最近活跃会话和当前工作；全量同步需明确确认。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
+| 飞书 | 弹窗里默认选「最近活跃」；也可自选会话，或改成全部群和单聊（需二次确认）。安装后随时点「编辑范围」 | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 默认只跟最近活跃会话和当前工作；全量同步需明确确认。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
 
 DSH 安装不接收 token / `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
 

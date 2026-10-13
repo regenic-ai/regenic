@@ -14,6 +14,7 @@ import {
   resolveSourceRetention,
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
+import { ContextRecordsDialog } from "./ContextRecordsDialog";
 import { useLocale } from "./LocaleContext";
 import type {
   DataDirectoryAction,
@@ -65,17 +66,8 @@ function storeHasData(store: StoreView): boolean {
   );
 }
 
-function contextRecordCount(
-  store: Pick<
-    StoreView,
-    "context_artifacts" | "context_snapshots" | "context_snapshot_index" | "context_bundles" | "context_checkpoints"
-  >,
-): number {
-  return store.context_artifacts +
-    store.context_snapshots +
-  store.context_snapshot_index +
-  store.context_bundles +
-    store.context_checkpoints;
+function contextRecordCount(store: Pick<StoreView, "context_artifacts">): number {
+  return store.context_artifacts;
 }
 
 export function SettingsPage({
@@ -107,6 +99,7 @@ export function SettingsPage({
   const [dataDone, setDataDone] = useState<string | null>(null);
   const [reclaimConfirming, setReclaimConfirming] = useState(false);
   const [reclaimBusy, setReclaimBusy] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const [dispatchPolicy, setDispatchPolicy] = useState<PersonalDispatchPolicy | null>(null);
   const [dispatchBusy, setDispatchBusy] = useState(false);
   const [dispatchMessage, setDispatchMessage] = useState<string | null>(null);
@@ -788,8 +781,13 @@ export function SettingsPage({
           <StoreStat
             label={t("settings.storeContext")}
             value={contextRecordCount(currentStore)}
+            ariaLabel={t("settings.contextOpen")}
+            onClick={() => setContextOpen(true)}
           />
         </div>
+        {contextOpen ? (
+          <ContextRecordsDialog onClose={() => setContextOpen(false)} />
+        ) : null}
         {!canClear ? <p className="muted">{t("settings.storeEmpty")}</p> : null}
         {confirming ? (
           <div className="store-confirm">
@@ -835,11 +833,34 @@ export function SettingsPage({
   );
 }
 
-function StoreStat({ label, value }: { label: string; value: number }) {
+function StoreStat({
+  label,
+  value,
+  onClick,
+  ariaLabel,
+}: {
+  label: string;
+  value: number;
+  onClick?: () => void;
+  ariaLabel?: string;
+}) {
+  if (!onClick) {
+    return (
+      <div className="store-stat">
+        <span className="store-stat-value">{value}</span>
+        <span className="store-stat-label">{label}</span>
+      </div>
+    );
+  }
   return (
-    <div className="store-stat">
+    <button
+      type="button"
+      className="store-stat"
+      aria-label={ariaLabel ?? label}
+      onClick={onClick}
+    >
       <span className="store-stat-value">{value}</span>
       <span className="store-stat-label">{label}</span>
-    </div>
+    </button>
   );
 }

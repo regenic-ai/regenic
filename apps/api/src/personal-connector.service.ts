@@ -1,44 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
-  ChannelDriverError,
   ChannelDriverRegistry,
-  DEFAULT_COPY_LOCALE,
   type CopyLocale,
-  ConnectorRunner,
-  readEnvCredential,
-  DeadlineExceededError,
-  isDeadlineExceeded,
-  INGEST_SCHEMA_VERSION,
+  isSyncSoftMiss,
   InstallationQuotaBook,
   asConnectorHost,
-  persistInstallSecrets,
-  channelRecord,
-  connectorPollTimeoutMs,
-  connectorSyncTimeoutMs,
-  driverCanReply,
-  driverPolls,
-  normalizeListTitle,
-  parseConversationThread,
-  requireCreateThread,
-  requireWebhookPorts,
-  currentSyncLane,
-  runInSyncLane,
-  SyncEngine,
-  applyKernelPressureToSyncBudget,
-  buildSyncProgressSnapshot,
-  loadSyncProgress,
-  scopeSyncCatalogMembers,
-  SyncLiveRing,
-  steadyCapacityFromEnv,
-  steadyLaneLimitsForCount,
-  pacedStreamIdleMs,
-  streamIdleTiersFromEnv,
-  syncModeFromConfig,
-  syncModePreset,
-  syncPageOutcomeFromPollRuns,
-  withDeadline,
-  yieldToEventLoop,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -46,15 +13,21 @@ import {
   type ConnectorStream,
   type ConnectorWebhookRunResult,
   type ConversationThread,
-  type SyncCatalogMember,
+  type IngestQuarantine,
+  DEFAULT_BOOTSTRAP_DUE_WORK_CLAIM_LIMIT,
+  DEFAULT_DUE_WORK_CLAIM_LIMIT,
+  DueWorkClaimLimiter,
+  MAX_DUE_WORK_CLAIM_LIMIT,
+  MIN_DUE_WORK_CLAIM_LIMIT,
+  type SyncRun,
+  type SyncRunMode,
   type WebhookRequest,
+  historySyncClaimLanes,
+  shouldRunHistoryTick,
+  steadySyncClaimLanes,
 } from "@regenic/domain";
-import type { Host } from "@regenic/plugin-host";
 import {
-  connectorAllowsMultiple,
-  catalogFromDrivers,
   nextPickedChatNames,
-  toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
@@ -62,52 +35,42 @@ import { PersonalInboxService } from "./personal-inbox.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
   applyPullOutcome,
-  beginPull,
-  finishPull,
-  preferThread,
   preferredThreadId,
   publishPullStreams,
   pullStatus,
   resetPullStatus,
   type PullStreamStatus,
 } from "./personal-pull-status";
-import { isHumanIdle, noteHumanActivity } from "./personal-human-pace";
-import {
-  capSelectedStreams,
-  catalogRefreshPages,
-  IDLE_STREAM_CONCURRENCY,
-  LIVE_STREAM_CONCURRENCY,
-  shouldKeepCatchingUp,
-  syncExecutionBudget,
-} from "./personal-stream-pace";
+import { shouldKeepCatchingUp } from "./personal-stream-pace";
 import {
   backgroundSyncReleased,
   markBackgroundListen,
 } from "./personal-interactive-gate";
-import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import type { ConnectorFocusSlot, ConnectorState } from "./personal-connector-state";
+import { summarizeRuns } from "./personal-connector-poll";
 import {
-  shouldHydrateOpenedInbox,
-} from "./personal-inbox-query";
+  bootstrapPullIntervalMs,
+  catalogPullIntervalMs,
+  pullIntervalMs,
+  streamPaceKey,
+} from "./personal-connector-rhythm";
+import * as connectorSyncRun from "./personal-connector-sync-run";
+import * as connectorWebhook from "./personal-connector-webhook";
+import * as connectorEgress from "./personal-connector-egress";
+import * as connectorLive from "./personal-connector-live";
+import { delay } from "./personal-connector-live";
+import * as connectorConversation from "./personal-connector-conversation";
+import * as connectorInstall from "./personal-connector-install";
 import {
-  shouldPullOlderFocus,
-} from "./personal-conversation-focus";
-import { catalogMembersFromStreams } from "./connector-sync-members";
+  runCatalogTick,
+  runDueWorkPlane,
+} from "./personal-connector-due-work";
 
 export { PersonalConnectorError } from "./personal-errors";
+export { wrapDriverError } from "./personal-connector-poll";
 
-const DEFAULT_MAX_PAGES = 1;
-const MAX_PAGES_CAP = 5;
-const HYDRATE_COOLDOWN_MS = 15_000;
-const HYDRATE_WAIT_MS = 12_000;
-const LIVE_KICK_COOLDOWN_MS = 3_000;
-const LIVE_KICK_WAIT_MS = 12_000;
-const FOLLOW_TRIES = 6;
-const FOLLOW_WAIT_MS = 750;
-const DEFAULT_PULL_MS = 10_000;
-const DEFAULT_CATALOG_PULL_MS = 45_000;
 const START_PULL_DELAY_MS = 1_000;
-const LEASE_MS = 60_000;
 
 export interface ConnectorInstallInput {
   connector_type: string;
@@ -123,24 +86,13 @@ export interface CreatedConversationView {
   list_title: "conversation" | "face" | "prompt";
 }
 
-export interface ConnectorSyncOptions {
-  skipIdle?: boolean;
-  capCatchUp?: boolean;
-  allowHistory?: boolean;
-  discover?: boolean;
-  /** When set with capCatchUp, schedules only one sync plane. */
-  syncPlane?: "bootstrap" | "steady";
-}
-
-export interface ConnectorSyncView {
-  installation_id: string;
-  pages_attempted: number;
-  streams_attempted: number;
-  accepted_count: number;
-  duplicate_count: number;
-  quarantined_count: number;
-  last_run_status: ConnectorPollRunResult["status"] | "idle";
-  installation: EngineInstallationView;
+export interface StartSyncRunInput {
+  mode?: SyncRunMode;
+  max_pages?: number;
+  stream_keys?: string[];
+  archive_from?: string;
+  archive_to?: string;
+  run_window?: { start_hour: number; end_hour: number; timezone?: string };
 }
 
 export interface ConnectorWebhookView {
@@ -153,9 +105,7 @@ export interface ConnectorWebhookView {
 
 @Injectable()
 export class PersonalConnectorService implements OnModuleDestroy {
-  private readonly inflight = new Map<string, Promise<ConnectorSyncView>>();
   private readonly streamLocks = new Map<string, Promise<void>>();
-  /** Per-installation plane key: `${id}:steady` / `${id}:bootstrap` / `${id}:all`. */
   private readonly streamIdleUntil = new Map<string, number>();
   private readonly streamCatchingUp = new Set<string>();
   private readonly streamSeeded = new Set<string>();
@@ -166,19 +116,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private readonly streamErrors = new Map<string, string>();
   private readonly streamPulling = new Set<string>();
   private readonly streamPullingHistory = new Set<string>();
-  private focusSlot: {
-    threadId: string;
-    generation: number;
-    kind: "hydrate" | "live" | "older" | "media" | "receipt";
-    abort: AbortController;
-    promise: Promise<void>;
-  } | null = null;
+  private focusSlot: ConnectorFocusSlot | null = null;
   private focusGeneration = 0;
   private readonly hydrateCooldown = new Map<string, number>();
   private readonly liveKickCooldown = new Map<string, number>();
-  private lastCatchUpCursor: string | undefined;
-  private lastSeedCursor: string | undefined;
-  private readonly liveRing = new SyncLiveRing();
   private timer: ReturnType<typeof setInterval> | undefined;
   private bootstrapTimer: ReturnType<typeof setInterval> | undefined;
   private catalogTimer: ReturnType<typeof setInterval> | undefined;
@@ -192,6 +133,20 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private maintenanceHold = false;
   private readonly quota = new InstallationQuotaBook();
   private readonly creatingByClient = new Map<string, Promise<CreatedConversationView>>();
+  private readonly dueWorkOwner = `personal-due:${randomUUID()}`;
+  private readonly dueWorkLimiters = {
+    steady: new DueWorkClaimLimiter(
+      MIN_DUE_WORK_CLAIM_LIMIT,
+      MAX_DUE_WORK_CLAIM_LIMIT,
+      DEFAULT_DUE_WORK_CLAIM_LIMIT,
+    ),
+    bootstrap: new DueWorkClaimLimiter(
+      MIN_DUE_WORK_CLAIM_LIMIT,
+      MAX_DUE_WORK_CLAIM_LIMIT,
+      DEFAULT_BOOTSTRAP_DUE_WORK_CLAIM_LIMIT,
+    ),
+  };
+  private readonly catalogSizeByInstall = new Map<string, number>();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -203,6 +158,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
     @Inject(KernelRuntimeService)
     private readonly kernelRuntime: KernelRuntimeService,
   ) {}
+
+  private connectorState(): ConnectorState {
+    return this as unknown as ConnectorState;
+  }
 
   startAfterListen(): void {
     if (this.backgroundStarted) {
@@ -244,7 +203,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
-  async onModuleDestroy(): Promise<void> {
+  /** Drop poll timers so this process can become a follower, then a leader again. */
+  stopBackground(): void {
     if (this.startTimer) {
       clearTimeout(this.startTimer);
       this.startTimer = undefined;
@@ -269,6 +229,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
       clearInterval(this.catalogTimer);
       this.catalogTimer = undefined;
     }
+    this.backgroundStarted = false;
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.stopBackground();
   }
 
   async pauseForMaintenance(): Promise<void> {
@@ -286,148 +251,56 @@ export class PersonalConnectorService implements OnModuleDestroy {
     this.maintenanceHold = false;
   }
 
-  async sync(
+  async startSyncRun(
     installationId: string,
-    maxPages = DEFAULT_MAX_PAGES,
-    options?: ConnectorSyncOptions,
-  ): Promise<ConnectorSyncView> {
-    if (this.maintenanceHold) {
-      throw new PersonalConnectorError(
-        "disabled",
-        "Store maintenance in progress",
-        409,
-      );
-    }
-    const planeKey = syncInflightKey(installationId, options?.syncPlane);
-    const existing = this.inflight.get(planeKey);
-    if (existing) {
-      return existing;
-    }
-    const job = this.runSync(
-      installationId,
-      clampPages(maxPages),
-      options,
-    )
-      .catch(async (error) => {
-        await applyPullOutcome([error]);
-        throw error;
-      })
-      .finally(() => {
-        this.inflight.delete(planeKey);
-      });
-    this.inflight.set(planeKey, job);
-    return job;
+    input: StartSyncRunInput = {},
+  ): Promise<SyncRun> {
+    return connectorSyncRun.startSyncRun(this.connectorState(), installationId, input);
+  }
+
+  async listSyncRuns(
+    installationId?: string,
+    limit?: number,
+  ): Promise<SyncRun[]> {
+    return connectorSyncRun.listSyncRuns(this.connectorState(), installationId, limit);
+  }
+
+  async getSyncRun(runId: string): Promise<SyncRun> {
+    return connectorSyncRun.getSyncRun(this.connectorState(), runId);
+  }
+
+  async commandSyncRun(
+    runId: string,
+    command: "pause" | "resume" | "cancel",
+  ): Promise<SyncRun> {
+    return connectorSyncRun.commandSyncRun(this.connectorState(), runId, command);
+  }
+
+  async listQuarantines(
+    installationId: string,
+  ): Promise<IngestQuarantine[]> {
+    return connectorSyncRun.listQuarantines(this.connectorState(), installationId);
+  }
+
+  async retryQuarantines(
+    installationId: string,
+    quarantineId?: string,
+  ): Promise<SyncRun> {
+    return connectorSyncRun.retryQuarantines(this.connectorState(), installationId, quarantineId);
   }
 
   async ingestWebhook(
     installationId: string,
     request: WebhookRequest,
   ): Promise<ConnectorWebhookView> {
-    if (this.maintenanceHold) {
-      throw new PersonalConnectorError(
-        "disabled",
-        "Store maintenance in progress",
-        409,
-      );
-    }
-    const host = this.runtime.requireHost();
-    const store = host.get("authority");
-    const installation = await this.requireInstallation(store, installationId);
-    if (installation.status !== "enabled") {
-      throw new PersonalConnectorError(
-        "disabled",
-        "Connector installation is disabled",
-        409,
-      );
-    }
-    const driver = this.drivers.get(installation.connector_type);
-    if (!driver) {
-      throw new PersonalConnectorError(
-        "unsupported_connector",
-        `Connector type cannot ingest webhooks: ${installation.connector_type}`,
-        400,
-      );
-    }
-    try {
-      const { bindWebhook } = requireWebhookPorts(driver);
-      const connector = await bindWebhook(
-        installation,
-        asConnectorHost(host),
-        process.env,
-      );
-      const runner = new ConnectorRunner(
-        connector,
-        host.get("ingest"),
-        store,
-        () => new Date().toISOString(),
-        this.quota,
-      );
-      const run = await withDeadline(
-        runner.webhook({
-          installation_id: installation.id,
-          request,
-          timeout_ms: connectorPollTimeoutMs(),
-        }),
-        connectorSyncTimeoutMs(),
-        `webhook ${installation.id}`,
-      );
-      if (run.status === "unsupported_mode") {
-        throw new PersonalConnectorError(
-          "unsupported_channel",
-          "Webhook ingest is not available",
-          501,
-        );
-      }
-      if (run.status === "throttled") {
-        throw new PersonalConnectorError(
-          "throttled",
-          "Connector installation is rate limited",
-          429,
-        );
-      }
-      const accepted = run as Extract<
-        ConnectorWebhookRunResult,
-        { status: "completed" | "retryable_failure" }
-      >;
-      const summary = summarizeWebhook(accepted);
-      if (summary.accepted_count > 0) {
-        this.inbox.touchInboxDigest();
-      }
-      if (accepted.wake_thread_ids?.length) {
-        await this.wakeStreamsForThreads(
-          installation.id,
-          accepted.wake_thread_ids,
-        );
-      }
-      return {
-        installation_id: installation.id,
-        ...summary,
-        last_run_status: run.status,
-      };
-    } catch (error) {
-      throw wrapDriverError(error, "sync_failed");
-    }
+    return connectorWebhook.ingestWebhook(this.connectorState(), installationId, request);
   }
 
   async listEgressQueue(
     installationId: string,
     input: { apiKey?: string; origin?: string } = {},
   ): Promise<{ commands: ReturnType<NonNullable<ChannelDriver["listEgressQueue"]>> }> {
-    const host = this.runtime.requireHost();
-    const installation = await this.requireInstallation(
-      host.get("authority"),
-      installationId,
-    );
-    const driver = this.drivers.get(installation.connector_type);
-    if (!driver?.listEgressQueue) {
-      throw new PersonalConnectorError(
-        "unsupported_channel",
-        "Egress queue is not available",
-        501,
-      );
-    }
-    await this.assertInstallSecret(installation, input);
-    return { commands: driver.listEgressQueue(installation) };
+    return connectorEgress.listEgressQueue(this.connectorState(), installationId, input);
   }
 
   async ackEgressQueue(
@@ -435,608 +308,37 @@ export class PersonalConnectorService implements OnModuleDestroy {
     commandId: string,
     input: { apiKey?: string; origin?: string } = {},
   ): Promise<{ acknowledged: boolean }> {
-    const host = this.runtime.requireHost();
-    const installation = await this.requireInstallation(
-      host.get("authority"),
-      installationId,
-    );
-    const driver = this.drivers.get(installation.connector_type);
-    if (!driver?.ackEgressQueue) {
-      throw new PersonalConnectorError(
-        "unsupported_channel",
-        "Egress queue is not available",
-        501,
-      );
-    }
-    await this.assertInstallSecret(installation, input);
-    return driver.ackEgressQueue(installation, commandId);
+    return connectorEgress.ackEgressQueue(this.connectorState(), installationId, commandId, input);
   }
 
   async followThread(
     installationId: string,
     thread: ConversationThread,
   ): Promise<void> {
-    if (this.maintenanceHold) {
-      return;
-    }
-    const host = this.runtime.requireHost();
-    const store = host.get("authority");
-    const installation = await this.requireInstallation(store, installationId);
-    const driver = this.drivers.get(installation.connector_type);
-    if (!driver || installation.status !== "enabled") {
-      return;
-    }
-    let stream: ConnectorStream;
-    try {
-      stream = await driver.resolveThreadStream(
-        installation,
-        thread,
-        asConnectorHost(host),
-        process.env,
-      );
-    } catch (error) {
-      throw wrapDriverError(error, "sync_failed");
-    }
-    await this.exclusiveStream(installation.id, stream.stream_key, async () => {
-      if (this.maintenanceHold) {
-        return;
-      }
-      try {
-        await this.followStream(host, store, installation, stream, thread);
-      } catch (error) {
-        throw wrapDriverError(error, "sync_failed");
-      }
-    });
+    return connectorLive.followThread(this.connectorState(), installationId, thread);
   }
 
   async hydrateOpenedThread(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
-      return;
-    }
-    const id = threadId.trim();
-    if (!id || !shouldHydrateOpenedInbox({ thread_id: id })) {
-      return;
-    }
-    if (this.awaitExistingRecentFocus(id)) {
-      try {
-        await Promise.race([
-          this.focusSlot!.promise,
-          delay(HYDRATE_WAIT_MS),
-        ]);
-      } catch {
-        return;
-      }
-      return;
-    }
-    if ((this.hydrateCooldown.get(id) ?? 0) > Date.now()) {
-      return;
-    }
-    const job = this.takeFocus(id, "hydrate", (signal, generation) =>
-      this.runRecentLiveForThread(id, signal, generation, {
-        requireHydrateCapability: true,
-        cooldownMs: HYDRATE_COOLDOWN_MS,
-      }),
-    );
-    try {
-      await Promise.race([job, delay(HYDRATE_WAIT_MS)]);
-    } catch {
-      return;
-    }
+    return connectorLive.hydrateOpenedThread(this.connectorState(), threadId);
   }
 
-  /**
-   * Open / live focus: immediately poll one recent page for the thread.
-   * Works for any polling driver (not only hydrate_on_open).
-   */
   async kickInteractiveLive(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
-      return;
-    }
-    const id = threadId.trim();
-    if (!id) {
-      return;
-    }
-    preferThread(id);
-    if (this.awaitExistingRecentFocus(id)) {
-      try {
-        await Promise.race([
-          this.focusSlot!.promise,
-          delay(LIVE_KICK_WAIT_MS),
-        ]);
-      } catch {
-        return;
-      }
-      return;
-    }
-    if ((this.liveKickCooldown.get(id) ?? 0) > Date.now()) {
-      return;
-    }
-    const job = this.takeFocus(id, "live", (signal, generation) =>
-      this.runRecentLiveForThread(id, signal, generation, {
-        requireHydrateCapability: false,
-        cooldownMs: LIVE_KICK_COOLDOWN_MS,
-      }),
-    );
-    try {
-      await Promise.race([job, delay(LIVE_KICK_WAIT_MS)]);
-    } catch {
-      return;
-    }
+    return connectorLive.kickInteractiveLive(this.connectorState(), threadId);
   }
 
-  private awaitExistingRecentFocus(threadId: string): boolean {
-    return Boolean(
-      this.focusSlot &&
-        this.focusSlot.threadId === threadId &&
-        (this.focusSlot.kind === "hydrate" || this.focusSlot.kind === "live") &&
-        !this.focusSlot.abort.signal.aborted,
-    );
-  }
-
-  /**
-   * Mark the interactive thread without starting work.
-   * Cancels hydrate/older jobs for any other thread so live receipts can proceed.
-   */
   noteInteractiveFocus(threadId: string): void {
-    const id = threadId.trim();
-    if (!id) {
-      return;
-    }
-    preferThread(id);
-    if (this.focusSlot && this.focusSlot.threadId !== id) {
-      this.focusSlot.abort.abort();
-      this.focusSlot = null;
-    }
+    return connectorLive.noteInteractiveFocus(this.connectorState(), threadId);
   }
 
   async drainMediaForThread(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
-      return;
-    }
-    const id = threadId.trim();
-    if (!id) {
-      return;
-    }
-    noteHumanActivity();
-    preferThread(id);
-    try {
-      await this.takeFocus(id, "media", (signal, generation) =>
-        this.runDrainMediaThread(id, signal, generation),
-      );
-    } catch {
-      return;
-    }
+    return connectorLive.drainMediaForThread(this.connectorState(), threadId);
   }
 
-  async pullOlderForThread(threadId: string): Promise<void> {
-    if (this.maintenanceHold) {
-      return;
-    }
-    const id = threadId.trim();
-    if (!id || !shouldPullOlderFocus({ thread_id: id, pull_older: true, before: "1" })) {
-      return;
-    }
-    noteHumanActivity();
-    preferThread(id);
-    if (
-      this.focusSlot?.threadId === id &&
-      this.focusSlot.kind === "hydrate" &&
-      !this.focusSlot.abort.signal.aborted
-    ) {
-      try {
-        await Promise.race([this.focusSlot.promise, delay(HYDRATE_WAIT_MS)]);
-      } catch {
-        return;
-      }
-    }
-    try {
-      await this.takeFocus(id, "older", (signal, generation) =>
-        this.runPullOlderThread(id, signal, generation),
-      );
-    } catch {
-      return;
-    }
-  }
-
-  private takeFocus(
+  async pullOlderForThread(
     threadId: string,
-    kind: "hydrate" | "live" | "older" | "media" | "receipt",
-    work: (signal: AbortSignal, generation: number) => Promise<void>,
-  ): Promise<void> {
-    if (
-      this.focusSlot &&
-      this.focusSlot.threadId === threadId &&
-      !this.focusSlot.abort.signal.aborted &&
-      (this.focusSlot.kind === kind ||
-        (isRecentFocusKind(kind) && isRecentFocusKind(this.focusSlot.kind)))
-    ) {
-      return this.focusSlot.promise;
-    }
-    if (this.focusSlot) {
-      this.focusSlot.abort.abort();
-      this.focusSlot = null;
-    }
-    preferThread(threadId);
-    const generation = ++this.focusGeneration;
-    const abort = new AbortController();
-    const promise = work(abort.signal, generation).finally(() => {
-      if (this.focusSlot?.generation === generation) {
-        this.focusSlot = null;
-      }
-    });
-    this.focusSlot = {
-      threadId,
-      generation,
-      kind,
-      abort,
-      promise,
-    };
-    return promise;
-  }
-
-  private focusAlive(generation: number, signal: AbortSignal): boolean {
-    return !signal.aborted && this.focusSlot?.generation === generation;
-  }
-
-  private async runPullOlderThread(
-    threadId: string,
-    signal: AbortSignal,
-    generation: number,
-  ): Promise<void> {
-    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
-      return;
-    }
-    let thread: ConversationThread;
-    try {
-      thread = parseConversationThread(threadId);
-    } catch {
-      return;
-    }
-    const host = this.runtime.requireHost();
-    const store = host.get("authority");
-    const installations = await store.listInstallations(this.runtime.orgId());
-    if (!this.focusAlive(generation, signal)) {
-      return;
-    }
-    for (const installation of installations) {
-      if (installation.status !== "enabled") {
-        continue;
-      }
-      const driver = this.drivers.get(installation.connector_type);
-      if (!driver?.matchesThread(installation, thread)) {
-        continue;
-      }
-      let stream: ConnectorStream;
-      try {
-        stream = await driver.resolveThreadStream(
-          installation,
-          thread,
-          asConnectorHost(host),
-          process.env,
-        );
-      } catch {
-        continue;
-      }
-      if (!this.focusAlive(generation, signal)) {
-        return;
-      }
-      const key = streamPaceKey(installation.id, stream.stream_key);
-      this.rememberStreamMeta(key, stream);
-      this.streamPulling.add(key);
-      this.streamPullingHistory.add(key);
-      this.publishStreams();
-      try {
-        const pages = await this.exclusiveStream(
-          installation.id,
-          stream.stream_key,
-          () => {
-            if (!this.focusAlive(generation, signal)) {
-              return Promise.resolve([]);
-            }
-            return runInSyncLane("interactive", () =>
-              pollStream(
-                host,
-                store,
-                installation,
-                stream,
-                1,
-                { older: true },
-                this.quota,
-              ),
-            );
-          },
-        );
-        if (pages === undefined || !this.focusAlive(generation, signal)) {
-          return;
-        }
-        this.rememberStreamPace({
-          key,
-          pages,
-          pagesBudget: 1,
-          idleMs: streamIdleMs(stream, installation.config),
-        });
-      } catch (error) {
-        this.rememberStreamPace({
-          key,
-          pages: [],
-          pagesBudget: 1,
-          idleMs: streamIdleMs(stream, installation.config),
-          error,
-        });
-        throw error;
-      } finally {
-        this.streamPulling.delete(key);
-        this.streamPullingHistory.delete(key);
-        this.publishStreams();
-      }
-      return;
-    }
-  }
-
-  private async runRecentLiveForThread(
-    threadId: string,
-    signal: AbortSignal,
-    generation: number,
-    options: {
-      requireHydrateCapability: boolean;
-      cooldownMs: number;
-    },
-  ): Promise<void> {
-    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
-      return;
-    }
-    let thread: ConversationThread;
-    try {
-      thread = parseConversationThread(threadId);
-    } catch {
-      return;
-    }
-    const host = this.runtime.requireHost();
-    const store = host.get("authority");
-    const installations = await store.listInstallations(this.runtime.orgId());
-    if (!this.focusAlive(generation, signal)) {
-      return;
-    }
-    if (
-      options.requireHydrateCapability &&
-      !this.drivers.hydrateOnOpen(installations, thread)
-    ) {
-      return;
-    }
-    for (const installation of installations) {
-      if (installation.status !== "enabled") {
-        continue;
-      }
-      const driver = this.drivers.get(installation.connector_type);
-      if (!driver?.matchesThread(installation, thread)) {
-        continue;
-      }
-      if (!driverPolls(driver)) {
-        continue;
-      }
-      if (
-        options.requireHydrateCapability &&
-        !driver.capabilities(installation).hydrate_on_open
-      ) {
-        continue;
-      }
-      let stream: ConnectorStream;
-      try {
-        stream = await driver.resolveThreadStream(
-          installation,
-          thread,
-          asConnectorHost(host),
-          process.env,
-        );
-      } catch {
-        continue;
-      }
-      if (!this.focusAlive(generation, signal)) {
-        return;
-      }
-      const key = streamPaceKey(installation.id, stream.stream_key);
-      this.rememberStreamMeta(key, stream);
-      this.streamPulling.add(key);
-      this.publishStreams();
-      try {
-        const pages = await this.exclusiveStream(
-          installation.id,
-          stream.stream_key,
-          () => {
-            if (!this.focusAlive(generation, signal)) {
-              return Promise.resolve([]);
-            }
-            return runInSyncLane("interactive", () =>
-              pollStream(
-                host,
-                store,
-                installation,
-                stream,
-                1,
-                { older: false },
-                this.quota,
-              ),
-            );
-          },
-          { skipIfBusy: false },
-        );
-        if (pages === undefined || !this.focusAlive(generation, signal)) {
-          return;
-        }
-        this.rememberStreamPace({
-          key,
-          pages,
-          pagesBudget: 1,
-          idleMs: streamIdleMs(stream, installation.config),
-        });
-        if (pages.some((page) => page.status === "completed")) {
-          this.hydrateCooldown.set(threadId, Date.now() + options.cooldownMs);
-          this.liveKickCooldown.set(threadId, Date.now() + options.cooldownMs);
-          this.inbox.publishThreadUpdated(threadId);
-          this.inbox.touchInboxDigest();
-        }
-      } catch (error) {
-        this.rememberStreamPace({
-          key,
-          pages: [],
-          pagesBudget: 1,
-          idleMs: streamIdleMs(stream, installation.config),
-          error,
-        });
-        throw error;
-      } finally {
-        this.streamPulling.delete(key);
-        this.publishStreams();
-      }
-      return;
-    }
-  }
-
-  private async runDrainMediaThread(
-    threadId: string,
-    signal: AbortSignal,
-    generation: number,
-  ): Promise<void> {
-    if (this.maintenanceHold || !this.focusAlive(generation, signal)) {
-      return;
-    }
-    let thread: ConversationThread;
-    try {
-      thread = parseConversationThread(threadId);
-    } catch {
-      return;
-    }
-    const host = this.runtime.requireHost();
-    const store = host.get("authority");
-    const installations = await store.listInstallations(this.runtime.orgId());
-    if (!this.focusAlive(generation, signal)) {
-      return;
-    }
-    for (const installation of installations) {
-      if (installation.status !== "enabled") {
-        continue;
-      }
-      const driver = this.drivers.get(installation.connector_type);
-      if (!driver?.matchesThread(installation, thread)) {
-        continue;
-      }
-      let stream: ConnectorStream;
-      try {
-        stream = await driver.resolveThreadStream(
-          installation,
-          thread,
-          asConnectorHost(host),
-          process.env,
-        );
-      } catch {
-        continue;
-      }
-      if (!this.focusAlive(generation, signal)) {
-        return;
-      }
-      const key = streamPaceKey(installation.id, stream.stream_key);
-      this.rememberStreamMeta(key, stream);
-      this.streamPulling.add(key);
-      this.publishStreams();
-      try {
-        const pages = await this.exclusiveStream(
-          installation.id,
-          stream.stream_key,
-          () => {
-            if (!this.focusAlive(generation, signal)) {
-              return Promise.resolve([]);
-            }
-            return runInSyncLane("interactive", () =>
-              pollStream(host, store, installation, stream, 3, { media: true }, this.quota),
-            );
-          },
-          { skipIfBusy: false },
-        );
-        if (pages === undefined || !this.focusAlive(generation, signal)) {
-          return;
-        }
-        const accepted = summarizeRuns(pages).accepted_count;
-        this.rememberStreamPace({
-          key,
-          pages,
-          pagesBudget: 3,
-          idleMs: streamIdleMs(stream, installation.config),
-        });
-        if (accepted > 0) {
-          this.inbox.publishThreadUpdated(threadId);
-          this.inbox.touchInboxDigest();
-        }
-      } catch (error) {
-        this.rememberStreamPace({
-          key,
-          pages: [],
-          pagesBudget: 3,
-          idleMs: streamIdleMs(stream, installation.config),
-          error,
-        });
-        throw error;
-      } finally {
-        this.streamPulling.delete(key);
-        this.publishStreams();
-      }
-      return;
-    }
-  }
-
-  private async followStream(
-    host: Host,
-    store: ConnectorRuntimeStore,
-    installation: ConnectorInstallation,
-    stream: ConnectorStream,
-    thread: ConversationThread,
-  ): Promise<void> {
-    const threadId = `${thread.source}:${thread.target}`;
-    const before = await this.threadFollowState(threadId);
-    for (let attempt = 0; attempt < FOLLOW_TRIES; attempt += 1) {
-      await pollStream(
-        host,
-        store,
-        installation,
-        stream,
-        2,
-        { older: false },
-        this.quota,
-      );
-      const after = await this.threadFollowState(threadId);
-      if (after.latestId && after.latestId !== before.latestId && after.inbound) {
-        await pollStream(
-          host,
-          store,
-          installation,
-          stream,
-          2,
-          { older: false },
-          this.quota,
-        );
-        return;
-      }
-      if (attempt < FOLLOW_TRIES - 1) {
-        await delay(FOLLOW_WAIT_MS);
-      }
-    }
-  }
-
-  private async threadFollowState(threadId: string): Promise<{
-    latestId?: string;
-    inbound: boolean;
-  }> {
-    const items = await this.inbox.listInbox({
-      thread_id: threadId,
-      heads: true,
-    });
-    const latest = items[items.length - 1];
-    if (!latest) {
-      return { inbound: false };
-    }
-    return {
-      latestId: latest.event.id,
-      inbound: latest.direction === "inbound",
-    };
+    anchor?: { before?: string; before_external_id?: string },
+  ): Promise<{ history_pending: boolean }> {
+    return connectorLive.pullOlderForThread(this.connectorState(), threadId, anchor);
   }
 
   async createConversation(
@@ -1049,28 +351,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       locale?: CopyLocale;
     } = {},
   ): Promise<CreatedConversationView> {
-    const clientKey = this.createClientKey(input.client_request_id);
-    if (clientKey) {
-      const pending = this.creatingByClient.get(clientKey);
-      if (pending) {
-        return pending;
-      }
-    }
-    const run = this.createConversationOnce(input).catch((error) => {
-      if (clientKey) {
-        this.creatingByClient.delete(clientKey);
-      }
-      throw error;
-    });
-    if (clientKey) {
-      this.creatingByClient.set(clientKey, run);
-    }
-    return run;
-  }
-
-  private createClientKey(value?: string): string | undefined {
-    const id = value?.trim();
-    return id ? `${this.runtime.orgId()}:${id}` : undefined;
+    return connectorConversation.createConversation(this.connectorState(), input);
   }
 
   async openCreatedThread(input: {
@@ -1084,297 +365,35 @@ export class PersonalConnectorService implements OnModuleDestroy {
     driver: ChannelDriver;
     create_with_task: boolean;
   }> {
-    const host = this.runtime.requireHost();
-    const found = await this.resolveCreatable(input);
-    const withTask = found.driver.capabilities(found.installation).create_with_task === true;
-    const firstTask = withTask ? input.text?.trim() : undefined;
-    try {
-      const thread = await requireCreateThread(found.driver)(
-        found.installation,
-        asConnectorHost(host),
-        process.env,
-        {
-          ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
-          ...(firstTask ? { text: firstTask } : {}),
-        },
-      );
-      if (withTask) {
-        void this.seedCreatedThread(found.installation, found.driver, thread, host).catch(
-          () => {
-            void this.catchUp(found.installation.id);
-          },
-        );
-      } else {
-        await this.seedCreatedThread(found.installation, found.driver, thread, host);
-      }
-      return {
-        thread,
-        installation: found.installation,
-        driver: found.driver,
-        create_with_task: withTask,
-      };
-    } catch (error) {
-      throw wrapDriverError(error, "send_failed");
-    }
-  }
-
-  private async resolveCreatable(input: {
-    installation_id?: string;
-    source?: string;
-  }): Promise<{ installation: ConnectorInstallation; driver: ChannelDriver }> {
-    const host = this.runtime.requireHost();
-    const installations = await host
-      .get("authority")
-      .listInstallations(this.runtime.orgId());
-    const requested = input.installation_id?.trim();
-    if (requested) {
-      const installation = installations.find((item) => item.id === requested);
-      if (!installation) {
-        throw new PersonalConnectorError(
-          "not_found",
-          "Connector installation not found",
-          404,
-        );
-      }
-      const driver = this.drivers.get(installation.connector_type);
-      if (!driver || !driver.capabilities(installation).create) {
-        throw new PersonalConnectorError(
-          "unsupported_channel",
-          "This connector cannot create a conversation",
-          501,
-        );
-      }
-      return { installation, driver };
-    }
-    const found = this.drivers.findCreatable(installations, input.source);
-    if (!found) {
-      throw new PersonalConnectorError(
-        "unsupported_channel",
-        "No enabled connector can create a conversation",
-        501,
-      );
-    }
-    return found;
-  }
-
-  private async createConversationOnce(
-    input: {
-      installation_id?: string;
-      source?: string;
-      text?: string;
-      cwd?: string;
-      locale?: CopyLocale;
-    },
-  ): Promise<CreatedConversationView> {
-    const host = this.runtime.requireHost();
-    const opened = await this.openCreatedThread(input);
-    const firstTask = opened.create_with_task ? input.text?.trim() : undefined;
-    if (firstTask) {
-      try {
-        await this.seedCreatedOutbound(
-          opened.installation,
-          opened.driver,
-          opened.thread,
-          firstTask,
-          host,
-        );
-      } catch {
-        // Poll below can still land the first task from the connector.
-      }
-    }
-    return {
-      thread_id: `${opened.thread.source}:${opened.thread.target}`,
-      channel: opened.thread.source,
-      channel_label: this.drivers.sourceLabel(
-        opened.thread.source,
-        process.env,
-        input.locale ?? DEFAULT_COPY_LOCALE,
-      ),
-      can_send: driverCanReply(opened.driver, opened.installation),
-      await_reply: opened.driver.capabilities(opened.installation).await_reply === true,
-      list_title: normalizeListTitle(
-        opened.driver.capabilities(opened.installation).list_title,
-      ),
-    };
-  }
-
-  private async seedCreatedOutbound(
-    installation: ConnectorInstallation,
-    driver: ChannelDriver,
-    thread: ConversationThread,
-    text: string,
-    host: Host,
-  ): Promise<void> {
-    const now = new Date().toISOString();
-    const receipt = { accepted: true as const, rpc_id: randomUUID() };
-    const externalId = driver.outboundId
-      ? driver.outboundId(thread, receipt)
-      : `${thread.target}:out:${receipt.rpc_id}`;
-    const record = channelRecord({
-      channel: driver.source,
-      kind: "user",
-      direction: "outbound",
-      external_id: externalId,
-      occurred_at: now,
-      actor_id: "local-owner",
-      scope_id: thread.target,
-      text,
-    });
-    record.weight_hints = { importance: 1 };
-    await host.get("ingest").ingest({
-      schema_version: INGEST_SCHEMA_VERSION,
-      connector_id: installation.id,
-      org_id: this.runtime.orgId(),
-      delivery_id: `create:${externalId}`,
-      received_at: now,
-      records: [record],
-    });
-  }
-
-  private async seedCreatedThread(
-    installation: ConnectorInstallation,
-    driver: ChannelDriver,
-    thread: ConversationThread,
-    host: Host,
-  ): Promise<void> {
-    const stream = await driver.resolveThreadStream(
-      installation,
-      thread,
-      asConnectorHost(host),
-      process.env,
-    );
-    await pollStream(
-      host,
-      host.get("authority"),
-      installation,
-      stream,
-      1,
-      undefined,
-      this.quota,
-    );
+    return connectorConversation.openCreatedThread(this.connectorState(), input);
   }
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
-    const store = this.runtime.requireHost().get("authority");
-    if (
-      !connectorAllowsMultiple(
-        input.connector_type,
-        catalogFromDrivers(this.drivers, process.env),
-      )
-    ) {
-      const existing = (await store.listInstallations(this.runtime.orgId())).some(
-        (item) => item.connector_type === input.connector_type,
-      );
-      if (existing) {
-        throw new PersonalConnectorError(
-          "already_installed",
-          `${input.connector_type} is already installed`,
-          409,
-        );
-      }
-    }
-    const now = new Date().toISOString();
-    const drafted = this.buildInstallation(input, now);
-    const created = await store.createInstallation({
-      ...drafted,
-      config: persistInstallSecrets({
-        connector_type: drafted.connector_type,
-        installation_id: drafted.id,
-        catalog: this.drivers.get(drafted.connector_type)?.installCatalog?.({
-          env: process.env,
-        }),
-        incoming: input.config ?? {},
-        stored: drafted.config ?? {},
-      }),
-    });
-    void this.catchUp(created.id);
-    return this.viewWithPairingCode(store, created);
+    return connectorInstall.install(this.connectorState(), input);
   }
 
   async updateConfig(
     installationId: string,
     config: Record<string, unknown>,
   ): Promise<EngineInstallationView> {
-    const store = this.runtime.requireHost().get("authority");
-    const current = await this.requireInstallation(store, installationId);
-    const driver = this.drivers.get(current.connector_type);
-    if (!driver) {
-      throw new PersonalConnectorError(
-        "unsupported_connector",
-        `Connector type cannot be updated: ${current.connector_type}`,
-        400,
-      );
-    }
-    let nextConfig: ConnectorInstallation["config"];
-    try {
-      nextConfig = persistInstallSecrets({
-        connector_type: current.connector_type,
-        installation_id: current.id,
-        catalog: driver.installCatalog?.({ env: process.env }),
-        incoming: config,
-        stored: driver.install({
-          id: current.id,
-          org_id: current.org_id,
-          config,
-          now: new Date().toISOString(),
-        }).config,
-      });
-    } catch (error) {
-      throw wrapDriverError(error, "invalid_config");
-    }
-    const updated = await store.updateInstallationConfig({
-      id: current.id,
-      org_id: this.runtime.orgId(),
-      config: nextConfig,
-      updated_at: new Date().toISOString(),
-    });
-    if (!updated) {
-      throw new PersonalConnectorError(
-        "not_found",
-        "Connector installation not found",
-        404,
-      );
-    }
-    if (updated.status === "enabled") {
-      void this.catchUp(updated.id);
-    }
-    return this.viewOf(store, updated);
+    return connectorInstall.updateConfig(this.connectorState(), installationId, config);
   }
 
   async uninstall(installationId: string): Promise<{ id: string; removed: true }> {
-    const store = this.runtime.requireHost().get("authority");
-    const current = await store.findInstallation(installationId);
-    if (!current || current.org_id !== this.runtime.orgId()) {
-      return { id: installationId, removed: true };
-    }
-    await store.deleteInstallation(current.id, this.runtime.orgId());
-    this.kernelRuntime.clearInstallationSnapshots(current.id);
-    return { id: current.id, removed: true };
+    return connectorInstall.uninstall(this.connectorState(), installationId);
   }
 
   async setStatus(
     installationId: string,
     status: "enabled" | "disabled",
   ): Promise<EngineInstallationView> {
-    const store = this.runtime.requireHost().get("authority");
-    const current = await this.requireInstallation(store, installationId);
-    const updated = await store.setInstallationStatus({
-      id: current.id,
-      org_id: this.runtime.orgId(),
-      status,
-      updated_at: new Date().toISOString(),
-    });
-    if (!updated) {
-      throw new PersonalConnectorError(
-        "not_found",
-        "Connector installation not found",
-        404,
-      );
-    }
-    if (status === "enabled") {
-      void this.catchUp(updated.id);
-    }
-    return this.viewOf(store, updated);
+    return connectorInstall.setStatus(this.connectorState(), installationId, status);
+  }
+
+  async revealPairingCode(
+    installationId: string,
+  ): Promise<{ pairing_code: string }> {
+    return connectorInstall.revealPairingCode(this.connectorState(), installationId);
   }
 
   private async waitForQuiet(timeoutMs = 10_000): Promise<void> {
@@ -1383,7 +402,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
       this.steadyTicking ||
       this.bootstrapTicking ||
       this.catalogTicking ||
-      this.inflight.size > 0 ||
       this.streamLocks.size > 0 ||
       this.focusSlot != null
     ) {
@@ -1409,8 +427,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
     this.streamPullingHistory.clear();
     this.hydrateCooldown.clear();
     this.liveKickCooldown.clear();
-    this.lastCatchUpCursor = undefined;
-    this.lastSeedCursor = undefined;
     resetPullStatus();
     pullStatus.interval_ms = interval;
   }
@@ -1438,39 +454,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
     try {
       const store = this.runtime.requireHost().get("authority");
-      const installations = await store.listInstallations(this.runtime.orgId());
-      const eligible = installations.filter((installation) => {
-        const driver = this.drivers.get(installation.connector_type);
-        return (
-          installation.status === "enabled" &&
-          driver &&
-          driverPolls(driver) &&
-          !this.inflight.has(syncInflightKey(installation.id, "steady"))
-        );
+      await runDueWorkPlane(this.connectorState(), store, {
+        plane: "steady",
+        lanes: [...steadySyncClaimLanes()],
+        allowHistory: false,
       });
-      const errors: unknown[] = [];
-      for (const installation of eligible) {
-        if (this.kernelRuntime.shouldDeferBackgroundSync()) {
-          break;
-        }
-        try {
-          await withDeadline(
-            this.sync(installation.id, DEFAULT_MAX_PAGES, {
-              skipIdle: true,
-              capCatchUp: true,
-              syncPlane: "steady",
-              allowHistory: false,
-            }),
-            connectorSyncTimeoutMs(),
-            `sync ${installation.connector_type}`,
-          );
-        } catch (error) {
-          errors.push(error);
-        }
-        await yieldToEventLoop();
-      }
       pullStatus.last_tick_at = new Date().toISOString();
-      await applyPullOutcome(errors);
     } catch (error) {
       await applyPullOutcome([error]);
     } finally {
@@ -1489,48 +478,22 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return;
     }
     if (
-      !backgroundSyncReleased() ||
-      !isHumanIdle() ||
-      this.kernelRuntime.shouldDeferHistorySync() ||
-      this.kernelRuntime.pressureView().throttle_history
+      !shouldRunHistoryTick({
+        backgroundReleased: backgroundSyncReleased(),
+        deferHistory: this.kernelRuntime.shouldDeferHistorySync(),
+        throttleHistory: this.kernelRuntime.pressureView().throttle_history,
+      })
     ) {
       return;
     }
     this.bootstrapTicking = true;
     try {
       const store = this.runtime.requireHost().get("authority");
-      const installations = await store.listInstallations(this.runtime.orgId());
-      const eligible = installations.filter((installation) => {
-        const driver = this.drivers.get(installation.connector_type);
-        return (
-          installation.status === "enabled" &&
-          driver &&
-          driverPolls(driver) &&
-          !this.inflight.has(syncInflightKey(installation.id, "bootstrap"))
-        );
+      await runDueWorkPlane(this.connectorState(), store, {
+        plane: "bootstrap",
+        lanes: [...historySyncClaimLanes()],
+        allowHistory: true,
       });
-      const errors: unknown[] = [];
-      for (const installation of eligible) {
-        if (this.kernelRuntime.shouldDeferHistorySync()) {
-          break;
-        }
-        try {
-          await withDeadline(
-            this.sync(installation.id, DEFAULT_MAX_PAGES, {
-              skipIdle: true,
-              capCatchUp: true,
-              syncPlane: "bootstrap",
-              allowHistory: true,
-            }),
-            connectorSyncTimeoutMs(),
-            `bootstrap ${installation.connector_type}`,
-          );
-        } catch (error) {
-          errors.push(error);
-        }
-        await yieldToEventLoop();
-      }
-      await applyPullOutcome(errors);
     } catch (error) {
       await applyPullOutcome([error]);
     } finally {
@@ -1557,577 +520,12 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
     this.catalogTicking = true;
     try {
-      const host = this.runtime.requireHost();
-      const store = host.get("authority");
-      const installations = await store.listInstallations(this.runtime.orgId());
-      for (const installation of installations) {
-        if (this.kernelRuntime.shouldDeferHistorySync()) {
-          break;
-        }
-        const driver = this.drivers.get(installation.connector_type);
-        if (
-          installation.status !== "enabled" ||
-          !driver?.bindSyncSource ||
-          !driverPolls(driver)
-        ) {
-          continue;
-        }
-        try {
-          const source = await driver.bindSyncSource(
-            installation,
-            asConnectorHost(host),
-            process.env,
-          );
-          const engine = new SyncEngine(store);
-          await engine.refreshCatalog({
-            installation_id: installation.id,
-            source,
-            pages: catalogRefreshPages({ catalogTick: true }),
-            force: false,
-          });
-          void this.refreshSyncSnapshot(installation.id);
-        } catch (error) {
-          await applyPullOutcome([error]);
-        }
-        await yieldToEventLoop();
-      }
+      await runCatalogTick(this.connectorState());
     } catch (error) {
       await applyPullOutcome([error]);
     } finally {
       this.catalogTicking = false;
     }
-  }
-
-  private async catchUp(installationId: string): Promise<void> {
-    try {
-      await withDeadline(
-        this.sync(installationId, DEFAULT_MAX_PAGES, {
-          skipIdle: true,
-          capCatchUp: true,
-          syncPlane: "bootstrap",
-          allowHistory: true,
-          discover: true,
-        }),
-        connectorSyncTimeoutMs(),
-        `catchUp ${installationId}`,
-      );
-    } catch (error) {
-      await applyPullOutcome([error]);
-    }
-  }
-
-  private async runSync(
-    installationId: string,
-    maxPages: number,
-    options?: ConnectorSyncOptions,
-  ): Promise<ConnectorSyncView> {
-    if (this.maintenanceHold) {
-      throw new PersonalConnectorError(
-        "disabled",
-        "Store maintenance in progress",
-        409,
-      );
-    }
-    const host = this.runtime.requireHost();
-    const store = host.get("authority");
-    const installation = await this.requireInstallation(store, installationId);
-    if (installation.status !== "enabled") {
-      throw new PersonalConnectorError(
-        "disabled",
-        "Connector installation is disabled",
-        409,
-      );
-    }
-    const driver = this.drivers.get(installation.connector_type);
-    if (!driver) {
-      throw new PersonalConnectorError(
-        "unsupported_connector",
-        `Connector type cannot be synced: ${installation.connector_type}`,
-        400,
-      );
-    }
-    if (!driverPolls(driver)) {
-      return {
-        installation_id: installation.id,
-        pages_attempted: 0,
-        streams_attempted: 0,
-        accepted_count: 0,
-        duplicate_count: 0,
-        quarantined_count: 0,
-        last_run_status: "idle",
-        installation: await this.viewOf(store, installation),
-      };
-    }
-    beginPull();
-    this.publishStreams();
-    try {
-      const engine = new SyncEngine(store);
-      const allowHistory = options?.allowHistory !== false;
-      const humanIdle = isHumanIdle();
-      if (driver.bindSyncSource && options?.discover === true) {
-        const source = await driver.bindSyncSource(
-          installation,
-          asConnectorHost(host),
-          process.env,
-        );
-        await engine.refreshCatalog({
-          installation_id: installation.id,
-          source,
-          pages: catalogRefreshPages({ discover: true }),
-          force: true,
-        });
-      }
-      const catalog = await engine.catalog(installation.id);
-      const threads = mergeConversationThreads(
-        await loadEligibleInstallationThreads(
-          store,
-          installation.org_id,
-          installation,
-          driver,
-          preferredThreadId(),
-        ),
-        threadsFromCatalog(catalog.members, driver.source),
-      );
-      const streams = await driver.resolveStreams(
-        installation,
-        asConnectorHost(host),
-        process.env,
-        {
-          threads,
-          catalog: catalog.members,
-          discover: !driver.bindSyncSource && options?.discover === true,
-        },
-      );
-      await this.persistPickedChatNames(store, installation, streams);
-      this.pruneStreamPace(installation.id, streams);
-      const storedStates = await store.listSyncStates(installation.id);
-      const stateByKey = new Map(
-        storedStates.map((state) => [state.stream_key, state] as const),
-      );
-      const cursorStates = new Map<string, string | undefined>();
-      const cursorKeys = streams
-        .map((stream) => stream.stream_key)
-        .filter((streamKey) => {
-          const state = stateByKey.get(streamKey);
-          return !state || state.phase === "live" || state.phase === "steady";
-        });
-      await Promise.all(
-        cursorKeys.map(async (streamKey) => {
-          const cursor = await store.getCursor(
-            installation.id,
-            streamKey,
-          );
-          cursorStates.set(streamKey, cursor?.cursor);
-        }),
-      );
-      const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
-      const mountedStreamKeys = new Set(streams.map((stream) => stream.stream_key));
-      const planMembers = scopeSyncCatalogMembers(
-        catalog.members,
-        mountedStreamKeys,
-        fallbackMembers,
-      );
-      const catalogIncomplete = catalog.catalog ? !catalog.catalog.complete : true;
-      const steadyEnv = steadyCapacityFromEnv();
-      const planInput = {
-        installation_id: installation.id,
-        preferredThreadId: preferredThreadId(),
-        humanIdle,
-        rotateFrom: this.lastCatchUpCursor,
-        rotateSeedFrom: this.lastSeedCursor,
-        pages: options?.capCatchUp ? DEFAULT_MAX_PAGES : maxPages,
-        members: planMembers,
-        fallbackMembers,
-        cursorStates,
-      };
-      const liveCap = humanIdle
-        ? IDLE_STREAM_CONCURRENCY
-        : LIVE_STREAM_CONCURRENCY;
-      const splitPlan =
-        options?.capCatchUp || options?.syncPlane
-          ? await engine.planSplit({
-              ...planInput,
-              liveRing: this.liveRing,
-              bootstrapLimits: options?.discover
-                ? {
-                    interactive: 1,
-                    live: 16,
-                    catalog: 0,
-                    history: 16,
-                    media: 0,
-                  }
-                : {
-                    interactive: 1,
-                    live: humanIdle ? liveCap : 0,
-                    catalog: 0,
-                    history: 1,
-                    media: 0,
-                  },
-              steadyLimits: {
-                ...steadyLaneLimitsForCount({
-                  members: planMembers,
-                  states: stateByKey,
-                  tickIntervalMs: pullIntervalMs(),
-                  catalogIncomplete,
-                  targetIdleMs: steadyEnv.targetIdleMs,
-                  maxLive: liveCap,
-                }),
-                catalog: 0,
-                media:
-                  options?.syncPlane === "bootstrap"
-                    ? 0
-                    : 1,
-              },
-            })
-          : null;
-      const work = splitPlan
-        ? options?.syncPlane === "bootstrap"
-          ? splitPlan.bootstrap
-          : options?.syncPlane === "steady"
-            ? splitPlan.steady
-            : splitPlan.all
-        : await engine.plan(planInput);
-      const streamByKey = new Map(
-        streams.map((stream) => [stream.stream_key, stream] as const),
-      );
-      const pressure = this.kernelRuntime.pressureView();
-      const allowBackgroundMedia =
-        options?.syncPlane !== "bootstrap" &&
-        humanIdle &&
-        pressure.interactive_ready &&
-        !pressure.throttle_media &&
-        !this.kernelRuntime.shouldDeferHistorySync();
-      const uncapped = work.flatMap((item) => {
-        if (item.lane === "catalog") {
-          return [];
-        }
-        const stream = streamByKey.get(item.stream_key);
-        if (!stream) {
-          return [];
-        }
-        if (!allowHistory && (item.older || item.lane === "history")) {
-          return [];
-        }
-        if (pressure.throttle_history && (item.older || item.lane === "history")) {
-          if (options?.syncPlane !== "bootstrap") {
-            return [];
-          }
-        }
-        if ((item.media || item.lane === "media") && !allowBackgroundMedia) {
-          return [];
-        }
-        if (pressure.throttle_media && item.media) {
-          return [];
-        }
-        const key = streamPaceKey(installation.id, stream.stream_key);
-        this.rememberStreamMeta(key, stream);
-        const budget = syncExecutionBudget({
-          humanIdle,
-          capCatchUp: options?.capCatchUp,
-          lane: item.lane,
-          pages: item.pages,
-          catchUpPages: streamCatchUpPages(stream, item.pages),
-        });
-        const throttled = applyKernelPressureToSyncBudget(
-          {
-            pages: budget.pages,
-            concurrency: budget.concurrency,
-            lane: item.lane,
-          },
-          pressure.level,
-        );
-        if (throttled.concurrency <= 0) {
-          return [];
-        }
-        return [
-          {
-            stream,
-            key,
-            idleMs: streamIdleMs(stream, installation.config),
-            older: item.older,
-            pages: throttled.pages,
-            lane: item.lane,
-            media: item.media,
-          },
-        ];
-      });
-      const selected = capSelectedStreams(uncapped, {
-        liveLimit: options?.discover ? 16 : liveCap,
-        historyLimit: options?.discover
-          ? 16
-          : allowHistory && !pressure.throttle_history
-            ? 1
-            : 0,
-        mediaLimit: allowBackgroundMedia ? 1 : 0,
-      });
-      const olderKey = engine.lastHistoryKey(work);
-      if (olderKey) {
-        this.lastCatchUpCursor = olderKey;
-      }
-      const seedKey = engine.lastSeedKey(work);
-      if (seedKey) {
-        this.lastSeedCursor = seedKey;
-      }
-      for (const item of selected) {
-        this.streamPulling.add(item.key);
-        if (item.older || item.lane === "history") {
-          this.streamCatchingUp.add(item.key);
-        }
-        if (item.older) {
-          this.streamPullingHistory.add(item.key);
-        }
-      }
-      this.publishStreams();
-      const textItems = selected.filter((item) => !item.media);
-      const liveTextItems = textItems.filter(
-        (item) => !item.older && item.lane !== "history",
-      );
-      const historyTextItems = textItems.filter(
-        (item) => item.older || item.lane === "history",
-      );
-      // Media never shares a tick with history catch-up; focus drain covers open threads.
-      const mediaItems =
-        historyTextItems.length > 0
-          ? []
-          : selected.filter((item) => item.media);
-      const liveConcurrency = syncExecutionBudget({
-        humanIdle,
-        capCatchUp: options?.capCatchUp,
-        lane: "live",
-        pages: 1,
-      }).concurrency;
-      const historyConcurrency = syncExecutionBudget({
-        humanIdle,
-        capCatchUp: options?.capCatchUp,
-        lane: "history",
-        pages: 1,
-      }).concurrency;
-      const mediaConcurrency = syncExecutionBudget({
-        humanIdle,
-        capCatchUp: options?.capCatchUp,
-        lane: "media",
-        pages: 1,
-      }).concurrency;
-      const runSelected = async (item: (typeof selected)[number]) => {
-        try {
-          const pages = await this.exclusiveStream(
-            installation.id,
-            item.stream.stream_key,
-            () =>
-              runInSyncLane(item.lane, () =>
-                pollStream(
-                  host,
-                  store,
-                  installation,
-                  item.stream,
-                  item.pages,
-                  { older: item.older, media: item.media },
-                  this.quota,
-                ),
-              ),
-            { skipIfBusy: item.lane !== "interactive" },
-          );
-          const result = {
-            key: item.key,
-            pages: pages ?? [],
-            pagesBudget: item.pages,
-            idleMs: item.idleMs,
-            error: null as unknown,
-          };
-          this.streamPulling.delete(item.key);
-          if (item.older) {
-            this.streamPullingHistory.delete(item.key);
-          }
-          this.rememberStreamPace(result);
-          await rememberEngineResult(engine, installation.id, item, result);
-          this.publishStreams();
-          return result;
-        } catch (error) {
-          const result = {
-            key: item.key,
-            pages: [] as ConnectorPollRunResult[],
-            pagesBudget: item.pages,
-            idleMs: item.idleMs,
-            error,
-          };
-          this.streamPulling.delete(item.key);
-          if (item.older) {
-            this.streamPullingHistory.delete(item.key);
-          }
-          this.rememberStreamPace(result);
-          await rememberEngineResult(engine, installation.id, item, result);
-          this.publishStreams();
-          return result;
-        }
-      };
-      // Live and history use separate concurrency budgets so catch-up does not
-      // throttle watermark pulls (and vice versa when both planes run).
-      const [liveBatches, historyBatches] = await Promise.all([
-        mapLimit(liveTextItems, liveConcurrency, runSelected),
-        mapLimit(historyTextItems, historyConcurrency, runSelected),
-      ]);
-      await yieldToEventLoop();
-      const mediaBatches = await mapLimit(mediaItems, mediaConcurrency, runSelected);
-      const batches = [...liveBatches, ...historyBatches, ...mediaBatches];
-      const runs = batches.flatMap((batch) => batch.pages);
-      const firstError = batches.find((batch) => batch.error)?.error;
-      if (runs.length === 0 && firstError) {
-        throw firstError;
-      }
-      await this.reconcileCatchingUp(store, installation.id, streams);
-      const last = runs.at(-1);
-      const summary = summarizeRuns(runs);
-      finishPull({
-        accepted: summary.accepted_count,
-        pages: runs.length,
-        catchingUp: this.streamCatchingUp.size,
-      });
-      if (summary.accepted_count > 0) {
-        await this.inbox.publishInboxDigest();
-        const notifyAccepted = (
-          items: Array<{ stream: ConnectorStream }>,
-          batches: Array<{ pages: ConnectorPollRunResult[] }>,
-        ) => {
-          for (let index = 0; index < items.length; index += 1) {
-            const threadId = items[index]?.stream.thread_id;
-            const batch = batches[index];
-            if (
-              !threadId ||
-              !batch ||
-              summarizeRuns(batch.pages).accepted_count === 0
-            ) {
-              continue;
-            }
-            this.inbox.publishThreadUpdated(threadId);
-          }
-        };
-        notifyAccepted(liveTextItems, liveBatches);
-        notifyAccepted(historyTextItems, historyBatches);
-        notifyAccepted(mediaItems, mediaBatches);
-      }
-      this.publishStreams();
-      void this.refreshSyncSnapshot(installation.id, streams);
-      return {
-        installation_id: installation.id,
-        pages_attempted: runs.length,
-        streams_attempted: options?.skipIdle ? selected.length : streams.length,
-        ...summary,
-        last_run_status: last?.status ?? "idle",
-        installation: await this.viewOf(store, installation),
-      };
-    } catch (error) {
-      finishPull({
-        accepted: 0,
-        pages: 0,
-        catchingUp: this.streamCatchingUp.size,
-      });
-      this.publishStreams();
-      throw wrapDriverError(error, "sync_failed");
-    }
-  }
-
-  private async refreshSyncSnapshot(
-    installationId: string,
-    _streams?: readonly ConnectorStream[],
-  ): Promise<void> {
-    try {
-      const store = this.runtime.requireHost().get("authority");
-      const [catalog, states, attempt] = await Promise.all([
-        store.getSyncCatalog(installationId),
-        store.listSyncStates(installationId),
-        store.latestAttempt(installationId),
-      ]);
-      const snapshot = buildSyncProgressSnapshot({
-        installation_id: installationId,
-        members: catalog.members,
-        states,
-        catalog_complete: catalog.catalog?.complete === true,
-      });
-      if (snapshot) {
-        this.kernelRuntime.publishSyncSnapshot(snapshot);
-      }
-      if (attempt) {
-        this.kernelRuntime.publishInstallAttempt(installationId, attempt);
-      }
-    } catch (error) {
-      console.warn("sync progress snapshot refresh failed", error);
-    }
-  }
-
-  private async reconcileCatchingUp(
-    store: ConnectorRuntimeStore,
-    installationId: string,
-    streams: readonly ConnectorStream[],
-  ): Promise<void> {
-    const states = await store.listSyncStates(installationId);
-    const byKey = new Map(
-      states.map((state) => [state.stream_key, state] as const),
-    );
-    const mounted = new Set(streams.map((stream) => stream.stream_key));
-    const prefix = `${installationId}:`;
-    for (const key of [...this.streamCatchingUp]) {
-      if (!key.startsWith(prefix)) {
-        continue;
-      }
-      if (this.streamPulling.has(key) || this.streamPullingHistory.has(key)) {
-        continue;
-      }
-      const streamKey = key.slice(prefix.length);
-      if (!mounted.has(streamKey)) {
-        this.streamCatchingUp.delete(key);
-        continue;
-      }
-      const state = byKey.get(streamKey);
-      if (!state || state.phase === "unseeded" || state.phase === "history") {
-        continue;
-      }
-      // Coverage already moved this stream to live/steady; drop the sticky
-      // "还剩 N" chip instead of waiting for another empty tip poll.
-      this.streamCatchingUp.delete(key);
-    }
-  }
-
-  private buildInstallation(
-    input: ConnectorInstallInput,
-    now: string,
-  ) {
-    const driver = this.drivers.get(input.connector_type);
-    if (!driver) {
-      throw new PersonalConnectorError(
-        "unsupported_connector",
-        `Connector type cannot be installed: ${input.connector_type}`,
-        400,
-      );
-    }
-    try {
-      return driver.install({
-        id: randomUUID(),
-        org_id: this.runtime.orgId(),
-        config: input.config ?? {},
-        now,
-      });
-    } catch (error) {
-      throw wrapDriverError(error, "invalid_config");
-    }
-  }
-
-  async revealPairingCode(
-    installationId: string,
-  ): Promise<{ pairing_code: string }> {
-    const host = this.runtime.requireHost();
-    const installation = await this.requireInstallation(
-      host.get("authority"),
-      installationId,
-    );
-    const pairing_code = await this.pairingCodeOf(installation);
-    if (!pairing_code) {
-      throw new PersonalConnectorError(
-        "not_found",
-        "Pairing code is not available",
-        404,
-      );
-    }
-    return { pairing_code };
   }
 
   async allowsBrowserLiveRequest(path: string, apiKey: string): Promise<boolean> {
@@ -2152,6 +550,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
               apiKey,
               origin: "extension",
               env: process.env,
+              secrets: asConnectorHost(host).secrets,
             });
             return true;
           } catch {
@@ -2183,6 +582,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
         apiKey,
         origin: "extension",
         env: process.env,
+        secrets: asConnectorHost(host).secrets,
       });
       return true;
     } catch {
@@ -2190,69 +590,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
   }
 
-  private async viewWithPairingCode(
-    store: ConnectorRuntimeStore,
-    installation: ConnectorInstallation,
-  ): Promise<EngineInstallationView> {
-    const view = await this.viewOf(store, installation);
-    const pairing_code = await this.pairingCodeOf(installation);
-    return pairing_code ? { ...view, pairing_code } : view;
-  }
-
-  private pairingCodeOf(
-    installation: ConnectorInstallation,
-  ): Promise<string | undefined> {
-    const driver = this.drivers.get(installation.connector_type);
-    if (
-      !driver?.readPairingCode ||
-      !driver.capabilities(installation).pairing_code
-    ) {
-      return Promise.resolve(undefined);
-    }
-    return driver.readPairingCode(installation);
-  }
-
-  private async assertInstallSecret(
-    installation: ConnectorInstallation,
-    input: { apiKey?: string; origin?: string },
-  ): Promise<void> {
-    const driver = this.drivers.get(installation.connector_type);
-    if (
-      driver?.authorizeLiveAccess &&
-      driver.capabilities(installation).browser_live
-    ) {
-      try {
-        await driver.authorizeLiveAccess(installation, {
-          apiKey: input.apiKey,
-          origin: input.origin,
-          env: process.env,
-        });
-      } catch (error) {
-        if (
-          error instanceof ChannelDriverError &&
-          error.code === "missing_credentials"
-        ) {
-          throw new PersonalConnectorError("unauthorized", error.message, 401);
-        }
-        throw wrapDriverError(error, "invalid_config");
-      }
-      return;
-    }
-    const expected = readEnvCredential(installation.credentials_ref, process.env);
-    if (input.origin?.trim() && !expected) {
-      throw new PersonalConnectorError(
-        "unauthorized",
-        "Live connector API key is required for browser access",
-        401,
-      );
-    }
-    if (expected && input.apiKey !== expected) {
-      throw new PersonalConnectorError(
-        "unauthorized",
-        "Invalid live connector API key",
-        401,
-      );
-    }
+  private installSecrets() {
+    return asConnectorHost(this.runtime.requireHost()).secrets;
   }
 
   private async requireInstallation(
@@ -2268,31 +607,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
       );
     }
     return installation;
-  }
-
-  private async wakeStreamsForThreads(
-    installationId: string,
-    threadIds: readonly string[],
-  ): Promise<void> {
-    const want = new Set(
-      threadIds.map((id) => id.trim()).filter((id) => id.length > 0),
-    );
-    if (want.size === 0) {
-      return;
-    }
-    const prefix = `${installationId}:`;
-    for (const [key, meta] of this.streamMeta) {
-      if (key.startsWith(prefix) && meta.thread_id && want.has(meta.thread_id)) {
-        this.liveRing.nudge(key.slice(prefix.length));
-      }
-    }
-    const store = this.runtime.requireHost().get("authority");
-    const catalog = await store.getSyncCatalog(installationId);
-    for (const member of catalog.members) {
-      if (member.thread_id && want.has(member.thread_id)) {
-        this.liveRing.nudge(member.stream_key);
-      }
-    }
   }
 
   private pruneStreamPace(
@@ -2358,7 +672,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       return {
         stream_key: key,
         thread_id: meta?.thread_id ?? null,
-        label: meta?.label ?? null,
+        label: this.streamDisplayLabel(meta?.thread_id ?? null, meta?.label ?? null),
         phase,
         work: this.streamPulling.has(key)
           ? this.streamPullingHistory.has(key)
@@ -2371,6 +685,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
     publishPullStreams(streams);
   }
 
+  private streamDisplayLabel(
+    threadId: string | null,
+    label: string | null,
+  ): string | null {
+    if (label && !opaqueChatLabel(label, threadId)) {
+      return label;
+    }
+    return null;
+  }
+
   private rememberStreamPace(input: {
     key: string;
     pages: ConnectorPollRunResult[];
@@ -2378,7 +702,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     idleMs?: number;
     error?: unknown;
   }): void {
-    const softMiss = input.error != null && isDeadlineExceeded(input.error);
+    const softMiss = input.error != null && isSyncSoftMiss(input.error);
     if (input.error && !softMiss) {
       this.streamErrors.set(input.key, errorMessage(input.error));
     } else {
@@ -2437,13 +761,15 @@ export class PersonalConnectorService implements OnModuleDestroy {
     installationId: string,
     streamKey: string,
     work: () => Promise<T>,
-    options?: { skipIfBusy?: boolean },
+    options?: { skipIfBusy?: boolean; ahead?: boolean },
   ): Promise<T | undefined> {
     const lock = `${installationId}:${streamKey}`;
     if (options?.skipIfBusy && this.streamLocks.has(lock)) {
       return Promise.resolve(undefined);
     }
-    const previous = this.streamLocks.get(lock) ?? Promise.resolve();
+    const previous = options?.ahead
+      ? Promise.resolve()
+      : (this.streamLocks.get(lock) ?? Promise.resolve());
     const current = previous.then(work, work);
     const released = current.then(
       () => undefined,
@@ -2458,13 +784,50 @@ export class PersonalConnectorService implements OnModuleDestroy {
     return current;
   }
 
+  private async reconcileCatchingUp(
+    store: ConnectorRuntimeStore,
+    installationId: string,
+    streams: readonly ConnectorStream[],
+  ): Promise<void> {
+    const states = await store.listSyncPhaseHeads(installationId);
+    const byKey = new Map(
+      states.map((state) => [state.stream_key, state] as const),
+    );
+    const mounted = new Set(streams.map((stream) => stream.stream_key));
+    const prefix = `${installationId}:`;
+    for (const key of [...this.streamCatchingUp]) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      if (this.streamPulling.has(key) || this.streamPullingHistory.has(key)) {
+        continue;
+      }
+      const streamKey = key.slice(prefix.length);
+      if (!mounted.has(streamKey)) {
+        this.streamCatchingUp.delete(key);
+        continue;
+      }
+      const state = byKey.get(streamKey);
+      if (!state || state.phase === "unseeded" || state.phase === "history") {
+        continue;
+      }
+      // Coverage already moved this stream to live/steady; drop the sticky
+      // "还剩 N" chip instead of waiting for another empty tip poll.
+      this.streamCatchingUp.delete(key);
+    }
+  }
+
   private async persistPickedChatNames(
     store: ConnectorRuntimeStore,
     installation: ConnectorInstallation,
     streams: ConnectorStream[],
   ): Promise<void> {
-    const names = nextPickedChatNames(installation.config, streams);
-    if (!names) {
+    const field = this.drivers
+      .get(installation.connector_type)
+      ?.installCatalog?.({ env: process.env })
+      ?.fields?.find((item) => item.option_labels_key);
+    const names = nextPickedChatNames(installation.config, streams, field);
+    if (!names || !field?.option_labels_key) {
       return;
     }
     await store.updateInstallationConfig({
@@ -2472,362 +835,24 @@ export class PersonalConnectorService implements OnModuleDestroy {
       org_id: installation.org_id,
       config: {
         ...installation.config,
-        chat_names: names,
+        [field.option_labels_key]: names,
       },
       updated_at: new Date().toISOString(),
     });
   }
-
-  private async viewOf(
-    store: ConnectorRuntimeStore,
-    installation: ConnectorInstallation,
-  ): Promise<EngineInstallationView> {
-    const host = this.runtime.requireHost();
-    const streams = host.get("connectors").listStreams(installation.id);
-    const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
-    const [attempt, sync] = await Promise.all([
-      store.latestAttempt(installation.id),
-      loadSyncProgress(store, installation.id, {
-        mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
-        fallbackMembers,
-      }),
-    ]);
-    return toInstallationView(installation, attempt, this.drivers, DEFAULT_COPY_LOCALE, {
-      sync,
-    });
-  }
-}
-
-export function wrapDriverError(
-  error: unknown,
-  fallback: "sync_failed" | "send_failed" | "invalid_config",
-): PersonalConnectorError {
-  if (error instanceof PersonalConnectorError) {
-    return error;
-  }
-  if (error instanceof DeadlineExceededError) {
-    return new PersonalConnectorError(
-      error.code,
-      error.message,
-      httpStatusFor(error.code),
-    );
-  }
-  if (error instanceof ChannelDriverError) {
-    return new PersonalConnectorError(
-      error.code,
-      error.message,
-      httpStatusFor(error.code),
-    );
-  }
-  const message =
-    error instanceof Error ? error.message : "Connector operation failed";
-  return new PersonalConnectorError(fallback, message, httpStatusFor(fallback));
-}
-
-function httpStatusFor(code: string): number {
-  switch (code) {
-    case "invalid_config":
-    case "missing_credentials":
-      return 400;
-    case "unsupported_channel":
-      return 501;
-    case "no_sender":
-      return 404;
-    case "disabled":
-    case "lease_unavailable":
-      return 409;
-    case "deadline_exceeded":
-      return 504;
-    case "throttled":
-      return 429;
-    default:
-      return 502;
-  }
-}
-
-async function pollStream(
-  host: Host,
-  store: ConnectorRuntimeStore,
-  installation: ConnectorInstallation,
-  stream: ConnectorStream,
-  maxPages: number,
-  options?: { older?: boolean; media?: boolean },
-  quota?: InstallationQuotaBook,
-): Promise<ConnectorPollRunResult[]> {
-  const runner = new ConnectorRunner(
-    stream.connector,
-    host.get("ingest"),
-    store,
-    () => new Date().toISOString(),
-    quota,
-  );
-  const runs: ConnectorPollRunResult[] = [];
-  const seenCursors = new Set<string>();
-  for (let page = 0; page < maxPages; page += 1) {
-    const run = await runner.poll({
-      installation_id: installation.id,
-      stream_key: stream.stream_key,
-      lease_owner: `personal-api:${randomUUID()}`,
-      lease_duration_ms: LEASE_MS,
-      older: options?.older === true,
-      media: options?.media,
-      timeout_ms: connectorPollTimeoutMs(),
-    });
-    runs.push(run);
-    if (run.status === "lease_unavailable") {
-      if (currentSyncLane() === "interactive") {
-        // Same-stream history may hold the lease; retry on the next focus/tick.
-        break;
-      }
-      throw new PersonalConnectorError(
-        "lease_unavailable",
-        "Connector stream is already leased",
-        409,
-      );
-    }
-    if (run.status === "throttled" || run.status === "unsupported_mode") {
-      break;
-    }
-    if (run.status !== "completed") {
-      break;
-    }
-    if (run.has_more === false || !run.next_cursor) {
-      break;
-    }
-    if (seenCursors.has(run.next_cursor)) {
-      break;
-    }
-    seenCursors.add(run.next_cursor);
-    await yieldToEventLoop();
-  }
-  return runs;
-}
-
-function pullIntervalMs(): number {
-  const raw = Number(process.env.REGENIC_CONNECTOR_PULL_MS ?? DEFAULT_PULL_MS);
-  if (!Number.isFinite(raw) || raw <= 0) {
-    return 0;
-  }
-  return Math.max(1_000, Math.min(raw, 60_000));
-}
-
-function bootstrapPullIntervalMs(): number {
-  const raw = Number(process.env.REGENIC_BOOTSTRAP_PULL_MS ?? 1_500);
-  if (!Number.isFinite(raw) || raw <= 0) {
-    return 0;
-  }
-  return Math.max(500, Math.min(raw, 30_000));
-}
-
-function catalogPullIntervalMs(): number {
-  const raw = Number(process.env.REGENIC_CATALOG_PULL_MS ?? DEFAULT_CATALOG_PULL_MS);
-  if (!Number.isFinite(raw) || raw <= 0) {
-    return 0;
-  }
-  return Math.max(15_000, Math.min(raw, 120_000));
-}
-
-function syncInflightKey(
-  installationId: string,
-  syncPlane?: "bootstrap" | "steady",
-): string {
-  return `${installationId}:${syncPlane ?? "all"}`;
-}
-
-function isRecentFocusKind(
-  kind: "hydrate" | "live" | "older" | "media" | "receipt",
-): boolean {
-  return kind === "hydrate" || kind === "live";
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function streamPaceKey(installationId: string, streamKey: string): string {
-  return `${installationId}:${streamKey}`;
-}
-
-/** Prefer connector pace or sync_mode; omit idle when neither is set (DSH). */
-function streamIdleMs(
-  stream: ConnectorStream,
-  config?: Record<string, unknown>,
-): number | undefined {
-  const value = stream.pace?.idle_ms;
-  const hintMs =
-    Number.isInteger(value) && value !== undefined && value >= 1
-      ? value
-      : undefined;
-  const mode = syncModeFromConfig(config);
-  // No pace.idle_ms and no sync_mode → every tick (unchanged for DSH).
-  if (hintMs === undefined && mode == null) {
-    return undefined;
-  }
-  const preferred = preferredThreadId();
-  const active = Boolean(
-    preferred && stream.thread_id && stream.thread_id === preferred,
-  );
-  const tiers =
-    mode != null ? syncModePreset(mode) : streamIdleTiersFromEnv();
-  return pacedStreamIdleMs({
-    active,
-    hintMs,
-    activeIdleMs: tiers.activeIdleMs,
-    inactiveIdleMs: tiers.inactiveIdleMs,
-  });
-}
-
-function streamCatchUpPages(
-  stream: ConnectorStream,
-  fallback: number,
-): number {
-  const value = stream.pace?.catch_up_pages;
-  if (!Number.isInteger(value) || value === undefined || value < 1) {
-    return fallback;
-  }
-  return Math.min(value, MAX_PAGES_CAP);
-}
-
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) {
-    return [];
-  }
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await fn(items[index] as T);
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
-  );
-  return results;
-}
-
-function clampPages(value: number): number {
-  if (!Number.isInteger(value) || value < 1) {
-    return DEFAULT_MAX_PAGES;
-  }
-  return Math.min(value, MAX_PAGES_CAP);
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Connector pull failed";
 }
 
-function mergeConversationThreads(
-  ...lists: ConversationThread[][]
-): ConversationThread[] {
-  const byId = new Map<string, ConversationThread>();
-  for (const thread of lists.flat()) {
-    byId.set(`${thread.source}:${thread.target}`, thread);
+function opaqueChatLabel(label: string, threadId: string | null): boolean {
+  const trimmed = label.trim();
+  if (/^oc_[0-9a-f]+$/i.test(trimmed)) {
+    return true;
   }
-  return [...byId.values()];
+  const key = threadId?.includes(":")
+    ? threadId.slice(threadId.lastIndexOf(":") + 1)
+    : threadId;
+  return Boolean(key && trimmed === key);
 }
-
-function threadsFromCatalog(
-  members: readonly SyncCatalogMember[],
-  source: string,
-): ConversationThread[] {
-  return members.flatMap((member) => {
-    if (member.thread_id) {
-      try {
-        return [parseConversationThread(member.thread_id)];
-      } catch {
-        return [];
-      }
-    }
-    const prefix = `${source}:`;
-    for (const kind of ["chat:", "session:", "channel:", "agent:"]) {
-      if (member.stream_key.startsWith(kind)) {
-        return [{ source, target: member.stream_key.slice(kind.length) }];
-      }
-    }
-    if (member.stream_key.startsWith(prefix)) {
-      return [{ source, target: member.stream_key.slice(prefix.length) }];
-    }
-    return [];
-  });
-}
-
-async function rememberEngineResult(
-  engine: SyncEngine,
-  installationId: string,
-  item: { stream: ConnectorStream; older: boolean; media: boolean; idleMs?: number },
-  result: { pages: ConnectorPollRunResult[]; error?: unknown },
-): Promise<void> {
-  await engine.rememberResult(
-    syncPageOutcomeFromPollRuns(
-      installationId,
-      {
-        stream: item.stream,
-        work: { older: item.older, media: item.media },
-        idleMs: item.idleMs,
-      },
-      result,
-      new Date().toISOString(),
-    ),
-  );
-}
-
-function summarizeWebhook(run: Extract<
-  ConnectorWebhookRunResult,
-  { status: "completed" | "retryable_failure" }
->): {
-  accepted_count: number;
-  duplicate_count: number;
-  quarantined_count: number;
-} {
-  return run.result.records.reduce(
-    (acc, record) => {
-      if (record.status === "accepted") {
-        acc.accepted_count += 1;
-      }
-      if (record.status === "duplicate") {
-        acc.duplicate_count += 1;
-      }
-      if (record.status === "quarantined") {
-        acc.quarantined_count += 1;
-      }
-      return acc;
-    },
-    { accepted_count: 0, duplicate_count: 0, quarantined_count: 0 },
-  );
-}
-
-function summarizeRuns(runs: ConnectorPollRunResult[]): {
-  accepted_count: number;
-  duplicate_count: number;
-  quarantined_count: number;
-} {
-  return runs.reduce(
-    (acc, run) => {
-      if (!("result" in run)) {
-        return acc;
-      }
-      for (const record of run.result.records) {
-        if (record.status === "accepted") {
-          acc.accepted_count += 1;
-        }
-        if (record.status === "duplicate") {
-          acc.duplicate_count += 1;
-        }
-        if (record.status === "quarantined") {
-          acc.quarantined_count += 1;
-        }
-      }
-      return acc;
-    },
-    { accepted_count: 0, duplicate_count: 0, quarantined_count: 0 },
-  );
-}
-

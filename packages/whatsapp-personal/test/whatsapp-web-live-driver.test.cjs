@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { asConnectorHost, readInstallSecret, setKeychainStoreForTests, verifyChannelDriverConformance } = require("@regenic/domain");
-const { conversationId } = require("@regenic/domain");
+const { conversationId } = require("@regenic/connector-contract");
+const { verifyChannelDriverConformance } = require("@regenic/connector-test-utils");
 const {
   isWhatsAppChatId,
   parseWhatsAppChatId,
@@ -12,8 +12,20 @@ const {
   whatsappWebLiveDriver,
 } = require("../dist");
 
-function fakeHost() {
-  return asConnectorHost({
+function memorySecrets() {
+  const store = new Map();
+  return {
+    write(ref, secret) {
+      store.set(`${ref.service}:${ref.account}`, secret);
+    },
+    async read(connectorType, installationId, field) {
+      return store.get(`regenic-${connectorType}:${installationId}:${field}`);
+    },
+  };
+}
+
+function fakeHost(secrets = memorySecrets()) {
+  return {
     get(name) {
       if (name === "connectors" || name === "egress") {
         return {};
@@ -23,20 +35,11 @@ function fakeHost() {
     async plugin() {
       return { ready: async () => undefined, dispose: async () => undefined };
     },
-  });
-}
-
-function withTestKeychain() {
-  const store = new Map();
-  setKeychainStoreForTests({
-    write(service, account, secret) {
-      store.set(`${service}:${account}`, secret);
+    now() {
+      return "2026-08-21T00:00:00.000Z";
     },
-    async read(service, account) {
-      return store.get(`${service}:${account}`);
-    },
-  });
-  return store;
+    secrets,
+  };
 }
 
 describe("whatsapp ids", () => {
@@ -124,13 +127,13 @@ describe("whatsapp-web-live driver", () => {
   });
 
   it("maps fromMe to local-owner and group peers to phone JID plus display name", async () => {
-    withTestKeychain();
-    try {
-      const installed = whatsappWebLiveDriver.install({
+    const secrets = memorySecrets();
+    const installed = whatsappWebLiveDriver.install({
         id: "wa-1",
         org_id: "local-owner",
         config: {},
         now: "2026-08-21T00:00:00.000Z",
+        secrets,
       });
       const bound = await whatsappWebLiveDriver.bindWebhook(
         installed,
@@ -169,9 +172,6 @@ describe("whatsapp-web-live driver", () => {
       assert.equal(peer.records[0].actor.id, "34603369879@c.us");
       assert.equal(peer.records[0].actor.display_name, "Alex Diaz");
       assert.deepEqual(peer.records[0].direction_tags, ["inbound"]);
-    } finally {
-      setKeychainStoreForTests();
-    }
   });
 
   it("revises an existing Purr CSV id and leaves a fresh export as create", () => {
@@ -199,9 +199,8 @@ describe("whatsapp-web-live driver", () => {
   });
 
   it("creates a pairing code on install and does not block the catalog", async () => {
-    withTestKeychain();
-    try {
-      const catalog = whatsappWebLiveDriver.installCatalog();
+    const secrets = memorySecrets();
+    const catalog = whatsappWebLiveDriver.installCatalog();
       assert.equal(catalog.prerequisites, undefined);
       assert.equal(catalog.credential_hint, "catalog.credentialHint");
       assert.equal(catalog.setup_steps[0].title, "setup.install.title");
@@ -211,8 +210,9 @@ describe("whatsapp-web-live driver", () => {
         org_id: "local-owner",
         config: {},
         now: "2026-08-21T00:00:00.000Z",
+        secrets,
       });
-      const pairing = await readInstallSecret(
+      const pairing = await secrets.read(
         "whatsapp-web-live",
         "wa-1",
         "pairing_code",
@@ -221,7 +221,7 @@ describe("whatsapp-web-live driver", () => {
       assert.ok(pairing.length >= 16);
       const bound = await whatsappWebLiveDriver.bindWebhook(
         installed,
-        fakeHost(),
+        fakeHost(secrets),
         { LISTEN_HOST: "127.0.0.1" },
       );
       const verified = await bound.verifyWebhook({
@@ -242,8 +242,5 @@ describe("whatsapp-web-live driver", () => {
           }),
         /live connector API key/i,
       );
-    } finally {
-      setKeychainStoreForTests();
-    }
   });
 });

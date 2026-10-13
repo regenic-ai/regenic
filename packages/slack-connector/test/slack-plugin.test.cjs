@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { MemoryConnectorRegistry, verifyChannelDriverConformance } = require("@regenic/domain");
+const { MemoryConnectorRegistry, verifyChannelDriverConformance } = require("@regenic/connector-test-utils");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const { slackChannelPlugin } = require("../dist/plugin");
 const { slackChannelDriver } = require("../dist/slack-channel-driver");

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { keychainCredentialsRef } from "@regenic/domain";
+import { keychainCredentialsRef } from "@regenic/connector-contract";
 
 export const CURSOR_KEYCHAIN_SERVICE = "regenic-cursor";
 

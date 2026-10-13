@@ -98,6 +98,59 @@ describe("sync catalog apply", () => {
     );
     assert.equal(done.catalog.complete, true);
   });
+
+  it("drops an in-progress census when a directory page replaces it", () => {
+    const census = applySyncCatalogMembers(emptySyncCatalog("feishu-1"), {
+      installation_id: "feishu-1",
+      members: [
+        { stream_key: "chat:a", thread_id: "feishu:a" },
+        { stream_key: "chat:b", thread_id: "feishu:b" },
+      ],
+      now: "2026-08-31T00:00:00.000Z",
+      next_cursor: "p2",
+      complete: false,
+    });
+    const picked = applySyncCatalogMembers(census, {
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:a", thread_id: "feishu:a" }],
+      now: "2026-08-31T00:01:00.000Z",
+      complete: true,
+      replaces: true,
+    });
+    assert.deepEqual(
+      picked.members.map((item) => item.stream_key),
+      ["chat:a"],
+    );
+    assert.equal(picked.catalog.complete, true);
+    assert.equal(picked.catalog.cursor, undefined);
+  });
+
+  it("keeps earlier chats when a finished page is not the whole directory", () => {
+    const seeded = applySyncCatalogMembers(emptySyncCatalog("feishu-1"), {
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:quiet", thread_id: "feishu:quiet" }],
+      now: "2026-08-31T00:00:00.000Z",
+      complete: true,
+    });
+    const again = applySyncCatalogMembers(seeded, {
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:hot", thread_id: "feishu:hot", label: "Hot" }],
+      now: "2026-08-31T00:05:00.000Z",
+      complete: true,
+    });
+    assert.equal(again.catalog.generation, seeded.catalog.generation);
+    assert.deepEqual(
+      again.members.map((item) => item.stream_key).sort(),
+      ["chat:hot", "chat:quiet"],
+    );
+    const missed = applySyncCatalogMembers(again, {
+      installation_id: "feishu-1",
+      members: [],
+      now: "2026-08-31T00:10:00.000Z",
+      complete: true,
+    });
+    assert.equal(missed.members.length, 2);
+  });
 });
 
 describe("sync phase", () => {
@@ -437,6 +490,36 @@ describe("sync slot pool", () => {
     assert.equal(pool.tryAcquire("history"), false);
     pool.release("live");
     assert.equal(pool.tryAcquire("history"), true);
+    pool.reset();
+  });
+
+  it("does not let a reserved lane spend another lane's slot", () => {
+    const pool = new SyncSlotPool({
+      total: 4,
+      reserved: { interactive: 1, live: 2, history: 1 },
+    });
+    assert.equal(pool.tryAcquire("live"), true);
+    assert.equal(pool.tryAcquire("live"), true);
+    assert.equal(pool.tryAcquire("live"), false);
+    assert.equal(pool.tryAcquire("interactive"), true);
+    assert.equal(pool.tryAcquire("history"), true);
+    pool.reset();
+  });
+
+  it("keeps an interactive slot beside 8 latest and 4 history", () => {
+    const pool = new SyncSlotPool({
+      total: 13,
+      reserved: { interactive: 1, live: 8, history: 4 },
+    });
+    for (let i = 0; i < 8; i += 1) {
+      assert.equal(pool.tryAcquire("live"), true);
+    }
+    assert.equal(pool.tryAcquire("live"), false);
+    for (let i = 0; i < 4; i += 1) {
+      assert.equal(pool.tryAcquire("history"), true);
+    }
+    assert.equal(pool.tryAcquire("history"), false);
+    assert.equal(pool.tryAcquire("interactive"), true);
     pool.reset();
   });
 

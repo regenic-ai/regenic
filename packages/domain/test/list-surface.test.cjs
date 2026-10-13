@@ -6,6 +6,7 @@ const {
   foldByHuman,
   foldByPolicy,
   foldThreadByPolicy,
+  listSurfacePatches,
   nextHiddenPref,
   normalizeInboxListView,
   unfold,
@@ -76,6 +77,48 @@ describe("list surface", () => {
       }),
       undefined,
     );
+  });
+
+  it("builds hide patches without writing the store", () => {
+    const patches = listSurfacePatches({
+      orgId: "org",
+      now: "t1",
+      events: [
+        {
+          id: "event-1",
+          org_id: "org",
+          source: "crm",
+          external_id: "order-1",
+          operation: "create",
+          occurred_at: "t0",
+          ingested_at: "t0",
+        },
+      ],
+      dispositions: new Map([
+        ["event-1", { event_id: "event-1", disposition: "current_work" }],
+      ]),
+      prefs: new Map([
+        [
+          "crm:order-1",
+          {
+            org_id: "org",
+            thread_id: "crm:order-1",
+            hidden: true,
+            hidden_reason: "policy",
+          },
+        ],
+      ]),
+      onDesk: new Map([["crm:order-1", false]]),
+    });
+    assert.deepEqual(patches, [
+      {
+        org_id: "org",
+        thread_id: "crm:order-1",
+        hidden: false,
+        hidden_reason: null,
+        updated_at: "t1",
+      },
+    ]);
   });
 
   it("does not rewrite an already policy-hidden thread", () => {

@@ -1,6 +1,13 @@
+import type {
+  ResultEnvelope,
+  WorkRun,
+  WorkRunStatus,
+} from "@regenic/connector-contract";
 import type { ContentPart, JsonValue } from "./ingestion";
 import type { RecordClass } from "./record-class";
 import type { ThreadFacet } from "./thread-facet";
+
+export type { ResultEnvelope, WorkRun, WorkRunStatus };
 
 export const WORK_ITEM_STATUSES = [
   "open",
@@ -17,6 +24,12 @@ export const ACTIVE_WORK_STATUSES: readonly WorkItemStatus[] = [
   "open",
   "running",
   "waiting_human",
+];
+
+/** Statuses a background observe pass may still retry. Settled rows stay in the table. */
+export const WORK_OBSERVE_AGAIN_STATUSES: readonly WorkItemStatus[] = [
+  "open",
+  "failed",
 ];
 
 export function isActiveWorkStatus(status: WorkItemStatus): boolean {
@@ -90,33 +103,6 @@ export interface WorkItem {
   thread_facet: ThreadFacet;
   status: WorkItemStatus;
   recipe_id?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export type WorkRunStatus =
-  | "running"
-  | "waiting_human"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-export interface ResultEnvelope {
-  summary: string;
-  content?: ContentPart[];
-  evidence_event_ids?: string[];
-}
-
-export interface WorkRun {
-  id: string;
-  org_id: string;
-  work_item_id: string;
-  recipe_id: string;
-  executor_type: string;
-  external_run_id?: string;
-  agent_thread_id?: string;
-  status: WorkRunStatus;
-  result?: ResultEnvelope;
   created_at: string;
   updated_at: string;
 }
@@ -200,12 +186,20 @@ export interface WorkStore {
   getRecipe(orgId: string, id: string): Promise<Recipe | null>;
   putRecipe(recipe: Recipe): Promise<Recipe>;
   deleteRecipe(orgId: string, id: string): Promise<boolean>;
-  listWorkItems(orgId: string): Promise<WorkItem[]>;
+  listWorkItems(
+    orgId: string,
+    options?: { statuses?: readonly WorkItemStatus[] },
+  ): Promise<WorkItem[]>;
   getWorkItem(orgId: string, id: string): Promise<WorkItem | null>;
   /** Foreground job on the session, not a unique thread identity. */
   getWorkItemByThread(
     orgId: string,
     threadId: string,
+  ): Promise<WorkItem | null>;
+  getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
   ): Promise<WorkItem | null>;
   putWorkItem(item: WorkItem): Promise<WorkItem>;
   listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]>;
@@ -214,8 +208,12 @@ export interface WorkStore {
     orgId: string,
     workItemId: string,
   ): Promise<WorkRun | null>;
+  /** Executor sessions that are not themselves a work thread. */
+  listHiddenExecutorThreadIds(orgId: string): Promise<string[]>;
   putWorkRun(run: WorkRun): Promise<WorkRun>;
   listWorkDeliveries(orgId: string): Promise<WorkDelivery[]>;
+  /** Deliveries a flush tick may still send. Acked and dead rows stay out. */
+  listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]>;
   getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null>;
   getWorkDeliveryByItem(
     orgId: string,

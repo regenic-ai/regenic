@@ -1,4 +1,4 @@
-import { ChannelDriverError } from "@regenic/domain";
+import { ChannelDriverError } from "@regenic/connector-contract";
 
 export function loopbackHttpUrl(value: string): string {
   const parsed = parseHttpUrl(value, "DSH base_url must be a loopback http(s) URL");

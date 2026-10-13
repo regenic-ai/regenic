@@ -1,13 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
-  ConnectorRunner,
-  IngestionService,
-  MemoryAuthorityStore,
-  MemoryBlobStore,
-  MemoryConnectorRuntimeStore,
-} = require("@regenic/domain");
-const {
   DshCliSessionClient,
   DshSessionPollConnector,
   MemoryDshRunLog,
@@ -80,7 +73,7 @@ describe("handleDshPublicRpc", () => {
     assert.equal(result.body.result.error.code, "bad-request");
   });
 
-  it("receives through session.history and ingests the journal page", async () => {
+  it("returns the journal page from session.history", async () => {
     const connector = new DshSessionPollConnector(
       new DshCliSessionClient(new MemoryDshRunLog([{
         run_id: "run-1",
@@ -97,23 +90,6 @@ describe("handleDshPublicRpc", () => {
         now: () => "2026-08-21T00:00:00.000Z",
       },
     );
-    const authority = new MemoryAuthorityStore();
-    const runtime = new MemoryConnectorRuntimeStore();
-    await runtime.createInstallation({
-      id: "dsh-1",
-      org_id: "local-owner",
-      connector_type: "dsh-session",
-      status: "enabled",
-      config: { mailbox: "dsh-main" },
-      created_at: "2026-08-21T00:00:00.000Z",
-    });
-    const runner = new ConnectorRunner(
-      connector,
-      new IngestionService(new MemoryBlobStore(), authority),
-      runtime,
-      () => "2026-08-21T00:00:00.000Z",
-    );
-
     const result = await handleDshPublicRpc(
       "session.history",
       {
@@ -130,13 +106,7 @@ describe("handleDshPublicRpc", () => {
           return [];
         },
         async receive() {
-          const run = await runner.poll({
-            installation_id: "dsh-1",
-            stream_key: "session:dsh-main",
-            lease_owner: "api",
-            lease_duration_ms: 30_000,
-          });
-          assert.equal(run.status, "completed");
+          await connector.poll(null);
           return connector.lastSurfacePage;
         },
         async send() {
@@ -147,12 +117,10 @@ describe("handleDshPublicRpc", () => {
 
     assert.equal(result.body.result.ok, true);
     assert.equal(result.body.result.value.events[0].seq, 0);
-    assert.equal((await authority.listEvents("local-owner")).length, 2);
   });
 
-  it("sends through session.prompt without touching the store", async () => {
+  it("sends through session.prompt", async () => {
     const sent = [];
-    const authority = new MemoryAuthorityStore();
     const result = await handleDshPublicRpc(
       "session.prompt",
       {
@@ -177,7 +145,6 @@ describe("handleDshPublicRpc", () => {
     );
     assert.deepEqual(sent, [{ sessionId: "dsh-main", text: "Follow up" }]);
     assert.deepEqual(result.body.result.value, { accepted: true });
-    assert.deepEqual(await authority.listEvents("local-owner"), []);
   });
 
   it("forwards maxMessages and beforeSeq to session.history", async () => {

@@ -1,5 +1,10 @@
-import type { SyncDirectoryPage, SyncSource } from "@regenic/domain";
-import type { FeishuChat, FeishuChatMode, FeishuImClient } from "./feishu-cli-client";
+import type { SyncDirectoryPage, SyncSource } from "@regenic/connector-contract";
+import {
+  runInLarkSlot,
+  type FeishuChat,
+  type FeishuChatMode,
+  type FeishuImClient,
+} from "./feishu-cli-client";
 import { FEISHU_SOURCE } from "./feishu-message";
 import { feishuStreamKey } from "./feishu-streams";
 
@@ -20,7 +25,9 @@ export function createFeishuRecentSyncSource(
 ): SyncSource {
   return {
     async listDirectory(): Promise<SyncDirectoryPage> {
-      const chats = await listRecentFeishuCatalogChats(client, kinds);
+      const chats = await runInLarkSlot("history", () =>
+        listRecentFeishuCatalogChats(client, kinds),
+      );
       return {
         members: chats.map((chat) => ({
           stream_key: feishuStreamKey(chat.chat_id),
@@ -34,6 +41,33 @@ export function createFeishuRecentSyncSource(
   };
 }
 
+export function createFeishuPickedSyncSource(
+  chats: readonly { chat_id: string; name?: string }[],
+): SyncSource {
+  return {
+    async listDirectory(): Promise<SyncDirectoryPage> {
+      return {
+        members: chats.flatMap((chat) => {
+          const chatId = chat.chat_id.trim();
+          if (!chatId) {
+            return [];
+          }
+          const name = chat.name?.trim();
+          return [
+            {
+              stream_key: feishuStreamKey(chatId),
+              thread_id: `${FEISHU_SOURCE}:${chatId}`,
+              ...(name ? { label: name } : {}),
+            },
+          ];
+        }),
+        complete: true,
+        replaces: true,
+      };
+    },
+  };
+}
+
 export function createFeishuSyncSource(
   client: Pick<FeishuImClient, "listChats">,
   kinds: FeishuChatMode[],
@@ -41,18 +75,22 @@ export function createFeishuSyncSource(
   const wantsGroup = kinds.includes("group");
   const wantsP2p = kinds.includes("p2p");
   return {
-    async listDirectory(cursor: string | null): Promise<SyncDirectoryPage> {
-      if (typeof client.listChats !== "function") {
-        return { members: [], complete: true };
-      }
-      const state = parseDirectoryCursor(cursor, wantsGroup, wantsP2p);
-      if (state.phase === "mixed") {
-        return listPhase(client, kinds, state.token, "mixed", false);
-      }
-      if (state.phase === "group") {
-        return listPhase(client, ["group"], state.token, "group", wantsP2p);
-      }
-      return listPhase(client, ["p2p"], state.token, "p2p", false);
+    listDirectory(cursor: string | null): Promise<SyncDirectoryPage> {
+      return runInLarkSlot("history", async () => {
+        if (typeof client.listChats !== "function") {
+          return { members: [], complete: true };
+        }
+        const state = parseDirectoryCursor(cursor, wantsGroup, wantsP2p);
+        const page = state.phase === "mixed"
+          ? await listPhase(client, kinds, state.token, "mixed", false)
+          : state.phase === "group"
+            ? await listPhase(client, ["group"], state.token, "group", wantsP2p)
+            : await listPhase(client, ["p2p"], state.token, "p2p", false);
+        if (!cursor && page.complete && !page.next_cursor) {
+          return { ...page, replaces: true };
+        }
+        return page;
+      });
     },
   };
 }
@@ -68,8 +106,8 @@ async function listPhase(
     page_size: phase === "group" ? GROUP_PAGE_SIZE : P2P_PAGE_SIZE,
     page_token: token,
     types,
-    // Groups already carry name on /im/v1/chats. P2p needs contact fill.
-    names: phase === "p2p" || phase === "mixed",
+    // /im/v1/chats already names groups and p2p peers. Fill only a missing name.
+    names: types.includes("p2p"),
   });
   const members = page.items
     .filter((chat) => chatMatchesKinds(chat, types))
@@ -135,22 +173,18 @@ async function listRecentFeishuCatalogChats(
   client: FeishuRecentCatalogClient,
   kinds: FeishuChatMode[],
 ): Promise<FeishuChat[]> {
-  try {
-    if (client.listRecentChats) {
-      return (await client.listRecentChats(kinds, { names: true })).filter((chat) =>
-        chatMatchesKinds(chat, kinds),
-      );
-    }
-    if (client.listChats) {
-      const page = await client.listChats({
-        page_size: 50,
-        types: kinds,
-        names: kinds.includes("p2p"),
-      });
-      return page.items.filter((chat) => chatMatchesKinds(chat, kinds));
-    }
-  } catch {
-    // Keep the install usable when the directory misses.
+  if (client.listRecentChats) {
+    return (await client.listRecentChats(kinds, { names: true })).filter((chat) =>
+      chatMatchesKinds(chat, kinds),
+    );
+  }
+  if (client.listChats) {
+    const page = await client.listChats({
+      page_size: 50,
+      types: kinds,
+      names: kinds.includes("p2p"),
+    });
+    return page.items.filter((chat) => chatMatchesKinds(chat, kinds));
   }
   return [];
 }

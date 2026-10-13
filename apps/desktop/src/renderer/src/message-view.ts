@@ -21,9 +21,10 @@ export function messageRole(
 
 export function roleLabel(
   role: MessageRole,
-  channel?: string,
+  _channel?: string,
   actorLabel?: string | null,
   direction?: MessageDirection | null,
+  channelLabel?: string | null,
 ): string {
   const named = actorLabel?.replace(/\s+/g, " ").trim();
   if (named) {
@@ -35,13 +36,26 @@ export function roleLabel(
   if (role === "system") {
     return t("label.runtime");
   }
-  return channel === "dsh" ? t("label.dshAgent") : t("label.assistant");
+  const labeled = channelLabel?.replace(/\s+/g, " ").trim();
+  if (labeled) {
+    return labeled;
+  }
+  return t("label.assistant");
 }
 
 export function messageSpeakerLabel(
-  item: Pick<InboxViewItem, "kind" | "channel" | "actor_label" | "direction">,
+  item: Pick<
+    InboxViewItem,
+    "kind" | "channel" | "channel_label" | "actor_label" | "direction"
+  >,
 ): string {
-  return roleLabel(item.kind, item.channel, item.actor_label, item.direction);
+  return roleLabel(
+    item.kind,
+    item.channel,
+    item.actor_label,
+    item.direction,
+    item.channel_label,
+  );
 }
 
 export function messageSpeakerMark(

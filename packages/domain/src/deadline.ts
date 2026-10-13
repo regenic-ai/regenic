@@ -25,9 +25,43 @@ export function isDeadlineExceeded(error: unknown): boolean {
   return false;
 }
 
+/** Another stream/lane already holds the lease — retry later; do not sticky-alert. */
+export function isLeaseUnavailable(error: unknown): boolean {
+  if (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "lease_unavailable"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** Transient sync contention (deadline or lease) — never a durable user-facing failure. */
+export function isSyncSoftMiss(error: unknown): boolean {
+  return isDeadlineExceeded(error) || isLeaseUnavailable(error);
+}
+
 /** UI defense when only the message survived across the wire. */
 export function looksLikeDeadlineExceededMessage(message: string): boolean {
   return /\btimed out after \d+ms\b/i.test(message.trim());
+}
+
+export function looksLikeLeaseUnavailableMessage(message: string): boolean {
+  const text = message.trim().toLowerCase();
+  return (
+    text.includes("already leased") ||
+    text.includes("already syncing") ||
+    text.includes("lease_unavailable")
+  );
+}
+
+export function looksLikeSyncSoftMissMessage(message: string): boolean {
+  return (
+    looksLikeDeadlineExceededMessage(message) ||
+    looksLikeLeaseUnavailableMessage(message)
+  );
 }
 
 export const DEFAULT_POLL_TIMEOUT_MS = 20_000;
@@ -35,7 +69,7 @@ export const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
 /** Ceiling for `probeCatalog` (local CLI / HTTP readiness). */
 export const DEFAULT_CATALOG_PROBE_TIMEOUT_MS = 2_500;
 /** Ceiling for install-form field options (chat lists, etc.). */
-export const DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS = 8_000;
+export { DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS } from "@regenic/connector-contract";
 
 export function connectorPollTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,

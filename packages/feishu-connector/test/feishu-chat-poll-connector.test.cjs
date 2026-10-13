@@ -1,13 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const {
-  ConnectorRunner,
-  IngestionService,
-  MemoryAuthorityStore,
-  MemoryBlobStore,
-  MemoryConnectorRuntimeStore,
-  verifyPollConnectorConformance,
-} = require("@regenic/domain");
+const { verifyPollConnectorConformance } = require("@regenic/connector-test-utils");
 const {
   FeishuApiError,
   FeishuChatEgress,
@@ -20,6 +13,7 @@ const {
   planFeishuHistoryRequest,
   decodeFeishuCursor,
   deferredHistoryToken,
+  feishuPollHint,
   needsRecentSeed,
   resetFeishuAttention,
   clearFeishuMediaJobsForTests,
@@ -287,7 +281,8 @@ describe("FeishuChatPollConnector", () => {
         history_token: "older",
       }),
     );
-    assert.equal(result.has_more, true);
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
   });
 
   it("skips attachment downloads when opening so the first page can land as text", async () => {
@@ -324,7 +319,8 @@ describe("FeishuChatPollConnector", () => {
     assert.deepEqual(downloads, []);
     assert.equal(attachment.external_locator, "feishu:image:img_shot");
     assert.equal(attachment.bytes, undefined);
-    assert.equal(result.has_more, true);
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
     assert.equal(result.media_pending, true);
     assert.match(result.next_cursor ?? "", /"recent_seeded":true/);
     assert.equal(/"media_jobs"/.test(result.next_cursor ?? ""), false);
@@ -372,11 +368,202 @@ describe("FeishuChatPollConnector", () => {
       sort_type: "ByCreateTimeDesc",
     });
     assert.equal(live.batch.records[0].external_id, "oc_1:om_live");
-    assert.equal(live.has_more, true);
+    assert.equal(live.has_more, false);
+    assert.equal(live.poll_hint.history_pending, true);
     assert.match(live.next_cursor ?? "", /"history_token":"older"/);
     assert.equal(older.batch.records[0].external_id, "oc_1:om_old");
     assert.match(older.next_cursor ?? "", /"history_token":"older-2"/);
     assert.match(older.next_cursor ?? "", /"start_time":"1723500000"/);
+  });
+
+  it("keeps a history walk when the newest page is refreshed", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (input.page_token === "older-5") {
+          return {
+            items: [textItem({ message_id: "om_old", create_time: "1723000000000" })],
+            has_more: true,
+            page_token: "older-6",
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_new", create_time: "1723600000000" })],
+          has_more: true,
+          page_token: "older",
+        };
+      },
+    });
+    const seeded = JSON.stringify({
+      start_time: "1723500000",
+      recent_seeded: true,
+      history_token: "older-5",
+    });
+    const live = await connector.poll({ value: seeded }, { latest: true });
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      sort_type: "ByCreateTimeDesc",
+      timeout_ms: 8000,
+    });
+    assert.match(live.next_cursor ?? "", /"history_token":"older-5"/);
+    assert.equal(live.has_more, false);
+    assert.equal(live.poll_hint.history_pending, true);
+    const older = await connector.poll({ value: live.next_cursor }, { older: true });
+    assert.equal(calls[1].page_token, "older-5");
+    assert.equal(calls[1].sort_type, "ByCreateTimeDesc");
+    assert.equal(older.batch.records[0].external_id, "oc_1:om_old");
+    assert.match(older.next_cursor ?? "", /"history_token":"older-6"/);
+  });
+
+  it("does not reopen a finished history walk from the newest page token", async () => {
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [textItem({ message_id: "om_new", create_time: "1723600000000" })],
+          has_more: true,
+          page_token: "older",
+        };
+      },
+    });
+    const caughtUp = JSON.stringify({
+      start_time: "1723500000",
+      recent_seeded: true,
+    });
+    const live = await connector.poll({ value: caughtUp }, { latest: true });
+    assert.equal(/history_token/.test(live.next_cursor ?? ""), false);
+    assert.equal(live.has_more, false);
+    assert.equal(live.poll_hint.history_pending, false);
+  });
+
+  it("loads messages before the on-screen anchor without moving the history token", async () => {
+    const calls = [];
+    const anchorMs = 1723500000500;
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        return {
+          items: [
+            textItem({ message_id: "om_boundary", create_time: String(anchorMs) }),
+            textItem({ message_id: "om_earlier", create_time: String(anchorMs - 400) }),
+            textItem({ message_id: "om_older", create_time: "1723400000000" }),
+          ],
+          has_more: true,
+          page_token: "shallow",
+        };
+      },
+    });
+    const seeded = JSON.stringify({
+      start_time: "1723600000",
+      recent_seeded: true,
+      history_token: "older-5",
+    });
+    const older = await connector.poll(
+      { value: seeded },
+      {
+        older: true,
+        before: new Date(anchorMs).toISOString(),
+        before_external_id: "oc_1:om_boundary",
+      },
+    );
+    assert.deepEqual(calls[0], {
+      chat_id: "oc_1",
+      page_size: 50,
+      end_time: "1723500000",
+      sort_type: "ByCreateTimeDesc",
+      timeout_ms: 8000,
+    });
+    assert.deepEqual(
+      older.batch.records.map((record) => record.external_id),
+      ["oc_1:om_earlier", "oc_1:om_older"],
+    );
+    assert.match(older.next_cursor ?? "", /"history_token":"older-5"/);
+    assert.equal(/shallow/.test(older.next_cursor ?? ""), false);
+    assert.equal(older.has_more, true);
+    assert.equal(older.poll_hint.history_pending, true);
+  });
+
+  it("follows an anchored page past the boundary row and then closes history", async () => {
+    const calls = [];
+    const anchorMs = 1723500000500;
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (!input.page_token) {
+          return {
+            items: [textItem({ message_id: "om_boundary", create_time: String(anchorMs) })],
+            has_more: true,
+            page_token: "next-older",
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_older", create_time: "1723400000000" })],
+          has_more: false,
+        };
+      },
+    });
+    const older = await connector.poll(
+      {
+        value: JSON.stringify({
+          start_time: "1723600000",
+          recent_seeded: true,
+          history_token: "older-5",
+        }),
+      },
+      {
+        older: true,
+        before: new Date(anchorMs).toISOString(),
+        before_external_id: "oc_1:om_boundary",
+      },
+    );
+    assert.equal(calls[1].page_token, "next-older");
+    assert.equal(calls[1].end_time, "1723500000");
+    assert.equal(older.batch.records[0].external_id, "oc_1:om_older");
+    assert.equal(older.has_more, false);
+    assert.equal(older.poll_hint.history_pending, false);
+    assert.equal(/history_token/.test(older.next_cursor ?? ""), false);
+    assert.match(older.next_cursor ?? "", /"start_time":"1723600000"/);
+  });
+
+  it("leaves a repeated history token and continues from the oldest time", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (input.page_token === "stuck") {
+          return {
+            items: [textItem({ message_id: "om_same", create_time: "1723400000000" })],
+            has_more: true,
+            page_token: "stuck",
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_older", create_time: "1723300000000" })],
+          has_more: true,
+          page_token: "ignored",
+        };
+      },
+    });
+    const first = await connector.poll(
+      {
+        value: JSON.stringify({
+          start_time: "1723600000",
+          recent_seeded: true,
+          history_token: "stuck",
+        }),
+      },
+      { older: true },
+    );
+    assert.equal(calls[0].page_token, "stuck");
+    assert.equal(/history_token/.test(first.next_cursor ?? ""), false);
+    assert.match(first.next_cursor ?? "", /"history_before":"1723400000000"/);
+    const second = await connector.poll({ value: first.next_cursor }, { older: true });
+    assert.equal(calls[1].end_time, "1723400000");
+    assert.equal(calls[1].page_token, undefined);
+    assert.equal(second.batch.records[0].external_id, "oc_1:om_older");
+    assert.match(second.next_cursor ?? "", /"history_before":"1723300000000"/);
+    assert.match(second.next_cursor ?? "", /"start_time":"1723600000"/);
   });
 
   it("does not turn a scroll-up into a live pull when history is already caught up", async () => {
@@ -422,7 +609,51 @@ describe("FeishuChatPollConnector", () => {
     });
   });
 
-  it("seeds recent messages without dropping a mid-history asc cursor", async () => {
+  it("polls latest from the newer watermark while history is still open", () => {
+    const state = {
+      start_time: "1788155027",
+      head_time: "1786935878",
+      recent_seeded: true,
+      history_token: "older",
+    };
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: undefined,
+      start_time: "1788155027",
+      sort_type: "ByCreateTimeAsc",
+    });
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state, { older: true }), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: "older",
+      sort_type: "ByCreateTimeDesc",
+    });
+  });
+
+  it("does not reuse an ascending page token as descending history", () => {
+    const state = {
+      page_token: "asc-20",
+      start_time: "1723400000",
+      head_time: "1723600000",
+      recent_seeded: true,
+    };
+    assert.equal(deferredHistoryToken(state), undefined);
+    assert.equal(feishuPollHint(state).history_pending, false);
+    assert.equal(
+      planFeishuHistoryRequest("oc_1", 50, state, { older: true }),
+      null,
+    );
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, state), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: "asc-20",
+      start_time: "1723400000",
+      sort_type: "ByCreateTimeAsc",
+    });
+  });
+
+  it("keeps the descending page token from the newest page, not the old asc token", async () => {
     const calls = [];
     const connector = createConnector({
       async listMessages(input) {
@@ -450,13 +681,21 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(
       result.next_cursor,
       JSON.stringify({
-        page_token: "asc-20",
-        start_time: "100",
-        head_time: "1723600000",
+        start_time: "1723600000",
         recent_seeded: true,
+        history_token: "desc-2",
       }),
     );
-    assert.equal(result.has_more, true);
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
+    const seeded = decodeFeishuCursor({ value: result.next_cursor });
+    assert.deepEqual(planFeishuHistoryRequest("oc_1", 50, seeded), {
+      chat_id: "oc_1",
+      page_size: 50,
+      page_token: undefined,
+      start_time: "1723600000",
+      sort_type: "ByCreateTimeAsc",
+    });
   });
 
   it("reseeds a live start_time cursor that never stored recent messages", async () => {
@@ -480,51 +719,8 @@ describe("FeishuChatPollConnector", () => {
       sort_type: "ByCreateTimeDesc",
     });
     assert.equal(result.batch.records[0].external_id, "oc_1:om_recent");
-    assert.equal(result.has_more, true);
-  });
-
-  it("settles a Feishu page through the shared connector runtime", async () => {
-    const connector = createConnector({
-      async listMessages() {
-        return {
-          items: [textItem()],
-          has_more: false,
-        };
-      },
-    });
-    const runtime = new MemoryConnectorRuntimeStore();
-    await runtime.createInstallation({
-      id: "feishu-installation",
-      org_id: "local-owner",
-      connector_type: "feishu-chat",
-      status: "enabled",
-      config: { chat_id: "oc_1" },
-      created_at: "2026-08-12T00:00:00.000Z",
-    });
-    const runner = new ConnectorRunner(
-      connector,
-      new IngestionService(new MemoryBlobStore(), new MemoryAuthorityStore()),
-      runtime,
-      () => "2026-08-12T00:00:00.000Z",
-    );
-
-    const run = await runner.poll({
-      installation_id: "feishu-installation",
-      stream_key: "chat:oc_1",
-      lease_owner: "worker-a",
-      lease_duration_ms: 30_000,
-    });
-    const cursor = await runtime.getCursor("feishu-installation", "chat:oc_1");
-
-    assert.equal(run.status, "completed");
-    assert.equal(run.result.records[0].status, "accepted");
-    assert.equal(
-      cursor.cursor,
-      JSON.stringify({
-        start_time: "1723420800",
-        recent_seeded: true,
-      }),
-    );
+    assert.equal(result.has_more, false);
+    assert.equal(result.poll_hint.history_pending, true);
   });
 
   it("passes the reusable poll connector conformance suite", async () => {

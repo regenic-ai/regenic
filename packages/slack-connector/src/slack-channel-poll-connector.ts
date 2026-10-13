@@ -6,7 +6,7 @@ import {
   type IngestBatch,
   type PollResult,
   type SyncPollHint,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 
 export interface SlackHistoryMessage {
   ts: string;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { formatChatTime } from "./format";
+import { formatChatTime, threadIsSyncing, threadSyncLabel } from "./format";
 import {
   filterInboxThreads,
   filterInboxThreadsByTitle,
@@ -421,6 +421,8 @@ export function InboxWorkspace({
                   key={`${section.key}:${thread.id}`}
                   thread={thread}
                   selected={selected?.id === thread.id}
+                  syncing={threadIsSyncing(thread.id, pull)}
+                  syncLabel={threadSyncLabel(thread.id, pull)}
                   renaming={renamingId === thread.id}
                   folded={thread.hidden}
                   onSelect={() => {
@@ -459,7 +461,7 @@ export function InboxWorkspace({
             loadingOlder={loadingOlder}
             onLoadOlder={onLoadOlder}
             onRetry={() => {
-              void onRefresh();
+              onSelect(selected.id);
             }}
             onRefresh={onRefresh}
             onApplyOutbound={
@@ -565,6 +567,8 @@ function ListBody({
 function WorkRow({
   thread,
   selected,
+  syncing,
+  syncLabel,
   renaming,
   folded,
   onSelect,
@@ -576,6 +580,8 @@ function WorkRow({
 }: {
   thread: InboxThread;
   selected: boolean;
+  syncing: boolean;
+  syncLabel: string | null;
   renaming: boolean;
   folded: boolean;
   onSelect: () => void;
@@ -656,6 +662,15 @@ function WorkRow({
                 </button>
               </div>
               <span className="item-time">
+                {syncing ? (
+                  <span
+                    className="item-syncing"
+                    title={syncLabel ?? t("thread.syncLatest")}
+                  >
+                    <span className="item-sync" aria-hidden="true" />
+                    {t("thread.syncingShort")}
+                  </span>
+                ) : null}
                 {thread.unread ? (
                   <span className="item-unread" aria-label={t("inbox.unreadAria")} />
                 ) : null}

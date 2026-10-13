@@ -9,6 +9,11 @@ import {
   type ChannelDriver,
   type TaskExecutor,
 } from "@regenic/domain";
+import {
+  BUILTIN_CONNECTOR_SPECS,
+  builtinChannelDrivers,
+  builtinTaskExecutors,
+} from "@regenic/connector-host";
 
 const nodeRequire = createRequire(__filename);
 const DEFAULT_CATALOG_ORDER = 1_000;
@@ -196,8 +201,28 @@ export function loadNewExtraPlugins(
 }
 
 export function firstPartyPlugins(
-  kernelPackageJson = kernelPackageJsonPath(),
+  kernelPackageJson?: string,
 ): LoadedPlugins {
+  if (!kernelPackageJson) {
+    const drivers = builtinChannelDrivers();
+    const executors = builtinTaskExecutors();
+    for (let index = 0; index < BUILTIN_CONNECTOR_SPECS.length; index += 1) {
+      const spec = BUILTIN_CONNECTOR_SPECS[index]!;
+      const driver = drivers[index];
+      recordInventory(spec, undefined, "first_party", {
+        status: "loaded",
+        drivers: driver ? [driver.connector_type] : [],
+        executors:
+          spec === "@regenic/dsh-connector"
+            ? executors.flatMap((executor) => {
+                const source = executor.catalog().source?.trim();
+                return source ? [source] : [];
+              })
+            : [],
+      });
+    }
+    return { drivers, executors };
+  }
   return collectPlugins(firstPartyPluginSpecs(kernelPackageJson), [], {
     required: true,
     origin: "first_party",
@@ -205,8 +230,11 @@ export function firstPartyPlugins(
 }
 
 export function firstPartyPluginSpecs(
-  kernelPackageJson = kernelPackageJsonPath(),
+  kernelPackageJson?: string,
 ): string[] {
+  if (!kernelPackageJson) {
+    return [...BUILTIN_CONNECTOR_SPECS];
+  }
   const pkg = nodeRequire(kernelPackageJson) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;

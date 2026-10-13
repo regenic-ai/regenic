@@ -5,7 +5,7 @@ import {
   DEFAULT_CURSOR_API_BASE,
   type CursorFetch,
 } from "./cursor-api-client";
-import type { ConnectorCatalogProbe, CopyRef } from "@regenic/domain";
+import type { ConnectorCatalogProbe, CopyRef } from "@regenic/connector-contract";
 
 export const CURSOR_KEY_MISSING_HINT =
   "Paste a Cursor API key in the install form, or set CURSOR_API_KEY.";

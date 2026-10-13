@@ -1,8 +1,8 @@
 import type {
   SyncCatalogMember,
   SyncCatalogView,
+  SyncPhaseHead,
   SyncStore,
-  SyncStreamState,
 } from "./sync-contracts";
 import { summarizeSyncLifecycle } from "./sync-lifecycle";
 
@@ -48,7 +48,7 @@ export function scopeSyncCatalogMembers(
 
 export function summarizeSyncProgress(
   catalog: SyncCatalogView,
-  states: readonly SyncStreamState[],
+  states: readonly SyncPhaseHead[],
 ): SyncProgressView {
   const byKey = new Map(states.map((state) => [state.stream_key, state]));
   let seeded = 0;
@@ -84,7 +84,7 @@ export function summarizeSyncProgress(
 
 export function publishedSyncProgress(
   catalog: SyncCatalogView,
-  states: readonly SyncStreamState[],
+  states: readonly SyncPhaseHead[],
 ): SyncProgressView | null {
   if (!catalog.catalog && catalog.members.length === 0) {
     return null;
@@ -114,7 +114,7 @@ export function aggregateSyncProgress(
 }
 
 export async function loadSyncProgress(
-  store: Pick<SyncStore, "getSyncCatalog" | "listSyncStates">,
+  store: Pick<SyncStore, "getSyncCatalog" | "listSyncPhaseHeads">,
   installationId: string,
   options?: {
     mountedStreamKeys?: ReadonlySet<string>;
@@ -123,7 +123,7 @@ export async function loadSyncProgress(
 ): Promise<SyncProgressView | null> {
   const [catalog, states] = await Promise.all([
     store.getSyncCatalog(installationId),
-    store.listSyncStates(installationId),
+    store.listSyncPhaseHeads(installationId),
   ]);
   if (!options?.mountedStreamKeys) {
     return publishedSyncProgress(catalog, states);

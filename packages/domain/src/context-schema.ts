@@ -591,20 +591,51 @@ const ContextBundleDiffItemSchema: z.ZodType<ContextBundleDiffItem> = z
   })
   .strict();
 
+const contextBundleDiffChangeReasonSchema = z.enum([
+  "section_changed",
+  "resource_changed",
+  "kind_changed",
+  "content_changed",
+  "evidence_changed",
+  "status_changed",
+  "token_estimate_changed",
+]);
+
+const contextBundleDiffCountSchema = z.number().int().nonnegative();
+
 export const ContextBundleDiffSchema: z.ZodType<ContextBundleDiff> = z
   .object({
     from_snapshot_id: nonEmptyStringSchema,
     to_snapshot_id: nonEmptyStringSchema,
+    summary: z.object({
+      added: contextBundleDiffCountSchema,
+      removed: contextBundleDiffCountSchema,
+      changed: contextBundleDiffCountSchema,
+      unchanged: contextBundleDiffCountSchema,
+    }).strict(),
     added: z.array(ContextBundleDiffItemSchema).max(10_000),
     removed: z.array(ContextBundleDiffItemSchema).max(10_000),
     changed: z.array(z.object({
       before: ContextBundleDiffItemSchema,
       after: ContextBundleDiffItemSchema,
+      reasons: z.array(contextBundleDiffChangeReasonSchema),
     }).strict()).max(10_000),
     unchanged: z.array(ContextBundleDiffItemSchema).max(10_000),
   })
   .strict()
   .superRefine((diff, context) => {
+    if (
+      diff.summary.added !== diff.added.length ||
+      diff.summary.removed !== diff.removed.length ||
+      diff.summary.changed !== diff.changed.length ||
+      diff.summary.unchanged !== diff.unchanged.length
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["summary"],
+        message: "Diff summary does not match classifications",
+      });
+    }
     diff.changed.forEach((change, index) => {
       if (change.before.candidate_id !== change.after.candidate_id) {
         context.addIssue({

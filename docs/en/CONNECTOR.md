@@ -424,7 +424,7 @@ adapter writes that envelope back to the same source and thread.
 ## Catalog
 
 `GET /v1/me/engine` returns a catalog. The Engine page opens a dialog for
-those catalog fields on Install and on Edit sync. When required
+those catalog fields on Install and on Edit scope. When required
 prerequisites are not ready, the card button says Set up and still
 opens that same dialog.
 

@@ -1,10 +1,10 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { slackChannelDriver } = require("@regenic/slack-connector");
-const { dshSessionDriver } = require("@regenic/dsh-connector");
-const { feishuChatDriver } = require("@regenic/feishu-connector");
-const { cursorAgentDriver } = require("@regenic/cursor-connector");
-const { whatsappWebLiveDriver } = require("@regenic/whatsapp-personal");
+const {
+  builtinChannelDrivers,
+  feishuChatDriver,
+  slackChannelDriver,
+} = require("@regenic/connector-host");
 const {
   catalogFromDrivers,
   connectorAllowsMultiple,
@@ -14,13 +14,7 @@ const {
 } = require("../dist/personal-connector-view");
 
 function firstPartyDrivers() {
-  return [
-    slackChannelDriver,
-    dshSessionDriver,
-    feishuChatDriver,
-    cursorAgentDriver,
-    whatsappWebLiveDriver,
-  ];
+  return builtinChannelDrivers();
 }
 
 function firstParty(env = {}, locale) {
@@ -243,6 +237,8 @@ describe("connector catalog hints", () => {
     assert.equal(feishu.fields[2].key, "kinds");
     assert.equal(feishu.fields[2].default, "group,p2p");
     assert.equal(feishu.fields[3].multiple, true);
+    assert.equal(feishu.fields[3].filter_options_by, "kinds");
+    assert.equal(feishu.fields[3].option_labels_key, "chat_names");
     assert.deepEqual(feishu.fields[3].options, [
       { value: "oc_1", label: "Group · Bioby.ai" },
     ]);
@@ -453,7 +449,8 @@ describe("connector catalog hints", () => {
     assert.equal(view.settings.max_open, "50");
   });
 
-  it("persists picked chat names from stream labels", () => {
+  it("persists picked option labels from stream labels", () => {
+    const field = { key: "chat_ids", option_labels_key: "chat_names" };
     assert.deepEqual(
       nextPickedChatNames(
         { selection: "pick", chat_ids: ["oc_1", "oc_2"] },
@@ -461,6 +458,7 @@ describe("connector catalog hints", () => {
           { thread_id: "feishu:oc_1", label: "合伙" },
           { thread_id: "feishu:oc_2", label: "李诗婷" },
         ],
+        field,
       ),
       ["合伙", "李诗婷"],
     );
@@ -468,6 +466,7 @@ describe("connector catalog hints", () => {
       nextPickedChatNames(
         { selection: "pick", chat_ids: ["oc_1"], chat_names: ["Ada"] },
         [{ thread_id: "feishu:oc_1", label: "Ada" }],
+        field,
       ),
       null,
     );
@@ -475,6 +474,14 @@ describe("connector catalog hints", () => {
       nextPickedChatNames(
         { selection: "pick", chat_ids: ["oc_1", "oc_2"] },
         [{ thread_id: "feishu:oc_1", label: "oc_1" }],
+        field,
+      ),
+      null,
+    );
+    assert.equal(
+      nextPickedChatNames(
+        { selection: "pick", chat_ids: ["oc_1"] },
+        [{ thread_id: "feishu:oc_1", label: "合伙" }],
       ),
       null,
     );

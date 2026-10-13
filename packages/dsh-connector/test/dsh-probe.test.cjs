@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { LOCAL_PROXY_HINT } = require("@regenic/domain");
+const { LOCAL_PROXY_HINT } = require("@regenic/connector-contract");
 const {
   dshCliCatalogHint,
   dshSessionDriver,

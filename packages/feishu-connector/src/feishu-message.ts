@@ -237,7 +237,7 @@ export function senderKind(
   return undefined;
 }
 
-function feishuCreateTimeMs(createTime: string | undefined): number | undefined {
+export function feishuCreateTimeMs(createTime: string | undefined): number | undefined {
   if (!createTime) {
     return undefined;
   }

@@ -1,4 +1,3 @@
-import "@regenic/domain";
 import { definePlugin } from "@regenic/plugin-host";
 import {
   SlackChannelPollConnector,

@@ -1,7 +1,9 @@
 export const CONTENT_PARTS_MEDIA_TYPE =
   "application/vnd.regenic.content-parts+json";
 
-export const SURFACE_MEDIA_TYPE = "application/vnd.regenic.surface+json";
+import { SURFACE_MEDIA_TYPE } from "@regenic/connector-contract";
+
+export { SURFACE_MEDIA_TYPE };
 
 export interface StoredContentPart {
   role?: string;

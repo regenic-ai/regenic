@@ -9,6 +9,7 @@ import { threadTitle } from "./message-view";
 import { TRAY_HEADS_PAGE_SIZE } from "./thread-window";
 import type { InboxViewItem, PersonalEngineView } from "./types";
 import type { KernelReachability } from "../../shared/connection-state.ts";
+import type { MessageKey } from "../../shared/i18n.ts";
 
 const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
@@ -101,9 +102,7 @@ export function TrayApp() {
         <p className="muted">
           {t("tray.workCount", { count: engine?.inbox_count ?? threads.length })}
           {engine?.installations[0]?.last_attempt
-            ? t("tray.lastSync", {
-                status: engine.installations[0].last_attempt.status,
-              })
+            ? t(traySyncKey(engine.installations[0].last_attempt.status))
             : ""}
         </p>
       </header>
@@ -157,4 +156,16 @@ export function TrayApp() {
       </footer>
     </div>
   );
+}
+
+function traySyncKey(
+  status: "running" | "succeeded" | "failed",
+): MessageKey {
+  if (status === "running") {
+    return "tray.syncing";
+  }
+  if (status === "failed") {
+    return "tray.syncFailed";
+  }
+  return "tray.synced";
 }

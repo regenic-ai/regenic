@@ -38,6 +38,7 @@ const {
   recipeAllowsPullDispatch,
   recipeAllowsPushDispatch,
   recipeHasStartCapacity,
+  recipeStartInflight,
   occupiedRecipeSlots,
   normalizeRecipeMaxConcurrent,
   shouldAcceptPushRecord,
@@ -226,6 +227,19 @@ describe("recipe auto-start specification", () => {
         items: [{ id: "w1", recipe_id: "cap", status: "done" }],
       }),
       true,
+    );
+    assert.equal(
+      recipeStartInflight({
+        recipeId: "cap",
+        starting: [
+          { item_id: "w1", recipe_id: "cap" },
+          { item_id: "w2", recipe_id: "cap" },
+          { item_id: "w3", recipe_id: "other" },
+        ],
+        occupiedItemIds: ["w1"],
+        exceptItemId: "w9",
+      }),
+      1,
     );
   });
 

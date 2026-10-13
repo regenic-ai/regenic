@@ -5,6 +5,7 @@ const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const Database = require("better-sqlite3");
 const { SqliteAuthorityStore } = require("../dist/sqlite");
+const { processSyncMetrics } = require("@regenic/domain");
 
 const roots = [];
 const installation = {
@@ -309,6 +310,210 @@ describe("SQLite connector runtime", () => {
     assert.equal(catalog.catalog.cursor, "p2");
     const state = await store.getSyncState(installation.id, "chat:oc_1");
     assert.equal(state.phase, "unseeded");
+    store.close();
+  });
+
+  it("commits attempt, events, and cursor in one page", async () => {
+    const root = await createRoot();
+    const store = await createStore(root);
+    await store.acquireLease(leaseInput);
+    const txBefore =
+      processSyncMetrics
+        .snapshot()
+        .find(
+          (row) =>
+            row.name === "database_transaction_ms" &&
+            row.labels.operation === "commit_sync_page",
+        )?.count ?? 0;
+    const committed = await store.commitSyncPage({
+      attempt: {
+        id: "attempt-page",
+        org_id: installation.org_id,
+        connector_installation_id: installation.id,
+        stream_key: "personal",
+        delivery_id: "page-1",
+        started_at: leaseInput.now,
+      },
+      ingest: {
+        appends: [
+          {
+            id: "event-page",
+            org_id: installation.org_id,
+            source: "fake",
+            external_id: "message-1",
+            content_hash: "hash-page",
+            content_media_type: "text/plain",
+            content_byte_size: 2,
+            occurred_at: "2026-08-12T00:00:00.000Z",
+            expected_head_id: null,
+          },
+        ],
+        dispositions: [],
+      },
+      settle: {
+        attempt_id: "attempt-page",
+        installation_id: installation.id,
+        stream_key: "personal",
+        lease_owner: "worker-a",
+        finished_at: "2026-08-12T00:00:01.000Z",
+        accepted_count: 1,
+        duplicate_count: 0,
+        quarantined_count: 0,
+        retryable_failure_count: 0,
+        next_cursor: "cursor-2",
+        quarantines: [],
+      },
+    });
+    assert.equal(committed.attempt.status, "succeeded");
+    assert.equal(committed.events[0].id, "event-page");
+    const cursor = await store.getCursor(installation.id, "personal");
+    assert.equal(cursor.cursor, "cursor-2");
+    const event = await store.getEvent(installation.org_id, "event-page");
+    assert.equal(event.external_id, "message-1");
+    const txAfter =
+      processSyncMetrics
+        .snapshot()
+        .find(
+          (row) =>
+            row.name === "database_transaction_ms" &&
+            row.labels.operation === "commit_sync_page",
+        )?.count ?? 0;
+    assert.ok(txAfter > txBefore);
+    store.close();
+  });
+
+  it("rolls back ingested events when the page cannot settle", async () => {
+    const root = await createRoot();
+    const store = await createStore(root);
+    await store.acquireLease(leaseInput);
+    await assert.rejects(
+      () =>
+        store.commitSyncPage({
+          attempt: {
+            id: "attempt-fail",
+            org_id: installation.org_id,
+            connector_installation_id: installation.id,
+            stream_key: "personal",
+            delivery_id: "page-1",
+            started_at: leaseInput.now,
+          },
+          ingest: {
+            appends: [
+              {
+                id: "event-fail",
+                org_id: installation.org_id,
+                source: "fake",
+                external_id: "message-fail",
+                content_hash: "hash-fail",
+                content_media_type: "text/plain",
+                content_byte_size: 2,
+                occurred_at: "2026-08-12T00:00:00.000Z",
+                expected_head_id: null,
+              },
+            ],
+            dispositions: [],
+          },
+          settle: {
+            attempt_id: "attempt-fail",
+            installation_id: installation.id,
+            stream_key: "personal",
+            lease_owner: "other-worker",
+            finished_at: "2026-08-12T00:00:01.000Z",
+            accepted_count: 1,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 0,
+            next_cursor: "cursor-2",
+            quarantines: [],
+          },
+        }),
+      /lease is not held/,
+    );
+    assert.equal(await store.getEvent(installation.org_id, "event-fail"), null);
+    assert.equal(await store.latestAttempt(installation.id), null);
+    const cursor = await store.getCursor(installation.id, "personal");
+    assert.equal(cursor.cursor, undefined);
+    assert.equal(
+      await store.acquireLease({
+        ...leaseInput,
+        lease_owner: "other-worker",
+        now: "2026-08-12T00:00:02.000Z",
+      }),
+      null,
+    );
+    store.close();
+  });
+
+  it("applies list-surface prefs in the same page and rolls them back with ingest", async () => {
+    const root = await createRoot();
+    const store = await createStore(root);
+    await store.acquireLease(leaseInput);
+    await store.putConversationPref({
+      org_id: installation.org_id,
+      thread_id: "fake:message-keep",
+      hidden: true,
+      hidden_reason: "policy",
+      updated_at: leaseInput.now,
+    });
+    await assert.rejects(
+      () =>
+        store.commitSyncPage({
+          attempt: {
+            id: "attempt-pref",
+            org_id: installation.org_id,
+            connector_installation_id: installation.id,
+            stream_key: "personal",
+            delivery_id: "page-1",
+            started_at: leaseInput.now,
+          },
+          ingest: {
+            appends: [
+              {
+                id: "event-pref",
+                org_id: installation.org_id,
+                source: "fake",
+                external_id: "message-keep",
+                content_hash: "hash-pref",
+                content_media_type: "text/plain",
+                content_byte_size: 2,
+                occurred_at: "2026-08-12T00:00:00.000Z",
+                expected_head_id: null,
+              },
+            ],
+            dispositions: [],
+          },
+          prefs: [
+            {
+              org_id: installation.org_id,
+              thread_id: "fake:message-keep",
+              hidden: false,
+              hidden_reason: null,
+              updated_at: "2026-08-12T00:00:01.000Z",
+            },
+          ],
+          settle: {
+            attempt_id: "attempt-pref",
+            installation_id: installation.id,
+            stream_key: "personal",
+            lease_owner: "other-worker",
+            finished_at: "2026-08-12T00:00:01.000Z",
+            accepted_count: 1,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 0,
+            next_cursor: "cursor-2",
+            quarantines: [],
+          },
+        }),
+      /lease is not held/,
+    );
+    const pref = await store.getConversationPref(
+      installation.org_id,
+      "fake:message-keep",
+    );
+    assert.equal(pref.hidden, true);
+    assert.equal(pref.hidden_reason, "policy");
+    assert.equal(await store.getEvent(installation.org_id, "event-pref"), null);
     store.close();
   });
 });

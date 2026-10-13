@@ -1,4 +1,4 @@
-import type { PromptAnswer, ThreadPrompt } from "@regenic/domain";
+import type { PromptAnswer, ThreadPrompt } from "@regenic/connector-contract";
 
 const stores = new Map<string, DshPromptStore>();
 

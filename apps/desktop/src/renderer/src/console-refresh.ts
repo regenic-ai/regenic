@@ -37,13 +37,19 @@ export function engineRevision(
         .join("/"),
     )
     .join(",");
-  return `${engine.kernel}|${engine.inbox_count}|${engine.inbox_hidden_count ?? 0}|${engine.pull?.phase ?? ""}|${engine.pull?.catching_up_count ?? 0}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${pullStreamRevision(engine)}|${installs}|${catalog}|${executors}|${executorCatalog}${
+  const readiness = engine.sync_readiness
+    ? `${engine.sync_readiness.freshness_ms ?? ""}:${engine.sync_readiness.eta?.low_ms ?? ""}:${engine.sync_readiness.eta?.high_ms ?? ""}:${engine.sync_readiness.throttle_reason ?? ""}`
+    : "";
+  return `${engine.kernel}|${engine.inbox_count}|${engine.inbox_hidden_count ?? 0}|${engine.pull?.phase ?? ""}|${engine.pull?.catching_up_count ?? 0}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${pullStreamRevision(engine)}|${installs}|${catalog}|${executors}|${executorCatalog}|${readiness}${
     detailed ? `|${engine.pull?.last_tick_at ?? ""}` : ""
   }`;
 }
 
 function pullStreamRevision(engine: PersonalEngineView): string {
   return (engine.pull?.streams ?? [])
-    .map((item) => `${item.thread_id ?? item.stream_key}:${item.phase}`)
+    .map(
+      (item) =>
+        `${item.thread_id ?? item.stream_key}:${item.phase}:${item.work ?? ""}:${item.label ?? ""}`,
+    )
     .join(",");
 }

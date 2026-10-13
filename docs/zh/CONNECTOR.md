@@ -245,7 +245,7 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 
 | 方法 | 说明 |
 | --- | --- |
-| `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书存 `sync_mode`（默认 `conversation`：对话优先 / `balanced` / `context`）加 `selection=recent`（默认）加 `kinds`（`group` / `p2p`），`selection=all` 加 `kinds`，或勾选的 `chat_ids`。`sync_mode` 与收取范围独立；内核按通用键映射 idle 预设，不按渠道名分支。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
+| `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书存 `sync_mode`（默认 `conversation`：当前会话优先 / `balanced`：均衡 / `context`：后台慢慢检查）加 `selection=recent`（默认）加 `kinds`（`group` / `p2p`），`selection=all` 加 `kinds`，或勾选的 `chat_ids`。`sync_mode` 与收取范围独立；内核按通用键映射 idle 预设，不按渠道名分支。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
 | `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`、`create_with_task`、`hold_while_working`。`await_reply`：DSH / Cursor 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH / Cursor 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时拉最近一页；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Slack / Cursor 不写。`create_with_task` / `hold_while_working`：Cursor 为 true；DSH 不写。 |
@@ -334,7 +334,7 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 ## 目录
 
-`GET /v1/me/engine` 返回 catalog。引擎页在 Install 和 Edit sync 时用弹窗渲染这些字段。未齐前置时主按钮写「设置」，仍打开同一张弹层。
+`GET /v1/me/engine` 返回 catalog。引擎页在安装和「编辑范围」时用弹窗渲染这些字段。未齐前置时主按钮写「设置」，仍打开同一张弹层。
 
 驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段、标题或导入器。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
 

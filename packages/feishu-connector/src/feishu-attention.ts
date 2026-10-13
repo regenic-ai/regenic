@@ -1,4 +1,4 @@
-import type { ThreadAttention } from "@regenic/domain";
+import type { ThreadAttention } from "@regenic/connector-contract";
 
 const lastInbound = new Map<string, { id: string; at: number }>();
 const localRead = new Set<string>();

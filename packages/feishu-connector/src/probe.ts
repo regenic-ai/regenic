@@ -1,15 +1,17 @@
 import {
   DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
   type CopyRef,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import {
   FeishuApiError,
   LarkCliClient,
   resetFeishuChatListCache,
   resetFeishuUserNameCache,
+  spawnLarkProcess,
   type FeishuChat,
   type FeishuSpawn,
 } from "./feishu-cli-client";
+import { createLarkUserTokenSource } from "./feishu-user-token";
 
 const PROBE_TTL_MS = 20_000;
 
@@ -79,22 +81,37 @@ export async function listFeishuCatalogChats(options: {
   now?: () => number;
   budget_ms?: number;
 } = {}): Promise<FeishuChat[]> {
+  const budget =
+    options.budget_ms ?? DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS - 250;
+  // The API deadline starts with this call, including the login probe.
+  // Finish inside that window so a late page is not thrown away.
+  const deadline = budget > 0 ? Date.now() + budget : undefined;
   const probe = await probeLarkCli(options);
   if (!larkCliReady(probe)) {
     return [];
   }
-  const budget =
-    options.budget_ms ?? DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS - 250;
-  const deadline = budget > 0 ? Date.now() + budget : undefined;
+  if (deadline !== undefined && Date.now() >= deadline) {
+    return [];
+  }
   try {
     const remaining = deadline
       ? Math.max(500, deadline - Date.now())
       : 30_000;
+    const command = options.command ?? options.env?.REGENIC_LARK_CLI;
     const client = new LarkCliClient({
-      command: options.command ?? options.env?.REGENIC_LARK_CLI,
+      command,
       env: options.env,
       spawn: options.spawn,
       timeout_ms: Math.min(30_000, remaining),
+      // Tests inject spawn and stay on the CLI. The install picker uses the
+      // same user-token HTTP path as message sync.
+      userToken: options.spawn
+        ? undefined
+        : createLarkUserTokenSource({
+            command,
+            env: options.env,
+            spawn: spawnLarkProcess,
+          }),
     });
     return await client.listAllChats(CATALOG_CHAT_PAGES, undefined, {
       deadline,

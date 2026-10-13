@@ -1,10 +1,9 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { loadEnv } from "@regenic/config";
 import {
-  createDshHostRpcServices,
-  handleDshPublicRpc,
+  dshPublicTransport,
   type DshRpcHttpResult,
-} from "@regenic/dsh-connector";
+} from "@regenic/connector-host";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 export interface DshApiRequest {
@@ -45,10 +44,10 @@ export class DshApiService {
         },
       };
     }
-    return handleDshPublicRpc(
+    return dshPublicTransport.handle(
       method,
       { contentType: input.contentType, body: input.body },
-      createDshHostRpcServices(host, {
+      dshPublicTransport.createServices(host, {
         org_id: env.REGENIC_ORG,
         access_token: env.REGENIC_DSH_TOKEN,
         env: process.env,

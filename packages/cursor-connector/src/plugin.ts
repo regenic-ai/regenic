@@ -1,4 +1,3 @@
-import "@regenic/domain";
 import { definePlugin } from "@regenic/plugin-host";
 import type { CursorAgentSummary, CursorConversation } from "./cursor-api-client";
 import { CursorAgentEgress } from "./cursor-agent-egress";

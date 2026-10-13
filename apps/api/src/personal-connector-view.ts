@@ -38,7 +38,9 @@ export interface ConnectorField {
   default?: string;
   multiple?: boolean;
   secret?: boolean;
-  options?: { value: string; label: string }[];
+  options?: { value: string; label: string; kind?: string; title?: string }[];
+  filter_options_by?: string;
+  option_labels_key?: string;
   visible_when?: ConnectorFieldWhen;
 }
 
@@ -96,7 +98,10 @@ export interface CatalogReadiness {
   locale?: CopyLocale;
   drivers?: { list(): ChannelDriver[]; get?(type: string): ChannelDriver | undefined };
   services?: Record<string, boolean | CatalogServiceState>;
-  field_options?: Record<string, Record<string, { value: string; label: CopyRef }[]>>;
+  field_options?: Record<
+    string,
+    Record<string, { value: string; label: CopyRef; kind?: string; title?: string }[]>
+  >;
   extras?: CatalogDefinition[];
 }
 
@@ -156,6 +161,8 @@ function catalogDefinitionFromDriver(
       multiple: field.multiple,
       secret: field.secret === true,
       options: field.options,
+      filter_options_by: field.filter_options_by,
+      option_labels_key: field.option_labels_key,
       visible_when: field.visible_when,
     })),
     prerequisites: (resolved.prerequisites ?? []).map((prerequisite) => ({
@@ -269,6 +276,8 @@ export function connectorCatalog(
         )?.map((option) => ({
           value: option.value,
           label: resolveCopy(tables, locale, option.label) ?? String(option.label),
+          ...("kind" in option && option.kind ? { kind: option.kind } : {}),
+          ...("title" in option && option.title ? { title: option.title } : {}),
         })),
       })),
       installed: instanceCount > 0,
@@ -292,6 +301,7 @@ export interface EngineInstallationView {
   can_reply: boolean;
   can_create: boolean;
   create_with_task: boolean;
+  can_pair: boolean;
   channel: string;
   channel_label: string;
   last_attempt: IngestAttempt | null;
@@ -331,6 +341,7 @@ export function toInstallationView(
     can_reply: enabled && capabilities.reply,
     can_create: enabled && capabilities.create,
     create_with_task: enabled && capabilities.create === true && capabilities.create_with_task === true,
+    can_pair: enabled && capabilities.pairing_code === true,
     channel,
     channel_label: sourceLabelFromCatalog(
       channel,
@@ -381,15 +392,18 @@ function connectorPresentation(
 export function nextPickedChatNames(
   config: Record<string, unknown>,
   streams: Array<{ thread_id?: string | null; label?: string | null }>,
+  field?: { key: string; option_labels_key?: string },
 ): string[] | null {
-  if (config.selection === "all") {
+  const idKey = field?.key;
+  const labelKey = field?.option_labels_key;
+  if (!idKey || !labelKey) {
     return null;
   }
-  const ids = configStringList(config, "chat_ids");
+  const ids = configStringList(config, idKey);
   if (ids.length === 0) {
     return null;
   }
-  const existing = configStringList(config, "chat_names");
+  const existing = configStringList(config, labelKey);
   if (existing.length === ids.length) {
     return null;
   }

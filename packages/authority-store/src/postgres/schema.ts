@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 42;
+export const PG_SCHEMA_VERSION = 48;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -405,6 +405,103 @@ CREATE INDEX context_snapshot_index_query_idx
   );
 `,
   },
+  {
+    version: 43,
+    sql: `
+CREATE TABLE sync_runs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+  mode TEXT NOT NULL CHECK (mode IN ('quick_start', 'continuous', 'archive')),
+  status TEXT NOT NULL CHECK (
+    status IN ('queued', 'running', 'paused', 'succeeded', 'failed', 'cancelled')
+  ),
+  options_json JSONB NOT NULL,
+  total_work INTEGER NOT NULL DEFAULT 0 CHECK (total_work >= 0),
+  completed_work INTEGER NOT NULL DEFAULT 0 CHECK (completed_work >= 0),
+  failed_work INTEGER NOT NULL DEFAULT 0 CHECK (failed_work >= 0),
+  accepted_count INTEGER NOT NULL DEFAULT 0 CHECK (accepted_count >= 0),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX sync_runs_org_created_idx
+  ON sync_runs (org_id, created_at DESC, id DESC);
+CREATE INDEX sync_runs_installation_status_idx
+  ON sync_runs (installation_id, status, updated_at);
+
+CREATE TABLE connector_sync_work (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES sync_runs(id),
+  installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+  stream_key TEXT NOT NULL,
+  lane TEXT NOT NULL CHECK (
+    lane IN ('interactive', 'live', 'catalog', 'history', 'media')
+  ),
+  priority INTEGER NOT NULL,
+  next_due_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')
+  ),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  generation INTEGER NOT NULL,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE UNIQUE INDEX connector_sync_work_unique_idx
+  ON connector_sync_work (installation_id, stream_key, lane, generation);
+CREATE INDEX connector_sync_work_pending_due_idx
+  ON connector_sync_work (next_due_at, priority DESC, created_at, id)
+  WHERE status = 'pending';
+CREATE INDEX connector_sync_work_running_expired_idx
+  ON connector_sync_work (lease_expires_at, priority DESC, created_at, id)
+  WHERE status = 'running';
+CREATE INDEX connector_sync_work_run_idx
+  ON connector_sync_work (run_id, status, updated_at);
+`,
+  },
+  {
+    version: 44,
+    sql: `
+CREATE INDEX connector_sync_work_unassigned_idx
+  ON connector_sync_work (installation_id, status, lane)
+  WHERE run_id IS NULL;
+`,
+  },
+  {
+    version: 45,
+    sql: `
+CREATE INDEX connector_sync_state_gap_idx
+  ON connector_sync_state (
+    installation_id, phase, stream_key, generation, media_pending, idle_until
+  );
+`,
+  },
+  {
+    version: 46,
+    sql: `
+CREATE INDEX IF NOT EXISTS events_parent_event_idx
+  ON events (parent_event_id)
+  WHERE parent_event_id IS NOT NULL;
+`,
+  },
+  {
+    version: 47,
+    sql: `
+ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '{}';
+`,
+  },
+  {
+    version: 48,
+    sql: `
+SELECT 1;
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -442,6 +539,9 @@ CREATE INDEX events_content_hash_idx ON events (content_hash);
 CREATE INDEX events_org_ingested_idx ON events (org_id, ingested_at, id);
 CREATE INDEX events_org_thread_occurred_idx
   ON events (org_id, thread_id, occurred_at, id);
+CREATE INDEX events_parent_event_idx
+  ON events (parent_event_id)
+  WHERE parent_event_id IS NOT NULL;
 CREATE INDEX events_org_occurred_idx
   ON events (org_id, occurred_at, id);
 
@@ -692,6 +792,10 @@ CREATE TABLE connector_sync_state (
   updated_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (installation_id, stream_key)
 );
+CREATE INDEX connector_sync_state_gap_idx
+  ON connector_sync_state (
+    installation_id, phase, stream_key, generation, media_pending, idle_until
+  );
 
 CREATE TABLE context_artifacts (
   org_id TEXT NOT NULL,
@@ -701,6 +805,7 @@ CREATE TABLE context_artifacts (
   generation TEXT NOT NULL,
   recorded_at TIMESTAMPTZ NOT NULL,
   payload_json JSONB NOT NULL,
+  preview_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (org_id, id)
 );
 
@@ -984,4 +1089,63 @@ CREATE TABLE thread_heads (
 
 CREATE INDEX thread_heads_org_face_idx
   ON thread_heads (org_id, has_current_work, face_occurred_at DESC, face_event_id DESC);
+
+CREATE TABLE sync_runs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+  mode TEXT NOT NULL CHECK (mode IN ('quick_start', 'continuous', 'archive')),
+  status TEXT NOT NULL CHECK (
+    status IN ('queued', 'running', 'paused', 'succeeded', 'failed', 'cancelled')
+  ),
+  options_json JSONB NOT NULL,
+  total_work INTEGER NOT NULL DEFAULT 0 CHECK (total_work >= 0),
+  completed_work INTEGER NOT NULL DEFAULT 0 CHECK (completed_work >= 0),
+  failed_work INTEGER NOT NULL DEFAULT 0 CHECK (failed_work >= 0),
+  accepted_count INTEGER NOT NULL DEFAULT 0 CHECK (accepted_count >= 0),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX sync_runs_org_created_idx
+  ON sync_runs (org_id, created_at DESC, id DESC);
+CREATE INDEX sync_runs_installation_status_idx
+  ON sync_runs (installation_id, status, updated_at);
+
+CREATE TABLE connector_sync_work (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES sync_runs(id),
+  installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+  stream_key TEXT NOT NULL,
+  lane TEXT NOT NULL CHECK (
+    lane IN ('interactive', 'live', 'catalog', 'history', 'media')
+  ),
+  priority INTEGER NOT NULL,
+  next_due_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')
+  ),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  generation INTEGER NOT NULL,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE UNIQUE INDEX connector_sync_work_unique_idx
+  ON connector_sync_work (installation_id, stream_key, lane, generation);
+CREATE INDEX connector_sync_work_pending_due_idx
+  ON connector_sync_work (next_due_at, priority DESC, created_at, id)
+  WHERE status = 'pending';
+CREATE INDEX connector_sync_work_running_expired_idx
+  ON connector_sync_work (lease_expires_at, priority DESC, created_at, id)
+  WHERE status = 'running';
+CREATE INDEX connector_sync_work_run_idx
+  ON connector_sync_work (run_id, status, updated_at);
+CREATE INDEX connector_sync_work_unassigned_idx
+  ON connector_sync_work (installation_id, status, lane)
+  WHERE run_id IS NULL;
 `;

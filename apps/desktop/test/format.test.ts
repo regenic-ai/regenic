@@ -5,15 +5,21 @@ import {
   connectorActionError,
   networkWatchHint,
 } from "../src/renderer/src/connector-errors.ts";
+import { KernelRequestError } from "../src/renderer/src/kernel-request.ts";
 import { formatChatTime } from "../src/renderer/src/format.ts";
 import {
   engineChip,
+  namedPullProgress,
   pullStatusLabel,
+  releaseOtherLivePulls,
   threadSyncLabel,
   threadSyncTone,
+  threadIsSyncing,
 } from "../src/renderer/src/pull-copy.ts";
 import {
   aggregateInstallationSync,
+  syncEtaSummary,
+  syncFreshnessSummary,
   syncProgressSummary,
   syncProgressTone,
 } from "../src/renderer/src/sync-copy.ts";
@@ -22,6 +28,7 @@ import type {
   PersonalEngineView,
   PullStatusView,
   SyncProgressView,
+  SyncReadinessView,
 } from "../src/renderer/src/types.ts";
 
 function pull(overrides: Partial<PullStatusView> = {}): PullStatusView {
@@ -73,8 +80,8 @@ describe("engine chip and pull copy", () => {
       }),
     });
     assert.equal(engineChip(view), "running");
-    assert.equal(pullStatusLabel(view.pull), "Backfilling history · 熊峰");
-    assert.equal(threadSyncLabel("feishu:oc_1", view.pull), "Syncing older messages");
+    assert.equal(pullStatusLabel(view.pull), "Earlier messages · 熊峰");
+    assert.equal(threadSyncLabel("feishu:oc_1", view.pull), "Syncing earlier messages");
     assert.equal(threadSyncTone("feishu:oc_1", view.pull), "syncing");
   });
 
@@ -96,9 +103,74 @@ describe("engine chip and pull copy", () => {
       }),
     });
     assert.equal(engineChip(view), "running");
-    assert.equal(pullStatusLabel(view.pull), "Fetching latest · Christy");
-    assert.equal(threadSyncLabel("feishu:oc_1", view.pull), null);
-    assert.equal(threadSyncTone("feishu:oc_1", view.pull), null);
+    assert.equal(pullStatusLabel(view.pull), "New messages · Christy");
+    assert.equal(threadSyncLabel("feishu:oc_1", view.pull), "Syncing new messages");
+    assert.equal(threadSyncTone("feishu:oc_1", view.pull), "syncing");
+    assert.equal(threadIsSyncing("feishu:oc_1", view.pull), true);
+    assert.equal(
+      threadIsSyncing("feishu:oc_53d", pull({
+        phase: "pulling",
+        streams: [
+          {
+            stream_key: "feishu-1:chat:oc_53d",
+            thread_id: null,
+            label: "oc_53d",
+            phase: "pulling",
+            work: "live",
+            last_error: null,
+          },
+        ],
+      })),
+      true,
+    );
+  });
+
+  it("names the titlebar chip from the inbox thread when the stream label is blank", () => {
+    const status = pull({
+      phase: "pulling",
+      streams: [
+        {
+          stream_key: "feishu-1:chat:oc_1",
+          thread_id: "feishu:oc_1",
+          label: null,
+          phase: "pulling",
+          work: "live",
+          last_error: null,
+        },
+      ],
+    });
+    assert.equal(pullStatusLabel(status), "New messages");
+    assert.equal(
+      namedPullProgress(status, [{ id: "feishu:oc_1", title: "熊峰" }]),
+      "New messages · 熊峰",
+    );
+  });
+
+  it("clears the previous conversation's live sync mark when another is opened", () => {
+    const status = pull({
+      phase: "pulling",
+      streams: [
+        {
+          stream_key: "feishu-1:chat:oc_old",
+          thread_id: "feishu:oc_old",
+          label: "熊志健",
+          phase: "pulling",
+          work: "live",
+          last_error: null,
+        },
+        {
+          stream_key: "feishu-1:chat:oc_new",
+          thread_id: "feishu:oc_new",
+          label: "林晨",
+          phase: "pulling",
+          work: "live",
+          last_error: null,
+        },
+      ],
+    });
+    const next = releaseOtherLivePulls(status, "feishu:oc_new");
+    assert.equal(threadIsSyncing("feishu:oc_old", next), false);
+    assert.equal(threadIsSyncing("feishu:oc_new", next), true);
   });
 
   it("names a dropped sync so the open thread can show it", () => {
@@ -114,9 +186,9 @@ describe("engine chip and pull copy", () => {
         },
       ],
     });
-    assert.equal(threadSyncLabel("feishu:oc_1", status), "Sync interrupted · retrying");
+    assert.equal(threadSyncLabel("feishu:oc_1", status), "Sync paused · retrying");
     assert.equal(threadSyncTone("feishu:oc_1", status), "error");
-    assert.equal(pullStatusLabel(status), "Retrying after a drop");
+    assert.equal(pullStatusLabel(status), "Connection dropped · retrying");
   });
 });
 
@@ -134,14 +206,14 @@ describe("sync coverage copy", () => {
     };
     assert.equal(
       syncProgressSummary(sync),
-      "Listed 120+ · bootstrap 94 · steady 26",
+      "120+ found · 94 syncing · 26 current",
     );
     assert.equal(syncProgressTone(sync), "warn");
     setActiveLocale("zh");
     try {
       assert.equal(
         syncProgressSummary(sync),
-        "已列出 120+ · 补齐中 94 · 已就绪 26",
+        "已发现 120+ · 同步中 94 · 已跟上 26",
       );
     } finally {
       setActiveLocale("en");
@@ -177,20 +249,40 @@ describe("sync coverage copy", () => {
     assert.equal(coverage?.seeded, 34);
     assert.notEqual(coverage?.discovered, 34);
   });
+
+  it("shows poll freshness and an ETA range without a fake percent", () => {
+    const readiness: SyncReadinessView = {
+      remaining_streams: 10_000,
+      freshness_ms: 3_600_000,
+      freshness_source: "poll",
+      accepted_count: 12,
+      throttle_reason: null,
+      eta: { low_ms: 6_240_000, high_ms: 37_440_000 },
+    };
+    assert.equal(syncFreshnessSummary(readiness), "1h ago");
+    assert.equal(syncEtaSummary(readiness), "2h – 10h");
+    assert.equal(
+      syncEtaSummary({
+        ...readiness,
+        throttle_reason: "source_429",
+      }),
+      "Rate limited",
+    );
+    assert.equal(syncFreshnessSummary(null), "Not checked yet");
+    assert.equal(syncEtaSummary({ ...readiness, eta: null }), "—");
+  });
 });
 
 describe("connector action errors", () => {
-  it("maps install failures onto the active desktop catalog", () => {
+  it("maps structured kernel codes onto the active desktop catalog", () => {
     setActiveLocale("zh");
     try {
       assert.equal(
-        connectorActionError(
-          "Feishu install requires at least one conversation when choosing conversations",
-        ),
-        "选全部会话，或勾选要同步的会话",
+        connectorActionError(new KernelRequestError("ignored", "conversation_required")),
+        "至少选一个会话，或改为同步全部。",
       );
       assert.equal(
-        connectorActionError("Slack install requires channel_id"),
+        connectorActionError(new KernelRequestError("ignored", "channel_required")),
         "Slack 需要填写频道 ID",
       );
       assert.equal(
@@ -203,7 +295,7 @@ describe("connector action errors", () => {
       setActiveLocale("en");
     }
     assert.equal(
-      connectorActionError("feishu-chat is already installed"),
+      connectorActionError(new KernelRequestError("feishu-chat is already installed", "already_installed")),
       "This connector is already installed",
     );
   });

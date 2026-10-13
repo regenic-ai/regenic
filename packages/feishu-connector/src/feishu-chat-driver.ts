@@ -5,7 +5,6 @@ import {
   keychainCredentialsRef,
   parseSyncMode,
   requireConnectorStream,
-  runInSyncLane,
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
@@ -16,10 +15,11 @@ import {
   type NewConnectorInstallation,
   type ResolveStreamsOptions,
   type SyncCatalogMember,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import {
   LarkCliClient,
   feishuChatOptionLabel,
+  runInLarkSlot,
   spawnLarkProcess,
   type FeishuChat,
   type FeishuChatMode,
@@ -59,12 +59,17 @@ import {
   listFeishuCatalogChats,
   probeLarkCli,
 } from "./probe";
-import { createFeishuRecentSyncSource, createFeishuSyncSource } from "./feishu-sync-source";
+import { createFeishuPickedSyncSource, createFeishuRecentSyncSource, createFeishuSyncSource } from "./feishu-sync-source";
+import { clearAllFeishuMediaJobs } from "./feishu-media-job-store";
 
 export const feishuChatDriver: ChannelDriver = {
   connector_type: "feishu-chat",
   source: FEISHU_SOURCE,
   connector_protocol: CONNECTOR_PROTOCOL,
+
+  onStoreClear() {
+    clearAllFeishuMediaJobs();
+  },
 
   install(input): NewConnectorInstallation {
     return {
@@ -139,6 +144,8 @@ export const feishuChatDriver: ChannelDriver = {
           required: true,
           multiple: true,
           placeholder: "field.chatIds.placeholder",
+          filter_options_by: "kinds",
+          option_labels_key: "chat_names",
           visible_when: { field: "selection", value: "pick" },
         },
       ],
@@ -249,9 +256,21 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   async bindSyncSource(installation, _host, env) {
+    const config = installation.config;
+    const selection = feishuSelection(config);
+    if (selection === "pick") {
+      const ids = feishuPickedChatIds(config);
+      const names = pickedChatNames(config, ids);
+      return createFeishuPickedSyncSource(
+        ids.map((chat_id, index) => ({
+          chat_id,
+          name: names[index],
+        })),
+      );
+    }
     const client = larkClient(env);
-    const kinds = feishuKinds(installation.config);
-    if (feishuSelection(installation.config) === "recent") {
+    const kinds = feishuKinds(config);
+    if (selection === "recent") {
       return createFeishuRecentSyncSource(client, kinds);
     }
     return createFeishuSyncSource(client, kinds);
@@ -464,7 +483,7 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   async probeCatalog({ env }) {
-    return runInSyncLane("interactive", async () => {
+    return runInLarkSlot("interactive", async () => {
       const lark = await probeLarkCli({ env });
       return {
         services: {
@@ -478,12 +497,14 @@ export const feishuChatDriver: ChannelDriver = {
   },
 
   async listCatalogFieldOptions({ env }) {
-    return runInSyncLane("interactive", async () => {
+    return runInLarkSlot("interactive", async () => {
       const chats = await listFeishuCatalogChats({ env });
       return {
         chat_ids: chats.map((chat) => ({
           value: chat.chat_id,
           label: feishuChatOptionLabel(chat),
+          kind: chat.chat_mode === "p2p" ? "p2p" : "group",
+          title: chat.name?.trim() || undefined,
         })),
       };
     });
@@ -591,6 +612,7 @@ export function feishuInstallConfig(
       throw new ChannelDriverError(
         "invalid_config",
         "Feishu install requires groups, direct messages, or both",
+        "kinds_required",
       );
     }
     return { sync_mode: syncMode, selection: "recent", kinds };
@@ -601,16 +623,18 @@ export function feishuInstallConfig(
       throw new ChannelDriverError(
         "invalid_config",
         "Feishu install requires groups, direct messages, or both",
+        "kinds_required",
       );
     }
     return { sync_mode: syncMode, selection: "all", kinds };
   }
   const chatIds = feishuPickedChatIds(input);
   if (chatIds.length === 0) {
-    throw new ChannelDriverError(
-      "invalid_config",
-      "Feishu install requires at least one conversation when choosing conversations",
-    );
+      throw new ChannelDriverError(
+        "invalid_config",
+        "Feishu install requires at least one conversation when choosing conversations",
+        "conversation_required",
+      );
   }
   const names = pickedChatNames(input, chatIds);
   const config: Record<string, JsonValue> = {

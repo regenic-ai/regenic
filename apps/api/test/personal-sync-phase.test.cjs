@@ -27,6 +27,9 @@ function authority(membersByInstallation, statesByInstallation) {
     async listSyncStates(installationId) {
       return statesByInstallation[installationId] ?? [];
     },
+    async listSyncPhaseHeads(installationId) {
+      return statesByInstallation[installationId] ?? [];
+    },
   };
 }
 

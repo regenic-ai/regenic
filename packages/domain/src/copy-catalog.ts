@@ -28,7 +28,9 @@ export interface ResolvedCatalogField {
   default?: string;
   multiple?: boolean;
   secret?: boolean;
-  options?: { value: string; label: string }[];
+  options?: { value: string; label: string; kind?: string; title?: string }[];
+  filter_options_by?: string;
+  option_labels_key?: string;
   visible_when?: DriverCatalogField["visible_when"];
 }
 
@@ -204,8 +206,16 @@ function resolveField(
           options: field.options.map((option) => ({
             value: option.value,
             label: resolveCopyText(tables, locale, option.label),
+            ...(option.kind ? { kind: option.kind } : {}),
+            ...(option.title ? { title: option.title } : {}),
           })),
         }
+      : {}),
+    ...(field.filter_options_by
+      ? { filter_options_by: field.filter_options_by }
+      : {}),
+    ...(field.option_labels_key
+      ? { option_labels_key: field.option_labels_key }
       : {}),
     ...(field.visible_when ? { visible_when: field.visible_when } : {}),
   };

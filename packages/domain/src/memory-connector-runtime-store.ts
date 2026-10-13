@@ -13,13 +13,43 @@ import type {
   SetConnectorInstallationConfig,
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
+  CommitSyncPage,
+  CommitSyncPageResult,
 } from "./ingestion";
+import { catalogStreamKeysLeft } from "./sync-catalog";
 import { MemorySyncStore } from "./sync-engine";
 import type {
   ApplySyncCatalogPageInput,
+  SyncCatalogHead,
   SyncCatalogView,
   SyncStreamState,
 } from "./sync-contracts";
+import { SYNC_CATALOG_STREAM } from "./sync-contracts";
+import {
+  dueSyncWorkId,
+  syncWorkEnsurePlan,
+} from "./sync-work-planner";
+import { historyPolicyFromConfig, releaseHistoryPhase } from "./sync-history";
+import {
+  syncRunIsClaimable,
+  syncWorkPriority,
+  isUnassignedSyncWork,
+  validateSyncRunOptions,
+  type ClaimSyncWork,
+  type CommandSyncRun,
+  type EnqueueSyncWork,
+  type ListSyncRunsQuery,
+  type NewSyncRun,
+  type RenewSyncWork,
+  type SettleSyncWork,
+  type SyncRun,
+  type ListSyncWorkGapsOptions,
+  type SyncWorkGap,
+  type SyncWorkIdentity,
+  type SyncWorkRecord,
+  type UnassignedSyncWorkQuery,
+  type WakeUnassignedSyncWork,
+} from "./sync-work";
 
 interface StoredCursor extends ConnectorStreamCursor {
   lease_owner?: string;
@@ -35,6 +65,9 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   private readonly cursors = new Map<string, StoredCursor>();
   private readonly attempts = new Map<string, IngestAttempt>();
   private readonly quarantines: IngestQuarantine[] = [];
+  private readonly syncRuns = new Map<string, SyncRun>();
+  private readonly syncWork = new Map<string, SyncWorkRecord>();
+  private readonly syncWorkKeys = new Map<string, string>();
   private readonly sync = new MemorySyncStore();
 
   async createInstallation(
@@ -116,6 +149,17 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
         this.quarantines.splice(index, 1);
       }
     }
+    for (const [runId, run] of this.syncRuns) {
+      if (run.installation_id === id) {
+        this.syncRuns.delete(runId);
+      }
+    }
+    for (const [workId, work] of this.syncWork) {
+      if (work.installation_id === id) {
+        this.syncWork.delete(workId);
+        this.syncWorkKeys.delete(syncWorkUniqueKey(work));
+      }
+    }
     return true;
   }
 
@@ -125,6 +169,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     const key = cursorKey(input.installation_id, input.stream_key);
     const current = this.cursors.get(key);
     if (
+      !input.preempt &&
       current?.lease_expires_at &&
       current.lease_expires_at > input.now &&
       current.lease_owner !== input.lease_owner
@@ -186,6 +231,16 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
+    return this.beginAttemptUnlocked(input);
+  }
+
+  async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    this.beginAttemptUnlocked(input.attempt);
+    const attempt = await this.settleAttempt(input.settle);
+    return { attempt, events: [] };
+  }
+
+  private beginAttemptUnlocked(input: NewIngestAttempt): IngestAttempt {
     const attempt: IngestAttempt = {
       ...input,
       status: "running",
@@ -287,16 +342,417 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return cursor ? this.copyCursor(cursor) : null;
   }
 
+  async listCursors(
+    installationId: string,
+    streamKeys?: readonly string[],
+  ): Promise<ConnectorStreamCursor[]> {
+    const wanted = streamKeys ? new Set(streamKeys) : null;
+    return [...this.cursors.values()]
+      .filter(
+        (cursor) =>
+          cursor.installation_id === installationId &&
+          (!wanted || wanted.has(cursor.stream_key)),
+      )
+      .map((cursor) => this.copyCursor(cursor));
+  }
+
+  async createSyncRun(input: NewSyncRun): Promise<SyncRun> {
+    if (this.syncRuns.has(input.id)) {
+      throw new Error(`Sync run already exists: ${input.id}`);
+    }
+    validateSyncRunOptions(input.options ?? {});
+    const installation = this.installations.get(input.installation_id);
+    if (!installation || installation.org_id !== input.org_id) {
+      throw new Error("Connector installation not found for sync run");
+    }
+    const run: SyncRun = {
+      id: input.id,
+      org_id: input.org_id,
+      installation_id: input.installation_id,
+      mode: input.mode,
+      status: "queued",
+      options: copyJson(input.options ?? {}),
+      total_work: 0,
+      completed_work: 0,
+      failed_work: 0,
+      accepted_count: 0,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    this.syncRuns.set(run.id, run);
+    return copySyncRun(run);
+  }
+
+  async getSyncRun(id: string, orgId: string): Promise<SyncRun | null> {
+    const run = this.syncRuns.get(id);
+    return run?.org_id === orgId ? copySyncRun(run) : null;
+  }
+
+  async listSyncRuns(query: ListSyncRunsQuery): Promise<SyncRun[]> {
+    const limit =
+      Number.isInteger(query.limit) && Number(query.limit) > 0
+        ? Number(query.limit)
+        : 100;
+    return [...this.syncRuns.values()]
+      .filter(
+        (run) =>
+          run.org_id === query.org_id &&
+          (!query.installation_id ||
+            run.installation_id === query.installation_id),
+      )
+      .sort(
+        (left, right) =>
+          right.created_at.localeCompare(left.created_at) ||
+          right.id.localeCompare(left.id),
+      )
+      .slice(0, limit)
+      .map(copySyncRun);
+  }
+
+  async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
+    const run = this.syncRuns.get(input.id);
+    if (!run || run.org_id !== input.org_id) {
+      return null;
+    }
+    if (input.command === "pause" && syncRunIsClaimable(run.status)) {
+      run.status = "paused";
+    } else if (input.command === "resume" && run.status === "paused") {
+      run.status = "queued";
+      run.finished_at = undefined;
+    } else if (
+      input.command === "cancel" &&
+      (syncRunIsClaimable(run.status) || run.status === "paused")
+    ) {
+      run.status = "cancelled";
+      run.finished_at = input.now;
+      for (const work of this.syncWork.values()) {
+        if (
+          work.run_id === run.id &&
+          (work.status === "pending" || work.status === "running")
+        ) {
+          work.status = "cancelled";
+          work.lease_owner = undefined;
+          work.lease_expires_at = undefined;
+          work.updated_at = input.now;
+        }
+      }
+    }
+    run.updated_at = input.now;
+    return copySyncRun(run);
+  }
+
+  async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {
+    if (input.run_id && !this.syncRuns.has(input.run_id)) {
+      throw new Error(`Sync run not found: ${input.run_id}`);
+    }
+    const key = syncWorkUniqueKey(input);
+    const existingId = this.syncWorkKeys.get(key);
+    if (existingId) {
+      const existing = this.syncWork.get(existingId)!;
+      if (existing.status !== "running") {
+        existing.next_due_at = input.next_due_at;
+        existing.priority = input.priority ?? syncWorkPriority(input.lane);
+        existing.status = "pending";
+        existing.last_error = undefined;
+        existing.updated_at = input.now;
+      }
+      return copySyncWork(existing);
+    }
+    const work: SyncWorkRecord = {
+      id: input.id,
+      run_id: input.run_id,
+      installation_id: input.installation_id,
+      stream_key: input.stream_key,
+      lane: input.lane,
+      priority: input.priority ?? syncWorkPriority(input.lane),
+      next_due_at: input.next_due_at,
+      status: "pending",
+      attempts: 0,
+      generation: input.generation,
+      created_at: input.now,
+      updated_at: input.now,
+    };
+    this.syncWork.set(work.id, work);
+    this.syncWorkKeys.set(key, work.id);
+    if (work.run_id) {
+      const run = this.syncRuns.get(work.run_id)!;
+      run.total_work += 1;
+      run.updated_at = input.now;
+    }
+    return copySyncWork(work);
+  }
+
+  async enqueueSyncWorkMany(
+    inputs: readonly EnqueueSyncWork[],
+  ): Promise<number> {
+    for (const input of inputs) {
+      await this.enqueueSyncWork(input);
+    }
+    return inputs.length;
+  }
+
+  async claimSyncWork(input: ClaimSyncWork): Promise<SyncWorkRecord[]> {
+    const leaseExpiresAt = new Date(
+      Date.parse(input.now) + input.lease_ms,
+    ).toISOString();
+    const claimed = [...this.syncWork.values()]
+      .filter((work) => {
+        if (input.work_id && work.id !== input.work_id) {
+          return false;
+        }
+        if (
+          input.installation_id &&
+          work.installation_id !== input.installation_id
+        ) {
+          return false;
+        }
+        if (input.lanes?.length && !input.lanes.includes(work.lane)) {
+          return false;
+        }
+        if (input.unassigned && work.run_id) {
+          return false;
+        }
+        if (work.run_id) {
+          const run = this.syncRuns.get(work.run_id);
+          if (!run || !syncRunIsClaimable(run.status)) {
+            return false;
+          }
+        }
+        return (
+          (work.status === "pending" && work.next_due_at <= input.now) ||
+          (work.status === "running" &&
+            Boolean(
+              work.lease_expires_at && work.lease_expires_at <= input.now,
+            ))
+        );
+      })
+      .sort(
+        (left, right) =>
+          right.priority - left.priority ||
+          left.next_due_at.localeCompare(right.next_due_at) ||
+          left.created_at.localeCompare(right.created_at) ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(0, Math.max(0, input.limit));
+    for (const work of claimed) {
+      work.status = "running";
+      work.attempts += 1;
+      work.lease_owner = input.owner;
+      work.lease_expires_at = leaseExpiresAt;
+      work.updated_at = input.now;
+      if (work.run_id) {
+        const run = this.syncRuns.get(work.run_id)!;
+        if (run.status === "queued") {
+          run.status = "running";
+          run.started_at ??= input.now;
+          run.updated_at = input.now;
+        }
+      }
+    }
+    return claimed.map(copySyncWork);
+  }
+
+  async renewSyncWork(input: RenewSyncWork): Promise<boolean> {
+    const work = this.syncWork.get(input.id);
+    if (
+      !work ||
+      work.status !== "running" ||
+      work.lease_owner !== input.owner ||
+      !work.lease_expires_at ||
+      work.lease_expires_at <= input.now
+    ) {
+      return false;
+    }
+    work.lease_expires_at = new Date(
+      Date.parse(input.now) + input.lease_ms,
+    ).toISOString();
+    work.updated_at = input.now;
+    return true;
+  }
+
+  async settleSyncWork(
+    input: SettleSyncWork,
+  ): Promise<SyncWorkRecord | null> {
+    const work = this.syncWork.get(input.id);
+    if (
+      !work ||
+      work.status !== "running" ||
+      work.lease_owner !== input.owner
+    ) {
+      return null;
+    }
+    const terminal = input.outcome !== "retry";
+    work.status =
+      input.outcome === "retry" ? "pending" : input.outcome;
+    work.next_due_at = input.next_due_at ?? work.next_due_at;
+    work.last_error = input.error_code;
+    work.lease_owner = undefined;
+    work.lease_expires_at = undefined;
+    work.updated_at = input.now;
+    if (work.run_id && terminal) {
+      const run = this.syncRuns.get(work.run_id);
+      if (run && run.status !== "cancelled") {
+        if (input.outcome === "succeeded") {
+          run.completed_work += 1;
+        } else if (input.outcome === "failed") {
+          run.failed_work += 1;
+          run.last_error = input.error_code;
+        }
+        run.accepted_count += Math.max(0, input.accepted_count ?? 0);
+        settleRunIfComplete(run, [...this.syncWork.values()], input.now);
+      }
+    }
+    return copySyncWork(work);
+  }
+
+  async hasUnassignedSyncWork(
+    query: UnassignedSyncWorkQuery = {},
+  ): Promise<boolean> {
+    return [...this.syncWork.values()].some((work) =>
+      matchesUnassignedQuery(work, query),
+    );
+  }
+
+  async listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
+    const states = await this.sync.listSyncStates(installationId);
+    const catalog = await this.sync.getSyncCatalog(installationId);
+    const threadByKey = new Map(
+      catalog.members.map((member) => [member.stream_key, member.thread_id] as const),
+    );
+    const gaps: SyncWorkGap[] = [];
+    for (const state of states) {
+      const existing = this.workForStream(state);
+      const threadId = threadByKey.get(state.stream_key);
+      for (const lane of syncWorkEnsurePlan({
+        state,
+        existing,
+        policy: historyPolicyFromConfig(
+          this.installations.get(state.installation_id)?.config,
+        ),
+      }).enqueue) {
+        gaps.push({
+          stream_key: state.stream_key,
+          phase: state.phase,
+          media_pending: state.media_pending,
+          idle_until: state.idle_until,
+          generation: state.generation,
+          missing_lane: lane,
+          ...(threadId ? { thread_id: threadId } : {}),
+        });
+      }
+    }
+    const limit = Math.max(0, Math.floor(options?.unseeded_limit ?? 0));
+    if (limit === 0) {
+      return gaps;
+    }
+    const seeded = new Set(states.map((state) => state.stream_key));
+    const unseeded = catalog.members
+      .filter((member) => {
+        if (
+          !member.stream_key ||
+          member.stream_key === SYNC_CATALOG_STREAM ||
+          seeded.has(member.stream_key)
+        ) {
+          return false;
+        }
+        return !this.latestWorkCovers(
+          installationId,
+          member.stream_key,
+          member.generation || 1,
+        );
+      })
+      .sort((left, right) => {
+        const seen = (right.last_seen_at || "").localeCompare(
+          left.last_seen_at || "",
+        );
+        if (seen !== 0) {
+          return seen;
+        }
+        const discovered = (right.discovered_at || "").localeCompare(
+          left.discovered_at || "",
+        );
+        if (discovered !== 0) {
+          return discovered;
+        }
+        return left.stream_key.localeCompare(right.stream_key);
+      })
+      .slice(0, limit);
+    for (const member of unseeded) {
+      gaps.push({
+        stream_key: member.stream_key,
+        phase: "unseeded",
+        media_pending: false,
+        generation: member.generation || 1,
+        missing_lane: "live",
+        ...(member.thread_id ? { thread_id: member.thread_id } : {}),
+      });
+    }
+    return gaps;
+  }
+
+  async listUnassignedSyncWorkIdentities(query: {
+    installation_id: string;
+  }): Promise<SyncWorkIdentity[]> {
+    return [...this.syncWork.values()]
+      .filter((work) =>
+        matchesUnassignedQuery(work, {
+          installation_id: query.installation_id,
+        }),
+      )
+      .map((work) => ({
+        stream_key: work.stream_key,
+        lane: work.lane,
+        generation: work.generation,
+      }));
+  }
+
+  async wakeUnassignedSyncWork(
+    input: WakeUnassignedSyncWork,
+  ): Promise<number> {
+    const keys = new Set(
+      input.stream_keys.filter((key) => key.trim().length > 0),
+    );
+    if (keys.size === 0) {
+      return 0;
+    }
+    let updated = 0;
+    for (const work of this.syncWork.values()) {
+      if (
+        work.installation_id !== input.installation_id ||
+        work.run_id ||
+        work.status !== "pending" ||
+        !keys.has(work.stream_key)
+      ) {
+        continue;
+      }
+      work.next_due_at = input.now;
+      work.updated_at = input.now;
+      updated += 1;
+    }
+    return updated;
+  }
+
   getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
     return this.sync.getSyncCatalog(installationId);
   }
 
+  getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    return this.sync.getSyncCatalogHead(installationId);
+  }
+
   applySyncCatalogPage(input: ApplySyncCatalogPageInput): Promise<SyncCatalogView> {
-    return this.sync.applySyncCatalogPage(input);
+    return this.applyCatalogPage(input);
   }
 
   listSyncStates(installationId: string): Promise<SyncStreamState[]> {
     return this.sync.listSyncStates(installationId);
+  }
+
+  listSyncPhaseHeads(installationId: string) {
+    return this.sync.listSyncPhaseHeads(installationId);
   }
 
   getSyncState(
@@ -306,8 +762,140 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return this.sync.getSyncState(installationId, streamKey);
   }
 
-  putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
-    return this.sync.putSyncState(state);
+  async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
+    const stored = releaseHistoryPhase(
+      state,
+      historyPolicyFromConfig(this.installations.get(state.installation_id)?.config),
+    );
+    const view = await this.sync.getSyncCatalog(stored.installation_id);
+    if (
+      view.catalog?.complete === true &&
+      !view.members.some((member) => member.stream_key === stored.stream_key)
+    ) {
+      this.sync.dropSyncState(stored.installation_id, stored.stream_key);
+      this.cancelUnassignedStreams(
+        stored.installation_id,
+        [stored.stream_key],
+        stored.updated_at,
+      );
+      return { ...stored };
+    }
+    const saved = await this.sync.putSyncState(stored);
+    await this.ensureOwedSyncWork(saved);
+    return saved;
+  }
+
+  private async applyCatalogPage(
+    input: ApplySyncCatalogPageInput,
+  ): Promise<SyncCatalogView> {
+    const current = await this.sync.getSyncCatalog(input.installation_id);
+    const next = await this.sync.applySyncCatalogPage(input);
+    if (input.complete) {
+      const left = catalogStreamKeysLeft(current, next);
+      for (const streamKey of left) {
+        this.sync.dropSyncState(input.installation_id, streamKey);
+      }
+      this.cancelUnassignedStreams(input.installation_id, left, input.now);
+    }
+    return next;
+  }
+
+  private cancelUnassignedStreams(
+    installationId: string,
+    streamKeys: readonly string[],
+    now: string,
+  ): void {
+    if (streamKeys.length === 0) {
+      return;
+    }
+    const keys = new Set(streamKeys);
+    for (const work of this.syncWork.values()) {
+      if (
+        work.installation_id !== installationId ||
+        work.run_id ||
+        (work.status !== "pending" && work.status !== "running") ||
+        !keys.has(work.stream_key)
+      ) {
+        continue;
+      }
+      work.status = "cancelled";
+      work.lease_owner = undefined;
+      work.lease_expires_at = undefined;
+      work.updated_at = now;
+    }
+  }
+
+  private latestWorkCovers(
+    installationId: string,
+    streamKey: string,
+    generation: number,
+  ): boolean {
+    return [...this.syncWork.values()].some(
+      (work) =>
+        work.installation_id === installationId &&
+        work.stream_key === streamKey &&
+        work.generation === generation &&
+        (work.lane === "live" || work.lane === "interactive") &&
+        (Boolean(work.run_id) ||
+          work.status === "pending" ||
+          work.status === "running"),
+    );
+  }
+
+  private workForStream(state: Pick<
+    SyncStreamState,
+    "installation_id" | "stream_key" | "generation"
+  >): SyncWorkRecord[] {
+    return [...this.syncWork.values()].filter(
+      (work) =>
+        work.installation_id === state.installation_id &&
+        work.stream_key === state.stream_key &&
+        work.generation === state.generation,
+    );
+  }
+
+  private async ensureOwedSyncWork(state: SyncStreamState): Promise<void> {
+    const plan = syncWorkEnsurePlan({
+      state,
+      existing: this.workForStream(state),
+      policy: historyPolicyFromConfig(
+        this.installations.get(state.installation_id)?.config,
+      ),
+    });
+    for (const lane of plan.enqueue) {
+      await this.enqueueSyncWork({
+        id: dueSyncWorkId(
+          state.installation_id,
+          state.stream_key,
+          lane,
+          state.generation,
+        ),
+        installation_id: state.installation_id,
+        stream_key: state.stream_key,
+        lane,
+        next_due_at: state.updated_at,
+        generation: state.generation,
+        now: state.updated_at,
+      });
+    }
+    for (const lane of plan.cancel) {
+      for (const work of this.syncWork.values()) {
+        if (
+          work.installation_id !== state.installation_id ||
+          work.stream_key !== state.stream_key ||
+          work.generation !== state.generation ||
+          work.lane !== lane ||
+          work.run_id ||
+          work.status !== "pending"
+        ) {
+          continue;
+        }
+        work.status = "cancelled";
+        work.lease_owner = undefined;
+        work.lease_expires_at = undefined;
+        work.updated_at = state.updated_at;
+      }
+    }
   }
 
   private copyInstallation(
@@ -333,4 +921,65 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       lease_expires_at: cursor.lease_expires_at!,
     };
   }
+}
+
+function syncWorkUniqueKey(
+  input: Pick<
+    EnqueueSyncWork | SyncWorkRecord,
+    "installation_id" | "stream_key" | "lane" | "generation"
+  >,
+): string {
+  return JSON.stringify([
+    input.installation_id,
+    input.stream_key,
+    input.lane,
+    input.generation,
+  ]);
+}
+
+function matchesUnassignedQuery(
+  work: SyncWorkRecord,
+  query: UnassignedSyncWorkQuery,
+): boolean {
+  if (!isUnassignedSyncWork(work)) {
+    return false;
+  }
+  if (query.installation_id && work.installation_id !== query.installation_id) {
+    return false;
+  }
+  if (query.lanes?.length && !query.lanes.includes(work.lane)) {
+    return false;
+  }
+  return true;
+}
+
+function copySyncRun(run: SyncRun): SyncRun {
+  return { ...run, options: copyJson(run.options) };
+}
+
+function copySyncWork(work: SyncWorkRecord): SyncWorkRecord {
+  return { ...work };
+}
+
+function copyJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function settleRunIfComplete(
+  run: SyncRun,
+  allWork: SyncWorkRecord[],
+  now: string,
+): void {
+  const remaining = allWork.some(
+    (work) =>
+      work.run_id === run.id &&
+      (work.status === "pending" || work.status === "running"),
+  );
+  if (remaining || run.status === "paused") {
+    run.updated_at = now;
+    return;
+  }
+  run.status = run.failed_work > 0 ? "failed" : "succeeded";
+  run.finished_at = now;
+  run.updated_at = now;
 }

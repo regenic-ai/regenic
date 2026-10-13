@@ -1,16 +1,11 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
+const { ChannelDriverError } = require("@regenic/connector-contract");
 const {
-  ChannelDriverError,
-  INGEST_SCHEMA_VERSION,
-  IngestionService,
-  MemoryAuthorityStore,
-  MemoryBlobStore,
   MemoryConnectorRegistry,
   MemoryEgressRegistry,
-  channelRecord,
   verifyChannelDriverConformance,
-} = require("@regenic/domain");
+} = require("@regenic/connector-test-utils");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const {
   FEISHU_STREAM_PACE,
@@ -268,87 +263,6 @@ describe("feishuChatDriver", () => {
       ),
       "oc_1:out:om_out",
     );
-  });
-
-  it("dedupes a split Feishu image echo against reply outbound ids", async () => {
-    const authority = new MemoryAuthorityStore();
-    const blobs = new MemoryBlobStore();
-    const service = new IngestionService(blobs, authority);
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
-    const outboundId = feishuChatDriver.outboundId(
-      { source: "feishu", target: "oc_1" },
-      { accepted: true, rpc_id: "om_text" },
-    );
-    const outbound = await service.ingest({
-      schema_version: INGEST_SCHEMA_VERSION,
-      connector_id: "feishu-chat",
-      org_id: "local-owner",
-      delivery_id: "feishu-out-reply",
-      received_at: "2026-09-02T00:15:00.000Z",
-      records: [
-        channelRecord({
-          channel: "feishu",
-          kind: "user",
-          direction: "outbound",
-          external_id: outboundId,
-          occurred_at: "2026-09-02T00:15:00.000Z",
-          actor_id: "local-owner",
-          scope_id: "oc_1",
-          text: "记得我这个小技巧会更符合写代码逻辑",
-          content: [
-            {
-              role: "attachment",
-              media_type: "image/png",
-              source_filename: "tasks.png",
-              bytes: png,
-            },
-          ],
-        }),
-      ],
-    });
-    const echoed = await service.ingest({
-      schema_version: INGEST_SCHEMA_VERSION,
-      connector_id: "feishu-chat",
-      org_id: "local-owner",
-      delivery_id: "feishu-sync-reply",
-      received_at: "2026-09-02T00:15:02.000Z",
-      records: [
-        channelRecord({
-          channel: "feishu",
-          kind: "user",
-          direction: "outbound",
-          external_id: "oc_1:om_text",
-          occurred_at: "2026-09-02T00:15:00.000Z",
-          actor_id: "ou_1",
-          scope_id: "oc_1",
-          text: "记得我这个小技巧会更符合写代码逻辑",
-        }),
-        channelRecord({
-          channel: "feishu",
-          kind: "user",
-          direction: "outbound",
-          external_id: "oc_1:om_image",
-          occurred_at: "2026-09-02T00:15:01.000Z",
-          actor_id: "ou_1",
-          scope_id: "oc_1",
-          content: [
-            {
-              role: "attachment",
-              media_type: "image/png",
-              source_filename: "image.png",
-              bytes: png,
-            },
-          ],
-        }),
-      ],
-    });
-
-    assert.equal(outbound.records[0].status, "accepted");
-    assert.equal(echoed.records[0].status, "duplicate");
-    assert.equal(echoed.records[1].status, "duplicate");
-    assert.equal(echoed.records[0].event_id, outbound.records[0].event_id);
-    assert.equal(echoed.records[1].event_id, outbound.records[0].event_id);
-    assert.equal(authority.allEvents().length, 1);
   });
 
   it("installs all direct messages only", () => {
@@ -863,9 +777,45 @@ describe("createFeishuRecentSyncSource", () => {
     const page = await source.listDirectory(null);
     assert.equal(all, 0);
     assert.equal(page.complete, true);
+    assert.equal(page.replaces, undefined);
     assert.deepEqual(
       page.members.map((member) => member.thread_id),
       ["feishu:oc_hot"],
+    );
+  });
+
+  it("reports a recent-list failure instead of an empty directory", async () => {
+    const { createFeishuRecentSyncSource } = require("../dist/feishu-sync-source");
+    const source = createFeishuRecentSyncSource(
+      {
+        async listRecentChats() {
+          throw new Error("directory down");
+        },
+      },
+      ["group"],
+    );
+    await assert.rejects(() => source.listDirectory(null), /directory down/);
+  });
+});
+
+describe("createFeishuPickedSyncSource", () => {
+  it("returns only the chosen chats as the whole directory", async () => {
+    const { createFeishuPickedSyncSource } = require("../dist/feishu-sync-source");
+    const source = createFeishuPickedSyncSource([
+      { chat_id: "oc_a", name: "Ada" },
+      { chat_id: "  ", name: "blank" },
+      { chat_id: "oc_b" },
+    ]);
+    const page = await source.listDirectory("leftover-census");
+    assert.equal(page.complete, true);
+    assert.equal(page.replaces, true);
+    assert.equal(page.next_cursor, undefined);
+    assert.deepEqual(
+      page.members.map((member) => [member.stream_key, member.label]),
+      [
+        ["chat:oc_a", "Ada"],
+        ["chat:oc_b", undefined],
+      ],
     );
   });
 });
@@ -908,7 +858,29 @@ describe("createFeishuSyncSource", () => {
     );
     assert.equal(p2p.members[0].label, "Ada");
     assert.equal(p2p.complete, true);
+    assert.equal(p2p.replaces, undefined);
     assert.deepEqual(calls[1].types, ["p2p"]);
     assert.equal(calls[1].names, true);
+  });
+
+  it("treats a single finished page as the whole directory", async () => {
+    const source = createFeishuSyncSource(
+      {
+        async listChats() {
+          return {
+            items: [{ chat_id: "oc_only", name: "Only", chat_mode: "p2p" }],
+            has_more: false,
+          };
+        },
+      },
+      ["p2p"],
+    );
+    const page = await source.listDirectory(null);
+    assert.equal(page.complete, true);
+    assert.equal(page.replaces, true);
+    assert.deepEqual(
+      page.members.map((member) => member.thread_id),
+      ["feishu:oc_only"],
+    );
   });
 });

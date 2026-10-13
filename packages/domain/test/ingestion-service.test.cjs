@@ -1067,4 +1067,112 @@ describe("IngestionService", () => {
     });
     assert.equal(second.records[0].status, "accepted");
   });
+
+  it("commits a create-only page without a second ingest write", async () => {
+    const { authorityStore, service } = createHarness();
+    let ingestWrites = 0;
+    const originalIngest = authorityStore.commitIngest.bind(authorityStore);
+    authorityStore.commitIngest = async (request) => {
+      ingestWrites += 1;
+      return originalIngest(request);
+    };
+    const result = await service.ingest(createBatch(), {
+      attempt: {
+        id: "attempt-page",
+        org_id: "local-owner",
+        connector_installation_id: "install-1",
+        stream_key: "personal",
+        delivery_id: "delivery-1",
+        started_at: "2026-08-08T00:00:00.000Z",
+      },
+      settle: {
+        attempt_id: "attempt-page",
+        installation_id: "install-1",
+        stream_key: "personal",
+        lease_owner: "worker-a",
+        finished_at: "2026-08-08T00:00:01.000Z",
+      },
+    });
+    assert.equal(result.valid, true);
+    assert.equal(result.page_committed, true);
+    assert.equal(result.records[0].status, "accepted");
+    assert.equal(ingestWrites, 1);
+    assert.equal(authorityStore.allEvents().length, 1);
+  });
+
+  it("unfolds a policy-hidden thread inside the page commit", async () => {
+    const { authorityStore, service } = createHarness();
+    await authorityStore.putConversationPref({
+      org_id: "local-owner",
+      thread_id: "regenic:source-event-1",
+      hidden: true,
+      hidden_reason: "policy",
+      updated_at: "2026-08-08T00:00:00.000Z",
+    });
+    let prefWrites = 0;
+    const originalPref = authorityStore.putConversationPref.bind(authorityStore);
+    authorityStore.putConversationPref = async (input) => {
+      prefWrites += 1;
+      return originalPref(input);
+    };
+    const result = await service.ingest(createBatch(), {
+      attempt: {
+        id: "attempt-unfold",
+        org_id: "local-owner",
+        connector_installation_id: "install-1",
+        stream_key: "personal",
+        delivery_id: "delivery-1",
+        started_at: "2026-08-08T00:00:00.000Z",
+      },
+      settle: {
+        attempt_id: "attempt-unfold",
+        installation_id: "install-1",
+        stream_key: "personal",
+        lease_owner: "worker-a",
+        finished_at: "2026-08-08T00:00:01.000Z",
+      },
+    });
+    const pref = await authorityStore.getConversationPref(
+      "local-owner",
+      "regenic:source-event-1",
+    );
+    assert.equal(result.page_committed, true);
+    assert.equal(prefWrites, 1);
+    assert.equal(pref.hidden, false);
+  });
+
+  it("does not treat a mixed revise page as atomically committed", async () => {
+    const { authorityStore, service } = createHarness();
+    await service.ingest(createBatch());
+    const revised = createBatch({
+      operation: "revise",
+      content: [
+        {
+          role: "body",
+          media_type: "text/plain",
+          text: "Revised canonical body.",
+        },
+      ],
+    });
+    const result = await service.ingest(revised, {
+      attempt: {
+        id: "attempt-revise",
+        org_id: "local-owner",
+        connector_installation_id: "install-1",
+        stream_key: "personal",
+        delivery_id: "delivery-2",
+        started_at: "2026-08-08T00:00:02.000Z",
+      },
+      settle: {
+        attempt_id: "attempt-revise",
+        installation_id: "install-1",
+        stream_key: "personal",
+        lease_owner: "worker-a",
+        finished_at: "2026-08-08T00:00:03.000Z",
+      },
+    });
+    assert.equal(result.valid, true);
+    assert.equal(result.page_committed, undefined);
+    assert.equal(result.records[0].status, "accepted");
+  });
 });

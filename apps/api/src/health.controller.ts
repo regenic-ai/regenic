@@ -1,7 +1,8 @@
 import { Controller, Get, Inject } from "@nestjs/common";
 import { isPersonalApiEnabled, loadEnv, resolveAuthorityBackend } from "@regenic/config";
-import type { StandardPlaceholder } from "@regenic/domain";
+import { type StandardPlaceholder } from "@regenic/domain";
 import { processMemoryView } from "./process-memory";
+import { syncMetricsView } from "./sync-metrics-view";
 import { PersonalApiKeyService } from "./personal-api-key.service";
 import { PersonalPairingService } from "./personal-pairing.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
@@ -82,5 +83,10 @@ export class HealthController {
       memory: processMemoryView(),
       domain: "@regenic/domain",
     };
+  }
+
+  @Get("metrics")
+  metrics() {
+    return syncMetricsView();
   }
 }

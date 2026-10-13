@@ -342,6 +342,7 @@ describe("context contracts", () => {
     const value = {
       from_snapshot_id: "snapshot-before",
       to_snapshot_id: "snapshot-after",
+      summary: { added: 1, removed: 0, changed: 0, unchanged: 0 },
       added: [item],
       removed: [],
       changed: [],

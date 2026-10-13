@@ -126,6 +126,7 @@ spec:
           args:
             - |
               mkdir -p "$HOME" "$TMPDIR" "$DSH_HOME"
+              chmod 600 "$DSH_HOME/.credentials.yaml" "$HOME/.dsh/.credentials.yaml" 2>/dev/null || true
               if [ ! -d "$HOME/regenic/.git" ]; then
                 git clone https://github.com/regenic-ai/regenic.git "$HOME/regenic"
               fi
@@ -155,19 +156,21 @@ spec:
                   key: DSH_TRUSTED_HOSTS
                   optional: true
             - name: NODE_OPTIONS
-              value: --max-old-space-size=512
+              value: --max-old-space-size=3072
             - name: DEEPSEEK_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: regenic-secrets
                   key: DEEPSEEK_API_KEY
+            - name: DEEPSEEK_BASE_URL
+              value: https://dashscope.aliyuncs.com/compatible-mode/v1
           resources:
             requests:
-              cpu: 100m
-              memory: 102Mi
+              cpu: 200m
+              memory: 409Mi
             limits:
-              cpu: "1"
-              memory: 1024Mi
+              cpu: "2"
+              memory: 4Gi
           volumeMounts:
             - name: data
               mountPath: /data

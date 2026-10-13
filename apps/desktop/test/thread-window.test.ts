@@ -10,6 +10,8 @@ import {
   prefixOffsets,
   appendHeadPages,
   hasOlderPage,
+  shouldPaintLocalOlder,
+  scrollOlderHasMore,
   inboxCursor,
   mergeInboxDelta,
   mergeOlderInbox,
@@ -25,6 +27,8 @@ import {
   shouldLoadOlder,
   shouldRearmLoadMoreHeads,
   shouldRearmLoadOlder,
+  unfinishedOpenAction,
+  OPEN_TIMEOUT_RETRIES,
   LIST_LOAD_MORE_PX,
   THREAD_LOAD_OLDER_PX,
   THREAD_PAGE_SIZE,
@@ -353,9 +357,36 @@ describe("thread window", () => {
     assert.deepEqual(olderInboxCursor(merged), {
       before: "2026-08-23T09:00:00.000Z",
       before_id: "m1",
+      before_external_id: "feishu:oc_1:m1",
     });
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE), true);
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE - 1), false);
+    assert.equal(shouldPaintLocalOlder(THREAD_PAGE_SIZE - 1), true);
+    assert.equal(shouldPaintLocalOlder(THREAD_PAGE_SIZE), false);
+    assert.equal(shouldPaintLocalOlder(0), false);
+  });
+
+  it("keeps scroll-up open until a short page has been pulled", () => {
+    assert.equal(
+      scrollOlderHasMore({ pageLength: THREAD_PAGE_SIZE, sourceSettled: false }),
+      true,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: THREAD_PAGE_SIZE - 1, sourceSettled: false }),
+      true,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: 0, sourceSettled: true }),
+      false,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: 0, sourceSettled: true, historyPending: true }),
+      true,
+    );
+    assert.equal(
+      scrollOlderHasMore({ pageLength: THREAD_PAGE_SIZE, sourceSettled: true }),
+      true,
+    );
   });
 
   it("keeps prepended history when a recent page is refetched", () => {
@@ -372,6 +403,64 @@ describe("thread window", () => {
     );
     assert.equal(merged[0], older);
     assert.equal(merged[1], mid);
+  });
+
+  it("does not treat a cancelled open as an empty transcript", () => {
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: false,
+        stillSelected: false,
+        focusAborted: true,
+        loaded: false,
+        attempt: 0,
+      }),
+      "ignore",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: true,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: false,
+        attempt: 0,
+      }),
+      "ignore",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: false,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: false,
+        attempt: 0,
+      }),
+      "retry",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: true,
+        superseded: false,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: false,
+        attempt: OPEN_TIMEOUT_RETRIES,
+      }),
+      "fail",
+    );
+    assert.equal(
+      unfinishedOpenAction({
+        aborted: false,
+        superseded: false,
+        stillSelected: true,
+        focusAborted: false,
+        loaded: true,
+        attempt: 0,
+      }),
+      "ignore",
+    );
   });
 
   it("refetches a thin open window instead of polling only new ingest", () => {

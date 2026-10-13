@@ -27,12 +27,16 @@ export class PersonalStoreMaintenanceService implements OnModuleDestroy {
     this.scheduleStoreMaintenance();
   }
 
-  onModuleDestroy(): void {
-    this.maintainFinished = true;
+  stopBackground(): void {
     if (this.maintainTimer) {
       clearTimeout(this.maintainTimer);
       this.maintainTimer = undefined;
     }
+  }
+
+  onModuleDestroy(): void {
+    this.maintainFinished = true;
+    this.stopBackground();
   }
 
   private scheduleStoreMaintenance(): void {

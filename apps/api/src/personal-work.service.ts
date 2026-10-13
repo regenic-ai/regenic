@@ -145,12 +145,17 @@ export class PersonalWorkService implements OnModuleDestroy {
     void this.afterConnectorTick();
   }
 
-  async onModuleDestroy(): Promise<void> {
+  stopBackground(): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
     }
     this.waits.dropAll();
+    this.backgroundStarted = false;
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.stopBackground();
   }
 
   async pauseForMaintenance(): Promise<void> {
@@ -275,6 +280,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       if (!this.runtime.isReady()) {
         return;
       }
+      await this.dispatch.fillOpenSlots();
       await this.dispatch.reconcileInbox();
       await this.dispatch.dispatchPullRecipes();
     } catch (error) {

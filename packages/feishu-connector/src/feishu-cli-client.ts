@@ -1,14 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
-import {
-  currentSyncLane,
-  DeadlineExceededError,
-  SyncSlotPool,
-  withDeadline,
-} from "@regenic/domain";
 import { sniffMediaType } from "./feishu-message";
 import type { FeishuMention } from "./feishu-message";
 import {
@@ -93,7 +88,9 @@ export interface FeishuListInput {
   page_size: number;
   page_token?: string;
   start_time?: string;
+  end_time?: string;
   sort_type?: FeishuSortType;
+  timeout_ms?: number;
 }
 
 export type FeishuChatMode = "group" | "p2p";
@@ -144,18 +141,190 @@ export interface LarkCliClientOptions {
   fetch?: typeof fetch;
 }
 
-export const LARK_CLI_CONCURRENCY = 2;
+/** Open thread keeps one process. Latest uses 8, matching lark-cli's own GET /messages fan-out. History uses 4. */
+export const LARK_CLI_INTERACTIVE_SLOTS = 1;
+export const LARK_CLI_LIVE_SLOTS = 8;
+export const LARK_CLI_HISTORY_SLOTS = 4;
+export const LARK_CLI_CONCURRENCY =
+  LARK_CLI_INTERACTIVE_SLOTS + LARK_CLI_LIVE_SLOTS + LARK_CLI_HISTORY_SLOTS;
 export const LARK_CLI_RETRIES = 2;
 
-const larkCliSlots = new SyncSlotPool({
+/** Process-local CLI slots. The host does not pass a lane; callers pick one from poll options. */
+export type LarkCliSlot = "interactive" | "live" | "history";
+
+const LARK_CLI_SLOTS: readonly LarkCliSlot[] = ["interactive", "live", "history"];
+const larkSlotContext = new AsyncLocalStorage<LarkCliSlot>();
+const hostAbortContext = new AsyncLocalStorage<AbortSignal>();
+
+export function runWithHostAbort<T>(signal: AbortSignal, work: () => T): T {
+  return hostAbortContext.run(signal, work);
+}
+
+function currentHostAbort(): AbortSignal | undefined {
+  return hostAbortContext.getStore();
+}
+
+class LarkCliSlotPool {
+  private active = 0;
+  private readonly bySlot = new Map<LarkCliSlot, number>();
+  private readonly waiters: Array<{ slot: LarkCliSlot; resolve: () => void }> = [];
+
+  constructor(
+    private readonly options: {
+      total: number;
+      reserved: Record<LarkCliSlot, number>;
+    },
+  ) {}
+
+  async withSlot<T>(slot: LarkCliSlot, work: () => Promise<T>): Promise<T> {
+    await this.acquire(slot);
+    try {
+      return await work();
+    } finally {
+      this.release(slot);
+    }
+  }
+
+  reset(): void {
+    this.active = 0;
+    this.bySlot.clear();
+    this.waiters.length = 0;
+  }
+
+  private async acquire(slot: LarkCliSlot): Promise<void> {
+    if (this.tryAcquire(slot)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.waiters.push({ slot, resolve });
+    });
+  }
+
+  private tryAcquire(slot: LarkCliSlot): boolean {
+    if (!this.canAcquire(slot)) {
+      return false;
+    }
+    this.active += 1;
+    this.bySlot.set(slot, (this.bySlot.get(slot) ?? 0) + 1);
+    return true;
+  }
+
+  private release(slot: LarkCliSlot): void {
+    this.active = Math.max(0, this.active - 1);
+    const count = this.bySlot.get(slot) ?? 0;
+    if (count <= 1) {
+      this.bySlot.delete(slot);
+    } else {
+      this.bySlot.set(slot, count - 1);
+    }
+    this.flushWaiters();
+  }
+
+  private canAcquire(slot: LarkCliSlot): boolean {
+    if (this.active >= this.options.total) {
+      return false;
+    }
+    let protectedOthers = 0;
+    for (const other of LARK_CLI_SLOTS) {
+      if (other === slot) {
+        continue;
+      }
+      const reserved = this.options.reserved[other];
+      const used = this.bySlot.get(other) ?? 0;
+      protectedOthers += Math.max(0, reserved - used);
+    }
+    return this.active + protectedOthers < this.options.total;
+  }
+
+  private flushWaiters(): void {
+    for (let index = 0; index < this.waiters.length; ) {
+      const waiter = this.waiters[index];
+      if (!waiter || !this.canAcquire(waiter.slot)) {
+        index += 1;
+        continue;
+      }
+      this.waiters.splice(index, 1);
+      this.tryAcquire(waiter.slot);
+      waiter.resolve();
+    }
+  }
+}
+
+const larkCliSlots = new LarkCliSlotPool({
   total: LARK_CLI_CONCURRENCY,
-  reserved: { interactive: 1 },
+  reserved: {
+    interactive: LARK_CLI_INTERACTIVE_SLOTS,
+    live: LARK_CLI_LIVE_SLOTS,
+    history: LARK_CLI_HISTORY_SLOTS,
+  },
 });
 
 const readStatusInflight = new Map<string, Promise<Map<string, boolean>>>();
 
+export function runInLarkSlot<T>(slot: LarkCliSlot, work: () => T): T {
+  return larkSlotContext.run(slot, work);
+}
+
+function currentLarkSlot(): LarkCliSlot {
+  return larkSlotContext.getStore() ?? "live";
+}
+
+export function larkSlotForPoll(options?: {
+  older?: boolean;
+  latest?: boolean;
+  media?: boolean;
+}): LarkCliSlot {
+  // Latest owns the single open-thread slot. Scroll-up is a separate
+  // end_time query and uses a history slot so the two do not queue.
+  if (options?.latest === true && options.older !== true) {
+    return "interactive";
+  }
+  if (options?.media === true || options?.older === true) {
+    return "history";
+  }
+  return "live";
+}
+
 export async function withLarkCliSlot<T>(work: () => Promise<T>): Promise<T> {
-  return larkCliSlots.withSlot(currentSyncLane(), work);
+  return larkCliSlots.withSlot(currentLarkSlot(), work);
+}
+
+class LarkDeadlineError extends Error {
+  readonly code = "deadline_exceeded";
+
+  constructor(label: string) {
+    super(`${label} timed out`);
+    this.name = "LarkDeadlineError";
+  }
+}
+
+function withLocalDeadline<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return work;
+  }
+  const signal = AbortSignal.timeout(timeoutMs);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new LarkDeadlineError(label));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export function resetLarkCliSlot(): void {
@@ -237,6 +406,20 @@ export class LarkCliClient implements FeishuImClient {
   }
 
   async listMessages(input: FeishuListInput): Promise<FeishuHistoryPage> {
+    try {
+      return await this.listMessagesOnce(input, true);
+    } catch (error) {
+      if (!isRejectedSenderNameParam(error)) {
+        throw error;
+      }
+      return this.listMessagesOnce(input, false);
+    }
+  }
+
+  private async listMessagesOnce(
+    input: FeishuListInput,
+    withSenderName: boolean,
+  ): Promise<FeishuHistoryPage> {
     const params: Record<string, string | number> = {
       container_id_type: "chat",
       container_id: input.chat_id,
@@ -244,20 +427,29 @@ export class LarkCliClient implements FeishuImClient {
       page_size: input.page_size,
       user_id_type: "open_id",
     };
+    if (withSenderName) {
+      params.with_sender_name = "true";
+    }
     if (input.page_token) {
       params.page_token = input.page_token;
     }
     if (input.start_time) {
       params.start_time = input.start_time;
     }
+    if (input.end_time) {
+      params.end_time = input.end_time;
+    }
     const request = {
       method: "GET" as const,
       path: "/open-apis/im/v1/messages",
       params,
     };
-    // HTTP list shares the CLI slot pool so interactive polls keep a reserved lane.
+    // User-token HTTP does not take a CLI process slot.
     const viaHttp = this.options.userToken
-      ? await withLarkCliSlot(() => this.requestViaHttp(request))
+      ? await this.requestViaHttp({
+          ...request,
+          ...(input.timeout_ms ? { timeout_ms: input.timeout_ms } : {}),
+        })
       : undefined;
     const payload =
       viaHttp !== undefined ? viaHttp : await this.requestViaCli(request);
@@ -271,25 +463,30 @@ export class LarkCliClient implements FeishuImClient {
     names?: boolean;
   }): Promise<FeishuChatPage> {
     const types = normalizeChatTypes(input.types);
-    const page =
-      types.length === 1 && types[0] === "group"
-        ? await this.listChatsViaOpenApi(input)
-        : await this.listChatsViaShortcut(input, types);
+    const page = await this.listChatsViaOpenApi(input, types);
     if (input.names !== false) {
       await this.fillP2pNames(page.items);
     }
     return page;
   }
 
-  /** Official /im/v1/chats is groups only. Used when the census does not need p2p. */
-  private async listChatsViaOpenApi(input: {
-    page_size: number;
-    page_token?: string;
-  }): Promise<FeishuChatPage> {
+  /**
+   * `lark-cli im +chat-list` is this endpoint. Omitting `types` returns groups
+   * only; `types=p2p,group` is the same list, and p2p rows already include the
+   * peer's name.
+   */
+  private async listChatsViaOpenApi(
+    input: {
+      page_size: number;
+      page_token?: string;
+    },
+    types: FeishuChatMode[],
+  ): Promise<FeishuChatPage> {
     const params: Record<string, string | number> = {
       page_size: Math.min(Math.max(1, input.page_size), 100),
       sort_type: "ByActiveTimeDesc",
       user_id_type: "open_id",
+      types: types.join(","),
     };
     if (input.page_token) {
       params.page_token = input.page_token;
@@ -299,17 +496,19 @@ export class LarkCliClient implements FeishuImClient {
       path: "/open-apis/im/v1/chats",
       params,
     };
+    // User-token HTTP does not take a CLI process slot.
     const viaHttp = this.options.userToken
-      ? await withLarkCliSlot(() => this.requestViaHttp(request))
+      ? await this.requestViaHttp(request)
       : undefined;
     const page = parseChatPage(
       viaHttp !== undefined ? viaHttp : await this.requestViaCli(request),
     );
+    const fallback = types.length === 1 ? types[0] : undefined;
     return {
       ...page,
       items: page.items.map((chat) => ({
         ...chat,
-        chat_mode: chat.chat_mode ?? "group",
+        chat_mode: chat.chat_mode ?? fallback,
       })),
     };
   }
@@ -340,37 +539,6 @@ export class LarkCliClient implements FeishuImClient {
       chatInfoCache.set(id, { chat: null, at: now });
       return null;
     }
-  }
-
-  private async listChatsViaShortcut(
-    input: {
-      page_size: number;
-      page_token?: string;
-    },
-    types: FeishuChatMode[],
-  ): Promise<FeishuChatPage> {
-    const argv = [
-      this.command,
-      "im",
-      "+chat-list",
-      "--as",
-      "user",
-      "--types",
-      types.join(","),
-      "--page-size",
-      String(input.page_size),
-      "--format",
-      "json",
-    ];
-    if (input.page_token) {
-      argv.push("--page-token", input.page_token);
-    }
-    const result = await this.runCli({
-      command: argv,
-      env: this.options.env,
-      timeout_ms: this.timeoutMs,
-    });
-    return parseChatPage(unwrapLarkCli(result));
   }
 
   async listRecentChats(
@@ -451,15 +619,7 @@ export class LarkCliClient implements FeishuImClient {
     types?: FeishuChatMode[],
     deadline?: number,
   ): Promise<FeishuChat[]> {
-    const normalized = normalizeChatTypes(types);
-    const chats: FeishuChat[] = [];
-    if (normalized.includes("group")) {
-      chats.push(...(await this.fetchChatPages(maxPages, ["group"], deadline)));
-    }
-    if (normalized.includes("p2p")) {
-      chats.push(...(await this.fetchChatPages(maxPages, ["p2p"], deadline)));
-    }
-    return chats;
+    return this.fetchChatPages(maxPages, normalizeChatTypes(types), deadline);
   }
 
   private async fetchChatPages(
@@ -475,9 +635,9 @@ export class LarkCliClient implements FeishuImClient {
         break;
       }
       try {
-        const result = await withDeadline(
+        const result = await withLocalDeadline(
           this.listChats({
-            page_size: 50,
+            page_size: 100,
             page_token: pageToken,
             types,
             names: types.includes("p2p"),
@@ -491,7 +651,7 @@ export class LarkCliClient implements FeishuImClient {
         }
         pageToken = result.page_token;
       } catch (error) {
-        if (deadline && error instanceof DeadlineExceededError) {
+        if (chats.length > 0 || (deadline && error instanceof LarkDeadlineError)) {
           break;
         }
         throw error;
@@ -893,6 +1053,7 @@ export class LarkCliClient implements FeishuImClient {
       base_url: feishuOpenApiBaseUrl(brand),
       fetch: this.options.fetch,
       timeout_ms: input.timeout_ms ?? Math.min(this.timeoutMs, 20_000),
+      signal: currentHostAbort(),
     });
   }
 
@@ -1008,8 +1169,8 @@ export class LarkCliClient implements FeishuImClient {
   }
 
   /**
-   * Prefer official contact batch over HTTP (user token). Fall back to
-   * `contact +search-user` for missing ids or when no token is available.
+   * Prefer the names already on the message list. Contact batch is only for
+   * ids still missing, and CLI only when there is no user token.
    */
   private async lookupUserNamesFresh(ids: string[]): Promise<Map<string, string>> {
     if (ids.length === 0) {
@@ -1018,14 +1179,6 @@ export class LarkCliClient implements FeishuImClient {
     const viaHttp = await this.lookupUserNamesViaOpenApi(ids);
     if (!viaHttp) {
       return this.lookupUserNamesViaCli(ids);
-    }
-    const missing = ids.filter((id) => !viaHttp.has(id));
-    if (missing.length === 0) {
-      return viaHttp;
-    }
-    const viaCli = await this.lookupUserNamesViaCli(missing);
-    for (const [id, name] of viaCli) {
-      viaHttp.set(id, name);
     }
     return viaHttp;
   }
@@ -1041,7 +1194,7 @@ export class LarkCliClient implements FeishuImClient {
           user_id_type: "open_id",
           user_ids: ids,
         },
-        timeout_ms: Math.min(this.timeoutMs, 15_000),
+        timeout_ms: 3_000,
       });
       if (payload === undefined) {
         return undefined;
@@ -1057,26 +1210,44 @@ export class LarkCliClient implements FeishuImClient {
       return new Map();
     }
     try {
-      const result = await this.runCli({
-        command: [
-          this.command,
-          "contact",
-          "+search-user",
-          "--as",
-          "user",
-          "--user-ids",
-          ids.join(","),
-          "--format",
-          "json",
-        ],
-        env: this.options.env,
-        timeout_ms: Math.min(this.timeoutMs, 15_000),
-      });
+      const result = await runInLarkSlot("live", () =>
+        this.runCli({
+          command: [
+            this.command,
+            "contact",
+            "+search-user",
+            "--as",
+            "user",
+            "--user-ids",
+            ids.join(","),
+            "--format",
+            "json",
+          ],
+          env: this.options.env,
+          timeout_ms: 8_000,
+        }),
+      );
       return parseUserNamePage(unwrapLarkCli(result));
     } catch {
       return new Map();
     }
   }
+}
+
+function isRejectedSenderNameParam(error: unknown): boolean {
+  if (!(error instanceof FeishuApiError)) {
+    return false;
+  }
+  if (
+    error.code === "400" ||
+    error.code === "230001" ||
+    error.code === "99992402"
+  ) {
+    return true;
+  }
+  return /with_sender_name|field validation|invalid (request )?param/i.test(
+    error.message,
+  );
 }
 
 export function resolveLarkCommand(configured?: string): string {
@@ -1086,6 +1257,9 @@ export function resolveLarkCommand(configured?: string): string {
   }
   return command;
 }
+
+const LARK_CLI_SIGN_IN_MESSAGE =
+  "Feishu is not signed in. Run: lark-cli auth login --recommend";
 
 export function unwrapLarkCli(result: FeishuSpawnResult): unknown {
   const stdout = result.stdout.trim();
@@ -1098,15 +1272,11 @@ export function unwrapLarkCli(result: FeishuSpawnResult): unknown {
         result.stderr.trim() || "lark-cli returned invalid JSON",
       );
     }
+  } else {
+    parsed = parseCliJson(result.stderr);
   }
   if (isObject(parsed) && parsed.ok === false) {
-    const error = isObject(parsed.error) ? parsed.error : undefined;
-    throw new FeishuApiError(
-      stringValue(error?.message) ??
-        (result.stderr.trim() || "lark-cli request failed"),
-      stringValue(error?.subtype) ??
-        (typeof error?.code === "number" ? String(error.code) : undefined),
-    );
+    throw larkCliNotOk(parsed, result);
   }
   if (result.exit_code !== 0) {
     throw new FeishuApiError(
@@ -1123,6 +1293,53 @@ export function unwrapLarkCli(result: FeishuSpawnResult): unknown {
     return parsed.data;
   }
   return parsed;
+}
+
+function parseCliJson(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function larkCliNotOk(
+  parsed: Record<string, unknown>,
+  result: FeishuSpawnResult,
+): FeishuApiError {
+  const error = isObject(parsed.error) ? parsed.error : undefined;
+  const subtype = stringValue(error?.subtype);
+  const code =
+    subtype ??
+    (typeof error?.code === "number" ? String(error.code) : undefined);
+  if (subtype === "token_missing") {
+    return new FeishuApiError(LARK_CLI_SIGN_IN_MESSAGE, "token_missing");
+  }
+  return new FeishuApiError(
+    stringValue(error?.message) ??
+      (result.stderr.trim() || "lark-cli request failed"),
+    code,
+  );
+}
+
+function larkCliUserIdentityReady(user: Record<string, unknown>): boolean {
+  if (typeof user.available === "boolean") {
+    return user.available;
+  }
+  if (typeof user.status === "string") {
+    return larkCliIdentityStatusUsable(user.status);
+  }
+  return true;
+}
+
+/** Usable when the CLI still has a user identity, including one it will refresh. */
+function larkCliIdentityStatusUsable(status: string): boolean {
+  const normalized = status.trim().toLowerCase().replace(/[_-]+/g, " ");
+  return normalized === "ready" || normalized.startsWith("needs refresh");
 }
 
 export function parseChatPage(value: unknown): FeishuChatPage {
@@ -1284,10 +1501,10 @@ export function larkCliUserReady(stdout: string, exitCode: number): boolean {
     if (!isObject(parsed) || parsed.ok === false) {
       return false;
     }
-    if (parsed.identity === "user") {
-      return true;
-    }
     if (isObject(parsed.identities) && isObject(parsed.identities.user)) {
+      return larkCliUserIdentityReady(parsed.identities.user);
+    }
+    if (parsed.identity === "user") {
       return true;
     }
     return false;
@@ -1406,24 +1623,50 @@ export async function spawnLarkProcess(input: {
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr.push(chunk);
     });
+    let settled = false;
+    const hostAbort = currentHostAbort();
+    const finish = (settle: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      hostAbort?.removeEventListener("abort", onHostAbort);
+      settle();
+    };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new FeishuApiError(`lark-cli timed out after ${input.timeout_ms}ms`));
+      finish(() => {
+        reject(new FeishuApiError(`lark-cli timed out after ${input.timeout_ms}ms`));
+      });
     }, input.timeout_ms);
+    const onHostAbort = () => {
+      child.kill("SIGKILL");
+      finish(() => {
+        reject(new FeishuApiError("lark-cli aborted"));
+      });
+    };
+    if (hostAbort?.aborted) {
+      onHostAbort();
+      return;
+    }
+    hostAbort?.addEventListener("abort", onHostAbort, { once: true });
     child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(
-        new FeishuApiError(
-          `Unable to start lark-cli (is it on PATH?): ${error.message}`,
-        ),
-      );
+      finish(() => {
+        reject(
+          new FeishuApiError(
+            `Unable to start lark-cli (is it on PATH?): ${error.message}`,
+          ),
+        );
+      });
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-        exit_code: code ?? 1,
+      finish(() => {
+        resolve({
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+          exit_code: code ?? 1,
+        });
       });
     });
   });

@@ -147,14 +147,16 @@ export function mergeOlderInbox(
 
 export function olderInboxCursor(
   items: InboxViewItem[],
-): { before: string; before_id: string } | null {
+): { before: string; before_id: string; before_external_id?: string } | null {
   const first = items[0];
   if (!first) {
     return null;
   }
+  const externalId = first.event.external_id?.trim();
   return {
     before: first.event.occurred_at,
     before_id: first.event.id,
+    ...(externalId ? { before_external_id: externalId } : {}),
   };
 }
 
@@ -226,6 +228,34 @@ export function hasOlderPage(
   return pageLength >= limit;
 }
 
+/** Messages already stored locally should appear before a short page asks the source. */
+export function shouldPaintLocalOlder(
+  pageLength: number,
+  limit = THREAD_PAGE_SIZE,
+): boolean {
+  return pageLength > 0 && pageLength < limit;
+}
+
+/**
+ * A full local page can keep scrolling.
+ * A short page is the end only after the source pull for it has finished.
+ */
+export function scrollOlderHasMore(input: {
+  pageLength: number;
+  sourceSettled: boolean;
+  /** Source still has older records after this pull. */
+  historyPending?: boolean;
+  limit?: number;
+}): boolean {
+  if (hasOlderPage(input.pageLength, input.limit ?? THREAD_PAGE_SIZE)) {
+    return true;
+  }
+  if (!input.sourceSettled) {
+    return true;
+  }
+  return input.historyPending === true;
+}
+
 function isBeforeEvent(
   event: { occurred_at: string; id: string },
   before: string,
@@ -243,6 +273,37 @@ export function shouldFetchInboxDelta(input: {
   hasCursor: boolean;
 }): boolean {
   return input.loaded && input.hasCursor && input.loadedCount > 1;
+}
+
+/** Extra attempts after a timed-out open while the user stays on that thread. */
+export const OPEN_TIMEOUT_RETRIES = 2;
+
+export type UnfinishedOpen = {
+  aborted: boolean;
+  superseded: boolean;
+  stillSelected: boolean;
+  focusAborted: boolean;
+  loaded: boolean;
+  /** Failures already spent before this one. */
+  attempt: number;
+};
+
+/** What to do when an open-thread fetch does not return a page. */
+export type UnfinishedOpenAction = "ignore" | "retry" | "fail";
+
+/**
+ * Cancelling an open, or losing it to a newer load, is not an empty transcript.
+ * A timeout while the user is still looking at the thread retries, then fails
+ * visibly. Leaving the thread drops the attempt.
+ */
+export function unfinishedOpenAction(input: UnfinishedOpen): UnfinishedOpenAction {
+  if (input.loaded || input.superseded || !input.stillSelected || input.focusAborted) {
+    return "ignore";
+  }
+  if (input.aborted && input.attempt < OPEN_TIMEOUT_RETRIES) {
+    return "retry";
+  }
+  return "fail";
 }
 
 export function inboxCursor(

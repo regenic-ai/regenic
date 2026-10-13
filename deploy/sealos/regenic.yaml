@@ -74,6 +74,8 @@ spec:
               value: "1"
             - name: REGENIC_AUTHORITY_DRIVER
               value: sqlite
+            - name: REGENIC_REPLICAS
+              value: "1"
             - name: REGENIC_DATABASE
               value: /data/regenic.db
             - name: REGENIC_BLOB_ROOT

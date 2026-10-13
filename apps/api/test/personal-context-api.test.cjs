@@ -948,6 +948,23 @@ describe("personal context API", () => {
     const before = await fetch(`${origin}/v1/me/context/artifacts`);
     assert.equal(before.status, 200);
     assert.equal((await before.json())[0].status, "proposed");
+    const summariesResponse = await fetch(`${origin}/v1/me/context/artifact-summaries`);
+    assert.equal(summariesResponse.status, 200);
+    const summary = (await summariesResponse.json())[0];
+    assert.equal(summary.id, "summary-api-1");
+    assert.equal(summary.title, "Release approved");
+    assert.equal(summary.message_count, 1);
+    assert.equal(summary.thread_id, "chat-1");
+    assert.equal(summary.messages, undefined);
+    const recordResponse = await fetch(
+      `${origin}/v1/me/context/artifacts/${encodeURIComponent("summary-api-1")}/record`,
+    );
+    assert.equal(recordResponse.status, 200);
+    const record = await recordResponse.json();
+    assert.deepEqual(record.messages, [{ text: "Release approved" }]);
+    assert.equal(record.message_total, 1);
+    assert.equal(record.message_limit, 40);
+    assert.equal(record.input_refs, undefined);
     const accepted = await postJson(`${origin}/v1/me/context/artifacts/summary-api-1/decision`, { status: "accepted" });
     assert.equal(accepted.response.status, 201, accepted.text);
     assert.equal(JSON.parse(accepted.text).status, "accepted");

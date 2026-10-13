@@ -605,7 +605,7 @@ export const ThreadPane = memo(function ThreadPane({
                 {t("thread.loadingEarlier")}
               </span>
             ) : null}
-            {syncNote ? (
+            {syncNote && (!loadingOlder || syncTone === "error") ? (
               <span className={`thread-sync${syncTone === "error" ? " is-error" : ""}`}>
                 <span className="dot" />
                 {syncNote}

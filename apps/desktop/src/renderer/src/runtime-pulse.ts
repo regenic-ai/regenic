@@ -27,6 +27,7 @@ export function applyHeartbeatToEngine(
     catching_up_count: heartbeat.pull.catching_up_count,
     last_tick_at: heartbeat.pull.last_tick_at,
     last_accepted_count: heartbeat.pull.last_accepted_count,
+    streams: heartbeat.pull.streams ?? current.pull?.streams ?? [],
   };
   const pulseById = new Map(
     (heartbeat.installations ?? []).map((item) => [item.id, item] as const),

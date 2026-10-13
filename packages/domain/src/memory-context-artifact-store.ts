@@ -1,5 +1,9 @@
 import { canonicalContextJson } from "./context-canonical";
 import type { ContextArtifact } from "./context-artifact";
+import {
+  contextArtifactPreview,
+  type ContextArtifactIndex,
+} from "./context-artifact-summary";
 import type {
   ContextArtifactDecision,
   ContextArtifactState,
@@ -70,6 +74,16 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
       .sort((left, right) => compare(`${left.recorded_at}\u0000${left.id}`, `${right.recorded_at}\u0000${right.id}`))
       .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY)
       .map(clone);
+  }
+
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return (await this.listArtifacts(query)).map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      status: artifact.status,
+      recorded_at: artifact.recorded_at,
+      preview: contextArtifactPreview(artifact),
+    }));
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {

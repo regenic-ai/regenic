@@ -8,7 +8,7 @@ const {
   MemoryConnectorRegistry,
   MemoryEgressRegistry,
   verifyChannelDriverConformance,
-} = require("@regenic/domain");
+} = require("@regenic/connector-test-utils");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const { cursorAgentPlugin } = require("../dist/plugin");
 const { cursorAgentDriver } = require("../dist/cursor-agent-driver");

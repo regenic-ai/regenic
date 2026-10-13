@@ -13,7 +13,7 @@ import {
   type TaskExecutor,
   type ThreadPrompt,
   type WorkRun,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import { dshLocaleTables } from "./locales";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
 

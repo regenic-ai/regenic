@@ -7,6 +7,7 @@ import type {
   ConnectorRuntimeStore,
   ConnectorStreamCursor,
   ContextArtifact,
+  ContextArtifactIndex,
   ContextArtifactDecision,
   ContextArtifactQuery,
   ContextArtifactState,
@@ -66,7 +67,9 @@ import type {
   OutboundAttemptPut,
   OutboundAttemptRecord,
   ApplySyncCatalogPageInput,
+  SyncCatalogHead,
   SyncCatalogView,
+  SyncPhaseHead,
   SyncStreamState,
   RepointContentInput,
   ResetConnectorCursor,
@@ -86,6 +89,22 @@ import type {
   WorkStore,
   ExecutorInstallation,
   ExecutorStore,
+  ClaimSyncWork,
+  CommandSyncRun,
+  CommitSyncPage,
+  CommitSyncPageResult,
+  EnqueueSyncWork,
+  ListSyncRunsQuery,
+  NewSyncRun,
+  RenewSyncWork,
+  SettleSyncWork,
+  SyncRun,
+  ListSyncWorkGapsOptions,
+  SyncWorkGap,
+  SyncWorkIdentity,
+  SyncWorkRecord,
+  UnassignedSyncWorkQuery,
+  WakeUnassignedSyncWork,
 } from "@regenic/domain";
 import { resolve } from "node:path";
 import { SqliteWriteClient } from "./sqlite-write-client";
@@ -195,6 +214,10 @@ export class SqliteSplitAuthorityStore
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
     return this.reader.call("listArtifacts", [query]);
+  }
+
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return this.reader.call("listArtifactIndexes", [query]);
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
@@ -535,8 +558,84 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getCursor", [installationId, streamKey]);
   }
 
+  async listCursors(
+    installationId: string,
+    streamKeys?: readonly string[],
+  ): Promise<ConnectorStreamCursor[]> {
+    return this.reader.call("listCursors", [installationId, streamKeys]);
+  }
+
+  async createSyncRun(input: NewSyncRun): Promise<SyncRun> {
+    return this.writer.call("createSyncRun", [input]);
+  }
+
+  async getSyncRun(id: string, orgId: string): Promise<SyncRun | null> {
+    return this.reader.call("getSyncRun", [id, orgId]);
+  }
+
+  async listSyncRuns(query: ListSyncRunsQuery): Promise<SyncRun[]> {
+    return this.reader.call("listSyncRuns", [query]);
+  }
+
+  async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
+    return this.writer.call("commandSyncRun", [input]);
+  }
+
+  async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {
+    return this.writer.call("enqueueSyncWork", [input]);
+  }
+
+  async enqueueSyncWorkMany(
+    inputs: readonly EnqueueSyncWork[],
+  ): Promise<number> {
+    return this.writer.call("enqueueSyncWorkMany", [inputs]);
+  }
+
+  async claimSyncWork(input: ClaimSyncWork): Promise<SyncWorkRecord[]> {
+    return this.writer.call("claimSyncWork", [input]);
+  }
+
+  async renewSyncWork(input: RenewSyncWork): Promise<boolean> {
+    return this.writer.call("renewSyncWork", [input]);
+  }
+
+  async settleSyncWork(
+    input: SettleSyncWork,
+  ): Promise<SyncWorkRecord | null> {
+    return this.writer.call("settleSyncWork", [input]);
+  }
+
+  async hasUnassignedSyncWork(
+    query: UnassignedSyncWorkQuery = {},
+  ): Promise<boolean> {
+    return this.reader.call("hasUnassignedSyncWork", [query]);
+  }
+
+  async listUnassignedSyncWorkIdentities(query: {
+    installation_id: string;
+  }): Promise<SyncWorkIdentity[]> {
+    return this.reader.call("listUnassignedSyncWorkIdentities", [query]);
+  }
+
+  async listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
+    return this.reader.call("listSyncWorkGaps", [installationId, options]);
+  }
+
+  async wakeUnassignedSyncWork(
+    input: WakeUnassignedSyncWork,
+  ): Promise<number> {
+    return this.writer.call("wakeUnassignedSyncWork", [input]);
+  }
+
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
     return this.reader.call("getSyncCatalog", [installationId]);
+  }
+
+  async getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    return this.reader.call("getSyncCatalogHead", [installationId]);
   }
 
   async applySyncCatalogPage(
@@ -547,6 +646,10 @@ export class SqliteSplitAuthorityStore
 
   async listSyncStates(installationId: string): Promise<SyncStreamState[]> {
     return this.reader.call("listSyncStates", [installationId]);
+  }
+
+  async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
+    return this.reader.call("listSyncPhaseHeads", [installationId]);
   }
 
   async getSyncState(
@@ -621,8 +724,11 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("deleteRecipe", [orgId, id]);
   }
 
-  async listWorkItems(orgId: string): Promise<WorkItem[]> {
-    return this.reader.call("listWorkItems", [orgId]);
+  async listWorkItems(
+    orgId: string,
+    options?: { statuses?: readonly import("@regenic/domain").WorkItemStatus[] },
+  ): Promise<WorkItem[]> {
+    return this.reader.call("listWorkItems", [orgId, options]);
   }
 
   async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
@@ -634,6 +740,14 @@ export class SqliteSplitAuthorityStore
     threadId: string,
   ): Promise<WorkItem | null> {
     return this.reader.call("getWorkItemByThread", [orgId, threadId]);
+  }
+
+  async getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
+  ): Promise<WorkItem | null> {
+    return this.reader.call("getWorkItemByUnitKey", [orgId, threadId, unitKey]);
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {
@@ -655,12 +769,20 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getActiveWorkRun", [orgId, workItemId]);
   }
 
+  async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {
+    return this.reader.call("listHiddenExecutorThreadIds", [orgId]);
+  }
+
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return this.writer.call("putWorkRun", [run]);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return this.reader.call("listWorkDeliveries", [orgId]);
+  }
+
+  async listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]> {
+    return this.reader.call("listDueWorkDeliveries", [orgId, now]);
   }
 
   async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {
@@ -750,6 +872,7 @@ export class SqliteSplitAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     return this.writer.call("acquireLease", [input]);
   }
@@ -766,6 +889,10 @@ export class SqliteSplitAuthorityStore
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
     return this.writer.call("beginAttempt", [input]);
+  }
+
+  async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    return this.writer.call("commitSyncPage", [input]);
   }
 
   async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {

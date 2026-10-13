@@ -5,7 +5,7 @@ import {
   type IngestBatch,
   type IngestOperation,
   type IngestRecord,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import { whatsappConversationKind } from "./whatsapp-ids";
 
 export const WHATSAPP_PERSONAL_EXPORT_SCHEMA_VERSION = "1.0" as const;

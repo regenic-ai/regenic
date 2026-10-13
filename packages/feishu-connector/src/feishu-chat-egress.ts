@@ -5,7 +5,7 @@ import type {
   EgressAdapter,
   EgressCapabilities,
   SendIntent,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import {
   FeishuApiError,
   type FeishuImClient,

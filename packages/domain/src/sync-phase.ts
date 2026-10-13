@@ -4,6 +4,9 @@ import type {
   SyncPollHint,
   SyncStreamState,
 } from "./sync-contracts";
+import type { CursorKind } from "./sync-cursor-commit";
+import { sameLaneContinues } from "./sync-cursor-commit";
+import type { HistoryPolicy } from "./sync-history";
 
 /**
  * Opaque empty check only — core must not parse wire cursor encodings.
@@ -21,9 +24,15 @@ export function deriveSyncPhase(input: {
   now?: string;
   /** Prior stored phase when poll_hint is absent (opaque non-empty cursor). */
   fallback_phase?: SyncPhase;
+  cursor_kind?: CursorKind;
+  history_policy?: HistoryPolicy;
 }): SyncPhase {
   if (input.poll_hint) {
-    return deriveSyncPhaseFromHint(input.poll_hint, input.idle_until, input.now);
+    return deriveSyncPhaseFromHint(input.poll_hint, input.idle_until, input.now, {
+      fallback: input.fallback_phase,
+      policy: input.history_policy,
+      cursorKind: input.cursor_kind,
+    });
   }
   if (streamCursorUnseeded(input.live_cursor)) {
     return "unseeded";
@@ -44,11 +53,51 @@ export function deriveSyncPhase(input: {
   return "unseeded";
 }
 
+export interface SyncPhaseGuard {
+  fallback?: SyncPhase;
+  policy?: HistoryPolicy;
+  cursorKind?: CursorKind;
+}
+
 export function deriveSyncPhaseFromHint(
   hint: SyncPollHint,
   idleUntil?: string | null,
   now?: string,
+  guard?: SyncPhaseGuard,
 ): SyncPhase {
+  const policy = guard?.policy ?? "backfill";
+  const fallback = guard?.fallback;
+  const kind = guard?.cursorKind;
+  if (kind === "scroll" && fallback && fallback !== "unseeded") {
+    return fallback;
+  }
+  if (policy === "incremental") {
+    if (
+      hint.live_seeded === false &&
+      fallback !== "live" &&
+      fallback !== "steady"
+    ) {
+      return "unseeded";
+    }
+    if (idleUntil && now && idleUntil > now) {
+      return "steady";
+    }
+    return "live";
+  }
+  // Opening a chat pulls the newest page and must not finish or restart history.
+  if (kind === "live" && fallback === "history") {
+    return "history";
+  }
+  // A stream that already caught up stays on the live tail.
+  if (fallback === "live" || fallback === "steady") {
+    if (hint.live_seeded === false) {
+      return fallback;
+    }
+    if (idleUntil && now && idleUntil > now) {
+      return "steady";
+    }
+    return fallback === "steady" ? "steady" : "live";
+  }
   if (hint.live_seeded === false) {
     return "unseeded";
   }
@@ -92,18 +141,23 @@ export function advanceSyncState(
   const history =
     outcome.next_history_cursor !== undefined
       ? outcome.next_history_cursor
-      : current?.history_cursor ?? live;
+      : current?.history_cursor;
   const mediaPending =
     outcome.media_pending !== undefined
       ? outcome.media_pending
       : (current?.media_pending ?? false);
+  const continues = sameLaneContinues({
+    kind: outcome.cursor_kind ?? (outcome.older ? "history" : "live"),
+    hasMore: outcome.has_more,
+    historyPending: outcome.poll_hint?.history_pending === true,
+  });
   const idleUntil =
     !outcome.error &&
-    !outcome.has_more &&
+    !continues &&
     outcome.idle_ms &&
     outcome.idle_ms > 0
       ? new Date(Date.parse(outcome.now) + outcome.idle_ms).toISOString()
-      : outcome.has_more || outcome.error
+      : continues || outcome.error
         ? undefined
         : current?.idle_until;
   const phase = outcome.error
@@ -115,6 +169,8 @@ export function advanceSyncState(
         poll_hint: outcome.poll_hint,
         now: outcome.now,
         fallback_phase: current?.phase,
+        cursor_kind: outcome.cursor_kind,
+        history_policy: outcome.history_policy,
       });
   return {
     installation_id: outcome.installation_id,

@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const {
   ConnectorRunner,
   INGEST_SCHEMA_VERSION,
+  InProcessConnectorInvoker,
   InstallationQuotaBook,
   MemoryConnectorRuntimeStore,
 } = require("../dist");
@@ -61,7 +62,7 @@ function createRunner(runtime, records) {
   };
   const processor = { async ingest() { return validResult(records); } };
   const runner = new ConnectorRunner(
-    connector,
+    new InProcessConnectorInvoker(connector),
     processor,
     runtime,
     () => "2026-08-12T00:00:00.000Z",
@@ -396,6 +397,58 @@ describe("ConnectorRunner", () => {
     assert.equal(run.result.records[0].status, "accepted");
   });
 
+  it("lets ingest commit the page without a second settle", async () => {
+    const runtime = await createRuntime();
+    let pages = 0;
+    const original = runtime.commitSyncPage.bind(runtime);
+    runtime.commitSyncPage = async (input) => {
+      pages += 1;
+      return original(input);
+    };
+    const runner = new ConnectorRunner(
+      {
+        async poll() {
+          return { batch: batch(), next_cursor: "cursor-2" };
+        },
+      },
+      {
+        async ingest(_input, page) {
+          await runtime.commitSyncPage({
+            attempt: page.attempt,
+            settle: {
+              ...page.settle,
+              accepted_count: 1,
+              duplicate_count: 0,
+              quarantined_count: 0,
+              retryable_failure_count: 0,
+              quarantines: [],
+            },
+          });
+          return {
+            valid: true,
+            connector_id: "fake-poll",
+            delivery_id: "page-1",
+            records: [
+              {
+                external_id: "message-1",
+                status: "accepted",
+                event_id: "event-1",
+              },
+            ],
+            page_committed: true,
+          };
+        },
+      },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    const run = await runner.poll(input);
+    assert.equal(run.status, "completed");
+    assert.equal(pages, 1);
+    const cursor = await runtime.getCursor("installation-1", "personal");
+    assert.equal(cursor.cursor, "cursor-2");
+  });
+
   it("does not ingest a webhook when the mode is poll-only", async () => {
     const runtime = await createRuntime();
     const runner = new ConnectorRunner(
@@ -423,5 +476,37 @@ describe("ConnectorRunner", () => {
       },
     });
     assert.equal(run.status, "unsupported_mode");
+  });
+
+  it("ingests a scroll without moving the lease cursor", async () => {
+    const runtime = await createRuntime();
+    const seen = [];
+    const connector = {
+      async poll(cursor) {
+        seen.push(cursor?.value ?? null);
+        return {
+          batch: batch(),
+          next_cursor: seen.length === 1 ? "cursor-2" : "scroll-blob",
+        };
+      },
+    };
+    const runner = new ConnectorRunner(
+      new InProcessConnectorInvoker(connector),
+      { async ingest() { return validResult([{ external_id: "message-1", status: "accepted", event_id: "event-1" }]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    await runner.poll(input);
+    const scrolled = await runner.poll({
+      ...input,
+      cursor: "live-blob",
+      commit_cursor: false,
+      before: "2026-10-01T00:00:00.000Z",
+    });
+    const cursor = await runtime.getCursor("installation-1", "personal");
+    assert.equal(scrolled.status, "completed");
+    assert.equal(scrolled.next_cursor, "scroll-blob");
+    assert.deepEqual(seen, [null, "live-blob"]);
+    assert.equal(cursor.cursor, "cursor-2");
   });
 });

@@ -1,3 +1,4 @@
+import { createDecipheriv } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -124,6 +125,74 @@ export async function readLarkCliIdentity(
   }
 }
 
+const LARK_AES_KEY_BYTES = 32;
+const LARK_AES_IV_BYTES = 12;
+const LARK_AES_TAG_BYTES = 16;
+
+/** `~/Library/Application Support/lark-cli`. The OS keychain only holds `master.key`. */
+export function larkCliDarwinStorageDir(
+  service: string,
+  home: string = homedir(),
+): string {
+  return join(home, "Library", "Application Support", service);
+}
+
+/** Account `appId:userOpenId` becomes `appId_userOpenId.enc`. */
+export function larkCliSecretFileName(account: string): string {
+  return `${account.replace(/[^a-zA-Z0-9._-]/g, "_")}.enc`;
+}
+
+const GO_KEYRING_BASE64_PREFIX = "go-keyring-base64:";
+const GO_KEYRING_HEX_PREFIX = "go-keyring-encoded:";
+
+/**
+ * zalando/go-keyring stores every macOS password with a prefix so `security`
+ * does not hex-encode it on the way back out.
+ */
+export function unwrapGoKeyringSecret(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith(GO_KEYRING_BASE64_PREFIX)) {
+    const text = Buffer.from(
+      trimmed.slice(GO_KEYRING_BASE64_PREFIX.length),
+      "base64",
+    ).toString("utf8");
+    return text.length > 0 ? text : undefined;
+  }
+  if (trimmed.startsWith(GO_KEYRING_HEX_PREFIX)) {
+    const text = Buffer.from(
+      trimmed.slice(GO_KEYRING_HEX_PREFIX.length),
+      "hex",
+    ).toString("utf8");
+    return text.length > 0 ? text : undefined;
+  }
+  return trimmed;
+}
+
+/** AES-GCM blob written by lark-cli: 12-byte nonce, ciphertext, 16-byte tag. */
+export function decryptLarkCliSecret(
+  data: Uint8Array,
+  key: Uint8Array,
+): string | undefined {
+  if (key.byteLength !== LARK_AES_KEY_BYTES || data.byteLength < LARK_AES_IV_BYTES + LARK_AES_TAG_BYTES) {
+    return undefined;
+  }
+  const iv = data.subarray(0, LARK_AES_IV_BYTES);
+  const tag = data.subarray(data.byteLength - LARK_AES_TAG_BYTES);
+  const ciphertext = data.subarray(LARK_AES_IV_BYTES, data.byteLength - LARK_AES_TAG_BYTES);
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    const text = plain.toString("utf8");
+    return text.length > 0 ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function readDarwinKeychainSecret(
   service: string,
   account: string,
@@ -131,7 +200,11 @@ export async function readDarwinKeychainSecret(
   if (process.platform !== "darwin") {
     return undefined;
   }
-  return readKeychainSecretViaSpawn("security", [
+  const encrypted = await readDarwinEncryptedSecret(service, account);
+  if (encrypted) {
+    return encrypted;
+  }
+  const raw = await readKeychainSecretViaSpawn("security", [
     "find-generic-password",
     "-s",
     service,
@@ -139,6 +212,58 @@ export async function readDarwinKeychainSecret(
     account,
     "-w",
   ]);
+  return raw ? unwrapGoKeyringSecret(raw) : undefined;
+}
+
+async function readDarwinEncryptedSecret(
+  service: string,
+  account: string,
+): Promise<string | undefined> {
+  const dir = larkCliDarwinStorageDir(service);
+  let data: Buffer;
+  try {
+    data = await readFile(join(dir, larkCliSecretFileName(account)));
+  } catch {
+    return undefined;
+  }
+  const fileKey = await readDarwinFileMasterKey(dir);
+  if (fileKey) {
+    const plain = decryptLarkCliSecret(data, fileKey);
+    if (plain) {
+      return plain;
+    }
+  }
+  const keychainKey = await readDarwinMasterKey(service);
+  if (!keychainKey) {
+    return undefined;
+  }
+  return decryptLarkCliSecret(data, keychainKey);
+}
+
+async function readDarwinFileMasterKey(dir: string): Promise<Buffer | undefined> {
+  try {
+    const key = await readFile(join(dir, "master.key.file"));
+    return key.byteLength === LARK_AES_KEY_BYTES ? key : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readDarwinMasterKey(service: string): Promise<Buffer | undefined> {
+  const encoded = await readKeychainSecretViaSpawn("security", [
+    "find-generic-password",
+    "-s",
+    service,
+    "-a",
+    "master.key",
+    "-w",
+  ]);
+  const unwrapped = encoded ? unwrapGoKeyringSecret(encoded) : undefined;
+  if (!unwrapped) {
+    return undefined;
+  }
+  const key = Buffer.from(unwrapped, "base64");
+  return key.byteLength === LARK_AES_KEY_BYTES ? key : undefined;
 }
 
 /** Reads lark-cli UAT JSON from the platform credential store. */

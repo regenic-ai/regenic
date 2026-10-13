@@ -15,7 +15,7 @@ import {
   type NewConnectorInstallation,
   type PromptAnswer,
   type SyncSource,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
 import {
   dshPromptStoreFor,

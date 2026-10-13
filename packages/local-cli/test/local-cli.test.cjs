@@ -1567,10 +1567,10 @@ it("reviews overdue personal follow-ups through the local CLI", async () => {
     connector_id: "native-local",
     org_id: "local-owner",
     delivery_id: "follow-up-1",
-    received_at: "2020-01-01T12:00:00.000Z",
+    received_at: "2026-08-11T12:00:00.000Z",
     records: [
-      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2020-01-01T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
-      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2020-01-01T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
+      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2026-08-11T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
+      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2026-08-11T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
     ],
   });
   authority.close();

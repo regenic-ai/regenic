@@ -1,3 +1,17 @@
+export type CatalogOption = {
+  value: string;
+  label: string;
+  kind?: string;
+  title?: string;
+};
+
+export type CatalogField = {
+  key: string;
+  options?: CatalogOption[];
+  filter_options_by?: string;
+  option_labels_key?: string;
+};
+
 export function splitValues(value: string | undefined): string[] {
   return (value ?? "")
     .split(",")
@@ -15,39 +29,35 @@ export function toggleCsvValue(current: string | undefined, value: string): stri
   return [...selected].join(",");
 }
 
-export function conversationNameFromOptionLabel(
-  label: string,
-  chatId: string,
-): string {
-  const name = label.replace(/^(Direct|Group|单聊|群聊)\s*·\s*/i, "").trim();
-  if (!name || name === chatId) {
-    return "";
+export function optionTitle(option: CatalogOption): string {
+  const title = option.title?.replace(/\s+/g, " ").trim();
+  if (title && title !== option.value) {
+    return title;
   }
-  return name;
+  return "";
 }
 
-export function filterCatalogChatOptions(
-  fieldKey: string,
-  options: Array<{ value: string; label: string }>,
+export function filterCatalogFieldOptions(
+  field: Pick<CatalogField, "filter_options_by"> | undefined,
+  options: CatalogOption[],
   values: Record<string, string>,
-): Array<{ value: string; label: string }> {
-  if (fieldKey !== "chat_ids" || values.selection !== "pick") {
+): CatalogOption[] {
+  const filterKey = field?.filter_options_by;
+  if (!filterKey) {
     return options;
   }
-  const kinds = splitValues(values.kinds ?? "group,p2p");
-  if (kinds.length === 0 || kinds.length >= 2) {
+  const allowed = new Set(splitValues(values[filterKey]));
+  if (allowed.size === 0) {
     return options;
   }
-  return options.filter((option) => {
-    const label = option.label;
-    if (kinds.includes("group") && /^(Group|群聊)\s*·/i.test(label)) {
-      return true;
-    }
-    if (kinds.includes("p2p") && /^(Direct|单聊)\s*·/i.test(label)) {
-      return true;
-    }
-    return false;
-  });
+  const typed = options.filter((option) => option.kind);
+  if (typed.length === 0) {
+    return options;
+  }
+  if (typed.every((option) => allowed.has(option.kind!))) {
+    return options;
+  }
+  return options.filter((option) => !option.kind || allowed.has(option.kind));
 }
 
 /**
@@ -55,44 +65,50 @@ export function filterCatalogChatOptions(
  * array is truthy and the install form would render a dead `<select>`.
  */
 export function resolveCatalogFieldOptions(
-  fieldKey: string,
-  fieldOptions: Array<{ value: string; label: string }> | undefined,
-  remoteOptions: Array<{ value: string; label: string }> | undefined,
+  field: CatalogField | undefined,
+  fieldOptions: CatalogOption[] | undefined,
+  remoteOptions: CatalogOption[] | undefined,
   values: Record<string, string>,
-): Array<{ value: string; label: string }> | undefined {
+): CatalogOption[] | undefined {
   const source = remoteOptions ?? fieldOptions;
   if (!source) {
     return undefined;
   }
-  return filterCatalogChatOptions(fieldKey, source, values);
+  return filterCatalogFieldOptions(field, source, values);
 }
 
 export function catalogFieldUsesSelect(
-  options: Array<{ value: string; label: string }> | undefined,
+  options: CatalogOption[] | undefined,
 ): boolean {
   return (options?.length ?? 0) > 0;
 }
 
 export function configWithOptionNames(
   values: Record<string, string>,
-  fields: Array<{
-    key: string;
-    options?: Array<{ value: string; label: string }>;
-  }>,
+  fields: CatalogField[],
 ): Record<string, string> {
   const next = { ...values };
-  delete next.chat_names;
-  const field = fields.find((item) => item.key === "chat_ids");
-  const ids = splitValues(values.chat_ids);
-  if (!field?.options?.length || ids.length === 0) {
-    return next;
+  for (const field of fields) {
+    if (field.option_labels_key) {
+      delete next[field.option_labels_key];
+    }
   }
-  const names = ids.map((id) => {
-    const option = field.options?.find((item) => item.value === id);
-    return conversationNameFromOptionLabel(option?.label ?? "", id);
-  });
-  if (names.every((name) => name.length > 0)) {
-    next.chat_names = names.join(",");
+  for (const field of fields) {
+    const labelKey = field.option_labels_key;
+    if (!labelKey) {
+      continue;
+    }
+    const ids = splitValues(values[field.key]);
+    if (!field.options?.length || ids.length === 0) {
+      continue;
+    }
+    const names = ids.map((id) => {
+      const option = field.options?.find((item) => item.value === id);
+      return option ? optionTitle(option) : "";
+    });
+    if (names.every((name) => name.length > 0)) {
+      next[labelKey] = names.join(",");
+    }
   }
   return next;
 }

@@ -7,7 +7,7 @@ import {
   type CopyRef,
   type LocalNetworkKind,
   type TcpConnect,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
 
 const PROBE_TTL_MS = 20_000;

@@ -24,12 +24,18 @@ describe("conversation focus requests", () => {
       live: true,
     });
     assert.deepEqual(
-      pullOlderFocusRequest("feishu:oc_1", "2026-01-01T00:00:00.000Z", "e1"),
+      pullOlderFocusRequest(
+        "feishu:oc_1",
+        "2026-01-01T00:00:00.000Z",
+        "e1",
+        "oc_1:om_1",
+      ),
       {
         thread_id: "feishu:oc_1",
         pull_older: true,
         before: "2026-01-01T00:00:00.000Z",
         before_id: "e1",
+        before_external_id: "oc_1:om_1",
       },
     );
     assert.deepEqual(mediaDrainFocusRequest("feishu:oc_1"), {

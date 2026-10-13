@@ -34,7 +34,7 @@ export interface SyncLifecycleProgress {
 
 export function summarizeSyncLifecycle(
   members: readonly SyncCatalogMember[],
-  states: ReadonlyMap<string, SyncStreamState>,
+  states: ReadonlyMap<string, Pick<SyncStreamState, "phase" | "media_pending">>,
 ): SyncLifecycleProgress {
   let bootstrapPending = 0;
   let steady = 0;

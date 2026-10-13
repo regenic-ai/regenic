@@ -58,6 +58,20 @@ export class PersonalContextController {
     return this.guard(() => this.context.listArtifacts());
   }
 
+  @Get("artifact-summaries")
+  listArtifactSummaries() {
+    return this.guard(() => this.context.listArtifactSummaries());
+  }
+
+  @Get("artifacts/:artifactId/record")
+  getArtifactRecord(
+    @Param("artifactId") artifactId: string,
+    @Query("offset") offset?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.guard(() => this.context.getArtifactRecord(artifactId, offset, limit));
+  }
+
   @Post("daily-digests/project")
   projectDailyDigest(@Body() body: unknown) {
     return this.guard(() => this.context.projectDailyDigest(body));

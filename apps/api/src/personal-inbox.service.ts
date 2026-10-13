@@ -1,5 +1,4 @@
 import { Inject, Injectable, forwardRef } from "@nestjs/common";
-import { clearAllFeishuMediaJobs } from "@regenic/feishu-connector";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
@@ -7,7 +6,6 @@ import {
   DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
   resolveCopy,
   type CopyLocale,
-  attentionOf,
   arrangeMessage,
   collectFollowUpCandidates,
   followUpSnoozeKey,
@@ -15,29 +13,21 @@ import {
   followUpScanSince,
   PERSONAL_FOLLOW_UP_SCAN_LIMIT,
   collectLatestInbound,
-  computeThreadUnread,
   conversationId,
   inboxDigest,
   isExecutorSysoutBody,
   headsByThread,
-  isBeforeEvent,
   isLocalOutboundId,
   isThreadStatusItem,
   parseConversationThread,
-  projectThreadFacet,
-  recordClassFromType,
   takeRecentInboxItems,
-  latestForwardedTo,
-  type ForwardedFrom,
   foldByHuman,
   normalizeInboxLimit,
   normalizeInboxListView,
   unfold,
-  resolveMessageSurface,
   threadIdOf,
   withSurfaceGeneration,
   type ArrangementDecision,
-  type AttentionClass,
   type AuthorityStore,
   type BlobStore,
   type ConnectorInstallation,
@@ -47,23 +37,17 @@ import {
   type FollowUpCandidate,
   type InboxItem,
   type InboxQuery,
+  type InboxSummary,
   type IngestAttempt,
-  type ListTitleMode,
-  type MessageDirection,
-  type MessageKind,
   type PromptAnswer,
   type MessageReceipt,
-  type RecordClass,
-  type ThreadActivity,
   type ThreadAttention,
   type ThreadAttentionQuery,
-  type ThreadFacet,
   type ThreadInboundCursor,
   type ThreadInboundScan,
   type ThreadPrompt,
-  type ThreadReceiptQuery,
-  type WorkFace,
   loadSyncProgress,
+  aggregateSyncProgress,
   personalReadTierFromDetail,
   personalReadTierSpec,
   personalInboxReadTier,
@@ -72,12 +56,13 @@ import {
   classifyKernelReachability,
   type KernelPressureView,
   type SyncStore,
+  type SyncRun,
+  type SyncReadinessView,
   withDeadline,
 } from "@regenic/domain";
 import {
   resolveInboxBodies,
   resolveInboxBody,
-  type InboxAttachment,
   type InboxBody,
 } from "./inbox-body";
 import { catalogMembersFromStreams } from "./connector-sync-members";
@@ -93,6 +78,7 @@ import {
 import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-status";
 import { noteInteractiveReadFinished } from "./personal-interactive-gate";
 import { processMemoryView } from "./process-memory";
+import { currentSyncReadiness } from "./sync-metrics-view";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
   PersonalKernelStoppedError,
@@ -104,50 +90,71 @@ import {
   type EngineExecutorView,
   type ExecutorKindCatalogItem,
 } from "./personal-executor.service";
-import { PersonalWorkService, type WorkInboxFace } from "./personal-work.service";
+import { PersonalWorkService } from "./personal-work.service";
 import {
   listPluginInventory,
   resolvePluginDirectory,
   type PluginInventoryItem,
 } from "./channel-plugins";
 
-export interface InboxViewItem {
-  decision: ArrangementDecision;
-  event: EventRecord;
-  body_text?: string;
-  media_type?: string;
-  attachments?: InboxAttachment[];
-  channel: string;
-  channel_label: string;
-  kind: MessageKind;
-  direction: MessageDirection;
-  can_send: boolean;
-  await_reply: boolean;
-  hold_while_working: boolean;
-  list_title: ListTitleMode;
-  thread_id: string;
-  title: string | null;
-  pinned: boolean;
-  hidden: boolean;
-  pref_updated_at: string | null;
-  conversation_label: string | null;
-  conversation_kind: string | null;
-  unit_kind: string | null;
-  unit_kind_label: string | null;
-  actor_label: string | null;
-  activity?: ThreadActivity;
-  prompts: ThreadPrompt[];
-  unread: boolean;
-  unread_count: number;
-  can_receipt: boolean;
-  receipt?: MessageReceipt;
-  record_class: RecordClass;
-  thread_facet: ThreadFacet;
-  attention: AttentionClass;
-  work?: WorkFace;
-  forwarded_from?: ForwardedFrom;
-  forwarded_to?: ForwardedFrom;
-}
+import {
+  CHANGED_INBOX_EVENT_CAP,
+  collectChangedInboxThreadIds,
+  headsLiveFetchLimit,
+  headsNextBefore,
+  parseSinceInboxDigest,
+  partitionLiveInboxHeads,
+  shouldFallbackChangedInboxHeads,
+  shouldLoadChangedInboxHeads,
+  shouldSplitInboxHeads,
+  splitChangedInboxHeads,
+  splitHeadExcludeIds,
+  splitInboxHeadViews,
+  trimInboxHead,
+  type InboxHeadsPage,
+  type InboxListQuery,
+} from "./personal-inbox-heads";
+import {
+  loadInboxReceipts,
+  receiptQueriesOf,
+  type InboxResolvedRow,
+} from "./personal-inbox-receipts";
+import {
+  byEventTime,
+  messageSurfaceOf,
+  threadOf,
+} from "./personal-inbox-surface";
+import {
+  conversationLabelsFor,
+  decorateInboxItem,
+  loadForwardedToTraces,
+  projectForwardedTo,
+  type InboxViewItem,
+} from "./personal-inbox-view";
+
+export {
+  CHANGED_INBOX_EVENT_CAP,
+  CHANGED_INBOX_THREAD_CAP,
+  collectChangedInboxThreadIds,
+  headsLiveFetchLimit,
+  headsNextBefore,
+  parseSinceInboxDigest,
+  partitionLiveInboxHeads,
+  shouldFallbackChangedInboxHeads,
+  shouldLoadChangedInboxHeads,
+  shouldSplitInboxHeads,
+  splitChangedInboxHeads,
+  splitHeadExcludeIds,
+  splitInboxHeadViews,
+  trimInboxHead,
+} from "./personal-inbox-heads";
+export type {
+  InboxHeadsCursor,
+  InboxHeadsPage,
+  InboxListQuery,
+} from "./personal-inbox-heads";
+export type { InboxViewItem } from "./personal-inbox-view";
+
 
 export interface ConversationPrefView {
   thread_id: string;
@@ -180,6 +187,59 @@ export interface ConversationPromptInput {
 }
 
 const MAX_TITLE_LENGTH = 120;
+const ATTENTION_CACHE_MAX = 500;
+const RECEIPT_CACHE_MAX = 4_000;
+
+function rememberBounded<T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  max: number,
+): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  }
+  cache.set(key, value);
+  while (cache.size > max) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    cache.delete(oldest);
+  }
+}
+
+function cachedAttention(
+  cache: Map<string, ThreadAttention>,
+  threads: readonly { source: string; target: string }[],
+): Map<string, ThreadAttention> {
+  const found = new Map<string, ThreadAttention>();
+  for (const thread of threads) {
+    const id = threadIdOf(thread);
+    const value = cache.get(id);
+    if (value) {
+      rememberBounded(cache, id, value, ATTENTION_CACHE_MAX);
+      found.set(id, value);
+    }
+  }
+  return found;
+}
+
+function cachedReceipts(
+  cache: Map<string, MessageReceipt>,
+  rows: readonly { item: { event: { external_id: string } } }[],
+): Map<string, MessageReceipt> {
+  const found = new Map<string, MessageReceipt>();
+  for (const row of rows) {
+    const id = row.item.event.external_id;
+    const value = cache.get(id);
+    if (value) {
+      rememberBounded(cache, id, value, RECEIPT_CACHE_MAX);
+      found.set(id, value);
+    }
+  }
+  return found;
+}
 
 export type { EngineInstallationView } from "./personal-connector-view";
 
@@ -194,6 +254,8 @@ export interface PersonalEngineView {
   pressure: KernelPressureView;
   pull: PullStatusView;
   installations: EngineInstallationView[];
+  sync_runs: SyncRun[];
+  sync_readiness: SyncReadinessView;
   catalog: ConnectorCatalogItem[];
   executor_installations: EngineExecutorView[];
   executor_catalog: ExecutorKindCatalogItem[];
@@ -218,27 +280,13 @@ export interface PersonalHeartbeatView {
   reachability: "live" | "degraded" | "offline";
   pull: Pick<
     PullStatusView,
-    "phase" | "catching_up_count" | "last_tick_at" | "last_accepted_count"
+    | "phase"
+    | "catching_up_count"
+    | "last_tick_at"
+    | "last_accepted_count"
+    | "streams"
   >;
   installations: PersonalHeartbeatInstallationPulse[];
-}
-
-export interface InboxListQuery {
-  since?: string;
-  since_id?: string;
-  before?: string;
-  before_id?: string;
-  heads?: boolean;
-  live?: boolean;
-  split?: boolean;
-  changed?: boolean;
-  since_digest?: string;
-  thread_id?: string;
-  thread_ids?: string[];
-  limit?: number;
-  list?: string;
-  disposition?: "current_work" | "pending";
-  locale?: CopyLocale;
 }
 
 export interface PersonalFollowUpView {
@@ -248,420 +296,9 @@ export interface PersonalFollowUpView {
 }
 
 const PERSONAL_FOLLOW_UP_SNOOZES_PREF_KEY = "personal_follow_up_snoozes_v1";
-
-export type InboxHeadsCursor = { before: string; before_id: string };
-
-export interface InboxHeadsPage {
-  pinned: InboxViewItem[];
-  live: InboxViewItem[];
-  active_work?: InboxViewItem[];
-  next_before: InboxHeadsCursor | null;
-  has_older: boolean;
-  patch?: boolean;
-  gone?: string[];
-}
-
-export const CHANGED_INBOX_EVENT_CAP = 200;
-export const CHANGED_INBOX_THREAD_CAP = 80;
 /** Coalesce ingest-driven digest COUNT scans while sync pages land. */
 export const INBOX_DIGEST_DEBOUNCE_MS = 250;
 
-export function shouldSplitInboxHeads(query: InboxListQuery): boolean {
-  return query.heads === true && query.split === true && !query.thread_id;
-}
-
-export function shouldLoadChangedInboxHeads(query: InboxListQuery): boolean {
-  return (
-    query.heads === true &&
-    query.split === true &&
-    query.changed === true &&
-    Boolean(query.since_digest?.trim()) &&
-    !query.thread_id &&
-    !query.before
-  );
-}
-
-export function parseSinceInboxDigest(value: string): {
-  count: number;
-  latest_at: string;
-  latest_id: string;
-  pref_updated_at: string;
-} | null {
-  const trimmed = value.replace(/\s+/g, " ").trim();
-  if (!trimmed) {
-    return null;
-  }
-  const pref = peelInboxDigestTail(trimmed.split("&")[0] ?? "");
-  const prefCountSep = pref.head.lastIndexOf(":");
-  if (prefCountSep < 0) {
-    return null;
-  }
-  const prefCount = Number(pref.head.slice(prefCountSep + 1));
-  const left = pref.head.slice(0, prefCountSep);
-  const countSep = left.indexOf(":");
-  if (countSep < 0) {
-    return null;
-  }
-  const count = Number(left.slice(0, countSep));
-  const middle = left.slice(countSep + 1);
-  const idSep = middle.lastIndexOf(":");
-  if (idSep < 0) {
-    return null;
-  }
-  const latestAt = middle.slice(0, idSep);
-  if (!latestAt) {
-    return null;
-  }
-  if (!Number.isInteger(count) || count < 0) {
-    return null;
-  }
-  if (!Number.isInteger(prefCount) || prefCount < 0) {
-    return null;
-  }
-  return {
-    count,
-    latest_at: latestAt,
-    latest_id: middle.slice(idSep + 1),
-    pref_updated_at: pref.tail,
-  };
-}
-
-function peelInboxDigestTail(base: string): { head: string; tail: string } {
-  if (base.endsWith(":")) {
-    return { head: base.slice(0, -1), tail: "" };
-  }
-  const iso = base.match(
-    /^(.*):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/,
-  );
-  if (iso) {
-    return { head: iso[1] ?? "", tail: iso[2] ?? "" };
-  }
-  const last = base.lastIndexOf(":");
-  if (last < 0) {
-    return { head: "", tail: base };
-  }
-  return { head: base.slice(0, last), tail: base.slice(last + 1) };
-}
-
-export function shouldFallbackChangedInboxHeads(collected: {
-  ids: readonly string[];
-  tooMany: boolean;
-  countChanged?: boolean;
-}): boolean {
-  return (
-    collected.tooMany ||
-    (collected.ids.length === 0 && collected.countChanged === true)
-  );
-}
-
-export function collectChangedInboxThreadIds(input: {
-  events: Array<{ source: string; external_id: string; id: string }>;
-  prefs: Array<{ thread_id: string; updated_at: string }>;
-  prefSince: string;
-}): { ids: string[]; tooMany: boolean } {
-  if (input.events.length >= CHANGED_INBOX_EVENT_CAP) {
-    return { ids: [], tooMany: true };
-  }
-  const ids = new Set<string>();
-  for (const event of input.events) {
-    ids.add(conversationId(event.source, event.external_id, event.id));
-  }
-  for (const pref of input.prefs) {
-    if (!input.prefSince || pref.updated_at > input.prefSince) {
-      ids.add(pref.thread_id);
-    }
-  }
-  const list = [...ids];
-  return { ids: list, tooMany: list.length > CHANGED_INBOX_THREAD_CAP };
-}
-
-export function splitChangedInboxHeads<
-  T extends { thread_id?: string; pinned?: boolean; hidden?: boolean },
->(input: {
-  views: T[];
-  collectedIds: readonly string[];
-  prefs: Array<{ thread_id: string; hidden?: boolean }>;
-  workIds: readonly string[];
-  list?: string;
-}): {
-  pinned: T[];
-  live: T[];
-  active_work: T[];
-  gone: string[];
-} {
-  const hiddenList = normalizeInboxListView(input.list) === "hidden";
-  const work = new Set(input.workIds);
-  const loaded = new Set<string>();
-  const kept: T[] = [];
-  for (const item of input.views) {
-    const id = item.thread_id?.trim();
-    if (!id) {
-      continue;
-    }
-    loaded.add(id);
-    if (item.hidden === hiddenList) {
-      kept.push(item);
-    }
-  }
-  const returned = new Set(
-    kept.flatMap((item) => (item.thread_id ? [item.thread_id] : [])),
-  );
-  const hiddenByPref = new Map(
-    input.prefs.map((pref) => [pref.thread_id, pref.hidden] as const),
-  );
-  return {
-    pinned: kept.filter((item) => item.pinned),
-    live: kept.filter(
-      (item) => !item.pinned && !work.has(item.thread_id ?? ""),
-    ),
-    active_work: hiddenList
-      ? []
-      : kept.filter(
-          (item) => !item.pinned && work.has(item.thread_id ?? ""),
-        ),
-    gone: input.collectedIds.filter((id) => {
-      if (returned.has(id)) {
-        return false;
-      }
-      if (loaded.has(id)) {
-        return true;
-      }
-      const prefHidden = hiddenByPref.get(id);
-      if (prefHidden === true && !hiddenList) {
-        return true;
-      }
-      if (prefHidden === false && hiddenList) {
-        return true;
-      }
-      return false;
-    }),
-  };
-}
-
-export function headsNextBefore(
-  live: Array<{ event: { occurred_at: string; id: string } }>,
-): InboxHeadsCursor | null {
-  let oldest: { occurred_at: string; id: string } | undefined;
-  for (const item of live) {
-    if (!oldest || isBeforeEvent(item.event, oldest.occurred_at, oldest.id)) {
-      oldest = item.event;
-    }
-  }
-  return oldest
-    ? { before: oldest.occurred_at, before_id: oldest.id }
-    : null;
-}
-
-export function splitHeadExcludeIds(input: {
-  prefs: Array<{ thread_id: string; pinned?: boolean; hidden?: boolean }>;
-  workIds: readonly string[];
-  list?: string;
-}): { pinnedIds: string[]; workIds: string[] } {
-  const hiddenList = normalizeInboxListView(input.list) === "hidden";
-  const pinnedIds = [
-    ...new Set(
-      input.prefs
-        .filter(
-          (pref) => pref.pinned && (hiddenList ? pref.hidden : !pref.hidden),
-        )
-        .map((pref) => pref.thread_id),
-    ),
-  ];
-  const pinned = new Set(pinnedIds);
-  const workIds = hiddenList
-    ? []
-    : [...new Set(input.workIds.filter((id) => id && !pinned.has(id)))];
-  return { pinnedIds, workIds };
-}
-
-export function headsLiveFetchLimit(
-  limit: number | undefined,
-  excludeCount: number,
-): number | undefined {
-  if (typeof limit !== "number") {
-    return undefined;
-  }
-  return normalizeInboxLimit(limit + Math.max(0, excludeCount)) ?? limit;
-}
-
-export function partitionLiveInboxHeads<
-  T extends {
-    thread_id?: string;
-    event: {
-      id: string;
-      source?: string;
-      external_id?: string;
-      occurred_at: string;
-    };
-  },
->(input: {
-  items: T[];
-  pinnedIds: readonly string[];
-  workIds: readonly string[];
-  limit?: number;
-  fetchedCount: number;
-  fetchLimit?: number;
-}): {
-  live: T[];
-  pinned: T[];
-  work: T[];
-  hasOlder: boolean;
-} {
-  const pinnedSet = new Set(input.pinnedIds);
-  const workSet = new Set(input.workIds);
-  const pinned: T[] = [];
-  const work: T[] = [];
-  const liveAll: T[] = [];
-  for (const item of input.items) {
-    const id = headThreadId(item);
-    if (!id) {
-      continue;
-    }
-    if (pinnedSet.has(id)) {
-      pinned.push(item);
-    } else if (workSet.has(id)) {
-      work.push(item);
-    } else {
-      liveAll.push(item);
-    }
-  }
-  const live = takeRecentHeads(liveAll, input.limit);
-  const hasOlder =
-    (typeof input.limit === "number" && liveAll.length > live.length) ||
-    (typeof input.fetchLimit === "number" &&
-      input.fetchedCount >= input.fetchLimit);
-  return { live, pinned, work, hasOlder };
-}
-
-export function splitInboxHeadViews(
-  views: InboxViewItem[],
-  input: {
-    liveIds: readonly string[];
-    pinnedIds: readonly string[];
-    workIds: readonly string[];
-    liveCount: number;
-    limit?: number;
-    hasOlder?: boolean;
-  },
-): InboxHeadsPage {
-  const byId = new Map<string, InboxViewItem>();
-  for (const view of views) {
-    if (view.thread_id) {
-      byId.set(view.thread_id, view);
-    }
-  }
-  const take = (ids: readonly string[]) =>
-    ids.flatMap((id) => {
-      const item = byId.get(id);
-      return item ? [item] : [];
-    });
-  const workSet = new Set(input.workIds);
-  const takenLive = take(input.liveIds);
-  const pinned = uniqueHeadViews([
-    ...take(input.pinnedIds),
-    ...takenLive.filter((item) => item.pinned),
-  ]);
-  const pinnedKeys = new Set(pinned.map(headConversationKey).filter(Boolean));
-  const live = uniqueHeadViews(
-    takenLive.filter((item) => {
-      const key = headConversationKey(item);
-      return (
-        !item.pinned &&
-        !workSet.has(item.thread_id ?? "") &&
-        !(key && pinnedKeys.has(key))
-      );
-    }),
-  );
-  return {
-    pinned,
-    live,
-    active_work: uniqueHeadViews([
-      ...take(input.workIds),
-      ...takenLive.filter(
-        (item) => !item.pinned && workSet.has(item.thread_id ?? ""),
-      ),
-    ]),
-    next_before: headsNextBefore(live),
-    has_older:
-      input.hasOlder ??
-      (typeof input.limit === "number" && input.liveCount >= input.limit),
-  };
-}
-
-function takeRecentHeads<T extends { event: { occurred_at: string; id: string } }>(
-  items: T[],
-  limit?: number,
-): T[] {
-  const cap = normalizeInboxLimit(limit);
-  if (cap === undefined || items.length <= cap) {
-    return items;
-  }
-  return items
-    .map((item, index) => ({ item, index }))
-    .sort((left, right) => {
-      if (left.item.event.occurred_at !== right.item.event.occurred_at) {
-        return left.item.event.occurred_at < right.item.event.occurred_at
-          ? -1
-          : 1;
-      }
-      if (left.item.event.id !== right.item.event.id) {
-        return left.item.event.id < right.item.event.id ? -1 : 1;
-      }
-      return left.index - right.index;
-    })
-    .slice(items.length - cap)
-    .map((row) => row.item);
-}
-
-function uniqueHeadViews<T extends {
-  thread_id?: string;
-  event?: { source?: string; external_id?: string; id?: string };
-}>(items: T[]): T[] {
-  const seen = new Set<string>();
-  const next: T[] = [];
-  for (const item of items) {
-    const id = headConversationKey(item);
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    next.push(item);
-  }
-  return next;
-}
-
-function headConversationKey(item: {
-  thread_id?: string;
-  event?: { source?: string; external_id?: string; id?: string };
-}): string | undefined {
-  if (item.event?.source && item.event.external_id) {
-    return conversationId(
-      item.event.source,
-      item.event.external_id,
-      item.event.id,
-    );
-  }
-  const id = item.thread_id?.trim();
-  return id ? id : undefined;
-}
-
-function headThreadId(item: {
-  thread_id?: string;
-  event: { id: string; source?: string; external_id?: string };
-}): string | undefined {
-  const id = item.thread_id?.trim();
-  if (id) {
-    return id;
-  }
-  if (item.event.source && item.event.external_id) {
-    return conversationId(
-      item.event.source,
-      item.event.external_id,
-      item.event.id,
-    );
-  }
-  return undefined;
-}
 
 export function shouldSkipLiveChannelOverlays(query: InboxListQuery): boolean {
   return !shouldQueryInboxChannelOverlays(query);
@@ -711,6 +348,12 @@ export interface StoreClearView {
 export class PersonalInboxService {
   private readonly catalogProbes = new CatalogProbeCache();
   private digestPublishTimer: ReturnType<typeof setTimeout> | undefined;
+  /** One inbox count at a time. Overlapping heartbeats share it. */
+  private summaryFlight: Promise<InboxSummary> | undefined;
+  /** Channel overlays filled off the inbox read. Keyed by thread id / outbound id. */
+  private readonly attentionCache = new Map<string, ThreadAttention>();
+  private readonly receiptCache = new Map<string, MessageReceipt>();
+  private overlayRefresh: Promise<void> = Promise.resolve();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -734,7 +377,9 @@ export class PersonalInboxService {
   async listCatalogFieldOptions(
     connectorType: string,
     locale: CopyLocale = DEFAULT_COPY_LOCALE,
-  ): Promise<Record<string, { value: string; label: string }[]>> {
+  ): Promise<
+    Record<string, { value: string; label: string; kind?: string; title?: string }[]>
+  > {
     const type = connectorType.trim();
     if (!type) {
       return {};
@@ -750,12 +395,17 @@ export class PersonalInboxService {
         DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
         `catalog options ${type}`,
       );
-      const resolved: Record<string, { value: string; label: string }[]> = {};
+      const resolved: Record<
+        string,
+        { value: string; label: string; kind?: string; title?: string }[]
+      > = {};
       for (const [key, options] of Object.entries(raw ?? {})) {
         resolved[key] = (options ?? []).map((option) => ({
           value: option.value,
           label:
             resolveCopy(tables, locale, option.label) ?? String(option.label),
+          ...(option.kind ? { kind: option.kind } : {}),
+          ...(option.title ? { title: option.title } : {}),
         }));
       }
       return resolved;
@@ -768,19 +418,42 @@ export class PersonalInboxService {
     orgId: string,
     authority: Pick<AuthorityStore, "summarizeInbox">,
   ): Promise<{ count: number; hidden_count: number; digest: string }> {
-    const cached = this.kernelRuntime.inboxSummary.summary(orgId);
-    if (cached) {
-      return cached;
+    return this.loadInboxSummary(orgId, authority, false);
+  }
+
+  /**
+   * Shown and hidden counts are an inbox projection. Reads share one scan.
+   * `fresh` still joins a scan that is already running instead of starting another.
+   */
+  private loadInboxSummary(
+    orgId: string,
+    authority: Pick<AuthorityStore, "summarizeInbox">,
+    fresh: boolean,
+  ): Promise<InboxSummary> {
+    if (!fresh) {
+      const cached = this.kernelRuntime.inboxSummary.summary(orgId);
+      if (cached) {
+        return Promise.resolve(cached);
+      }
     }
-    const inbox = await authority.summarizeInbox(orgId);
-    this.kernelRuntime.inboxSummary.publish({
-      org_id: orgId,
-      count: inbox.count,
-      hidden_count: inbox.hidden_count,
-      digest: inbox.digest,
-      updated_at: new Date().toISOString(),
-    });
-    return inbox;
+    if (!this.summaryFlight) {
+      this.summaryFlight = authority
+        .summarizeInbox(orgId)
+        .then((summary) => {
+          this.kernelRuntime.inboxSummary.publish({
+            org_id: orgId,
+            count: summary.count,
+            hidden_count: summary.hidden_count,
+            digest: summary.digest,
+            updated_at: new Date().toISOString(),
+          });
+          return summary;
+        })
+        .finally(() => {
+          this.summaryFlight = undefined;
+        });
+    }
+    return this.summaryFlight;
   }
 
   /** Coalesce digest refreshes; keep serving the last snapshot until republish. */
@@ -816,16 +489,7 @@ export class PersonalInboxService {
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
     const [inbox, installations] = await Promise.all([
-      authority.summarizeInbox(orgId).then((summary) => {
-        this.kernelRuntime.inboxSummary.publish({
-          org_id: orgId,
-          count: summary.count,
-          hidden_count: summary.hidden_count,
-          digest: summary.digest,
-          updated_at: new Date().toISOString(),
-        });
-        return summary;
-      }),
+      this.loadInboxSummary(orgId, authority, true),
       authority.listInstallations(orgId),
     ]);
     this.events.inboxDigest(
@@ -838,6 +502,60 @@ export class PersonalInboxService {
 
   publishThreadUpdated(threadId: string): void {
     this.events.threadUpdated(threadId);
+  }
+
+  private scheduleChannelOverlays(input: {
+    installations: ConnectorInstallation[];
+    threads: ThreadAttentionQuery[];
+    threadIds: string[];
+    host: ReturnType<PersonalRuntimeService["requireHost"]>;
+    authority: AuthorityStore;
+    blobs: BlobStore;
+    orgId: string;
+    heads: boolean;
+    thread?: ConversationThread;
+    since?: string;
+    resolved: InboxResolvedRow[];
+  }): void {
+    this.overlayRefresh = this.overlayRefresh
+      .catch(() => undefined)
+      .then(async () => {
+        const [attention, receiptPage] = await Promise.all([
+          this.drivers.readAttention(input.installations, input.threads, input.host),
+          loadInboxReceipts({
+            heads: input.heads,
+            thread: input.thread,
+            since: input.since,
+            resolved: input.resolved,
+            installations: input.installations,
+            drivers: this.drivers,
+            host: input.host,
+            authority: input.authority,
+            blobs: input.blobs,
+            orgId: input.orgId,
+          }),
+        ]);
+        for (const [threadId, value] of attention) {
+          rememberBounded(
+            this.attentionCache,
+            threadId,
+            value,
+            ATTENTION_CACHE_MAX,
+          );
+        }
+        for (const [externalId, receipt] of receiptPage.receipts) {
+          rememberBounded(
+            this.receiptCache,
+            externalId,
+            receipt,
+            RECEIPT_CACHE_MAX,
+          );
+        }
+        for (const threadId of input.threadIds) {
+          this.publishThreadUpdated(threadId);
+        }
+      })
+      .catch(() => undefined);
   }
 
   async triageInboxEvent(
@@ -1178,6 +896,7 @@ export class PersonalInboxService {
             catching_up_count: pullStatus.catching_up_count,
             last_tick_at: pullStatus.last_tick_at,
             last_accepted_count: pullStatus.last_accepted_count,
+            streams: pullStatus.streams,
           },
           installations: [],
         };
@@ -1211,6 +930,7 @@ export class PersonalInboxService {
           catching_up_count: pullStatus.catching_up_count,
           last_tick_at: pullStatus.last_tick_at,
           last_accepted_count: pullStatus.last_accepted_count,
+          streams: pullStatus.streams,
         },
         installations: installations.map((installation) => {
           const pulse: PersonalHeartbeatInstallationPulse = {
@@ -1269,6 +989,8 @@ export class PersonalInboxService {
         pressure: this.kernelRuntime.pressureView(),
         pull: { ...pullStatus },
         installations: [],
+        sync_runs: [],
+        sync_readiness: currentSyncReadiness(null),
         catalog: catalogReady([]),
         executor_installations: [],
         executor_catalog: executorCatalog,
@@ -1278,9 +1000,10 @@ export class PersonalInboxService {
     }
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
-    const [inbox, installations] = await Promise.all([
+    const [inbox, installations, syncRuns] = await Promise.all([
       this.summarizeInboxCached(orgId, authority),
       authority.listInstallations(orgId),
+      authority.listSyncRuns({ org_id: orgId, limit: 50 }),
     ]);
     const views = await Promise.all(
       installations.map(async (installation) => {
@@ -1329,6 +1052,14 @@ export class PersonalInboxService {
       pressure: this.kernelRuntime.pressureView(),
       pull: { ...pullStatus },
       installations: views,
+      sync_runs: syncRuns,
+      sync_readiness: currentSyncReadiness(
+        aggregateSyncProgress(
+          views
+            .map((item) => item.sync)
+            .filter((item): item is NonNullable<typeof item> => item != null),
+        ),
+      ),
       catalog: catalogReady(views),
       executor_installations: executorInstallations,
       executor_catalog: tier.include_executor_catalog
@@ -1353,20 +1084,28 @@ export class PersonalInboxService {
 
   async clearStore(): Promise<StoreClearView> {
     const host = this.runtime.requireHost();
-    const result = await host
-      .get("authority")
-      .clearOperationalData(this.runtime.orgId(), new Date().toISOString());
+    const authority = host.get("authority");
+    const installations = await authority.listInstallations(this.runtime.orgId());
+    const result = await authority.clearOperationalData(
+      this.runtime.orgId(),
+      new Date().toISOString(),
+    );
     try {
       await host.get("blobs").clear();
     } catch (error) {
       console.error("blob store clear leftover files", error);
     }
+    await this.drivers.clearOperationalState(installations, host);
     try {
-      clearAllFeishuMediaJobs();
+      await host.get("context-lexical-index").clearOrganization(this.runtime.orgId());
     } catch (error) {
-      console.error("feishu media job clear leftover files", error);
+      if (
+        !(error instanceof Error) ||
+        !error.message.startsWith("Service is not available:")
+      ) {
+        console.error("lexical index clear leftover files", error);
+      }
     }
-    await host.get("context-lexical-index").clearOrganization(this.runtime.orgId());
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
     this.kernelRuntime.clearInstallationSnapshots();
     this.touchInboxDigest({ immediate: true });
@@ -1400,7 +1139,8 @@ export class PersonalInboxService {
     });
     const countChanged =
       collected.ids.length === 0 && !collected.tooMany
-        ? (await authority.summarizeInbox(orgId)).count !== previous.count
+        ? (await this.loadInboxSummary(orgId, authority, false)).count !==
+          previous.count
         : false;
     if (shouldFallbackChangedInboxHeads({ ...collected, countChanged })) {
       return this.loadThreadInbox({
@@ -1682,36 +1422,30 @@ export class PersonalInboxService {
         : inboundFromPage;
     const awaitingUser = awaitingUserThreads(resolved);
     const inboxTier = personalInboxReadTierSpec(personalInboxReadTier(query));
-    const liveChannel = inboxTier.channel_overlays;
-    const [livePrompts, attention, receiptPage] = await Promise.all([
-      inboxTier.connector_prompts
-        ? this.drivers.listPromptsForThreads(installations, threads, host)
-        : Promise.resolve(new Map<string, ThreadPrompt[]>()),
-      liveChannel
-        ? this.drivers.readAttention(
-            installations,
-            withInboundHint(threads, inboundByThread),
-            host,
-          )
-        : Promise.resolve(new Map()),
-      liveChannel
-        ? loadInboxReceipts({
-            heads: query.heads === true,
-            thread,
-            since: query.since,
-            resolved,
-            installations,
-            drivers: this.drivers,
-            host,
-            authority,
-            blobs,
-            orgId,
-          })
-        : Promise.resolve({
-            receipts: new Map(),
-            extras: [] as InboxResolvedRow[],
-          }),
-    ]);
+    const livePrompts = inboxTier.connector_prompts
+      ? await this.drivers.listPromptsForThreads(installations, threads, host)
+      : new Map<string, ThreadPrompt[]>();
+    const attention = cachedAttention(this.attentionCache, threads);
+    const receiptPage = {
+      receipts: cachedReceipts(this.receiptCache, resolved),
+      extras: [] as InboxResolvedRow[],
+    };
+    if (query.live === true) {
+      const threadIds = threads.map((item) => threadIdOf(item));
+      this.scheduleChannelOverlays({
+        installations,
+        threads: withInboundHint(threads, inboundByThread),
+        threadIds,
+        host,
+        authority,
+        blobs,
+        orgId,
+        heads: query.heads === true,
+        thread,
+        since: query.since,
+        resolved,
+      });
+    }
     const promptPage = await promptLabelsFor(
       orgId,
       resolved,
@@ -2074,183 +1808,6 @@ function listFaceText(text: string | undefined): string | undefined {
     : line;
 }
 
-function decorateInboxItem(
-  item: { decision: ArrangementDecision; event: EventRecord },
-  body: Awaited<ReturnType<typeof resolveInboxBody>>,
-  installations: ConnectorInstallation[],
-  drivers: ChannelDriverRegistry,
-  pref: ConversationPref | null,
-  labels: ReadonlyMap<string, string> = new Map(),
-  promptsByThread: ReadonlyMap<string, ThreadPrompt[]> = new Map(),
-  attentionByThread: ReadonlyMap<string, ThreadAttention> = new Map(),
-  inboundByThread: ReadonlyMap<string, ThreadInboundCursor> = new Map(),
-  awaitingUser: ReadonlySet<string> = new Set(),
-  receiptsByOutbound: ReadonlyMap<string, MessageReceipt> = new Map(),
-  includeReceipts = true,
-  workFace?: WorkInboxFace,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): InboxViewItem {
-  const surface = messageSurfaceOf(item.event, body);
-  const thread = threadOf(item.event);
-  const threadId = threadIdOf(thread);
-  const prompts = promptsByThread.get(threadId) ?? [];
-  const canReceipt = drivers.canReceipt(installations, thread);
-  const attention = computeThreadUnread({
-    source: attentionByThread.get(threadId),
-    pref,
-    latestInbound: inboundByThread.get(threadId),
-    activity: awaitingUser.has(threadId) ? "awaiting_user" : surface.activity,
-    prompts,
-  });
-  return {
-    ...item,
-    ...body,
-    channel: surface.channel,
-    channel_label: drivers.sourceLabel(surface.channel, process.env, locale),
-    kind: surface.kind,
-    direction: surface.direction,
-    can_send: drivers.canSend(installations, thread),
-    await_reply: drivers.awaitReply(installations, thread),
-    hold_while_working: drivers.holdWhileWorking(installations, thread),
-    list_title: drivers.listTitle(installations, thread),
-    thread_id: threadId,
-    title: pref?.title ?? null,
-    pinned: pref?.pinned === true,
-    hidden: pref?.hidden === true,
-    pref_updated_at: pref?.updated_at ?? null,
-    conversation_label:
-      surface.conversation_label ?? labels.get(threadId) ?? null,
-    conversation_kind: surface.conversation_kind ?? null,
-    unit_kind: surface.unit_kind ?? null,
-    unit_kind_label:
-      drivers.unitKindLabel(surface.channel, surface.unit_kind, locale) ?? null,
-    actor_label: surface.actor_label ?? null,
-    activity: surface.activity,
-    prompts,
-    unread: attention.unread,
-    unread_count: attention.unread_count ?? (attention.unread ? 1 : 0),
-    can_receipt: canReceipt,
-    receipt: includeReceipts
-      ? outboundReceipt(
-          surface.direction,
-          item.event.external_id,
-          canReceipt,
-          receiptsByOutbound,
-        )
-      : undefined,
-    record_class:
-      workFace?.record_class ?? recordClassFromType(surface.type) ?? "utterance",
-    thread_facet:
-      workFace?.thread_facet ??
-      projectThreadFacet({
-        type: surface.type,
-        prompts: prompts.length > 0,
-        hint: surface.thread_facet,
-      }),
-    attention: attentionOf({
-      prompts: prompts.length,
-      awaiting_user:
-        awaitingUser.has(threadId) || surface.activity === "awaiting_user",
-      unread: attention.unread,
-      work_status: workFace?.work?.status,
-      can_write_back: workFace?.work?.can_write_back,
-      has_result: workFace?.work?.has_result,
-      activity: surface.activity,
-    }),
-    work: workFace?.work,
-    ...(surface.forwarded_from
-      ? { forwarded_from: labeledForwardTrace(surface.forwarded_from, drivers, locale) }
-      : {}),
-    ...(surface.forwarded_to
-      ? { forwarded_to: labeledForwardTrace(surface.forwarded_to, drivers, locale) }
-      : {}),
-  };
-}
-
-function labeledForwardTrace(
-  trace: ForwardedFrom,
-  drivers: ChannelDriverRegistry,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): ForwardedFrom {
-  return {
-    ...trace,
-    channel_label: drivers.sourceLabel(trace.source, process.env, locale),
-  };
-}
-
-function projectForwardedTo(
-  views: InboxViewItem[],
-  drivers: ChannelDriverRegistry,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): InboxViewItem[] {
-  const traces = latestForwardedTo(
-    views.flatMap((view) => {
-      const trace = view.forwarded_to;
-      if (!trace || trace.event_ids.includes(view.event.id)) {
-        return [];
-      }
-      return [
-        {
-          id: view.event.id,
-          occurred_at: view.event.occurred_at,
-          forwarded_to: labeledForwardTrace(trace, drivers, locale),
-        },
-      ];
-    }),
-  );
-  if (traces.size === 0) {
-    return views;
-  }
-  return views.map((view) => {
-    const joined = traces.get(view.event.id);
-    if (!joined) {
-      return view;
-    }
-    return { ...view, forwarded_to: joined };
-  });
-}
-
-async function loadForwardedToTraces(
-  items: Array<{ decision: ArrangementDecision; event: EventRecord }>,
-  knownBodies: ReadonlyMap<string, InboxBody>,
-  authority: AuthorityStore,
-  blobs: BlobStore,
-  drivers: ChannelDriverRegistry,
-  locale: CopyLocale = DEFAULT_COPY_LOCALE,
-): Promise<Map<string, ForwardedFrom>> {
-  const status = items.filter((item) => isThreadStatusItem(item));
-  if (status.length === 0) {
-    return new Map();
-  }
-  const missing = status
-    .map((item) => item.event.content_hash)
-    .filter((hash): hash is string => {
-      if (!hash) {
-        return false;
-      }
-      return !knownBodies.has(hash);
-    });
-  const extra =
-    missing.length > 0
-      ? await resolveInboxBodies(authority, blobs, missing, "meta")
-      : new Map<string, InboxBody>();
-  return latestForwardedTo(
-    status.map((item) => {
-      const hash = item.event.content_hash;
-      const body = hash
-        ? (knownBodies.get(hash) ?? extra.get(hash) ?? {})
-        : {};
-      const surface = messageSurfaceOf(item.event, body);
-      return {
-        id: item.event.id,
-        occurred_at: item.event.occurred_at,
-        forwarded_to: surface.forwarded_to
-          ? labeledForwardTrace(surface.forwarded_to, drivers, locale)
-          : undefined,
-      };
-    }),
-  );
-}
 
 function mergePromptMap(
   dest: Map<string, ThreadPrompt[]>,
@@ -2270,66 +1827,6 @@ function mergePromptMap(
   ]);
 }
 
-async function conversationLabelsFor(
-  items: Array<{
-    item: { event: EventRecord };
-    body: Awaited<ReturnType<typeof resolveInboxBody>>;
-  }>,
-  installations: ConnectorInstallation[],
-  drivers: ChannelDriverRegistry,
-  store?: Pick<SyncStore, "getSyncCatalog">,
-): Promise<Map<string, string>> {
-  const missing = items.flatMap(({ item, body }) => {
-    const surface = messageSurfaceOf(item.event, body);
-    return surface.conversation_label ? [] : [threadOf(item.event)];
-  });
-  if (missing.length === 0) {
-    return new Map();
-  }
-  const labels = await catalogConversationLabels(installations, store);
-  const stillMissing = missing.filter(
-    (thread) => !labels.has(`${thread.source}:${thread.target}`),
-  );
-  if (stillMissing.length === 0) {
-    return labels;
-  }
-  const live = await drivers.resolveConversationLabels(
-    installations,
-    stillMissing,
-  );
-  for (const [threadId, label] of live) {
-    labels.set(threadId, label);
-  }
-  return labels;
-}
-
-async function catalogConversationLabels(
-  installations: ConnectorInstallation[],
-  store?: Pick<SyncStore, "getSyncCatalog">,
-): Promise<Map<string, string>> {
-  const labels = new Map<string, string>();
-  if (!store?.getSyncCatalog) {
-    return labels;
-  }
-  await Promise.all(
-    installations.map(async (installation) => {
-      try {
-        const catalog = await store.getSyncCatalog(installation.id);
-        for (const member of catalog.members) {
-          const label = member.label?.replace(/\s+/g, " ").trim();
-          const threadId = member.thread_id?.trim();
-          if (!label || !threadId) {
-            continue;
-          }
-          labels.set(threadId, label);
-        }
-      } catch {
-        // Catalog is optional. Drivers may still fill titles.
-      }
-    }),
-  );
-  return labels;
-}
 
 const PROMPT_USER_SCAN_LIMIT = 24;
 const PROMPT_READ_LIMIT = 128;
@@ -2499,27 +1996,6 @@ async function firstUserTextIn(
   return { hide: false };
 }
 
-function byEventTime(
-  left: { event: EventRecord },
-  right: { event: EventRecord },
-): number {
-  if (left.event.occurred_at !== right.event.occurred_at) {
-    return left.event.occurred_at < right.event.occurred_at ? -1 : 1;
-  }
-  return left.event.id < right.event.id ? -1 : 1;
-}
-
-function messageSurfaceOf(
-  event: EventRecord,
-  body: Awaited<ReturnType<typeof resolveInboxBody>>,
-) {
-  return resolveMessageSurface({
-    source: event.source,
-    external_id: event.external_id,
-    body_text: body.body_text,
-    stored: body.surface,
-  });
-}
 
 function parseThreadQuery(
   threadId: string | undefined,
@@ -2780,215 +2256,6 @@ function inboundScansOf(
   });
 }
 
-const RECEIPT_SCAN_LIMIT = 8;
-
-type InboxResolvedRow = {
-  item: { decision: ArrangementDecision; event: EventRecord };
-  threadId: string;
-  body: InboxBody;
-};
-
-async function loadInboxReceipts(input: {
-  heads: boolean;
-  thread?: ConversationThread;
-  since?: string;
-  resolved: InboxResolvedRow[];
-  installations: ConnectorInstallation[];
-  drivers: ChannelDriverRegistry;
-  host: Parameters<ChannelDriverRegistry["readReceipts"]>[2];
-  authority: AuthorityStore;
-  blobs: BlobStore;
-  orgId: string;
-}): Promise<{
-  receipts: ReadonlyMap<string, MessageReceipt>;
-  extras: InboxResolvedRow[];
-}> {
-  if (input.heads) {
-    return { receipts: new Map(), extras: [] };
-  }
-  const siblings =
-    input.thread && input.drivers.canReceipt(input.installations, input.thread)
-      ? await input.authority.listInbox(input.orgId, {
-          siblings: true,
-          thread_ids: [threadIdOf(input.thread)],
-        })
-      : [];
-  const siblingOutbound =
-    siblings.length > 0
-      ? await outboundSiblingEvents(siblings, input.authority, input.blobs)
-      : [];
-  const queries = mergeReceiptQueries(
-    receiptQueriesOf(input.resolved),
-    siblingOutbound.length > 0
-      ? receiptQueriesFromOutboundEvents(siblingOutbound)
-      : [],
-  );
-  const receipts = await input.drivers.readReceipts(
-    input.installations,
-    queries,
-    input.host,
-  );
-  if (!input.since || siblingOutbound.length === 0) {
-    return { receipts, extras: [] };
-  }
-  const seen = new Set(input.resolved.map((row) => row.item.event.id));
-  const extras = siblingOutbound.filter(
-    (item) =>
-      !seen.has(item.event.id) &&
-      receipts.get(item.event.external_id)?.state === "read",
-  );
-  if (extras.length === 0) {
-    return { receipts, extras: [] };
-  }
-  const bodies = await resolveInboxBodies(
-    input.authority,
-    input.blobs,
-    extras.map((item) => item.event.content_hash),
-    "preview",
-  );
-  return {
-    receipts,
-    extras: extras.map((item) => ({
-      item,
-      threadId: conversationId(
-        item.event.source,
-        item.event.external_id,
-        item.event.id,
-      ),
-      body: item.event.content_hash
-        ? (bodies.get(item.event.content_hash) ?? {})
-        : {},
-    })),
-  };
-}
-
-function receiptQueriesOf(resolved: InboxResolvedRow[]): ThreadReceiptQuery[] {
-  const groups = new Map<string, ThreadReceiptQuery>();
-  for (const row of resolved) {
-    const surface = messageSurfaceOf(row.item.event, row.body);
-    if (surface.direction !== "outbound") {
-      continue;
-    }
-    const thread = threadOf(row.item.event);
-    const current = groups.get(row.threadId) ?? { ...thread, outbound: [] };
-    current.outbound.push({
-      external_id: row.item.event.external_id,
-      occurred_at: row.item.event.occurred_at,
-    });
-    groups.set(row.threadId, current);
-  }
-  return [...groups.values()].map((query) => ({
-    ...query,
-    outbound: newestOutbound(query.outbound),
-  }));
-}
-
-function mergeReceiptQueries(
-  ...groups: ThreadReceiptQuery[][]
-): ThreadReceiptQuery[] {
-  const merged = new Map<string, ThreadReceiptQuery>();
-  for (const group of groups) {
-    for (const query of group) {
-      const threadId = threadIdOf(query);
-      const current = merged.get(threadId);
-      if (!current) {
-        merged.set(threadId, {
-          ...query,
-          outbound: [...query.outbound],
-        });
-        continue;
-      }
-      current.outbound.push(...query.outbound);
-    }
-  }
-  return [...merged.values()].map((query) => ({
-    ...query,
-    outbound: newestOutbound(uniqueOutbound(query.outbound)),
-  }));
-}
-
-function uniqueOutbound<T extends { external_id: string }>(items: T[]): T[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    if (seen.has(item.external_id)) {
-      return false;
-    }
-    seen.add(item.external_id);
-    return true;
-  });
-}
-
-async function outboundSiblingEvents(
-  items: InboxItem[],
-  authority: AuthorityStore,
-  blobs: BlobStore,
-): Promise<InboxItem[]> {
-  const newest = items.slice().sort(byEventTime).reverse().slice(0, 48);
-  const hashes = newest
-    .map((item) => item.event.content_hash)
-    .filter((hash): hash is string => Boolean(hash));
-  const bodies =
-    hashes.length > 0
-      ? await resolveInboxBodies(authority, blobs, hashes, "meta")
-      : new Map<string, InboxBody>();
-  return newest
-    .filter((item) => {
-      const body = item.event.content_hash
-        ? (bodies.get(item.event.content_hash) ?? {})
-        : {};
-      return messageSurfaceOf(item.event, body).direction === "outbound";
-    })
-    .slice(0, RECEIPT_SCAN_LIMIT);
-}
-
-function receiptQueriesFromOutboundEvents(
-  items: Array<{ event: EventRecord }>,
-): ThreadReceiptQuery[] {
-  const groups = new Map<string, ThreadReceiptQuery>();
-  for (const { event } of items) {
-    const thread = threadOf(event);
-    const threadId = threadIdOf(thread);
-    const current = groups.get(threadId) ?? { ...thread, outbound: [] };
-    current.outbound.push({
-      external_id: event.external_id,
-      occurred_at: event.occurred_at,
-    });
-    groups.set(threadId, current);
-  }
-  return [...groups.values()].map((query) => ({
-    ...query,
-    outbound: newestOutbound(query.outbound),
-  }));
-}
-
-function newestOutbound<T extends { occurred_at: string; external_id: string }>(
-  items: T[],
-): T[] {
-  return items
-    .slice()
-    .sort((left, right) =>
-      left.occurred_at === right.occurred_at
-        ? left.external_id < right.external_id
-          ? 1
-          : -1
-        : left.occurred_at < right.occurred_at
-          ? 1
-          : -1,
-    )
-    .slice(0, RECEIPT_SCAN_LIMIT);
-}
-
-function outboundReceipt(
-  direction: MessageDirection,
-  externalId: string,
-  canReceipt: boolean,
-  receipts: ReadonlyMap<string, MessageReceipt>,
-): MessageReceipt | undefined {
-  if (direction !== "outbound") {
-    return undefined;
-  }
-  return receipts.get(externalId) ?? (canReceipt ? { state: "sent" } : undefined);
-}
 
 function withInboundHint(
   threads: ConversationThread[],
@@ -3113,25 +2380,5 @@ async function latestInboundByThread(
   return new Map([...fromSiblings, ...cached]);
 }
 
-function threadOf(event: EventRecord): ConversationThread {
-  const id = conversationId(event.source, event.external_id, event.id);
-  try {
-    return parseConversationThread(id);
-  } catch {
-    return { source: event.source, target: event.external_id };
-  }
-}
-
-export function trimInboxHead<T extends {
-  list_title?: string;
-  conversation_label?: string | null;
-  body_text?: string;
-  attachments?: InboxAttachment[];
-}>(item: T): T {
-  if (item.list_title === "prompt" && item.conversation_label) {
-    return { ...item, body_text: undefined, attachments: undefined };
-  }
-  return { ...item, attachments: undefined };
-}
 
 export { PersonalKernelStoppedError };

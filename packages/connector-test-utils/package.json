@@ -1,0 +1,42 @@
+{
+  "name": "@regenic/connector-test-utils",
+  "version": "0.1.0",
+  "description": "In-memory connector host fakes and conformance checks.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/regenic-ai/regenic.git",
+    "directory": "packages/connector-test-utils"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build",
+    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/connector-contract build && pnpm run build && node --test test/*.test.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@regenic/connector-contract": "workspace:*",
+    "@regenic/plugin-host": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

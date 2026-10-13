@@ -1,12 +1,10 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { MemoryAuthorityStore } = require("@regenic/domain");
 const { DshApiError, DshSessionEgress } = require("../dist");
 
 describe("DshSessionEgress", () => {
   it("sends through the transport client without writing Events", async () => {
     const calls = [];
-    const store = new MemoryAuthorityStore();
     const egress = new DshSessionEgress(
       {
         async sessionPrompt(input) {
@@ -24,7 +22,6 @@ describe("DshSessionEgress", () => {
 
     assert.deepEqual(calls, [{ sessionId: "sess-1", text: "Follow up" }]);
     assert.deepEqual(receipt, { accepted: true, rpc_id: "rpc-1" });
-    assert.deepEqual(await store.listEvents("local-owner"), []);
   });
 
   it("rejects a send without text/plain content", async () => {

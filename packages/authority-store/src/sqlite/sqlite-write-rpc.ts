@@ -1,4 +1,7 @@
-import { AuthorityConflictError } from "@regenic/domain";
+import {
+  AuthorityConflictError,
+  type SyncMetricPoint,
+} from "@regenic/domain";
 
 export const AUTHORITY_READ_METHODS = [
   "findBlob",
@@ -12,6 +15,7 @@ export const AUTHORITY_READ_METHODS = [
   "getArtifact",
   "getArtifactState",
   "listArtifacts",
+  "listArtifactIndexes",
   "getSnapshot",
   "listSnapshotIndex",
   "getBundle",
@@ -49,19 +53,30 @@ export const AUTHORITY_READ_METHODS = [
   "latestAttempt",
   "listQuarantines",
   "getCursor",
+  "listCursors",
+  "getSyncRun",
+  "listSyncRuns",
   "getSyncCatalog",
+  "getSyncCatalogHead",
   "listSyncStates",
+  "listSyncPhaseHeads",
   "getSyncState",
+  "hasUnassignedSyncWork",
+  "listUnassignedSyncWorkIdentities",
+  "listSyncWorkGaps",
   "summarizeStore",
   "listRecipes",
   "getRecipe",
   "listWorkItems",
   "getWorkItem",
   "getWorkItemByThread",
+  "getWorkItemByUnitKey",
   "listWorkRuns",
   "getWorkRun",
   "getActiveWorkRun",
+  "listHiddenExecutorThreadIds",
   "listWorkDeliveries",
+  "listDueWorkDeliveries",
   "getWorkDelivery",
   "getWorkDeliveryByItem",
   "getUiPref",
@@ -140,7 +155,17 @@ export const AUTHORITY_WRITE_METHODS = [
   "releaseLease",
   "resetCursor",
   "beginAttempt",
+  "commitSyncPage",
+  "commitSyncPages",
   "settleAttempt",
+  "createSyncRun",
+  "commandSyncRun",
+  "enqueueSyncWork",
+  "enqueueSyncWorkMany",
+  "claimSyncWork",
+  "renewSyncWork",
+  "settleSyncWork",
+  "wakeUnassignedSyncWork",
   "applySyncCatalogPage",
   "putSyncState",
   "pruneIngestAttempts",
@@ -162,6 +187,10 @@ export interface SqliteWriteResponse {
   ok: boolean;
   result?: unknown;
   error?: SerializedStoreError;
+  /** Time the worker spent inside the call, after it dequeued the message. */
+  exec_ms?: number;
+  /** Metric samples recorded on the worker during this call. */
+  metrics?: SyncMetricPoint[];
 }
 
 export interface SerializedStoreError {

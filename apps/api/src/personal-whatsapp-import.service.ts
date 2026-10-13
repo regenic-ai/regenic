@@ -1,10 +1,10 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { ChannelDriverRegistry } from "@regenic/domain";
-import { WHATSAPP_WEB_LIVE_CONNECTOR_TYPE } from "@regenic/whatsapp-personal";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 const DEFAULT_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
+const LEGACY_WHATSAPP_CONNECTOR_TYPE = "whatsapp-web-live";
 
 @Injectable()
 export class PersonalWhatsAppImportService {
@@ -17,7 +17,7 @@ export class PersonalWhatsAppImportService {
 
   import(content: string | undefined, fileName?: string) {
     return this.importFile({
-      connector_type: WHATSAPP_WEB_LIVE_CONNECTOR_TYPE,
+      connector_type: LEGACY_WHATSAPP_CONNECTOR_TYPE,
       content,
       file_name: fileName,
     });

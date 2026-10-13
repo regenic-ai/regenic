@@ -1,349 +1,323 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import Database from "better-sqlite3";
-import {
-  AuthorityConflictError,
-  applySyncCatalogMembers,
-  canonicalContextJson,
-  conversationId,
-  formatInboxDigest,
-  hashCanonicalContext,
-  headsScanQuery,
-  isRecipeTriggerKind,
-  isPullIntervalMs,
-  isWorkDeliveryStatus,
-  isWorkWriteBackState,
-  normalizeInboxLimit,
-  normalizeInboxListView,
-  normalizeHiddenReason,
-  recipeTriggerOf,
-  threadExternalIdLike,
-  validateContextArtifact,
-  validateContextArtifactQuery,
-  validateContextBundle,
-  validateContextProjectionCheckpoint,
-  validateContextSnapshot,
-  validateContextSnapshotIndexEntry,
-  validateContextSnapshotIndexQuery,
-  validateDailyDigestPolicy,
-  validateProposal,
-  validateDecision,
-  validateReview,
-  validateHandoff,
-  assertHandoffTransition,
-  validateStandard,
-  validateStandardVersion,
-  transitionStandardVersion as applyStandardVersionTransition,
-  validateStandardGap,
-  validateStandardGapConversion,
-  validateAgentRun,
-  startAgentRun as applyAgentRunStart,
-  settleAgentRun as applyAgentRunSettlement,
-  handoffAgentRun as applyAgentRunHandoff,
-  cancelAgentRun as applyAgentRunCancellation,
-  agentRunState,
-  STANDARD_USAGE_SCHEMA_VERSION,
-  validateStandardUsage,
-} from "@regenic/domain";
 import type {
-  ArrangementDecision,
   AuthorityStore,
-  BlobRecord,
-  ConnectorInstallation,
-  ConversationPref,
-  ConversationPrefPatch,
-  InboxItem,
-  InboxQuery,
-  InboxSummary,
-  ConnectorLease,
   ConnectorRuntimeStore,
-  ConnectorStreamCursor,
-  ContextArtifact,
-  ContextArtifactDecision,
-  ContextArtifactQuery,
-  ContextArtifactState,
+  WorkStore,
+  ExecutorStore,
   ContextArtifactStore,
+  ContextAuthorityReader,
+  ContextProjectionOutboxStore,
+  DailyDigestJobStore,
+  DailyDigestPolicyStore,
+  SourceIdentity,
+  EventRecord,
+  SourceIdentityAliasBind,
+  OutboundAttemptRecord,
+  OutboundAttemptPut,
+  EventListQuery,
+  ContextAuthorityRead,
+  ContextArtifact,
+  ContextArtifactQuery,
+  ContextArtifactIndex,
+  ContextArtifactState,
+  ContextArtifactDecision,
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
-  ContextAuthorityRead,
-  ContextAuthorityReader,
+  ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
+  ClaimContextProjectionJobs,
   ContextProjectionJob,
-  ContextProjectionOutboxStore,
+  CompleteContextProjectionJob,
+  RenewContextProjectionJob,
+  FailContextProjectionJob,
   DailyDigestJob,
-  DailyDigestJobStore,
-  DailyDigestPolicy,
-  DailyDigestPolicyStore,
   DailyDigestCoverageAlert,
   ProposalRecord,
   ProposalStatus,
   DecisionRecord,
   ReviewRecord,
-  HandoffDirection,
   HandoffRecord,
   HandoffStatus,
+  HandoffDirection,
   StandardRecord,
   StandardVersionRecord,
-  StandardVersionState,
   StandardVersionTransition,
   StandardGapRecord,
   StandardGapStatus,
-  AgentRunOutput,
   AgentRunRecord,
-  AgentRunState,
   AgentRunStatus,
-  StandardUsageRecord,
+  AgentRunOutput,
   StandardUsageSourceKind,
-  ClaimContextProjectionJobs,
-  CompleteContextProjectionJob,
-  FailContextProjectionJob,
-  RenewContextProjectionJob,
-  ContextSnapshot,
-  ContextSnapshotIndexEntry,
-  ContextSnapshotIndexQuery,
-  EventListQuery,
-  EventRecord,
-  EventRevision,
-  IngestAttempt,
-  IngestCommitRequest,
-  IngestQuarantine,
-  IngestOperation,
-  NewConnectorInstallation,
-  NewEvent,
-  NewIngestAttempt,
-  OutboundAttemptPut,
-  OutboundAttemptRecord,
-  RepointContentInput,
-  ResetConnectorCursor,
-  ReleaseConnectorLease,
-  SetConnectorInstallationConfig,
-  SetConnectorInstallationStatus,
-  SettleIngestAttempt,
-  SourceIdentity,
-  SourceIdentityAliasBind,
-  TombstoneEvent,
-  Recipe,
-  WorkDelivery,
-  StoreClearResult,
+  StandardUsageRecord,
+  ArrangementDecision,
+  InboxQuery,
+  InboxItem,
+  InboxSummary,
+  ConversationPref,
+  ConversationPrefPatch,
   StoreFootprint,
+  StoreClearResult,
+  Recipe,
   WorkItem,
   WorkRun,
-  WorkStore,
+  WorkDelivery,
+  DailyDigestPolicy,
   ExecutorInstallation,
-  ExecutorStore,
-  ApplySyncCatalogPageInput,
-  SyncCatalogMember,
-  SyncCatalogSnapshot,
+  BlobRecord,
+  NewEvent,
+  RepointContentInput,
+  IngestCommitRequest,
+  EventRevision,
+  TombstoneEvent,
+  NewConnectorInstallation,
+  ConnectorInstallation,
+  SetConnectorInstallationStatus,
+  SetConnectorInstallationConfig,
+  ConnectorLease,
+  ReleaseConnectorLease,
+  ResetConnectorCursor,
+  ConnectorStreamCursor,
+  NewIngestAttempt,
+  IngestAttempt,
+  CommitSyncPage,
+  CommitSyncPageResult,
+  SettleIngestAttempt,
+  IngestQuarantine,
+  NewSyncRun,
+  SyncRun,
+  ListSyncRunsQuery,
+  CommandSyncRun,
+  EnqueueSyncWork,
+  SyncWorkRecord,
+  ClaimSyncWork,
+  RenewSyncWork,
+  SettleSyncWork,
+  UnassignedSyncWorkQuery,
+  SyncWorkIdentity,
+  WakeUnassignedSyncWork,
   SyncCatalogView,
-  SyncPhase,
+  SyncCatalogHead,
+  ApplySyncCatalogPageInput,
+  SyncPhaseHead,
   SyncStreamState,
+  ListSyncWorkGapsOptions,
+  SyncWorkGap,
 } from "@regenic/domain";
-import { LATEST_SCHEMA_VERSION, MIGRATIONS } from "./migrations";
-
-interface EventRow {
-  id: string;
-  org_id: string;
-  source: string;
-  external_id: string;
-  operation: IngestOperation;
-  content_hash: string | null;
-  parent_event_id: string | null;
-  thread_id: string | null;
-  actor_id: string | null;
-  required_scope_ids_json: string | null;
-  direction_tags_json?: string | null;
-  weight_hints_json?: string | null;
-  attrs_json?: string | null;
-  occurred_at: string;
-  ingested_at: string;
-}
-
-interface ContextEventRow extends EventRow {
-  content_media_type: string | null;
-}
-
-interface DispositionRow {
-  event_id: string;
-  org_id: string;
-  disposition: ArrangementDecision["disposition"];
-  layer: ArrangementDecision["layer"];
-  reason_codes_json: string;
-  score: number;
-  decided_at: string;
-}
-
-interface InboxRow extends EventRow {
-  event_id: string;
-  disposition_org_id: string;
-  disposition: ArrangementDecision["disposition"];
-  layer: ArrangementDecision["layer"];
-  reason_codes_json: string;
-  score: number;
-  decided_at: string;
-}
-
-interface BlobRow {
-  content_hash: string;
-  media_type: string;
-  byte_size: number;
-  created_at: string;
-}
-
-interface InstallationRow {
-  id: string;
-  org_id: string;
-  connector_type: string;
-  status: ConnectorInstallation["status"];
-  config_json: string;
-  credentials_ref: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface CursorRow {
-  installation_id: string;
-  stream_key: string;
-  cursor_value: string | null;
-  cursor_version: number;
-  lease_owner: string | null;
-  lease_expires_at: string | null;
-  updated_at: string;
-}
-
-interface StreamMemberRow {
-  installation_id: string;
-  stream_key: string;
-  thread_id: string | null;
-  label: string | null;
-  kind: string | null;
-  generation: number;
-  discovered_at: string;
-  last_seen_at: string;
-}
-
-interface CatalogCursorRow {
-  installation_id: string;
-  cursor_value: string | null;
-  complete: number;
-  generation: number;
-  updated_at: string;
-}
-
-interface SyncStateRow {
-  installation_id: string;
-  stream_key: string;
-  phase: SyncPhase;
-  live_cursor: string | null;
-  history_cursor: string | null;
-  media_pending: number;
-  idle_until: string | null;
-  generation: number;
-  updated_at: string;
-}
-
-interface AttemptRow {
-  id: string;
-  org_id: string;
-  connector_installation_id: string;
-  stream_key: string;
-  delivery_id: string;
-  started_at: string;
-  finished_at: string | null;
-  status: IngestAttempt["status"];
-  accepted_count: number;
-  duplicate_count: number;
-  quarantined_count: number;
-  retryable_failure_count: number;
-  error_code: string | null;
-}
-
-interface QuarantineRow {
-  id: string;
-  attempt_id: string;
-  connector_installation_id: string;
-  stream_key: string;
-  record_external_id: string;
-  reason_code: IngestQuarantine["reason_code"];
-  safe_metadata_json: string;
-  created_at: string;
-}
-
-interface ContextProjectionJobRow {
-  id: string;
-  org_id: string;
-  event_id: string;
-  status: ContextProjectionJob["status"];
-  attempts: number;
-  lease_owner: string | null;
-  lease_expires_at: string | null;
-  next_retry_at: string | null;
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface DailyDigestJobRow {
-  id: string;
-  org_id: string;
-  utc_date: string;
-  generation: string;
-  status: DailyDigestJob["status"];
-  attempts: number;
-  lease_owner: string | null;
-  lease_expires_at: string | null;
-  next_retry_at: string | null;
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface PrefRow {
-  org_id: string;
-  thread_id: string;
-  title: string | null;
-  pinned: number;
-  hidden: number;
-  hidden_reason: string | null;
-  last_read_at: string | null;
-  last_read_external_id: string | null;
-  updated_at: string;
-}
-
-const PREF_COLUMNS = `
-  org_id, thread_id, title, pinned, hidden, hidden_reason,
-  last_read_at, last_read_external_id, updated_at
-`;
-
-const INBOX_COLUMNS = `
-  d.event_id, d.org_id AS disposition_org_id, d.disposition, d.layer,
-  d.reason_codes_json, d.score, d.decided_at,
-  e.id, e.source, e.external_id, e.operation, e.content_hash,
-  e.parent_event_id, e.thread_id, e.actor_id, e.required_scope_ids_json,
-  e.direction_tags_json, e.weight_hints_json, e.attrs_json,
-  e.occurred_at, e.ingested_at
-`;
-
-interface InsertEventInput extends SourceIdentity {
-  id?: string;
-  operation: IngestOperation;
-  content_hash?: string;
-  content_media_type?: string;
-  content_byte_size?: number;
-  extra_blobs?: NewEvent["extra_blobs"];
-  parent_event_id?: string;
-  revision_id?: string;
-  thread_id?: string;
-  actor_id?: string;
-  required_scope_ids?: string[];
-  direction_tags?: string[];
-  weight_hints?: NewEvent["weight_hints"];
-  attrs?: NewEvent["attrs"];
-  occurred_at: string;
-  expected_head_id: string | null;
-}
+import Database from "better-sqlite3";
+import {
+  mkdirSync,
+} from "node:fs";
+import {
+  dirname,
+} from "node:path";
+import {
+  conversationId,
+  validateStandardVersion,
+  canonicalContextJson,
+  validateStandard,
+  validateProposal,
+  validateStandardGapConversion,
+  validateHandoff,
+  handoffAgentRun as applyAgentRunHandoff,
+  recordSyncDuration,
+  processSyncMetrics,
+} from "@regenic/domain";
+import {
+  LATEST_SCHEMA_VERSION,
+  MIGRATIONS,
+} from "./migrations";
+import {
+  append,
+  appendRevision,
+  bindSourceIdentityAliases,
+  commitIngestUnlocked,
+  findBlob,
+  findBlobs,
+  findBySourceIdentity,
+  getEvent,
+  getOutboundAttempt,
+  listEvents,
+  markTombstone,
+  openContextRead,
+  openContextReadForThread,
+  putOutboundAttempt,
+  repointContentHash,
+} from "./events";
+import {
+  decideArtifact,
+  getArtifact,
+  getArtifactState,
+  getBundle,
+  getCheckpoint,
+  getSnapshot,
+  listSnapshotIndex,
+  listArtifacts,
+  listArtifactIndexes,
+  putArtifact,
+  rebuildArtifactPreviews,
+  putBundle,
+  putCheckpoint,
+  putSnapshot,
+  putSnapshotIndex,
+  supersedeArtifact,
+  supersedeProposedArtifact,
+} from "./context-artifacts";
+import {
+  claimContextProjectionJobs,
+  completeContextProjectionJob,
+  failContextProjectionJob,
+  listContextProjectionJobs,
+  renewContextProjectionJob,
+} from "./context-projection";
+import {
+  claimDailyDigestJobs,
+  completeDailyDigestJob,
+  enqueueDailyDigestCatchUp,
+  enqueueDailyDigestJob,
+  failDailyDigestJob,
+  getDailyDigestPolicy,
+  getUiPref,
+  listDailyDigestCoverageAlerts,
+  listDailyDigestJobs,
+  putDailyDigestCoverageAlert,
+  putDailyDigestPolicy,
+  putUiPref,
+  renewDailyDigestJob,
+  resolveDailyDigestCoverageAlert,
+} from "./daily-digest";
+import {
+  HandoffRow,
+  ProposalRow,
+  commitProposalDecision,
+  getDecision,
+  getHandoff,
+  getProposal,
+  getProposalSync,
+  getReview,
+  listDecisions,
+  listHandoffs,
+  listProposals,
+  listReviews,
+  putHandoff,
+  putProposal,
+  putReview,
+  toHandoff,
+  toProposal,
+  transitionHandoff,
+  transitionProposal,
+} from "./proposals";
+import {
+  StandardGapRow,
+  StandardRow,
+  StandardVersionRow,
+  countStandardUsage,
+  dismissStandardGap,
+  getStandard,
+  getStandardBySlug,
+  getStandardGap,
+  getStandardSync,
+  getStandardVersion,
+  getStandardVersionSync,
+  listStandardGaps,
+  listStandardUsage,
+  listStandardVersions,
+  listStandards,
+  listSyncWorkGaps,
+  projectStandardUsage,
+  putStandardGap,
+  standardVersionState,
+  toStandard,
+  toStandardGap,
+  toStandardVersion,
+  transitionStandardVersion,
+} from "./standards";
+import {
+  cancelAgentRun,
+  getAgentRun,
+  getAgentRunRow,
+  listAgentRuns,
+  putAgentRun,
+  settleAgentRun,
+  startAgentRun,
+  toAgentRun,
+  updateAgentRunState,
+} from "./agent-runs";
+import {
+  getConversationPref,
+  getDisposition,
+  listConversationPrefs,
+  listInbox,
+  putConversationPref,
+  putDisposition,
+  summarizeInbox,
+} from "./inbox";
+import {
+  deleteExecutorInstallation,
+  deleteRecipe,
+  getActiveWorkRun,
+  getExecutorInstallation,
+  getRecipe,
+  getWorkDelivery,
+  getWorkDeliveryByItem,
+  getWorkItem,
+  getWorkItemByThread,
+  getWorkItemByUnitKey,
+  getWorkRun,
+  listExecutorInstallations,
+  listRecipes,
+  listDueWorkDeliveries,
+  listHiddenExecutorThreadIds,
+  listWorkDeliveries,
+  listWorkItems,
+  listWorkRuns,
+  putExecutorInstallation,
+  putRecipe,
+  putWorkDelivery,
+  putWorkItem,
+  putWorkRun,
+} from "./work";
+import {
+  acquireLease,
+  applySyncCatalogPage,
+  beginAttempt,
+  claimSyncWork,
+  commandSyncRun,
+  commitSyncPageUnlocked,
+  createInstallation,
+  createSyncRun,
+  deleteInstallation,
+  enqueueSyncWork,
+  enqueueSyncWorkMany,
+  findInstallation,
+  getCursor,
+  getSyncCatalog,
+  getSyncCatalogHead,
+  getSyncRun,
+  getSyncState,
+  hasUnassignedSyncWork,
+  latestAttempt,
+  listAttempts,
+  listCursors,
+  listInstallations,
+  listQuarantines,
+  listSyncPhaseHeads,
+  listSyncRuns,
+  listSyncStates,
+  listUnassignedSyncWorkIdentities,
+  pruneIngestAttempts,
+  putSyncState,
+  releaseLease,
+  renewSyncWork,
+  resetCursor,
+  setInstallationStatus,
+  settleAttempt,
+  settleSyncWork,
+  updateInstallationConfig,
+  wakeUnassignedSyncWork,
+} from "./sync";
 
 export interface SqliteOpenOptions {
   readonly?: boolean;
@@ -384,7 +358,9 @@ export class SqliteAuthorityStore
     DailyDigestJobStore
       , DailyDigestPolicyStore
 {
+
   private readonly database: Database.Database;
+
   readonly readonly: boolean;
 
   constructor(path: string, options: SqliteOpenOptions = {}) {
@@ -432,650 +408,113 @@ export class SqliteAuthorityStore
   async findBySourceIdentity(
     identity: SourceIdentity,
   ): Promise<EventRecord | null> {
-    return this.findCurrent(identity);
+    return findBySourceIdentity(this.database, identity);
   }
 
   async bindSourceIdentityAliases(input: SourceIdentityAliasBind): Promise<void> {
     this.assertWritable();
-    const event = await this.getEvent(input.org_id, input.event_id);
-    if (!event) {
-      throw new Error(`Unknown event for identity alias: ${input.event_id}`);
-    }
-    const insert = this.database.prepare(
-      `
-        INSERT OR IGNORE INTO source_heads (
-          org_id, source, external_id, current_event_id
-        ) VALUES (?, ?, ?, ?)
-      `,
-    );
-    const run = this.database.transaction(() => {
-      for (const alias of input.aliases) {
-        const externalId = alias.external_id.trim();
-        if (!alias.source.trim() || !externalId) {
-          continue;
-        }
-        insert.run(input.org_id, alias.source, externalId, input.event_id);
-      }
-    });
-    run();
+    return bindSourceIdentityAliases(this.database, input);
   }
 
   async getOutboundAttempt(
     orgId: string,
     clientRequestId: string,
   ): Promise<OutboundAttemptRecord | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT org_id, client_request_id, thread_id, event_id, status,
-                 channel_message_ids_json, created_at, updated_at
-          FROM outbound_attempts
-          WHERE org_id = ? AND client_request_id = ?
-        `,
-      )
-      .get(orgId, clientRequestId) as
-      | {
-          org_id: string;
-          client_request_id: string;
-          thread_id: string;
-          event_id: string | null;
-          status: "pending" | "accepted" | "sent" | "failed";
-          channel_message_ids_json: string | null;
-          created_at: string;
-          updated_at: string;
-        }
-      | undefined;
-    if (!row) {
-      return null;
-    }
-    return {
-      org_id: row.org_id,
-      client_request_id: row.client_request_id,
-      thread_id: row.thread_id,
-      ...(row.event_id ? { event_id: row.event_id } : {}),
-      status: row.status,
-      ...(row.channel_message_ids_json
-        ? {
-            channel_message_ids: JSON.parse(row.channel_message_ids_json) as string[],
-          }
-        : {}),
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    };
+    return getOutboundAttempt(this.database, orgId, clientRequestId);
   }
 
   async putOutboundAttempt(
     input: OutboundAttemptPut,
   ): Promise<OutboundAttemptRecord> {
     this.assertWritable();
-    const previous = await this.getOutboundAttempt(
-      input.org_id,
-      input.client_request_id,
-    );
-    const createdAt = previous?.created_at ?? input.now;
-    this.database
-      .prepare(
-        `
-          INSERT INTO outbound_attempts (
-            org_id, client_request_id, thread_id, event_id, status,
-            channel_message_ids_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(org_id, client_request_id) DO UPDATE SET
-            thread_id = excluded.thread_id,
-            event_id = excluded.event_id,
-            status = excluded.status,
-            channel_message_ids_json = excluded.channel_message_ids_json,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        input.org_id,
-        input.client_request_id,
-        input.thread_id,
-        input.event_id ?? null,
-        input.status,
-        input.channel_message_ids
-          ? JSON.stringify(input.channel_message_ids)
-          : null,
-        createdAt,
-        input.now,
-      );
-    return {
-      org_id: input.org_id,
-      client_request_id: input.client_request_id,
-      thread_id: input.thread_id,
-      ...(input.event_id ? { event_id: input.event_id } : {}),
-      status: input.status,
-      ...(input.channel_message_ids
-        ? { channel_message_ids: [...input.channel_message_ids] }
-        : {}),
-      created_at: createdAt,
-      updated_at: input.now,
-    };
+    return putOutboundAttempt(this.database, input);
   }
 
   async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT id, org_id, source, external_id, operation, content_hash,
-               parent_event_id, thread_id, actor_id, required_scope_ids_json,
-               direction_tags_json, weight_hints_json, attrs_json,
-               occurred_at, ingested_at
-          FROM events WHERE org_id = ? AND id = ?
-        `,
-      )
-      .get(orgId, eventId) as EventRow | undefined;
-    return row ? this.toEvent(row) : null;
+    return getEvent(this.database, orgId, eventId);
   }
 
   async listEvents(orgId: string, query?: EventListQuery): Promise<EventRecord[]> {
-    const clauses = ["org_id = ?"];
-    const params: unknown[] = [orgId];
-    if (query?.source) {
-      clauses.push("source = ?");
-      params.push(query.source);
-    }
-    if (query?.target) {
-      clauses.push("(external_id = ? OR external_id LIKE ? ESCAPE '\\')");
-      params.push(query.target, threadExternalIdLike(query.target));
-    }
-    if (query?.thread_ids) {
-      if (query.thread_ids.length === 0) {
-        return [];
-      }
-      clauses.push(
-        `thread_id IN (${query.thread_ids.map(() => "?").join(", ")})`,
-      );
-      params.push(...query.thread_ids);
-    }
-    if (query?.since) {
-      clauses.push("(ingested_at > ? OR (ingested_at = ? AND id > ?))");
-      params.push(query.since, query.since, query.since_id ?? "");
-    }
-    if (query?.occurred_since) {
-      clauses.push("occurred_at >= ?");
-      params.push(query.occurred_since);
-    }
-    const limit =
-      typeof query?.limit === "number" &&
-      Number.isInteger(query.limit) &&
-      query.limit > 0
-        ? query.limit
-        : undefined;
-    const rows = this.database
-      .prepare(
-        `
-          SELECT id, org_id, source, external_id, operation, content_hash,
-               parent_event_id, thread_id, actor_id, required_scope_ids_json,
-               direction_tags_json, weight_hints_json, attrs_json,
-               occurred_at, ingested_at
-          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${query?.order === "recent" ? "DESC" : "ASC"}
-          ${limit === undefined ? "" : "LIMIT ?"}
-        `,
-      )
-      .all(...(limit === undefined ? params : [...params, limit])) as EventRow[];
-    return rows.map((row) => this.toEvent(row));
+    return listEvents(this.database, orgId, query);
   }
 
   async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
-    return this.openContextReadInternal(orgId);
+    return openContextRead(this.database, orgId);
   }
 
   async openContextReadForThread(
     orgId: string,
     threadId: string,
   ): Promise<ContextAuthorityRead> {
-    const scopedThreadId = threadId.trim();
-    if (!scopedThreadId) {
-      throw new Error("Context thread read requires a thread id");
-    }
-    return this.openContextReadInternal(orgId, scopedThreadId);
-  }
-
-  private async openContextReadInternal(
-    orgId: string,
-    threadId?: string,
-  ): Promise<ContextAuthorityRead> {
-    const read = this.database.transaction(() => {
-      const rows = this.database
-        .prepare(
-          threadId
-            ? `
-                 SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
-                   e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                   e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
-                   e.occurred_at, e.ingested_at,
-                   b.media_type AS content_media_type
-                 FROM events e
-                 LEFT JOIN blobs b ON b.content_hash = e.content_hash
-                 WHERE e.org_id = ? AND e.thread_id = ?
-                 ORDER BY e.sequence ASC
-          `
-            : `
-                 SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
-                   e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                   e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
-                   e.occurred_at, e.ingested_at,
-                   b.media_type AS content_media_type
-                 FROM events e
-                 LEFT JOIN blobs b ON b.content_hash = e.content_hash
-                 WHERE e.org_id = ?
-                 ORDER BY e.sequence ASC
-          `,
-        )
-        .all(...(threadId ? [orgId, threadId] : [orgId])) as ContextEventRow[];
-      const lifecycleHeads = threadId
-        ? (this.database
-            .prepare(
-              `
-            SELECT sh.source, sh.external_id, sh.current_event_id AS head_event_id
-            FROM source_heads sh
-            WHERE sh.org_id = ?
-              AND EXISTS (
-                SELECT 1
-                FROM events e
-                WHERE e.org_id = sh.org_id
-                  AND e.source = sh.source
-                  AND e.external_id = sh.external_id
-                  AND e.thread_id = ?
-              )
-            ORDER BY sh.source ASC, sh.external_id ASC
-          `,
-            )
-            .all(orgId, threadId) as ContextAuthorityRead["lifecycle_heads"])
-        : (this.database
-            .prepare(
-              `
-            SELECT source, external_id, current_event_id AS head_event_id
-            FROM source_heads
-            WHERE org_id = ?
-            ORDER BY source ASC, external_id ASC
-          `,
-            )
-            .all(orgId) as ContextAuthorityRead["lifecycle_heads"]);
-      const recordedAt = new Date().toISOString();
-      const events = rows.map((row) => ({
-        ...this.toEvent(row),
-        ...(row.content_media_type
-          ? { content_media_type: row.content_media_type }
-          : {}),
-      }));
-      return {
-        read_epoch: `authority:${hashCanonicalContext({
-          org_id: orgId,
-          ...(threadId ? { thread_id: threadId } : {}),
-          events,
-          lifecycle_heads: lifecycleHeads,
-        })}`,
-        recorded_at: recordedAt,
-        events,
-        lifecycle_heads: lifecycleHeads,
-      } satisfies ContextAuthorityRead;
-    });
-    return read.deferred();
+    return openContextReadForThread(this.database, orgId, threadId);
   }
 
   async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
-    requireContextValue(validateContextArtifact(artifact), "artifact");
     this.assertWritable();
-    const payload = canonicalContextJson(artifact);
-    this.database.transaction(() => {
-    this.putImmutableContextJson(
-      "context_artifacts",
-      "org_id = ? AND id = ?",
-      [artifact.org_id, artifact.id],
-      payload,
-      "artifact",
-      `
-        INSERT INTO context_artifacts (
-          org_id, id, kind, status, generation, recorded_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        artifact.org_id,
-        artifact.id,
-        artifact.kind,
-        artifact.status,
-        artifact.generation,
-        artifact.recorded_at,
-        payload,
-      ],
-    );
-    this.database.prepare(
-      `INSERT OR IGNORE INTO context_artifact_states (org_id, artifact_id, status, decided_at) VALUES (?, ?, ?, ?)`,
-    ).run(artifact.org_id, artifact.id, artifact.status, artifact.recorded_at);
-    })();
-    return parseContextJson<ContextArtifact>(payload);
+    return putArtifact(this.database, artifact);
   }
 
   async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
-    const artifact = this.getContextJson<ContextArtifact>(
-      "context_artifacts",
-      "org_id = ? AND id = ?",
-      [orgId, id],
-    );
-    if (!artifact) return null;
-    const state = await this.getArtifactState(orgId, id);
-    return state ? { ...artifact, status: state.status } : artifact;
+    return getArtifact(this.database, orgId, id);
   }
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
-    const validation = validateContextArtifactQuery(query);
-    requireContextValue(validation, "artifact query");
-    const stableQuery = validation.success ? validation.data : query;
-    const clauses = ["a.org_id = ?"];
-    const params: unknown[] = [stableQuery.org_id];
-    if (stableQuery.kinds) {
-      if (stableQuery.kinds.length === 0) {
-        return [];
-      }
-      clauses.push(`a.kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
-      params.push(...stableQuery.kinds);
-    }
-    if (stableQuery.statuses) {
-      if (stableQuery.statuses.length === 0) {
-        return [];
-      }
-      clauses.push(`s.status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
-      params.push(...stableQuery.statuses);
-    }
-    if (stableQuery.generation) {
-      clauses.push("a.generation = ?");
-      params.push(stableQuery.generation);
-    }
-    const rows = this.database
-      .prepare(
-        `
-          SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
-          JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
-          WHERE ${clauses.join(" AND ")}
-        `,
-      )
-      .all(...params) as Array<{ payload_json: string; lifecycle_status: ContextArtifact["status"] }>;
-    return rows
-      .map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status as ContextArtifact["status"] }))
-      .sort((left, right) => compareContextArtifactOrder(left, right))
-      .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY);
+    return listArtifacts(this.database, query);
+  }
+
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return listArtifactIndexes(this.database, query);
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
-    const row = this.database.prepare(
-      `SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = ? AND artifact_id = ?`,
-    ).get(orgId, artifactId) as ArtifactStateRow | undefined;
-    return row ? artifactState(row) : null;
+    return getArtifactState(this.database, orgId, artifactId);
   }
 
   async decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState> {
-    assertArtifactDecision(input);
     this.assertWritable();
-    return this.database.transaction(() => {
-      const state = this.artifactStateForTransition(input.org_id, input.artifact_id);
-      this.database.prepare(
-        `UPDATE context_artifact_states SET status = ?, decided_at = ?, superseded_by = NULL WHERE org_id = ? AND artifact_id = ?`,
-      ).run(input.status, input.decided_at, input.org_id, input.artifact_id);
-      return { ...state, status: input.status, decided_at: input.decided_at } as ContextArtifactState;
-    })();
+    return decideArtifact(this.database, input);
   }
 
   async supersedeArtifact(input: ContextArtifactSupersession): Promise<{ superseded: ContextArtifactState; accepted: ContextArtifactState }> {
-    assertArtifactSupersession(input);
     this.assertWritable();
-    return this.database.transaction(() => {
-      const current = this.getArtifactStateSync(input.org_id, input.artifact_id);
-      const replacement = this.artifactStateForTransition(input.org_id, input.replacement_id);
-      const artifact = this.getContextJson<ContextArtifact>("context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
-      if (!current || current.status !== "accepted" || !artifact || artifact.supersedes_id !== input.artifact_id) {
-        throw new Error("Invalid Context artifact supersession");
-      }
-      this.database.prepare(`UPDATE context_artifact_states SET status = 'superseded', decided_at = ?, superseded_by = ? WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.replacement_id, input.org_id, input.artifact_id);
-      this.database.prepare(`UPDATE context_artifact_states SET status = 'accepted', decided_at = ?, superseded_by = NULL WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.org_id, input.replacement_id);
-      return {
-        superseded: { ...current, status: "superseded" as const, decided_at: input.decided_at, superseded_by: input.replacement_id },
-        accepted: { ...replacement, status: "accepted" as const, decided_at: input.decided_at },
-      };
-    })();
+    return supersedeArtifact(this.database, input);
   }
 
   async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{ superseded: ContextArtifactState; replacement: ContextArtifactState }> {
     this.assertWritable();
-    return this.database.transaction(() => {
-      const current = this.getArtifactStateSync(input.org_id, input.artifact_id);
-      const replacement = this.artifactStateForTransition(input.org_id, input.replacement_id);
-      const currentArtifact = this.getContextJson<ContextArtifact>("context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.artifact_id]);
-      const replacementArtifact = this.getContextJson<ContextArtifact>("context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
-      if (!current || current.status !== "proposed" || !currentArtifact || !replacementArtifact || currentArtifact.kind !== "daily_digest" || replacementArtifact.kind !== "daily_digest" || replacementArtifact.supersedes_id !== input.artifact_id) {
-        throw new Error("Invalid proposed daily digest supersession");
-      }
-      this.database.prepare(`UPDATE context_artifact_states SET status = 'superseded', decided_at = ?, superseded_by = ? WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.replacement_id, input.org_id, input.artifact_id);
-      this.database.prepare(`UPDATE context_artifact_states SET status = 'proposed', decided_at = ?, superseded_by = NULL WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.org_id, input.replacement_id);
-      return {
-        superseded: { ...current, status: "superseded" as const, decided_at: input.decided_at, superseded_by: input.replacement_id },
-        replacement: { ...replacement, status: "proposed" as const, decided_at: input.decided_at },
-      };
-    })();
-  }
-
-  private getArtifactStateSync(orgId: string, artifactId: string): ContextArtifactState | null {
-    const row = this.database.prepare(`SELECT org_id, artifact_id, status, decided_at, superseded_by FROM context_artifact_states WHERE org_id = ? AND artifact_id = ?`).get(orgId, artifactId) as ArtifactStateRow | undefined;
-    return row ? artifactState(row) : null;
-  }
-
-  private artifactStateForTransition(orgId: string, artifactId: string): ContextArtifactState {
-    const state = this.getArtifactStateSync(orgId, artifactId);
-    if (!state || !["proposed", "needs_clarify"].includes(state.status)) throw new Error("Context artifact is not transitionable");
-    return state;
+    return supersedeProposedArtifact(this.database, input);
   }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
-    requireContextValue(validateContextSnapshot(snapshot), "snapshot");
     this.assertWritable();
-    const payload = canonicalContextJson(snapshot);
-    this.putImmutableContextJson(
-      "context_snapshots",
-      "org_id = ? AND id = ?",
-      [snapshot.org_id, snapshot.id],
-      payload,
-      "snapshot",
-      "INSERT INTO context_snapshots (org_id, id, payload_json) VALUES (?, ?, ?)",
-      [snapshot.org_id, snapshot.id, payload],
-    );
+    return putSnapshot(this.database, snapshot);
   }
 
   async getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null> {
-    return this.getContextJson<ContextSnapshot>(
-      "context_snapshots",
-      "org_id = ? AND id = ?",
-      [orgId, id],
-    );
+    return getSnapshot(this.database, orgId, id);
   }
 
   async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
-    requireContextValue(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
     this.assertWritable();
-    const payload = canonicalContextJson(entry);
-    const lookup = [
-      entry.org_id,
-      entry.thread_id,
-      entry.snapshot_id,
-      entry.principal.actor_type,
-      entry.principal.actor_id,
-      entry.consumer_id,
-    ];
-    this.putImmutableContextJson(
-      "context_snapshot_index",
-      `
-        org_id = ? AND thread_id = ? AND snapshot_id = ?
-        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
-      `,
-      lookup,
-      payload,
-      "snapshot index entry",
-      `
-        INSERT INTO context_snapshot_index (
-          org_id, thread_id, snapshot_id, principal_actor_type,
-          principal_actor_id, consumer_id, created_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [...lookup, entry.created_at, payload],
-    );
+    return putSnapshotIndex(this.database, entry);
   }
 
   async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
-    const validation = validateContextSnapshotIndexQuery(query);
-    requireContextValue(validation, "snapshot index query");
-    const stableQuery = validation.success ? validation.data : query;
-    const purpose = stableQuery.purpose
-      ? "AND json_extract(payload_json, '$.purpose') = ?"
-      : "";
-    const cursor = stableQuery.before_created_at
-      ? `
-        AND (
-          created_at < ? OR (created_at = ? AND snapshot_id < ?)
-        )
-      `
-      : "";
-    const rows = this.database.prepare(`
-      SELECT payload_json
-      FROM context_snapshot_index
-      WHERE org_id = ? AND thread_id = ?
-        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
-        ${purpose}
-        ${cursor}
-      ORDER BY created_at DESC, snapshot_id DESC
-      LIMIT ?
-    `).all(
-      stableQuery.org_id,
-      stableQuery.thread_id,
-      stableQuery.principal.actor_type,
-      stableQuery.principal.actor_id,
-      stableQuery.consumer_id,
-      ...(stableQuery.purpose ? [stableQuery.purpose] : []),
-      ...(stableQuery.before_created_at
-        ? [
-          stableQuery.before_created_at,
-          stableQuery.before_created_at,
-          stableQuery.before_snapshot_id!,
-        ]
-        : []),
-      stableQuery.limit ?? 100,
-    ) as Array<{ payload_json: string }>;
-    return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));
+    return listSnapshotIndex(this.database, query);
   }
 
   async putBundle(bundle: ContextBundle): Promise<void> {
-    requireContextValue(validateContextBundle(bundle), "bundle");
     this.assertWritable();
-    const payload = canonicalContextJson(bundle);
-    const lookup = [
-      bundle.org_id,
-      bundle.snapshot_id,
-      bundle.principal.actor_type,
-      bundle.principal.actor_id,
-      bundle.consumer_id,
-    ];
-    this.putImmutableContextJson(
-      "context_bundles",
-      `
-        org_id = ? AND snapshot_id = ? AND principal_actor_type = ?
-        AND principal_actor_id = ? AND consumer_id = ?
-      `,
-      lookup,
-      payload,
-      "bundle",
-      `
-        INSERT INTO context_bundles (
-          org_id, snapshot_id, principal_actor_type, principal_actor_id,
-          consumer_id, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `,
-      [...lookup, payload],
-    );
+    return putBundle(this.database, bundle);
   }
 
   async getBundle(query: ContextBundleLookup): Promise<ContextBundle | null> {
-    return this.getContextJson<ContextBundle>(
-      "context_bundles",
-      `
-        org_id = ? AND snapshot_id = ? AND principal_actor_type = ?
-        AND principal_actor_id = ? AND consumer_id = ?
-      `,
-      [
-        query.org_id,
-        query.snapshot_id,
-        query.principal.actor_type,
-        query.principal.actor_id,
-        query.consumer_id,
-      ],
-    );
+    return getBundle(this.database, query);
   }
 
   async putCheckpoint(checkpoint: ContextProjectionCheckpoint): Promise<void> {
-    const validation = validateContextProjectionCheckpoint(checkpoint);
-    requireContextValue(validation, "projection checkpoint");
-    const stableCheckpoint = validation.success ? validation.data : checkpoint;
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const current = this.database
-        .prepare(
-          `
-            SELECT payload_json FROM context_projection_checkpoints
-            WHERE org_id = ? AND projector_id = ? AND generation = ?
-          `,
-        )
-        .get(
-          stableCheckpoint.org_id,
-          stableCheckpoint.projector_id,
-          stableCheckpoint.generation,
-        ) as { payload_json: string } | undefined;
-      if (current) {
-        const stored = parseContextJson<ContextProjectionCheckpoint>(current.payload_json);
-        if (stored.algorithm_version !== stableCheckpoint.algorithm_version) {
-          throw new Error("Projection checkpoint algorithm cannot change within a generation");
-        }
-        if (stored.sequence > stableCheckpoint.sequence) {
-          throw new Error("Projection checkpoint cannot move backwards");
-        }
-        if (stored.sequence === stableCheckpoint.sequence) {
-          if (current.payload_json === canonicalContextJson(stableCheckpoint)) {
-            return;
-          }
-          if (
-            stored.watermark === stableCheckpoint.watermark ||
-            Date.parse(stableCheckpoint.updated_at) <= Date.parse(stored.updated_at)
-          ) {
-            throw new Error("Projection checkpoint cannot regress at the same sequence");
-          }
-        }
-      }
-      const payload = canonicalContextJson(stableCheckpoint);
-      this.database
-        .prepare(
-          `
-            INSERT INTO context_projection_checkpoints (
-              org_id, projector_id, generation, algorithm_version,
-              sequence, watermark, updated_at, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(org_id, projector_id, generation) DO UPDATE SET
-              algorithm_version = excluded.algorithm_version,
-              sequence = excluded.sequence,
-              watermark = excluded.watermark,
-              updated_at = excluded.updated_at,
-              payload_json = excluded.payload_json
-          `,
-        )
-        .run(
-          stableCheckpoint.org_id,
-          stableCheckpoint.projector_id,
-          stableCheckpoint.generation,
-          stableCheckpoint.algorithm_version,
-          stableCheckpoint.sequence,
-          stableCheckpoint.watermark,
-          stableCheckpoint.updated_at,
-          payload,
-        );
-    });
-    transaction.immediate();
+    return putCheckpoint(this.database, checkpoint);
   }
 
   async getCheckpoint(
@@ -1083,110 +522,35 @@ export class SqliteAuthorityStore
     projectorId: string,
     generation: string,
   ): Promise<ContextProjectionCheckpoint | null> {
-    return this.getContextJson<ContextProjectionCheckpoint>(
-      "context_projection_checkpoints",
-      "org_id = ? AND projector_id = ? AND generation = ?",
-      [orgId, projectorId, generation],
-    );
+    return getCheckpoint(this.database, orgId, projectorId, generation);
   }
 
   async claimContextProjectionJobs(
     input: ClaimContextProjectionJobs,
   ): Promise<ContextProjectionJob[]> {
     this.assertWritable();
-    assertProjectionClaim(input);
-    return this.database.transaction(() => {
-      const rows = this.database.prepare(
-        `
-          SELECT id FROM context_projection_outbox
-          WHERE status = 'pending'
-             OR (status = 'failed' AND (next_retry_at IS NULL OR next_retry_at <= ?))
-             OR (status = 'running' AND lease_expires_at <= ?)
-          ORDER BY created_at, id
-          LIMIT ?
-        `,
-      ).all(input.now, input.now, input.limit) as Array<{ id: string }>;
-      const leaseExpiresAt = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
-      for (const row of rows) {
-        this.database.prepare(
-          `
-            UPDATE context_projection_outbox
-            SET status = 'running', attempts = attempts + 1,
-                lease_owner = ?, lease_expires_at = ?, next_retry_at = NULL,
-                last_error = NULL, updated_at = ?
-            WHERE id = ?
-          `,
-        ).run(input.owner, leaseExpiresAt, input.now, row.id);
-      }
-      return rows.map((row) => this.getContextProjectionJob(row.id)!);
-    }).immediate();
+    return claimContextProjectionJobs(this.database, input);
   }
 
   async completeContextProjectionJob(
     input: CompleteContextProjectionJob,
   ): Promise<boolean> {
     this.assertWritable();
-    assertProjectionSettle(input.id, input.owner, input.completed_at);
-    return this.database.prepare(
-      `
-        UPDATE context_projection_outbox
-        SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL,
-            next_retry_at = NULL, last_error = NULL, updated_at = ?
-        WHERE id = ? AND status = 'running' AND lease_owner = ?
-          AND lease_expires_at > ?
-      `,
-    ).run(input.completed_at, input.id, input.owner, input.completed_at).changes === 1;
+    return completeContextProjectionJob(this.database, input);
   }
 
   async renewContextProjectionJob(input: RenewContextProjectionJob): Promise<boolean> {
     this.assertWritable();
-    assertProjectionSettle(input.id, input.owner, input.now);
-    if (!Number.isSafeInteger(input.lease_ms) || input.lease_ms < 1) {
-      throw new Error("Invalid Context projection lease renewal");
-    }
-    const leaseExpiresAt = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
-    return this.database.prepare(
-      `
-        UPDATE context_projection_outbox
-        SET lease_expires_at = ?, updated_at = ?
-        WHERE id = ? AND status = 'running' AND lease_owner = ?
-          AND lease_expires_at > ?
-      `,
-    ).run(leaseExpiresAt, input.now, input.id, input.owner, input.now).changes === 1;
+    return renewContextProjectionJob(this.database, input);
   }
 
   async failContextProjectionJob(input: FailContextProjectionJob): Promise<boolean> {
     this.assertWritable();
-    assertProjectionSettle(input.id, input.owner, input.failed_at);
-    if (Number.isNaN(Date.parse(input.next_retry_at)) || !input.error_code.trim()) {
-      throw new Error("Invalid Context projection failure");
-    }
-    return this.database.prepare(
-      `
-        UPDATE context_projection_outbox
-        SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
-            next_retry_at = ?, last_error = ?, updated_at = ?
-        WHERE id = ? AND status = 'running' AND lease_owner = ?
-          AND lease_expires_at > ?
-      `,
-    ).run(
-      input.next_retry_at,
-      input.error_code.slice(0, 120),
-      input.failed_at,
-      input.id,
-      input.owner,
-      input.failed_at,
-    ).changes === 1;
+    return failContextProjectionJob(this.database, input);
   }
 
   async listContextProjectionJobs(orgId: string): Promise<ContextProjectionJob[]> {
-    return (this.database.prepare(
-      `
-        SELECT id, org_id, event_id, status, attempts, lease_owner,
-               lease_expires_at, next_retry_at, last_error, created_at, updated_at
-        FROM context_projection_outbox WHERE org_id = ? ORDER BY created_at, id
-      `,
-    ).all(orgId) as ContextProjectionJobRow[]).map(toContextProjectionJob);
+    return listContextProjectionJobs(this.database, orgId);
   }
 
   async enqueueDailyDigestCatchUp(input: {
@@ -1197,35 +561,7 @@ export class SqliteAuthorityStore
     max_days: number;
   }): Promise<DailyDigestJob[]> {
     this.assertWritable();
-    assertDailyDigestCatchUp(input);
-    return this.database.transaction(() => {
-      const cursor = this.database.prepare(
-        `SELECT last_scheduled_utc_date FROM daily_digest_schedule_cursors
-         WHERE org_id = ? AND generation = ?`,
-      ).get(input.org_id, input.generation) as { last_scheduled_utc_date: string } | undefined;
-      const dates = catchUpDates(cursor?.last_scheduled_utc_date, input.through_utc_date, input.max_days);
-      const jobs = dates.map((utcDate) => {
-        const id = `daily-digest-job:${hashCanonicalContext([input.org_id, utcDate, input.generation])}`;
-        this.database.prepare(
-          `INSERT INTO daily_digest_jobs (
-            id, org_id, utc_date, generation, status, attempts, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
-          ON CONFLICT (org_id, utc_date, generation) DO NOTHING`,
-        ).run(id, input.org_id, utcDate, input.generation, input.created_at, input.created_at);
-        return this.getDailyDigestJob(id)!;
-      });
-      const lastScheduled = dates.at(-1);
-      if (lastScheduled) {
-        this.database.prepare(
-          `INSERT INTO daily_digest_schedule_cursors (org_id, generation, last_scheduled_utc_date, updated_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT (org_id, generation) DO UPDATE SET
-             last_scheduled_utc_date = excluded.last_scheduled_utc_date,
-             updated_at = excluded.updated_at`,
-        ).run(input.org_id, input.generation, lastScheduled, input.created_at);
-      }
-      return jobs;
-    }).immediate();
+    return enqueueDailyDigestCatchUp(this.database, input);
   }
 
   async enqueueDailyDigestJob(input: {
@@ -1235,239 +571,111 @@ export class SqliteAuthorityStore
     created_at: string;
   }): Promise<DailyDigestJob> {
     this.assertWritable();
-    assertDailyDigestEnqueue(input);
-    const id = `daily-digest-job:${hashCanonicalContext([input.org_id, input.utc_date, input.generation])}`;
-    this.database.prepare(
-      `INSERT INTO daily_digest_jobs (
-        id, org_id, utc_date, generation, status, attempts, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
-      ON CONFLICT (org_id, utc_date, generation) DO NOTHING`,
-    ).run(id, input.org_id, input.utc_date, input.generation, input.created_at, input.created_at);
-    return this.getDailyDigestJob(id)!;
+    return enqueueDailyDigestJob(this.database, input);
   }
 
   async claimDailyDigestJobs(input: {
     owner: string; now: string; lease_ms: number; limit: number;
   }): Promise<DailyDigestJob[]> {
     this.assertWritable();
-    assertProjectionClaim(input);
-    return this.database.transaction(() => {
-      const rows = this.database.prepare(
-        `SELECT id FROM daily_digest_jobs
-         WHERE status = 'pending'
-            OR (status = 'failed' AND (next_retry_at IS NULL OR next_retry_at <= ?))
-            OR (status = 'running' AND lease_expires_at <= ?)
-         ORDER BY created_at, id LIMIT ?`,
-      ).all(input.now, input.now, input.limit) as Array<{ id: string }>;
-      const leaseExpiresAt = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
-      for (const row of rows) {
-        this.database.prepare(
-          `UPDATE daily_digest_jobs SET status = 'running', attempts = attempts + 1,
-           lease_owner = ?, lease_expires_at = ?, next_retry_at = NULL,
-           last_error = NULL, updated_at = ? WHERE id = ?`,
-        ).run(input.owner, leaseExpiresAt, input.now, row.id);
-      }
-      return rows.map((row) => this.getDailyDigestJob(row.id)!);
-    }).immediate();
+    return claimDailyDigestJobs(this.database, input);
   }
 
   async completeDailyDigestJob(input: { id: string; owner: string; completed_at: string }): Promise<boolean> {
     this.assertWritable();
-    assertProjectionSettle(input.id, input.owner, input.completed_at);
-    return this.database.prepare(
-      `UPDATE daily_digest_jobs SET status = 'succeeded', lease_owner = NULL,
-       lease_expires_at = NULL, next_retry_at = NULL, last_error = NULL, updated_at = ?
-       WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_expires_at > ?`,
-    ).run(input.completed_at, input.id, input.owner, input.completed_at).changes === 1;
+    return completeDailyDigestJob(this.database, input);
   }
 
   async renewDailyDigestJob(input: { id: string; owner: string; now: string; lease_ms: number }): Promise<boolean> {
     this.assertWritable();
-    assertProjectionSettle(input.id, input.owner, input.now);
-    if (!Number.isSafeInteger(input.lease_ms) || input.lease_ms < 1) throw new Error("Invalid daily digest lease renewal");
-    const leaseExpiresAt = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
-    return this.database.prepare(
-      `UPDATE daily_digest_jobs SET lease_expires_at = ?, updated_at = ?
-       WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_expires_at > ?`,
-    ).run(leaseExpiresAt, input.now, input.id, input.owner, input.now).changes === 1;
+    return renewDailyDigestJob(this.database, input);
   }
 
   async failDailyDigestJob(input: {
     id: string; owner: string; failed_at: string; next_retry_at: string; error_code: string;
   }): Promise<boolean> {
     this.assertWritable();
-    assertProjectionSettle(input.id, input.owner, input.failed_at);
-    if (Number.isNaN(Date.parse(input.next_retry_at)) || !input.error_code.trim()) throw new Error("Invalid daily digest failure");
-    return this.database.prepare(
-      `UPDATE daily_digest_jobs SET status = 'failed', lease_owner = NULL,
-       lease_expires_at = NULL, next_retry_at = ?, last_error = ?, updated_at = ?
-       WHERE id = ? AND status = 'running' AND lease_owner = ? AND lease_expires_at > ?`,
-    ).run(input.next_retry_at, input.error_code.slice(0, 120), input.failed_at, input.id, input.owner, input.failed_at).changes === 1;
+    return failDailyDigestJob(this.database, input);
   }
 
   async listDailyDigestJobs(orgId: string): Promise<DailyDigestJob[]> {
-    return (this.database.prepare(
-      `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
-       lease_expires_at, next_retry_at, last_error, created_at, updated_at
-      FROM daily_digest_jobs WHERE org_id = ? ORDER BY utc_date, generation, id`,
-    ).all(orgId) as DailyDigestJobRow[]).map(toDailyDigestJob);
+    return listDailyDigestJobs(this.database, orgId);
   }
 
   async putDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): Promise<DailyDigestCoverageAlert> {
     this.assertWritable();
-    this.database.prepare(`INSERT INTO daily_digest_coverage_alerts (id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (org_id, local_date, generation, event_id, reason_code) DO NOTHING`).run(alert.id, alert.org_id, alert.local_date, alert.generation, alert.event_id, alert.reason_code, alert.status, alert.created_at, alert.resolved_at ?? null);
-    return toDailyDigestCoverageAlert(this.database.prepare(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = ? AND local_date = ? AND generation = ? AND event_id = ? AND reason_code = ?`).get(alert.org_id, alert.local_date, alert.generation, alert.event_id, alert.reason_code) as DailyDigestCoverageAlert);
+    return putDailyDigestCoverageAlert(this.database, alert);
   }
 
   async listDailyDigestCoverageAlerts(input: { org_id: string; status?: "open" | "resolved"; limit?: number }): Promise<DailyDigestCoverageAlert[]> {
-    const limit = input.limit ?? 100;
-    return (this.database.prepare(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY local_date, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, limit] : [input.org_id, limit])) as DailyDigestCoverageAlert[]).map(toDailyDigestCoverageAlert);
+    return listDailyDigestCoverageAlerts(this.database, input);
   }
 
   async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
     this.assertWritable();
-    this.database.prepare(`UPDATE daily_digest_coverage_alerts SET status = 'resolved', resolved_at = ? WHERE org_id = ? AND id = ? AND status = 'open'`).run(input.resolved_at, input.org_id, input.alert_id);
-    const alert = this.database.prepare(`SELECT id, org_id, local_date, generation, event_id, reason_code, status, created_at, resolved_at FROM daily_digest_coverage_alerts WHERE org_id = ? AND id = ?`).get(input.org_id, input.alert_id) as DailyDigestCoverageAlert | undefined;
-    return alert ? toDailyDigestCoverageAlert(alert) : null;
+    return resolveDailyDigestCoverageAlert(this.database, input);
   }
 
   async putProposal(input: ProposalRecord): Promise<ProposalRecord> {
     this.assertWritable();
-    const proposal = validateProposal(input);
-    if (proposal.status !== "draft") throw new Error("New Proposal must be draft");
-    this.database.prepare(`INSERT INTO proposals (id, org_id, status, source_digest_id, source_item_event_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`).run(proposal.id, proposal.org_id, proposal.status, proposal.source_digest_id ?? null, proposal.source_item_event_id ?? null, canonicalContextJson(proposal), proposal.created_at, proposal.updated_at);
-    const stored = proposal.source_digest_id && proposal.source_item_event_id
-      ? this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND source_digest_id = ? AND source_item_event_id = ?`).get(proposal.org_id, proposal.source_digest_id, proposal.source_item_event_id)
-      : this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(proposal.org_id, proposal.id);
-    return toProposal(stored as ProposalRow);
+    return putProposal(this.database, input);
   }
 
   async getProposal(orgId: string, proposalId: string): Promise<ProposalRecord | null> {
-    return this.getProposalSync(orgId, proposalId);
+    return getProposal(this.database, orgId, proposalId);
   }
 
   async listProposals(input: { org_id: string; status?: ProposalStatus; limit?: number }): Promise<ProposalRecord[]> {
-    const limit = input.limit ?? 100;
-    const rows = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, limit] : [input.org_id, limit])) as ProposalRow[];
-    return rows.map(toProposal);
+    return listProposals(this.database, input);
   }
 
   async transitionProposal(input: { org_id: string; proposal_id: string; status: "submitted" | "in_review" | "rejected" | "withdrawn"; updated_at: string }): Promise<ProposalRecord | null> {
     this.assertWritable();
-    return this.database.transaction(() => {
-      const current = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(input.org_id, input.proposal_id) as ProposalRow | undefined;
-      if (!current) return null;
-      const proposal = toProposal(current);
-      const allowed = (proposal.status === "draft" && ["submitted", "withdrawn"].includes(input.status))
-        || (proposal.status === "submitted" && ["in_review", "withdrawn"].includes(input.status))
-        || (proposal.status === "in_review" && ["rejected", "withdrawn"].includes(input.status));
-      if (!allowed) throw new Error("Invalid Proposal transition");
-      const next = validateProposal({ ...proposal, status: input.status, updated_at: input.updated_at });
-      this.database.prepare(`UPDATE proposals SET status = ?, updated_at = ? WHERE org_id = ? AND id = ? AND status = ?`).run(next.status, next.updated_at, input.org_id, input.proposal_id, proposal.status);
-      return next;
-    })();
+    return transitionProposal(this.database, input);
   }
 
   async commitProposalDecision(input: { org_id: string; proposal_id: string; decision: DecisionRecord }): Promise<{ proposal: ProposalRecord; decision: DecisionRecord }> {
     this.assertWritable();
-    return this.database.transaction(() => {
-      const decision = validateDecision(input.decision);
-      const existing = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? AND proposal_id = ?`).get(input.org_id, input.proposal_id) as { payload_json: string } | undefined;
-      if (existing) {
-        const stored = validateDecision(JSON.parse(existing.payload_json) as DecisionRecord);
-        if (canonicalContextJson(stored) !== canonicalContextJson(decision)) throw new Error("Cannot replace immutable Decision");
-        return { proposal: this.getProposalSync(input.org_id, input.proposal_id)!, decision: stored };
-      }
-      const proposal = this.getProposalSync(input.org_id, input.proposal_id);
-      if (!proposal || proposal.status !== "in_review" || proposal.kind !== "decision"
-        || decision.org_id !== input.org_id || decision.proposal_id !== proposal.id
-        || decision.context_snapshot_id !== proposal.context_snapshot_id
-        || decision.rights_level !== proposal.rights_level
-        || canonicalContextJson(decision.standard_bindings) !== canonicalContextJson(proposal.standard_bindings)) {
-        throw new Error("Invalid Proposal Decision commit");
-      }
-      this.database.prepare(`INSERT INTO decisions (id, org_id, proposal_id, status, payload_json, committed_at) VALUES (?, ?, ?, ?, ?, ?)`).run(decision.id, decision.org_id, decision.proposal_id, decision.status, canonicalContextJson(decision), decision.committed_at);
-      this.database.prepare(`UPDATE proposals SET status = 'accepted', outcome_kind = 'decision', outcome_ref_id = ?, updated_at = ? WHERE org_id = ? AND id = ? AND status = 'in_review'`).run(decision.id, decision.committed_at, input.org_id, input.proposal_id);
-      return { proposal: this.getProposalSync(input.org_id, input.proposal_id)!, decision };
-    })();
+    return commitProposalDecision(this.database, input);
   }
 
   async getDecision(orgId: string, decisionId: string): Promise<DecisionRecord | null> {
-    const row = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? AND id = ?`).get(orgId, decisionId) as { payload_json: string } | undefined;
-    return row ? validateDecision(JSON.parse(row.payload_json) as DecisionRecord) : null;
+    return getDecision(this.database, orgId, decisionId);
   }
 
   async listDecisions(input: { org_id: string; limit?: number }): Promise<DecisionRecord[]> {
-    const rows = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? ORDER BY committed_at, id LIMIT ?`).all(input.org_id, input.limit ?? 100) as Array<{ payload_json: string }>;
-    return rows.map((row) => validateDecision(JSON.parse(row.payload_json) as DecisionRecord));
+    return listDecisions(this.database, input);
   }
 
   async putReview(input: ReviewRecord): Promise<ReviewRecord> {
     this.assertWritable();
-    const review = validateReview(input);
-    this.database.prepare(`INSERT INTO reviews (id, org_id, subject_kind, subject_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`).run(review.id, review.org_id, review.subject_kind, review.subject_id, canonicalContextJson(review), review.created_at);
-    const stored = await this.getReview(review.org_id, review.id);
-    if (!stored || canonicalContextJson(stored) !== canonicalContextJson(review)) throw new Error("Cannot replace immutable Review");
-    return stored;
+    return putReview(this.database, input);
   }
 
   async getReview(orgId: string, reviewId: string): Promise<ReviewRecord | null> {
-    const row = this.database.prepare(`SELECT payload_json FROM reviews WHERE org_id = ? AND id = ?`).get(orgId, reviewId) as { payload_json: string } | undefined;
-    return row ? validateReview(JSON.parse(row.payload_json) as ReviewRecord) : null;
+    return getReview(this.database, orgId, reviewId);
   }
 
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
-    const rows = this.database.prepare(`SELECT payload_json FROM reviews WHERE org_id = ? ${input.subject_id ? "AND subject_id = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.subject_id ? [input.org_id, input.subject_id, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as Array<{ payload_json: string }>;
-    return rows.map((row) => validateReview(JSON.parse(row.payload_json) as ReviewRecord));
+    return listReviews(this.database, input);
   }
 
   async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
     this.assertWritable();
-    const handoff = validateHandoff(input);
-    if (handoff.status !== "open") throw new Error("New Handoff must be open");
-    this.database.prepare(`INSERT INTO handoffs (id, org_id, direction, status, payload_json, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, NULL) ON CONFLICT (id) DO NOTHING`).run(handoff.id, handoff.org_id, handoff.direction, handoff.status, canonicalContextJson(handoff), handoff.created_at);
-    const row = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = ? AND id = ?`).get(handoff.org_id, handoff.id) as HandoffRow | undefined;
-    if (!row) throw new Error("Cannot replace immutable Handoff");
-    const storedCreation = validateHandoff(JSON.parse(row.payload_json) as HandoffRecord);
-    if (canonicalContextJson(storedCreation) !== canonicalContextJson({
-      ...handoff, created_at: storedCreation.created_at,
-    })) {
-      throw new Error("Cannot replace immutable Handoff");
-    }
-    return toHandoff(row);
+    return putHandoff(this.database, input);
   }
 
   async getHandoff(orgId: string, handoffId: string): Promise<HandoffRecord | null> {
-    const row = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = ? AND id = ?`).get(orgId, handoffId) as HandoffRow | undefined;
-    return row ? toHandoff(row) : null;
+    return getHandoff(this.database, orgId, handoffId);
   }
 
   async listHandoffs(input: { org_id: string; status?: HandoffStatus; direction?: HandoffDirection; limit?: number }): Promise<HandoffRecord[]> {
-    const conditions = ["org_id = ?"];
-    const values: Array<string | number> = [input.org_id];
-    if (input.status) { conditions.push("status = ?"); values.push(input.status); }
-    if (input.direction) { conditions.push("direction = ?"); values.push(input.direction); }
-    values.push(input.limit ?? 100);
-    const rows = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE ${conditions.join(" AND ")} ORDER BY created_at, id LIMIT ?`).all(...values) as HandoffRow[];
-    return rows.map(toHandoff);
+    return listHandoffs(this.database, input);
   }
 
   async transitionHandoff(input: { org_id: string; handoff_id: string; status: Exclude<HandoffStatus, "open">; transitioned_at: string }): Promise<HandoffRecord | null> {
     this.assertWritable();
-    if (!input.org_id?.trim() || !input.handoff_id?.trim() || Number.isNaN(Date.parse(input.transitioned_at))) throw new Error("Invalid Handoff transition");
-    return this.database.transaction(() => {
-      const row = this.database.prepare(`SELECT status, payload_json, resolved_at FROM handoffs WHERE org_id = ? AND id = ?`).get(input.org_id, input.handoff_id) as HandoffRow | undefined;
-      if (!row) return null;
-      const current = toHandoff(row);
-      assertHandoffTransition(current.status, input.status);
-      const next = validateHandoff({
-        ...current,
-        status: input.status,
-        ...(input.status === "resolved" ? { resolved_at: input.transitioned_at } : {}),
-      });
-      this.database.prepare(`UPDATE handoffs SET status = ?, resolved_at = ? WHERE org_id = ? AND id = ? AND status = ?`).run(next.status, next.resolved_at ?? null, input.org_id, input.handoff_id, current.status);
-      return next;
-    })();
+    return transitionHandoff(this.database, input);
   }
 
   async commitProposalStandardVersion(input: { org_id: string; proposal_id: string; standard?: StandardRecord; version: StandardVersionRecord }): Promise<{ proposal: ProposalRecord; standard: StandardRecord; version: StandardVersionRecord }> {
@@ -1475,7 +683,7 @@ export class SqliteAuthorityStore
     return this.database.transaction(() => {
       const version = validateStandardVersion(input.version);
       if (version.status !== "draft") throw new Error("New StandardVersion must be draft");
-      const proposal = this.getProposalSync(input.org_id, input.proposal_id);
+      const proposal = getProposalSync(this.database, input.org_id, input.proposal_id);
       if (!proposal || !["new_standard", "revise_standard"].includes(proposal.kind)
         || version.org_id !== input.org_id || version.proposal_id !== proposal.id
         || !version.gate || version.gate.single_uncertainty !== proposal.single_uncertainty) {
@@ -1511,9 +719,9 @@ export class SqliteAuthorityStore
         }
         this.database.prepare(`INSERT INTO standards (id, org_id, slug, payload_json, current_version_id, citation_count, created_at) VALUES (?, ?, ?, ?, NULL, 0, ?)`).run(standard.id, standard.org_id, standard.slug, canonicalContextJson(standard), standard.created_at);
       } else {
-        standard = this.getStandardSync(input.org_id, version.standard_id)!;
+        standard = getStandardSync(this.database, input.org_id, version.standard_id)!;
         const supersedesId = version.supersedes_version_id;
-        const superseded = supersedesId ? this.getStandardVersionSync(input.org_id, supersedesId) : null;
+        const superseded = supersedesId ? getStandardVersionSync(this.database, input.org_id, supersedesId) : null;
         const pinned = proposal.standard_bindings.some((binding) =>
           binding.standard_id === version.standard_id && binding.version_id === supersedesId
         );
@@ -1526,17 +734,16 @@ export class SqliteAuthorityStore
       }
       this.database.prepare(`INSERT INTO standard_versions (id, org_id, standard_id, proposal_id, version, status, payload_json, state_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(version.id, version.org_id, version.standard_id, version.proposal_id, version.version, version.status, canonicalContextJson(version), canonicalContextJson(standardVersionState(version)), version.created_at);
       this.database.prepare(`UPDATE proposals SET status = 'accepted', outcome_kind = 'standard_version', outcome_ref_id = ?, updated_at = ? WHERE org_id = ? AND id = ? AND status = 'in_review'`).run(version.id, version.created_at, input.org_id, proposal.id);
-      return { proposal: this.getProposalSync(input.org_id, proposal.id)!, standard, version };
+      return { proposal: getProposalSync(this.database, input.org_id, proposal.id)!, standard, version };
     })();
   }
 
   async getStandard(orgId: string, standardId: string): Promise<StandardRecord | null> {
-    return this.getStandardSync(orgId, standardId);
+    return getStandard(this.database, orgId, standardId);
   }
 
   async getStandardBySlug(orgId: string, slug: string): Promise<StandardRecord | null> {
-    const row = this.database.prepare(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = ? AND slug = ?`).get(orgId, slug) as StandardRow | undefined;
-    return row ? toStandard(row) : null;
+    return getStandardBySlug(this.database, orgId, slug);
   }
 
   async listStandards(input: {
@@ -1545,76 +752,33 @@ export class SqliteAuthorityStore
     after_created_at?: string;
     after_id?: string;
   }): Promise<StandardRecord[]> {
-    const hasCursor = !!input.after_created_at && !!input.after_id;
-    const rows = this.database.prepare(
-      `SELECT payload_json, current_version_id, citation_count FROM standards
-       WHERE org_id = ?${hasCursor ? " AND (created_at > ? OR (created_at = ? AND id > ?))" : ""}
-       ORDER BY created_at, id LIMIT ?`,
-    ).all(...(hasCursor
-      ? [input.org_id, input.after_created_at!, input.after_created_at!, input.after_id!, input.limit ?? 100]
-      : [input.org_id, input.limit ?? 100])) as StandardRow[];
-    return rows.map(toStandard);
+    return listStandards(this.database, input);
   }
 
   async getStandardVersion(orgId: string, versionId: string): Promise<StandardVersionRecord | null> {
-    return this.getStandardVersionSync(orgId, versionId);
+    return getStandardVersion(this.database, orgId, versionId);
   }
 
   async listStandardVersions(input: { org_id: string; standard_id: string; limit?: number }): Promise<StandardVersionRecord[]> {
-    const rows = this.database.prepare(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = ? AND standard_id = ? ORDER BY created_at, id LIMIT ?`).all(input.org_id, input.standard_id, input.limit ?? 100) as StandardVersionRow[];
-    return rows.map(toStandardVersion);
+    return listStandardVersions(this.database, input);
   }
 
   async transitionStandardVersion(input: StandardVersionTransition): Promise<StandardVersionRecord | null> {
     this.assertWritable();
-    return this.database.transaction(() => {
-      const row = this.database.prepare(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = ? AND id = ?`).get(input.org_id, input.version_id) as StandardVersionRow | undefined;
-      if (!row) return null;
-      const current = toStandardVersion(row);
-      const standard = this.getStandardSync(input.org_id, current.standard_id);
-      if (!standard) throw new Error("Standard was not found");
-      if (input.superseded_by_version_id) {
-        const replacement = this.getStandardVersionSync(input.org_id, input.superseded_by_version_id);
-        if (!replacement || replacement.standard_id !== current.standard_id || replacement.status !== "active") {
-          throw new Error("StandardVersion replacement must be active in the same Standard");
-        }
-      }
-      const next = applyStandardVersionTransition(current, standard, input);
-      this.database.prepare(`UPDATE standard_versions SET status = ?, state_json = ? WHERE org_id = ? AND id = ? AND status = ?`).run(next.status, canonicalContextJson(standardVersionState(next)), input.org_id, input.version_id, current.status);
-      if (next.status === "trial" || next.status === "active") {
-        this.database.prepare(`UPDATE standards SET current_version_id = ? WHERE org_id = ? AND id = ?`).run(next.id, input.org_id, standard.id);
-      } else if (next.superseded_by_version_id) {
-        this.database.prepare(`UPDATE standards SET current_version_id = ? WHERE org_id = ? AND id = ? AND current_version_id = ?`).run(next.superseded_by_version_id, input.org_id, standard.id, next.id);
-      }
-      return next;
-    })();
+    return transitionStandardVersion(this.database, input);
   }
 
   async putStandardGap(input: StandardGapRecord): Promise<StandardGapRecord> {
     this.assertWritable();
-    const gap = validateStandardGap(input);
-    if (gap.status !== "open") throw new Error("New StandardGap must be open");
-    this.database.prepare(`INSERT INTO standard_gaps (id, org_id, source_kind, source_ref, status, payload_json, converted_proposal_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'open', ?, NULL, ?, ?) ON CONFLICT DO NOTHING`).run(gap.id, gap.org_id, gap.source_kind, gap.source_ref, canonicalContextJson(gap), gap.created_at, gap.updated_at);
-    const row = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND source_kind = ? AND source_ref = ?`).get(gap.org_id, gap.source_kind, gap.source_ref) as StandardGapRow | undefined;
-    if (!row) throw new Error("Cannot persist StandardGap");
-    const storedCreation = validateStandardGap(JSON.parse(row.payload_json) as StandardGapRecord);
-    if (canonicalContextJson(storedCreation) !== canonicalContextJson({
-      ...gap,
-      id: storedCreation.id,
-      created_at: storedCreation.created_at,
-      updated_at: storedCreation.updated_at,
-    })) throw new Error("Cannot replace immutable StandardGap");
-    return toStandardGap(row);
+    return putStandardGap(this.database, input);
   }
 
   async getStandardGap(orgId: string, gapId: string): Promise<StandardGapRecord | null> {
-    const row = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND id = ?`).get(orgId, gapId) as StandardGapRow | undefined;
-    return row ? toStandardGap(row) : null;
+    return getStandardGap(this.database, orgId, gapId);
   }
 
   async listStandardGaps(input: { org_id: string; status?: StandardGapStatus; limit?: number }): Promise<StandardGapRecord[]> {
-    const rows = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ORDER BY created_at, id LIMIT ?`).all(...(input.status ? [input.org_id, input.status, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as StandardGapRow[];
-    return rows.map(toStandardGap);
+    return listStandardGaps(this.database, input);
   }
 
   async convertStandardGap(input: { org_id: string; gap_id: string; proposal: ProposalRecord }): Promise<{ gap: StandardGapRecord; proposal: ProposalRecord }> {
@@ -1648,81 +812,37 @@ export class SqliteAuthorityStore
 
   async dismissStandardGap(input: { org_id: string; gap_id: string; dismissed_at: string }): Promise<StandardGapRecord | null> {
     this.assertWritable();
-    if (!input.org_id?.trim() || !input.gap_id?.trim() || Number.isNaN(Date.parse(input.dismissed_at))) throw new Error("Invalid StandardGap dismissal");
-    const transaction = this.database.transaction(() => {
-      const row = this.database.prepare(`SELECT status, payload_json, converted_proposal_id, updated_at FROM standard_gaps WHERE org_id = ? AND id = ?`).get(input.org_id, input.gap_id) as StandardGapRow | undefined;
-      if (!row) return null;
-      const gap = toStandardGap(row);
-      if (gap.status === "converted") throw new Error("Converted StandardGap cannot be dismissed");
-      if (gap.status === "dismissed") return gap;
-      if (Date.parse(input.dismissed_at) < Date.parse(gap.created_at)) throw new Error("Invalid StandardGap dismissal");
-      const changed = this.database.prepare(`UPDATE standard_gaps SET status = 'dismissed', updated_at = ? WHERE org_id = ? AND id = ? AND status = 'open'`).run(input.dismissed_at, input.org_id, input.gap_id).changes;
-      if (changed !== 1) throw new Error("StandardGap state changed during dismissal");
-      return validateStandardGap({ ...gap, status: "dismissed", updated_at: input.dismissed_at });
-    });
-    return transaction.immediate();
+    return dismissStandardGap(this.database, input);
   }
 
   async putAgentRun(input: AgentRunRecord): Promise<AgentRunRecord> {
     this.assertWritable();
-    const run = validateAgentRun(input);
-    if (run.status !== "queued") throw new Error("New AgentRun must be queued");
-    this.database.prepare(`INSERT INTO agent_runs (id, org_id, status, payload_json, state_json, created_at) VALUES (?, ?, 'queued', ?, ?, ?) ON CONFLICT (id) DO NOTHING`).run(run.id, run.org_id, canonicalContextJson(run), canonicalContextJson(agentRunState(run)), run.created_at);
-    const row = this.database.prepare(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = ? AND id = ?`).get(run.org_id, run.id) as AgentRunRow | undefined;
-    if (!row) throw new Error("Cannot persist AgentRun");
-    const storedCreation = validateAgentRun(JSON.parse(row.payload_json) as AgentRunRecord);
-    if (canonicalContextJson(storedCreation) !== canonicalContextJson({ ...run, created_at: storedCreation.created_at })) {
-      throw new Error("Cannot replace immutable AgentRun");
-    }
-    return toAgentRun(row);
+    return putAgentRun(this.database, input);
   }
 
   async getAgentRun(orgId: string, runId: string): Promise<AgentRunRecord | null> {
-    const row = this.database.prepare(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = ? AND id = ?`).get(orgId, runId) as AgentRunRow | undefined;
-    return row ? toAgentRun(row) : null;
+    return getAgentRun(this.database, orgId, runId);
   }
 
   async listAgentRuns(input: { org_id: string; status?: AgentRunStatus; newest_first?: boolean; limit?: number }): Promise<AgentRunRecord[]> {
-    const order = input.newest_first
-      ? "ORDER BY julianday(json_extract(state_json, '$.finished_at')) DESC, id DESC"
-      : "ORDER BY created_at, id";
-    const rows = this.database.prepare(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = ? ${input.status ? "AND status = ?" : ""} ${order} LIMIT ?`).all(...(input.status ? [input.org_id, input.status, input.limit ?? 100] : [input.org_id, input.limit ?? 100])) as AgentRunRow[];
-    return rows.map(toAgentRun);
+    return listAgentRuns(this.database, input);
   }
 
   async startAgentRun(input: { org_id: string; run_id: string; started_at: string }): Promise<AgentRunRecord | null> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const row = this.getAgentRunRow(input.org_id, input.run_id);
-      if (!row) return null;
-      const current = toAgentRun(row);
-      if (current.status === "running") return current;
-      const next = applyAgentRunStart(current, input.started_at);
-      this.updateAgentRunState(current, next);
-      return next;
-    });
-    return transaction.immediate();
+    return startAgentRun(this.database, input);
   }
 
   async settleAgentRun(input: { org_id: string; run_id: string; status: "succeeded" | "failed"; output: AgentRunOutput; finished_at: string }): Promise<AgentRunRecord | null> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const row = this.getAgentRunRow(input.org_id, input.run_id);
-      if (!row) return null;
-      const current = toAgentRun(row);
-      if (current.status === input.status && canonicalContextJson(current.output) === canonicalContextJson(input.output)) return current;
-      const next = applyAgentRunSettlement(current, input.status, input.output, input.finished_at);
-      this.updateAgentRunState(current, next);
-      return next;
-    });
-    return transaction.immediate();
+    return settleAgentRun(this.database, input);
   }
 
   async handoffAgentRun(input: { org_id: string; run_id: string; handoff: HandoffRecord; handed_off_at: string }): Promise<{ run: AgentRunRecord; handoff: HandoffRecord }> {
     this.assertWritable();
     const handoff = validateHandoff(input.handoff);
     const transaction = this.database.transaction(() => {
-      const runRow = this.getAgentRunRow(input.org_id, input.run_id);
+      const runRow = getAgentRunRow(this.database, input.org_id, input.run_id);
       if (!runRow) throw new Error("AgentRun was not found");
       const current = toAgentRun(runRow);
       if (current.status === "handed_off") {
@@ -1737,7 +857,7 @@ export class SqliteAuthorityStore
       }
       const next = applyAgentRunHandoff(current, handoff, input.handed_off_at);
       this.database.prepare(`INSERT INTO handoffs (id, org_id, direction, status, payload_json, created_at, resolved_at) VALUES (?, ?, ?, 'open', ?, ?, NULL)`).run(handoff.id, handoff.org_id, handoff.direction, canonicalContextJson(handoff), handoff.created_at);
-      this.updateAgentRunState(current, next);
+      updateAgentRunState(this.database, current, next);
       return { run: next, handoff };
     });
     return transaction.immediate();
@@ -1745,384 +865,55 @@ export class SqliteAuthorityStore
 
   async cancelAgentRun(input: { org_id: string; run_id: string; cancelled_at: string }): Promise<AgentRunRecord | null> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const row = this.getAgentRunRow(input.org_id, input.run_id);
-      if (!row) return null;
-      const current = toAgentRun(row);
-      if (current.status === "cancelled") return current;
-      const next = applyAgentRunCancellation(current, input.cancelled_at);
-      this.updateAgentRunState(current, next);
-      return next;
-    });
-    return transaction.immediate();
+    return cancelAgentRun(this.database, input);
   }
 
   async projectStandardUsage(input: { org_id: string; source_kind: StandardUsageSourceKind; source_id: string }): Promise<StandardUsageRecord[]> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      if (!input.org_id?.trim() || !input.source_id?.trim() || !["decision", "agent_run"].includes(input.source_kind)) {
-        throw new Error("Invalid StandardUsage projection");
-      }
-      let bindings: Array<{ standard_id: string; version_id: string }>;
-      let contextSnapshotId: string;
-      let citedAt: string;
-      if (input.source_kind === "decision") {
-        const row = this.database.prepare(`SELECT payload_json FROM decisions WHERE org_id = ? AND id = ?`).get(input.org_id, input.source_id) as { payload_json: string } | undefined;
-        if (!row) throw new Error("StandardUsage source Decision was not found");
-        const decision = validateDecision(JSON.parse(row.payload_json) as DecisionRecord);
-        bindings = decision.standard_bindings;
-        contextSnapshotId = decision.context_snapshot_id;
-        citedAt = decision.committed_at;
-      } else {
-        const row = this.getAgentRunRow(input.org_id, input.source_id);
-        if (!row) throw new Error("StandardUsage source AgentRun was not found");
-        const run = toAgentRun(row);
-        bindings = run.standard_bindings;
-        contextSnapshotId = run.context_snapshot_id;
-        citedAt = run.created_at;
-      }
-      const usages = bindings.map((binding) => {
-        const standard = this.getStandardSync(input.org_id, binding.standard_id);
-        const version = this.getStandardVersionSync(input.org_id, binding.version_id);
-        if (!standard || !version || version.standard_id !== standard.id) {
-          throw new Error("StandardUsage binding was not found");
-        }
-        const usage = validateStandardUsage({
-          schema_version: STANDARD_USAGE_SCHEMA_VERSION,
-          id: `standard-usage:${hashCanonicalContext([
-            input.org_id, input.source_kind, input.source_id, standard.id, version.id,
-          ])}`,
-          org_id: input.org_id,
-          standard_id: standard.id,
-          version_id: version.id,
-          source_kind: input.source_kind,
-          source_id: input.source_id,
-          context_snapshot_id: contextSnapshotId,
-          cited_at: citedAt,
-        });
-        this.database.prepare(`INSERT INTO standard_usage (id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`).run(usage.id, usage.org_id, usage.standard_id, usage.version_id, usage.source_kind, usage.source_id, usage.context_snapshot_id, usage.cited_at);
-        return usage;
-      });
-      for (const standardId of new Set(usages.map(({ standard_id }) => standard_id))) {
-        this.database.prepare(`UPDATE standards SET citation_count = (SELECT COUNT(*) FROM standard_usage WHERE org_id = ? AND standard_id = ?) WHERE org_id = ? AND id = ?`).run(input.org_id, standardId, input.org_id, standardId);
-      }
-      return usages;
-    });
-    return transaction.immediate();
+    return projectStandardUsage(this.database, input);
   }
 
   async listStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind; newest_first?: boolean; limit?: number }): Promise<StandardUsageRecord[]> {
-    const conditions = ["org_id = ?"];
-    const values: Array<string | number> = [input.org_id];
-    if (input.standard_id) { conditions.push("standard_id = ?"); values.push(input.standard_id); }
-    if (input.version_id) { conditions.push("version_id = ?"); values.push(input.version_id); }
-    if (input.source_kind) { conditions.push("source_kind = ?"); values.push(input.source_kind); }
-    values.push(input.limit ?? 100);
-    const order = input.newest_first
-      ? "julianday(cited_at) DESC, id DESC"
-      : "julianday(cited_at), id";
-    const rows = this.database.prepare(`SELECT id, org_id, standard_id, version_id, source_kind, source_id, context_snapshot_id, cited_at FROM standard_usage WHERE ${conditions.join(" AND ")} ORDER BY ${order} LIMIT ?`).all(...values) as Array<Omit<StandardUsageRecord, "schema_version">>;
-    return rows.map((row) => validateStandardUsage({
-      schema_version: STANDARD_USAGE_SCHEMA_VERSION,
-      ...row,
-    }));
+    return listStandardUsage(this.database, input);
   }
 
   async countStandardUsage(input: { org_id: string; standard_id?: string; version_id?: string; source_kind?: StandardUsageSourceKind }): Promise<number> {
-    const conditions = ["org_id = ?"];
-    const values: string[] = [input.org_id];
-    if (input.standard_id) { conditions.push("standard_id = ?"); values.push(input.standard_id); }
-    if (input.version_id) { conditions.push("version_id = ?"); values.push(input.version_id); }
-    if (input.source_kind) { conditions.push("source_kind = ?"); values.push(input.source_kind); }
-    const row = this.database.prepare(`SELECT COUNT(*) AS count FROM standard_usage WHERE ${conditions.join(" AND ")}`).get(...values) as { count: number };
-    return row.count;
-  }
-
-  private getProposalSync(orgId: string, proposalId: string): ProposalRecord | null {
-    const row = this.database.prepare(`SELECT status, payload_json, updated_at, outcome_kind, outcome_ref_id FROM proposals WHERE org_id = ? AND id = ?`).get(orgId, proposalId) as ProposalRow | undefined;
-    return row ? toProposal(row) : null;
-  }
-
-  private getStandardSync(orgId: string, standardId: string): StandardRecord | null {
-    const row = this.database.prepare(`SELECT payload_json, current_version_id, citation_count FROM standards WHERE org_id = ? AND id = ?`).get(orgId, standardId) as StandardRow | undefined;
-    return row ? toStandard(row) : null;
-  }
-
-  private getStandardVersionSync(orgId: string, versionId: string): StandardVersionRecord | null {
-    const row = this.database.prepare(`SELECT status, payload_json, state_json FROM standard_versions WHERE org_id = ? AND id = ?`).get(orgId, versionId) as StandardVersionRow | undefined;
-    return row ? toStandardVersion(row) : null;
-  }
-
-  private getAgentRunRow(orgId: string, runId: string): AgentRunRow | undefined {
-    return this.database.prepare(`SELECT status, payload_json, state_json FROM agent_runs WHERE org_id = ? AND id = ?`).get(orgId, runId) as AgentRunRow | undefined;
-  }
-
-  private updateAgentRunState(current: AgentRunRecord, next: AgentRunRecord): void {
-    const changed = this.database.prepare(`UPDATE agent_runs SET status = ?, state_json = ? WHERE org_id = ? AND id = ? AND status = ?`).run(next.status, canonicalContextJson(agentRunState(next)), current.org_id, current.id, current.status).changes;
-    if (changed !== 1) throw new Error("AgentRun state changed concurrently");
-  }
-
-  private getDailyDigestJob(id: string): DailyDigestJob | null {
-    const row = this.database.prepare(
-      `SELECT id, org_id, utc_date, generation, status, attempts, lease_owner,
-       lease_expires_at, next_retry_at, last_error, created_at, updated_at
-       FROM daily_digest_jobs WHERE id = ?`,
-    ).get(id) as DailyDigestJobRow | undefined;
-    return row ? toDailyDigestJob(row) : null;
-  }
-
-  private getContextProjectionJob(id: string): ContextProjectionJob | null {
-    const row = this.database.prepare(
-      `
-        SELECT id, org_id, event_id, status, attempts, lease_owner,
-               lease_expires_at, next_retry_at, last_error, created_at, updated_at
-        FROM context_projection_outbox WHERE id = ?
-      `,
-    ).get(id) as ContextProjectionJobRow | undefined;
-    return row ? toContextProjectionJob(row) : null;
+    return countStandardUsage(this.database, input);
   }
 
   async putDisposition(decision: ArrangementDecision): Promise<void> {
     this.assertWritable();
-    this.database
-      .transaction(() => {
-        this.putDispositionWithinTransaction(decision);
-      })
-      .immediate();
-  }
-
-  private putDispositionWithinTransaction(decision: ArrangementDecision): void {
-    this.database
-      .prepare(
-        `
-          INSERT INTO message_dispositions (
-            event_id, org_id, disposition, layer, reason_codes_json, score, decided_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(event_id) DO UPDATE SET
-            org_id = excluded.org_id,
-            disposition = excluded.disposition,
-            layer = excluded.layer,
-            reason_codes_json = excluded.reason_codes_json,
-            score = excluded.score,
-            decided_at = excluded.decided_at
-        `,
-      )
-      .run(
-        decision.event_id,
-        decision.org_id,
-        decision.disposition,
-        decision.layer,
-        JSON.stringify(decision.reason_codes),
-        decision.score,
-        decision.decided_at,
-      );
-    const row = this.database
-      .prepare(`SELECT thread_id FROM events WHERE id = ?`)
-      .get(decision.event_id) as { thread_id: string | null } | undefined;
-    this.refreshThreadHeadWithinTransaction(decision.org_id, row?.thread_id);
+    return putDisposition(this.database, decision);
   }
 
   async getDisposition(eventId: string): Promise<ArrangementDecision | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT event_id, org_id, disposition, layer, reason_codes_json, score, decided_at
-          FROM message_dispositions WHERE event_id = ?
-        `,
-      )
-      .get(eventId) as DispositionRow | undefined;
-    return row ? this.toDisposition(row) : null;
+    return getDisposition(this.database, eventId);
   }
 
   async listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]> {
-    if (query?.thread_ids && query.thread_ids.length === 0) {
-      return [];
-    }
-    const { sql, params } = this.inboxSql(orgId, query);
-    const rows = this.database.prepare(sql).all(...params) as InboxRow[];
-    const items = rows.map((row) => this.toInboxItem(row));
-    if (inboxUsesNewestFirst(query)) {
-      items.reverse();
-    }
-    return items;
+    return listInbox(this.database, orgId, query);
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
-    const latest = this.database
-      .prepare(
-        `
-          SELECT e.ingested_at AS latest_at, e.id AS latest_id
-          FROM events e
-          JOIN message_dispositions d ON d.event_id = e.id
-          WHERE e.org_id = ?
-            AND d.disposition = 'current_work'
-            AND ${isCurrentHeadSql("e")}
-            AND ${notHiddenSql("e")}
-          ORDER BY e.ingested_at DESC, e.id DESC
-          LIMIT 1
-        `,
-      )
-      .get(orgId, orgId) as { latest_at: string; latest_id: string } | undefined;
-    const counted = this.database
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM thread_heads th
-          WHERE th.org_id = ?
-            AND th.has_current_work = 1
-            AND th.thread_id NOT IN (
-              SELECT p.thread_id FROM conversation_prefs p
-              WHERE p.org_id = ? AND p.hidden = 1
-            )
-        `,
-      )
-      .get(orgId, orgId) as { count: number };
-    const hiddenCounted = this.database
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM thread_heads th
-          WHERE th.org_id = ?
-            AND th.thread_id IN (
-              SELECT p.thread_id FROM conversation_prefs p
-              WHERE p.org_id = ? AND p.hidden = 1
-            )
-        `,
-      )
-      .get(orgId, orgId) as { count: number };
-    const prefs = this.database
-      .prepare(
-        `
-          SELECT COUNT(*) AS pref_count,
-                 COALESCE(MAX(updated_at), '') AS pref_updated_at
-          FROM conversation_prefs WHERE org_id = ?
-        `,
-      )
-      .get(orgId) as { pref_count: number; pref_updated_at: string };
-    const work = this.database
-      .prepare(
-        `
-          SELECT COALESCE(MAX(updated_at), '') AS work_updated_at FROM (
-            SELECT updated_at FROM work_items WHERE org_id = ?
-            UNION ALL
-            SELECT updated_at FROM work_deliveries WHERE org_id = ?
-          )
-        `,
-      )
-      .get(orgId, orgId) as { work_updated_at: string };
-    return {
-      count: counted.count,
-      hidden_count: hiddenCounted.count,
-      digest: formatInboxDigest({
-        count: counted.count,
-        latest_at: latest?.latest_at ?? "",
-        latest_id: latest?.latest_id ?? "",
-        pref_count: prefs.pref_count,
-        pref_updated_at: prefs.pref_updated_at,
-        work_updated_at: work.work_updated_at,
-      }),
-    };
+    return summarizeInbox(this.database, orgId);
   }
 
   async listConversationPrefs(orgId: string): Promise<ConversationPref[]> {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT ${PREF_COLUMNS}
-          FROM conversation_prefs WHERE org_id = ?
-          ORDER BY pinned DESC, updated_at DESC
-        `,
-      )
-      .all(orgId) as PrefRow[];
-    return rows.map((row) => this.toPref(row));
+    return listConversationPrefs(this.database, orgId);
   }
 
   async getConversationPref(
     orgId: string,
     threadId: string,
   ): Promise<ConversationPref | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT ${PREF_COLUMNS}
-          FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
-        `,
-      )
-      .get(orgId, threadId) as PrefRow | undefined;
-    return row ? this.toPref(row) : null;
+    return getConversationPref(this.database, orgId, threadId);
   }
 
   async putConversationPref(
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const current = this.database
-        .prepare(
-          `
-            SELECT ${PREF_COLUMNS}
-            FROM conversation_prefs WHERE org_id = ? AND thread_id = ?
-          `,
-        )
-        .get(input.org_id, input.thread_id) as PrefRow | undefined;
-      const hidden =
-        input.hidden !== undefined ? input.hidden : Boolean(current?.hidden);
-      const next: ConversationPref = {
-        org_id: input.org_id,
-        thread_id: input.thread_id,
-        title: input.title !== undefined ? input.title : (current?.title ?? null),
-        pinned:
-          input.pinned !== undefined
-            ? input.pinned
-            : Boolean(current?.pinned),
-        hidden,
-        hidden_reason: hidden
-          ? input.hidden_reason !== undefined
-            ? input.hidden_reason
-            : normalizeHiddenReason(current?.hidden_reason) ??
-              (input.hidden === true ? "human" : null)
-          : null,
-        last_read_at:
-          input.last_read_at !== undefined
-            ? input.last_read_at
-            : (current?.last_read_at ?? null),
-        last_read_external_id:
-          input.last_read_external_id !== undefined
-            ? input.last_read_external_id
-            : (current?.last_read_external_id ?? null),
-        updated_at: input.updated_at,
-      };
-      this.database
-        .prepare(
-          `
-            INSERT INTO conversation_prefs (
-              org_id, thread_id, title, pinned, hidden, hidden_reason,
-              last_read_at, last_read_external_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(org_id, thread_id) DO UPDATE SET
-              title = excluded.title,
-              pinned = excluded.pinned,
-              hidden = excluded.hidden,
-              hidden_reason = excluded.hidden_reason,
-              last_read_at = excluded.last_read_at,
-              last_read_external_id = excluded.last_read_external_id,
-              updated_at = excluded.updated_at
-          `,
-        )
-        .run(
-          next.org_id,
-          next.thread_id,
-          next.title,
-          next.pinned ? 1 : 0,
-          next.hidden ? 1 : 0,
-          next.hidden_reason,
-          next.last_read_at,
-          next.last_read_external_id,
-          next.updated_at,
-        );
-      return next;
-    });
-    return transaction.immediate();
+    return putConversationPref(this.database, input);
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {
@@ -2175,6 +966,9 @@ export class SqliteAuthorityStore
         .run(orgId);
       this.database.prepare(`DELETE FROM source_heads WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM thread_heads WHERE org_id = ?`).run(orgId);
+      this.database
+        .prepare(`DELETE FROM daily_digest_coverage_alerts WHERE org_id = ?`)
+        .run(orgId);
       this.database.prepare(`DELETE FROM events WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(
@@ -2228,6 +1022,24 @@ export class SqliteAuthorityStore
             WHERE installation_id IN (
               SELECT id FROM connector_installations WHERE org_id = ?
             )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM connector_sync_work
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
+            DELETE FROM sync_runs
+            WHERE org_id = ?
           `,
         )
         .run(orgId);
@@ -2312,314 +1124,109 @@ export class SqliteAuthorityStore
   }
 
   async listRecipes(orgId: string): Promise<Recipe[]> {
-    const rows = this.database
-      .prepare(
-        `SELECT * FROM recipes WHERE org_id = ? ORDER BY updated_at DESC, id`,
-      )
-      .all(orgId) as RecipeRow[];
-    return rows.map(toRecipe);
+    return listRecipes(this.database, orgId);
   }
 
   async getRecipe(orgId: string, id: string): Promise<Recipe | null> {
-    const row = this.database
-      .prepare(`SELECT * FROM recipes WHERE org_id = ? AND id = ?`)
-      .get(orgId, id) as RecipeRow | undefined;
-    return row ? toRecipe(row) : null;
+    return getRecipe(this.database, orgId, id);
   }
 
   async putRecipe(recipe: Recipe): Promise<Recipe> {
     this.assertWritable();
-    const trigger = recipeTriggerOf(recipe);
-    this.database
-      .prepare(
-        `
-          INSERT INTO recipes (
-            id, org_id, name, match_json, executor_type, executor_config_json,
-            can_write_back, include_context, enabled, trigger_kind,
-            trigger_interval_ms, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            match_json = excluded.match_json,
-            executor_type = excluded.executor_type,
-            executor_config_json = excluded.executor_config_json,
-            can_write_back = excluded.can_write_back,
-            include_context = excluded.include_context,
-            enabled = excluded.enabled,
-            trigger_kind = excluded.trigger_kind,
-            trigger_interval_ms = excluded.trigger_interval_ms,
-            trigger_coalesce = excluded.trigger_coalesce,
-            max_concurrent = excluded.max_concurrent,
-            next_run_at = excluded.next_run_at,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        recipe.id,
-        recipe.org_id,
-        recipe.name,
-        JSON.stringify(recipe.match),
-        recipe.executor_type,
-        JSON.stringify(recipe.executor_config),
-        recipe.can_write_back ? 1 : 0,
-        recipe.include_context ? 1 : 0,
-        recipe.enabled ? 1 : 0,
-        trigger.kind,
-        trigger.kind === "pull" ? (trigger.interval_ms ?? null) : null,
-        trigger.kind === "push" && trigger.coalesce !== false ? 1 : 0,
-        recipe.max_concurrent ?? null,
-        recipe.next_run_at ?? null,
-        recipe.created_at,
-        recipe.updated_at,
-      );
-    return recipe;
+    return putRecipe(this.database, recipe);
   }
 
   async deleteRecipe(orgId: string, id: string): Promise<boolean> {
     this.assertWritable();
-    const result = this.database
-      .prepare(`DELETE FROM recipes WHERE org_id = ? AND id = ?`)
-      .run(orgId, id);
-    return result.changes > 0;
+    return deleteRecipe(this.database, orgId, id);
   }
 
-  async listWorkItems(orgId: string): Promise<WorkItem[]> {
-    const rows = this.database
-      .prepare(
-        `SELECT * FROM work_items WHERE org_id = ? ORDER BY updated_at DESC, id`,
-      )
-      .all(orgId) as WorkItemRow[];
-    return rows.map(toWorkItem);
+  async listWorkItems(orgId: string, options?: { statuses?: readonly import("@regenic/domain").WorkItemStatus[] }): Promise<WorkItem[]> {
+    return listWorkItems(this.database, orgId, options);
   }
 
   async getWorkItem(orgId: string, id: string): Promise<WorkItem | null> {
-    const row = this.database
-      .prepare(`SELECT * FROM work_items WHERE org_id = ? AND id = ?`)
-      .get(orgId, id) as WorkItemRow | undefined;
-    return row ? toWorkItem(row) : null;
+    return getWorkItem(this.database, orgId, id);
   }
 
   async getWorkItemByThread(
     orgId: string,
     threadId: string,
   ): Promise<WorkItem | null> {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM work_items WHERE org_id = ? AND thread_id = ?
-         ORDER BY CASE WHEN status IN ('open', 'running', 'waiting_human') THEN 0 ELSE 1 END,
-                  created_at DESC, id DESC
-         LIMIT 1`,
-      )
-      .get(orgId, threadId) as WorkItemRow | undefined;
-    return row ? toWorkItem(row) : null;
+    return getWorkItemByThread(this.database, orgId, threadId);
+  }
+
+  async getWorkItemByUnitKey(
+    orgId: string,
+    threadId: string,
+    unitKey: string,
+  ): Promise<WorkItem | null> {
+    return getWorkItemByUnitKey(this.database, orgId, threadId, unitKey);
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {
     this.assertWritable();
-    this.database
-      .prepare(
-        `
-          INSERT INTO work_items (
-            id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
-            status, recipe_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            thread_id = excluded.thread_id,
-            unit_key = excluded.unit_key,
-            head_event_id = excluded.head_event_id,
-            record_class = excluded.record_class,
-            thread_facet = excluded.thread_facet,
-            status = excluded.status,
-            recipe_id = excluded.recipe_id,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        item.id,
-        item.org_id,
-        item.thread_id,
-        item.unit_key,
-        item.head_event_id ?? null,
-        item.record_class,
-        item.thread_facet,
-        item.status,
-        item.recipe_id ?? null,
-        item.created_at,
-        item.updated_at,
-      );
-    return item;
+    return putWorkItem(this.database, item);
   }
 
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
-    const rows = workItemId
-      ? (this.database
-          .prepare(
-            `SELECT * FROM work_runs WHERE org_id = ? AND work_item_id = ?
-             ORDER BY updated_at DESC, id`,
-          )
-          .all(orgId, workItemId) as WorkRunRow[])
-      : (this.database
-          .prepare(
-            `SELECT * FROM work_runs WHERE org_id = ? ORDER BY updated_at DESC, id`,
-          )
-          .all(orgId) as WorkRunRow[]);
-    return rows.map(toWorkRun);
+    return listWorkRuns(this.database, orgId, workItemId);
   }
 
   async getWorkRun(orgId: string, id: string): Promise<WorkRun | null> {
-    const row = this.database
-      .prepare(`SELECT * FROM work_runs WHERE org_id = ? AND id = ?`)
-      .get(orgId, id) as WorkRunRow | undefined;
-    return row ? toWorkRun(row) : null;
+    return getWorkRun(this.database, orgId, id);
   }
 
   async getActiveWorkRun(
     orgId: string,
     workItemId: string,
   ): Promise<WorkRun | null> {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM work_runs
-         WHERE org_id = ? AND work_item_id = ?
-           AND status IN ('running', 'waiting_human')
-         ORDER BY updated_at DESC, id DESC
-         LIMIT 1`,
-      )
-      .get(orgId, workItemId) as WorkRunRow | undefined;
-    return row ? toWorkRun(row) : null;
+    return getActiveWorkRun(this.database, orgId, workItemId);
+  }
+
+  async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {
+    return listHiddenExecutorThreadIds(this.database, orgId);
   }
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     this.assertWritable();
-    this.database
-      .prepare(
-        `
-          INSERT INTO work_runs (
-            id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-            agent_thread_id, status, result_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            recipe_id = excluded.recipe_id,
-            executor_type = excluded.executor_type,
-            external_run_id = excluded.external_run_id,
-            agent_thread_id = excluded.agent_thread_id,
-            status = excluded.status,
-            result_json = excluded.result_json,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        run.id,
-        run.org_id,
-        run.work_item_id,
-        run.recipe_id,
-        run.executor_type,
-        run.external_run_id ?? null,
-        run.agent_thread_id ?? null,
-        run.status,
-        run.result ? JSON.stringify(run.result) : null,
-        run.created_at,
-        run.updated_at,
-      );
-    return run;
+    return putWorkRun(this.database, run);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
-    const rows = this.database
-      .prepare(
-        `SELECT * FROM work_deliveries WHERE org_id = ? ORDER BY updated_at DESC, id`,
-      )
-      .all(orgId) as WorkDeliveryRow[];
-    return rows.map(toWorkDelivery);
+    return listWorkDeliveries(this.database, orgId);
+  }
+
+  async listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]> {
+    return listDueWorkDeliveries(this.database, orgId, now);
   }
 
   async getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null> {
-    const row = this.database
-      .prepare(`SELECT * FROM work_deliveries WHERE org_id = ? AND id = ?`)
-      .get(orgId, id) as WorkDeliveryRow | undefined;
-    return row ? toWorkDelivery(row) : null;
+    return getWorkDelivery(this.database, orgId, id);
   }
 
   async getWorkDeliveryByItem(
     orgId: string,
     workItemId: string,
   ): Promise<WorkDelivery | null> {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM work_deliveries WHERE org_id = ? AND work_item_id = ?`,
-      )
-      .get(orgId, workItemId) as WorkDeliveryRow | undefined;
-    return row ? toWorkDelivery(row) : null;
+    return getWorkDeliveryByItem(this.database, orgId, workItemId);
   }
 
   async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
     this.assertWritable();
-    this.database
-      .prepare(
-        `
-          INSERT INTO work_deliveries (
-            id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
-            status, write_back, attempts, last_error, next_retry_at,
-            payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            recipe_id = excluded.recipe_id,
-            kind = excluded.kind,
-            unit_key = excluded.unit_key,
-            event_id = excluded.event_id,
-            status = excluded.status,
-            write_back = excluded.write_back,
-            attempts = excluded.attempts,
-            last_error = excluded.last_error,
-            next_retry_at = excluded.next_retry_at,
-            payload_json = excluded.payload_json,
-            lease_expires_at = excluded.lease_expires_at,
-            idempotency_key = excluded.idempotency_key,
-            channel_receipt_json = excluded.channel_receipt_json,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        delivery.id,
-        delivery.org_id,
-        delivery.work_item_id,
-        delivery.recipe_id,
-        delivery.kind,
-        delivery.unit_key,
-        delivery.event_id ?? null,
-        delivery.status,
-        delivery.write_back,
-        delivery.attempts,
-        delivery.last_error ?? null,
-        delivery.next_retry_at ?? null,
-        delivery.payload ? JSON.stringify(delivery.payload) : null,
-        delivery.lease_expires_at ?? null,
-        delivery.idempotency_key ?? null,
-        delivery.channel_receipt ? JSON.stringify(delivery.channel_receipt) : null,
-        delivery.created_at,
-        delivery.updated_at,
-      );
-    return delivery;
+    return putWorkDelivery(this.database, delivery);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {
-    const row = this.database
-      .prepare(`SELECT value FROM ui_prefs WHERE org_id = ? AND key = ?`)
-      .get(orgId, key) as { value: string } | undefined;
-    return row?.value ?? null;
+    return getUiPref(this.database, orgId, key);
   }
 
   async getDailyDigestPolicy(orgId: string): Promise<DailyDigestPolicy | null> {
-    const value = await this.getUiPref(orgId, "daily_digest_policy_v1");
-    return value ? validateDailyDigestPolicy(JSON.parse(value) as DailyDigestPolicy) : null;
+    return getDailyDigestPolicy(this.database, orgId);
   }
 
   async putDailyDigestPolicy(input: { org_id: string; policy: DailyDigestPolicy; updated_at: string }): Promise<DailyDigestPolicy> {
-    const policy = validateDailyDigestPolicy(input.policy);
-    if (!input.org_id.trim() || Number.isNaN(Date.parse(input.updated_at))) throw new Error("Invalid daily digest policy update");
-    await this.putUiPref(input.org_id, "daily_digest_policy_v1", canonicalContextJson(policy), input.updated_at);
-    return policy;
+    return putDailyDigestPolicy(this.database, input);
   }
 
   async putUiPref(
@@ -2629,180 +1236,57 @@ export class SqliteAuthorityStore
     updatedAt: string,
   ): Promise<void> {
     this.assertWritable();
-    this.database
-      .prepare(
-        `
-          INSERT INTO ui_prefs (org_id, key, value, updated_at)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(org_id, key) DO UPDATE SET
-            value = excluded.value,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(orgId, key, value, updatedAt);
+    return putUiPref(this.database, orgId, key, value, updatedAt);
   }
 
   async listExecutorInstallations(
     orgId: string,
   ): Promise<ExecutorInstallation[]> {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT * FROM executor_installations
-          WHERE org_id = ? ORDER BY updated_at DESC, id
-        `,
-      )
-      .all(orgId) as ExecutorRow[];
-    return rows.map(toExecutorInstallation);
+    return listExecutorInstallations(this.database, orgId);
   }
 
   async getExecutorInstallation(
     orgId: string,
     id: string,
   ): Promise<ExecutorInstallation | null> {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM executor_installations WHERE org_id = ? AND id = ?`,
-      )
-      .get(orgId, id) as ExecutorRow | undefined;
-    return row ? toExecutorInstallation(row) : null;
+    return getExecutorInstallation(this.database, orgId, id);
   }
 
   async putExecutorInstallation(
     installation: ExecutorInstallation,
   ): Promise<ExecutorInstallation> {
     this.assertWritable();
-    this.database
-      .prepare(
-        `
-          INSERT INTO executor_installations (
-            id, org_id, kind, name, status, config_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            kind = excluded.kind,
-            name = excluded.name,
-            status = excluded.status,
-            config_json = excluded.config_json,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        installation.id,
-        installation.org_id,
-        installation.kind,
-        installation.name,
-        installation.status,
-        JSON.stringify(installation.config),
-        installation.created_at,
-        installation.updated_at,
-      );
-    return installation;
+    return putExecutorInstallation(this.database, installation);
   }
 
   async deleteExecutorInstallation(orgId: string, id: string): Promise<boolean> {
     this.assertWritable();
-    const result = this.database
-      .prepare(`DELETE FROM executor_installations WHERE org_id = ? AND id = ?`)
-      .run(orgId, id);
-    return result.changes > 0;
+    return deleteExecutorInstallation(this.database, orgId, id);
   }
 
   async findBlob(contentHash: string): Promise<BlobRecord | null> {
-    return (await this.findBlobs([contentHash])).get(contentHash) ?? null;
+    return findBlob(this.database, contentHash);
   }
 
   async findBlobs(
     contentHashes: readonly string[],
   ): Promise<Map<string, BlobRecord>> {
-    const unique = [
-      ...new Set(contentHashes.filter((hash) => hash.length > 0)),
-    ];
-    const found = new Map<string, BlobRecord>();
-    const chunkSize = 400;
-    for (let offset = 0; offset < unique.length; offset += chunkSize) {
-      const chunk = unique.slice(offset, offset + chunkSize);
-      const rows = this.database
-        .prepare(
-          `SELECT content_hash, media_type, byte_size, created_at
-           FROM blobs WHERE content_hash IN (${chunk.map(() => "?").join(", ")})`,
-        )
-        .all(...chunk) as BlobRow[];
-      for (const row of rows) {
-        found.set(row.content_hash, row);
-      }
-    }
-    return found;
+    return findBlobs(this.database, contentHashes);
   }
 
   async append(input: NewEvent): Promise<EventRecord> {
     this.assertWritable();
-    return this.insert({ ...input, operation: "create" });
+    return append(this.database, input);
   }
 
   async repointContentHash(input: RepointContentInput): Promise<number> {
     this.assertWritable();
-    return this.database.transaction(() => {
-      const now = new Date().toISOString();
-      const affectedEvents = this.database.prepare(
-        `SELECT id, org_id FROM events WHERE content_hash = ? ORDER BY sequence`,
-      ).all(input.old_content_hash) as Array<{ id: string; org_id: string }>;
-      this.insertBlobRow(
-        input.new_content_hash,
-        input.content_media_type,
-        input.content_byte_size,
-        now,
-      );
-      for (const blob of input.extra_blobs ?? []) {
-        this.insertBlobRow(
-          blob.content_hash,
-          blob.media_type,
-          blob.byte_size,
-          now,
-        );
-      }
-      const updated = this.database
-        .prepare(`UPDATE events SET content_hash = ? WHERE content_hash = ?`)
-        .run(input.new_content_hash, input.old_content_hash);
-      for (const event of affectedEvents) {
-        this.enqueueContextProjection(event.id, event.org_id, now);
-      }
-      if (input.old_content_hash !== input.new_content_hash) {
-        this.database
-          .prepare(
-            `
-              DELETE FROM blobs
-              WHERE content_hash = ?
-                AND content_hash NOT IN (
-                  SELECT content_hash FROM events WHERE content_hash IS NOT NULL
-                )
-            `,
-          )
-          .run(input.old_content_hash);
-      }
-      return updated.changes;
-    }).immediate();
+    return repointContentHash(this.database, input);
   }
 
   async vacuumStore(): Promise<void> {
     this.assertWritable();
     this.database.exec("VACUUM");
-  }
-
-  private insertBlobRow(
-    contentHash: string,
-    mediaType: string | undefined,
-    byteSize: number | undefined,
-    createdAt: string,
-  ): void {
-    this.database
-      .prepare(
-        `
-          INSERT OR IGNORE INTO blobs (
-            content_hash, media_type, byte_size, created_at
-          ) VALUES (?, ?, ?, ?)
-        `,
-      )
-      .run(contentHash, mediaType ?? "application/octet-stream", byteSize ?? 0, createdAt);
   }
 
   async commitIngest(request: IngestCommitRequest): Promise<EventRecord[]> {
@@ -2811,171 +1295,52 @@ export class SqliteAuthorityStore
       return [];
     }
     return this.database
-      .transaction(() => {
-        const events = request.appends.map((input) =>
-          this.insertWithinTransaction({ ...input, operation: "create" }),
-        );
-        for (const decision of request.dispositions) {
-          this.putDispositionWithinTransaction(decision);
-        }
-        return events;
-      })
+      .transaction(() => commitIngestUnlocked(this.database, request))
       .immediate();
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
     this.assertWritable();
-    return this.insert({ ...input, operation: "revise" });
+    return appendRevision(this.database, input);
   }
 
   async markTombstone(input: TombstoneEvent): Promise<EventRecord> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const current = this.findCurrent(input);
-      return this.insertWithinTransaction({
-        ...input,
-        operation: "tombstone",
-        content_hash: current?.content_hash,
-        parent_event_id: current?.id,
-      });
-    });
-    return transaction.immediate();
+    return markTombstone(this.database, input);
   }
 
   async createInstallation(
     input: NewConnectorInstallation,
   ): Promise<ConnectorInstallation> {
     this.assertWritable();
-    const installation: ConnectorInstallation = {
-      ...input,
-      config: { ...input.config },
-      updated_at: input.created_at,
-    };
-    this.database
-      .prepare(
-        `
-          INSERT INTO connector_installations (
-            id, org_id, connector_type, status, config_json, credentials_ref,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        installation.id,
-        installation.org_id,
-        installation.connector_type,
-        installation.status,
-        JSON.stringify(installation.config),
-        installation.credentials_ref ?? null,
-        installation.created_at,
-        installation.updated_at,
-      );
-    return installation;
+    return createInstallation(this.database, input);
   }
 
   async findInstallation(id: string): Promise<ConnectorInstallation | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT id, org_id, connector_type, status, config_json, credentials_ref,
-                 created_at, updated_at
-          FROM connector_installations WHERE id = ?
-        `,
-      )
-      .get(id) as InstallationRow | undefined;
-    return row ? this.toInstallation(row) : null;
+    return findInstallation(this.database, id);
   }
 
   async listInstallations(orgId: string): Promise<ConnectorInstallation[]> {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT id, org_id, connector_type, status, config_json, credentials_ref,
-                 created_at, updated_at
-          FROM connector_installations WHERE org_id = ? ORDER BY created_at DESC
-        `,
-      )
-      .all(orgId) as InstallationRow[];
-    return rows.map((row) => this.toInstallation(row));
+    return listInstallations(this.database, orgId);
   }
 
   async setInstallationStatus(
     input: SetConnectorInstallationStatus,
   ): Promise<ConnectorInstallation | null> {
     this.assertWritable();
-    const updated = this.database
-      .prepare(
-        `
-          UPDATE connector_installations SET status = ?, updated_at = ?
-          WHERE id = ? AND org_id = ?
-        `,
-      )
-      .run(input.status, input.updated_at, input.id, input.org_id);
-    return updated.changes === 1 ? this.findInstallation(input.id) : null;
+    return setInstallationStatus(this.database, input);
   }
 
   async updateInstallationConfig(
     input: SetConnectorInstallationConfig,
   ): Promise<ConnectorInstallation | null> {
     this.assertWritable();
-    const updated = this.database
-      .prepare(
-        `
-          UPDATE connector_installations SET config_json = ?, updated_at = ?
-          WHERE id = ? AND org_id = ?
-        `,
-      )
-      .run(
-        JSON.stringify(input.config),
-        input.updated_at,
-        input.id,
-        input.org_id,
-      );
-    return updated.changes === 1 ? this.findInstallation(input.id) : null;
+    return updateInstallationConfig(this.database, input);
   }
 
   async deleteInstallation(id: string, orgId: string): Promise<boolean> {
     this.assertWritable();
-    const removed = this.database.transaction(() => {
-      const row = this.database
-        .prepare(
-          `SELECT id FROM connector_installations WHERE id = ? AND org_id = ?`,
-        )
-        .get(id, orgId) as { id: string } | undefined;
-      if (!row) {
-        return false;
-      }
-      this.database
-        .prepare(
-          `
-            DELETE FROM ingest_quarantines
-            WHERE attempt_id IN (
-              SELECT id FROM ingest_attempts WHERE connector_installation_id = ?
-            )
-          `,
-        )
-        .run(id);
-      this.database
-        .prepare(`DELETE FROM ingest_attempts WHERE connector_installation_id = ?`)
-        .run(id);
-      this.database
-        .prepare(`DELETE FROM connector_cursors WHERE installation_id = ?`)
-        .run(id);
-      this.database
-        .prepare(`DELETE FROM connector_stream_members WHERE installation_id = ?`)
-        .run(id);
-      this.database
-        .prepare(`DELETE FROM connector_catalog_cursors WHERE installation_id = ?`)
-        .run(id);
-      this.database
-        .prepare(`DELETE FROM connector_sync_state WHERE installation_id = ?`)
-        .run(id);
-      this.database
-        .prepare(`DELETE FROM connector_installations WHERE id = ? AND org_id = ?`)
-        .run(id, orgId);
-      return true;
-    });
-    return removed();
+    return deleteInstallation(this.database, id, orgId);
   }
 
   async acquireLease(input: {
@@ -2984,270 +1349,78 @@ export class SqliteAuthorityStore
     lease_owner: string;
     now: string;
     lease_duration_ms: number;
+    preempt?: boolean;
   }): Promise<ConnectorLease | null> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const installation = this.database
-        .prepare(`SELECT status FROM connector_installations WHERE id = ?`)
-        .get(input.installation_id) as
-        | { status: ConnectorInstallation["status"] }
-        | undefined;
-      if (!installation || installation.status !== "enabled") {
-        return null;
-      }
-
-      const current = this.findCursorRow(
-        input.installation_id,
-        input.stream_key,
-      );
-      if (
-        current?.lease_expires_at &&
-        current.lease_expires_at > input.now &&
-        current.lease_owner !== input.lease_owner
-      ) {
-        return null;
-      }
-
-      const leaseExpiresAt = new Date(
-        new Date(input.now).getTime() + input.lease_duration_ms,
-      ).toISOString();
-      if (current) {
-        this.database
-          .prepare(
-            `
-              UPDATE connector_cursors
-              SET lease_owner = ?, lease_expires_at = ?, updated_at = ?
-              WHERE installation_id = ? AND stream_key = ?
-            `,
-          )
-          .run(
-            input.lease_owner,
-            leaseExpiresAt,
-            input.now,
-            input.installation_id,
-            input.stream_key,
-          );
-      } else {
-        this.database
-          .prepare(
-            `
-              INSERT INTO connector_cursors (
-                installation_id, stream_key, cursor_value, cursor_version,
-                lease_owner, lease_expires_at, updated_at
-              ) VALUES (?, ?, NULL, 1, ?, ?, ?)
-            `,
-          )
-          .run(
-            input.installation_id,
-            input.stream_key,
-            input.lease_owner,
-            leaseExpiresAt,
-            input.now,
-          );
-      }
-      return this.toLease(
-        this.findCursorRow(input.installation_id, input.stream_key)!,
-      );
-    });
-    return transaction.immediate();
+    return acquireLease(this.database, input);
   }
 
   async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
     this.assertWritable();
-    const released = this.database
-      .prepare(
-        `
-          UPDATE connector_cursors
-          SET lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
-          WHERE installation_id = ? AND stream_key = ? AND lease_owner = ?
-        `,
-      )
-      .run(
-        input.now,
-        input.installation_id,
-        input.stream_key,
-        input.lease_owner,
-      );
-    return released.changes === 1;
+    return releaseLease(this.database, input);
   }
 
   async resetCursor(
     input: ResetConnectorCursor,
   ): Promise<ConnectorStreamCursor | null> {
     this.assertWritable();
-    const transaction = this.database.transaction(() => {
-      const cursor = this.findCursorRow(input.installation_id, input.stream_key);
-      if (!cursor) {
-        return null;
-      }
-      if (cursor.lease_expires_at && cursor.lease_expires_at > input.now) {
-        throw new Error("Connector cursor is leased and cannot be reset");
-      }
-      this.database
-        .prepare(
-          `
-            UPDATE connector_cursors
-            SET cursor_value = NULL, cursor_version = ?, lease_owner = NULL,
-                lease_expires_at = NULL, updated_at = ?
-            WHERE installation_id = ? AND stream_key = ?
-          `,
-        )
-        .run(
-          cursor.cursor_version + 1,
-          input.now,
-          input.installation_id,
-          input.stream_key,
-        );
-      return this.toCursor(this.findCursorRow(input.installation_id, input.stream_key)!);
-    });
-    return transaction.immediate();
+    return resetCursor(this.database, input);
   }
 
   async beginAttempt(input: NewIngestAttempt): Promise<IngestAttempt> {
     this.assertWritable();
-    this.database
-      .prepare(
-        `
-          INSERT INTO ingest_attempts (
-            id, org_id, connector_installation_id, stream_key, delivery_id,
-            started_at, status
-          ) VALUES (?, ?, ?, ?, ?, ?, 'running')
-        `,
-      )
-      .run(
-        input.id,
-        input.org_id,
-        input.connector_installation_id,
-        input.stream_key,
-        input.delivery_id,
-        input.started_at,
-      );
-    return this.findAttempt(input.id)!;
+    return beginAttempt(this.database, input);
+  }
+
+  async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    this.assertWritable();
+    const startedAt = Date.now();
+    const commit = this.database.transaction(() => commitSyncPageUnlocked(this.database, input));
+    try {
+      return commit.immediate();
+    } finally {
+      recordSyncDuration(processSyncMetrics, "database_transaction_ms", startedAt, {
+        operation: "commit_sync_page",
+      });
+    }
+  }
+
+  async commitSyncPages(inputs: CommitSyncPage[]): Promise<CommitSyncPageResult[]> {
+    this.assertWritable();
+    if (inputs.length === 0) {
+      return [];
+    }
+    if (inputs.length === 1) {
+      const only = inputs[0];
+      return only ? [await this.commitSyncPage(only)] : [];
+    }
+    const startedAt = Date.now();
+    const commit = this.database.transaction(() =>
+      inputs.map((input) => commitSyncPageUnlocked(this.database, input)),
+    );
+    try {
+      return commit.immediate();
+    } finally {
+      recordSyncDuration(processSyncMetrics, "database_transaction_ms", startedAt, {
+        operation: "commit_sync_pages",
+      });
+    }
   }
 
   async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
     this.assertWritable();
-
-    const transaction = this.database.transaction(() => {
-      const cursor = this.findCursorRow(input.installation_id, input.stream_key);
-      if (!cursor || cursor.lease_owner !== input.lease_owner) {
-        throw new Error("Connector lease is not held by the attempt owner");
-      }
-      const status =
-        input.retryable_failure_count === 0 ? "succeeded" : "failed";
-      this.database
-        .prepare(
-          `
-            UPDATE ingest_attempts
-            SET finished_at = ?, status = ?, accepted_count = ?, duplicate_count = ?,
-                quarantined_count = ?, retryable_failure_count = ?, error_code = ?
-            WHERE id = ?
-          `,
-        )
-        .run(
-          input.finished_at,
-          status,
-          input.accepted_count,
-          input.duplicate_count,
-          input.quarantined_count,
-          input.retryable_failure_count,
-          input.error_code ?? null,
-          input.attempt_id,
-        );
-      for (const quarantine of input.quarantines) {
-        this.database
-          .prepare(
-            `
-              INSERT INTO ingest_quarantines (
-                id, attempt_id, record_external_id, reason_code,
-                safe_metadata_json, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?)
-            `,
-          )
-          .run(
-            quarantine.id,
-            input.attempt_id,
-            quarantine.record_external_id,
-            quarantine.reason_code,
-            JSON.stringify(quarantine.safe_metadata),
-            quarantine.created_at,
-          );
-      }
-      const advancesCursor =
-        input.retryable_failure_count === 0 && input.next_cursor !== undefined;
-      this.database
-        .prepare(
-          `
-            UPDATE connector_cursors
-            SET cursor_value = ?, cursor_version = ?, lease_owner = NULL,
-                lease_expires_at = NULL, updated_at = ?
-            WHERE installation_id = ? AND stream_key = ?
-          `,
-        )
-        .run(
-          advancesCursor ? input.next_cursor : cursor.cursor_value,
-          advancesCursor ? cursor.cursor_version + 1 : cursor.cursor_version,
-          input.finished_at,
-          input.installation_id,
-          input.stream_key,
-        );
-      return this.findAttempt(input.attempt_id)!;
-    });
-    return transaction.immediate();
+    return settleAttempt(this.database, input);
   }
 
   async listAttempts(
     installationId: string,
     limit?: number,
   ): Promise<IngestAttempt[]> {
-    const cap =
-      typeof limit === "number" && Number.isInteger(limit) && limit > 0
-        ? limit
-        : undefined;
-    const rows = cap
-      ? (this.database
-          .prepare(
-            `
-              SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
-                     started_at, finished_at, status, accepted_count, duplicate_count,
-                     quarantined_count, retryable_failure_count, error_code
-              FROM ingest_attempts
-              WHERE connector_installation_id = ?
-              ORDER BY started_at DESC, id DESC
-              LIMIT ?
-            `,
-          )
-          .all(installationId, cap) as AttemptRow[])
-      : (this.database
-          .prepare(
-            `
-              SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
-                     started_at, finished_at, status, accepted_count, duplicate_count,
-                     quarantined_count, retryable_failure_count, error_code
-              FROM ingest_attempts
-              WHERE connector_installation_id = ?
-              ORDER BY started_at DESC, id DESC
-            `,
-          )
-          .all(installationId) as AttemptRow[]);
-    return rows.map((row) => this.toAttempt(row));
+    return listAttempts(this.database, installationId, limit);
   }
 
   async latestAttempt(installationId: string): Promise<IngestAttempt | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
-                 started_at, finished_at, status, accepted_count, duplicate_count,
-                 quarantined_count, retryable_failure_count, error_code
-          FROM ingest_attempts
-          WHERE connector_installation_id = ?
-          ORDER BY started_at DESC, id DESC
-          LIMIT 1
-        `,
-      )
-      .get(installationId) as AttemptRow | undefined;
-    return row ? this.toAttempt(row) : null;
+    return latestAttempt(this.database, installationId);
   }
 
   async pruneIngestAttempts(
@@ -3256,90 +1429,7 @@ export class SqliteAuthorityStore
     installationLimit = Number.POSITIVE_INFINITY,
   ): Promise<{ deleted: number }> {
     this.assertWritable();
-    const keep =
-      Number.isInteger(keepPerInstallation) && keepPerInstallation > 0
-        ? keepPerInstallation
-        : 64;
-    const batch =
-      Number.isInteger(batchSize) && batchSize > 0 ? batchSize : 5_000;
-    const limit =
-      Number.isInteger(installationLimit) && installationLimit > 0
-        ? installationLimit
-        : Number.POSITIVE_INFINITY;
-    const installations = this.database
-      .prepare(
-        `
-          SELECT connector_installation_id AS id
-          FROM ingest_attempts
-          GROUP BY connector_installation_id
-          HAVING COUNT(*) > ?
-          ORDER BY COUNT(*) DESC, connector_installation_id ASC
-          LIMIT ?
-        `,
-      )
-      .all(keep, Number.isFinite(limit) ? limit : -1) as Array<{ id: string }>;
-    const deleteQuarantines = this.database.prepare(
-      `
-        DELETE FROM ingest_quarantines
-        WHERE attempt_id IN (
-          SELECT id FROM (
-            SELECT id FROM ingest_attempts
-            WHERE connector_installation_id = ?
-              AND id NOT IN (
-                SELECT id FROM (
-                  SELECT id FROM ingest_attempts
-                  WHERE connector_installation_id = ?
-                  ORDER BY started_at DESC, id DESC
-                  LIMIT ?
-                )
-              )
-            ORDER BY started_at ASC, id ASC
-            LIMIT ?
-          )
-        )
-      `,
-    );
-    const deleteAttempts = this.database.prepare(
-      `
-        DELETE FROM ingest_attempts
-        WHERE id IN (
-          SELECT id FROM (
-            SELECT id FROM ingest_attempts
-            WHERE connector_installation_id = ?
-              AND id NOT IN (
-                SELECT id FROM (
-                  SELECT id FROM ingest_attempts
-                  WHERE connector_installation_id = ?
-                  ORDER BY started_at DESC, id DESC
-                  LIMIT ?
-                )
-              )
-            ORDER BY started_at ASC, id ASC
-            LIMIT ?
-          )
-        )
-      `,
-    );
-    let deleted = 0;
-    for (const installation of installations) {
-      this.database
-        .transaction(() => {
-          deleteQuarantines.run(
-            installation.id,
-            installation.id,
-            keep,
-            batch,
-          );
-          deleted += deleteAttempts.run(
-            installation.id,
-            installation.id,
-            keep,
-            batch,
-          ).changes;
-        })
-        .immediate();
-    }
-    return { deleted };
+    return pruneIngestAttempts(this.database, keepPerInstallation, batchSize, installationLimit);
   }
 
   async checkpointWal(): Promise<void> {
@@ -3357,152 +1447,129 @@ export class SqliteAuthorityStore
   }
 
   async listQuarantines(installationId: string): Promise<IngestQuarantine[]> {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT q.id, q.attempt_id, a.connector_installation_id, a.stream_key,
-                 q.record_external_id, q.reason_code, q.safe_metadata_json, q.created_at
-          FROM ingest_quarantines q
-          JOIN ingest_attempts a ON a.id = q.attempt_id
-          WHERE a.connector_installation_id = ? ORDER BY q.created_at DESC
-        `,
-      )
-      .all(installationId) as QuarantineRow[];
-    return rows.map((row) => this.toQuarantine(row));
+    return listQuarantines(this.database, installationId);
   }
 
   async getCursor(
     installationId: string,
     streamKey: string,
   ): Promise<ConnectorStreamCursor | null> {
-    const row = this.findCursorRow(installationId, streamKey);
-    return row ? this.toCursor(row) : null;
+    return getCursor(this.database, installationId, streamKey);
+  }
+
+  async listCursors(
+    installationId: string,
+    streamKeys?: readonly string[],
+  ): Promise<ConnectorStreamCursor[]> {
+    return listCursors(this.database, installationId, streamKeys);
+  }
+
+  async createSyncRun(input: NewSyncRun): Promise<SyncRun> {
+    this.assertWritable();
+    return createSyncRun(this.database, input);
+  }
+
+  async getSyncRun(id: string, orgId: string): Promise<SyncRun | null> {
+    return getSyncRun(this.database, id, orgId);
+  }
+
+  async listSyncRuns(query: ListSyncRunsQuery): Promise<SyncRun[]> {
+    return listSyncRuns(this.database, query);
+  }
+
+  async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
+    this.assertWritable();
+    return commandSyncRun(this.database, input);
+  }
+
+  async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {
+    this.assertWritable();
+    return enqueueSyncWork(this.database, input);
+  }
+
+  async enqueueSyncWorkMany(
+    inputs: readonly EnqueueSyncWork[],
+  ): Promise<number> {
+    this.assertWritable();
+    return enqueueSyncWorkMany(this.database, inputs);
+  }
+
+  async claimSyncWork(input: ClaimSyncWork): Promise<SyncWorkRecord[]> {
+    this.assertWritable();
+    return claimSyncWork(this.database, input);
+  }
+
+  async renewSyncWork(input: RenewSyncWork): Promise<boolean> {
+    this.assertWritable();
+    return renewSyncWork(this.database, input);
+  }
+
+  async settleSyncWork(
+    input: SettleSyncWork,
+  ): Promise<SyncWorkRecord | null> {
+    this.assertWritable();
+    return settleSyncWork(this.database, input);
+  }
+
+  async hasUnassignedSyncWork(
+    query: UnassignedSyncWorkQuery = {},
+  ): Promise<boolean> {
+    return hasUnassignedSyncWork(this.database, query);
+  }
+
+  async listUnassignedSyncWorkIdentities(query: {
+    installation_id: string;
+  }): Promise<SyncWorkIdentity[]> {
+    return listUnassignedSyncWorkIdentities(this.database, query);
+  }
+
+  async wakeUnassignedSyncWork(
+    input: WakeUnassignedSyncWork,
+  ): Promise<number> {
+    this.assertWritable();
+    return wakeUnassignedSyncWork(this.database, input);
   }
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {
-    return this.loadSyncCatalog(installationId);
+    return getSyncCatalog(this.database, installationId);
+  }
+
+  async getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead> {
+    return getSyncCatalogHead(this.database, installationId);
   }
 
   async applySyncCatalogPage(
     input: ApplySyncCatalogPageInput,
   ): Promise<SyncCatalogView> {
     this.assertWritable();
-    const apply = this.database.transaction(() => {
-      const current = this.loadSyncCatalog(input.installation_id);
-      const next = applySyncCatalogMembers(current, input);
-      this.database
-        .prepare(`DELETE FROM connector_stream_members WHERE installation_id = ?`)
-        .run(input.installation_id);
-      const insert = this.database.prepare(
-        `
-          INSERT INTO connector_stream_members (
-            installation_id, stream_key, thread_id, label, kind,
-            generation, discovered_at, last_seen_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      );
-      for (const member of next.members) {
-        insert.run(
-          member.installation_id,
-          member.stream_key,
-          member.thread_id ?? null,
-          member.label ?? null,
-          member.kind ?? null,
-          member.generation,
-          member.discovered_at,
-          member.last_seen_at,
-        );
-      }
-      if (next.catalog) {
-        this.database
-          .prepare(
-            `
-              INSERT INTO connector_catalog_cursors (
-                installation_id, cursor_value, complete, generation, updated_at
-              ) VALUES (?, ?, ?, ?, ?)
-              ON CONFLICT(installation_id) DO UPDATE SET
-                cursor_value = excluded.cursor_value,
-                complete = excluded.complete,
-                generation = excluded.generation,
-                updated_at = excluded.updated_at
-            `,
-          )
-          .run(
-            next.catalog.installation_id,
-            next.catalog.cursor ?? null,
-            next.catalog.complete ? 1 : 0,
-            next.catalog.generation,
-            next.catalog.updated_at,
-          );
-      }
-      return next;
-    });
-    return apply.immediate();
+    return applySyncCatalogPage(this.database, input);
+  }
+
+  async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
+    return listSyncPhaseHeads(this.database, installationId);
   }
 
   async listSyncStates(installationId: string): Promise<SyncStreamState[]> {
-    const rows = this.database
-      .prepare(
-        `
-          SELECT installation_id, stream_key, phase, live_cursor, history_cursor,
-                 media_pending, idle_until, generation, updated_at
-          FROM connector_sync_state
-          WHERE installation_id = ?
-          ORDER BY updated_at DESC, stream_key ASC
-        `,
-      )
-      .all(installationId) as SyncStateRow[];
-    return rows.map((row) => this.toSyncState(row));
+    return listSyncStates(this.database, installationId);
   }
 
   async getSyncState(
     installationId: string,
     streamKey: string,
   ): Promise<SyncStreamState | null> {
-    const row = this.database
-      .prepare(
-        `
-          SELECT installation_id, stream_key, phase, live_cursor, history_cursor,
-                 media_pending, idle_until, generation, updated_at
-          FROM connector_sync_state
-          WHERE installation_id = ? AND stream_key = ?
-        `,
-      )
-      .get(installationId, streamKey) as SyncStateRow | undefined;
-    return row ? this.toSyncState(row) : null;
+    return getSyncState(this.database, installationId, streamKey);
   }
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
     this.assertWritable();
-    this.database
-      .prepare(
-        `
-          INSERT INTO connector_sync_state (
-            installation_id, stream_key, phase, live_cursor, history_cursor,
-            media_pending, idle_until, generation, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(installation_id, stream_key) DO UPDATE SET
-            phase = excluded.phase,
-            live_cursor = excluded.live_cursor,
-            history_cursor = excluded.history_cursor,
-            media_pending = excluded.media_pending,
-            idle_until = excluded.idle_until,
-            generation = excluded.generation,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        state.installation_id,
-        state.stream_key,
-        state.phase,
-        state.live_cursor ?? null,
-        state.history_cursor ?? null,
-        state.media_pending ? 1 : 0,
-        state.idle_until ?? null,
-        state.generation,
-        state.updated_at,
-      );
-    return { ...state };
+    return putSyncState(this.database, state);
+  }
+
+  async listSyncWorkGaps(
+    installationId: string,
+    options?: ListSyncWorkGapsOptions,
+  ): Promise<SyncWorkGap[]> {
+    return listSyncWorkGaps(this.database, installationId, options);
   }
 
   close(): void {
@@ -3522,6 +1589,9 @@ export class SqliteAuthorityStore
         `Authority database schema ${currentVersion} is newer than supported ${LATEST_SCHEMA_VERSION}`,
       );
     }
+    if (this.rebasePreMergeSyncSchema(currentVersion)) {
+      return;
+    }
 
     for (const migration of MIGRATIONS) {
       if (migration.version <= currentVersion) {
@@ -3535,6 +1605,9 @@ export class SqliteAuthorityStore
           return;
         }
         this.database.exec(migration.sql);
+        if (migration.version === 47) {
+          rebuildArtifactPreviews(this.database);
+        }
         this.database.pragma(`user_version = ${migration.version}`);
       });
       if (migration.version === 10) {
@@ -3550,1268 +1623,81 @@ export class SqliteAuthorityStore
     }
   }
 
-  private getContextJson<T>(
-    table: string,
-    where: string,
-    params: unknown[],
-  ): T | null {
-    const row = this.database
-      .prepare(`SELECT payload_json FROM ${table} WHERE ${where}`)
-      .get(...params) as { payload_json: string } | undefined;
-    return row ? parseContextJson<T>(row.payload_json) : null;
-  }
-
-  private putImmutableContextJson(
-    table: string,
-    where: string,
-    lookupParams: unknown[],
-    payload: string,
-    label: string,
-    insertSql: string,
-    insertParams: unknown[],
-  ): void {
-    const transaction = this.database.transaction(() => {
-      const current = this.database
-        .prepare(`SELECT payload_json FROM ${table} WHERE ${where}`)
-        .get(...lookupParams) as { payload_json: string } | undefined;
-      if (current) {
-        if (current.payload_json !== payload) {
-          throw new Error(`Cannot replace immutable context ${label}`);
-        }
-        return;
+  /**
+   * Feature-branch databases recorded sync migrations as versions 40–45.
+   * Those numbers now belong to the schema shipped on main, so reopening
+   * would skip the snapshot index and add preview_json a second time.
+   */
+  private rebasePreMergeSyncSchema(currentVersion: number): boolean {
+    if (currentVersion < 40 || currentVersion > 45) {
+      return false;
+    }
+    if (!this.tableExists("sync_runs") || this.tableExists("context_snapshot_index")) {
+      return false;
+    }
+    const repair = this.database.transaction(() => {
+      this.database.exec(`
+        CREATE INDEX IF NOT EXISTS events_org_occurred_idx
+          ON events (org_id, occurred_at, id);
+        CREATE TABLE IF NOT EXISTS context_snapshot_index (
+          org_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          snapshot_id TEXT NOT NULL,
+          principal_actor_type TEXT NOT NULL,
+          principal_actor_id TEXT NOT NULL,
+          consumer_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+          PRIMARY KEY (
+            org_id, thread_id, snapshot_id, principal_actor_type,
+            principal_actor_id, consumer_id
+          )
+        );
+        CREATE INDEX IF NOT EXISTS context_snapshot_index_query_idx
+          ON context_snapshot_index (
+            org_id, thread_id, principal_actor_type, principal_actor_id,
+            consumer_id, created_at DESC, snapshot_id DESC
+          );
+        CREATE INDEX IF NOT EXISTS connector_sync_work_unassigned_idx
+          ON connector_sync_work (installation_id, status, lane)
+          WHERE run_id IS NULL;
+        CREATE INDEX IF NOT EXISTS connector_sync_state_gap_idx
+          ON connector_sync_state (
+            installation_id, phase, stream_key, generation, media_pending, idle_until
+          );
+        CREATE INDEX IF NOT EXISTS events_parent_event_idx
+          ON events (parent_event_id)
+          WHERE parent_event_id IS NOT NULL;
+      `);
+      if (!this.columnExists("context_artifacts", "preview_json")) {
+        this.database.exec(
+          "ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '';",
+        );
       }
-      this.database.prepare(insertSql).run(...insertParams);
+      rebuildArtifactPreviews(this.database);
+      this.database.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
     });
-    transaction.immediate();
+    repair.immediate();
+    return true;
   }
 
-  private findCurrent(identity: SourceIdentity): EventRecord | null {
+  private tableExists(name: string): boolean {
     const row = this.database
-      .prepare(
-        `
-          SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
-               e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-               e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
-               e.occurred_at, e.ingested_at
-          FROM source_heads h
-          JOIN events e ON e.id = h.current_event_id
-          WHERE h.org_id = ? AND h.source = ? AND h.external_id = ?
-        `,
-      )
-      .get(identity.org_id, identity.source, identity.external_id) as
-      | EventRow
-      | undefined;
-    return row ? this.toEvent(row) : null;
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name) as { ok: number } | undefined;
+    return row !== undefined;
   }
 
-  private loadSyncCatalog(installationId: string): SyncCatalogView {
-    const members = (
-      this.database
-        .prepare(
-          `
-            SELECT installation_id, stream_key, thread_id, label, kind,
-                   generation, discovered_at, last_seen_at
-            FROM connector_stream_members
-            WHERE installation_id = ?
-            ORDER BY last_seen_at DESC, stream_key ASC
-          `,
-        )
-        .all(installationId) as StreamMemberRow[]
-    ).map((row) => this.toStreamMember(row));
-    const snapshot = this.database
-      .prepare(
-        `
-          SELECT installation_id, cursor_value, complete, generation, updated_at
-          FROM connector_catalog_cursors
-          WHERE installation_id = ?
-        `,
-      )
-      .get(installationId) as CatalogCursorRow | undefined;
-    return {
-      members,
-      catalog: snapshot ? this.toCatalogSnapshot(snapshot) : null,
-    };
+  private columnExists(table: string, column: string): boolean {
+    const rows = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return rows.some((row) => row.name === column);
   }
 
-  private toStreamMember(row: StreamMemberRow): SyncCatalogMember {
-    return {
-      installation_id: row.installation_id,
-      stream_key: row.stream_key,
-      ...(row.thread_id ? { thread_id: row.thread_id } : {}),
-      ...(row.label ? { label: row.label } : {}),
-      ...(row.kind ? { kind: row.kind } : {}),
-      generation: row.generation,
-      discovered_at: row.discovered_at,
-      last_seen_at: row.last_seen_at,
-    };
-  }
-
-  private toCatalogSnapshot(row: CatalogCursorRow): SyncCatalogSnapshot {
-    return {
-      installation_id: row.installation_id,
-      ...(row.cursor_value ? { cursor: row.cursor_value } : {}),
-      complete: row.complete === 1,
-      generation: row.generation,
-      updated_at: row.updated_at,
-    };
-  }
-
-  private toSyncState(row: SyncStateRow): SyncStreamState {
-    return {
-      installation_id: row.installation_id,
-      stream_key: row.stream_key,
-      phase: row.phase,
-      ...(row.live_cursor ? { live_cursor: row.live_cursor } : {}),
-      ...(row.history_cursor ? { history_cursor: row.history_cursor } : {}),
-      media_pending: row.media_pending === 1,
-      ...(row.idle_until ? { idle_until: row.idle_until } : {}),
-      generation: row.generation,
-      updated_at: row.updated_at,
-    };
-  }
-
-  private findCursorRow(
-    installationId: string,
-    streamKey: string,
-  ): CursorRow | null {
-    return (
-      (this.database
-        .prepare(
-          `
-            SELECT installation_id, stream_key, cursor_value, cursor_version,
-                   lease_owner, lease_expires_at, updated_at
-            FROM connector_cursors
-            WHERE installation_id = ? AND stream_key = ?
-          `,
-        )
-        .get(installationId, streamKey) as CursorRow | undefined) ?? null
-    );
-  }
-
-  private findAttempt(id: string): IngestAttempt | null {
-    const row = this.database
-      .prepare(
-        `
-          SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
-                 started_at, finished_at, status, accepted_count, duplicate_count,
-                 quarantined_count, retryable_failure_count, error_code
-          FROM ingest_attempts WHERE id = ?
-        `,
-      )
-      .get(id) as AttemptRow | undefined;
-    return row ? this.toAttempt(row) : null;
-  }
-
-  private insert(input: InsertEventInput): EventRecord {
-    return this.database.transaction(() =>
-      this.insertWithinTransaction(input),
-    ).immediate();
-  }
-
-  private insertWithinTransaction(input: InsertEventInput): EventRecord {
-    const event: EventRecord = {
-      id: input.id ?? randomUUID(),
-      org_id: input.org_id,
-      source: input.source,
-      external_id: input.external_id,
-      operation: input.operation,
-      content_hash: input.content_hash,
-      parent_event_id: input.parent_event_id,
-      thread_id: input.thread_id,
-      actor_id: input.actor_id,
-      required_scope_ids: input.required_scope_ids
-        ? [...input.required_scope_ids]
-        : undefined,
-      direction_tags: input.direction_tags ? [...input.direction_tags] : undefined,
-      weight_hints: input.weight_hints ? structuredClone(input.weight_hints) : undefined,
-      attrs: input.attrs ? structuredClone(input.attrs) : undefined,
-      occurred_at: input.occurred_at,
-      ingested_at: new Date().toISOString(),
-    };
-
-    if (input.content_hash) {
-      this.insertBlobRow(
-        input.content_hash,
-        input.content_media_type,
-        input.content_byte_size,
-        event.ingested_at,
-      );
-    }
-    for (const blob of input.extra_blobs ?? []) {
-      this.insertBlobRow(
-        blob.content_hash,
-        blob.media_type,
-        blob.byte_size,
-        event.ingested_at,
-      );
-    }
-
-    this.database
-      .prepare(
-        `
-          INSERT INTO events (
-            id, org_id, source, external_id, operation, content_hash,
-            parent_event_id, revision_id, occurred_at, ingested_at, thread_id,
-            actor_id, required_scope_ids_json, direction_tags_json, weight_hints_json, attrs_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      )
-      .run(
-        event.id,
-        event.org_id,
-        event.source,
-        event.external_id,
-        event.operation,
-        event.content_hash ?? null,
-        event.parent_event_id ?? null,
-        input.revision_id ?? null,
-        event.occurred_at,
-        event.ingested_at,
-        event.thread_id ?? conversationId(event.source, event.external_id, event.id),
-        event.actor_id ?? null,
-        event.required_scope_ids
-          ? JSON.stringify(event.required_scope_ids)
-          : null,
-        input.direction_tags ? JSON.stringify(input.direction_tags) : null,
-        input.weight_hints ? JSON.stringify(input.weight_hints) : null,
-        input.attrs ? JSON.stringify(input.attrs) : null,
-      );
-    const headUpdate =
-      input.expected_head_id === null
-        ? this.database
-            .prepare(
-              `
-                INSERT OR IGNORE INTO source_heads (
-                  org_id, source, external_id, current_event_id
-                ) VALUES (?, ?, ?, ?)
-              `,
-            )
-            .run(event.org_id, event.source, event.external_id, event.id)
-        : this.database
-            .prepare(
-              `
-                UPDATE source_heads SET current_event_id = ?
-                WHERE org_id = ? AND source = ? AND external_id = ?
-                  AND current_event_id = ?
-              `,
-            )
-            .run(
-              event.id,
-              event.org_id,
-              event.source,
-              event.external_id,
-              input.expected_head_id,
-            );
-    if (headUpdate.changes !== 1) {
-      throw new AuthorityConflictError();
-    }
-    this.enqueueContextProjection(event.id, event.org_id, event.ingested_at);
-    this.refreshThreadHeadWithinTransaction(event.org_id, event.thread_id);
-    return event;
-  }
-
-  /** Keep the list face in sync after ingest/disposition without a full-table scan. */
-  private refreshThreadHeadWithinTransaction(
-    orgId: string,
-    threadId: string | null | undefined,
-  ): void {
-    const id = threadId?.trim();
-    if (!id) {
-      return;
-    }
-    const face = this.database
-      .prepare(
-        `
-          SELECT e.id AS face_event_id, e.occurred_at AS face_occurred_at
-          FROM message_dispositions d
-          JOIN events e ON e.id = d.event_id
-          WHERE e.org_id = ?
-            AND e.thread_id = ?
-            AND e.operation != 'tombstone'
-            AND d.reason_codes_json NOT LIKE '%thread_status%'
-          ORDER BY
-            CASE WHEN ${isCurrentHeadSql("e")} THEN 0 ELSE 1 END,
-            e.occurred_at DESC,
-            e.id DESC
-          LIMIT 1
-        `,
-      )
-      .get(orgId, id) as
-      | { face_event_id: string; face_occurred_at: string }
-      | undefined;
-    if (!face) {
-      this.database
-        .prepare(
-          `DELETE FROM thread_heads WHERE org_id = ? AND thread_id = ?`,
-        )
-        .run(orgId, id);
-      return;
-    }
-    const currentWork = this.database
-      .prepare(
-        `
-          SELECT 1 AS ok
-          FROM message_dispositions d2
-          JOIN events e2 ON e2.id = d2.event_id
-          WHERE e2.org_id = ?
-            AND e2.thread_id = ?
-            AND d2.disposition = 'current_work'
-            AND ${isCurrentHeadSql("e2", "h2")}
-          LIMIT 1
-        `,
-      )
-      .get(orgId, id) as { ok: number } | undefined;
-    this.database
-      .prepare(
-        `
-          INSERT INTO thread_heads (
-            org_id, thread_id, face_event_id, face_occurred_at, has_current_work
-          ) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(org_id, thread_id) DO UPDATE SET
-            face_event_id = excluded.face_event_id,
-            face_occurred_at = excluded.face_occurred_at,
-            has_current_work = excluded.has_current_work
-        `,
-      )
-      .run(
-        orgId,
-        id,
-        face.face_event_id,
-        face.face_occurred_at,
-        currentWork ? 1 : 0,
-      );
-  }
-
-  private enqueueContextProjection(eventId: string, orgId: string, at: string): void {
-    this.database.prepare(
-      `
-        INSERT INTO context_projection_outbox (
-          id, org_id, event_id, status, attempts, created_at, updated_at
-        ) VALUES (?, ?, ?, 'pending', 0, ?, ?)
-        ON CONFLICT(event_id) DO UPDATE SET
-          status = 'pending', attempts = 0, lease_owner = NULL,
-          lease_expires_at = NULL, next_retry_at = NULL, last_error = NULL,
-          updated_at = excluded.updated_at
-      `,
-    ).run(`context-projection:${eventId}`, orgId, eventId, at, at);
-  }
-
-  private inboxSql(
-    orgId: string,
-    query?: InboxQuery,
-  ): { sql: string; params: unknown[] } {
-    const hiddenList = normalizeInboxListView(query?.list) === "hidden";
-    const scoped = inboxScoped(query);
-    if (query?.heads) {
-      const inner = headsScanQuery(query);
-      if (hiddenList) {
-        return this.hiddenHeadsSql(orgId, query, inner);
-      }
-      const visible = this.inboxClauses(orgId, inner, "any");
-      if (!scoped) {
-        visible.clauses.push(notHiddenSql("e"));
-        visible.params.push(orgId);
-      }
-      const page = materialHeadsPageTail(query);
-      return {
-        sql: `
-          SELECT ${INBOX_COLUMNS}
-          FROM thread_heads th
-          JOIN events e ON e.id = th.face_event_id
-          JOIN message_dispositions d ON d.event_id = e.id
-          WHERE th.has_current_work = 1
-            AND ${visible.clauses.join(" AND ")}
-          ${page.whereSql}
-          ${page.orderSql}
-        `,
-        params: [...visible.params, ...page.params],
-      };
-    }
-    if (query?.siblings) {
-      const { clauses, params } = this.inboxClauses(orgId, query, "any");
-      if (!scoped) {
-        if (hiddenList) {
-          const hidden = hiddenThreadIdSql(orgId);
-          clauses.push(`e.thread_id IN (${hidden.sql})`);
-          params.push(...hidden.params);
-        } else {
-          clauses.push(`e.thread_id IN (
-          SELECT e2.thread_id
-          FROM message_dispositions d2
-          JOIN events e2 ON e2.id = d2.event_id
-          WHERE d2.org_id = ? AND d2.disposition = 'current_work'
-            AND ${isCurrentHeadSql("e2", "h2")}
-        )`);
-          params.push(orgId);
-          clauses.push(notHiddenSql("e"));
-          params.push(orgId);
-        }
-      }
-      const tail = inboxTail(query);
-      return {
-        sql: `
-          SELECT ${INBOX_COLUMNS}
-          FROM message_dispositions d
-          JOIN events e ON e.id = d.event_id
-          WHERE ${clauses.join(" AND ")}
-            AND ${isCurrentHeadSql("e")}
-          ${tail.orderSql}
-        `,
-        params: [...params, ...tail.orderParams],
-      };
-    }
-    if (hiddenList) {
-      const { clauses, params } = this.inboxClauses(orgId, query, "any");
-      if (!scoped) {
-        const hidden = hiddenThreadIdSql(orgId);
-        clauses.push(`e.thread_id IN (${hidden.sql})`);
-        params.push(...hidden.params);
-      }
-      const tail = inboxTail(query);
-      return {
-        sql: `
-          SELECT ${INBOX_COLUMNS}
-          FROM message_dispositions d
-          JOIN events e ON e.id = d.event_id
-          WHERE ${clauses.join(" AND ")}
-            AND ${isCurrentHeadSql("e")}
-          ${tail.orderSql}
-        `,
-        params: [...params, ...tail.orderParams],
-      };
-    }
-    const { clauses, params } = this.inboxClauses(
-      orgId,
-      query,
-      query?.disposition ?? "current_work",
-    );
-    if (!scoped) {
-      clauses.push(notHiddenSql("e"));
-      params.push(orgId);
-    }
-    const tail = inboxTail(query);
-    return {
-      sql: `
-        SELECT ${INBOX_COLUMNS}
-        FROM message_dispositions d
-        JOIN events e ON e.id = d.event_id
-        WHERE ${clauses.join(" AND ")}
-          AND ${isCurrentHeadSql("e")}
-        ${tail.orderSql}
-      `,
-      params: [...params, ...tail.orderParams],
-    };
-  }
-
-  private hiddenHeadsSql(
-    orgId: string,
-    query?: InboxQuery,
-    inner: InboxQuery | undefined = headsScanQuery(query),
-  ): { sql: string; params: unknown[] } {
-    const visible = this.inboxClauses(orgId, inner, "any");
-    const hidden = hiddenThreadIdSql(orgId);
-    const page = materialHeadsPageTail(query);
-    return {
-      sql: `
-        SELECT ${INBOX_COLUMNS}
-        FROM thread_heads th
-        JOIN events e ON e.id = th.face_event_id
-        JOIN message_dispositions d ON d.event_id = e.id
-        WHERE ${visible.clauses.join(" AND ")}
-          AND e.thread_id IN (${hidden.sql})
-        ${page.whereSql}
-        ${page.orderSql}
-      `,
-      params: [...visible.params, ...hidden.params, ...page.params],
-    };
-  }
-
-  private inboxClauses(
-    orgId: string,
-    query: InboxQuery | undefined,
-    disposition: "current_work" | "pending" | "any",
-    tables: { event?: string; disposition?: string } = {},
-  ): { clauses: string[]; params: unknown[] } {
-    const event = tables.event ?? "e";
-    const decision = tables.disposition ?? "d";
-    const clauses = [`${event}.org_id = ?`];
-    const params: unknown[] = [orgId];
-    if (disposition !== "any") {
-      clauses.push(`${decision}.disposition = ?`);
-      params.push(disposition);
-    }
-    if (query?.source) {
-      clauses.push(`${event}.source = ?`);
-      params.push(query.source);
-    }
-    if (query?.target) {
-      clauses.push(
-        `(${event}.external_id = ? OR ${event}.external_id LIKE ? ESCAPE '\\')`,
-      );
-      params.push(query.target, threadExternalIdLike(query.target));
-    }
-    if (query?.thread_ids && query.thread_ids.length > 0) {
-      clauses.push(
-        `${event}.thread_id IN (${query.thread_ids.map(() => "?").join(", ")})`,
-      );
-      params.push(...query.thread_ids);
-    }
-    if (query?.since) {
-      clauses.push(
-        `(${event}.ingested_at > ? OR (${event}.ingested_at = ? AND ${event}.id > ?))`,
-      );
-      params.push(query.since, query.since, query.since_id ?? "");
-    }
-    if (query?.before) {
-      clauses.push(
-        `(${event}.occurred_at < ? OR (${event}.occurred_at = ? AND ${event}.id < ?))`,
-      );
-      params.push(query.before, query.before, query.before_id ?? "");
-    }
-    return { clauses, params };
-  }
-
-  private toInboxItem(row: InboxRow): InboxItem {
-    return {
-      decision: this.toDisposition({
-        event_id: row.event_id,
-        org_id: row.disposition_org_id,
-        disposition: row.disposition,
-        layer: row.layer,
-        reason_codes_json: row.reason_codes_json,
-        score: row.score,
-        decided_at: row.decided_at,
-      }),
-      event: this.toEvent({
-        id: row.id,
-        org_id: row.disposition_org_id,
-        source: row.source,
-        external_id: row.external_id,
-        operation: row.operation,
-        content_hash: row.content_hash,
-        parent_event_id: row.parent_event_id,
-        thread_id: row.thread_id,
-        actor_id: row.actor_id,
-        required_scope_ids_json: row.required_scope_ids_json,
-        direction_tags_json: row.direction_tags_json,
-        weight_hints_json: row.weight_hints_json,
-        attrs_json: row.attrs_json,
-        occurred_at: row.occurred_at,
-        ingested_at: row.ingested_at,
-      }),
-    };
-  }
-
-  private toEvent(row: EventRow): EventRecord {
-    return {
-      id: row.id,
-      org_id: row.org_id,
-      source: row.source,
-      external_id: row.external_id,
-      operation: row.operation,
-      content_hash: row.content_hash ?? undefined,
-      parent_event_id: row.parent_event_id ?? undefined,
-      thread_id: row.thread_id ?? undefined,
-      actor_id: row.actor_id ?? undefined,
-      required_scope_ids: row.required_scope_ids_json
-        ? (JSON.parse(row.required_scope_ids_json) as string[])
-        : undefined,
-      direction_tags: row.direction_tags_json
-        ? (JSON.parse(row.direction_tags_json) as string[])
-        : undefined,
-      weight_hints: row.weight_hints_json
-        ? JSON.parse(row.weight_hints_json) as NewEvent["weight_hints"]
-        : undefined,
-      attrs: row.attrs_json
-        ? JSON.parse(row.attrs_json) as NewEvent["attrs"]
-        : undefined,
-      occurred_at: row.occurred_at,
-      ingested_at: row.ingested_at,
-    };
-  }
-
-  private toPref(row: PrefRow): ConversationPref {
-    const hidden = row.hidden === 1;
-    return {
-      org_id: row.org_id,
-      thread_id: row.thread_id,
-      title: row.title,
-      pinned: row.pinned === 1,
-      hidden,
-      hidden_reason: hidden ? normalizeHiddenReason(row.hidden_reason) : null,
-      last_read_at: row.last_read_at,
-      last_read_external_id: row.last_read_external_id,
-      updated_at: row.updated_at,
-    };
-  }
-
-  private toDisposition(row: DispositionRow): ArrangementDecision {
-    return {
-      event_id: row.event_id,
-      org_id: row.org_id,
-      disposition: row.disposition,
-      layer: row.layer,
-      reason_codes: JSON.parse(row.reason_codes_json) as string[],
-      score: row.score,
-      decided_at: row.decided_at,
-    };
-  }
-
-  private toInstallation(row: InstallationRow): ConnectorInstallation {
-    return {
-      id: row.id,
-      org_id: row.org_id,
-      connector_type: row.connector_type,
-      status: row.status,
-      config: JSON.parse(row.config_json) as ConnectorInstallation["config"],
-      credentials_ref: row.credentials_ref ?? undefined,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    };
-  }
-
-  private toCursor(row: CursorRow): ConnectorStreamCursor {
-    return {
-      installation_id: row.installation_id,
-      stream_key: row.stream_key,
-      cursor: row.cursor_value ?? undefined,
-      cursor_version: row.cursor_version,
-      updated_at: row.updated_at,
-    };
-  }
-
-  private toLease(row: CursorRow): ConnectorLease {
-    return {
-      ...this.toCursor(row),
-      lease_owner: row.lease_owner!,
-      lease_expires_at: row.lease_expires_at!,
-    };
-  }
-
-  private toAttempt(row: AttemptRow): IngestAttempt {
-    return {
-      id: row.id,
-      org_id: row.org_id,
-      connector_installation_id: row.connector_installation_id,
-      stream_key: row.stream_key,
-      delivery_id: row.delivery_id,
-      started_at: row.started_at,
-      finished_at: row.finished_at ?? undefined,
-      status: row.status,
-      accepted_count: row.accepted_count,
-      duplicate_count: row.duplicate_count,
-      quarantined_count: row.quarantined_count,
-      retryable_failure_count: row.retryable_failure_count,
-      error_code: row.error_code ?? undefined,
-    };
-  }
-
-  private toQuarantine(row: QuarantineRow): IngestQuarantine {
-    return {
-      id: row.id,
-      attempt_id: row.attempt_id,
-      connector_installation_id: row.connector_installation_id,
-      stream_key: row.stream_key,
-      record_external_id: row.record_external_id,
-      reason_code: row.reason_code,
-      safe_metadata: JSON.parse(row.safe_metadata_json) as IngestQuarantine["safe_metadata"],
-      created_at: row.created_at,
-    };
-  }
 }
 
-function inboxUsesNewestFirst(query?: InboxQuery): boolean {
-  return Boolean(normalizeInboxLimit(query?.limit));
-}
-
-function toContextProjectionJob(row: ContextProjectionJobRow): ContextProjectionJob {
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    event_id: row.event_id,
-    status: row.status,
-    attempts: row.attempts,
-    ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
-    ...(row.lease_expires_at ? { lease_expires_at: row.lease_expires_at } : {}),
-    ...(row.next_retry_at ? { next_retry_at: row.next_retry_at } : {}),
-    ...(row.last_error ? { last_error: row.last_error } : {}),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function toDailyDigestJob(row: DailyDigestJobRow): DailyDigestJob {
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    utc_date: row.utc_date,
-    generation: row.generation,
-    status: row.status,
-    attempts: row.attempts,
-    ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
-    ...(row.lease_expires_at ? { lease_expires_at: row.lease_expires_at } : {}),
-    ...(row.next_retry_at ? { next_retry_at: row.next_retry_at } : {}),
-    ...(row.last_error ? { last_error: row.last_error } : {}),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function toDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): DailyDigestCoverageAlert {
-  const { resolved_at: resolvedAt, ...rest } = alert;
-  return { ...rest, ...(resolvedAt ? { resolved_at: resolvedAt } : {}) };
-}
-
-function assertDailyDigestEnqueue(input: {
-  org_id: string;
-  utc_date: string;
-  generation: string;
-  created_at: string;
-}): void {
-  if (
-    !input.org_id?.trim()
-    || !/^\d{4}-\d{2}-\d{2}$/.test(input.utc_date)
-    || !input.generation?.trim()
-    || Number.isNaN(Date.parse(input.created_at))
-  ) {
-    throw new Error("Invalid daily digest job");
-  }
-}
-
-function assertDailyDigestCatchUp(input: {
-  org_id: string;
-  through_utc_date: string;
-  generation: string;
-  created_at: string;
-  max_days: number;
-}): void {
-  assertDailyDigestEnqueue({
-    org_id: input.org_id,
-    utc_date: input.through_utc_date,
-    generation: input.generation,
-    created_at: input.created_at,
-  });
-  if (!Number.isSafeInteger(input.max_days) || input.max_days < 1 || input.max_days > 31) {
-    throw new Error("Invalid daily digest catch-up limit");
-  }
-}
-
-function catchUpDates(lastScheduled: string | undefined, throughDate: string, maxDays: number): string[] {
-  const start = lastScheduled
-    ? new Date(`${lastScheduled}T00:00:00.000Z`).getTime() + 86_400_000
-    : new Date(`${throughDate}T00:00:00.000Z`).getTime();
-  const end = new Date(`${throughDate}T00:00:00.000Z`).getTime();
-  const dates: string[] = [];
-  for (let timestamp = start; timestamp <= end && dates.length < maxDays; timestamp += 86_400_000) {
-    dates.push(new Date(timestamp).toISOString().slice(0, 10));
-  }
-  return dates;
-}
-
-function assertProjectionClaim(input: ClaimContextProjectionJobs): void {
-  if (
-    !input?.owner?.trim()
-    || Number.isNaN(Date.parse(input.now))
-    || !Number.isSafeInteger(input.lease_ms)
-    || input.lease_ms < 1
-    || !Number.isSafeInteger(input.limit)
-    || input.limit < 1
-    || input.limit > 100
-  ) {
-    throw new Error("Invalid Context projection claim");
-  }
-}
-
-function assertProjectionSettle(id: string, owner: string, at: string): void {
-  if (!id?.trim() || !owner?.trim() || Number.isNaN(Date.parse(at))) {
-    throw new Error("Invalid Context projection settlement");
-  }
-}
-
-function headsPageTail(query?: InboxQuery): {
-  whereSql: string;
-  orderSql: string;
-  params: unknown[];
-} {
-  const params: unknown[] = [];
-  let whereSql = "WHERE rn = 1";
-  if (query?.before) {
-    whereSql +=
-      " AND (occurred_at < ? OR (occurred_at = ? AND id < ?))";
-    params.push(query.before, query.before, query.before_id ?? "");
-  }
-  const limit = normalizeInboxLimit(query?.limit);
-  if (limit !== undefined) {
-    return {
-      whereSql,
-      orderSql: "ORDER BY occurred_at DESC, id DESC LIMIT ?",
-      params: [...params, limit],
-    };
-  }
-  return {
-    whereSql,
-    orderSql: "ORDER BY occurred_at ASC, id ASC",
-    params,
-  };
-}
-
-/** Page materialized thread faces without a ROW_NUMBER window. */
-function materialHeadsPageTail(query?: InboxQuery): {
-  whereSql: string;
-  orderSql: string;
-  params: unknown[];
-} {
-  const params: unknown[] = [];
-  let whereSql = "";
-  if (query?.before) {
-    whereSql =
-      "AND (e.occurred_at < ? OR (e.occurred_at = ? AND e.id < ?))";
-    params.push(query.before, query.before, query.before_id ?? "");
-  }
-  const limit = normalizeInboxLimit(query?.limit);
-  if (limit !== undefined) {
-    return {
-      whereSql,
-      orderSql: "ORDER BY e.occurred_at DESC, e.id DESC LIMIT ?",
-      params: [...params, limit],
-    };
-  }
-  return {
-    whereSql,
-    orderSql: "ORDER BY e.occurred_at ASC, e.id ASC",
-    params,
-  };
-}
-
-function isCurrentHeadSql(event = "e", heads = "h"): string {
-  return `EXISTS (
-    SELECT 1 FROM source_heads ${heads}
-    WHERE ${heads}.current_event_id = ${event}.id
-  )`;
-}
-
-function hiddenThreadIdSql(orgId: string): { sql: string; params: unknown[] } {
-  return {
-    sql: `SELECT thread_id FROM conversation_prefs WHERE org_id = ? AND hidden = 1`,
-    params: [orgId],
-  };
-}
-
-function notHiddenSql(event = "e"): string {
-  return `${event}.thread_id NOT IN (SELECT p.thread_id FROM conversation_prefs p WHERE p.org_id = ? AND p.hidden = 1)`;
-}
-
-function inboxScoped(query?: InboxQuery): boolean {
-  return Boolean(query?.source || query?.target || query?.thread_ids);
-}
-
-function inboxTail(query?: InboxQuery): {
-  orderSql: string;
-  orderParams: unknown[];
-} {
-  const limit = query?.heads ? undefined : normalizeInboxLimit(query?.limit);
-  if (limit !== undefined) {
-    return {
-      orderSql: "ORDER BY e.occurred_at DESC, e.id DESC LIMIT ?",
-      orderParams: [limit],
-    };
-  }
-  return {
-    orderSql: "ORDER BY e.occurred_at ASC, e.id ASC",
-    orderParams: [],
-  };
-}
-
-interface ExecutorRow {
-  id: string;
-  org_id: string;
-  kind: ExecutorInstallation["kind"];
-  name: string;
-  status: ExecutorInstallation["status"];
-  config_json: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface RecipeRow {
-  id: string;
-  org_id: string;
-  name: string;
-  match_json: string;
-  executor_type: string;
-  executor_config_json: string;
-  can_write_back: number;
-  include_context: number;
-  enabled: number;
-  trigger_kind: string | null;
-  trigger_interval_ms: number | null;
-  trigger_coalesce: number | null;
-  max_concurrent: number | null;
-  next_run_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface WorkItemRow {
-  id: string;
-  org_id: string;
-  thread_id: string;
-  unit_key: string;
-  head_event_id: string | null;
-  record_class: WorkItem["record_class"];
-  thread_facet: WorkItem["thread_facet"];
-  status: WorkItem["status"];
-  recipe_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface WorkDeliveryRow {
-  id: string;
-  org_id: string;
-  work_item_id: string;
-  recipe_id: string;
-  kind: string;
-  unit_key: string;
-  event_id: string | null;
-  status: string;
-  write_back: string;
-  attempts: number;
-  last_error: string | null;
-  next_retry_at: string | null;
-  payload_json: string | null;
-  lease_expires_at: string | null;
-  idempotency_key: string | null;
-  channel_receipt_json: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface WorkRunRow {
-  id: string;
-  org_id: string;
-  work_item_id: string;
-  recipe_id: string;
-  executor_type: string;
-  external_run_id: string | null;
-  agent_thread_id: string | null;
-  status: WorkRun["status"];
-  result_json: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    kind: row.kind,
-    name: row.name,
-    status: row.status,
-    config: JSON.parse(row.config_json) as ExecutorInstallation["config"],
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function toRecipe(row: RecipeRow): Recipe {
-  const match = JSON.parse(row.match_json) as Recipe["match"];
-  const kind = isRecipeTriggerKind(row.trigger_kind) ? row.trigger_kind : undefined;
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    name: row.name,
-    match,
-    trigger: recipeTriggerOf({
-      match,
-      trigger: kind
-        ? {
-            kind,
-            ...(kind === "pull" && isPullIntervalMs(row.trigger_interval_ms)
-              ? { interval_ms: row.trigger_interval_ms }
-              : {}),
-            ...(kind === "push" ? { coalesce: row.trigger_coalesce !== 0 } : {}),
-          }
-        : undefined,
-    }),
-    executor_type: row.executor_type,
-    executor_config: JSON.parse(row.executor_config_json) as Recipe["executor_config"],
-    can_write_back: row.can_write_back === 1,
-    include_context: row.include_context === 1,
-    enabled: row.enabled === 1,
-    ...(row.max_concurrent && row.max_concurrent > 0
-      ? { max_concurrent: row.max_concurrent }
-      : {}),
-    ...(row.next_run_at ? { next_run_at: row.next_run_at } : {}),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function toWorkItem(row: WorkItemRow): WorkItem {
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    thread_id: row.thread_id,
-    unit_key: row.unit_key,
-    head_event_id: row.head_event_id ?? undefined,
-    record_class: row.record_class,
-    thread_facet: row.thread_facet,
-    status: row.status,
-    recipe_id: row.recipe_id ?? undefined,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function toWorkRun(row: WorkRunRow): WorkRun {
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    work_item_id: row.work_item_id,
-    recipe_id: row.recipe_id,
-    executor_type: row.executor_type,
-    external_run_id: row.external_run_id ?? undefined,
-    agent_thread_id: row.agent_thread_id ?? undefined,
-    status: row.status,
-    result: row.result_json
-      ? (JSON.parse(row.result_json) as WorkRun["result"])
-      : undefined,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function toWorkDelivery(row: WorkDeliveryRow): WorkDelivery {
-  const kind = isRecipeTriggerKind(row.kind) ? row.kind : "manual";
-  return {
-    id: row.id,
-    org_id: row.org_id,
-    work_item_id: row.work_item_id,
-    recipe_id: row.recipe_id,
-    kind,
-    unit_key: row.unit_key,
-    event_id: row.event_id ?? undefined,
-    status: isWorkDeliveryStatus(row.status) ? row.status : "queued",
-    write_back: isWorkWriteBackState(row.write_back) ? row.write_back : "pending",
-    attempts: row.attempts,
-    last_error: row.last_error ?? undefined,
-    next_retry_at: row.next_retry_at ?? undefined,
-    payload: parseDeliveryPayload(row.payload_json),
-    lease_expires_at: row.lease_expires_at ?? undefined,
-    idempotency_key: row.idempotency_key ?? undefined,
-    channel_receipt: parseChannelReceipt(row.channel_receipt_json),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
-function parseChannelReceipt(
-  raw: string | null,
-): WorkDelivery["channel_receipt"] | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(raw) as WorkDelivery["channel_receipt"];
-    if (!parsed || typeof parsed.accepted !== "boolean") {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseDeliveryPayload(
-  raw: string | null,
-): WorkDelivery["payload"] | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(raw) as WorkDelivery["payload"];
-    if (!parsed || typeof parsed.summary !== "string") {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-function parseContextJson<T>(value: string): T {
-  return JSON.parse(value) as T;
-}
-
-function requireContextValue(
-  result: { success: true } | { success: false; issues: Array<{ message: string }> },
-  label: string,
-): void {
-  if (!result.success) {
-    throw new Error(
-      `Invalid context ${label}: ${result.issues.map((issue) => issue.message).join("; ")}`,
-    );
-  }
-}
-
-
-function compareContextArtifactOrder(left: ContextArtifact, right: ContextArtifact): number {
-  const leftKey = `${left.recorded_at}\u0000${left.id}`;
-  const rightKey = `${right.recorded_at}\u0000${right.id}`;
-  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-}
-
-interface ArtifactStateRow {
-  org_id: string;
-  artifact_id: string;
-  status: ContextArtifactState["status"];
-  decided_at: string;
-  superseded_by: string | null;
-}
-
-function artifactState(row: ArtifactStateRow): ContextArtifactState {
-  return {
-    org_id: row.org_id,
-    artifact_id: row.artifact_id,
-    status: row.status,
-    decided_at: row.decided_at,
-    ...(row.superseded_by ? { superseded_by: row.superseded_by } : {}),
-  };
-}
-
-function assertArtifactDecision(input: ContextArtifactDecision): void {
-  if (!input?.org_id?.trim() || !input.artifact_id?.trim() || !["accepted", "rejected", "needs_clarify"].includes(input.status) || Number.isNaN(Date.parse(input.decided_at))) throw new Error("Invalid Context artifact decision");
-}
-
-function assertArtifactSupersession(input: ContextArtifactSupersession): void {
-  if (!input?.org_id?.trim() || !input.artifact_id?.trim() || !input.replacement_id?.trim() || input.artifact_id === input.replacement_id || Number.isNaN(Date.parse(input.decided_at))) throw new Error("Invalid Context artifact supersession");
-}
-
-interface ProposalRow {
-  status: ProposalStatus;
-  payload_json: string;
-  updated_at: string;
-  outcome_kind: "standard_version" | "decision" | "claim" | "none" | null;
-  outcome_ref_id: string | null;
-}
-
-interface HandoffRow {
-  status: HandoffStatus;
-  payload_json: string;
-  resolved_at: string | null;
-}
-
-interface StandardRow {
-  payload_json: string;
-  current_version_id: string | null;
-  citation_count: number;
-}
-
-interface StandardVersionRow {
-  status: StandardVersionRecord["status"];
-  payload_json: string;
-  state_json: string;
-}
-
-interface StandardGapRow {
-  status: StandardGapStatus;
-  payload_json: string;
-  converted_proposal_id: string | null;
-  updated_at: string;
-}
-
-interface AgentRunRow {
-  status: AgentRunStatus;
-  payload_json: string;
-  state_json: string;
-}
-
-function toAgentRun(row: AgentRunRow): AgentRunRecord {
-  const run = JSON.parse(row.payload_json) as AgentRunRecord;
-  const state = JSON.parse(row.state_json) as AgentRunState;
-  return validateAgentRun({
-    ...run,
-    status: row.status,
-    ...(state.output ? { output: state.output } : {}),
-    ...(state.handoff_id ? { handoff_id: state.handoff_id } : {}),
-    ...(state.started_at ? { started_at: state.started_at } : {}),
-    ...(state.finished_at ? { finished_at: state.finished_at } : {}),
-  });
-}
-
-function toStandardGap(row: StandardGapRow): StandardGapRecord {
-  return validateStandardGap({
-    ...(JSON.parse(row.payload_json) as StandardGapRecord),
-    status: row.status,
-    updated_at: row.updated_at,
-    ...(row.converted_proposal_id ? { converted_proposal_id: row.converted_proposal_id } : {}),
-  });
-}
-
-function toStandard(row: StandardRow): StandardRecord {
-  return validateStandard({
-    ...(JSON.parse(row.payload_json) as StandardRecord),
-    ...(row.current_version_id ? { current_version_id: row.current_version_id } : {}),
-    citation_count: row.citation_count,
-  });
-}
-
-function standardVersionState(version: StandardVersionRecord): StandardVersionState {
-  return {
-    status: version.status,
-    ...(version.gate?.upgrade_evidence ? { upgrade_evidence: version.gate.upgrade_evidence } : {}),
-    ...(version.published_at ? { published_at: version.published_at } : {}),
-    ...(version.published_by ? { published_by: version.published_by } : {}),
-    ...(version.deprecated_at ? { deprecated_at: version.deprecated_at } : {}),
-    ...(version.deprecated_by ? { deprecated_by: version.deprecated_by } : {}),
-    ...(version.deprecation_evidence ? { deprecation_evidence: version.deprecation_evidence } : {}),
-    ...(version.superseded_by_version_id ? { superseded_by_version_id: version.superseded_by_version_id } : {}),
-  };
-}
-
-function toStandardVersion(row: StandardVersionRow): StandardVersionRecord {
-  const version = JSON.parse(row.payload_json) as StandardVersionRecord;
-  const state = JSON.parse(row.state_json) as StandardVersionState;
-  return validateStandardVersion({
-    ...version,
-    status: row.status,
-    ...(version.gate && state.upgrade_evidence
-      ? { gate: { ...version.gate, upgrade_evidence: state.upgrade_evidence } }
-      : {}),
-    ...(state.published_at ? { published_at: state.published_at } : {}),
-    ...(state.published_by ? { published_by: state.published_by } : {}),
-    ...(state.deprecated_at ? { deprecated_at: state.deprecated_at } : {}),
-    ...(state.deprecated_by ? { deprecated_by: state.deprecated_by } : {}),
-    ...(state.deprecation_evidence ? { deprecation_evidence: state.deprecation_evidence } : {}),
-    ...(state.superseded_by_version_id ? { superseded_by_version_id: state.superseded_by_version_id } : {}),
-  });
-}
-
-function toHandoff(row: HandoffRow): HandoffRecord {
-  return validateHandoff({
-    ...(JSON.parse(row.payload_json) as HandoffRecord),
-    status: row.status,
-    ...(row.resolved_at ? { resolved_at: row.resolved_at } : {}),
-  });
-}
-
-function toProposal(row: ProposalRow): ProposalRecord {
-  const proposal = validateProposal({
-    ...(JSON.parse(row.payload_json) as ProposalRecord),
-    status: row.status,
-    updated_at: row.updated_at,
-  });
-  return {
-    ...proposal,
-    ...(row.outcome_kind
-      ? { outcome_ref: { outcome_kind: row.outcome_kind, ...(row.outcome_ref_id ? { ref_id: row.outcome_ref_id } : {}) } }
-      : {}),
-  };
 }

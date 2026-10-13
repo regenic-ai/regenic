@@ -39,6 +39,8 @@ const envSchema = z.object({
   REGENIC_PERSONAL_API_KEY: z.string().optional(),
   REGENIC_PERSONAL_PAIRING: z.string().optional(),
   REGENIC_PERSONAL_LIVE_KEY: z.string().optional(),
+  REGENIC_REPLICAS: z.string().optional(),
+  REGENIC_START_BACKGROUND: z.string().optional(),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;
@@ -94,6 +96,101 @@ export function resolveAuthorityBackend(
     return { driver: "sqlite", path: sqlitePath, blobRoot };
   }
   return { driver: "none" };
+}
+
+export function replicaCount(env: AppEnv | NodeJS.ProcessEnv = process.env): number {
+  const parsed = isLoadedEnv(env) ? env : loadEnv(env);
+  const raw = String(parsed.REGENIC_REPLICAS ?? "").trim();
+  if (!raw) {
+    return 1;
+  }
+  const replicas = Number(raw);
+  if (!Number.isFinite(replicas) || replicas < 1 || !Number.isInteger(replicas)) {
+    throw new Error(`REGENIC_REPLICAS must be a positive integer, got ${raw}`);
+  }
+  return replicas;
+}
+
+/**
+ * Personal SQLite is a single writer. A replica count above one is a
+ * misconfigured cloud deploy, not a supported scale-out path.
+ */
+export function assertSqliteSingleReplica(
+  env: AppEnv | NodeJS.ProcessEnv = process.env,
+): void {
+  const parsed = isLoadedEnv(env) ? env : loadEnv(env);
+  const backend = resolveAuthorityBackend(parsed);
+  const driver = parsed.REGENIC_AUTHORITY_DRIVER?.trim().toLowerCase() ?? "";
+  if (backend.driver !== "sqlite" && driver !== "sqlite") {
+    return;
+  }
+  const replicas = replicaCount(parsed);
+  if (replicas > 1) {
+    throw new Error(
+      `Personal SQLite refuses REGENIC_REPLICAS=${replicas}; keep replicas at 1 or switch to PostgreSQL + worker`,
+    );
+  }
+}
+
+/**
+ * Cloud workers claim Postgres rows with SKIP LOCKED. SQLite stays on the
+ * single-writer API process.
+ */
+export function assertCloudWorkerBackend(
+  env: AppEnv | NodeJS.ProcessEnv = process.env,
+): Extract<AuthorityBackend, { driver: "postgres" }> {
+  const backend = resolveAuthorityBackend(env);
+  if (backend.driver !== "postgres") {
+    throw new Error(
+      "Cloud worker requires REGENIC_AUTHORITY_DRIVER=postgres and REGENIC_BLOB_ROOT; SQLite stays on the single-writer API process",
+    );
+  }
+  return backend;
+}
+
+/**
+ * REGENIC_START_BACKGROUND=0|false|none stops connector/work/maintenance
+ * timers after listen. Kernel host still comes up for the request path.
+ */
+export function shouldStartBackgroundWork(
+  env: AppEnv | NodeJS.ProcessEnv = process.env,
+): boolean {
+  const parsed = isLoadedEnv(env) ? env : loadEnv(env);
+  const flag = parsed.REGENIC_START_BACKGROUND?.trim().toLowerCase();
+  return flag !== "0" && flag !== "false" && flag !== "none";
+}
+
+/**
+ * Projection and digest belong on the worker when Authority is Postgres.
+ * Personal SQLite keeps them in-process. REGENIC_START_BACKGROUND=all forces
+ * the API to run them even on Postgres.
+ */
+export function shouldRunInProcessContextJobs(
+  env: AppEnv | NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!shouldStartBackgroundWork(env)) {
+    return false;
+  }
+  const parsed = isLoadedEnv(env) ? env : loadEnv(env);
+  const flag = parsed.REGENIC_START_BACKGROUND?.trim().toLowerCase();
+  if (flag === "all") {
+    return true;
+  }
+  return resolveAuthorityBackend(parsed).driver !== "postgres";
+}
+
+/**
+ * Postgres API processes elect one timer leader. SQLite always starts timers
+ * locally. Followers stay on the HTTP path until they hold the session lock.
+ */
+export function requiresBackgroundLeader(
+  env: AppEnv | NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!shouldStartBackgroundWork(env)) {
+    return false;
+  }
+  const parsed = isLoadedEnv(env) ? env : loadEnv(env);
+  return resolveAuthorityBackend(parsed).driver === "postgres";
 }
 
 export function isLoopbackListenHost(host: string): boolean {
