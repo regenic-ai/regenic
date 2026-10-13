@@ -592,6 +592,37 @@ grant. Both Snapshots must be replayable by the current organization and
 principal with the submitted consumer, purpose, and allowed uses. The response
 contains stable candidate references and hashes, never evidence text.
 
+#### Compare two saved Snapshots
+
+Use the older Snapshot as `from_snapshot_id` and the newer Snapshot as
+`to_snapshot_id`. The replay grant must exactly match the grant used to create
+both bundles:
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/diff \
+  -H "content-type: application/json" \
+  -d '{
+    "from_snapshot_id": "context-snapshot:older",
+    "to_snapshot_id": "context-snapshot:newer",
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"]
+  }'
+```
+
+The result classifies candidates as:
+
+- `added`: selected only by the newer Snapshot;
+- `removed`: selected only by the older Snapshot;
+- `changed`: the same candidate identity has different selected content or
+  metadata;
+- `unchanged`: the candidate is identical in both authorized bundles.
+
+Candidate references are sorted deterministically. A consumer mismatch returns
+the same not-found response as a missing bundle, so callers cannot probe whether
+a Snapshot exists under another grant. A diff does not read current source data,
+modify either Snapshot, or grant replay access.
+
 #### Troubleshooting empty thread history
 
 History is intentionally empty unless the original assemble request used exactly
