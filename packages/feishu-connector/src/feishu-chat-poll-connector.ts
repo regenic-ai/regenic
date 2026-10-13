@@ -74,6 +74,8 @@ export interface FeishuCursorState {
   head_time?: string;
   recent_seeded?: boolean;
   history_token?: string;
+  /** Oldest create_time ms already consumed. Set when a page token stops moving. */
+  history_before?: string;
   /** @deprecated Migrated into durable store; never re-encoded into cursors. */
   media_jobs?: FeishuMediaJob[];
 }
@@ -167,6 +169,7 @@ export class FeishuChatPollConnector {
       return this.pollMediaOnly(state, mediaJobs, cursor, nowMs);
     }
     const anchor = feishuHistoryAnchor(options);
+    const historyBound = anchor ? null : feishuStoredHistoryBound(state);
     const interactiveTip =
       !anchor && options?.latest === true && options?.older !== true;
     const request = anchor
@@ -176,6 +179,13 @@ export class FeishuChatPollConnector {
           end_time: anchor.endTime,
           sort_type: "ByCreateTimeDesc" as const,
         }
+      : historyBound
+        ? {
+            chat_id: this.options.chat_id,
+            page_size: this.pageSize,
+            end_time: historyBound.endTime,
+            sort_type: "ByCreateTimeDesc" as const,
+          }
       : interactiveTip
         ? {
             chat_id: this.options.chat_id,
@@ -208,14 +218,18 @@ export class FeishuChatPollConnector {
       };
     }
     const page = anchor
-      ? await this.walkAnchoredHistory(anchor)
+      ? await this.walkAnchoredHistory(anchor, 8_000)
+      : historyBound
+        ? await this.walkAnchoredHistory(historyBound)
       : request
         ? await this.client.listMessages(
             interactiveTip ? { ...request, timeout_ms: 8_000 } : request,
           )
         : { items: [], has_more: false };
     // Name lookup can outlive the interactive poll budget and discard the page.
-    const names = await this.resolveNames(page.items, { network: !interactiveTip });
+    const names = await this.resolveNames(page.items, {
+      network: !interactiveTip && !anchor,
+    });
     const selfId = await this.selfUserId();
     const records: IngestBatch["records"] = [];
     for (const item of page.items) {
@@ -238,10 +252,15 @@ export class FeishuChatPollConnector {
     // A newest-page refresh must not replace that token with its own.
     // An anchored scroll does not write that token at all.
     const continuation =
-      !anchor && sort === "ByCreateTimeDesc" && Boolean(request?.page_token);
+      !anchor &&
+      !historyBound &&
+      sort === "ByCreateTimeDesc" &&
+      Boolean(request?.page_token);
     const nextState = anchor
       ? feishuCursorAfterAnchor(state, page.has_more)
-      : nextFeishuCursor(state, page, sort, { continuation });
+      : historyBound
+        ? nextHistoryBoundState(state, page)
+        : retainHistoryBefore(state, nextFeishuCursor(state, page, sort, { continuation }));
     const nextCursor = encodeFeishuCursor(nextState);
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
@@ -255,12 +274,12 @@ export class FeishuChatPollConnector {
     return {
       batch,
       next_cursor: nextCursor,
-      has_more: anchor
+      has_more: anchor || historyBound
         ? page.has_more
         : Boolean(request) &&
           feishuHistoryHasMore(state, page, sort, nextState, { continuation }),
       media_pending: drained.jobs.length > 0,
-      poll_hint: anchor
+      poll_hint: anchor || historyBound
         ? {
             live_seeded: state.recent_seeded === true,
             history_pending: page.has_more,
@@ -272,6 +291,7 @@ export class FeishuChatPollConnector {
   /** One scroll: messages strictly before the anchor. The stored walk stays put. */
   private async walkAnchoredHistory(
     anchor: FeishuHistoryAnchor,
+    timeoutMs?: number,
   ): Promise<{ items: FeishuHistoryItem[]; has_more: boolean }> {
     const kept: FeishuHistoryItem[] = [];
     let token: string | undefined;
@@ -282,6 +302,7 @@ export class FeishuChatPollConnector {
         page_size: this.pageSize,
         end_time: anchor.endTime,
         sort_type: "ByCreateTimeDesc",
+        ...(timeoutMs ? { timeout_ms: timeoutMs } : {}),
         ...(token ? { page_token: token } : {}),
       });
       for (const item of page.items) {
@@ -709,6 +730,7 @@ export function decodeFeishuCursor(cursor: ConnectorCursor | null): FeishuCursor
         head_time: stringValue(parsed.head_time),
         recent_seeded: parsed.recent_seeded === true,
         history_token: historyToken,
+        history_before: stringValue(parsed.history_before),
         media_jobs: decodeMediaJobs(parsed.media_jobs),
       };
     }
@@ -725,7 +747,8 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
     state.sort !== "desc" &&
     !state.recent_seeded &&
     !state.head_time &&
-    !state.history_token
+    !state.history_token &&
+    !state.history_before
   ) {
     return undefined;
   }
@@ -739,6 +762,7 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
       : {}),
     ...(state.recent_seeded ? { recent_seeded: true } : {}),
     ...(state.history_token ? { history_token: state.history_token } : {}),
+    ...(state.history_before ? { history_before: state.history_before } : {}),
   });
 }
 
@@ -753,7 +777,64 @@ export interface FeishuHistoryAnchor {
   externalId?: string;
 }
 
-/** Scroll-up anchor. Absent when this older pull is the background page walk. */
+/** Background walk whose page token stopped moving. The bound stays inside the connector cursor. */
+export function feishuStoredHistoryBound(
+  state: FeishuCursorState,
+): FeishuHistoryAnchor | null {
+  if (deferredHistoryToken(state)) {
+    return null;
+  }
+  const before = state.history_before?.trim() ?? "";
+  const anchorMs = Number(before);
+  if (!before || !Number.isFinite(anchorMs) || anchorMs <= 0) {
+    return null;
+  }
+  return {
+    before,
+    anchorMs,
+    endTime: String(Math.floor(anchorMs / 1000)),
+  };
+}
+
+function nextHistoryBoundState(
+  state: FeishuCursorState,
+  page: { items: FeishuHistoryItem[]; has_more: boolean },
+): FeishuCursorState {
+  if (!page.has_more) {
+    return feishuCursorAfterAnchor(state, false);
+  }
+  const oldest = oldestCreateMs(page.items);
+  const bound = Number(state.history_before);
+  const nextBefore =
+    oldest ??
+    (Number.isFinite(bound) && bound > 1000 ? bound - 1000 : undefined);
+  return {
+    ...(state.page_token && state.sort !== "desc" ? { page_token: state.page_token } : {}),
+    ...(state.start_time ? { start_time: state.start_time } : {}),
+    ...(state.head_time && state.head_time !== state.start_time
+      ? { head_time: state.head_time }
+      : {}),
+    ...(state.recent_seeded ? { recent_seeded: true } : {}),
+    ...(state.sort === "asc" ? { sort: "asc" as const } : {}),
+    ...(nextBefore !== undefined && nextBefore > 0
+      ? { history_before: String(nextBefore) }
+      : {}),
+  };
+}
+
+function retainHistoryBefore(
+  current: FeishuCursorState,
+  next: FeishuCursorState,
+): FeishuCursorState {
+  if (!current.history_before || next.history_before) {
+    return next;
+  }
+  if (deferredHistoryToken(next) || (!deferredHistoryToken(current) && current.history_before)) {
+    return { ...next, history_before: current.history_before };
+  }
+  return next;
+}
+
 export function feishuHistoryAnchor(
   options?: { older?: boolean; before?: string; before_external_id?: string },
 ): FeishuHistoryAnchor | null {
@@ -835,6 +916,15 @@ export function planFeishuHistoryRequest(
   }
   const historyToken = deferredHistoryToken(state);
   if (options.older === true) {
+    const bound = feishuStoredHistoryBound(state);
+    if (bound) {
+      return {
+        chat_id: chatId,
+        page_size: pageSize,
+        end_time: bound.endTime,
+        sort_type: "ByCreateTimeDesc",
+      };
+    }
     if (!historyToken) {
       return null;
     }
@@ -948,24 +1038,37 @@ export function nextFeishuCursor(
   if (sort === "ByCreateTimeDesc") {
     const live = current.start_time ?? current.head_time ?? head;
     const existing = deferredHistoryToken(current);
+    const oldest = oldestCreateMs(page.items);
     // A newest-page refresh includes a shallow page_token. Writing that
     // token restarts scroll-up at the latest page. Continue only when this
     // request already carried the history token. has_more false here means
     // the chat fits in the newest page, so the walk is finished.
-    const history = options.continuation
-      ? page.has_more && page.page_token
-        ? page.page_token
-        : undefined
-      : page.has_more
-        ? existing
-        : undefined;
-    if (history) {
+    // A token that comes back unchanged is stuck; the next walk uses time.
+    const repeated =
+      options.continuation === true &&
+      Boolean(existing) &&
+      page.has_more &&
+      page.page_token === existing;
+    const unstick = repeated && oldest !== undefined;
+    const history = unstick
+      ? undefined
+      : options.continuation
+        ? page.has_more && page.page_token
+          ? page.page_token
+          : undefined
+        : page.has_more
+          ? existing
+          : undefined;
+    if (history || unstick) {
       return {
         ...(live ? { start_time: live } : {}),
         ...(current.head_time || head
           ? { head_time: laterTime(current.head_time, head) }
           : {}),
-        history_token: history,
+        ...(history ? { history_token: history } : {}),
+        ...(unstick && oldest !== undefined
+          ? { history_before: String(oldest) }
+          : {}),
         recent_seeded: true,
       };
     }
@@ -1016,6 +1119,20 @@ function lastStartTime(items: FeishuHistoryItem[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function oldestCreateMs(items: FeishuHistoryItem[]): number | undefined {
+  let oldest: number | undefined;
+  for (const item of items) {
+    const ms = feishuCreateTimeMs(item.create_time);
+    if (ms === undefined) {
+      continue;
+    }
+    if (oldest === undefined || ms < oldest) {
+      oldest = ms;
+    }
+  }
+  return oldest;
 }
 
 function newestStartTime(items: FeishuHistoryItem[]): string | undefined {

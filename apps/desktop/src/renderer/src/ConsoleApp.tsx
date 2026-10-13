@@ -79,6 +79,7 @@ import {
 } from "./inbox-list-sync.ts";
 import {
   hasOlderPage,
+  shouldPaintLocalOlder,
   scrollOlderHasMore,
   inboxCursor,
   mergeInboxDelta,
@@ -615,50 +616,19 @@ export function ConsoleApp() {
     setLoadingOlderId(threadId);
     const epoch = workspaceEpoch.current;
     const signal = focusSignal();
-    const readOlder = () =>
+    const stillOpen = () =>
+      workspaceEpoch.current === epoch && selectedIdRef.current === threadId;
+    const readOlder = (before: { before: string; before_id: string }) =>
       fetchInbox(
         {
           thread_id: threadId,
-          before: cursor.before,
-          before_id: cursor.before_id,
+          before: before.before,
+          before_id: before.before_id,
           limit: THREAD_PAGE_SIZE,
         },
         { signal, timeoutMs: OPEN_FETCH_MS },
       );
-    try {
-      let page = await readOlder();
-      let sourceSettled = false;
-      let historyPending = false;
-      if (!hasOlderPage(page.length)) {
-        const focused = await focusConversation(
-          pullOlderFocusRequest(
-            threadId,
-            cursor.before,
-            cursor.before_id,
-            cursor.before_external_id,
-          ),
-        );
-        if (workspaceEpoch.current !== epoch || selectedIdRef.current !== threadId) {
-          return;
-        }
-        historyPending = focused.history_pending === true;
-        page = await readOlder();
-        sourceSettled = true;
-      }
-      if (workspaceEpoch.current !== epoch) {
-        return;
-      }
-      if (selectedIdRef.current !== threadId) {
-        return;
-      }
-      setHasOlderByThread((prev) => ({
-        ...prev,
-        [threadId]: scrollOlderHasMore({
-          pageLength: page.length,
-          sourceSettled,
-          historyPending,
-        }),
-      }));
+    const paintOlder = (page: InboxViewItem[]) => {
       if (page.length === 0) {
         return;
       }
@@ -669,6 +639,55 @@ export function ConsoleApp() {
           mergeOlderInbox(prev[threadId] ?? current, page),
         ),
       );
+    };
+    try {
+      const page = await readOlder(cursor);
+      if (!stillOpen()) {
+        return;
+      }
+      paintOlder(page);
+      if (hasOlderPage(page.length)) {
+        setHasOlderByThread((prev) => ({ ...prev, [threadId]: true }));
+        return;
+      }
+      const shown = page.length > 0 ? mergeOlderInbox(current, page) : current;
+      const floor = olderInboxCursor(shown) ?? cursor;
+      if (shouldPaintLocalOlder(page.length)) {
+        setHasOlderByThread((prev) => ({ ...prev, [threadId]: true }));
+      }
+      let historyPending = true;
+      try {
+        const focused = await focusConversation(
+          pullOlderFocusRequest(
+            threadId,
+            floor.before,
+            floor.before_id,
+            floor.before_external_id,
+          ),
+        );
+        historyPending = focused.history_pending === true;
+      } catch (caught) {
+        if (isInboxAbortError(caught)) {
+          return;
+        }
+        return;
+      }
+      if (!stillOpen()) {
+        return;
+      }
+      const more = await readOlder(floor);
+      if (!stillOpen()) {
+        return;
+      }
+      paintOlder(more);
+      setHasOlderByThread((prev) => ({
+        ...prev,
+        [threadId]: scrollOlderHasMore({
+          pageLength: more.length,
+          sourceSettled: true,
+          historyPending,
+        }),
+      }));
     } catch (caught) {
       if (isInboxAbortError(caught)) {
         return;

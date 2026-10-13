@@ -228,6 +228,14 @@ export function hasOlderPage(
   return pageLength >= limit;
 }
 
+/** Messages already stored locally should appear before a short page asks the source. */
+export function shouldPaintLocalOlder(
+  pageLength: number,
+  limit = THREAD_PAGE_SIZE,
+): boolean {
+  return pageLength > 0 && pageLength < limit;
+}
+
 /**
  * A full local page can keep scrolling.
  * A short page is the end only after the source pull for it has finished.

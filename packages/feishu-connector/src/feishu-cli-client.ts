@@ -273,7 +273,11 @@ export function larkSlotForPoll(options?: {
   older?: boolean;
   latest?: boolean;
   media?: boolean;
+  before?: string;
 }): LarkCliSlot {
+  if (options?.older === true && Boolean(options.before?.trim())) {
+    return "interactive";
+  }
   if (options?.latest === true && options.older !== true) {
     return "interactive";
   }

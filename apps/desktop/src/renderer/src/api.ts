@@ -916,6 +916,7 @@ export async function focusConversation(input: {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
+    signal: input.pull_older ? AbortSignal.timeout(25_000) : undefined,
   });
   const body = (await response.json()) as
     | { accepted: true; thread_id: string; history_pending?: boolean }

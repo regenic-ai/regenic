@@ -467,6 +467,7 @@ describe("FeishuChatPollConnector", () => {
       page_size: 50,
       end_time: "1723500000",
       sort_type: "ByCreateTimeDesc",
+      timeout_ms: 8000,
     });
     assert.deepEqual(
       older.batch.records.map((record) => record.external_id),
@@ -518,6 +519,46 @@ describe("FeishuChatPollConnector", () => {
     assert.equal(older.poll_hint.history_pending, false);
     assert.equal(/history_token/.test(older.next_cursor ?? ""), false);
     assert.match(older.next_cursor ?? "", /"start_time":"1723600000"/);
+  });
+
+  it("leaves a repeated history token and continues from the oldest time", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (input.page_token === "stuck") {
+          return {
+            items: [textItem({ message_id: "om_same", create_time: "1723400000000" })],
+            has_more: true,
+            page_token: "stuck",
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_older", create_time: "1723300000000" })],
+          has_more: true,
+          page_token: "ignored",
+        };
+      },
+    });
+    const first = await connector.poll(
+      {
+        value: JSON.stringify({
+          start_time: "1723600000",
+          recent_seeded: true,
+          history_token: "stuck",
+        }),
+      },
+      { older: true },
+    );
+    assert.equal(calls[0].page_token, "stuck");
+    assert.equal(/history_token/.test(first.next_cursor ?? ""), false);
+    assert.match(first.next_cursor ?? "", /"history_before":"1723400000000"/);
+    const second = await connector.poll({ value: first.next_cursor }, { older: true });
+    assert.equal(calls[1].end_time, "1723400000");
+    assert.equal(calls[1].page_token, undefined);
+    assert.equal(second.batch.records[0].external_id, "oc_1:om_older");
+    assert.match(second.next_cursor ?? "", /"history_before":"1723300000000"/);
+    assert.match(second.next_cursor ?? "", /"start_time":"1723600000"/);
   });
 
   it("does not turn a scroll-up into a live pull when history is already caught up", async () => {

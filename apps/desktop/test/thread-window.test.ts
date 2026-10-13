@@ -10,6 +10,7 @@ import {
   prefixOffsets,
   appendHeadPages,
   hasOlderPage,
+  shouldPaintLocalOlder,
   scrollOlderHasMore,
   inboxCursor,
   mergeInboxDelta,
@@ -360,6 +361,9 @@ describe("thread window", () => {
     });
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE), true);
     assert.equal(hasOlderPage(THREAD_PAGE_SIZE - 1), false);
+    assert.equal(shouldPaintLocalOlder(THREAD_PAGE_SIZE - 1), true);
+    assert.equal(shouldPaintLocalOlder(THREAD_PAGE_SIZE), false);
+    assert.equal(shouldPaintLocalOlder(0), false);
   });
 
   it("keeps scroll-up open until a short page has been pulled", () => {

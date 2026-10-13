@@ -1101,7 +1101,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
               ),
             );
           },
-        );
+          { ahead: true },
+        )
         if (pages === undefined || !this.focusAlive(generation, signal)) {
           return true;
         }
