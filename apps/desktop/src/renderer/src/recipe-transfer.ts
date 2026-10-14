@@ -91,13 +91,38 @@ function parseTrigger(value: unknown): RecipeTrigger | null {
     return null;
   }
   if (value.kind === "pull") {
-    return {
+    const trigger: RecipeTrigger = {
       kind: "pull",
       interval_ms:
         typeof value.interval_ms === "number" && Number.isFinite(value.interval_ms)
           ? value.interval_ms
           : 60 * 60 * 1000,
     };
+    if (
+      typeof value.at_minute === "number" &&
+      Number.isInteger(value.at_minute) &&
+      value.at_minute >= 0 &&
+      value.at_minute <= 1439 &&
+      typeof value.timezone === "string" &&
+      value.timezone.trim()
+    ) {
+      trigger.at_minute = value.at_minute;
+      trigger.timezone = value.timezone.trim();
+      if (Array.isArray(value.weekdays)) {
+        const days = [
+          ...new Set(
+            value.weekdays.filter(
+              (day): day is number =>
+                typeof day === "number" && Number.isInteger(day) && day >= 1 && day <= 7,
+            ),
+          ),
+        ].sort((left, right) => left - right);
+        if (days.length > 0) {
+          trigger.weekdays = days;
+        }
+      }
+    }
+    return trigger;
   }
   if (value.kind === "manual") {
     return { kind: "manual" };

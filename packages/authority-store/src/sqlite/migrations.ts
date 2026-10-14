@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 47;
+export const LATEST_SCHEMA_VERSION = 48;
 
 export const MIGRATIONS = [
   {
@@ -1003,6 +1003,14 @@ export const MIGRATIONS = [
     version: 47,
     sql: `
       SELECT 1;
+    `,
+  },
+  {
+    version: 48,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
+      ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
+      ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
     `,
   },
 ] as const;
