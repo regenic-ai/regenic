@@ -1,9 +1,13 @@
 import { isLocalOutboundId } from "./message-contract";
+import {
+  isPullIntervalMs,
+  nextClockAtOrAfter,
+  readPullClock,
+} from "./pull-clock";
 import { recordClassFromType } from "./record-class";
 import type { Specification } from "./specification";
 import {
   PULL_INTERVAL_MS,
-  PULL_INTERVALS_MS,
   type Recipe,
   type RecipeMatch,
   type RecipeTrigger,
@@ -11,6 +15,13 @@ import {
   type WorkItem,
   type WorkItemStatus,
 } from "./work";
+
+export {
+  isPullIntervalMs,
+  nextClockAtOrAfter,
+  pullScheduleColumns,
+  pullScheduleFromColumns,
+} from "./pull-clock";
 
 /**
  * Match must name a subject. Facet and source-only matches are device
@@ -53,14 +64,6 @@ export function isRecipeTriggerKind(value: unknown): value is RecipeTriggerKind 
   return value === "push" || value === "pull" || value === "manual";
 }
 
-export function isPullIntervalMs(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    (PULL_INTERVALS_MS as readonly number[]).includes(value)
-  );
-}
-
 export function inferLegacyRecipeTrigger(match: RecipeMatch): RecipeTrigger {
   return recipeMatchIsSpecific(match)
     ? { kind: "push", coalesce: true }
@@ -81,12 +84,11 @@ export function normalizeRecipeTrigger(
     ? input.kind
     : inferLegacyRecipeTrigger(match).kind;
   if (kind === "pull") {
-    return {
-      kind: "pull",
-      interval_ms: isPullIntervalMs(input?.interval_ms)
-        ? input.interval_ms
-        : PULL_INTERVAL_MS["1h"],
-    };
+    const interval_ms = isPullIntervalMs(input?.interval_ms)
+      ? input.interval_ms
+      : PULL_INTERVAL_MS["1h"];
+    const clock = readPullClock(input ?? {});
+    return clock ? { kind: "pull", interval_ms, ...clock } : { kind: "pull", interval_ms };
   }
   if (kind === "manual") {
     return { kind: "manual" };
@@ -277,8 +279,62 @@ export function shouldKeepPullSchedule(
   }
   return (
     existing.trigger.interval_ms === next.trigger.interval_ms &&
-    (existing.match.thread_id ?? "") === (next.match.thread_id ?? "")
+    (existing.match.thread_id ?? "") === (next.match.thread_id ?? "") &&
+    (existing.trigger.at_minute ?? null) === (next.trigger.at_minute ?? null) &&
+    (existing.trigger.timezone ?? "") === (next.trigger.timezone ?? "") &&
+    weekdayKey(existing.trigger.weekdays) === weekdayKey(next.trigger.weekdays)
   );
+}
+
+function weekdayKey(days: readonly number[] | undefined): string {
+  return [...(days ?? [])].sort((left, right) => left - right).join(",");
+}
+
+/** First due time for a new or edited pull. Intervals are due immediately. */
+export function initialPullNextRun(trigger: RecipeTrigger, now: string): string {
+  const clock = trigger.kind === "pull" ? readPullClock(trigger) : undefined;
+  if (!clock) {
+    return now;
+  }
+  try {
+    const nowMs = Date.parse(now);
+    const earliest = Number.isFinite(nowMs) ? nowMs : Date.now();
+    return new Date(nextClockAtOrAfter(clock, earliest)).toISOString();
+  } catch {
+    return now;
+  }
+}
+
+/** Next fire after `from`, strictly later than both `from` and `now`. */
+export function advanceRecipePull(
+  trigger: RecipeTrigger,
+  from: string,
+  now: string,
+): string {
+  const clock = trigger.kind === "pull" ? readPullClock(trigger) : undefined;
+  if (!clock) {
+    return advancePullNextRun(
+      from,
+      trigger.interval_ms ?? PULL_INTERVAL_MS["1h"],
+      now,
+    );
+  }
+  try {
+    const fromMs = Date.parse(from);
+    const nowMs = Date.parse(now);
+    const earliest =
+      Math.max(
+        Number.isFinite(fromMs) ? fromMs : 0,
+        Number.isFinite(nowMs) ? nowMs : 0,
+      ) + 1;
+    return new Date(nextClockAtOrAfter(clock, earliest)).toISOString();
+  } catch {
+    return advancePullNextRun(
+      from,
+      trigger.interval_ms ?? PULL_INTERVAL_MS["1h"],
+      now,
+    );
+  }
 }
 
 export function advancePullNextRun(
