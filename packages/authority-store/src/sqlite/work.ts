@@ -319,8 +319,7 @@ export async function getWorkDeliveryByItem(db: Database.Database, orgId: string
   }
 
 export async function putWorkDelivery(db: Database.Database, delivery: WorkDelivery): Promise<WorkDelivery> {
-    
-    db
+    const row = db
       .prepare(
         `
           INSERT INTO work_deliveries (
@@ -329,7 +328,8 @@ export async function putWorkDelivery(db: Database.Database, delivery: WorkDeliv
             payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
             created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
+          ON CONFLICT(org_id, work_item_id) DO UPDATE SET
+            id = excluded.id,
             recipe_id = excluded.recipe_id,
             kind = excluded.kind,
             unit_key = excluded.unit_key,
@@ -344,9 +344,10 @@ export async function putWorkDelivery(db: Database.Database, delivery: WorkDeliv
             idempotency_key = excluded.idempotency_key,
             channel_receipt_json = excluded.channel_receipt_json,
             updated_at = excluded.updated_at
+          RETURNING *
         `,
       )
-      .run(
+      .get(
         delivery.id,
         delivery.org_id,
         delivery.work_item_id,
@@ -365,8 +366,11 @@ export async function putWorkDelivery(db: Database.Database, delivery: WorkDeliv
         delivery.channel_receipt ? JSON.stringify(delivery.channel_receipt) : null,
         delivery.created_at,
         delivery.updated_at,
-      );
-    return delivery;
+      ) as WorkDeliveryRow | undefined;
+    if (!row) {
+      throw new Error("work delivery upsert returned no row");
+    }
+    return toWorkDelivery(row);
   }
 
 export async function listExecutorInstallations(db: Database.Database, orgId: string): Promise<ExecutorInstallation[]> {
