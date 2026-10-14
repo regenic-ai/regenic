@@ -243,9 +243,11 @@ export function matchWriteBackPrompt(
         labelsFor(option.label).includes(candidate),
       );
       if (matched && question) {
+        const comment = writeBackComment(summary);
         return {
           prompt_id: prompt.prompt_id,
           answers: [{ id: question.id, selected: [matched.label] }],
+          ...(comment ? { comment } : {}),
         };
       }
     }
@@ -265,6 +267,20 @@ function writeBackConclusionLines(summary: string): string[] {
   }
   const firstLine = text.split(/\r?\n/, 1)[0]?.trim() ?? "";
   return firstLine && firstLine !== text ? [text, firstLine] : [text];
+}
+
+const WHY_PREFIX = /^(?:why|原因)\s*[:：]\s*/i;
+
+/** Text after the first line of the executor conclusion. */
+function writeBackComment(summary: string): string | undefined {
+  const text = summary.trim();
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+  const rest = text.slice(firstLine.length).trim();
+  if (!rest) {
+    return undefined;
+  }
+  const stripped = rest.replace(WHY_PREFIX, "").trim();
+  return stripped || undefined;
 }
 
 export function workStatusFromHandle(

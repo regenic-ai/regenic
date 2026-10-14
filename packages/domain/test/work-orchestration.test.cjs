@@ -822,10 +822,11 @@ describe("write-back prompt match", () => {
       prompt_id: "crm:audit:1",
       answers: [{ id: "decision", selected: ["REJECTED"] }],
     });
-    assert.equal(
-      matchWriteBackPrompt([orderPrompt], "REJECTED\n地区不符").answers[0].selected[0],
-      "REJECTED",
-    );
+    assert.deepEqual(matchWriteBackPrompt([orderPrompt], "REJECTED\n地区不符"), {
+      prompt_id: "crm:audit:1",
+      answers: [{ id: "decision", selected: ["REJECTED"] }],
+      comment: "地区不符",
+    });
     assert.equal(
       matchWriteBackPrompt(
         [orderPrompt],
@@ -833,6 +834,31 @@ describe("write-back prompt match", () => {
         (label) => (label === "REJECTED" ? ["REJECTED", "不通过"] : [label]),
       ).answers[0].selected[0],
       "REJECTED",
+    );
+  });
+
+  it("puts the why line on comment without replacing the selected option", () => {
+    const opsPrompt = {
+      prompt_id: "crm:ops:task-1",
+      presentation: "choice",
+      questions: [
+        {
+          id: "decision",
+          prompt: "scene",
+          options: [{ label: "REAL_HUMAN" }, { label: "NEED_QUOTE_BRIEF" }],
+        },
+      ],
+    };
+    assert.deepEqual(
+      matchWriteBackPrompt(
+        [opsPrompt],
+        "REAL_HUMAN\nwhy: 报价在附件，正文无数，核不出。",
+      ),
+      {
+        prompt_id: "crm:ops:task-1",
+        answers: [{ id: "decision", selected: ["REAL_HUMAN"] }],
+        comment: "报价在附件，正文无数，核不出。",
+      },
     );
   });
 

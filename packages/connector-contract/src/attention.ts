@@ -32,6 +32,12 @@ export interface PromptAnswerItem {
 export interface PromptAnswer {
   prompt_id: string;
   answers: PromptAnswerItem[];
+  /**
+   * Optional note from the executor (second line / why). Not a selected option.
+   * Channels may write this back as a comment. Single-select `custom` still
+   * overrides `selected`; this field does not.
+   */
+  comment?: string;
 }
 
 export interface ThreadAttention {
