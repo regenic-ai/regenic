@@ -6,16 +6,23 @@ import type {
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
+  ContextArtifactIndex,
   SyncCatalogSnapshot,
 } from "@regenic/domain";
 import {
   validateContextArtifact,
   canonicalContextJson,
+  contextArtifactPreview,
+  contextArtifactPreviewFromStored,
   validateContextArtifactQuery,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
   validateContextBundle,
   validateContextProjectionCheckpoint,
 } from "@regenic/domain";
@@ -52,8 +59,8 @@ export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise
       "artifact",
       `
         INSERT INTO context_artifacts (
-          org_id, id, kind, status, generation, recorded_at, payload_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          org_id, id, kind, status, generation, recorded_at, payload_json, preview_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `,
       [
         artifact.org_id,
@@ -63,6 +70,7 @@ export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise
         artifact.generation,
         artifact.recorded_at,
         payload,
+        canonicalContextJson(contextArtifactPreview(artifact)),
       ],
     );
     await db.execute(
@@ -81,51 +89,125 @@ export async function getArtifact(db: PgSql, orgId: string, id: string): Promise
   }
 
 export async function listArtifacts(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifact[]> {
-    const validation = validateContextArtifactQuery(query);
-    requireContextValue(validation, "artifact query");
-    const stableQuery = validation.success ? validation.data : query;
-    const params: unknown[] = [];
-    const p = (value: unknown): string => {
-      params.push(value);
-      return `$${params.length}`;
-    };
-    const clauses = [`a.org_id = ${p(stableQuery.org_id)}`];
-    if (stableQuery.kinds) {
-      if (stableQuery.kinds.length === 0) {
-        return [];
-      }
-      clauses.push(
-        `a.kind IN (${stableQuery.kinds.map((kind) => p(kind)).join(", ")})`,
-      );
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
     }
-    if (stableQuery.statuses) {
-      if (stableQuery.statuses.length === 0) {
-        return [];
-      }
-      clauses.push(
-        `s.status IN (${stableQuery.statuses.map((status) => p(status)).join(", ")})`,
-      );
-    }
-    if (stableQuery.generation) {
-      clauses.push(`a.generation = ${p(stableQuery.generation)}`);
-    }
-    const limit = stableQuery.limit;
-    const limitSql =
-      typeof limit === "number" && Number.isFinite(limit)
-        ? `LIMIT ${p(limit)}`
-        : "";
     const rows = await db.query<{ payload_json: unknown; lifecycle_status: ContextArtifact["status"] }>(
       `
         SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
         JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
-        WHERE ${clauses.join(" AND ")}
+        WHERE ${parts.clauses.join(" AND ")}
         ORDER BY a.recorded_at ASC, a.id ASC
-        ${limitSql}
+        ${parts.limitSql}
       `,
-      params,
+      parts.params,
     );
     return rows.map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status }));
   }
+
+export async function listArtifactIndexes(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
+    }
+    const rows = await db.query<{
+      id: string;
+      kind: string;
+      recorded_at: unknown;
+      preview_json: unknown;
+      lifecycle_status: string;
+    }>(
+      `
+        SELECT a.id, a.kind, a.recorded_at, a.preview_json, s.status AS lifecycle_status
+        FROM context_artifacts a
+        JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
+        WHERE ${parts.clauses.join(" AND ")}
+      `,
+      parts.params,
+    );
+    return rows
+      .map((row) => {
+        const recordedAt = toIso(row.recorded_at);
+        return {
+          id: row.id,
+          kind: row.kind,
+          status: row.lifecycle_status,
+          recorded_at: recordedAt,
+          preview: contextArtifactPreviewFromStored(row.preview_json),
+        };
+      })
+      .sort((left, right) => compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id))
+      .slice(0, parts.limit);
+  }
+
+export async function rebuildArtifactPreviews(client: PoolClient): Promise<void> {
+  const rows = await client.query<{ org_id: string; id: string; payload_json: unknown }>(
+    `SELECT org_id, id, payload_json FROM context_artifacts`,
+  );
+  for (const row of rows.rows) {
+    await client.query(
+      `UPDATE context_artifacts SET preview_json = $1 WHERE org_id = $2 AND id = $3`,
+      [previewJson(row.payload_json), row.org_id, row.id],
+    );
+  }
+}
+
+function previewJson(payload: unknown): string {
+  let parsed = payload;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed) as unknown;
+    } catch {
+      parsed = {};
+    }
+  }
+  return canonicalContextJson(contextArtifactPreview(parsed as ContextArtifact));
+}
+
+function artifactListParts(query: ContextArtifactQuery): {
+  clauses: string[];
+  params: unknown[];
+  limit: number;
+  limitSql: string;
+} | null {
+  const validation = validateContextArtifactQuery(query);
+  requireContextValue(validation, "artifact query");
+  const stableQuery = validation.success ? validation.data : query;
+  const params: unknown[] = [];
+  const p = (value: unknown): string => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const clauses = [`a.org_id = ${p(stableQuery.org_id)}`];
+  if (stableQuery.kinds) {
+    if (stableQuery.kinds.length === 0) {
+      return null;
+    }
+    clauses.push(`a.kind IN (${stableQuery.kinds.map((kind) => p(kind)).join(", ")})`);
+  }
+  if (stableQuery.statuses) {
+    if (stableQuery.statuses.length === 0) {
+      return null;
+    }
+    clauses.push(`s.status IN (${stableQuery.statuses.map((status) => p(status)).join(", ")})`);
+  }
+  if (stableQuery.generation) {
+    clauses.push(`a.generation = ${p(stableQuery.generation)}`);
+  }
+  const limit = stableQuery.limit ?? Number.POSITIVE_INFINITY;
+  const limitSql =
+    typeof stableQuery.limit === "number" && Number.isFinite(stableQuery.limit)
+      ? `LIMIT ${p(stableQuery.limit)}`
+      : "";
+  return { clauses, params, limit, limitSql };
+}
+
+function compareRecordedId(leftAt: string, leftId: string, rightAt: string, rightId: string): number {
+  const leftKey = `${leftAt}\u0000${leftId}`;
+  const rightKey = `${rightAt}\u0000${rightId}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
 
 export async function getArtifactState(db: PgSql, orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
     const row = await db.queryOne<ArtifactStateRow>(
@@ -209,6 +291,80 @@ export async function getSnapshot(db: PgSql, orgId: string, id: string): Promise
       "org_id = $1 AND id = $2",
       [orgId, id],
     );
+  }
+
+export async function putSnapshotIndex(db: PgSql, entry: ContextSnapshotIndexEntry): Promise<void> {
+    requireContextValue(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
+    const payload = canonicalContextJson(entry);
+    const lookup = [
+      entry.org_id,
+      entry.thread_id,
+      entry.snapshot_id,
+      entry.principal.actor_type,
+      entry.principal.actor_id,
+      entry.consumer_id,
+    ];
+    await putImmutableContextJson(
+      db,
+      "context_snapshot_index",
+      `
+        org_id = $1 AND thread_id = $2 AND snapshot_id = $3
+        AND principal_actor_type = $4 AND principal_actor_id = $5 AND consumer_id = $6
+      `,
+      lookup,
+      payload,
+      "snapshot index entry",
+      `
+        INSERT INTO context_snapshot_index (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id, created_at, payload_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [...lookup, entry.created_at, payload],
+    );
+  }
+
+export async function listSnapshotIndex(db: PgSql, query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    const validation = validateContextSnapshotIndexQuery(query);
+    requireContextValue(validation, "snapshot index query");
+    const stableQuery = validation.success ? validation.data : query;
+    const purpose = stableQuery.purpose
+      ? "AND payload_json ->> 'purpose' = $6"
+      : "";
+    const cursorParameter = stableQuery.purpose ? 7 : 6;
+    const cursor = stableQuery.before_created_at
+      ? `
+          AND (
+            created_at < $${cursorParameter} OR (created_at = $${cursorParameter} AND snapshot_id < $${cursorParameter + 1})
+          )
+        `
+      : "";
+    const limitParameter = `$${cursorParameter + (stableQuery.before_created_at ? 2 : 0)}`;
+    const rows = await db.query<{ payload_json: unknown }>(
+      `
+        SELECT payload_json
+        FROM context_snapshot_index
+        WHERE org_id = $1 AND thread_id = $2
+          AND principal_actor_type = $3 AND principal_actor_id = $4 AND consumer_id = $5
+          ${purpose}
+          ${cursor}
+        ORDER BY created_at DESC, snapshot_id DESC
+        LIMIT ${limitParameter}
+      `,
+      [
+        stableQuery.org_id,
+        stableQuery.thread_id,
+        stableQuery.principal.actor_type,
+        stableQuery.principal.actor_id,
+        stableQuery.consumer_id,
+        ...(stableQuery.purpose ? [stableQuery.purpose] : []),
+        ...(stableQuery.before_created_at
+          ? [stableQuery.before_created_at, stableQuery.before_snapshot_id!]
+          : []),
+        stableQuery.limit ?? 100,
+      ],
+    );
+    return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));
   }
 
 export async function putBundle(db: PgSql, bundle: ContextBundle): Promise<void> {

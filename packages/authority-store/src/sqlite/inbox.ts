@@ -473,7 +473,12 @@ function inboxSql(db: Database.Database, orgId: string, query?: InboxQuery): { s
         params: [...params, ...tail.orderParams],
       };
     }
-    const { clauses, params } = inboxClauses(db, orgId, query, "current_work");
+    const { clauses, params } = inboxClauses(
+      db,
+      orgId,
+      query,
+      query?.disposition ?? "current_work",
+    );
     if (!scoped) {
       clauses.push(notHiddenSql("e"));
       params.push(orgId);
@@ -528,13 +533,14 @@ function hiddenHeadsSql(db: Database.Database, orgId: string, query?: InboxQuery
     };
   }
 
-function inboxClauses(db: Database.Database, orgId: string, query: InboxQuery | undefined, disposition: "current_work" | "any", tables: { event?: string; disposition?: string } = {}): { clauses: string[]; params: unknown[] } {
+function inboxClauses(db: Database.Database, orgId: string, query: InboxQuery | undefined, disposition: "current_work" | "pending" | "any", tables: { event?: string; disposition?: string } = {}): { clauses: string[]; params: unknown[] } {
     const event = tables.event ?? "e";
     const decision = tables.disposition ?? "d";
     const clauses = [`${event}.org_id = ?`];
     const params: unknown[] = [orgId];
-    if (disposition === "current_work") {
-      clauses.push(`${decision}.disposition = 'current_work'`);
+    if (disposition !== "any") {
+      clauses.push(`${decision}.disposition = ?`);
+      params.push(disposition);
     }
     if (query?.source) {
       clauses.push(`${event}.source = ?`);

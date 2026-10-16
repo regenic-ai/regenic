@@ -7,16 +7,23 @@ import type {
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
+  ContextArtifactIndex,
   SyncCatalogSnapshot,
 } from "@regenic/domain";
 import {
   validateContextArtifact,
   canonicalContextJson,
+  contextArtifactPreview,
+  contextArtifactPreviewFromStored,
   validateContextArtifactQuery,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
   validateContextBundle,
   validateContextProjectionCheckpoint,
 } from "@regenic/domain";
@@ -37,8 +44,8 @@ export async function putArtifact(db: Database.Database, artifact: ContextArtifa
       "artifact",
       `
         INSERT INTO context_artifacts (
-          org_id, id, kind, status, generation, recorded_at, payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          org_id, id, kind, status, generation, recorded_at, payload_json, preview_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         artifact.org_id,
@@ -48,6 +55,7 @@ export async function putArtifact(db: Database.Database, artifact: ContextArtifa
         artifact.generation,
         artifact.recorded_at,
         payload,
+        canonicalContextJson(contextArtifactPreview(artifact)),
       ],
     );
     db.prepare(
@@ -69,43 +77,114 @@ export async function getArtifact(db: Database.Database, orgId: string, id: stri
   }
 
 export async function listArtifacts(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifact[]> {
-    const validation = validateContextArtifactQuery(query);
-    requireContextValue(validation, "artifact query");
-    const stableQuery = validation.success ? validation.data : query;
-    const clauses = ["a.org_id = ?"];
-    const params: unknown[] = [stableQuery.org_id];
-    if (stableQuery.kinds) {
-      if (stableQuery.kinds.length === 0) {
-        return [];
-      }
-      clauses.push(`a.kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
-      params.push(...stableQuery.kinds);
-    }
-    if (stableQuery.statuses) {
-      if (stableQuery.statuses.length === 0) {
-        return [];
-      }
-      clauses.push(`s.status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
-      params.push(...stableQuery.statuses);
-    }
-    if (stableQuery.generation) {
-      clauses.push("a.generation = ?");
-      params.push(stableQuery.generation);
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
     }
     const rows = db
       .prepare(
         `
           SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
           JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
-          WHERE ${clauses.join(" AND ")}
+          WHERE ${parts.clauses.join(" AND ")}
         `,
       )
-      .all(...params) as Array<{ payload_json: string; lifecycle_status: ContextArtifact["status"] }>;
+      .all(...parts.params) as Array<{ payload_json: string; lifecycle_status: ContextArtifact["status"] }>;
     return rows
       .map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status as ContextArtifact["status"] }))
       .sort((left, right) => compareContextArtifactOrder(left, right))
-      .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY);
+      .slice(0, parts.limit);
   }
+
+export async function listArtifactIndexes(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    const parts = artifactListParts(query);
+    if (!parts) {
+      return [];
+    }
+    const rows = db
+      .prepare(
+        `
+          SELECT a.id, a.kind, a.recorded_at, a.preview_json, s.status AS lifecycle_status
+          FROM context_artifacts a
+          JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
+          WHERE ${parts.clauses.join(" AND ")}
+        `,
+      )
+      .all(...parts.params) as Array<{
+        id: string;
+        kind: string;
+        recorded_at: string;
+        preview_json: string;
+        lifecycle_status: string;
+      }>;
+    return rows
+      .sort((left, right) => compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id))
+      .slice(0, parts.limit)
+      .map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        status: row.lifecycle_status,
+        recorded_at: row.recorded_at,
+        preview: contextArtifactPreviewFromStored(row.preview_json),
+      }));
+  }
+
+export function rebuildArtifactPreviews(db: Database.Database): void {
+  const rows = db.prepare(
+    `SELECT org_id, id, payload_json FROM context_artifacts`,
+  ).all() as Array<{ org_id: string; id: string; payload_json: string }>;
+  const update = db.prepare(
+    `UPDATE context_artifacts SET preview_json = ? WHERE org_id = ? AND id = ?`,
+  );
+  for (const row of rows) {
+    update.run(previewJson(row.payload_json), row.org_id, row.id);
+  }
+}
+
+function previewJson(payload: string): string {
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(payload) as unknown;
+  } catch {
+    parsed = {};
+  }
+  return canonicalContextJson(contextArtifactPreview(parsed as ContextArtifact));
+}
+
+function artifactListParts(query: ContextArtifactQuery): {
+  clauses: string[];
+  params: unknown[];
+  limit: number;
+} | null {
+  const validation = validateContextArtifactQuery(query);
+  requireContextValue(validation, "artifact query");
+  const stableQuery = validation.success ? validation.data : query;
+  const clauses = ["a.org_id = ?"];
+  const params: unknown[] = [stableQuery.org_id];
+  if (stableQuery.kinds) {
+    if (stableQuery.kinds.length === 0) {
+      return null;
+    }
+    clauses.push(`a.kind IN (${stableQuery.kinds.map(() => "?").join(", ")})`);
+    params.push(...stableQuery.kinds);
+  }
+  if (stableQuery.statuses) {
+    if (stableQuery.statuses.length === 0) {
+      return null;
+    }
+    clauses.push(`s.status IN (${stableQuery.statuses.map(() => "?").join(", ")})`);
+    params.push(...stableQuery.statuses);
+  }
+  if (stableQuery.generation) {
+    clauses.push("a.generation = ?");
+    params.push(stableQuery.generation);
+  }
+  return {
+    clauses,
+    params,
+    limit: stableQuery.limit ?? Number.POSITIVE_INFINITY,
+  };
+}
 
 export async function getArtifactState(db: Database.Database, orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
     const row = db.prepare(
@@ -196,6 +275,79 @@ export async function getSnapshot(db: Database.Database, orgId: string, id: stri
       "org_id = ? AND id = ?",
       [orgId, id],
     );
+  }
+
+export async function putSnapshotIndex(db: Database.Database, entry: ContextSnapshotIndexEntry): Promise<void> {
+    requireContextValue(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
+    const payload = canonicalContextJson(entry);
+    const lookup = [
+      entry.org_id,
+      entry.thread_id,
+      entry.snapshot_id,
+      entry.principal.actor_type,
+      entry.principal.actor_id,
+      entry.consumer_id,
+    ];
+    putImmutableContextJson(
+      db,
+      "context_snapshot_index",
+      `
+        org_id = ? AND thread_id = ? AND snapshot_id = ?
+        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+      `,
+      lookup,
+      payload,
+      "snapshot index entry",
+      `
+        INSERT INTO context_snapshot_index (
+          org_id, thread_id, snapshot_id, principal_actor_type,
+          principal_actor_id, consumer_id, created_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [...lookup, entry.created_at, payload],
+    );
+  }
+
+export async function listSnapshotIndex(db: Database.Database, query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    const validation = validateContextSnapshotIndexQuery(query);
+    requireContextValue(validation, "snapshot index query");
+    const stableQuery = validation.success ? validation.data : query;
+    const purpose = stableQuery.purpose
+      ? "AND json_extract(payload_json, '$.purpose') = ?"
+      : "";
+    const cursor = stableQuery.before_created_at
+      ? `
+        AND (
+          created_at < ? OR (created_at = ? AND snapshot_id < ?)
+        )
+      `
+      : "";
+    const rows = db.prepare(`
+      SELECT payload_json
+      FROM context_snapshot_index
+      WHERE org_id = ? AND thread_id = ?
+        AND principal_actor_type = ? AND principal_actor_id = ? AND consumer_id = ?
+        ${purpose}
+        ${cursor}
+      ORDER BY created_at DESC, snapshot_id DESC
+      LIMIT ?
+    `).all(
+      stableQuery.org_id,
+      stableQuery.thread_id,
+      stableQuery.principal.actor_type,
+      stableQuery.principal.actor_id,
+      stableQuery.consumer_id,
+      ...(stableQuery.purpose ? [stableQuery.purpose] : []),
+      ...(stableQuery.before_created_at
+        ? [
+          stableQuery.before_created_at,
+          stableQuery.before_created_at,
+          stableQuery.before_snapshot_id!,
+        ]
+        : []),
+      stableQuery.limit ?? 100,
+    ) as Array<{ payload_json: string }>;
+    return rows.map((row) => parseContextJson<ContextSnapshotIndexEntry>(row.payload_json));
   }
 
 export async function putBundle(db: Database.Database, bundle: ContextBundle): Promise<void> {
@@ -370,8 +522,12 @@ function requireContextValue(
 }
 
 function compareContextArtifactOrder(left: ContextArtifact, right: ContextArtifact): number {
-  const leftKey = `${left.recorded_at}\u0000${left.id}`;
-  const rightKey = `${right.recorded_at}\u0000${right.id}`;
+  return compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id);
+}
+
+function compareRecordedId(leftAt: string, leftId: string, rightAt: string, rightId: string): number {
+  const leftKey = `${leftAt}\u0000${leftId}`;
+  const rightKey = `${rightAt}\u0000${rightId}`;
   return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 

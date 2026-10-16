@@ -234,12 +234,17 @@ export async function listEvents(db: Database.Database, orgId: string, query?: E
       clauses.push("(ingested_at > ? OR (ingested_at = ? AND id > ?))");
       params.push(query.since, query.since, query.since_id ?? "");
     }
+    if (query?.occurred_since) {
+      clauses.push("occurred_at >= ?");
+      params.push(query.occurred_since);
+    }
     const limit =
       typeof query?.limit === "number" &&
       Number.isInteger(query.limit) &&
       query.limit > 0
         ? query.limit
         : undefined;
+    const order = query?.order === "recent" ? "DESC" : "ASC";
     const rows = db
       .prepare(
         `
@@ -247,7 +252,7 @@ export async function listEvents(db: Database.Database, orgId: string, query?: E
                parent_event_id, thread_id, actor_id, required_scope_ids_json,
                direction_tags_json, weight_hints_json, attrs_json,
                occurred_at, ingested_at
-          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
+          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${order}
           ${limit === undefined ? "" : "LIMIT ?"}
         `,
       )

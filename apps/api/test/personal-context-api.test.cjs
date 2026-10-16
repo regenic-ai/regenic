@@ -33,7 +33,7 @@ async function createRoot() {
   return root;
 }
 
-async function ingestEvidence(database, blobRoot, suffix = "") {
+async function ingestEvidence(database, blobRoot, suffix = "", threadId = "chat-1") {
   const authority = new SqliteAuthorityStore(database);
   const service = new IngestionService(new FsBlobStore(blobRoot), authority);
   const result = await service.ingest({
@@ -45,10 +45,10 @@ async function ingestEvidence(database, blobRoot, suffix = "") {
     records: [{
       operation: "create",
       source: "synthetic-chat",
-      external_id: `chat-1:message-1${suffix ? `-${suffix}` : ""}`,
+      external_id: `${threadId}:message-1${suffix ? `-${suffix}` : ""}`,
       occurred_at: "2026-08-30T00:00:00.000Z",
       actor: { id: "person-1" },
-      scope: { id: "chat-1" },
+      scope: { id: threadId },
       type: "message",
       direction_tags: ["product"],
       weight_hints: { urgency: 1, importance: 1 },
@@ -135,7 +135,7 @@ async function startApi(root, model = { driver: "none" }) {
   const app = await createHttpApp({ logger: false });
   await app.listen(0, "127.0.0.1");
   apps.push(app);
-  return { origin: await app.getUrl(), eventId };
+  return { origin: await app.getUrl(), eventId, database };
 }
 
 function assembleBody() {
@@ -161,6 +161,11 @@ async function postJson(url, body) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+  return { response, text: await response.text() };
+}
+
+async function getJson(url) {
+  const response = await fetch(url);
   return { response, text: await response.text() };
 }
 
@@ -943,6 +948,23 @@ describe("personal context API", () => {
     const before = await fetch(`${origin}/v1/me/context/artifacts`);
     assert.equal(before.status, 200);
     assert.equal((await before.json())[0].status, "proposed");
+    const summariesResponse = await fetch(`${origin}/v1/me/context/artifact-summaries`);
+    assert.equal(summariesResponse.status, 200);
+    const summary = (await summariesResponse.json())[0];
+    assert.equal(summary.id, "summary-api-1");
+    assert.equal(summary.title, "Release approved");
+    assert.equal(summary.message_count, 1);
+    assert.equal(summary.thread_id, "chat-1");
+    assert.equal(summary.messages, undefined);
+    const recordResponse = await fetch(
+      `${origin}/v1/me/context/artifacts/${encodeURIComponent("summary-api-1")}/record`,
+    );
+    assert.equal(recordResponse.status, 200);
+    const record = await recordResponse.json();
+    assert.deepEqual(record.messages, [{ text: "Release approved" }]);
+    assert.equal(record.message_total, 1);
+    assert.equal(record.message_limit, 40);
+    assert.equal(record.input_refs, undefined);
     const accepted = await postJson(`${origin}/v1/me/context/artifacts/summary-api-1/decision`, { status: "accepted" });
     assert.equal(accepted.response.status, 201, accepted.text);
     assert.equal(JSON.parse(accepted.text).status, "accepted");
@@ -1013,6 +1035,213 @@ describe("personal context API", () => {
     });
     assert.equal(invalidBudget.response.status, 400);
     assert.equal(JSON.parse(invalidBudget.text).error.code, "invalid_request");
+  });
+
+  it("keeps a desktop thread preview scoped to its thread and replays its snapshot", async () => {
+    const root = await createRoot();
+    const { origin, eventId } = await startApi(root);
+    const otherEventId = await ingestEvidence(
+      join(root, "authority.db"),
+      join(root, "blobs"),
+      "other-thread",
+      "chat-2",
+    );
+    const request = {
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context for the open personal conversation",
+      allowed_uses: ["display"],
+      filters: { thread_ids: ["synthetic-chat:chat-1"] },
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    };
+    const assembledResponse = await postJson(`${origin}/v1/me/context/assemble`, request);
+    assert.equal(assembledResponse.response.status, 201, assembledResponse.text);
+    const assembled = JSON.parse(assembledResponse.text);
+    const selectedEventIds = assembled.bundle.sections.flatMap((section) =>
+      section.items.flatMap((item) => item.evidence.map((evidence) => evidence.event_id)),
+    );
+    assert.deepEqual(selectedEventIds, [eventId]);
+    assert.equal(selectedEventIds.includes(otherEventId), false);
+
+    const replayResponse = await postJson(`${origin}/v1/me/context/replay`, {
+      snapshot_id: assembled.snapshot.id,
+      consumer_id: request.consumer_id,
+      purpose: request.purpose,
+      allowed_uses: request.allowed_uses,
+    });
+    assert.equal(replayResponse.response.status, 201, replayResponse.text);
+    const replayed = JSON.parse(replayResponse.text);
+    assert.equal(replayed.snapshot_id, assembled.snapshot.id);
+    assert.equal(replayed.content_hash, assembled.bundle.content_hash);
+  });
+
+  it("diffs two snapshots only through their shared replay grant", async () => {
+    const root = await createRoot();
+    const { origin, database } = await startApi(root);
+    const grant = {
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context for the open personal conversation",
+      allowed_uses: ["display"],
+    };
+    const request = {
+      ...grant,
+      filters: { thread_ids: ["synthetic-chat:chat-1"] },
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    };
+    const firstResponse = await postJson(`${origin}/v1/me/context/assemble`, request);
+    assert.equal(firstResponse.response.status, 201, firstResponse.text);
+    const first = JSON.parse(firstResponse.text);
+
+    const addedEventId = await ingestEvidence(
+      database,
+      join(root, "blobs"),
+      "later",
+      "chat-1",
+    );
+    const secondResponse = await postJson(`${origin}/v1/me/context/assemble`, request);
+    assert.equal(secondResponse.response.status, 201, secondResponse.text);
+    const second = JSON.parse(secondResponse.text);
+
+    const diffResponse = await postJson(`${origin}/v1/me/context/diff`, {
+      from_snapshot_id: first.snapshot.id,
+      to_snapshot_id: second.snapshot.id,
+      ...grant,
+    });
+    assert.equal(diffResponse.response.status, 201, diffResponse.text);
+    const diff = JSON.parse(diffResponse.text);
+    assert.equal(diff.from_snapshot_id, first.snapshot.id);
+    assert.equal(diff.to_snapshot_id, second.snapshot.id);
+    assert.deepEqual(diff.added.map((item) => item.resource_id), [addedEventId]);
+    assert.equal(diff.removed.length, 0);
+    assert.equal(diff.unchanged.length, 1);
+    assert.equal(diffResponse.text.includes("Additional release evidence"), false);
+
+    const forbidden = await postJson(`${origin}/v1/me/context/diff`, {
+      from_snapshot_id: first.snapshot.id,
+      to_snapshot_id: second.snapshot.id,
+      ...grant,
+      consumer_id: "another-consumer",
+    });
+    assert.equal(forbidden.response.status, 404, forbidden.text);
+    assert.equal(JSON.parse(forbidden.text).error.code, "not_found");
+
+    const invalid = await postJson(`${origin}/v1/me/context/diff`, {
+      from_snapshot_id: first.snapshot.id,
+      to_snapshot_id: second.snapshot.id,
+      ...grant,
+      principal: { actor_type: "human", actor_id: "other" },
+    });
+    assert.equal(invalid.response.status, 400, invalid.text);
+    assert.equal(JSON.parse(invalid.text).error.code, "invalid_request");
+  });
+
+  it("lists only the current principal's desktop snapshot history for one thread", async () => {
+    const root = await createRoot();
+    const { origin, database } = await startApi(root);
+    await ingestEvidence(database, join(root, "blobs"), "other-thread", "chat-2");
+    const request = {
+      consumer_id: "desktop-context-pilot",
+      purpose: "display context for the open personal conversation",
+      allowed_uses: ["display"],
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    };
+    const first = await postJson(`${origin}/v1/me/context/assemble`, {
+      ...request,
+      filters: { thread_ids: ["synthetic-chat:chat-1"] },
+    });
+    const second = await postJson(`${origin}/v1/me/context/assemble`, {
+      ...request,
+      filters: { thread_ids: ["synthetic-chat:chat-2"] },
+    });
+    assert.equal(first.response.status, 201, first.text);
+    assert.equal(second.response.status, 201, second.text);
+
+    const authority = new SqliteAuthorityStore(database);
+    const visibleEntry = {
+      org_id: "local-owner",
+      thread_id: "synthetic-chat:chat-1",
+      snapshot_id: JSON.parse(first.text).snapshot.id,
+      principal: { actor_type: "human", actor_id: "local-owner" },
+      consumer_id: "desktop-context-pilot",
+      purpose: request.purpose,
+      allowed_uses: request.allowed_uses,
+      created_at: JSON.parse(first.text).snapshot.created_at,
+    };
+    await authority.putSnapshotIndex({
+      ...visibleEntry,
+      snapshot_id: "snapshot-other-principal",
+      principal: { actor_type: "human", actor_id: "other-person" },
+    });
+    await authority.putSnapshotIndex({
+      ...visibleEntry,
+      snapshot_id: "snapshot-other-consumer",
+      consumer_id: "other-consumer",
+    });
+    await authority.putSnapshotIndex({
+      ...visibleEntry,
+      snapshot_id: "snapshot-other-purpose",
+      purpose: "another desktop operation",
+    });
+    const olderEntry = {
+      ...visibleEntry,
+      snapshot_id: "snapshot-older",
+      created_at: new Date(Date.parse(visibleEntry.created_at) - 1_000).toISOString(),
+    };
+    await authority.putSnapshotIndex(olderEntry);
+    authority.close();
+
+    const listed = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=10`,
+    );
+    assert.equal(listed.response.status, 200, listed.text);
+    assert.deepEqual(JSON.parse(listed.text), [visibleEntry, olderEntry]);
+    const firstPage = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=1`,
+    );
+    assert.equal(firstPage.response.status, 200, firstPage.text);
+    assert.deepEqual(JSON.parse(firstPage.text), [visibleEntry]);
+    const secondPage = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}`
+      + `&limit=1&before_created_at=${encodeURIComponent(visibleEntry.created_at)}`
+      + `&before_snapshot_id=${encodeURIComponent(visibleEntry.snapshot_id)}`,
+    );
+    assert.equal(secondPage.response.status, 200, secondPage.text);
+    assert.deepEqual(JSON.parse(secondPage.text), [olderEntry]);
+    const otherThread = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-2")}`,
+    );
+    assert.equal(otherThread.response.status, 200, otherThread.text);
+    assert.equal(JSON.parse(otherThread.text).length, 1);
+    assert.equal(JSON.parse(otherThread.text)[0].snapshot_id, JSON.parse(second.text).snapshot.id);
+    const invalid = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}&limit=101`,
+    );
+    assert.equal(invalid.response.status, 400);
+    const incompleteCursor = await getJson(
+      `${origin}/v1/me/context/snapshots?thread_id=${encodeURIComponent("synthetic-chat:chat-1")}`
+      + `&before_created_at=${encodeURIComponent(visibleEntry.created_at)}`,
+    );
+    assert.equal(incompleteCursor.response.status, 400);
   });
 
   it("rejects model citations outside the assembled bundle", async () => {

@@ -13,6 +13,7 @@ import {
   STANDARD_GAP_SCHEMA_VERSION,
   AGENT_RUN_SCHEMA_VERSION,
   STANDARD_DRIFT_DETECTOR_VERSION,
+  diffContextBundles,
   hashCanonicalContext,
   hashStandardVersionBody,
   validateIterationGate,
@@ -22,6 +23,7 @@ import {
   detectStandardDrift,
   detectStandardHealth,
   type ContextBundle,
+  type ContextBundleDiff,
   type ContextArtifact,
   type ContextReplayRequest,
   type ContextRequest,
@@ -58,6 +60,13 @@ import {
   ContextQuestionError,
   type ContextAnswerResult,
 } from "@regenic/context-engine";
+import {
+  CONTEXT_RECORD_PAGE_MAX,
+  contextRecordPage,
+  contextRecordSummary,
+  type ContextRecordPage,
+  type ContextRecordSummary,
+} from "./context-record-view";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 const FORBIDDEN_PERSONAL_KEYS = new Set(["id", "org_id", "principal", "schema_version"]);
@@ -71,6 +80,15 @@ const ASK_KEYS = new Set([
   "budget",
   "requested_kinds",
 ]);
+const DIFF_KEYS = new Set([
+  "from_snapshot_id",
+  "to_snapshot_id",
+  "consumer_id",
+  "purpose",
+  "allowed_uses",
+]);
+const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
+const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
 
 export class PersonalContextError extends Error {
   constructor(
@@ -115,9 +133,82 @@ export class PersonalContextService {
     return snapshot;
   }
 
+  async listSnapshots(
+    threadId?: string,
+    limit?: string,
+    beforeCreatedAt?: string,
+    beforeSnapshotId?: string,
+  ) {
+    if ((beforeCreatedAt === undefined) !== (beforeSnapshotId === undefined)) {
+      throw new PersonalContextError(
+        "invalid_request",
+        HttpStatus.BAD_REQUEST,
+        "before_created_at and before_snapshot_id must be provided together",
+      );
+    }
+    return this.runtime.requireHost().get("context-artifacts").listSnapshotIndex({
+      org_id: this.runtime.orgId(),
+      thread_id: requiredString(threadId, "thread_id"),
+      principal: this.principal(),
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
+      limit: querySafeInteger(limit, "limit", 20, 1, 100),
+      ...(beforeCreatedAt === undefined ? {} : {
+        before_created_at: requiredTimestamp(beforeCreatedAt, "before_created_at"),
+        before_snapshot_id: requiredString(beforeSnapshotId, "before_snapshot_id"),
+      }),
+    });
+  }
+
+  async diff(input: unknown): Promise<ContextBundleDiff> {
+    const body = strictBody(input, DIFF_KEYS);
+    const grant = {
+      consumer_id: body.consumer_id,
+      purpose: body.purpose,
+      allowed_uses: body.allowed_uses,
+    };
+    const from = await this.replay({
+      ...grant,
+      snapshot_id: requiredString(body.from_snapshot_id, "from_snapshot_id"),
+    });
+    const to = await this.replay({
+      ...grant,
+      snapshot_id: requiredString(body.to_snapshot_id, "to_snapshot_id"),
+    });
+    return diffContextBundles(from, to);
+  }
+
   async listArtifacts(): Promise<ContextArtifact[]> {
     return this.runtime.requireHost().get("context-artifacts").listArtifacts({
       org_id: this.runtime.orgId(),
+    });
+  }
+
+  async listArtifactSummaries(): Promise<ContextRecordSummary[]> {
+    const indexes = await this.runtime.requireHost().get("context-artifacts").listArtifactIndexes({
+      org_id: this.runtime.orgId(),
+    });
+    return indexes.map((index) => contextRecordSummary(index));
+  }
+
+  async getArtifactRecord(
+    artifactId: string,
+    offset?: string,
+    limit?: string,
+  ): Promise<ContextRecordPage> {
+    const id = requiredString(artifactId, "artifact_id");
+    const parsedOffset = optionalBoundedInt(offset, "offset", 1_000_000_000, 0);
+    const parsedLimit = optionalBoundedInt(limit, "limit", CONTEXT_RECORD_PAGE_MAX, 1);
+    const artifact = await this.runtime
+      .requireHost()
+      .get("context-artifacts")
+      .getArtifact(this.runtime.orgId(), id);
+    if (!artifact) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context record was not found");
+    }
+    return contextRecordPage(artifact, {
+      ...(parsedOffset === undefined ? {} : { offset: parsedOffset }),
+      ...(parsedLimit === undefined ? {} : { limit: parsedLimit }),
     });
   }
 
@@ -1357,6 +1448,33 @@ function modelError(error: unknown): PersonalContextError {
   );
 }
 
+function optionalBoundedInt(
+  value: string | undefined,
+  name: string,
+  max: number,
+  min: number,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new PersonalContextError(
+      "invalid_request",
+      HttpStatus.BAD_REQUEST,
+      `${name} must be an integer`,
+    );
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new PersonalContextError(
+      "invalid_request",
+      HttpStatus.BAD_REQUEST,
+      `${name} is out of range`,
+    );
+  }
+  return parsed;
+}
+
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new PersonalContextError(
@@ -1751,4 +1869,3 @@ function asRecord(value: unknown): Record<string, unknown> {
   }
   return value as Record<string, unknown>;
 }
-

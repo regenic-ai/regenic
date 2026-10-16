@@ -1,5 +1,6 @@
 import type { ActorRef } from "./actor";
 import type { ContextArtifact, ContextArtifactKind, ContextArtifactStatus } from "./context-artifact";
+import type { ContextArtifactIndex } from "./context-artifact-summary";
 import type {
   ContextArtifactDecision,
   ContextArtifactLifecycleStore,
@@ -12,7 +13,11 @@ import type { ContextSectionKind } from "./context-budget";
 import type { ContextCandidate, ContextCandidateKind } from "./context-candidate";
 import type { EvidenceReference } from "./context-consumer";
 import type { ContextRequest } from "./context-request";
-import type { ContextSnapshot } from "./context-snapshot";
+import type {
+  ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
+} from "./context-snapshot";
 import type { EventRecord, JsonValue, WeightHints } from "./ingestion";
 
 export interface ContextProjectionCapabilities {
@@ -60,6 +65,7 @@ export interface ContextArtifactStore extends ContextArtifactLifecycleStore {
   putArtifact(artifact: ContextArtifact): Promise<ContextArtifact>;
   getArtifact(orgId: string, id: string): Promise<ContextArtifact | null>;
   listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]>;
+  listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]>;
   getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null>;
   decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState>;
   supersedeArtifact(input: ContextArtifactSupersession): Promise<{
@@ -72,6 +78,8 @@ export interface ContextArtifactStore extends ContextArtifactLifecycleStore {
   }>;
   putSnapshot(snapshot: ContextSnapshot): Promise<void>;
   getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null>;
+  putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void>;
+  listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]>;
   putBundle(bundle: ContextBundle): Promise<void>;
   getBundle(query: ContextBundleLookup): Promise<ContextBundle | null>;
   putCheckpoint(checkpoint: ContextProjectionCheckpoint): Promise<void>;

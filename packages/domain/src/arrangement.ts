@@ -1,5 +1,10 @@
 import type { EventRecord, WeightHints } from "./ingestion";
 import type { MessageKind } from "./message-contract";
+import {
+  DEFAULT_PERSONAL_DISPATCH_POLICY,
+  validatePersonalDispatchPolicy,
+  type PersonalDispatchPolicy,
+} from "./personal-dispatch-policy";
 
 export type MessageDisposition =
   | "current_work"
@@ -29,6 +34,7 @@ export interface ArrangementInput {
   kind?: MessageKind;
   text?: string;
   weight_hints?: WeightHints;
+  dispatch_policy?: PersonalDispatchPolicy;
   now?: string;
 }
 
@@ -40,13 +46,16 @@ const ACTIONABLE_PATTERN =
 export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
   const text = normalizeText(input.text);
   const decidedAt = input.now ?? new Date().toISOString();
+  const policy = input.dispatch_policy
+    ? validatePersonalDispatchPolicy(input.dispatch_policy)
+    : DEFAULT_PERSONAL_DISPATCH_POLICY;
 
   if (input.event.operation === "tombstone") {
     return decision(input, "outside_current_work", ["tombstoned"], 0, decidedAt);
   }
 
   if (isHighHint(input.weight_hints)) {
-    return decision(input, "current_work", ["weight_hint"], 0.9, decidedAt);
+    return policyDecision(input, policy.high_hint_disposition, "weight_hint", 0.9, decidedAt);
   }
 
   if (input.type === "thread_status") {
@@ -72,7 +81,7 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
   }
 
   if (isActionable(text)) {
-    return decision(input, "current_work", ["actionable"], 0.85, decidedAt);
+    return policyDecision(input, policy.actionable_disposition, "actionable", 0.85, decidedAt);
   }
 
   if (input.type === "thread_reply") {
@@ -86,14 +95,38 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
   }
 
   if (text !== undefined && text.length < 8) {
-    return decision(input, "pending", ["needs_review"], 0.4, decidedAt);
+    return policyDecision(input, policy.short_text_disposition, "needs_review", 0.4, decidedAt);
   }
 
+  return policyDecision(
+    input,
+    policy.default_disposition,
+    "default_personal_attention",
+    0.6,
+    decidedAt,
+  );
+}
+
+function policyDecision(
+  input: ArrangementInput,
+  disposition: MessageDisposition,
+  defaultReason: string,
+  score: number,
+  decidedAt: string,
+): ArrangementDecision {
+  const defaultPolicy = DEFAULT_PERSONAL_DISPATCH_POLICY;
+  const defaultDisposition = defaultReason === "weight_hint"
+    ? defaultPolicy.high_hint_disposition
+    : defaultReason === "actionable"
+      ? defaultPolicy.actionable_disposition
+      : defaultReason === "needs_review"
+        ? defaultPolicy.short_text_disposition
+        : defaultPolicy.default_disposition;
   return decision(
     input,
-    "current_work",
-    ["default_personal_attention"],
-    0.6,
+    disposition,
+    [disposition === defaultDisposition ? defaultReason : `policy_${defaultReason}`],
+    score,
     decidedAt,
   );
 }

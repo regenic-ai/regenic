@@ -25,7 +25,9 @@ import {
 import {
   askContext,
   assembleContext,
+  diffContextSnapshots,
   evaluateContext,
+  listContextSnapshotHistory,
   publishContextEvidenceBundle,
   publishEvidenceBundle,
   replayContext,
@@ -57,10 +59,20 @@ import {
 } from "./commands/import-export";
 import {
   acknowledgeInboxEvent,
+  getPersonalDispatchPolicy,
+  getPersonalFollowUpPolicy,
+  putPersonalDispatchPolicy,
+  putPersonalFollowUpPolicy,
+  reapplyInboxDispatchPolicy,
   resetInboxTriage,
   setInboxEventHidden,
+  setInboxEventPinned,
+  showFollowUps,
   showInbox,
+  showPendingInbox,
+  snoozeFollowUp,
   triageInbox,
+  unsnoozeFollowUp,
 } from "./commands/inbox";
 import {
   createDecisionProposal,
@@ -165,6 +177,18 @@ export async function runLocalCli(
     case "inbox":
       await showInbox(commandOptions, stdout);
       return;
+    case "inbox-pending":
+      await showPendingInbox(commandOptions, stdout);
+      return;
+    case "follow-ups":
+      await showFollowUps(commandOptions, stdout, now);
+      return;
+    case "follow-up-snooze":
+      await snoozeFollowUp(commandOptions, stdout, now);
+      return;
+    case "follow-up-unsnooze":
+      await unsnoozeFollowUp(commandOptions, stdout, now);
+      return;
     case "inbox-triage":
       await triageInbox(commandOptions, stdout, now);
       return;
@@ -177,14 +201,41 @@ export async function runLocalCli(
     case "inbox-unfold":
       await setInboxEventHidden(commandOptions, stdout, now, false);
       return;
+    case "inbox-pin":
+      await setInboxEventPinned(commandOptions, stdout, now, true);
+      return;
+    case "inbox-unpin":
+      await setInboxEventPinned(commandOptions, stdout, now, false);
+      return;
     case "inbox-triage-reset":
       await resetInboxTriage(commandOptions, stdout, now);
+      return;
+    case "dispatch-policy-get":
+      await getPersonalDispatchPolicy(commandOptions, stdout);
+      return;
+    case "dispatch-policy-set":
+      await putPersonalDispatchPolicy(commandOptions, stdout, now);
+      return;
+    case "follow-up-policy-get":
+      await getPersonalFollowUpPolicy(commandOptions, stdout);
+      return;
+    case "follow-up-policy-set":
+      await putPersonalFollowUpPolicy(commandOptions, stdout, now);
+      return;
+    case "inbox-dispatch-reapply":
+      await reapplyInboxDispatchPolicy(commandOptions, stdout, now);
       return;
     case "context-assemble":
       await assembleContext(commandOptions, stdout, createId);
       return;
     case "context-snapshot":
       await showContextSnapshot(commandOptions, stdout);
+      return;
+    case "context-snapshot-history":
+      await listContextSnapshotHistory(commandOptions, stdout);
+      return;
+    case "context-snapshot-diff":
+      await diffContextSnapshots(commandOptions, stdout);
       return;
     case "context-replay":
       await replayContext(commandOptions, stdout);
@@ -362,7 +413,7 @@ export async function runLocalCli(
       await listStandardHealthCommand(commandOptions, stdout, now);
       return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-snapshot, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
+      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-snapshot, context-snapshot-history, context-snapshot-diff, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
   }
 }
 

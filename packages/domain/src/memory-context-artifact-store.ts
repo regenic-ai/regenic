@@ -1,5 +1,9 @@
 import { canonicalContextJson } from "./context-canonical";
 import type { ContextArtifact } from "./context-artifact";
+import {
+  contextArtifactPreview,
+  type ContextArtifactIndex,
+} from "./context-artifact-summary";
 import type {
   ContextArtifactDecision,
   ContextArtifactState,
@@ -13,18 +17,25 @@ import type {
   ContextBundleLookup,
   ContextProjectionCheckpoint,
 } from "./context-port";
-import type { ContextSnapshot } from "./context-snapshot";
+import type {
+  ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
+} from "./context-snapshot";
 import {
   validateContextArtifact,
   validateContextArtifactQuery,
   validateContextBundle,
   validateContextProjectionCheckpoint,
   validateContextSnapshot,
+  validateContextSnapshotIndexEntry,
+  validateContextSnapshotIndexQuery,
 } from "./context-schema";
 
 export class MemoryContextArtifactStore implements ContextArtifactStore {
   private readonly artifacts = new Map<string, ContextArtifact>();
   private readonly snapshots = new Map<string, ContextSnapshot>();
+  private readonly snapshotIndex = new Map<string, ContextSnapshotIndexEntry>();
   private readonly bundles = new Map<string, ContextBundle>();
   private readonly checkpoints = new Map<string, ContextProjectionCheckpoint>();
   private readonly artifactStates = new Map<string, ContextArtifactState>();
@@ -63,6 +74,16 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
       .sort((left, right) => compare(`${left.recorded_at}\u0000${left.id}`, `${right.recorded_at}\u0000${right.id}`))
       .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY)
       .map(clone);
+  }
+
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return (await this.listArtifacts(query)).map((artifact) => ({
+      id: artifact.id,
+      kind: artifact.kind,
+      status: artifact.status,
+      recorded_at: artifact.recorded_at,
+      preview: contextArtifactPreview(artifact),
+    }));
   }
 
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
@@ -142,6 +163,45 @@ export class MemoryContextArtifactStore implements ContextArtifactStore {
     return cloneOrNull(this.snapshots.get(artifactKey(orgId, id)));
   }
 
+  async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
+    requireValid(validateContextSnapshotIndexEntry(entry), "snapshot index entry");
+    this.putImmutable(
+      this.snapshotIndex,
+      snapshotIndexKey(entry),
+      entry,
+      "snapshot index entry",
+    );
+  }
+
+  async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    const validation = validateContextSnapshotIndexQuery(query);
+    requireValid(validation, "snapshot index query");
+    const stableQuery = validation.success ? validation.data : query;
+    return [...this.snapshotIndex.values()]
+      .filter((entry) =>
+        entry.org_id === stableQuery.org_id
+        && entry.thread_id === stableQuery.thread_id
+        && entry.principal.actor_type === stableQuery.principal.actor_type
+        && entry.principal.actor_id === stableQuery.principal.actor_id
+        && entry.consumer_id === stableQuery.consumer_id
+        && (!stableQuery.purpose || entry.purpose === stableQuery.purpose)
+      )
+      .filter((entry) => !stableQuery.before_created_at
+        || entry.created_at < stableQuery.before_created_at
+        || (
+          entry.created_at === stableQuery.before_created_at
+          && entry.snapshot_id < stableQuery.before_snapshot_id!
+        ))
+      .sort((left, right) =>
+        compare(
+          `${right.created_at}\u0000${right.snapshot_id}`,
+          `${left.created_at}\u0000${left.snapshot_id}`,
+        )
+      )
+      .slice(0, stableQuery.limit ?? Number.POSITIVE_INFINITY)
+      .map(clone);
+  }
+
   async putBundle(bundle: ContextBundle): Promise<void> {
     requireValid(validateContextBundle(bundle), "bundle");
     this.putImmutable(this.bundles, bundleKey(bundle), bundle, "bundle");
@@ -219,6 +279,17 @@ function artifactKey(orgId: string, id: string): string {
 
 function bundleKey(bundle: ContextBundle): string {
   return bundleLookupKey(bundle);
+}
+
+function snapshotIndexKey(entry: ContextSnapshotIndexEntry): string {
+  return JSON.stringify([
+    entry.org_id,
+    entry.thread_id,
+    entry.snapshot_id,
+    entry.principal.actor_type,
+    entry.principal.actor_id,
+    entry.consumer_id,
+  ]);
 }
 
 function bundleLookupKey(bundle: ContextBundleLookup): string {

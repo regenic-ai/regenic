@@ -291,6 +291,30 @@ pnpm local inbox-fold --database ./regenic.db --org local-owner \
 pnpm local inbox-unfold --database ./regenic.db --org local-owner \
 	--event <event-id>
 
+# 将该 Event 所在的 conversation 置顶或取消置顶。
+pnpm local inbox-pin --database ./regenic.db --org local-owner \
+	--event <event-id>
+pnpm local inbox-unpin --database ./regenic.db --org local-owner \
+	--event <event-id>
+
+# 查看或更新版本化的个人 dispatch policy。
+# 已保存的 policy 作用于下一批 ingest，不会改写已有 disposition。
+pnpm local dispatch-policy-get --database ./regenic.db --org local-owner
+pnpm local dispatch-policy-set --database ./regenic.db --org local-owner \
+	--policy ./dispatch-policy.json
+
+# 对一个已存在的 inbox event 显式重新应用已保存的 policy。
+pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
+	--org local-owner --event <event-id>
+
+# 复核等待明确关注的 event，不扩大默认工作 inbox。
+pnpm local inbox-pending --database ./regenic.db --org local-owner
+
+# 复核超时未回复，或将一条 outbound message 暂停提醒到指定时间。
+pnpm local follow-ups --database ./regenic.db --blob-root ./blobs --org local-owner
+pnpm local follow-up-snooze --database ./regenic.db --org local-owner \
+	--thread <thread-id> --outbound <external-id> --until 2026-10-01T09:00:00.000Z
+
 # 人工 triage 覆盖当前工作分层，但不会修改 Event。
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
@@ -510,10 +534,93 @@ Personal API 提供同一条持久化路径：
 
 ```http
 POST /v1/me/context/assemble
+POST /v1/me/context/diff
+GET  /v1/me/context/snapshots?thread_id=...&limit=...
 GET  /v1/me/context/snapshots/:snapshot_id
 POST /v1/me/context/replay
 POST /v1/me/context/ask
 ```
+
+线程 Snapshot 历史绑定当前组织、当前 principal 与 `desktop-context-pilot`
+consumer，按时间倒序返回；默认最多 20 条，最大 100 条。
+要稳定读取下一页，请把末条记录的 `created_at` 和 `snapshot_id` 分别作为
+`before_created_at` 与 `before_snapshot_id` 传入。
+
+### Context Pilot 线程历史
+
+要创建一条历史记录，请使用 desktop consumer 且只针对一个线程 assemble Context。
+Snapshot 不可变：相同的授权输入会收敛到同一个 Snapshot，而不会覆盖它。
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/assemble \
+  -H "content-type: application/json" \
+  -d '{
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"],
+    "filters": { "thread_ids": ["synthetic-chat:chat-1"] },
+    "temporal": { "mode": "current" },
+    "budget": {
+      "profile": "desktop-thread-preview-v1",
+      "max_tokens": 2000,
+      "max_items": 20,
+      "max_raw_evidence": 20
+    },
+    "requested_kinds": ["event"]
+  }'
+```
+
+然后读取该线程已保存的历史：
+
+```bash
+curl "http://127.0.0.1:4370/v1/me/context/snapshots?thread_id=synthetic-chat%3Achat-1"
+```
+
+每条结果都是关联关系，不是新的授权。重放某个 Snapshot 时，使用其 `snapshot_id`，
+并保持创建时的 consumer、purpose 与 allowed uses。历史 API 不会扩大 replay 权限。
+
+`POST /v1/me/context/diff` 使用同一份 replay grant 比较两个 Snapshot ID。
+两个 Snapshot 都必须能由当前组织和 principal 使用提交的 consumer、purpose 与
+allowed uses 重放。响应只包含稳定的 candidate 引用与 hash，不返回证据正文。
+
+#### 比较两个已保存的 Snapshot
+
+把较早的 Snapshot 作为 `from_snapshot_id`，较新的 Snapshot 作为
+`to_snapshot_id`。Replay grant 必须与创建两个 bundle 时使用的 grant 完全一致：
+
+```bash
+curl -X POST http://127.0.0.1:4370/v1/me/context/diff \
+  -H "content-type: application/json" \
+  -d '{
+    "from_snapshot_id": "context-snapshot:older",
+    "to_snapshot_id": "context-snapshot:newer",
+    "consumer_id": "desktop-context-pilot",
+    "purpose": "display context for the open personal conversation",
+    "allowed_uses": ["display"]
+  }'
+```
+
+结果按以下类别整理 candidate：
+
+- `added`：只有较新的 Snapshot 选中；
+- `removed`：只有较早的 Snapshot 选中；
+- `changed`：相同 candidate identity 的选中正文或元数据不同；
+- `unchanged`：两个授权 bundle 中的 candidate 完全一致。
+
+Candidate 引用按确定性顺序返回。Consumer 不匹配与 bundle 不存在使用相同的
+not-found 响应，调用方不能探测其他 grant 下的 Snapshot 是否存在。Diff 不读取当前
+来源数据、不修改任一 Snapshot，也不会授予 replay 权限。
+
+#### 排查线程历史为空
+
+只有原始 assemble 请求的 `filters.thread_ids` 恰好包含一个线程时，才会登记历史。
+无线程 filter 或包含多个线程的请求仍会创建可用的 Snapshot，但不会建立线程历史关联。
+由于无法可靠推断旧 Snapshot 的来源线程，已有 Snapshot 不会被回填。
+
+历史还按组织、principal 和 consumer 隔离。请确认请求使用的 Personal API 身份以及
+`desktop-context-pilot` consumer 与 assemble 请求一致。本地排查时，使用创建 Snapshot
+时相同的本地 org、principal、consumer 选项运行
+`context-snapshot-history --thread <thread-id>`。
 
 证据正文作为不可信 user data 发送给模型，绝不作为模型 instruction。只有当模型提交的每条
 citation 都指向授权 bundle 中已有的 candidate 与 Event 时，回答才会返回。模型输出不会

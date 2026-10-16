@@ -240,6 +240,9 @@ export async function listEvents(db: PgSql, orgId: string, query?: EventListQuer
         `(ingested_at > ${p(query.since)} OR (ingested_at = ${p(query.since)} AND id > ${p(query.since_id ?? "")}))`,
       );
     }
+    if (query?.occurred_since) {
+      clauses.push(`occurred_at >= ${p(query.occurred_since)}`);
+    }
     const limit =
       typeof query?.limit === "number" &&
       Number.isInteger(query.limit) &&
@@ -247,12 +250,13 @@ export async function listEvents(db: PgSql, orgId: string, query?: EventListQuer
         ? query.limit
         : undefined;
     const limitSql = limit === undefined ? "" : `LIMIT ${p(limit)}`;
+    const order = query?.order === "recent" ? "DESC" : "ASC";
     const rows = await db.query<EventRow>(
       `
         SELECT id, org_id, source, external_id, operation, content_hash,
                parent_event_id, thread_id, actor_id, required_scope_ids,
                occurred_at, ingested_at
-        FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ASC
+        FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${order}
         ${limitSql}
       `,
       params,

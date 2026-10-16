@@ -35,6 +35,121 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     }
   });
 
+  it("reads and updates a personal dispatch policy", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const defaults = await (await fetch(`${origin}/v1/me/dispatch-policy`)).json();
+      assert.equal(defaults.version, 1);
+      assert.equal(defaults.actionable_disposition, "current_work");
+      const policy = {
+        ...defaults,
+        actionable_disposition: "pending",
+        default_disposition: "outside_current_work",
+      };
+      const updated = await (
+        await fetch(`${origin}/v1/me/dispatch-policy`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ policy }),
+        })
+      ).json();
+      assert.deepEqual(updated, policy);
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/dispatch-policy`)).json(), policy);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reads and updates a personal follow-up policy", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const defaults = await (await fetch(`${origin}/v1/me/follow-up-policy`)).json();
+      assert.equal(defaults.version, 1);
+      assert.equal(defaults.wait_minutes, 1440);
+      const policy = { ...defaults, wait_minutes: 120, include_initial_outbound: true };
+      const updated = await (
+        await fetch(`${origin}/v1/me/follow-up-policy`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ policy }),
+        })
+      ).json();
+      assert.deepEqual(updated, policy);
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-up-policy`)).json(), policy);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reviews overdue personal follow-ups without changing inbox disposition", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestFollowUpThread(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const followUps = await (await fetch(`${origin}/v1/me/follow-ups`)).json();
+      assert.equal(followUps.length, 1);
+      assert.equal(followUps[0].event.id, eventId);
+      assert.equal(followUps[0].candidate.outbound_external_id, "thread-1:out-1");
+      assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
+      assert.equal(followUps[0].body_text, "I will confirm it today.");
+      const threadId = encodeURIComponent(followUps[0].candidate.thread_id);
+      const snoozed = await (
+        await fetch(`${origin}/v1/me/follow-ups/${threadId}/snooze`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ until: "2099-01-01T00:00:00.000Z" }),
+        })
+      ).json();
+      assert.equal(snoozed.snoozed_until, "2099-01-01T00:00:00.000Z");
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-ups`)).json(), []);
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-ups/snoozes`)).json(), {
+        [followUps[0].candidate.thread_id]: snoozed.snoozed_until,
+      });
+      await fetch(`${origin}/v1/me/follow-ups/${threadId}/snooze`, { method: "DELETE" });
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/follow-ups/snoozes`)).json(), {});
+      assert.equal((await (await fetch(`${origin}/v1/me/follow-ups`)).json()).length, 1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reapplies the saved dispatch policy to an inbox event", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const defaults = await (await fetch(`${origin}/v1/me/dispatch-policy`)).json();
+      await fetch(`${origin}/v1/me/dispatch-policy`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ policy: { ...defaults, actionable_disposition: "pending" } }),
+      });
+      const decision = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/dispatch-policy/reapply`, { method: "POST" })
+      ).json();
+      assert.equal(decision.disposition, "pending");
+      assert.ok(decision.reason_codes.includes("policy_actionable"));
+      assert.ok(decision.reason_codes.includes("personal_dispatch_policy"));
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
+      const pending = await (await fetch(`${origin}/v1/me/inbox?disposition=pending`)).json();
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].event.id, eventId);
+      assert.equal(pending[0].decision.disposition, "pending");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lets a human triage an inbox event out of current work", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
@@ -105,6 +220,31 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(unfolded.hidden, false);
       assert.equal(unfolded.hidden_reason, null);
       assert.equal((await (await fetch(`${origin}/v1/me/inbox`)).json()).length, 1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("pins and unpins an inbox event's thread", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const pinned = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/pin`, { method: "POST" })
+      ).json();
+      assert.equal(pinned.pinned, true);
+      const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1&split=1`)).json();
+      assert.equal(heads.pinned.length, 1);
+
+      const unpinned = await (
+        await fetch(`${origin}/v1/me/inbox/${eventId}/unpin`, { method: "POST" })
+      ).json();
+      assert.equal(unpinned.pinned, false);
+      const after = await (await fetch(`${origin}/v1/me/inbox?heads=1&split=1`)).json();
+      assert.equal(after.pinned.length, 0);
     } finally {
       await app.close();
     }
@@ -510,3 +650,24 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     }
   });
 });
+
+async function ingestFollowUpThread(database, blobRoot) {
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const now = Date.now();
+  const inboundAt = new Date(now - 27 * 60 * 60_000).toISOString();
+  const outboundAt = new Date(now - 26 * 60 * 60_000).toISOString();
+  const result = await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "native-local",
+    org_id: "local-owner",
+    delivery_id: "follow-up-1",
+    received_at: new Date(now).toISOString(),
+    records: [
+      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: inboundAt, actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
+      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: outboundAt, actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
+    ],
+  });
+  authority.close();
+  return result.records[1].event_id;
+}

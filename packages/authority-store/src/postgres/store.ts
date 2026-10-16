@@ -21,11 +21,14 @@ import type {
   ContextAuthorityRead,
   ContextArtifact,
   ContextArtifactQuery,
+  ContextArtifactIndex,
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
@@ -196,12 +199,15 @@ import {
   getBundle,
   getCheckpoint,
   getSnapshot,
+  listSnapshotIndex,
   listArtifacts,
+  listArtifactIndexes,
   parseContextJson,
   putArtifact,
   putBundle,
   putCheckpoint,
   putSnapshot,
+  putSnapshotIndex,
   supersedeArtifact,
   supersedeProposedArtifact,
 } from "./context-artifacts";
@@ -452,6 +458,10 @@ export class PostgresAuthorityStore
     return listArtifacts(this.sql, query);
   }
 
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return listArtifactIndexes(this.sql, query);
+  }
+
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
     return getArtifactState(this.sql, orgId, artifactId);
   }
@@ -474,6 +484,14 @@ export class PostgresAuthorityStore
 
   async getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null> {
     return getSnapshot(this.sql, orgId, id);
+  }
+
+  async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
+    return putSnapshotIndex(this.sql, entry);
+  }
+
+  async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    return listSnapshotIndex(this.sql, query);
   }
 
   async putBundle(bundle: ContextBundle): Promise<void> {
@@ -872,6 +890,7 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM context_snapshot_index WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_bundles WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshots WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_artifact_states WHERE org_id = $1`, [orgId], client);
@@ -995,6 +1014,7 @@ export class PostgresAuthorityStore
           blobs: before.blobs,
           context_artifacts: before.context_artifacts,
           context_snapshots: before.context_snapshots,
+          context_snapshot_index: before.context_snapshot_index,
           context_bundles: before.context_bundles,
           context_checkpoints: before.context_checkpoints,
         },
@@ -1046,6 +1066,10 @@ export class PostgresAuthorityStore
       ),
       context_snapshots: await count(
         `SELECT COUNT(*)::int AS n FROM context_snapshots WHERE org_id = $1`,
+        [orgId],
+      ),
+      context_snapshot_index: await count(
+        `SELECT COUNT(*)::int AS n FROM context_snapshot_index WHERE org_id = $1`,
         [orgId],
       ),
       context_bundles: await count(

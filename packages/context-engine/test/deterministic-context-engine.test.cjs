@@ -1000,6 +1000,63 @@ describe("deterministic context engine", () => {
     );
   });
 
+  it("indexes successful empty single-thread assemblies but not multi-thread or unscoped requests", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const context = engine({ artifacts, source: source([]) });
+    const single = await context.assemble(request({
+      filters: { thread_ids: ["thread-1"] },
+      anchors: undefined,
+    }));
+    assert.equal(single.snapshot.selected.length, 0);
+    const query = {
+      org_id: "example-org",
+      thread_id: "thread-1",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "test-consumer",
+    };
+    assert.deepEqual(await artifacts.listSnapshotIndex(query), [{
+      org_id: "example-org",
+      thread_id: "thread-1",
+      snapshot_id: single.snapshot.id,
+      principal: query.principal,
+      consumer_id: "test-consumer",
+      purpose: "answer a synthetic release question",
+      allowed_uses: ["display", "reason"],
+      created_at: single.snapshot.created_at,
+    }]);
+
+    await context.assemble(request({
+      id: "request-multi",
+      filters: { thread_ids: ["thread-1", "thread-2"] },
+    }));
+    await context.assemble(request({ id: "request-unscoped", filters: undefined }));
+    assert.equal((await artifacts.listSnapshotIndex(query)).length, 1);
+  });
+
+  it("does not write snapshot index entries during replay", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const context = engine({ artifacts });
+    const assembled = await context.assemble(request({
+      filters: { thread_ids: ["thread-1"] },
+    }));
+    const query = {
+      org_id: "example-org",
+      thread_id: "thread-1",
+      principal: { actor_type: "human", actor_id: "person-1" },
+      consumer_id: "test-consumer",
+    };
+    assert.equal((await artifacts.listSnapshotIndex(query)).length, 1);
+    await context.replay({
+      org_id: "example-org",
+      snapshot_id: assembled.snapshot.id,
+      principal: query.principal,
+      consumer_id: query.consumer_id,
+      purpose: "answer a synthetic release question",
+      allowed_uses: ["display"],
+    });
+    assert.equal((await artifacts.listSnapshotIndex(query)).length, 1);
+  });
+
   it("rejects malformed replay requests before consulting storage", async () => {
     await assert.rejects(
       engine().replay({

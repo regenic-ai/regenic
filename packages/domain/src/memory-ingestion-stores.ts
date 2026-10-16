@@ -208,6 +208,9 @@ export class MemoryAuthorityStore
     const matched = this.events
       .filter((event) => matchesEventQuery(event, orgId, query))
       .map(cloneEvent);
+    if (query?.order === "recent") {
+      matched.reverse();
+    }
     const limit = query?.limit;
     if (typeof limit === "number" && Number.isInteger(limit) && limit > 0) {
       return matched.slice(0, limit);
@@ -230,10 +233,11 @@ export class MemoryAuthorityStore
     const useDecided =
       query?.siblings ||
       query?.heads ||
+      query?.disposition === "pending" ||
       normalizeInboxListView(query?.list) === "hidden";
     const items = useDecided
       ? await this.decidedInbox(orgId, headsScanQuery(query) ?? query)
-      : this.currentWorkInbox(orgId);
+      : this.currentWorkInbox(orgId, query?.disposition ?? "current_work");
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
       if (byTime !== 0) {
@@ -272,11 +276,14 @@ export class MemoryAuthorityStore
     return withFace.size;
   }
 
-  private currentWorkInbox(orgId: string): InboxItem[] {
+  private currentWorkInbox(
+    orgId: string,
+    disposition: "current_work" | "pending" = "current_work",
+  ): InboxItem[] {
     const hidden = this.hiddenThreadIds(orgId);
     return [...this.currentBySource.values()].flatMap((event) => {
       const decision = this.dispositions.get(event.id);
-      if (event.org_id !== orgId || decision?.disposition !== "current_work") {
+      if (event.org_id !== orgId || decision?.disposition !== disposition) {
         return [];
       }
       if (hidden.has(eventThreadId(event))) {
@@ -317,7 +324,7 @@ export class MemoryAuthorityStore
         return [];
       }
       const decision = this.dispositions.get(event.id);
-      if (!decision) {
+      if (!decision || (query?.disposition && decision.disposition !== query.disposition)) {
         return [];
       }
       return [
@@ -432,6 +439,7 @@ export class MemoryAuthorityStore
         blobs: before.blobs,
         context_artifacts: before.context_artifacts,
         context_snapshots: before.context_snapshots,
+        context_snapshot_index: before.context_snapshot_index,
         context_bundles: before.context_bundles,
         context_checkpoints: before.context_checkpoints,
       },
@@ -454,6 +462,7 @@ export class MemoryAuthorityStore
       ).size,
       context_artifacts: 0,
       context_snapshots: 0,
+      context_snapshot_index: 0,
       context_bundles: 0,
       context_checkpoints: 0,
       recipes: this.recipeCount(orgId),

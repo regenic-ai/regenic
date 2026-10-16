@@ -13,7 +13,14 @@ import type {
   KernelSettingsView,
   Locale,
   MessageReceipt,
+  PersonalDispatchPolicy,
   PersonalEngineView,
+  PersonalFollowUpPolicy,
+  PersonalFollowUpView,
+  PersonalContextBundle,
+  PersonalContextDiff,
+  PersonalContextSnapshotIndexEntry,
+  PersonalContextView,
   PersonalHeartbeatView,
   PluginInventoryItem,
   PromptAnswerItem,
@@ -1267,10 +1274,29 @@ export async function dismissWorkItem(id: string): Promise<void> {
   }
 }
 
-export async function fetchContextArtifacts(): Promise<unknown> {
-  const response = await fetch(`${origin()}/v1/me/context/artifacts`);
+export async function fetchContextArtifactSummaries(): Promise<unknown> {
+  const response = await fetch(`${origin()}/v1/me/context/artifact-summaries`);
   if (!response.ok) {
     throw new Error(`context artifacts ${response.status}`);
+  }
+  return response.json() as Promise<unknown>;
+}
+
+export async function fetchContextArtifactRecord(
+  id: string,
+  range?: { offset: number; limit: number },
+): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (range) {
+    params.set("offset", String(range.offset));
+    params.set("limit", String(range.limit));
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await fetch(
+    `${origin()}/v1/me/context/artifacts/${encodeURIComponent(id)}/record${query}`,
+  );
+  if (!response.ok) {
+    throw new Error(`context record ${response.status}`);
   }
   return response.json() as Promise<unknown>;
 }
@@ -1288,6 +1314,7 @@ export async function fetchStore(): Promise<StoreView> {
     blobs: Number(body.blobs) || 0,
     context_artifacts: Number(body.context_artifacts) || 0,
     context_snapshots: Number(body.context_snapshots) || 0,
+    context_snapshot_index: Number(body.context_snapshot_index) || 0,
     context_bundles: Number(body.context_bundles) || 0,
     context_checkpoints: Number(body.context_checkpoints) || 0,
     recipes: Number(body.recipes) || 0,
@@ -1313,6 +1340,218 @@ export async function clearStore(): Promise<StoreClearView> {
     );
   }
   return body as StoreClearView;
+}
+
+const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
+const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
+
+export async function assemblePersonalContext(
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<PersonalContextView> {
+  const response = await kernelFetch("/v1/me/context/assemble", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
+      allowed_uses: ["display"],
+      filters: { thread_ids: [threadId] },
+      temporal: { mode: "current" },
+      budget: {
+        profile: "desktop-thread-preview-v1",
+        max_tokens: 2_000,
+        max_items: 20,
+        max_raw_evidence: 20,
+      },
+      requested_kinds: ["event"],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`context assemble ${response.status}`);
+  }
+  return response.json() as Promise<PersonalContextView>;
+}
+
+export async function replayPersonalContext(
+  snapshotId: string,
+  signal?: AbortSignal,
+): Promise<PersonalContextBundle> {
+  const response = await kernelFetch("/v1/me/context/replay", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      snapshot_id: snapshotId,
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
+      allowed_uses: ["display"],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`context replay ${response.status}`);
+  }
+  return response.json() as Promise<PersonalContextBundle>;
+}
+
+export async function diffPersonalContext(
+  fromSnapshotId: string,
+  toSnapshotId: string,
+  signal?: AbortSignal,
+): Promise<PersonalContextDiff> {
+  const response = await kernelFetch("/v1/me/context/diff", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({
+      from_snapshot_id: fromSnapshotId,
+      to_snapshot_id: toSnapshotId,
+      consumer_id: DESKTOP_CONTEXT_CONSUMER,
+      purpose: DESKTOP_CONTEXT_PURPOSE,
+      allowed_uses: ["display"],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`context diff ${response.status}`);
+  }
+  return response.json() as Promise<PersonalContextDiff>;
+}
+
+export async function fetchPersonalContextHistory(
+  threadId: string,
+  options?: {
+    before?: Pick<PersonalContextSnapshotIndexEntry, "created_at" | "snapshot_id">;
+    signal?: AbortSignal;
+  },
+): Promise<PersonalContextSnapshotIndexEntry[]> {
+  const query = new URLSearchParams({ thread_id: threadId, limit: "20" });
+  if (options?.before) {
+    query.set("before_created_at", options.before.created_at);
+    query.set("before_snapshot_id", options.before.snapshot_id);
+  }
+  const response = await kernelFetch(`/v1/me/context/snapshots?${query}`, {
+    signal: options?.signal,
+  });
+  if (!response.ok) {
+    throw new Error(`context history ${response.status}`);
+  }
+  const entries = await response.json() as PersonalContextSnapshotIndexEntry[];
+  if (!Array.isArray(entries)) {
+    throw new Error("context history");
+  }
+  return entries;
+}
+
+export async function fetchFollowUps(): Promise<PersonalFollowUpView[]> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups`);
+  if (!response.ok) {
+    throw new Error(`follow-ups ${response.status}`);
+  }
+  const items = (await response.json()) as PersonalFollowUpView[];
+  if (!Array.isArray(items)) {
+    throw new Error("follow-ups");
+  }
+  return items;
+}
+
+export async function fetchFollowUpPolicy(): Promise<PersonalFollowUpPolicy> {
+  const response = await fetch(`${origin()}/v1/me/follow-up-policy`);
+  if (!response.ok) {
+    throw new Error(`follow-up policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalFollowUpPolicy>;
+}
+
+export async function fetchFollowUpSnoozes(): Promise<Record<string, string>> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups/snoozes`);
+  if (!response.ok) {
+    throw new Error(`follow-up snoozes ${response.status}`);
+  }
+  return response.json() as Promise<Record<string, string>>;
+}
+
+export async function saveFollowUpPolicy(
+  policy: PersonalFollowUpPolicy,
+): Promise<PersonalFollowUpPolicy> {
+  const response = await fetch(`${origin()}/v1/me/follow-up-policy`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ policy }),
+  });
+  if (!response.ok) {
+    throw new Error(`follow-up policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalFollowUpPolicy>;
+}
+
+export async function snoozeFollowUp(threadId: string, until: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups/${encodeURIComponent(threadId)}/snooze`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ until }),
+  });
+  if (!response.ok) {
+    throw new Error(`follow-up snooze ${response.status}`);
+  }
+}
+
+export async function unsnoozeFollowUp(threadId: string): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/follow-ups/${encodeURIComponent(threadId)}/snooze`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`follow-up unsnooze ${response.status}`);
+  }
+}
+
+export async function fetchDispatchPolicy(): Promise<PersonalDispatchPolicy> {
+  const response = await fetch(`${origin()}/v1/me/dispatch-policy`);
+  if (!response.ok) {
+    throw new Error(`dispatch policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalDispatchPolicy>;
+}
+
+export async function saveDispatchPolicy(
+  policy: PersonalDispatchPolicy,
+): Promise<PersonalDispatchPolicy> {
+  const response = await fetch(`${origin()}/v1/me/dispatch-policy`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ policy }),
+  });
+  if (!response.ok) {
+    throw new Error(`dispatch policy ${response.status}`);
+  }
+  return response.json() as Promise<PersonalDispatchPolicy>;
+}
+
+export async function fetchPendingInbox(): Promise<InboxViewItem[]> {
+  const params = new URLSearchParams({ disposition: "pending", locale: activeLocale() });
+  const response = await fetch(`${origin()}/v1/me/inbox?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(`pending inbox ${response.status}`);
+  }
+  const items = (await response.json()) as InboxViewItem[];
+  if (!Array.isArray(items)) {
+    throw new Error("pending inbox");
+  }
+  return items.map(normalizeInboxItem);
+}
+
+export async function triagePendingInbox(
+  eventId: string,
+  disposition: "current_work" | "outside_current_work",
+): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/inbox/${encodeURIComponent(eventId)}/triage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ disposition }),
+  });
+  if (!response.ok) {
+    throw new Error(`inbox triage ${response.status}`);
+  }
 }
 
 export async function fetchUiPrefs(): Promise<UiPrefsView> {

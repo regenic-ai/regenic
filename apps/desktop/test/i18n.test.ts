@@ -52,6 +52,26 @@ describe("desktop locale", () => {
     assert.equal(translate("en", "edit.copy"), "Copy");
     assert.equal(translate("en", "thread.forward"), "Forward");
     assert.equal(translate("zh", "thread.forwardConversation"), "转发会话");
+    assert.equal(translate("en", "thread.contextHistory"), "Saved history");
+    assert.equal(translate("zh", "thread.contextHistory"), "保存的历史");
+    assert.equal(translate("en", "thread.contextHistoryRetry"), "Retry");
+    assert.equal(translate("zh", "thread.contextHistoryRetry"), "重试");
+    assert.equal(
+      translate("en", "thread.contextCompareResult", {
+        added: 1,
+        removed: 2,
+        changed: 3,
+        unchanged: 4,
+      }),
+      "1 added · 2 removed · 3 changed · 4 unchanged",
+    );
+    assert.equal(translate("zh", "thread.contextCompare"), "对比");
+    assert.equal(
+      translate("en", "thread.contextHistoryEntry", { date: "today", id: "snapshot-123" }),
+      "today · Snapshot snapshot-123",
+    );
+    assert.equal(translate("en", "thread.contextHistoryLoadMore"), "Load older snapshots");
+    assert.equal(translate("zh", "thread.contextHistoryLoadMore"), "加载更早的快照");
     assert.equal(translate("en", "thread.startRun"), "Handle now");
     assert.match(translate("en", "work.hint.running"), /chat reply/);
     assert.equal(translate("en", "work.hint.running").includes("DSH"), false);

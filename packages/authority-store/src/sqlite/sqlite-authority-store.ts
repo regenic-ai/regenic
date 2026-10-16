@@ -17,11 +17,14 @@ import type {
   ContextAuthorityRead,
   ContextArtifact,
   ContextArtifactQuery,
+  ContextArtifactIndex,
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextSnapshot,
+  ContextSnapshotIndexEntry,
+  ContextSnapshotIndexQuery,
   ContextBundle,
   ContextBundleLookup,
   ContextProjectionCheckpoint,
@@ -150,11 +153,15 @@ import {
   getBundle,
   getCheckpoint,
   getSnapshot,
+  listSnapshotIndex,
   listArtifacts,
+  listArtifactIndexes,
   putArtifact,
+  rebuildArtifactPreviews,
   putBundle,
   putCheckpoint,
   putSnapshot,
+  putSnapshotIndex,
   supersedeArtifact,
   supersedeProposedArtifact,
 } from "./context-artifacts";
@@ -455,6 +462,10 @@ export class SqliteAuthorityStore
     return listArtifacts(this.database, query);
   }
 
+  async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
+    return listArtifactIndexes(this.database, query);
+  }
+
   async getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null> {
     return getArtifactState(this.database, orgId, artifactId);
   }
@@ -481,6 +492,15 @@ export class SqliteAuthorityStore
 
   async getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null> {
     return getSnapshot(this.database, orgId, id);
+  }
+
+  async putSnapshotIndex(entry: ContextSnapshotIndexEntry): Promise<void> {
+    this.assertWritable();
+    return putSnapshotIndex(this.database, entry);
+  }
+
+  async listSnapshotIndex(query: ContextSnapshotIndexQuery): Promise<ContextSnapshotIndexEntry[]> {
+    return listSnapshotIndex(this.database, query);
   }
 
   async putBundle(bundle: ContextBundle): Promise<void> {
@@ -911,6 +931,7 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifact_states WHERE org_id = ?`).run(orgId);
@@ -1031,6 +1052,7 @@ export class SqliteAuthorityStore
           blobs: before.blobs,
           context_artifacts: before.context_artifacts,
           context_snapshots: before.context_snapshots,
+          context_snapshot_index: before.context_snapshot_index,
           context_bundles: before.context_bundles,
           context_checkpoints: before.context_checkpoints,
         },
@@ -1075,6 +1097,10 @@ export class SqliteAuthorityStore
       ),
       context_snapshots: count(
         `SELECT COUNT(*) AS n FROM context_snapshots WHERE org_id = ?`,
+        orgId,
+      ),
+      context_snapshot_index: count(
+        `SELECT COUNT(*) AS n FROM context_snapshot_index WHERE org_id = ?`,
         orgId,
       ),
       context_bundles: count(
@@ -1563,6 +1589,9 @@ export class SqliteAuthorityStore
         `Authority database schema ${currentVersion} is newer than supported ${LATEST_SCHEMA_VERSION}`,
       );
     }
+    if (this.rebasePreMergeSyncSchema(currentVersion)) {
+      return;
+    }
 
     for (const migration of MIGRATIONS) {
       if (migration.version <= currentVersion) {
@@ -1576,6 +1605,9 @@ export class SqliteAuthorityStore
           return;
         }
         this.database.exec(migration.sql);
+        if (migration.version === 47) {
+          rebuildArtifactPreviews(this.database);
+        }
         this.database.pragma(`user_version = ${migration.version}`);
       });
       if (migration.version === 10) {
@@ -1589,6 +1621,76 @@ export class SqliteAuthorityStore
         }
       }
     }
+  }
+
+  /**
+   * Feature-branch databases recorded sync migrations as versions 40–45.
+   * Those numbers now belong to the schema shipped on main, so reopening
+   * would skip the snapshot index and add preview_json a second time.
+   */
+  private rebasePreMergeSyncSchema(currentVersion: number): boolean {
+    if (currentVersion < 40 || currentVersion > 45) {
+      return false;
+    }
+    if (!this.tableExists("sync_runs") || this.tableExists("context_snapshot_index")) {
+      return false;
+    }
+    const repair = this.database.transaction(() => {
+      this.database.exec(`
+        CREATE INDEX IF NOT EXISTS events_org_occurred_idx
+          ON events (org_id, occurred_at, id);
+        CREATE TABLE IF NOT EXISTS context_snapshot_index (
+          org_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          snapshot_id TEXT NOT NULL,
+          principal_actor_type TEXT NOT NULL,
+          principal_actor_id TEXT NOT NULL,
+          consumer_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+          PRIMARY KEY (
+            org_id, thread_id, snapshot_id, principal_actor_type,
+            principal_actor_id, consumer_id
+          )
+        );
+        CREATE INDEX IF NOT EXISTS context_snapshot_index_query_idx
+          ON context_snapshot_index (
+            org_id, thread_id, principal_actor_type, principal_actor_id,
+            consumer_id, created_at DESC, snapshot_id DESC
+          );
+        CREATE INDEX IF NOT EXISTS connector_sync_work_unassigned_idx
+          ON connector_sync_work (installation_id, status, lane)
+          WHERE run_id IS NULL;
+        CREATE INDEX IF NOT EXISTS connector_sync_state_gap_idx
+          ON connector_sync_state (
+            installation_id, phase, stream_key, generation, media_pending, idle_until
+          );
+        CREATE INDEX IF NOT EXISTS events_parent_event_idx
+          ON events (parent_event_id)
+          WHERE parent_event_id IS NOT NULL;
+      `);
+      if (!this.columnExists("context_artifacts", "preview_json")) {
+        this.database.exec(
+          "ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '';",
+        );
+      }
+      rebuildArtifactPreviews(this.database);
+      this.database.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
+    });
+    repair.immediate();
+    return true;
+  }
+
+  private tableExists(name: string): boolean {
+    const row = this.database
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name) as { ok: number } | undefined;
+    return row !== undefined;
+  }
+
+  private columnExists(table: string, column: string): boolean {
+    const rows = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return rows.some((row) => row.name === column);
   }
 
 }

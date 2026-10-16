@@ -6,6 +6,7 @@ import {
   type ContextEvaluationDataset,
 } from "@regenic/context-engine";
 import {
+  diffContextBundles,
   EVIDENCE_BUNDLE_SCHEMA_VERSION,
   projectEvidenceBundleV1,
   type ContextConsumer,
@@ -100,6 +101,72 @@ export async function showContextSnapshot(
       throw new Error(`Context snapshot not found: ${snapshotId}`);
     }
     writeJson(stdout, snapshot);
+  });
+}
+
+export async function listContextSnapshotHistory(
+  options: CommandOptions,
+  stdout: CliOutput,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const limit = requirePositiveInteger(options, "limit", 20);
+  if (limit > 100) {
+    throw new Error("--limit must not exceed 100");
+  }
+  const beforeCreatedAt = optionString(options, "before-created-at");
+  const beforeSnapshotId = optionString(options, "before-snapshot-id");
+  if ((beforeCreatedAt === undefined) !== (beforeSnapshotId === undefined)) {
+    throw new Error("--before-created-at and --before-snapshot-id must be provided together");
+  }
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    writeJson(stdout, await host.get("context-artifacts").listSnapshotIndex({
+      org_id: orgId,
+      thread_id: requireOption(options, "thread"),
+      principal: { actor_type: "human", actor_id: orgId },
+      consumer_id: optionString(options, "consumer") ?? "local-cli",
+      limit,
+      ...(beforeCreatedAt === undefined ? {} : {
+        before_created_at: beforeCreatedAt,
+        before_snapshot_id: beforeSnapshotId,
+      }),
+    }));
+  });
+}
+
+export async function diffContextSnapshots(
+  options: CommandOptions,
+  stdout: CliOutput,
+): Promise<void> {
+  const orgId = requireOption(options, "org");
+  const grant = {
+    principal: { actor_type: "human" as const, actor_id: orgId },
+    consumer_id: optionString(options, "consumer") ?? "local-cli",
+    purpose: optionString(options, "purpose") ?? "inspect authorized local context",
+    allowed_uses: ["display" as const],
+  };
+  await withLocalHost({
+    database: requirePath(options, "database"),
+    blobRoot: requirePath(options, "blob-root"),
+    orgId,
+    model: { driver: "none" },
+  }, async (host) => {
+    const context = host.get("context");
+    const from = await context.replay({
+      org_id: orgId,
+      snapshot_id: requireOption(options, "from-snapshot"),
+      ...grant,
+    });
+    const to = await context.replay({
+      org_id: orgId,
+      snapshot_id: requireOption(options, "to-snapshot"),
+      ...grant,
+    });
+    writeJson(stdout, diffContextBundles(from, to));
   });
 }
 
@@ -256,7 +323,12 @@ function localContextRequest(
     allowed_uses: ["display", "reason"],
     ...(query ? { query } : {}),
     ...(thread ? { anchors: [{ kind: "conversation", id: thread }] } : {}),
-    ...(source ? { filters: { sources: [source] } } : {}),
+    ...((thread || source) ? {
+      filters: {
+        ...(thread ? { thread_ids: [thread] } : {}),
+        ...(source ? { sources: [source] } : {}),
+      },
+    } : {}),
     temporal: { mode: "current" },
     budget: {
       profile: "local-cli-v1",

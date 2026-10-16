@@ -259,8 +259,10 @@ export interface EventListQuery {
   since_id?: string;
   before?: string;
   before_id?: string;
+  occurred_since?: string;
   thread_ids?: string[];
   limit?: number;
+  order?: "recent";
 }
 
 export interface InboxQuery extends EventListQuery {
@@ -277,6 +279,8 @@ export interface InboxQuery extends EventListQuery {
    */
   tasks?: boolean;
   siblings?: boolean;
+  /** Default `current_work`. `pending` exposes items for explicit review. */
+  disposition?: "current_work" | "pending";
   /** Default `shown`. `hidden` is the folded list, not deleted Events. */
   list?: "shown" | "hidden";
 }
@@ -295,6 +299,7 @@ export interface StoreFootprint {
   blobs: number;
   context_artifacts: number;
   context_snapshots: number;
+  context_snapshot_index: number;
   context_bundles: number;
   context_checkpoints: number;
   recipes: number;
@@ -310,6 +315,7 @@ export interface StoreClearResult {
     blobs: number;
     context_artifacts: number;
     context_snapshots: number;
+    context_snapshot_index: number;
     context_bundles: number;
     context_checkpoints: number;
   };
