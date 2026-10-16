@@ -12,6 +12,7 @@
 - [采集架构](INGESTION_ARCHITECTURE.md)
 - [协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)
 - [上下文管理架构](CONTEXT_MANAGEMENT_ARCHITECTURE.md)
+- [EmbeddingGemma 2 记录检索架构](EMBEDDING_RETRIEVAL_ARCHITECTURE.md)
 - [路线图](ROADMAP.md)
 - [架构 RFC](rfcs/)
 - [从个人到组织](rfcs/personal-to-org.md)
