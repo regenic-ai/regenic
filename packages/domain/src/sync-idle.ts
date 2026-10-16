@@ -101,6 +101,33 @@ export function dueWorkIdleMs(input: {
   return Math.max(floor, fromHint);
 }
 
+/**
+ * When to claim this stream again after a poll.
+ * A future idle_until from a connector hint still wins.
+ * No hint and a cold poll (not the open thread, nothing new) waits out the
+ * cold idle, so a finished DSH session cannot become due again immediately.
+ * Hot and interactive polls stay due now.
+ */
+export function nextDueAfterPoll(input: {
+  now: string;
+  idleUntil?: string | null;
+  idleMs?: number;
+  heat: DueWorkHeat;
+  coldIdleMs?: number;
+}): string {
+  if (input.idleUntil && input.idleUntil > input.now) {
+    return input.idleUntil;
+  }
+  if (input.idleMs == null && input.heat === "cold") {
+    return nextDueAtForDueWork({
+      now: input.now,
+      heat: "cold",
+      coldIdleMs: input.coldIdleMs,
+    });
+  }
+  return input.now;
+}
+
 export function nextDueAtForDueWork(input: {
   now: string;
   idleUntil?: string;

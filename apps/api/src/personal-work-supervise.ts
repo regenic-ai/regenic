@@ -311,16 +311,18 @@ export class PersonalWorkSupervise {
         status,
         updated_at: now,
       });
-      if (!isActiveWorkStatus(status)) {
-        this.writeBackOverride.delete(item.id);
-        this.waits?.drop(run.id);
-        await foldFinishedWorkThreads(
-          authority,
-          item.org_id,
-          item.thread_id,
-          nextRun.agent_thread_id,
-          now,
-        );
+    }
+    if (!isActiveWorkStatus(status)) {
+      this.writeBackOverride.delete(item.id);
+      this.waits?.drop(run.id);
+      await foldFinishedWorkThreads(
+        authority,
+        item.org_id,
+        item.thread_id,
+        nextRun.agent_thread_id,
+        now,
+      );
+      if (item.status !== status) {
         this.touchInboxDigest?.();
       }
     }

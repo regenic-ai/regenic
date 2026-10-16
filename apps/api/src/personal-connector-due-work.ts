@@ -27,6 +27,7 @@ import {
   historySyncClaimLanes,
   messageDuty,
   liveWorkAfterInteractiveRelease,
+  nextDueAfterPoll,
   planSyncWorkGaps,
   sameLaneContinues,
   shouldReleaseInteractiveWork,
@@ -667,10 +668,16 @@ async function pollClaimedDueWorkStreams(
           installation.id,
           stream.stream_key,
         );
-        const nextDueAt =
-          syncState?.idle_until && syncState.idle_until > settledAt
-            ? syncState.idle_until
-            : settledAt;
+        const nextDueAt = nextDueAfterPoll({
+          now: settledAt,
+          idleUntil: syncState?.idle_until,
+          idleMs,
+          heat,
+          coldIdleMs: coldIdleMsForCatalogSize(
+            catalogSize,
+            streamIdleTiersFromEnv().coldIdleMs,
+          ),
+        });
         recordDueWorkFreshness({
           installationId: installation.id,
           lane: item.lane,

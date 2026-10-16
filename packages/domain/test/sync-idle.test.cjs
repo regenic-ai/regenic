@@ -10,6 +10,7 @@ const {
   streamIsPreferredThread,
   coldIdleMsForCatalogSize,
   dueWorkIdleMs,
+  nextDueAfterPoll,
   nextDueAtForDueWork,
   pacedStreamIdleMs,
   streamIdleTiersFromEnv,
@@ -83,6 +84,31 @@ describe("due-work heat", () => {
     );
     assert.equal(dueWorkIdleMs({ heat: "hot" }), DEFAULT_HOT_STREAM_IDLE_MS);
     assert.equal(dueWorkIdleMs({ heat: "cold" }), DEFAULT_COLD_STREAM_IDLE_MS);
+  });
+
+  it("keeps a quiet poll with no idle hint off the next tick", () => {
+    assert.equal(
+      nextDueAfterPoll({
+        now: "2026-09-21T00:00:00.000Z",
+        heat: "cold",
+      }),
+      "2026-09-21T01:00:00.000Z",
+    );
+    assert.equal(
+      nextDueAfterPoll({
+        now: "2026-09-21T00:00:00.000Z",
+        heat: "hot",
+      }),
+      "2026-09-21T00:00:00.000Z",
+    );
+    assert.equal(
+      nextDueAfterPoll({
+        now: "2026-09-21T00:00:00.000Z",
+        heat: "cold",
+        idleUntil: "2026-09-21T00:03:00.000Z",
+      }),
+      "2026-09-21T00:03:00.000Z",
+    );
   });
 
   it("defers first plan of seeded live streams instead of due-now", () => {
