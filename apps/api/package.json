@@ -6,7 +6,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
-    "test": "pnpm --filter @regenic/connector-host... build && pnpm --filter @regenic/config build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm --filter @regenic/lexical-index build && pnpm --filter @regenic/context-engine build && pnpm --filter @regenic/model-provider build && pnpm run build && node --test --test-concurrency=1 test/personal-api*.test.cjs && node --test $(find test -maxdepth 1 -type f -name '*.test.cjs' ! -name 'personal-api*')",
+    "test": "pnpm --filter @regenic/api... build && node --test --test-concurrency=1 test/personal-api*.test.cjs && node --test $(find test -maxdepth 1 -type f -name '*.test.cjs' ! -name 'personal-api*')",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -19,9 +19,11 @@
     "@regenic/connector-host": "workspace:*",
     "@regenic/context-engine": "workspace:*",
     "@regenic/domain": "workspace:*",
+    "@regenic/embedding-provider": "workspace:*",
     "@regenic/lexical-index": "workspace:*",
     "@regenic/model-provider": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
+    "@regenic/vector-index": "workspace:*",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

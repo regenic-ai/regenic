@@ -93,6 +93,8 @@ export * from "./context-canonical";
 export * from "./context-diff";
 export * from "./context-compatibility";
 export * from "./context-lexical";
+export * from "./embedding-provider";
+export * from "./context-vector-index";
 export * from "./context-projection-outbox";
 export * from "./context-projection-scope";
 export * from "./context-schema";

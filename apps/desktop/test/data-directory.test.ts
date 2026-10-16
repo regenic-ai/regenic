@@ -307,7 +307,7 @@ describe("data directory actions", () => {
     }
   });
 
-  it("copies authority and lexical databases, WAL files, and blobs", () => {
+  it("copies authority, lexical and vector databases, WAL files, and blobs", () => {
     const root = tempDir();
     try {
       const from = storePaths(join(root, "from"));
@@ -317,6 +317,8 @@ describe("data directory actions", () => {
       writeFileSync(`${from.database}-wal`, "wal");
       writeFileSync(`${from.database}.lexical.db`, "fts");
       writeFileSync(`${from.database}.lexical.db-wal`, "fts-wal");
+      writeFileSync(`${from.database}.vector.db`, "vectors");
+      writeFileSync(`${from.database}.vector.db-wal`, "vector-wal");
       writeFileSync(join(from.blobRoot, "a", "file.bin"), "blob");
       copyStore(from, dest);
       const copied = storePaths(dest);
@@ -324,6 +326,8 @@ describe("data directory actions", () => {
       assert.equal(readFileSync(`${copied.database}-wal`, "utf8"), "wal");
       assert.equal(readFileSync(`${copied.database}.lexical.db`, "utf8"), "fts");
       assert.equal(readFileSync(`${copied.database}.lexical.db-wal`, "utf8"), "fts-wal");
+      assert.equal(readFileSync(`${copied.database}.vector.db`, "utf8"), "vectors");
+      assert.equal(readFileSync(`${copied.database}.vector.db-wal`, "utf8"), "vector-wal");
       assert.equal(readFileSync(join(copied.blobRoot, "a", "file.bin"), "utf8"), "blob");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -339,13 +343,16 @@ describe("data directory actions", () => {
       mkdirSync(dest.blobRoot, { recursive: true });
       writeFileSync(from.database, "new");
       writeFileSync(`${from.database}.lexical.db`, "new-index");
+      writeFileSync(`${from.database}.vector.db`, "new-vectors");
       writeFileSync(join(from.blobRoot, "n.txt"), "n");
       writeFileSync(dest.database, "old");
       writeFileSync(`${dest.database}.lexical.db`, "old-index");
+      writeFileSync(`${dest.database}.vector.db`, "old-vectors");
       writeFileSync(join(dest.blobRoot, "o.txt"), "o");
       materializeDataRoot("replace", from, dest.dataRoot);
       assert.equal(readFileSync(dest.database, "utf8"), "new");
       assert.equal(readFileSync(`${dest.database}.lexical.db`, "utf8"), "new-index");
+      assert.equal(readFileSync(`${dest.database}.vector.db`, "utf8"), "new-vectors");
       assert.equal(readFileSync(join(dest.blobRoot, "n.txt"), "utf8"), "n");
       assert.equal(storeHasData(dest), true);
     } finally {
@@ -445,6 +452,8 @@ describe("data directory actions", () => {
       writeFileSync(`${dest.database}-wal`, "wal");
       writeFileSync(`${dest.database}.lexical.db`, "fts");
       writeFileSync(`${dest.database}.lexical.db-shm`, "fts-shm");
+      writeFileSync(`${dest.database}.vector.db`, "vectors");
+      writeFileSync(`${dest.database}.vector.db-shm`, "vector-shm");
       writeFileSync(join(dest.blobRoot, "a.bin"), "blob");
       writeFileSync(join(dest.dataRoot, "notes.txt"), "keep");
       writeFileSync(join(dest.dataRoot, "regenic.store.json"), "{}");
@@ -455,6 +464,8 @@ describe("data directory actions", () => {
       assert.equal(existsSync(`${dest.database}-wal`), false);
       assert.equal(existsSync(`${dest.database}.lexical.db`), false);
       assert.equal(existsSync(`${dest.database}.lexical.db-shm`), false);
+      assert.equal(existsSync(`${dest.database}.vector.db`), false);
+      assert.equal(existsSync(`${dest.database}.vector.db-shm`), false);
       assert.equal(existsSync(dest.blobRoot), false);
       assert.equal(existsSync(join(dest.dataRoot, "regenic.store.json")), false);
       assert.equal(existsSync(join(dest.dataRoot, "regenic.store.lock")), false);
@@ -468,7 +479,7 @@ describe("data directory actions", () => {
     }
   });
 
-  it("counts authority and lexical database sidecars plus attachments", () => {
+  it("counts authority, lexical and vector database sidecars plus attachments", () => {
     const root = tempDir();
     try {
       const dest = storePaths(join(root, "dest"));
@@ -477,9 +488,11 @@ describe("data directory actions", () => {
       writeFileSync(`${dest.database}-wal`, "ww");
       writeFileSync(`${dest.database}.lexical.db`, "fts");
       writeFileSync(`${dest.database}.lexical.db-wal`, "w");
+      writeFileSync(`${dest.database}.vector.db`, "vec");
+      writeFileSync(`${dest.database}.vector.db-wal`, "v");
       writeFileSync(join(dest.blobRoot, "a.bin"), "blob");
       writeFileSync(join(dest.dataRoot, "notes.txt"), "ignored");
-      assert.equal(storeFootprintBytes(dest.dataRoot), 5 + 2 + 3 + 1 + 4);
+      assert.equal(storeFootprintBytes(dest.dataRoot), 5 + 2 + 3 + 1 + 3 + 1 + 4);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

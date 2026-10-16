@@ -23,13 +23,25 @@ Execution is a `TaskExecutor` on `ctx.executors`. See
 | Blob bodies | Local directory | MinIO / S3 / OSS |
 | Background jobs | In-process queue | BullMQ + Redis |
 | Identity | One local user | OIDC / channel SSO |
-| Search | noop first; SQLite FTS if needed | pgvector / OpenSearch (optional) |
+| Search | Rebuildable SQLite FTS5 sidecar with authorized-body lexical fallback | pgvector / OpenSearch (optional; not implemented) |
 | Secrets | OS keychain / local file | Vault or cloud KMS (optional) |
 | Clients | Electron | Desktop first; Web for admin; mobile later |
 | Runtime | On the machine, or embedded in the desktop app | Docker Compose |
 
 Optional remote history is off by default. It is a cold backup the user opts
 into — not the authority store, and not the org database.
+
+The personal SQLite API and CLI mount the same indexed Event retriever and
+projection-coordinator index, using `${database}.lexical.db`. Missing or partial
+FTS coverage falls back to the same versioned lexical scorer. The PostgreSQL
+API runtime still uses deterministic body scoring without a local sidecar.
+Optional personal text indexing now uses a separate `EmbeddingProvider`,
+a loopback-only reference inference service, and `${database}.vector.db`.
+Durable embedding jobs reconcile full Authority lifecycle reads independently
+of the existing projection queue. It is off by default
+(`REGENIC_EMBEDDING_DRIVER=none`). Enabling indexing does not yet enable hybrid
+retrieval, change `/ask`, or expose a record-search endpoint. See the
+[implementation status and local setup](../zh/EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影).
 
 ## 2. Components
 
@@ -45,6 +57,7 @@ into — not the authority store, and not the org database.
 | Hosted run | `TaskExecutor` (public default `dsh`) |
 | Context publication | `ContextConsumer` (future; evidence bundles only) |
 | Models | `ModelProvider` |
+| Text embeddings | `EmbeddingProvider` (optional personal loopback HTTP) |
 | Identity | `IdentityProvider` |
 | Authz | In-app ACL (RFC 0006) |
 | Search | `SearchIndex` |

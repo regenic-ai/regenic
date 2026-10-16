@@ -85,14 +85,23 @@ export function eventCandidateFor(
   request: ContextRequest,
   recordedAt: string,
 ): RetrievedContextCandidate | null {
+  const material = eventCandidateMaterialFor(source, request, recordedAt);
+  if (request.query && material?.candidate.scores.lexical === 0) {
+    return null;
+  }
+  return material;
+}
+
+export function eventCandidateMaterialFor(
+  source: AuthorizedContextSourceEvent,
+  request: ContextRequest,
+  recordedAt: string,
+): RetrievedContextCandidate | null {
   const contentHash = source.event.content_hash;
   if (!contentHash) {
     return null;
   }
   const queryScore = scoreContextLexicalText(source.text, request.query);
-  if (request.query && queryScore.lexical === 0) {
-    return null;
-  }
   const estimatedTokens = source.estimated_tokens ?? estimateTokens(source.text);
   const evidence = [{
     event_id: source.event.event_id,
