@@ -18,6 +18,7 @@ COPY packages/connector-host/package.json packages/connector-host/
 COPY packages/context-engine/package.json packages/context-engine/
 COPY packages/cursor-connector/package.json packages/cursor-connector/
 COPY packages/domain/package.json packages/domain/
+COPY packages/embedding-provider/package.json packages/embedding-provider/
 COPY packages/dsh-connector/package.json packages/dsh-connector/
 COPY packages/feishu-connector/package.json packages/feishu-connector/
 COPY packages/local-cli/package.json packages/local-cli/
@@ -25,6 +26,7 @@ COPY packages/lexical-index/package.json packages/lexical-index/
 COPY packages/model-provider/package.json packages/model-provider/
 COPY packages/plugin-host/package.json packages/plugin-host/
 COPY packages/slack-connector/package.json packages/slack-connector/
+COPY packages/vector-index/package.json packages/vector-index/
 COPY packages/whatsapp-personal/package.json packages/whatsapp-personal/
 # Optional native accel for BullMQ; JS fallback is fine for the spike.
 ENV npm_config_build_from_source=false
@@ -42,6 +44,8 @@ RUN pnpm --filter @regenic/plugin-host build \
   && pnpm --filter @regenic/blob-store build \
   && pnpm --filter @regenic/authority-store build \
   && pnpm --filter @regenic/lexical-index build \
+  && pnpm --filter @regenic/embedding-provider build \
+  && pnpm --filter @regenic/vector-index build \
   && pnpm --filter @regenic/context-engine build \
   && pnpm --filter @regenic/cursor-connector build \
   && pnpm --filter @regenic/model-provider build \
@@ -55,6 +59,8 @@ RUN pnpm --filter @regenic/plugin-host build \
   && test -f packages/domain/dist/index.d.ts \
   && test -f packages/context-engine/dist/index.d.ts \
   && test -f packages/lexical-index/dist/index.d.ts \
+  && test -f packages/embedding-provider/dist/index.d.ts \
+  && test -f packages/vector-index/dist/index.d.ts \
   && test -f packages/cursor-connector/dist/index.d.ts \
   && test -f packages/model-provider/dist/index.d.ts \
   && pnpm --filter @regenic/api build \

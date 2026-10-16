@@ -6,6 +6,7 @@ export * from "./authority-context-source";
 export * from "./personal-context-policy";
 export * from "./context-question-answerer";
 export * from "./context-retrieval-evaluator";
+export * from "./context-embedding-worker";
 export * from "./context-projection-coordinator";
 export * from "./deterministic-thread-summary-projector";
 export * from "./deterministic-daily-digest-projector";

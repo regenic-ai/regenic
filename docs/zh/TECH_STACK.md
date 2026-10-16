@@ -19,13 +19,22 @@
 | 正文（Blob） | 本地目录 | MinIO / S3 / OSS |
 | 后台任务 | 进程内队列 | BullMQ + Redis |
 | 身份 | 本机一个用户 | OIDC / 渠道 SSO |
-| 检索 | 先 noop；需要时用 SQLite FTS | pgvector / OpenSearch（可选） |
+| 检索 | 可重建 SQLite FTS5 sidecar，未覆盖时回退已授权正文词法评分 | pgvector / OpenSearch（可选，尚未实现） |
 | 密钥 | 系统钥匙串 / 本地文件 | Vault 或云 KMS（可选） |
 | 客户端 | Electron | 桌面为主；Web 管配置；手机稍后 |
 | 运行方式 | 本机，或嵌在桌面应用里 | Docker Compose |
 
 用户可选的「远端历史」默认关闭，只是冷备份。权威数据仍在本地，
 也不是组织库。
+
+个人 SQLite API 与 CLI 装配相同的 indexed Event retriever，并把同一索引交给
+projection coordinator，路径为 `${database}.lexical.db`。FTS 未建或部分覆盖时，
+使用同一版本的正文词法评分回退。PostgreSQL API runtime 仍使用确定性正文评分，
+不装配本地 sidecar。第二批新增可选的个人文本索引：独立 `EmbeddingProvider`、
+仅回环地址推理服务与 `${database}.vector.db`，通过完整 Authority 生命周期读取
+对账独立持久化任务，不消费既有 projection outbox。默认
+`REGENIC_EMBEDDING_DRIVER=none`；启用索引尚不会切换混合召回、改变 `/ask` 或提供
+记录搜索端点。运行方式与限制见[设计文档第 15 节](EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影)。
 
 ## 2. 组件
 
@@ -41,6 +50,7 @@
 | 托管执行 | `TaskExecutor`（公开默认 `dsh`） |
 | 上下文发布 | `ContextConsumer`（未来；仅 Evidence Bundle） |
 | 模型 | `ModelProvider` |
+| 文本 embedding | `EmbeddingProvider`（可选的个人回环 HTTP 服务） |
 | 身份 | `IdentityProvider` |
 | 权限 | 应用内 ACL（RFC 0006） |
 | 检索 | `SearchIndex` |

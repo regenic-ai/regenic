@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
 import {
+  CONTENT_PARTS_MEDIA_TYPE,
   bodyTextFromStored,
   canonicalContextJson,
+  isTextMediaType,
+  parseStoredContentParts,
+  storedPartBytes,
   type BlobStore,
   type AuthorizedContextSourceEvent,
   type ContextAuthorityRead,
@@ -11,10 +16,13 @@ import {
   type ContextSourceEvent,
 } from "@regenic/domain";
 
+export class ContextTextMaterialError extends Error {}
+
 export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
   constructor(
     private readonly authority: ContextAuthorityReader,
     private readonly blobs: BlobStore,
+    private readonly strictText = false,
   ) {}
 
   async openRead(request: ContextRequest) {
@@ -88,6 +96,12 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
     return events.map((source) => {
       const contentHash = source.event.content_hash;
       const bytes = contentHash ? bodies.get(contentHash) : undefined;
+      if (this.strictText && bytes) {
+        if (createHash("sha256").update(bytes).digest("hex") !== contentHash) {
+          throw new ContextTextMaterialError("Stored text hash mismatch");
+        }
+        if (source.content_media_type) validateTextEncoding(bytes, source.content_media_type);
+      }
       const text = bytes && source.content_media_type
         ? bodyTextFromStored(bytes, source.content_media_type)
         : undefined;
@@ -96,6 +110,26 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
         ...(text === undefined ? {} : { text }),
       };
     });
+  }
+}
+
+function validateTextEncoding(bytes: Uint8Array, mediaType: string): void {
+  if (!isTextMediaType(mediaType) && mediaType !== CONTENT_PARTS_MEDIA_TYPE) return;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  try {
+    decoder.decode(bytes);
+    if (mediaType === CONTENT_PARTS_MEDIA_TYPE) {
+      const parts = parseStoredContentParts(bytes);
+      if (!parts) throw new ContextTextMaterialError("Invalid stored text envelope");
+      const body = parts.find((part) => part.role === "body") ?? parts[0];
+      if (body?.media_type && isTextMediaType(body.media_type)) {
+        const embedded = storedPartBytes(body);
+        if (embedded) decoder.decode(embedded);
+      }
+    }
+  } catch (error) {
+    if (error instanceof TypeError) throw new ContextTextMaterialError("Invalid UTF-8 text");
+    throw error;
   }
 }
 

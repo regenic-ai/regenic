@@ -37,6 +37,9 @@ importers:
       '@regenic/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@regenic/embedding-provider':
+        specifier: workspace:*
+        version: link:../../packages/embedding-provider
       '@regenic/lexical-index':
         specifier: workspace:*
         version: link:../../packages/lexical-index
@@ -46,6 +49,9 @@ importers:
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
+      '@regenic/vector-index':
+        specifier: workspace:*
+        version: link:../../packages/vector-index
       pg:
         specifier: ^8.13.1
         version: 8.22.0
@@ -298,6 +304,12 @@ importers:
       '@regenic/blob-store':
         specifier: workspace:*
         version: link:../blob-store
+      '@regenic/lexical-index':
+        specifier: workspace:*
+        version: link:../lexical-index
+      '@regenic/vector-index':
+        specifier: workspace:*
+        version: link:../vector-index
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -368,6 +380,22 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/embedding-provider:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/feishu-connector:
     dependencies:
       '@regenic/connector-contract':
@@ -426,6 +454,9 @@ importers:
       '@regenic/dsh-connector':
         specifier: workspace:*
         version: link:../dsh-connector
+      '@regenic/embedding-provider':
+        specifier: workspace:*
+        version: link:../embedding-provider
       '@regenic/lexical-index':
         specifier: workspace:*
         version: link:../lexical-index
@@ -438,6 +469,9 @@ importers:
       '@regenic/slack-connector':
         specifier: workspace:*
         version: link:../slack-connector
+      '@regenic/vector-index':
+        specifier: workspace:*
+        version: link:../vector-index
       '@regenic/whatsapp-personal':
         specifier: workspace:*
         version: link:../whatsapp-personal
@@ -490,6 +524,28 @@ importers:
       '@regenic/connector-test-utils':
         specifier: workspace:*
         version: link:../connector-test-utils
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/vector-index:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+      better-sqlite3:
+        specifier: 11.10.0
+        version: 11.10.0
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1

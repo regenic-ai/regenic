@@ -255,7 +255,7 @@ describe("PersonalContextProjectionService", () => {
     await service.onModuleDestroy();
   });
 
-  it("completes threadless events without calling projection", async () => {
+  it("indexes threadless events before completing without calling thread projection", async () => {
     const { service, calls } = fixture(
       [job()],
       async () => {
@@ -267,7 +267,30 @@ describe("PersonalContextProjectionService", () => {
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
 
     assert.equal(calls.projects.length, 0);
+    assert.deepEqual(calls.indexSyncs[1], {
+      orgId: "example-org",
+      generation: "continuous-v1",
+      eventIds: ["event-1"],
+      threadId: undefined,
+    });
     assert.deepEqual(calls.completes.map((value) => value.id), ["job-1"]);
+    await service.onModuleDestroy();
+  });
+
+  it("does not acknowledge threadless jobs when incremental indexing fails", async () => {
+    const { service, calls } = fixture(
+      [job()],
+      async () => { throw new Error("thread projection should not run"); },
+      async (orgId, eventId) => eventRecord(orgId, eventId, null),
+      async (_orgId, _generation, eventIds) => {
+        if (eventIds) throw new Error("sensitive body must not be logged");
+      },
+    );
+    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+    assert.deepEqual(calls.completes, []);
+    assert.equal(calls.failures.length, 1);
+    assert.equal(calls.failures[0].error_code, "projection_failed");
+    assert.ok(!JSON.stringify(calls.failures).includes("sensitive body"));
     await service.onModuleDestroy();
   });
 

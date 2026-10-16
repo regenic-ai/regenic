@@ -3,7 +3,7 @@
 Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授权、生命周期和预算构建上下文。
 本文设计在这条链路中加入 `google/embeddinggemma-2` 文本 embedding 与混合检索的方式。
 
-- **状态：** 设计草案；仅文档，无运行时变更。
+- **状态：** 分批实施中；词法基础与可选的个人文本向量索引流水线已实现，默认关闭。混合召回和搜索端点尚未实现。实施状态见第 14、15 节。
 - **源码基线：** 默认分支 `main`，提交 [`4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8`](https://github.com/regenic-ai/regenic/commit/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8)，核对日期 2026-10-15。
 - **相关：** [上下文管理架构](CONTEXT_MANAGEMENT_ARCHITECTURE.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · [ACL 与 Agent 身份](rfcs/0006-acl-agent-identity.md)
 - **文档范围：** 本次按任务要求新增中文专题；英文镜像留待后续文档 PR，不链接尚不存在的译文。
@@ -23,7 +23,9 @@ Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授�
 
 ### 1.1 范围外
 
-本 PR 不实现模型服务、端口、worker、API、向量索引或数据库迁移，不修改代码、配置、依赖或测试。
+原始设计 PR 仅新增文档；后续首批实施新增词法基础代码与测试，见第 14 节。
+第 14 节首批仅覆盖词法基础；第 15 节第二批新增 embedding 端口、参考推理服务、
+独立向量 sidecar 与任务 worker，不修改 Authority schema，也尚不实现 search API。
 首期方案不做多模态索引、生成式查询改写、reranker、组织 ACL 实现或 Blob 读取优化。
 这些能力需要独立设计与实施；模型名称不意味着运行环境已经具备相应能力。
 
@@ -32,9 +34,12 @@ Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授�
 | 分类 | 内容 |
 | --- | --- |
 | 已实现 | Event + Blob、SQLite/PostgreSQL Authority、Context Engine、个人 policy、词法检索、投影 outbox、snapshot/replay、`/ask` |
-| 推荐新增 | 独立 `EmbeddingProvider`、`ContextVectorIndex`、embedding 任务流、Event 级混合召回、`/search` |
+| 第二批已实现，默认关闭 | 独立 `EmbeddingProvider`、`ContextVectorIndex`、SQLite embedding 任务流与个人文本 worker；见第 15 节 |
+| 后续实施 | Event 级混合召回、`/search`、snapshot 检索追踪与真实数据质量验收 |
 | 规划能力 | 两阶段检索、组织 ACL 与撤回安全的 replay、选择性永久删除、可选 pgvector、大规模 ANN、多模态 |
-| 待官方确认 | 指定模型的规格、模板、许可证、运行库兼容性与部署要求 |
+| 已核验官方资料 | 第二代模型标识/revision、声明许可证、维度、模板与官方文本模式示例；见第 2 节 |
+| 已运行初验 | Windows CPU 固定 revision 载入、query/document 推理及 HTTP → CLI 持久化烟测；见第 15.4 节 |
+| 待上线验证 | 真实数据质量、资源占用/吞吐、平台兼容性、权重分发与许可证义务复核 |
 | 待测试确认 | chunk 大小、召回数量、融合参数、批量大小、延迟/内存预算、撤回和擦除时限 |
 
 ## 2. 模型资料与未知项
@@ -42,23 +47,28 @@ Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授�
 `google/embeddinggemma-2` 是本方案指定的目标标识，不是自动回退模型。
 不能用第一代 EmbeddingGemma 或 Gemini Embedding 2 的资料替代该模型的证据。
 
-执行环境无法直接读取以下官方候选来源的正文。搜索摘要不能替代可复核的官方模型卡；
-前文出现的发布日期、多模态能力、768 维或文本模块加载方式，在本文中均不作为已确认规格。
+2026-10-16 已重新读取 Google 官方模型卡、开发者指南和固定 revision 的配置，
+不再依赖搜索摘要。核验结果如下，**资料核验不等于已完成运行或性能验证**：
 
-| 待核对内容 | 官方来源入口 | 本文处理 |
+| 核验内容 | 官方来源入口 | 核验结果 |
 | --- | --- | --- |
-| 模型标识、权重 revision、许可证及使用限制 | [Google 模型卡](https://huggingface.co/google/embeddinggemma-2) | 待确认；部署前固定权重 commit 与许可证审查结果 |
-| 发布说明与输入模态 | [Google 发布页](https://blog.google/innovation-and-ai/technology/developers-tools/embeddinggemma-2/) | 待确认；首期仅设计文本输入 |
-| 文档/查询模板、tokenizer、归一化及相似度 | [Google 开发者指南](https://developers.googleblog.com/embeddinggemma-2-the-developer-guide/) | 待确认；不得猜测提示前缀 |
-| 参数量、维度、最大输入长度、截断/降维能力、运行要求 | [Google AI for Developers](https://ai.google.dev/gemma/docs/embeddinggemma)及目标模型卡 | 待确认；页面必须明确适用于第二代，否则不采用 |
+| 模型与 revision | [Google 仓库元数据](https://huggingface.co/api/models/google/embeddinggemma-2/revision/914f7f89142e33e77833254d9c9b90c3cef7303b) | `google/embeddinggemma-2`；`914f7f89142e33e77833254d9c9b90c3cef7303b`，后续权重、tokenizer 与配置统一固定到该 revision |
+| 许可证与模态 | [固定模型卡](https://huggingface.co/google/embeddinggemma-2/blob/914f7f89142e33e77833254d9c9b90c3cef7303b/README.md)、[发布页](https://blog.google/innovation-and-ai/technology/developers-tools/embeddinggemma-2/) | 声明 Apache-2.0；支持多模态，但 Regenic 首期仍仅处理文本。本次未分发权重；分发前另行落实许可证和 NOTICE 义务 |
+| 文档/查询模板 | [固定 Sentence Transformers 配置](https://huggingface.co/google/embeddinggemma-2/blob/914f7f89142e33e77833254d9c9b90c3cef7303b/config_sentence_transformers.json) | `SearchQuery`：`task: search result \| query: `；`Document`：`title: none \| text: `。使用模板名时不重复手工加前缀；有标题时按官方格式单独处理 |
+| 维度与相似度 | [固定模型配置](https://huggingface.co/google/embeddinggemma-2/blob/914f7f89142e33e77833254d9c9b90c3cef7303b/config.json)、上述 Sentence Transformers 配置 | 原生 768 维、cosine；MRL 可选 512/256/128 维。降维后重新 L2 归一化；查询和文档维度一致，降维改变 generation |
+| 长度与文本运行方式 | [第二代开发者指南](https://developers.googleblog.com/embeddinggemma-2-the-developer-guide/) | 公开检索窗口为 8,192 tokens；文本模式约 270M 参数，使用 `config_kwargs` 禁用 vision/audio；官方要求 `sentence-transformers >= 6.1.0` |
+| 归一化与运行库证据 | [固定 modules](https://huggingface.co/google/embeddinggemma-2/blob/914f7f89142e33e77833254d9c9b90c3cef7303b/modules.json)、固定 Sentence Transformers 配置 | 含 Normalize 模块；配置保存的构建版本为 PyTorch `2.14.0+cu130`、Transformers `5.18.0.dev0`、Sentence Transformers `6.1.0`，不是本机已验证的部署依赖清单 |
 
-这里的链接是核验入口，不是已经核验成功的规格引用。实施阶段必须记录实际可访问的官方来源、
-核验日期和对应 revision；无法确认时保持禁用，而不是静默替换模型、维度或输入模板。
-服务协议中的维度与输入限制通过经核验的模型描述声明，并由客户端检查；不在本文写死。
+固定配置中的 `max_position_embeddings = 262144` 不等于公开支持的检索输入上限，
+不能据此把输入窗口扩大到 262K。后续实现以公开的 8,192-token 窗口为上限，
+计入模板和特殊 token，并在目标 tokenizer/运行库上验证拒绝超长输入、不静默截断。
+本批没有安装 Python 推理栈、下载权重或进行本机推理，因此语义能力继续关闭。
+服务协议中的维度与输入限制仍由固定 revision 的模型描述声明并校验，不作为所有后端的通用常量。
 
 ## 3. 当前系统架构与源码证据
 
 本节只描述基线源码，不表示这些组件已经在某个部署环境运行。下方所有源码链接固定 commit 和行号。
+个人 SQLite API 的词法装配已在首批实施中改变，见第 14 节；本节保留原设计基线以供对照。
 
 ### 3.1 Event、Blob 与 Authority
 
@@ -465,7 +475,7 @@ ACL 泄露、撤回后可见和永久删除复活要求测试中为零；性能�
 
 ## 13. 分阶段计划、路径与验收
 
-所有路径是后续实施建议；本 PR 仅新增本文与中文目录链接。
+下表保留原设计阶段划分；已实施的基础与尚未启用的能力见第 14 节。
 
 | 阶段 | 建议新增/修改路径 | 验收 |
 | --- | --- | --- |
@@ -488,6 +498,189 @@ ACL 泄露、撤回后可见和永久删除复活要求测试中为零；性能�
 
 文档 PR 验收：仅 Markdown 变更；源码引用固定默认分支 commit 与行号；
 模型未知项没有借用其他模型规格；已实现/建议/规划/待测试清晰分离；没有运行时、迁移或依赖变更。
+
+## 14. 首批实施：词法基线与候选构造
+
+本批不启用 embedding，也不增加 `/search`。实施内容：
+
+- [API kernel host](../../apps/api/src/kernel-host.ts) 在个人 SQLite runtime 中与
+  [CLI host](../../packages/local-cli/src/host.ts) 一样装配 indexed Event retriever，
+  持久索引路径为 `${database}.lexical.db`，并把同一个索引交给 projection coordinator。
+  测试/工具用的 personal host 复用 kernel host，避免只在测试入口接通索引。
+  PostgreSQL runtime 仍使用确定性正文词法检索，不引入本地 SQLite 或宣称已有 pgvector。
+- 现有 projection outbox 保持单消费者确认语义；无 thread 的 Event 也须完成词法同步才能确认，
+  但不运行 thread-summary projector。索引未建或部分覆盖仍按同一正文词法算法回退。
+- [Event 候选构造](../../packages/context-engine/src/deterministic-event-retriever.ts) 拆为
+  `eventCandidateMaterialFor`（完整 Event material）与 `eventCandidateFor`（原有词法入选）。
+  测试替身验证 lexical=0 的语义候选可进入引擎，但仍须通过完整原文/hash/引用绑定与预算。
+  这不是向量 retriever 的实现，也不向运行时注册语义能力。
+
+### 14.1 中文开发基线
+
+[合成夹具](../../packages/context-engine/test/fixtures/chinese-retrieval.cjs) 包含 12 个 Event、
+16 个查询（12 个正例、4 个负例），覆盖中文口语、专名/编号、日期、否定、繁体、全角、
+中英混合、长记录局部事实、thread 筛选，以及隐藏/删除/旧版本负例。
+标注是人工编写的合成开发标签，**不是独立 holdout，也不代表真实组织 ACL 或真实数据效果**。
+同义/跨语言缺口故意保留，不能为了让词法指标变好而改写 query 或相关 Event 标注。
+
+在 `k=10` 下，确定性正文词法和完整 FTS5 的基线一致：
+
+| 指标 | 基线 |
+| --- | --- |
+| Recall@10 / MRR@10 / nDCG@10 | 均为 `0.833333333333` |
+| 引用覆盖率 | `1` |
+| 未授权选择 / 过期选择 / 负例选择率 | 均为 `0` |
+
+两个零词法的跨语言/同义查询当前均无命中，是后续真实 embedding 的改进目标。
+测试还比较未建索引、部分覆盖、完整覆盖的选择结果，并固定上述指标防止无意回归。
+FTS5 不可用时也验证同样的回退选择与质量指标。
+
+复现（仓库根目录；Node >= 20、pnpm 9.15.0）：
+
+```powershell
+pnpm --filter @regenic/context-engine test
+pnpm --filter @regenic/context-engine bench:retrieval
+```
+
+微基准输出环境信息、每路 160 次装配的 p50/p95/p99、进程采样 RSS 与词法库大小。
+它使用内存 Authority/Blob 替身和 SQLite FTS5，不包含真实 Blob I/O、模型推理、
+冷启动、并发或大规模数据；不能作为上线延迟/内存 SLO，也不能据此声称向量检索已提速。
+真实数据 holdout、模型吞吐和端到端性能基准仍是后续启用门槛。
+
+2026-10-16 首次微基准记录：Windows x64、Node `v22.23.2`、AMD EPYC 7763，
+每路预热两轮后测量 160 次装配；词法 SQLite 文件为 49,152 bytes。
+
+| 路径 | p50 (ms) | p95 (ms) | p99 (ms) |
+| --- | --- | --- | --- |
+| 正文词法 | 2.746 | 3.832 | 4.619 |
+| 完整 FTS5 | 2.569 | 4.116 | 4.908 |
+
+此规模下不据此认定 FTS 更快。RSS 是同一进程依次运行两路时的采样峰值，
+不是单路索引的独立内存开销，不能直接相减作为 FTS 成本。
+
+## 15. 第二批实施：独立文本向量投影
+
+### 15.1 已接入的代码与边界
+
+- [领域端口](../../packages/domain/src/embedding-provider.ts)：
+  固定模型描述、document/query 模式、token 计数、归一化向量校验、可重试错误；
+  generation 覆盖模型/tokenizer revision、模板、维度、数值格式、抽取器和 chunk 参数。
+- [本地 HTTP adapter](../../packages/embedding-provider/src/index.ts)：
+  只接受数字回环地址 `http://127.0.0.1:<port>` 或 `http://[::1]:<port>`，
+  禁止重定向；有请求/响应体上限、覆盖响应读取的超时与取消，不自动更换模型。
+- [SQLite 向量投影](../../packages/vector-index/src/index.ts)：
+  `${database}.vector.db` 的独立 schema v1，保存 generation manifest、
+  source head/fence、任务、完整 Event 覆盖与 float32 chunk 向量，不保存 chunk 正文。
+  WAL、外键、secure_delete 与 busy timeout 独立于 Authority/FTS。
+  授权 Event/hash 集合内精确计算 cosine，先按 Event 聚合最大 chunk 分，再执行 limit；
+  同分按 Event ID、chunk ordinal 稳定排序，不是先全库 top-k 再过滤。
+- [个人文本 worker](../../packages/context-engine/src/context-embedding-worker.ts)：
+  回填/增量共用完整 Authority 生命周期读取；每轮领取一个任务，持久租约、
+  续租、退避重试、隔离不可重试输入。UTF-8 解码和 Blob hash 在 embedding 路径中严格校验，
+  不改变既有正文读取行为。Unicode 分块保留 UTF-16 原文区间；
+  对包含模板/特殊 token 的实际输入计数，超过 chunk 数上限时整 Event 隔离，
+  不发布部分覆盖。
+- API 与 CLI 共用插件。API 仅允许个人 SQLite 后端，
+  在既有后台开关和人类空闲门控下每两秒触发一轮，不阻塞采集。
+  模型不可用时任务失败并保留安全错误码；已知向量库初始化故障显式报告 unavailable，
+  仍保留词法功能，不将损坏的向量库伪装为可用空索引。
+  桌面数据目录的迁移、替换、清空和大小统计纳入 vector DB 及其 SQLite sidecar。
+  清库会先取消并等待本进程 worker，再清除投影；清理后可继续索引。
+  即使 embedding 已关闭，已有向量 sidecar 也参与 API 清库。
+
+### 15.2 可靠投递与生命周期保证
+
+本批选择第 7 节允许的**可恢复扫描/对账方案**，没有改用现有 projection outbox，
+也不依赖易丢失的进程内提交回调。每轮从完整 Authority 视图登记当前来源任务，
+在同一向量库事务中推进扫描 epoch；崩溃后重新扫描与幂等登记。
+`reconciled_epoch` 只代表任务登记所见快照，**不是全量向量已完成的覆盖水位**；
+真正的覆盖由 org/generation/Event/hash 对应的完整 chunk 集合决定。
+
+source fence 跨 generation 共享。观察到 revision/tombstone 后，事务内失效旧版本
+在全部 generation 的覆盖；删除不等待模型推理。推理前后重新读取生命周期，
+发布时再次校验任务 owner、租约、source identity、当前 head/fence，
+完整 chunk 替换与任务成功确认处于同一事务。旧 owner、过期租约和晚完成任务不能覆盖新版本。
+向量任务不会领取或确认线程摘要/词法投影任务。
+
+这是个人 current-only、完整元数据扫描的正确性基线，不是大规模 keyset 增量扫描。
+最后一次 Authority 读取与独立 SQLite 提交之间仍存在竞态窗口：
+尚未被观察到的删除/修订可能短暂保留旧物理投影，下一轮对账清理。
+未来 retriever 必须始终使用当次权威授权后的 Event/hash 集合，不能相信向量库自行授予可见性。
+本批不宣称组织 ACL 撤回、跨进程同步清库、选择性永久删除或物理擦除时限已经实现。
+`secure_delete`/WAL checkpoint 也不构成备份、文件系统或推理内存的擦除证明。
+
+### 15.3 本地运行
+
+默认 `REGENIC_EMBEDDING_DRIVER=none`。以下为 Windows PowerShell 示例，
+在仓库根目录执行；Python 运行库与权重需要联网下载，权重不包含在 Node 安装包或镜像中。
+参考服务使用固定 revision 的文本路径（禁用 vision/audio），不读 Regenic 数据库，
+不记录请求正文；运行库的 `image` extra 用于模型 processor 初始化，不表示启用了图片索引。
+
+```powershell
+python -m venv .venv-embedding
+.\.venv-embedding\Scripts\python.exe -m pip install -r .\packages\embedding-provider\python\requirements.txt
+.\.venv-embedding\Scripts\python.exe -B .\packages\embedding-provider\python\serve.py --port 8765 --device cpu
+```
+
+在另一个终端配置 API/CLI，再按现有方式启动个人 API：
+
+```powershell
+$env:REGENIC_EMBEDDING_DRIVER = "local_http"
+$env:REGENIC_EMBEDDING_BASE_URL = "http://127.0.0.1:8765"
+$env:REGENIC_EMBEDDING_TIMEOUT_MS = "30000"
+$env:REGENIC_EMBEDDING_CHUNK_TOKENS = "256"
+$env:REGENIC_EMBEDDING_MAX_CHUNKS = "128"
+pnpm --filter @regenic/local-cli... build
+pnpm --filter @regenic/local-cli start context-embedding-index --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner
+pnpm --filter @regenic/local-cli start context-embedding-status --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner
+```
+
+替换示例数据库、Blob 目录和 org 为同一份个人库。`index` 每次最多处理一个任务，
+可重复调用进行回填；失败数、superseded 数与 processed 数分别输出。
+`status` 查看持久任务状态；可重试失败在 `retry_at` 后由后续轮次自动重试，
+隔离任务仅在仍是当前 head 时可显式重放：
+
+```powershell
+pnpm --filter @regenic/local-cli start context-embedding-retry --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner --event "<event-id>"
+```
+
+256-token chunk、128 chunks/Event 与 30 秒超时是可调整的实验默认值，不是质量或延迟承诺。
+chunk 参数改变会创建新 generation；本批没有 alias 切换、跨 generation 融合或旧 generation GC。
+参考服务串行处理请求，未提供生产并发、限流或吞吐保证。
+
+依赖安装后可运行不加载真实权重的协议/编码器测试：
+
+```powershell
+.\.venv-embedding\Scripts\python.exe -B -m unittest discover -s .\packages\embedding-provider\python -p "test_*.py"
+```
+
+**启用索引不等于启用语义搜索。** 当前 `/ask` 和 Context Engine 仍使用现有词法召回；
+混合 Event retriever、查询路由、`/search`、snapshot embedding trace、
+真实数据 holdout 与性能验收留待后续批次。本批协议测试和合成向量测试不能替代真实模型验收。
+
+### 15.4 本批真实模型烟测
+
+在独立 Python 3.12 虚拟环境中使用 Windows x64 CPU，实际下载并载入固定 revision；
+Sentence Transformers `6.1.0`、Transformers `5.19.0`、PyTorch `2.14.1`、
+torchvision `0.29.1`、Pillow `12.3.0`。没有使用替代模型或生产假向量。
+
+真实运行发现 BF16 路径即使设置 `normalize_embeddings=True`，
+转成 float32 后的一个输出范数仍为 `0.99835837`，超出 adapter 的 `0.001` 容差。
+参考服务因此显式在 float32 转换后再次 L2 归一化，而不是放宽校验；
+同时保留零向量、非有限值、错误维度与 tokenizer 截断的拒绝测试。
+
+实际通过的短链路：
+
+1. 本地 HTTP query/document 推理均返回 768 维有效向量。
+2. 查询“上线得到许可了吗？”对“审批已通过，可以部署到生产环境。”
+   与“午餐想吃番茄鸡蛋面。”的归一化向量点积分别约 `0.762754`、`0.632601`，
+   相关文档排序在前。
+3. 经真实 HTTP provider 执行 CLI `context-embedding-index`，
+   持久化一个合成 Event：`processed=1, failed=0, superseded=0`。
+
+这只证明参考依赖、模板、数值协议和索引发布链路能实际运行。
+两个文档不能证明中文检索质量、可靠拒答阈值或性能 SLO，
+也不表示尚未接入的混合 retriever 已完成验收。
 
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679

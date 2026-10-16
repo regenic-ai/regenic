@@ -1,5 +1,6 @@
 import { definePlugin } from "@regenic/plugin-host";
 import {
+  embeddingGeneration,
   type ContextEvidenceSource,
   type ContextLexicalIndex,
   type ContextPolicyEvaluator,
@@ -13,6 +14,25 @@ import { ContextProjectionCoordinator } from "./context-projection-coordinator";
 import { DeterministicThreadSummaryProjector } from "./deterministic-thread-summary-projector";
 import { DailyDigestProjectionCoordinator } from "./daily-digest-projection-runner";
 import { PersonalContextPolicyEvaluator } from "./personal-context-policy";
+import { ContextEmbeddingWorker } from "./context-embedding-worker";
+
+export const contextEmbeddingWorkerPlugin = definePlugin<{
+  org_id: string; chunk_tokens: number; max_chunks_per_event: number;
+}>({
+  name: "context-embedding-worker",
+  inject: ["context-authority", "blobs", "embedding", "context-vector-index", "context-embedding-jobs"],
+  apply(ctx, config) {
+    const provider = ctx.get("embedding");
+    const worker = new ContextEmbeddingWorker(
+      config.org_id,
+      new AuthorityContextEvidenceSource(ctx.get("context-authority"), ctx.get("blobs"), true),
+      provider, ctx.get("context-vector-index"), ctx.get("context-embedding-jobs"),
+      embeddingGeneration(provider.descriptor, config.chunk_tokens, config.max_chunks_per_event),
+    );
+    ctx.provide("context-embedding-worker", worker);
+    ctx.effect(() => () => worker.stop());
+  },
+});
 
 export const deterministicEventRetrieverPlugin = definePlugin({
   name: "context-retriever-event-deterministic",
