@@ -7,6 +7,7 @@ const {
   DEFAULT_INACTIVE_STREAM_IDLE_MS,
   MAX_COLD_STREAM_IDLE_MS,
   classifyDueWorkHeat,
+  streamIsPreferredThread,
   coldIdleMsForCatalogSize,
   dueWorkIdleMs,
   nextDueAtForDueWork,
@@ -55,6 +56,13 @@ describe("sync idle tiers", () => {
 });
 
 describe("due-work heat", () => {
+  it("matches the open thread exactly and ignores empty ids", () => {
+    assert.equal(streamIsPreferredThread("dsh:sess-1", "dsh:sess-1"), true);
+    assert.equal(streamIsPreferredThread("dsh:sess-1", "dsh:sess-2"), false);
+    assert.equal(streamIsPreferredThread(null, "dsh:sess-1"), false);
+    assert.equal(streamIsPreferredThread("dsh:sess-1", null), false);
+  });
+
   it("keeps preferred interactive and first seed hot", () => {
     assert.equal(classifyDueWorkHeat({ preferred: true }), "interactive");
     assert.equal(

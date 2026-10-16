@@ -17,6 +17,7 @@ import {
   type WorkRun,
 } from "@regenic/domain";
 import { PersonalWorkChannel } from "./personal-work-channel";
+import { preferThread, preferredThreadId } from "./personal-pull-status";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import type { PersonalWorkWait } from "./personal-work-wait";
 import {
@@ -28,6 +29,24 @@ import {
   WORK_REAP_FOLLOW_COOLDOWN_MS,
   WORK_REAP_LOG_EVERY_MS,
 } from "./personal-work-reap";
+
+export async function foldFinishedWorkThreads(
+  store: Parameters<typeof foldThreadByPolicy>[0],
+  orgId: string,
+  sourceThreadId: string,
+  agentThreadId: string | undefined,
+  now: string,
+): Promise<void> {
+  await foldThreadByPolicy(store, orgId, sourceThreadId, now);
+  const agent = agentThreadId?.trim();
+  if (!agent || agent === sourceThreadId) {
+    return;
+  }
+  await foldThreadByPolicy(store, orgId, agent, now);
+  if (preferredThreadId() === agent) {
+    preferThread(null);
+  }
+}
 
 export class PersonalWorkSupervise {
   private waits?: PersonalWorkWait;
@@ -295,7 +314,13 @@ export class PersonalWorkSupervise {
       if (!isActiveWorkStatus(status)) {
         this.writeBackOverride.delete(item.id);
         this.waits?.drop(run.id);
-        await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
+        await foldFinishedWorkThreads(
+          authority,
+          item.org_id,
+          item.thread_id,
+          nextRun.agent_thread_id,
+          now,
+        );
         this.touchInboxDigest?.();
       }
     }

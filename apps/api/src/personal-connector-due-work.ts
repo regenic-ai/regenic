@@ -26,8 +26,10 @@ import {
   historyPolicyFromConfig,
   historySyncClaimLanes,
   messageDuty,
+  liveWorkAfterInteractiveRelease,
   planSyncWorkGaps,
   sameLaneContinues,
+  shouldReleaseInteractiveWork,
   type SyncLane,
   type SyncPhase,
   type SyncWorkRecord,
@@ -502,6 +504,22 @@ async function pollClaimedDueWorkStreams(
         });
         return;
       }
+      const threadId = `${thread.source}:${thread.target}`;
+      if (
+        shouldReleaseInteractiveWork({
+          lane: item.lane,
+          threadId,
+          preferredThreadId: preferredThreadId(),
+        })
+      ) {
+        await releaseStaleInteractiveClaim(
+          state,
+          store,
+          item,
+          catalogSize,
+        );
+        return;
+      }
       let stream: ConnectorStream;
       try {
         stream = await driver.resolveThreadStream(
@@ -630,6 +648,21 @@ async function pollClaimedDueWorkStreams(
           state.inbox.publishThreadUpdated(stream.thread_id);
         }
         const settledAt = new Date().toISOString();
+        if (
+          shouldReleaseInteractiveWork({
+            lane: item.lane,
+            threadId: stream.thread_id ?? threadId,
+            preferredThreadId: preferredThreadId(),
+          })
+        ) {
+          await releaseStaleInteractiveClaim(
+            state,
+            store,
+            item,
+            catalogSize,
+          );
+          return;
+        }
         const syncState = await store.getSyncState(
           installation.id,
           stream.stream_key,
@@ -745,6 +778,33 @@ async function settleDueWork(
     error_code: input.errorCode,
     accepted_count: input.acceptedCount,
   });
+}
+
+async function releaseStaleInteractiveClaim(
+  state: ConnectorState,
+  store: ConnectorRuntimeStore,
+  item: SyncWorkRecord,
+  catalogSize: number,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await store.settleSyncWork({
+    id: item.id,
+    owner: state.dueWorkOwner,
+    now,
+    outcome: "cancelled",
+  });
+  await store.enqueueSyncWork(
+    liveWorkAfterInteractiveRelease({
+      installation_id: item.installation_id,
+      stream_key: item.stream_key,
+      generation: item.generation,
+      now,
+      coldIdleMs: coldIdleMsForCatalogSize(
+        catalogSize,
+        streamIdleTiersFromEnv().coldIdleMs,
+      ),
+    }),
+  );
 }
 
 export async function discoverCatalogDueWork(

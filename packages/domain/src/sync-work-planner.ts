@@ -12,6 +12,7 @@ import {
   coldIdleMsForCatalogSize,
   DEFAULT_COLD_STREAM_IDLE_MS,
   nextDueAtForDueWork,
+  streamIsPreferredThread,
 } from "./sync-idle";
 import type {
   EnqueueSyncWork,
@@ -72,19 +73,21 @@ function laneBlocksEnqueue(
 
 /**
  * What a phase write should add or drop. Pending and running rows keep their
- * due time. A running lease is left alone. Interactive pending/running covers live.
+ * due time. A running lease is left alone. Interactive pending/running covers
+ * live only while this stream is still the open / working thread.
+ *
+ * `preferred: false` drops a leftover interactive row so a finished DSH
+ * session cannot occupy the interactive claim forever.
  */
 export function syncWorkEnsurePlan(input: {
   state: Pick<SyncStreamState, "phase" | "media_pending">;
   existing: readonly OpenSyncWorkLane[];
   policy?: HistoryPolicy;
+  preferred?: boolean;
 }): { enqueue: SyncLane[]; cancel: SyncLane[] } {
   const owed = owedSyncLanes(
     input.state,
     input.policy ?? DEFAULT_HISTORY_POLICY,
-  );
-  const enqueue = owed.filter(
-    (lane) => !laneBlocksEnqueue(input.existing, lane),
   );
   const owedSet = new Set(owed);
   const cancel: SyncLane[] = [];
@@ -92,6 +95,14 @@ export function syncWorkEnsurePlan(input: {
     input.existing.some(
       (item) => !item.run_id && item.lane === lane && item.status === "pending",
     );
+  if (input.preferred === false && pending("interactive")) {
+    cancel.push("interactive");
+  }
+  const blocking =
+    input.preferred === false
+      ? input.existing.filter((item) => item.lane !== "interactive")
+      : input.existing;
+  const enqueue = owed.filter((lane) => !laneBlocksEnqueue(blocking, lane));
   if (!owedSet.has("history") && pending("history")) {
     cancel.push("history");
   }
@@ -99,7 +110,7 @@ export function syncWorkEnsurePlan(input: {
     if (pending("live")) {
       cancel.push("live");
     }
-    if (pending("interactive")) {
+    if (pending("interactive") && !cancel.includes("interactive")) {
       cancel.push("interactive");
     }
   }
@@ -107,6 +118,50 @@ export function syncWorkEnsurePlan(input: {
     cancel.push("media");
   }
   return { enqueue, cancel };
+}
+
+/** Drop interactive due-work that is no longer the open / working thread. */
+export function shouldReleaseInteractiveWork(input: {
+  lane: SyncLane;
+  threadId?: string | null;
+  preferredThreadId?: string | null;
+}): boolean {
+  return (
+    input.lane === "interactive" &&
+    !streamIsPreferredThread(input.preferredThreadId, input.threadId)
+  );
+}
+
+/**
+ * Live row to enqueue after cancelling a stale interactive claim.
+ * Cold due time so finished DSH sessions do not immediately refill the queue.
+ */
+export function liveWorkAfterInteractiveRelease(input: {
+  installation_id: string;
+  stream_key: string;
+  generation: number;
+  now: string;
+  coldIdleMs?: number;
+}): EnqueueSyncWork {
+  return {
+    id: dueSyncWorkId(
+      input.installation_id,
+      input.stream_key,
+      "live",
+      input.generation,
+    ),
+    installation_id: input.installation_id,
+    stream_key: input.stream_key,
+    lane: "live",
+    priority: syncWorkPriority("live"),
+    next_due_at: nextDueAtForDueWork({
+      now: input.now,
+      heat: "cold",
+      coldIdleMs: input.coldIdleMs,
+    }),
+    generation: input.generation,
+    now: input.now,
+  };
 }
 
 /**

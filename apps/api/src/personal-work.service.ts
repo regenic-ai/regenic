@@ -10,7 +10,6 @@ import {
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   cancelWorkRun,
-  foldThreadByPolicy,
   deliveryAbandoned,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
@@ -56,7 +55,10 @@ import {
   isWorkTickShutdown,
 } from "./personal-work-support";
 import { PersonalWorkWait } from "./personal-work-wait";
-import { PersonalWorkSupervise } from "./personal-work-supervise";
+import {
+  foldFinishedWorkThreads,
+  PersonalWorkSupervise,
+} from "./personal-work-supervise";
 
 export type { RecipeInput } from "./personal-work-recipe";
 export type { WorkInboxFace } from "./personal-work-faces";
@@ -751,10 +753,13 @@ export class PersonalWorkService implements OnModuleDestroy {
       "work_acked",
       now,
     );
-    await foldThreadByPolicy(
+    const run = await host.get("authority").getActiveWorkRun(item.org_id, item.id)
+      ?? (await host.get("authority").listWorkRuns(item.org_id, item.id))[0];
+    await foldFinishedWorkThreads(
       host.get("authority"),
       item.org_id,
       threadId,
+      run?.agent_thread_id,
       now,
     );
     this.inbox.touchInboxDigest();
@@ -861,7 +866,13 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (delivery && delivery.status !== "acked") {
       await host.get("authority").putWorkDelivery(deliveryAbandoned(delivery, now));
     }
-    await foldThreadByPolicy(host.get("authority"), orgId, next.thread_id, now);
+    await foldFinishedWorkThreads(
+      host.get("authority"),
+      orgId,
+      next.thread_id,
+      run?.agent_thread_id ?? cancelled?.agent_thread_id,
+      now,
+    );
     this.supervise.clearWriteBackOverride(item.id);
     this.inbox.touchInboxDigest();
     return {

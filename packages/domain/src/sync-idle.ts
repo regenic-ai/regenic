@@ -45,6 +45,16 @@ export function pacedStreamIdleMs(input: {
   return Math.max(inactiveFloor, fromHint);
 }
 
+/** Open / working thread id must match exactly. Empty sides never match. */
+export function streamIsPreferredThread(
+  preferredThreadId?: string | null,
+  threadId?: string | null,
+): boolean {
+  const preferred = preferredThreadId?.trim() || "";
+  const thread = threadId?.trim() || "";
+  return Boolean(preferred && thread && preferred === thread);
+}
+
 /**
  * Preferred thread stays interactive. First seed, media catch-up, and
  * recently accepted polls stay hot. Everything else is cold.
