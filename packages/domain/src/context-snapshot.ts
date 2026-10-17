@@ -5,6 +5,25 @@ import type { ContextAllowedUse } from "./context-request";
 
 export const CONTEXT_SNAPSHOT_SCHEMA_VERSION = "1.0" as const;
 
+export interface ContextRetrievalTrace {
+  retriever_id: string;
+  profile: string;
+  mode: "lexical" | "hybrid";
+  generation?: string;
+  model_revision?: string;
+  authorized_count: number;
+  covered_count: number;
+  routes: Array<{
+    event_id: string;
+    lexical_rank?: number;
+    vector_rank?: number;
+    vector_score?: number;
+    chunk_ordinal?: number;
+    start?: number;
+    end?: number;
+  }>;
+}
+
 interface ContextSelectedReferenceBase {
   candidate_id: string;
   resource_id: string;
@@ -32,6 +51,7 @@ export interface ContextSnapshot {
   principal_policy_hash: string;
   read_epoch: string;
   retrieval_profile_version: string;
+  retrieval_trace?: ContextRetrievalTrace[];
   assembly_profile_version: string;
   bundle_payload_hash: string;
   selected: ContextSelectedReference[];

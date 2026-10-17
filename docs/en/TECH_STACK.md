@@ -39,8 +39,10 @@ Optional personal text indexing now uses a separate `EmbeddingProvider`,
 a loopback-only reference inference service, and `${database}.vector.db`.
 Durable embedding jobs reconcile full Authority lifecycle reads independently
 of the existing projection queue. It is off by default
-(`REGENIC_EMBEDDING_DRIVER=none`). Enabling indexing does not yet enable hybrid
-retrieval, change `/ask`, or expose a record-search endpoint. See the
+(`REGENIC_EMBEDDING_DRIVER=none`). Explicitly configured personal API hosts now
+use current-only hybrid Event retrieval (also for `/ask`), with lexical degradation
+and pinned snapshot traces. A separate record-search endpoint and CLI query
+configuration are the next rollout step. See the
 [implementation status and local setup](../zh/EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影).
 
 ## 2. Components

@@ -1,6 +1,13 @@
 import type { ContextLexicalKey } from "./context-lexical";
 import type { EmbeddingGeneration } from "./embedding-provider";
 
+export class ContextVectorUnavailableError extends Error {
+  constructor(readonly reason: "unbuilt" | "corrupt" | "unavailable") {
+    super(reason === "unbuilt" ? "Vector generation is not registered" : `Vector index ${reason}`);
+    this.name = "ContextVectorUnavailableError";
+  }
+}
+
 export interface ContextVectorChunk {
   ordinal: number;
   start: number;

@@ -2,6 +2,7 @@ import {
   CONTEXT_BUNDLE_SCHEMA_VERSION,
   CONTEXT_SECTION_KINDS,
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+  ContextRetrievalTraceSchema,
   canonicalContextJson,
   hashCanonicalContext,
   hashContextEvidenceReferences,
@@ -33,6 +34,7 @@ import {
   type ContextRetriever,
   type ContextRetrievalResult,
   type ContextRetrievalCapabilities,
+  type ContextRetrievalTrace,
   type ContextRetrieverRegistry,
   type ContextSectionKind,
   type ContextSelectedReference,
@@ -46,6 +48,14 @@ const RETRIEVAL_DEGRADATION_FLAGS = new Set([
   "lexical_index_absent",
   "lexical_index_partial",
   "lexical_index_unbuilt",
+  "embedding_unavailable",
+  "embedding_timeout",
+  "vector_index_absent",
+  "vector_index_unbuilt",
+  "vector_index_corrupt",
+  "vector_index_unavailable",
+  "vector_index_partial",
+  "vector_temporal_unsupported",
 ]);
 
 export interface ContextRetrievalProfile {
@@ -157,6 +167,18 @@ export class DeterministicContextEngine implements ContextEngine {
       active,
       result: normalizeRetrievalResult(await active.retriever.retrieve(clone(plan))),
     })));
+    const retrievalTrace = retrievalRuns.flatMap((run) => run.result.trace ? [run.result.trace] : []);
+    if (retrievalTrace.length) {
+      const latest = await this.source.openRead(clone(stableRequest));
+      if (latest.read_epoch !== sourceRead.read_epoch ||
+        await this.policy.policyHash(clone(stableRequest)) !== policyHash) {
+        throw new ContextEngineError("source_boundary", "Authority or policy changed during retrieval; retry the request");
+      }
+      const allowedIds = new Set(lifecycleEvents.map((source) => source.event.event_id));
+      if (retrievalTrace.some((trace) => trace.routes.some((route) => !allowedIds.has(route.event_id)))) {
+        throw new ContextEngineError("invalid_candidate", "Retrieval trace contains an unauthorized Event");
+      }
+    }
     const retrieved = retrievalRuns.flatMap(({ active, result }) =>
       result.candidates.map((value) => ({ active, value })),
     );
@@ -184,6 +206,7 @@ export class DeterministicContextEngine implements ContextEngine {
       readEpoch: authorizedReadEpoch,
       recordedAt: sourceRead.recorded_at,
       retrievalProfileVersion: this.retrievalProfile.version,
+      retrievalTrace,
       assemblyProfileVersion: this.assemblyProfile.version,
       bundlePayloadHash: hashContextBundlePayload(bundlePayload),
       selected: assembled.selected,
@@ -534,6 +557,7 @@ function createSnapshot(input: {
   readEpoch: string;
   recordedAt: string;
   retrievalProfileVersion: string;
+  retrievalTrace: ContextRetrievalTrace[];
   assemblyProfileVersion: string;
   bundlePayloadHash: string;
   selected: ScoredRetrievedCandidate[];
@@ -549,6 +573,7 @@ function createSnapshot(input: {
     principal_policy_hash: input.policyHash,
     read_epoch: input.readEpoch,
     retrieval_profile_version: input.retrievalProfileVersion,
+    ...(input.retrievalTrace.length ? { retrieval_trace: input.retrievalTrace } : {}),
     assembly_profile_version: input.assemblyProfileVersion,
     bundle_payload_hash: input.bundlePayloadHash,
     selected,
@@ -779,6 +804,7 @@ function normalizeRetrievalResult(
   if (
     !result ||
     !Array.isArray(result.candidates) ||
+    (result.trace !== undefined && !ContextRetrievalTraceSchema.safeParse(result.trace).success) ||
     (result.degradation_flags !== undefined &&
       (!Array.isArray(result.degradation_flags) ||
         result.degradation_flags.length > 100 ||

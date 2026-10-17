@@ -6,6 +6,8 @@ import {
   canonicalContextJson,
   embeddingGeneration,
   validateEmbeddingVector,
+  ContextVectorUnavailableError,
+  EmbeddingError,
   type ContextVectorIndex,
   type ContextVectorChunk,
   type EmbeddingGeneration,
@@ -215,6 +217,15 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJo
   }
 
   async matchAuthorized(input: Parameters<ContextVectorIndex["matchAuthorized"]>[0]): ReturnType<ContextVectorIndex["matchAuthorized"]> {
+    try {
+      return await this.matchAuthorizedView(input);
+    } catch (error) {
+      if (error instanceof Database.SqliteError) throw new ContextVectorUnavailableError("unavailable");
+      throw error;
+    }
+  }
+
+  private async matchAuthorizedView(input: Parameters<ContextVectorIndex["matchAuthorized"]>[0]): ReturnType<ContextVectorIndex["matchAuthorized"]> {
     const generation = this.manifest(input.org_id, input.generation);
     validateEmbeddingVector(input.query_vector, generation.model.dimensions);
     const queryNorm = Math.sqrt(input.query_vector.reduce((sum, value) => sum + value * value, 0));
@@ -237,12 +248,17 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJo
         if (!coverage) continue;
         const chunks = this.db.prepare("SELECT * FROM chunks WHERE org_id=? AND generation=? AND event_id=? ORDER BY ordinal")
           .all(input.org_id, input.generation, key.event_id) as Array<{ ordinal: number; start: number; end: number; vector: Buffer }>;
-        if (chunks.length !== coverage.chunk_count || chunks.length === 0) throw new Error("Incomplete vector coverage");
+        if (chunks.length !== coverage.chunk_count || chunks.length === 0) throw new ContextVectorUnavailableError("corrupt");
         let best: { score: number; chunk_ordinal: number; start: number; end: number } | undefined;
         for (const chunk of chunks) {
-          if (chunk.vector.byteLength !== generation.model.dimensions * 4) throw new Error("Corrupt vector dimensions");
+          if (chunk.vector.byteLength !== generation.model.dimensions * 4) throw new ContextVectorUnavailableError("corrupt");
           const vector = Array.from({ length: generation.model.dimensions }, (_, i) => chunk.vector.readFloatLE(i * 4));
-          validateEmbeddingVector(vector, generation.model.dimensions);
+          try {
+            validateEmbeddingVector(vector, generation.model.dimensions);
+          } catch (error) {
+            if (error instanceof EmbeddingError) throw new ContextVectorUnavailableError("corrupt");
+            throw error;
+          }
           const vectorNorm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
           const cosine = vector.reduce((sum, value, i) => sum + value * input.query_vector[i], 0) / (queryNorm * vectorNorm);
           const score = Number(Math.max(-1, Math.min(1, cosine)).toFixed(9));
@@ -272,10 +288,16 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJo
     required(orgId); required(id);
     const row = this.db.prepare("SELECT manifest_json FROM generations WHERE org_id=? AND generation=?")
       .get(orgId, id) as { manifest_json: string } | undefined;
-    if (!row) throw new Error("Vector generation is not registered");
-    const value: EmbeddingGeneration = JSON.parse(row.manifest_json);
-    if (canonicalContextJson(value) !== canonicalContextJson(embeddingGeneration(value.model, value.chunk_tokens, value.max_chunks_per_event))) {
-      throw new Error("Corrupt vector generation manifest");
+    if (!row) throw new ContextVectorUnavailableError("unbuilt");
+    let value: EmbeddingGeneration;
+    try {
+      value = JSON.parse(row.manifest_json);
+      if (canonicalContextJson(value) !== canonicalContextJson(embeddingGeneration(value.model, value.chunk_tokens, value.max_chunks_per_event))) {
+        throw new ContextVectorUnavailableError("corrupt");
+      }
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      throw new ContextVectorUnavailableError("corrupt");
     }
     return value;
   }

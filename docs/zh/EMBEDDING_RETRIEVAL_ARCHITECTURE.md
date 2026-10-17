@@ -3,7 +3,7 @@
 Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授权、生命周期和预算构建上下文。
 本文设计在这条链路中加入 `google/embeddinggemma-2` 文本 embedding 与混合检索的方式。
 
-- **状态：** 分批实施中；词法基础与可选的个人文本向量索引流水线已实现，默认关闭。混合召回和搜索端点尚未实现。实施状态见第 14、15 节。
+- **状态：** 分批实施中；基础索引与可选的个人 current 混合召回已实现，默认关闭。独立搜索端点与 generation 运维仍待后续批次。当前实施状态见第 14–16 节。
 - **源码基线：** 默认分支 `main`，提交 [`4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8`](https://github.com/regenic-ai/regenic/commit/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8)，核对日期 2026-10-15。
 - **相关：** [上下文管理架构](CONTEXT_MANAGEMENT_ARCHITECTURE.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · [ACL 与 Agent 身份](rfcs/0006-acl-agent-identity.md)
 - **文档范围：** 本次按任务要求新增中文专题；英文镜像留待后续文档 PR，不链接尚不存在的译文。
@@ -159,7 +159,7 @@ Origin、key 和监听地址；loopback 且无 Origin 的请求可能无需 key�
 
 ## 4. 关键设计决策与职责边界
 
-以下均为**推荐新增方案，尚未实现**。
+以下为原设计职责划分；各组件的当前实现范围以第 14–16 节为准。
 
 | 组件 | 职责 | 禁止承担的职责 |
 | --- | --- | --- |
@@ -328,10 +328,10 @@ score(event) = sum(weight(route) / (rrf_k + rank(route, event)))
 平分按 Event ID；chunk 平分按 ordinal。最终同分按 `candidate_id` 字典序，
 并保留现有 policy/section 优先和预算规则。固定浮点表示和排序规则，拒绝 NaN/Infinity、错误维度及异常范数。
 
-这**不是当前引擎已实现的算法**。现有 [融合][engine-fusion] 与 [评分][engine-score]
+第 16 节在可选 Hybrid retriever 内实现 RRF；原有 [融合][engine-fusion] 与 [评分][engine-score]
 按 retriever 命名空间保留分数、按 `(kind, resource_id)` 去重并加权求和，默认权重为
 anchor/exact_match/lexical/recency；新分数名未配置权重时贡献为零。
-未来 Hybrid retriever 输出一个明确配置权重的融合分数，并版本化 retrieval profile，
+Hybrid retriever 必须输出一个明确配置权重的融合分数，并版本化 retrieval profile，
 不能假设添加 `vector` 分数就会参与排序，也不能让独立 Event retriever 再次重复计分。
 
 另一个实施约束是 [现有 Event 构造函数][event-builder] 会拒绝 query 非空但词法分数为零的候选。
@@ -654,7 +654,7 @@ chunk 参数改变会创建新 generation；本批没有 alias 切换、跨 gene
 .\.venv-embedding\Scripts\python.exe -B -m unittest discover -s .\packages\embedding-provider\python -p "test_*.py"
 ```
 
-**启用索引不等于启用语义搜索。** 当前 `/ask` 和 Context Engine 仍使用现有词法召回；
+**#227 验收时启用索引不等于启用语义搜索。** 当时 `/ask` 和 Context Engine 仍使用现有词法召回；
 混合 Event retriever、查询路由、`/search`、snapshot embedding trace、
 真实数据 holdout 与性能验收留待后续批次。本批协议测试和合成向量测试不能替代真实模型验收。
 
@@ -681,6 +681,37 @@ torchvision `0.29.1`、Pillow `12.3.0`。没有使用替代模型或生产假向
 这只证明参考依赖、模板、数值协议和索引发布链路能实际运行。
 两个文档不能证明中文检索质量、可靠拒答阈值或性能 SLO，
 也不表示尚未接入的混合 retriever 已完成验收。
+
+## 16. 第三批实施：可选混合召回与 snapshot 追踪
+
+个人 API 显式配置 embedding 后只注册一个 Hybrid Event retriever，不再并行注册
+独立的 Event lexical retriever，避免重复计分。关闭 embedding 时保留原装配。
+CLI host 支持同一装配；CLI 查询命令的环境配置接线与独立 search 入口在下一批完成。
+
+- 两路都只消费 Policy 已授权、生命周期解析和 filters/anchors/max-age 筛选后的 Event/hash。
+  query 使用独立模板；空查询、非 Event 请求不调用模型，history/as_of 显式降级为词法。
+- 复用完整 Event material，允许 lexical=0 的语义命中，仍执行现有证据绑定和预算。
+  向量 key/hash/覆盖、有限分数、chunk ordinal 和原文区间逐项验证；
+  伪造授权键或无效绑定直接失败，不伪装为成功的词法降级。
+- profile 为 `personal-hybrid-rrf-v1`：两路等权 RRF、`k=60`、向量最多 1000 个授权 Event，
+  先 Event 聚合再 LIMIT；cosine 下限暂为实验值 `0.7`，待独立评测确认，不是已批准的拒答阈值。
+  用归一化 RRF 作为明确配置权重的 `hybrid` 分数；分路同分以 Event ID 排序。
+  未覆盖的词法命中保留，不能因向量局部覆盖消失。
+- 已知模型/索引故障与部分覆盖产生独立降级标志；超长/非法 query 不降级成成功。
+  索引 SQL/manifest/向量损坏有受限错误类型；非预期编程错误不吞掉。
+- snapshot 新增可选 `retrieval_trace`，与 snapshot hash 一起固定实际 profile/generation/revision、
+  授权域内覆盖数、两路 rank/score 和 chunk 位置；不保存 query 向量或索引正文。
+  旧 snapshot 字段与哈希规则兼容；replay 仍返回已保存的 bundle，不重新推理。
+- 推理结束后重读 Authority epoch 和 policy hash；观察到变化时拒绝本轮结果，要求重试。
+  这不是跨存储原子事务，也不宣称已经解决规划中的组织撤回协议。
+
+桌面现有上下文面板会展示 bundle 中的降级标志，不新增未受客户端识别的成功状态。
+`model_absent` 仍描述原引擎 completion 能力占位，不代表 embedding 健康；
+embedding 与 vector 的实际运行情况由新标志和 trace 表达。
+
+后续预计三个独立 PR：统一 search/ask 入口、generation 运维、真实模型评测与故障/性能收尾。
+首期仅个人 SQLite/current 文本；组织 ACL、历史语义覆盖、pgvector/ANN、多模态和选择性永久删除
+仍属单独的后续范围，不以合成评测冒充组织或真实用户数据质量认证。
 
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679
