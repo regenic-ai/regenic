@@ -17,6 +17,7 @@ import type {
   ContextSnapshot,
   ContextSnapshotIndexEntry,
   ContextSnapshotIndexQuery,
+  ContextRetrievalTrace,
 } from "./context-snapshot";
 import type { EventRecord, JsonValue, WeightHints } from "./ingestion";
 
@@ -213,6 +214,7 @@ export interface RetrievedContextCandidate {
 export interface ContextRetrievalResult {
   candidates: RetrievedContextCandidate[];
   degradation_flags?: string[];
+  trace?: ContextRetrievalTrace;
 }
 
 export interface ContextRetriever {
