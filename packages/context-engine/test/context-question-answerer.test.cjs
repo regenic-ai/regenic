@@ -75,7 +75,7 @@ function contextWith(value) {
   return {
     async assemble() {
       return {
-        snapshot: { id: "snapshot-1" },
+        snapshot: { id: "snapshot-1", retrieval_profile_version: "test-v1" },
         bundle: value,
       };
     },
@@ -103,6 +103,9 @@ describe("ContextQuestionAnswerer", () => {
 
     const result = await answerer.ask(request(), "What happened?");
     assert.equal(result.snapshot_id, "snapshot-1");
+    assert.deepEqual(result.degradation_flags, []);
+    assert.equal(result.retrieval_profile, "test-v1");
+    assert.equal(result.generation, null);
     assert.deepEqual(result.citations, [{
       candidate_id: "event:event-1",
       event_ids: ["event-1"],

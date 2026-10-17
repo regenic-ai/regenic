@@ -2,6 +2,8 @@ import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   ContextQuestionAnswerer,
+  ContextSearcher,
+  contextSearchRequest,
   evaluateContextRetrieval,
   type ContextEvaluationDataset,
 } from "@regenic/context-engine";
@@ -14,8 +16,10 @@ import {
   type EvidenceBundle,
 } from "@regenic/domain";
 import { modelProviderConfigFromEnv } from "@regenic/model-provider";
+import { embeddingConfigFromEnv } from "@regenic/embedding-provider";
 import {
   optionString,
+  assertObjectKeys,
   requireOption,
   requirePath,
   requirePositiveInteger,
@@ -67,6 +71,7 @@ export async function publishEvidenceBundle(
 
 export async function assembleContext(
   options: CommandOptions,
+  env: NodeJS.ProcessEnv,
   stdout: CliOutput,
   createId: () => string,
 ): Promise<void> {
@@ -76,11 +81,43 @@ export async function assembleContext(
     blobRoot: requirePath(options, "blob-root"),
     orgId,
     model: { driver: "none" },
+    embedding: embeddingConfigFromEnv(env),
   }, async (host) => {
     await bootstrapLocalContextSearch(host, orgId);
     writeJson(stdout, await host.get("context").assemble(
       localContextRequest(options, orgId, createId),
     ));
+  });
+}
+
+export async function searchContext(
+  options: CommandOptions,
+  env: NodeJS.ProcessEnv,
+  stdout: CliOutput,
+  createId: () => string,
+): Promise<void> {
+  assertObjectKeys(options, new Set(["database", "blob-root", "org", "query", "limit", "source", "thread", "temporal"]), "search option");
+  for (const [key, value] of Object.entries(options)) {
+    if (typeof value !== "string") throw new Error(`--${key} requires a value`);
+  }
+  const orgId = requireOption(options, "org");
+  const source = optionString(options, "source");
+  const thread = optionString(options, "thread");
+  const request = contextSearchRequest({
+    query: requireOption(options, "query"),
+    limit: requirePositiveInteger(options, "limit", 20),
+    temporal: { mode: optionString(options, "temporal") ?? "current" },
+    ...((source || thread) ? { filters: {
+      ...(source ? { sources: [source] } : {}),
+      ...(thread ? { thread_ids: [thread] } : {}),
+    } } : {}),
+  }, { id: createId(), org_id: orgId, principal: { actor_type: "human", actor_id: orgId } });
+  await withLocalHost({
+    database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId,
+    model: { driver: "none" }, embedding: embeddingConfigFromEnv(env),
+  }, async (host) => {
+    await bootstrapLocalContextSearch(host, orgId);
+    writeJson(stdout, await new ContextSearcher(host.get("context")).search(request));
   });
 }
 
@@ -235,6 +272,7 @@ export async function askContext(
     blobRoot: requirePath(options, "blob-root"),
     orgId,
     model: modelProviderConfigFromEnv(env),
+    embedding: embeddingConfigFromEnv(env),
   }, async (host) => {
     await bootstrapLocalContextSearch(host, orgId);
     const request = localContextRequest(
@@ -339,4 +377,3 @@ function localContextRequest(
     requested_kinds: ["event"],
   };
 }
-

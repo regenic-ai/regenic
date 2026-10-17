@@ -57,6 +57,8 @@ import {
 } from "@regenic/domain";
 import {
   ContextEngineError,
+  ContextSearcher,
+  contextSearchRequest,
   ContextQuestionAnswerer,
   ContextQuestionError,
   type ContextAnswerResult,
@@ -121,6 +123,15 @@ export class PersonalContextService {
   async assemble(input: unknown) {
     const request = this.contextRequest(input);
     return this.runContext(() => this.runtime.requireHost().get("context").assemble(request));
+  }
+
+  async search(input: unknown) {
+    return this.runContext(async () => {
+      const request = contextSearchRequest(input, {
+        id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
+      });
+      return new ContextSearcher(this.runtime.requireHost().get("context")).search(request);
+    });
   }
 
   async getSnapshot(snapshotId: string): Promise<ContextSnapshot> {

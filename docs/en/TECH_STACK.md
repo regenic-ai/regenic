@@ -41,8 +41,9 @@ Durable embedding jobs reconcile full Authority lifecycle reads independently
 of the existing projection queue. It is off by default
 (`REGENIC_EMBEDDING_DRIVER=none`). Explicitly configured personal API hosts now
 use current-only hybrid Event retrieval (also for `/ask`), with lexical degradation
-and pinned snapshot traces. A separate record-search endpoint and CLI query
-configuration are the next rollout step. See the
+and pinned snapshot traces. `POST /v1/me/context/search` does not require completion;
+CLI `context-search`, `context-assemble`, and `context-ask` share the optional
+embedding configuration. See the
 [implementation status and local setup](../zh/EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影).
 
 ## 2. Components

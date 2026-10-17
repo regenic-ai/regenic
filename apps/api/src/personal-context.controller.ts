@@ -31,6 +31,12 @@ export class PersonalContextController {
     return this.guard(() => this.context.assemble(body));
   }
 
+  @Post("search")
+  @HttpCode(HttpStatus.OK)
+  search(@Body() body: unknown) {
+    return this.guard(() => this.context.search(body));
+  }
+
   @Get("snapshots/:snapshotId")
   getSnapshot(@Param("snapshotId") snapshotId: string) {
     return this.guard(() => this.context.getSnapshot(snapshotId));

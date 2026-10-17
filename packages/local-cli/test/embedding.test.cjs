@@ -21,7 +21,7 @@ it("runs local HTTP indexing/status/retry commands with durable progress across 
     for await (const chunk of request) body += chunk;
     const input = JSON.parse(body);
     assert.deepEqual(input.descriptor, EMBEDDINGGEMMA_2);
-    assert.equal(input.mode, "document");
+    assert.ok(["document", "query"].includes(input.mode));
     response.setHeader("content-type", "application/json");
     if (reject) {
       response.writeHead(400);
@@ -75,5 +75,16 @@ it("runs local HTTP indexing/status/retry commands with durable progress across 
   assert.equal((await run("context-embedding-status")).jobs[0].status, "succeeded");
   assert.equal((await run("context-embedding-index")).processed, 0);
   assert.equal(embeddings, 1);
+  const searched = await run("context-search", "--query", "release permission", "--limit", "1");
+  assert.equal(searched.items.length, 1);
+  assert.ok(searched.generation);
+  assert.equal(searched.items[0].snippet, "发布批准 RG-2048");
+  assert.equal(searched.coverage.covered_count, 1);
+  assert.equal(embeddings, 2);
+  const assembled = await run("context-assemble", "--query", "release permission");
+  assert.equal(assembled.snapshot.retrieval_trace[0].mode, "hybrid");
+  await assert.rejects(run("context-search", "--query", "release", "--temporal", "history"), /Invalid search/);
+  await assert.rejects(run("context-search", "--query", "release", "--limit", "101"), /Invalid search/);
+  await assert.rejects(run("context-search", "--query", "release", "--generation", "injected"), /Unexpected search/);
   await assert.rejects(run("context-embedding-retry", "--event", "missing"), /No current quarantined/);
 });

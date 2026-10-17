@@ -26,6 +26,7 @@ import {
 import {
   askContext,
   assembleContext,
+  searchContext,
   diffContextSnapshots,
   evaluateContext,
   listContextSnapshotHistory,
@@ -232,7 +233,10 @@ export async function runLocalCli(
       await reapplyInboxDispatchPolicy(commandOptions, stdout, now);
       return;
     case "context-assemble":
-      await assembleContext(commandOptions, stdout, createId);
+      await assembleContext(commandOptions, env, stdout, createId);
+      return;
+    case "context-search":
+      await searchContext(commandOptions, env, stdout, createId);
       return;
     case "context-snapshot":
       await showContextSnapshot(commandOptions, stdout);
