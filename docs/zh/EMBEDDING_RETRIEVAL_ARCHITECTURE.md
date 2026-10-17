@@ -348,11 +348,10 @@ chunk 命中不能绕过预算。后续片段证据协议和两阶段 materializ
 
 ## 9. 建议 API 协议与 `/ask` 复用
 
-### 9.1 `POST /v1/me/context/search`（尚未实现）
+### 9.1 `POST /v1/me/context/search`
 
-当前 [Controller][api-controller] 提供 assemble、replay、ask 等入口，没有 search。
-建议在同一个个人 API 边界下新增记录搜索入口，不要求 completion 模型可用。
-以下是**协议草案**，不表示现有接口接受这些字段：
+已在同一个个人 API Guard 边界下提供记录搜索入口，不要求 completion 模型可用。
+接口接受以下严格协议：
 
 ```json
 {
@@ -363,13 +362,13 @@ chunk 命中不能绕过预算。后续片段证据协议和两阶段 materializ
 }
 ```
 
-`20` 只是示例，不是已经确认的默认值。首期限定 `temporal.mode = current`；
+默认 `limit=20`，整数范围 1–100；首期限定 `temporal.mode = current`；
 history/as_of 仅在历史版本覆盖和撤回测试通过后开放，之前显式拒绝，不静默改成 current。
 filters 复用现有字段语义，未知字段、空白 query、过长输入、非法时间或超额 limit 返回 `400`。
 服务端设置请求 ID、org/principal、`display` 用途、purpose 与受限预算；不接受客户端传入
 policy hash、向量、授权键、generation、模型 revision 或任意推理服务 URL。
 
-建议响应包含：
+响应包含：
 
 - `request_id`、`snapshot_id`、`read_epoch`、检索 profile 与实际 generation；generation 在纯词法时为空。
 - `items`：Event ID、content hash、来源、发生时间、排名、受限 snippet 及证据引用。
@@ -382,7 +381,7 @@ policy hash、向量、授权键、generation、模型 revision 或任意推理�
 不为首期引入游标；未来分页需绑定 principal/policy epoch、query、generation 和稳定读视图。
 `401/403/404` 遵循个人 Guard 现有边界；限流 `429`、权威/Policy 不可用 `503`。
 模型/索引故障但词法可用时 `200` 并明确降级；无命中 `200` 空数组，不能伪装模型成功。
-上述新增状态与字段需独立实现和协议测试。
+输入和降级路径已有协议测试；`429` 沿用部署边界限流策略，本接口不新增独立限流器。
 
 ### 9.2 `/ask` 的复用
 
@@ -390,7 +389,7 @@ policy hash、向量、授权键、generation、模型 revision 或任意推理�
 当前 [ask service][api-ask-service] 把 question 转成 ContextRequest，再调用
 [ContextQuestionAnswerer][answerer] assemble、生成回答并校验引用。
 
-建议 search 与 ask 共用内部检索/assemble 服务和 Hybrid retriever，不在 ask 内部发 HTTP 请求调用 search。
+search 与 ask 共用内部 assemble 和 Hybrid retriever，不在 ask 内部发 HTTP 请求调用 search。
 ask 按 `display`/`reason` 用途和回答预算构建自己的 ContextRequest，直接消费完整 bundle，
 不把搜索 snippet 当作回答证据；不是直接复用 display-only search snapshot。
 词法降级时仍可基于授权 bundle 回答；completion 失败保留现有错误语义，不生成无引用回答。
@@ -709,9 +708,26 @@ CLI host 支持同一装配；CLI 查询命令的环境配置接线与独立 sea
 `model_absent` 仍描述原引擎 completion 能力占位，不代表 embedding 健康；
 embedding 与 vector 的实际运行情况由新标志和 trace 表达。
 
-后续预计三个独立 PR：统一 search/ask 入口、generation 运维、真实模型评测与故障/性能收尾。
+后续实施见第 17 节；generation 运维、真实模型评测与故障/性能收尾仍待完成。
 首期仅个人 SQLite/current 文本；组织 ACL、历史语义覆盖、pgvector/ANN、多模态和选择性永久删除
 仍属单独的后续范围，不以合成评测冒充组织或真实用户数据质量认证。
+
+## 17. 第四批实施：Search API/CLI 与查询入口统一
+
+- `POST /v1/me/context/search` 返回 `200`，严格校验 query（非空、最多 8000 UTF-16 单元）、
+  filters、current temporal 和 limit；不允许覆盖服务端 principal/purpose/预算/generation。
+- 先 assemble 并保存 display-only snapshot，再投影 Event 搜索视图。固定最多 8000 token，
+  limit 仅限制条数上限，长 Event 仍可能被整体预算排除。`truncated` 表示组装预算截断，
+  不代表整个语料库还有多少条，首期没有游标。
+- snippet 从授权 bundle 原文提取，优先采用已验证的匹配 chunk 起点，最多 480 Unicode code point。
+  `snippet_start/end` 是 UTF-16 原文区间；完整 Event 仍是问答证据，snippet 不写回 bundle。
+- 仅回传授权域覆盖摘要；纯词法时 generation 为 null，默认未配置 embedding 时 coverage 为 null。
+  ask 响应新增 degradation_flags、retrieval_profile、generation，不改变原引用约束。
+- CLI `context-search --database <db> --blob-root <dir> --org <org> --query <text>`
+  可加 `--limit 20`、`--source <source>`、`--thread <thread>`，只接受 current temporal。
+  search、assemble、ask 均读取 `REGENIC_EMBEDDING_*`，replay 不配置 embedding，不调用模型。
+- 桌面协议类型同步可选 snapshot trace 与 search 视图；现有面板继续展示 bundle 降级标志，
+  不在本批加入新的搜索页面。
 
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679

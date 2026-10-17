@@ -170,6 +170,42 @@ async function getJson(url) {
 }
 
 describe("personal context API", () => {
+  it("searches without completion, pins display snapshots and validates the strict public protocol", async () => {
+    const root = await createRoot();
+    const { origin, eventId } = await startApi(root);
+    const searched = await postJson(`${origin}/v1/me/context/search`, { query: "release approved", limit: 1 });
+    assert.equal(searched.response.status, 200, searched.text);
+    const result = JSON.parse(searched.text);
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].event_id, eventId);
+    assert.equal(result.items[0].rank, 1);
+    assert.equal(result.items[0].snippet, "The release is approved for Monday.");
+    assert.match(result.items[0].content_hash, /^[a-f0-9]{64}$/);
+    assert.equal(result.generation, null);
+    assert.ok(result.request_id && result.snapshot_id && result.read_epoch && result.retrieval_profile);
+    assert.equal((await getJson(`${origin}/v1/me/context/snapshots/${result.snapshot_id}`)).response.status, 200);
+    const empty = await postJson(`${origin}/v1/me/context/search`, { query: "zzzznonexistent", limit: 1 });
+    assert.equal(empty.response.status, 200);
+    assert.deepEqual(JSON.parse(empty.text).items, []);
+    for (const body of [
+      {}, { query: " " }, { query: "x".repeat(8001) },
+      { query: "release", limit: 0 }, { query: "release", limit: 101 }, { query: "release", limit: 1.1 },
+      { query: "release", filters: {} }, { query: "release", filters: { secret: "x" } },
+      { query: "release", filters: { sources: ["x", "x"] } },
+      { query: "release", filters: { occurred_after: "bad" } },
+      { query: "release", temporal: { mode: "history" } },
+      { query: "release", temporal: { mode: "as_of", recorded_at: "2026-08-30T00:00:00.000Z" } },
+      ...["org_id", "principal", "purpose", "budget", "generation", "vectors", "base_url"].map((key) =>
+        ({ query: "release", [key]: "injected" })),
+    ]) {
+      const invalid = await postJson(`${origin}/v1/me/context/search`, body);
+      assert.equal(invalid.response.status, 400, invalid.text);
+    }
+    const filtered = await postJson(`${origin}/v1/me/context/search`, {
+      query: "release", filters: { sources: ["not-authorized-source"] },
+    });
+    assert.deepEqual(JSON.parse(filtered.text).items, []);
+  });
   it("reviews a snapshot-pinned Proposal and atomically commits one Decision", async () => {
     const root = await createRoot();
     const { origin, eventId } = await startApi(root);

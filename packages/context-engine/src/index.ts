@@ -5,6 +5,7 @@ export * from "./deterministic-context-engine";
 export * from "./authority-context-source";
 export * from "./personal-context-policy";
 export * from "./context-question-answerer";
+export * from "./context-searcher";
 export * from "./context-retrieval-evaluator";
 export * from "./context-embedding-worker";
 export * from "./hybrid-event-retriever";
