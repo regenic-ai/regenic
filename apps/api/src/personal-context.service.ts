@@ -1397,6 +1397,13 @@ export class PersonalContextService {
       if (error instanceof EmbeddingError && (error.code === "invalid_input" || error.code === "input_too_large")) {
         throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Query exceeds embedding input limits or is invalid");
       }
+      if (error instanceof Error && "code" in error && typeof error.code === "string" &&
+        ["SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_IOERR", "SQLITE_CORRUPT", "SQLITE_NOTADB",
+          "SQLITE_CANTOPEN", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(error.code)) {
+        console.warn("context source unavailable", error.code);
+        throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+          "Context source is unavailable; retry the request");
+      }
       if (!(error instanceof ContextEngineError)) {
         throw error;
       }

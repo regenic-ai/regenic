@@ -45,6 +45,10 @@ and pinned snapshot traces. `POST /v1/me/context/search` does not require comple
 CLI `context-search`, `context-assemble`, and `context-ask` share the optional
 embedding configuration. See the
 [implementation status and local setup](../zh/EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影).
+Generation backfill/activation/rollback/GC and a reproducible real-model synthetic
+evaluation are available. The v2 hybrid profile gates covered single-CJK-character-only
+lexical matches, preserves lexical fallback, and remains off by default. Small synthetic
+results are not real-user quality or production performance certification.
 
 ## 2. Components
 
