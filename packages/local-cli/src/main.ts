@@ -134,6 +134,10 @@ export async function runLocalCli(
     case "context-embedding-index":
     case "context-embedding-status":
     case "context-embedding-retry":
+    case "context-embedding-backfill":
+    case "context-embedding-activate":
+    case "context-embedding-rollback":
+    case "context-embedding-gc":
       await embeddingCommand(command, commandOptions, env, stdout);
       return;
     case "slack-install":

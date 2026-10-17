@@ -9,6 +9,7 @@ import {
   ContextVectorUnavailableError,
   EmbeddingError,
   type ContextVectorIndex,
+  type ContextVectorGenerationStore,
   type ContextVectorChunk,
   type EmbeddingGeneration,
   type EmbeddingJob,
@@ -23,7 +24,7 @@ interface JobRow {
   lineage_json: string; fence: number; attempts: number; status: EmbeddingJob["status"]; error_code: string | null;
 }
 
-export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJobStore {
+export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore {
   private readonly db: Database.Database;
 
   constructor(path: string) {
@@ -35,7 +36,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJo
       this.db.pragma("secure_delete = ON");
       this.db.pragma("busy_timeout = 5000");
       const version = this.db.pragma("user_version", { simple: true });
-      if (version !== 0 && version !== 1) throw new VectorIndexSchemaError("Unsupported vector index schema");
+      if (version !== 0 && version !== 1 && version !== 2) throw new VectorIndexSchemaError("Unsupported vector index schema");
       this.db.transaction(() => {
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS generations (
@@ -69,7 +70,15 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJo
             PRIMARY KEY (org_id, generation, event_id, ordinal),
             FOREIGN KEY (org_id, generation, event_id) REFERENCES coverage(org_id, generation, event_id) ON DELETE CASCADE
           );
-          PRAGMA user_version = 1;
+          CREATE TABLE IF NOT EXISTS active_generations (
+            org_id TEXT PRIMARY KEY, generation TEXT NOT NULL,
+            FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
+          );
+          CREATE TABLE IF NOT EXISTS retired_generations (
+            org_id TEXT NOT NULL, generation TEXT NOT NULL, manifest_json TEXT NOT NULL, retired_at TEXT NOT NULL,
+            PRIMARY KEY (org_id, generation)
+          );
+          PRAGMA user_version = 2;
         `);
       }).immediate();
     } catch (error) {
@@ -84,9 +93,93 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJo
     required(orgId);
     const expected = embeddingGeneration(generation.model, generation.chunk_tokens, generation.max_chunks_per_event);
     if (canonicalContextJson(generation) !== canonicalContextJson(expected)) throw new Error("Invalid vector generation manifest");
-    this.db.prepare("INSERT OR IGNORE INTO generations(org_id,generation,manifest_json) VALUES (?,?,?)")
-      .run(orgId, generation.id, canonicalContextJson(generation));
-    this.manifest(orgId, generation.id);
+    this.db.transaction(() => {
+      if (this.db.prepare("SELECT 1 FROM retired_generations WHERE org_id=? AND generation=?").get(orgId, generation.id)) {
+        throw new Error("Generation was collected; use a new recipe or explicitly clear the projection");
+      }
+      this.db.prepare("INSERT OR IGNORE INTO generations(org_id,generation,manifest_json) VALUES (?,?,?)")
+        .run(orgId, generation.id, canonicalContextJson(generation));
+      this.manifest(orgId, generation.id);
+      this.db.prepare("INSERT OR IGNORE INTO active_generations VALUES (?,?)").run(orgId, generation.id);
+    }).immediate();
+  }
+
+  async listGenerations(orgId: string): ReturnType<ContextVectorGenerationStore["listGenerations"]> {
+    required(orgId);
+    const rows = this.db.prepare(`SELECT g.generation,g.reconciled_epoch,
+      CASE WHEN a.generation=g.generation THEN 1 ELSE 0 END AS active
+      FROM generations g LEFT JOIN active_generations a ON a.org_id=g.org_id
+      WHERE g.org_id=? ORDER BY g.generation`).all(orgId) as Array<{
+        generation: string; reconciled_epoch: string | null; active: number;
+      }>;
+    return rows.map((row) => ({
+      manifest: this.manifest(orgId, row.generation), active: row.active === 1,
+      ...(row.reconciled_epoch ? { reconciled_epoch: row.reconciled_epoch } : {}),
+    }));
+  }
+
+  async activeGeneration(orgId: string): Promise<EmbeddingGeneration | undefined> {
+    required(orgId);
+    try {
+      const row = this.db.prepare("SELECT generation FROM active_generations WHERE org_id=?").get(orgId) as
+        { generation: string } | undefined;
+      return row ? this.manifest(orgId, row.generation) : undefined;
+    } catch (error) {
+      if (error instanceof Database.SqliteError) throw new ContextVectorUnavailableError("unavailable");
+      throw error;
+    }
+  }
+
+  async activateGeneration(input: Parameters<ContextVectorGenerationStore["activateGeneration"]>[0]): Promise<void> {
+    required(input.org_id); required(input.generation); required(input.read_epoch);
+    const ids = new Set<string>();
+    for (const key of input.required) {
+      required(key.event_id);
+      if (!validHash(key.content_hash) || ids.has(key.event_id)) throw new Error("Invalid generation coverage proof");
+      ids.add(key.event_id);
+    }
+    this.db.transaction(() => {
+      const manifest = this.manifest(input.org_id, input.generation);
+      const row = this.db.prepare("SELECT reconciled_epoch FROM generations WHERE org_id=? AND generation=?")
+        .get(input.org_id, input.generation) as { reconciled_epoch: string | null };
+      if (row.reconciled_epoch !== input.read_epoch) throw new Error("Generation requires reconciliation at the current Authority epoch");
+      for (const key of input.required) {
+        const coverage = this.db.prepare(`SELECT c.chunk_count FROM coverage c JOIN source_heads h
+          ON h.org_id=c.org_id AND h.source=c.source AND h.external_id=c.external_id AND h.event_id=c.event_id
+          WHERE c.org_id=? AND c.generation=? AND c.event_id=? AND c.content_hash=?`)
+          .get(input.org_id, input.generation, key.event_id, key.content_hash) as { chunk_count: number } | undefined;
+        if (!coverage) throw new Error("Generation is not fully covered; backfill or retry first");
+        const chunks = this.db.prepare("SELECT ordinal,start,end,vector FROM chunks WHERE org_id=? AND generation=? AND event_id=? ORDER BY ordinal")
+          .all(input.org_id, input.generation, key.event_id) as Array<{ ordinal: number; start: number; end: number; vector: Buffer }>;
+        let end = 0;
+        if (chunks.length !== coverage.chunk_count || chunks.length < 1) throw new ContextVectorUnavailableError("corrupt");
+        for (const [ordinal, chunk] of chunks.entries()) {
+          if (chunk.ordinal !== ordinal || chunk.start !== end || chunk.end <= end ||
+            chunk.vector.length !== manifest.model.dimensions * 4) throw new ContextVectorUnavailableError("corrupt");
+          validateEmbeddingVector(Array.from({ length: manifest.model.dimensions },
+            (_, index) => chunk.vector.readFloatLE(index * 4)), manifest.model.dimensions);
+          end = chunk.end;
+        }
+      }
+      this.db.prepare(`INSERT INTO active_generations VALUES (?,?)
+        ON CONFLICT(org_id) DO UPDATE SET generation=excluded.generation`).run(input.org_id, input.generation);
+    }).immediate();
+  }
+
+  async removeGeneration(orgId: string, generation: string): Promise<void> {
+    required(orgId); required(generation);
+    this.db.transaction(() => {
+      this.manifest(orgId, generation);
+      if (this.db.prepare("SELECT 1 FROM active_generations WHERE org_id=? AND generation=?").get(orgId, generation)) {
+        throw new Error("Cannot garbage-collect the active generation");
+      }
+      if (this.db.prepare("SELECT 1 FROM jobs WHERE org_id=? AND generation=? AND status='running' AND lease_until>?")
+        .get(orgId, generation, new Date().toISOString())) throw new Error("Generation still has a live indexing lease");
+      this.db.prepare(`INSERT INTO retired_generations
+        SELECT org_id,generation,manifest_json,? FROM generations WHERE org_id=? AND generation=?`)
+        .run(new Date().toISOString(), orgId, generation);
+      this.db.prepare("DELETE FROM generations WHERE org_id=? AND generation=?").run(orgId, generation);
+    }).immediate();
   }
 
   async reconcile(input: Parameters<EmbeddingJobStore["reconcile"]>[0]): Promise<void> {
@@ -280,6 +373,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, EmbeddingJo
     this.db.transaction(() => {
       this.db.prepare("DELETE FROM generations WHERE org_id=?").run(orgId);
       this.db.prepare("DELETE FROM source_heads WHERE org_id=?").run(orgId);
+      this.db.prepare("DELETE FROM retired_generations WHERE org_id=?").run(orgId);
     }).immediate();
     this.db.pragma("wal_checkpoint(TRUNCATE)");
   }
@@ -320,6 +414,7 @@ export const sqliteContextVectorIndexPlugin = definePlugin<{ path: string }>({
     }
     ctx.provide("context-vector-status", { status: "ready" });
     ctx.provide("context-vector-index", index);
+    ctx.provide("context-vector-generations", index);
     ctx.provide("context-embedding-jobs", index);
     ctx.effect(() => () => index.close());
   },

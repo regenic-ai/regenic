@@ -31,6 +31,7 @@ export const hybridEventRetrieverPlugin = definePlugin<{
       provider,
       ctx.get("context-vector-status").status === "ready" ? ctx.get("context-vector-index") : undefined,
       embeddingGeneration(provider.descriptor, config.chunk_tokens, config.max_chunks_per_event),
+      ctx.get("context-vector-status").status === "ready" ? ctx.get("context-vector-generations") : undefined,
     ));
   },
 });
@@ -47,6 +48,7 @@ export const contextEmbeddingWorkerPlugin = definePlugin<{
       new AuthorityContextEvidenceSource(ctx.get("context-authority"), ctx.get("blobs"), true),
       provider, ctx.get("context-vector-index"), ctx.get("context-embedding-jobs"),
       embeddingGeneration(provider.descriptor, config.chunk_tokens, config.max_chunks_per_event),
+      ctx.get("context-vector-generations"),
     );
     ctx.provide("context-embedding-worker", worker);
     ctx.effect(() => () => worker.stop());

@@ -27,6 +27,7 @@ async function fixture(t) {
   await index.registerGeneration("org", generation);
   t.after(async () => { index.close(); await rm(root, { recursive: true, force: true }); });
   return {
+    path,
     get index() { return index; },
     reopen() { index.close(); index = new SqliteContextVectorIndex(path); return index; },
   };
@@ -42,6 +43,63 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("switches only fully covered reconciled generations, persists rollback and guards collection", async (t) => {
+    const f = await fixture(t);
+    const next = embeddingGeneration(model, 64);
+    await f.index.registerGeneration("org", next);
+    assert.equal((await f.index.activeGeneration("org")).id, generation.id);
+    await reconcile(f.index, [head("event")], "org", next);
+    const proof = { org_id: "org", generation: next.id, read_epoch: "authority:1",
+      required: [{ event_id: "event", content_hash: hash }] };
+    await assert.rejects(f.index.activateGeneration(proof), /not fully covered/);
+    const [job] = await claim(f.index, "owner", at, "org", next);
+    await f.index.complete({ job, owner: "owner", now: at, chunks: [chunk()] });
+    await assert.rejects(f.index.activateGeneration({ ...proof, read_epoch: "authority:2" }), /current Authority epoch/);
+    await assert.rejects(f.index.activateGeneration({ ...proof, required: [...proof.required, ...proof.required] }), /coverage proof/);
+    await f.index.activateGeneration(proof);
+    f.reopen();
+    assert.equal((await f.index.activeGeneration("org")).id, next.id);
+    await assert.rejects(f.index.removeGeneration("org", next.id), /active generation/);
+    assert.equal(await f.index.activeGeneration("another-org"), undefined);
+    await reconcile(f.index, [head("event")]);
+    await assert.rejects(f.index.activateGeneration({ ...proof, generation: generation.id }), /not fully covered/);
+    const [previous] = await claim(f.index);
+    await f.index.complete({ job: previous, owner: "owner", now: at, chunks: [chunk()] });
+    await f.index.activateGeneration({ ...proof, generation: generation.id });
+    await f.index.removeGeneration("org", next.id);
+    await assert.rejects(f.index.registerGeneration("org", next), /was collected/);
+    f.reopen();
+    await assert.rejects(f.index.registerGeneration("org", next), /was collected/);
+    assert.equal((await f.index.listGenerations("org")).length, 1);
+    await assert.rejects(query(f.index, proof.required, { generation: next.id }), /not registered/);
+    await assert.rejects(f.index.complete({ job, owner: "owner", now: later, chunks: [chunk()] }), /not registered/);
+    await f.index.clearOrganization("org");
+    assert.equal(await f.index.activeGeneration("org"), undefined);
+  });
+
+  it("migrates schema v1 without inventing an active generation before configured registration", async (t) => {
+    const f = await fixture(t);
+    f.index.close();
+    const Database = require("better-sqlite3");
+    const db = new Database(f.path);
+    db.exec("DROP TABLE active_generations; PRAGMA user_version=1;");
+    db.close();
+    f.reopen();
+    assert.equal(await f.index.activeGeneration("org"), undefined);
+    await f.index.registerGeneration("org", generation);
+    assert.equal((await f.index.activeGeneration("org")).id, generation.id);
+  });
+
+  it("refuses collection while an inactive generation still has a live indexing lease", async (t) => {
+    const { index } = await fixture(t);
+    const next = embeddingGeneration(model, 64);
+    await index.registerGeneration("org", next);
+    await reconcile(index, [head("event")], "org", next);
+    const now = new Date().toISOString();
+    await index.claim({ org_id: "org", generation: next.id, owner: "live", now, lease_ms: 90000, limit: 1 });
+    await assert.rejects(index.removeGeneration("org", next.id), /live indexing lease/);
+    assert.equal((await index.listGenerations("org")).length, 2);
+  });
   it("scans only authorized Event/hash keys, aggregates chunks once, and has stable ties", async (t) => {
     const { index } = await fixture(t);
     await reconcile(index, [head("event-b"), head("event-a"), head("hidden")]);
