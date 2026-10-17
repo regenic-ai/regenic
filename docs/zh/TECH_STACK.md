@@ -36,6 +36,8 @@ projection coordinator，路径为 `${database}.lexical.db`。FTS 未建或部�
 `REGENIC_EMBEDDING_DRIVER=none`；显式启用的个人 API host 已接入 current-only 混合召回，
 包括 `/ask`，支持词法降级和 snapshot trace。`POST /v1/me/context/search` 不依赖 completion；
 CLI `context-search`、`context-assemble`、`context-ask` 共享可选 embedding 配置。
+generation 回填、激活、回滚、GC 和真实模型合成评测已实现。混合 v2 profile 约束已覆盖文本的
+单字弱词法准入，保留故障词法降级；默认仍关闭，合成结果不等于真实用户质量或生产性能认证。
 运行方式与限制见[设计文档第 15 节](EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影)及第 16 节。
 
 ## 2. 组件

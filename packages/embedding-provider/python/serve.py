@@ -3,7 +3,8 @@
 import argparse
 import json
 import logging
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL_ID = "google/embeddinggemma-2"
 REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
@@ -94,6 +95,73 @@ class TextEncoder:
         return vectors.tolist()
 
 
+class PriorityEncoder:
+    def __init__(self, encoder, max_pending=16, wait_seconds=30):
+        self.encoder = encoder
+        self.max_pending = max_pending
+        self.wait_seconds = wait_seconds
+        self.condition = threading.Condition()
+        self.busy = False
+        self.pending = 0
+        self.waiting_queries = 0
+
+    def call(self, method, texts, mode):
+        with self.condition:
+            if self.pending >= self.max_pending:
+                raise InputError(429)
+            self.pending += 1
+            self.waiting_queries += int(mode == "query")
+            self.condition.notify_all()
+            try:
+                ready = self.condition.wait_for(
+                    lambda: not self.busy and (mode == "query" or self.waiting_queries == 0),
+                    timeout=self.wait_seconds,
+                )
+                if not ready:
+                    raise InputError(503)
+                self.busy = True
+            finally:
+                self.pending -= 1
+                self.waiting_queries -= int(mode == "query")
+        try:
+            return getattr(self.encoder, method)(texts, mode)
+        finally:
+            with self.condition:
+                self.busy = False
+                self.condition.notify_all()
+
+    def count(self, texts, mode):
+        return self.call("count", texts, mode)
+
+    def embed(self, texts, mode):
+        return self.call("embed", texts, mode)
+
+
+class BoundedHTTPServer(ThreadingHTTPServer):
+    def __init__(self, address, handler):
+        self.slots = threading.BoundedSemaphore(32)
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except (RuntimeError, OSError):
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
 def handler_for(encoder):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, _format, *args):
@@ -121,6 +189,7 @@ def handler_for(encoder):
                 result = encoder.count(texts, mode) if field == "counts" else encoder.embed(texts, mode)
                 self.reply(200, {"descriptor": DESCRIPTOR, field: result})
             except InputError as error:
+                logging.warning("embedding_request_rejected status=%d", error.status)
                 self.reply(error.status, {"error": "invalid_embedding_request"})
             except (ValueError, UnicodeError):
                 self.reply(400, {"error": "invalid_json"})
@@ -148,8 +217,8 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
-    encoder = TextEncoder(args.device)
-    server = HTTPServer(("127.0.0.1", args.port), handler_for(encoder))
+    encoder = PriorityEncoder(TextEncoder(args.device))
+    server = BoundedHTTPServer(("127.0.0.1", args.port), handler_for(encoder))
     logging.warning("embedding_ready model_revision=%s port=%d", REVISION, args.port)
     try:
         server.serve_forever()
