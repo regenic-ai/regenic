@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 48;
+export const PG_SCHEMA_VERSION = 49;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -502,6 +502,14 @@ ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '{}'
 SELECT 1;
 `,
   },
+  {
+    version: 49,
+    sql: `
+ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
+ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
+ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -664,6 +672,9 @@ CREATE TABLE recipes (
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   trigger_kind TEXT NOT NULL DEFAULT 'push',
   trigger_interval_ms INTEGER,
+  trigger_at_minute INTEGER,
+  trigger_weekdays TEXT,
+  trigger_timezone TEXT,
   trigger_coalesce BOOLEAN NOT NULL DEFAULT TRUE,
   max_concurrent INTEGER,
   next_run_at TIMESTAMPTZ,
