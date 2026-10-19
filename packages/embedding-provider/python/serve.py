@@ -167,6 +167,14 @@ def handler_for(encoder):
         def log_message(self, _format, *args):
             pass
 
+        def do_GET(self):
+            if self.path != "/health":
+                self.reply(404, {"error": "not_found"})
+            elif self.headers.get("Origin") is not None:
+                self.reply(403, {"error": "origin_rejected"})
+            else:
+                self.reply(200, {"status": "ready", "descriptor": DESCRIPTOR})
+
         def do_POST(self):
             self.connection.settimeout(10)
             if self.headers.get("Origin") is not None:
@@ -214,10 +222,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
     encoder = PriorityEncoder(TextEncoder(args.device))
+    if args.download_only:
+        logging.warning("embedding_download_verified model_revision=%s", REVISION)
+        return
     server = BoundedHTTPServer(("127.0.0.1", args.port), handler_for(encoder))
     logging.warning("embedding_ready model_revision=%s port=%d", REVISION, args.port)
     try:

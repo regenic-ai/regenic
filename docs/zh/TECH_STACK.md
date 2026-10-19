@@ -39,6 +39,12 @@ CLI `context-search`、`context-assemble`、`context-ask` 共享可选 embedding
 generation 回填、激活、回滚、GC 和真实模型合成评测已实现。混合 v2 profile 约束已覆盖文本的
 单字弱词法准入，保留故障词法降级；默认仍关闭，合成结果不等于真实用户质量或生产性能认证。
 运行方式与限制见[设计文档第 15 节](EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影)及第 16 节。
+桌面搜索页已接入授权 current 文本检索、安全片段、证据、覆盖与降级追踪。
+设置页支持独立 Python 3.12 venv / 固定模型的下载、启停、健康检查与索引任务计数；
+默认关闭，模型存于 Electron userData，不随个人数据目录搬迁。仅管理桌面拥有的本地内核。
+`GET /v1/me/context/embedding/status` 仅返回就绪状态与各代任务聚合计数，
+`POST /v1/me/context/embedding/index` 只接受 `{}`、一次处理至多一个任务；
+二者共用 Personal API 认证边界。详见[桌面操作说明](DESKTOP.md#个人上下文搜索与本地模型)。
 
 ## 2. 组件
 

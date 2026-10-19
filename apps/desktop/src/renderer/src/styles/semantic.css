@@ -1,0 +1,16 @@
+.semantic-search-form { display: grid; gap: 12px; }
+.semantic-search-form textarea { width: 100%; resize: vertical; min-height: 72px; }
+.semantic-filters { display: flex; gap: 16px; flex-wrap: wrap; }
+.semantic-filters label { display: grid; gap: 5px; flex: 1; min-width: 140px; }
+.semantic-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.semantic-consent { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; }
+.semantic-consent input { width: auto; }
+.semantic-results { list-style: none; padding: 0; display: grid; gap: 16px; }
+.semantic-results header { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.semantic-results time { color: var(--muted); }
+.semantic-snippet { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.semantic-results dl, .semantic-search-meta dl { user-select: text; }
+.semantic-results dd, .semantic-search-meta dd, .semantic-generation { overflow-wrap: anywhere; margin-left: 0; }
+.semantic-results dt, .semantic-search-meta dt { color: var(--muted); margin-top: 8px; }
+.semantic-generation { border-top: 1px solid var(--line); padding-top: 12px; }
+.titlebar .search { -webkit-app-region: no-drag; text-align: left; cursor: text; }

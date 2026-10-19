@@ -109,7 +109,7 @@ async function startModelStub(mode = "valid") {
   };
 }
 
-async function startApi(root, model = { driver: "none" }) {
+async function startApi(root, model = { driver: "none" }, embedding) {
   const database = join(root, "authority.db");
   const blobRoot = join(root, "blobs");
   const env = {
@@ -129,6 +129,8 @@ async function startApi(root, model = { driver: "none" }) {
     REGENIC_MODEL_TIMEOUT_MS: "2000",
     REGENIC_MODEL_MAX_RESPONSE_BYTES: "65536",
     CONTEXT_API_MODEL_KEY: model.driver === "none" ? undefined : "context-api-test-secret",
+    REGENIC_EMBEDDING_DRIVER: embedding ? "local_http" : "none",
+    REGENIC_EMBEDDING_BASE_URL: embedding,
   };
   setEnv(env);
   const eventId = await ingestEvidence(database, blobRoot);
@@ -170,6 +172,55 @@ async function getJson(url) {
 }
 
 describe("personal context API", () => {
+  it("indexes one bounded job and reports aggregate coverage without exposing content or URLs", async () => {
+    const { EMBEDDINGGEMMA_2 } = require("@regenic/embedding-provider");
+    const server = createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({
+        descriptor: EMBEDDINGGEMMA_2,
+        ...(request.url === "/tokens" ? { counts: input.texts.map(() => 10) }
+          : { vectors: input.texts.map(() => [1, ...Array(767).fill(0)]) }),
+      }));
+    });
+    await listenServer(server);
+    servers.push(server);
+    const root = await createRoot();
+    const { origin } = await startApi(root, { driver: "none" }, `http://127.0.0.1:${server.address().port}`);
+    const indexed = await postJson(`${origin}/v1/me/context/embedding/index`, {});
+    assert.equal(indexed.response.status, 200, indexed.text);
+    assert.equal(JSON.parse(indexed.text).processed, 1);
+    const status = await getJson(`${origin}/v1/me/context/embedding/status`);
+    assert.equal(status.response.status, 200, status.text);
+    const value = JSON.parse(status.text);
+    assert.equal(value.configured, true);
+    assert.equal(value.healthy, true);
+    assert.equal(value.vector_status, "ready");
+    assert.equal(value.generations.filter((generation) => generation.active).length, 1);
+    assert.equal(value.generations.find((generation) => generation.active).jobs.succeeded, 1);
+    assert.ok(!status.text.includes("http://") && !status.text.includes("release is approved"));
+    const search = await postJson(`${origin}/v1/me/context/search`, { query: "release" });
+    assert.equal(search.response.status, 200, search.text);
+    assert.ok(JSON.parse(search.text).generation);
+  });
+  it("reports disabled embeddings safely and strictly rejects unavailable indexing and injected fields", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(root);
+    const status = await getJson(`${origin}/v1/me/context/embedding/status`);
+    assert.equal(status.response.status, 200, status.text);
+    assert.deepEqual(JSON.parse(status.text), {
+      configured: false, healthy: false, vector_status: "disabled", generations: [],
+    });
+    const index = await postJson(`${origin}/v1/me/context/embedding/index`, {});
+    assert.equal(index.response.status, 503, index.text);
+    assert.equal(JSON.parse(index.text).error.code, "retrieval_unavailable");
+    for (const body of [{ org_id: "other" }, { limit: 1000 }, { base_url: "http://example.com" }]) {
+      const rejected = await postJson(`${origin}/v1/me/context/embedding/index`, body);
+      assert.equal(rejected.response.status, 400, rejected.text);
+    }
+  });
   it("searches without completion, pins display snapshots and validates the strict public protocol", async () => {
     const root = await createRoot();
     const { origin, eventId } = await startApi(root);

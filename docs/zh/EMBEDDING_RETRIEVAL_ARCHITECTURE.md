@@ -862,6 +862,35 @@ development 的阈值矩阵只在开发集运行；其它集合不调参。报�
 无需删除 Authority 或历史 snapshot。上述功能交付不包含组织 ACL、ANN、历史语义、多模态、
 选择性永久擦除、自动默认开启或真实用户数据质量认证。
 
+### 桌面入口与模型管理补齐
+
+桌面搜索已接入 `/v1/me/context/search`：自然语言、精确 source/thread 过滤、
+条数上限、安全 snippet、来源证据、generation/coverage/degradation/snapshot 元数据。
+默认词法可用；错误、空结果和主动取消分别处理，后发查询和内核切换不会被旧响应覆盖。
+
+模型安装不再要求手工启动服务：设置页在下载同意后检查 Python 3.12、创建隔离 venv、
+安装固定依赖并执行 `serve.py --download-only --device cpu`，实际加载权重成功才写安装标记。
+服务资产作为桌面构建产物附带；标记绑定资产指纹。启动时只使用本机缓存（offline），
+随机数值回环端口，`GET /health` 验证固定模型身份后才注入自有内核的 `local_http` 配置。
+启停、内核切换和数据目录迁移互斥；仅管理自有进程，自定义内核不被重启。
+下载环境与缓存位于 Electron userData，禁用保留文件；启动失败不阻止词法内核启动。
+
+新增同一 Personal API 边界内的 `GET /v1/me/context/embedding/status`
+（provider/vector 状态与各代任务聚合计数，不暴露原文、原始错误和模型地址）和
+`POST /v1/me/context/embedding/index`（严格空对象，至多一个任务）。
+设置页显示进度并可手动推进一个任务；失败重试、代切换、rollback、GC 仍由 CLI 执行。
+Python 需要预装，安装不是系统 Python 安装器；依赖与权重下载需要网络、数 GB 磁盘和内存预算。
+详见[桌面操作说明](DESKTOP.md#个人上下文搜索与本地模型)。
+
+本批验收实际执行了隔离安装、固定权重加载、offline 启动、健康探测、
+768 维输出及 L2 norm 检查；随后用单条合成中文 Event 通过真实模型完成
+`embedding/index → embedding/status → context/search`（hybrid v2，覆盖 1/1）。
+另外启动独立 userData / 合成库的实际 Electron，验证 preload IPC 启用、
+保存偏好、重启自有内核并得到健康 provider，再禁用恢复词法内核。
+浏览器受控响应验收覆盖快速连续查询、内核切换清空、安全文本、空结果、错误、
+中英切换、下载同意及自定义内核禁用管理。上述是功能烟测，不代替真实用户语料质量、
+大规模性能、跨平台安装或生产认证；首次版本的合成质量评测结论保持不变。
+
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679
 [fs-blob]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/blob-store/src/fs-blob-store.ts#L23-L70

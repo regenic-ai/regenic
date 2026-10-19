@@ -1,4 +1,15 @@
-export type NavId = "inbox" | "follow-ups" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "search" | "follow-ups" | "recipes" | "engine" | "settings";
+
+export interface SemanticIndexStatus {
+  configured: boolean;
+  healthy: boolean;
+  vector_status: string;
+  generations: Array<{
+    id: string;
+    active: boolean;
+    jobs: { pending: number; running: number; succeeded: number; failed: number; quarantined: number; superseded: number };
+  }>;
+}
 
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";

@@ -15,6 +15,7 @@ import {
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
 import { ContextRecordsDialog } from "./ContextRecordsDialog";
+import { SemanticSettings } from "./SemanticSettings";
 import { useLocale } from "./LocaleContext";
 import type {
   DataDirectoryAction,
@@ -392,6 +393,8 @@ export function SettingsPage({
         <h1>{t("settings.title")}</h1>
         <p className="page-lead">{t("settings.lead")}</p>
       </header>
+
+      <SemanticSettings />
 
       <section className="card">
         <h2>{t("settings.language")}</h2>

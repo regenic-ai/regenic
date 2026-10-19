@@ -37,6 +37,17 @@ export class PersonalContextController {
     return this.guard(() => this.context.search(body));
   }
 
+  @Get("embedding/status")
+  semanticStatus() {
+    return this.guard(() => this.context.semanticStatus());
+  }
+
+  @Post("embedding/index")
+  @HttpCode(HttpStatus.OK)
+  indexSemantic(@Body() body: unknown) {
+    return this.guard(() => this.context.indexSemantic(body));
+  }
+
   @Get("snapshots/:snapshotId")
   getSnapshot(@Param("snapshotId") snapshotId: string) {
     return this.guard(() => this.context.getSnapshot(snapshotId));

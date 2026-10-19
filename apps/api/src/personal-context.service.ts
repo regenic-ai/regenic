@@ -134,6 +134,20 @@ export class PersonalContextService {
     });
   }
 
+  async semanticStatus() {
+    return this.runContext(() => this.runtime.semanticStatus());
+  }
+
+  async indexSemantic(input: unknown) {
+    strictBody(input, new Set());
+    const status = await this.semanticStatus();
+    if (!status.configured || status.vector_status !== "ready") {
+      throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+        "Semantic indexing is not configured or the vector store is unavailable");
+    }
+    return this.runContext(() => this.runtime.indexSemanticOnce());
+  }
+
   async getSnapshot(snapshotId: string): Promise<ContextSnapshot> {
     const id = requiredString(snapshotId, "snapshot_id");
     const snapshot = await this.runtime

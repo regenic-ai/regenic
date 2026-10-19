@@ -17,6 +17,7 @@ export interface KernelPreference {
 }
 
 export interface DesktopPreference extends KernelPreference {
+  semanticEnabled?: boolean;
   locale: Locale;
   dataRoot?: string;
   previousDataRoot?: string;
@@ -49,6 +50,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       dataRoot?: unknown;
       previousDataRoot?: unknown;
       personalApiKeys?: unknown;
+      semanticEnabled?: unknown;
     };
     const locale = parseLocale(raw.locale ?? DEFAULT_LOCALE);
     const dataRoot = tryParseDataRoot(raw.dataRoot);
@@ -59,6 +61,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
         mode: "custom",
         origin: parseKernelOrigin(raw.origin),
         locale,
+        ...(typeof raw.semanticEnabled === "boolean" ? { semanticEnabled: raw.semanticEnabled } : {}),
         ...(dataRoot ? { dataRoot } : {}),
         ...(previousDataRoot ? { previousDataRoot } : {}),
         ...(personalApiKeys ? { personalApiKeys } : {}),
@@ -67,6 +70,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
     return {
       mode: "local",
       locale,
+      ...(typeof raw.semanticEnabled === "boolean" ? { semanticEnabled: raw.semanticEnabled } : {}),
       ...(dataRoot ? { dataRoot } : {}),
       ...(previousDataRoot ? { previousDataRoot } : {}),
       ...(personalApiKeys ? { personalApiKeys } : {}),
@@ -91,6 +95,7 @@ export function saveDesktopPreference(
     mode: preference.mode,
     locale: preference.locale,
   };
+  if (preference.semanticEnabled !== undefined) body.semanticEnabled = preference.semanticEnabled;
   if (preference.mode === "custom" && preference.origin) {
     body.origin = preference.origin;
   }

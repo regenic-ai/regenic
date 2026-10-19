@@ -64,6 +64,7 @@ import {
   saveKernelPreference,
   saveLocalePreference,
   savePreviousDataRootPreference,
+  saveDesktopPreference,
   type KernelPreference,
 } from "./kernel-settings";
 import { connectCustomKernel } from "./kernel-connect";
@@ -72,6 +73,8 @@ import {
   attachConsolePresenceWindow,
   createConversationPresence,
 } from "./conversation-presence";
+import { SemanticRuntime } from "./semantic-runtime";
+import { semanticAction } from "../shared/semantic-runtime";
 
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
@@ -86,6 +89,53 @@ let apiOrigin = `http://127.0.0.1:${DEFAULT_PORT}`;
 let personalApiKey: string | null = null;
 let quitting = false;
 let lastInboxCount: number | null = null;
+let semanticRuntime: SemanticRuntime | undefined;
+let semanticJob: Promise<void> | undefined;
+let semanticActionError: string | undefined;
+let kernelMutation = false;
+
+async function mutateKernel<T>(run: () => Promise<T>): Promise<T> {
+  if (kernelMutation || semanticJob) throw new Error("semantic.busy");
+  kernelMutation = true;
+  try { return await run(); } finally { kernelMutation = false; }
+}
+
+function managedSemantic(): SemanticRuntime {
+  return semanticRuntime ??= new SemanticRuntime({
+    root: join(app.getPath("userData"), "semantic-runtime"),
+    assets: join(__dirname, "embedding"),
+  });
+}
+
+function semanticView() {
+  const preference = loadDesktopPreference(settingsFile());
+  return {
+    ...managedSemantic().view(preference.semanticEnabled === true, !kernelMutation && preference.mode === "local" && sidecar !== null),
+    ...(semanticActionError ? { error: semanticActionError } : {}),
+    busy: Boolean(semanticJob),
+  };
+}
+
+async function changeSemantic(action: "install" | "start" | "stop"): Promise<void> {
+  if (semanticJob) throw new Error("semantic.busy");
+  if (!semanticView().canManage) throw new Error("semantic.localOnly");
+  semanticActionError = undefined;
+  const run = async () => {
+    if (action === "install") { await managedSemantic().install(); return; }
+    if (action === "start") await managedSemantic().start();
+    const current = loadDesktopPreference(settingsFile());
+    saveDesktopPreference(settingsFile(), { ...current, semanticEnabled: action === "start" });
+    await stopOwnedSidecarAndWait();
+    releaseOwnedStoreLock();
+    await startLocalKernel({ forceSpawn: true });
+    if (action === "stop") await managedSemantic().stop();
+    broadcastOrigin();
+  };
+  semanticJob = run().catch((error: unknown) => {
+    semanticActionError = error instanceof Error && error.message.startsWith("semantic.") ? error.message : "semantic.kernelFailed";
+    console.error("[semantic]", semanticActionError);
+  }).finally(() => { semanticJob = undefined; });
+}
 const conversationPresence = createConversationPresence({
   getMainWindow: () => mainWindow,
   getApiOrigin: () => apiOrigin,
@@ -186,6 +236,13 @@ function sidecarEnv(
     .filter(Boolean);
   env.NO_PROXY = [...new Set(noProxy)].join(",");
   env.no_proxy = env.NO_PROXY;
+  const semanticEnabled = loadDesktopPreference(settingsFile()).semanticEnabled;
+  if (semanticEnabled !== undefined) {
+    const endpoint = semanticEnabled ? managedSemantic().endpoint() : undefined;
+    env.REGENIC_EMBEDDING_DRIVER = endpoint ? "local_http" : "none";
+    if (endpoint) env.REGENIC_EMBEDDING_BASE_URL = endpoint;
+    else delete env.REGENIC_EMBEDDING_BASE_URL;
+  }
   return env;
 }
 
@@ -494,6 +551,7 @@ async function applyKernelPreference(
   preference: KernelPreference,
   pendingKey?: string | null,
 ): Promise<void> {
+  if (semanticJob) throw new Error("semantic.busy");
   resetHostStatCache();
   if (preference.mode === "custom" && preference.origin) {
     const connected = await connectCustomKernel(preference.origin, {
@@ -502,6 +560,7 @@ async function applyKernelPreference(
     });
     saveKernelPreference(settingsFile(), preference);
     await stopOwnedSidecarAndWait();
+    await managedSemantic().stop();
     releaseOwnedStoreLock();
     apiOrigin = connected.origin;
     personalApiKey = connected.key;
@@ -509,6 +568,7 @@ async function applyKernelPreference(
     return;
   }
   saveKernelPreference(settingsFile(), { mode: "local" });
+  if (loadDesktopPreference(settingsFile()).semanticEnabled) await managedSemantic().start();
   await startLocalKernel();
   broadcastOrigin();
 }
@@ -576,6 +636,7 @@ async function applyDataDirectory(input: {
   path: string;
   action: DataDirectoryAction;
 }) {
+  if (semanticJob) throw new Error("semantic.busy");
   const plan = inspectCurrentDataDirectory(input.path);
   if (plan.sameAsCurrent) {
     return kernelView();
@@ -973,6 +1034,16 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("regenic:get-api-origin", async () => apiOrigin);
   ipcMain.handle("regenic:get-kernel-settings", async () => kernelView());
+  ipcMain.handle("regenic:get-semantic-runtime", async (event) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
+    await managedSemantic().refreshHealth();
+    return semanticView();
+  });
+  ipcMain.handle("regenic:semantic-action", async (event, action: unknown) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
+    await changeSemantic(semanticAction(action));
+    return semanticView();
+  });
   ipcMain.handle("regenic:open-external", async (_event, url: unknown) => {
     if (isHttpUrl(url)) {
       await shell.openExternal(url);
@@ -1004,6 +1075,7 @@ app.whenReady().then(async () => {
       _event,
       input: { mode?: string; origin?: string; personalApiKey?: string },
     ) => {
+      await mutateKernel(async () => {
       if (input?.mode === "custom") {
         await applyKernelPreference(
           {
@@ -1015,6 +1087,7 @@ app.whenReady().then(async () => {
       } else {
         await applyKernelPreference({ mode: "local" });
       }
+      });
       return kernelView();
     },
   );
@@ -1043,20 +1116,27 @@ app.whenReady().then(async () => {
       if (typeof input?.path !== "string") {
         throw dataDirectoryError("settings.dataDirReasonAbs");
       }
-      return applyDataDirectory({
-        path: input.path,
+      const path = input.path;
+      return mutateKernel(() => applyDataDirectory({
+        path,
         action: parseDataDirectoryAction(input.action),
-      });
+      }));
     },
   );
   ipcMain.handle(
     "regenic:resolve-source-retention",
     async (_event, input: { action?: unknown }) => {
-      return resolveSourceRetention(parseRetentionAction(input?.action));
+      return mutateKernel(() => resolveSourceRetention(parseRetentionAction(input?.action)));
     },
   );
 
   try {
+    const preference = loadDesktopPreference(settingsFile());
+    if (preference.mode === "local" && preference.semanticEnabled) {
+      try { await managedSemantic().start(); } catch (error) {
+        console.error("[semantic] startup failed", error instanceof Error ? error.message : "semantic.startFailed");
+      }
+    }
     await connectSavedKernel();
   } catch (error) {
     process.stderr.write(`[kernel] ${error instanceof Error ? error.message : error}\n`);
@@ -1081,6 +1161,7 @@ app.on("before-quit", () => {
   conversationPresence.stop();
   personalApiKey = null;
   sidecar?.kill();
+  semanticRuntime?.shutdown();
   releaseOwnedStoreLock();
 });
 

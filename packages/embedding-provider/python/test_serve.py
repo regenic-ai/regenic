@@ -14,6 +14,29 @@ class FakeEncoder:
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_health_is_descriptor_only_and_rejects_browser_origins(self):
+        server = BoundedHTTPServer(("127.0.0.1", 0), handler_for(FakeEncoder()))
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            for path, headers, status in (
+                ("/health", {}, 200),
+                ("/health", {"Origin": "https://example.com"}, 403),
+                ("/missing", {}, 404),
+            ):
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                connection.request("GET", path, headers=headers)
+                response = connection.getresponse()
+                self.assertEqual(response.status, status)
+                value = json.loads(response.read())
+                if status == 200:
+                    self.assertEqual(value, {"status": "ready", "descriptor": DESCRIPTOR})
+                connection.close()
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
     def test_queries_precede_queued_documents_and_queue_is_bounded(self):
         started = threading.Event()
         release = threading.Event()

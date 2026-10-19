@@ -1,3 +1,5 @@
+import type { SemanticAction, SemanticRuntimeView } from "../shared/semantic-runtime";
+
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
 export type DataPathSource = "env" | "settings" | "repo" | "default" | "relocated";
@@ -78,6 +80,8 @@ export interface RegenicDesktop {
   apiOrigin: string;
   getApiOrigin: () => Promise<string>;
   getKernelSettings: () => Promise<KernelSettingsView>;
+  getSemanticRuntime: () => Promise<SemanticRuntimeView>;
+  semanticAction: (action: SemanticAction) => Promise<SemanticRuntimeView>;
   setKernelSettings: (input: {
     mode: KernelMode;
     origin?: string;
