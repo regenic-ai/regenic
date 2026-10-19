@@ -402,6 +402,33 @@ const ContextSelectedReferenceSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+export const ContextRetrievalTraceSchema = z.object({
+  retriever_id: nonEmptyStringSchema,
+  profile: nonEmptyStringSchema,
+  mode: z.enum(["lexical", "hybrid"]),
+  generation: contentHashSchema.optional(),
+  model_revision: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
+  authorized_count: z.number().int().min(0).max(10000),
+  covered_count: z.number().int().min(0).max(10000),
+  routes: z.array(z.object({
+    event_id: nonEmptyStringSchema,
+    lexical_rank: z.number().int().positive().optional(),
+    vector_rank: z.number().int().positive().optional(),
+    vector_score: z.number().finite().min(-1).max(1).optional(),
+    chunk_ordinal: z.number().int().min(0).optional(),
+    start: z.number().int().min(0).optional(),
+    end: z.number().int().positive().optional(),
+  }).strict()).max(10000),
+}).strict().superRefine((trace, context) => {
+  if (trace.covered_count > trace.authorized_count ||
+    new Set(trace.routes.map((route) => route.event_id)).size !== trace.routes.length ||
+    (trace.mode === "hybrid" && (!trace.generation || !trace.model_revision)) ||
+    trace.routes.some((route) => (route.start === undefined) !== (route.end === undefined) ||
+      (route.start !== undefined && route.end! <= route.start))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid retrieval trace" });
+  }
+});
+
 export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
   .object({
     schema_version: z.literal(CONTEXT_SNAPSHOT_SCHEMA_VERSION),
@@ -411,6 +438,7 @@ export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
     principal_policy_hash: contentHashSchema,
     read_epoch: nonEmptyStringSchema,
     retrieval_profile_version: nonEmptyStringSchema,
+    retrieval_trace: z.array(ContextRetrievalTraceSchema).max(100).optional(),
     assembly_profile_version: nonEmptyStringSchema,
     bundle_payload_hash: contentHashSchema,
     selected: z.array(ContextSelectedReferenceSchema).max(10_000),

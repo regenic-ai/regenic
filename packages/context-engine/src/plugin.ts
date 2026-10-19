@@ -15,6 +15,25 @@ import { DeterministicThreadSummaryProjector } from "./deterministic-thread-summ
 import { DailyDigestProjectionCoordinator } from "./daily-digest-projection-runner";
 import { PersonalContextPolicyEvaluator } from "./personal-context-policy";
 import { ContextEmbeddingWorker } from "./context-embedding-worker";
+import { HybridEventRetriever, HYBRID_RETRIEVAL_PROFILE } from "./hybrid-event-retriever";
+
+export const hybridEventRetrieverPlugin = definePlugin<{
+  lexical_index?: ContextLexicalIndex;
+  chunk_tokens: number;
+  max_chunks_per_event: number;
+}>({
+  name: "context-retriever-event-hybrid",
+  inject: ["context-retrievers", "embedding", "context-vector-status"],
+  apply(ctx, config) {
+    const provider = ctx.get("embedding");
+    return ctx.get("context-retrievers").register(new HybridEventRetriever(
+      config.lexical_index ? new IndexedEventRetriever(config.lexical_index) : new DeterministicEventRetriever(),
+      provider,
+      ctx.get("context-vector-status").status === "ready" ? ctx.get("context-vector-index") : undefined,
+      embeddingGeneration(provider.descriptor, config.chunk_tokens, config.max_chunks_per_event),
+    ));
+  },
+});
 
 export const contextEmbeddingWorkerPlugin = definePlugin<{
   org_id: string; chunk_tokens: number; max_chunks_per_event: number;
@@ -63,6 +82,7 @@ export const deterministicContextEnginePlugin = definePlugin<DeterministicContex
 export interface PersonalContextEnginePluginConfig {
   org_id: string;
   actor_id?: string;
+  hybrid?: boolean;
 }
 
 export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePluginConfig>({
@@ -85,6 +105,7 @@ export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePlu
       policy,
       artifacts: ctx.get("context-artifacts"),
       retrievers: ctx.get("context-retrievers"),
+      retrieval_profile: config.hybrid ? HYBRID_RETRIEVAL_PROFILE : undefined,
     }));
   },
 });

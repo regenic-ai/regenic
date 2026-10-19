@@ -33,8 +33,9 @@ projection coordinator，路径为 `${database}.lexical.db`。FTS 未建或部�
 不装配本地 sidecar。第二批新增可选的个人文本索引：独立 `EmbeddingProvider`、
 仅回环地址推理服务与 `${database}.vector.db`，通过完整 Authority 生命周期读取
 对账独立持久化任务，不消费既有 projection outbox。默认
-`REGENIC_EMBEDDING_DRIVER=none`；启用索引尚不会切换混合召回、改变 `/ask` 或提供
-记录搜索端点。运行方式与限制见[设计文档第 15 节](EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影)。
+`REGENIC_EMBEDDING_DRIVER=none`；显式启用的个人 API host 已接入 current-only 混合召回，
+包括 `/ask`，支持词法降级和 snapshot trace。独立搜索端点与 CLI 查询配置将在下一批接入。
+运行方式与限制见[设计文档第 15 节](EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影)及第 16 节。
 
 ## 2. 组件
 

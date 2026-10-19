@@ -4,6 +4,7 @@ import {
   ModelTimeoutError,
   ModelUnavailableError,
   ModelUpstreamError,
+  EmbeddingError,
   PROPOSAL_SCHEMA_VERSION,
   DECISION_SCHEMA_VERSION,
   REVIEW_SCHEMA_VERSION,
@@ -100,6 +101,7 @@ export class PersonalContextError extends Error {
       | "model_unavailable"
       | "model_timeout"
       | "model_upstream"
+      | "retrieval_unavailable"
       | "invalid_model_output",
     readonly httpStatus: number,
     message: string,
@@ -1381,8 +1383,16 @@ export class PersonalContextService {
     try {
       return await run();
     } catch (error) {
+      if (error instanceof EmbeddingError && (error.code === "invalid_input" || error.code === "input_too_large")) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Query exceeds embedding input limits or is invalid");
+      }
       if (!(error instanceof ContextEngineError)) {
         throw error;
+      }
+      if (error.code === "source_boundary" || error.code === "invalid_candidate") {
+        console.warn("context retrieval unavailable", error.code);
+        throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+          "Context retrieval changed or is unavailable; retry the request");
       }
       const status = error.code === "not_found"
         ? HttpStatus.NOT_FOUND
