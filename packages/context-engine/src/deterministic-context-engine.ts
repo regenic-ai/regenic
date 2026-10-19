@@ -55,6 +55,7 @@ const RETRIEVAL_DEGRADATION_FLAGS = new Set([
   "vector_index_corrupt",
   "vector_index_unavailable",
   "vector_index_partial",
+  "vector_index_capacity",
   "vector_temporal_unsupported",
 ]);
 
