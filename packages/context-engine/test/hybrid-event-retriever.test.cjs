@@ -93,6 +93,28 @@ it("admits semantic zero-lexical evidence, deduplicates and pins replayable retr
   assert.deepEqual(await f.engine.assemble(request), result);
 });
 
+it("pins one selected generation across query inference even when the active pointer switches", async () => {
+  const next = embeddingGeneration(descriptor, 64);
+  let active = next;
+  let selected = 0;
+  const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
+    descriptor,
+    async countTokens() { active = generation; return [12]; },
+    async embed() { return [[1, 0]]; },
+  }, {
+    async matchAuthorized(input) {
+      assert.equal(input.generation, next.id);
+      return { generation: input.generation, covered: [], matched: [] };
+    },
+  }, generation, {
+    async activeGeneration() { selected++; return active; },
+  });
+  const result = await retriever.retrieve(fixture().plan);
+  assert.equal(result.trace.generation, next.id);
+  assert.equal(active.id, generation.id);
+  assert.equal(selected, 1);
+});
+
 it("preserves lexical candidates and records explicit model/index degradation", async () => {
   for (const [options, flag] of [
     [{ error: new EmbeddingError("timeout", true) }, "embedding_timeout"],

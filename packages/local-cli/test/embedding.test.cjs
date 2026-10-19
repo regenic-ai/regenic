@@ -87,4 +87,14 @@ it("runs local HTTP indexing/status/retry commands with durable progress across 
   await assert.rejects(run("context-search", "--query", "release", "--limit", "101"), /Invalid search/);
   await assert.rejects(run("context-search", "--query", "release", "--generation", "injected"), /Unexpected search/);
   await assert.rejects(run("context-embedding-retry", "--event", "missing"), /No current quarantined/);
+  const before = await run("context-embedding-status");
+  const original = before.generations.find((entry) => entry.active).manifest.id;
+  const built = await run("context-embedding-backfill", "--chunk-tokens", "512", "--max-jobs", "10");
+  assert.notEqual(built.generation, original);
+  assert.equal((await run("context-embedding-activate", "--generation", built.generation)).active, true);
+  assert.equal((await run("context-search", "--query", "release permission")).generation, built.generation);
+  assert.equal((await run("context-embedding-rollback", "--generation", original)).active, true);
+  assert.equal((await run("context-search", "--query", "release permission")).generation, original);
+  assert.equal((await run("context-embedding-gc", "--generation", built.generation)).removed, true);
+  assert.equal((await run("context-embedding-status")).generations.length, 1);
 });

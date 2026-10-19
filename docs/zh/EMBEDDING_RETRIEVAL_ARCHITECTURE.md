@@ -729,6 +729,45 @@ embedding 与 vector 的实际运行情况由新标志和 trace 表达。
 - 桌面协议类型同步可选 snapshot trace 与 search 视图；现有面板继续展示 bundle 降级标志，
   不在本批加入新的搜索页面。
 
+## 18. 第五批实施：个人 generation 运维
+
+vector sidecar schema v2 向前迁移 v1，不修改 Authority。首次注册的配置 generation 是
+兼容原行为的启动基线，可处于部分覆盖；后续切换必须显式通过覆盖校验。
+旧 v1 存在多个 manifest 时不猜测当前代际，由配置注册建立初始指针。
+
+- 每次查询在推理前读取一次持久化 active pointer，整次查询固定同一 manifest。
+  切换中的请求仍可完成旧 generation 查询并将实际代际写入 snapshot；不会拼接不同向量空间。
+- worker 对所有保留 manifest 轮转更新，一次最多处理一个 Event，完整源生命周期 fence
+  仍跨 generation 生效。当前固定模型适配器支持不同 chunk recipe；不支持任意模型 revision 热替换，
+  不兼容模型 descriptor 会显式拒绝，不自动复用旧向量。
+- activate/rollback 先从个人 Authority 完整读取、同步 lifecycle、严格重新绑定文本，
+  再复核 epoch；SQLite 事务检查该 epoch 下所有可检索非空文本 Event/hash 完整 chunk 覆盖，
+  并验证向量形状/归一化后切换指针。纯二进制或空正文不要求向量；损坏文本或未完成文本禁止切换。
+  这是观察到的 Authority epoch 的就绪证明，不是跨库原子事务。切换后新发生的写入仍可能暂时未覆盖，
+  查询继续使用当次授权键与明确 partial 降级；不宣称组织强撤回。
+- 旧代际继续更新，因此 rollback 也必须重新证明当前覆盖，而不是直接改指针。
+- GC 拒绝 active generation、当前配置 write generation 和未过期运行租约；删除向量/任务后保留
+  manifest retirement 记录，拒绝旧 worker 重新注册复活。GC 后不能重新使用同一 recipe ID，
+  除非显式清空整个个人投影；已有 snapshot 仍通过保存的 bundle replay，不依赖索引。
+
+以下命令均需要相同的 `--database`、`--blob-root`、`--org` 及 `REGENIC_EMBEDDING_*`：
+
+```text
+context-embedding-backfill --chunk-tokens 512 --max-jobs 100
+context-embedding-status
+context-embedding-status --generation <id>
+context-embedding-activate --generation <ready-id>
+context-embedding-rollback --generation <retained-ready-id>
+context-embedding-retry --generation <id> --event <current-quarantined-event>
+context-embedding-gc --generation <inactive-id>
+```
+
+`--max-jobs` 默认为 1，最多 1000；进度汇总所有保留代际的实际工作，不只目标代际。
+可重复运行回填；status 给出每个保留 manifest、active 标记、枚举 epoch 及所选代际任务。
+不要将 reconciled epoch 当作完成覆盖水位；激活使用独立的当前 Event/hash 完整覆盖检查。
+GC 之前先停止使用旧配置的进程；主数据库与所有 sidecar 应一致备份，回滚 schema v2 前须恢复备份，
+不能让旧版仅支持 schema v1 的进程直接打开新 sidecar。
+
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679
 [fs-blob]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/blob-store/src/fs-blob-store.ts#L23-L70

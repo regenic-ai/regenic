@@ -9,6 +9,7 @@ import {
   type ContextSourceRead,
   type ContextVectorChunk,
   type ContextVectorIndex,
+  type ContextVectorGenerationStore,
   type EmbeddingGeneration,
   type EmbeddingJob,
   type EmbeddingJobStore,
@@ -23,6 +24,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   private stopped = false;
   private clearing = false;
   private running: ReturnType<ContextEmbeddingRunner["runOnce"]> | undefined;
+  private generationCursor = 0;
 
   constructor(
     private readonly orgId: string,
@@ -31,13 +33,14 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     private readonly index: ContextVectorIndex,
     private readonly jobs: EmbeddingJobStore,
     readonly generation: EmbeddingGeneration,
+    private readonly generations?: ContextVectorGenerationStore,
   ) {
     assertEmbeddingDescriptor(provider.descriptor, generation.model);
   }
 
   async runOnce(): ReturnType<ContextEmbeddingRunner["runOnce"]> {
     if (this.stopped || this.clearing || this.running) return { processed: 0, failed: 0, superseded: 0 };
-    this.running = this.run();
+    this.running = this.runGenerations();
     try {
       return await this.running;
     } finally {
@@ -64,28 +67,40 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     }
   }
 
-  private async read(): Promise<ContextSourceRead> {
-    const request: ContextRequest = {
-      schema_version: "1.0", id: this.owner, org_id: this.orgId,
-      principal: { actor_type: "human", actor_id: this.orgId },
-      consumer_id: "embedding-indexer", purpose: "build personal text projection", allowed_uses: ["display"],
-      temporal: { mode: "current" },
-      budget: { profile: "embedding-v1", max_tokens: 1, max_items: 1, max_raw_evidence: 1 },
-    };
+  private async read(generation: EmbeddingGeneration): Promise<ContextSourceRead> {
+    const request = embeddingMaintenanceRequest(this.orgId, this.owner);
     const read = await this.source.openRead(request);
     if (read.lifecycle_complete !== true) throw new Error("Embedding requires a complete authority lifecycle view");
-    await this.index.registerGeneration(this.orgId, this.generation);
     await this.jobs.reconcile({
-      org_id: this.orgId, generation: this.generation.id, read_epoch: read.read_epoch,
+      org_id: this.orgId, generation: generation.id, read_epoch: read.read_epoch,
       heads: headsFor(read), now: new Date().toISOString(),
     });
     return read;
   }
 
-  private async run() {
-    await this.read();
+  private async runGenerations() {
+    await this.index.registerGeneration(this.orgId, this.generation);
+    const manifests = this.generations
+      ? (await this.generations.listGenerations(this.orgId)).map((entry) => entry.manifest)
+      : [this.generation];
+    for (let offset = 0; offset < manifests.length; offset++) {
+      const cursor = (this.generationCursor + offset) % manifests.length;
+      const generation = manifests[cursor];
+      assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
+      if (this.abort.signal.aborted) break;
+      const result = await this.run(generation);
+      if (result.processed + result.failed + result.superseded > 0) {
+        this.generationCursor = (cursor + 1) % manifests.length;
+        return result;
+      }
+    }
+    return { processed: 0, failed: 0, superseded: 0 };
+  }
+
+  private async run(generation: EmbeddingGeneration) {
+    await this.read(generation);
     const claimed = await this.jobs.claim({
-      org_id: this.orgId, generation: this.generation.id, owner: this.owner,
+      org_id: this.orgId, generation: generation.id, owner: this.owner,
       now: new Date().toISOString(), lease_ms: 90000, limit: 1,
     });
     const result = { processed: 0, failed: 0, superseded: 0 };
@@ -100,7 +115,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         }).catch(() => { leaseLost = true; heartbeatFailed = true; });
       }, 20000);
       try {
-        const read = await this.read();
+        const read = await this.read(generation);
         const event = read.events.find((event) => event.event.event_id === job.event_id);
         if (!event || !isHead(read, job)) {
           result.superseded += 1;
@@ -113,8 +128,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         const text = materialized[0]?.text;
         if (typeof text !== "string" || !text.trim()) throw new EmbeddingError("invalid_input", false);
         if (Buffer.byteLength(text, "utf8") > 262144) throw new EmbeddingError("input_too_large", false);
-        const chunks = await chunkEmbeddingText(text, this.provider, this.generation, this.abort.signal);
-        const latest = await this.read();
+        const chunks = await chunkEmbeddingText(text, this.provider, generation, this.abort.signal);
+        const latest = await this.read(generation);
         await heartbeat;
         if (heartbeatFailed) throw new Error("Embedding lease renewal failed");
         if (leaseLost || !isHead(latest, job)) {
@@ -146,6 +161,45 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     }
     return result;
   }
+}
+
+export async function activateEmbeddingGeneration(
+  orgId: string,
+  generation: string,
+  source: ContextEvidenceSource,
+  jobs: EmbeddingJobStore,
+  generations: ContextVectorGenerationStore,
+): Promise<void> {
+  const request = embeddingMaintenanceRequest(orgId, `generation-switch:${randomUUID()}`);
+  const read = await source.openRead(request);
+  if (read.lifecycle_complete !== true) throw new Error("Generation activation requires a complete Authority lifecycle");
+  const heads = headsFor(read);
+  await jobs.reconcile({
+    org_id: orgId, generation, read_epoch: read.read_epoch, heads, now: new Date().toISOString(),
+  });
+  const ids = new Set(heads.filter((head) => head.operation !== "tombstone").map((head) => head.event_id));
+  const current: AuthorizedContextSourceEvent[] = read.events.filter((entry) => ids.has(entry.event.event_id))
+    .map((entry) => ({ ...entry, status: "current" }));
+  if (!source.materialize) throw new Error("Generation activation requires verified Authority text materialization");
+  const materialized = await source.materialize(current);
+  const required = materialized.filter((entry) => typeof entry.text === "string" && entry.text.trim())
+    .map((entry) => {
+      if (!entry.event.content_hash) throw new Error("Text Event is missing its content hash");
+      return { event_id: entry.event.event_id, content_hash: entry.event.content_hash };
+    });
+  const latest = await source.openRead(request);
+  if (latest.read_epoch !== read.read_epoch) throw new Error("Authority changed during activation; retry after reconciliation");
+  await generations.activateGeneration({ org_id: orgId, generation, read_epoch: read.read_epoch, required });
+}
+
+function embeddingMaintenanceRequest(orgId: string, id: string): ContextRequest {
+  return {
+    schema_version: "1.0", id, org_id: orgId,
+    principal: { actor_type: "human", actor_id: orgId },
+    consumer_id: "embedding-indexer", purpose: "maintain personal text projection", allowed_uses: ["display"],
+    temporal: { mode: "current" },
+    budget: { profile: "embedding-v1", max_tokens: 1, max_items: 1, max_raw_evidence: 1 },
+  };
 }
 
 export async function chunkEmbeddingText(

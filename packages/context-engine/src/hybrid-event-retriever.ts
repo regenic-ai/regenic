@@ -8,6 +8,7 @@ import {
   type ContextRetrievalResult,
   type ContextRetrievalTrace,
   type ContextVectorIndex,
+  type ContextVectorGenerationStore,
   type EmbeddingGeneration,
   type EmbeddingProvider,
   type RetrievedContextCandidate,
@@ -32,6 +33,7 @@ export class HybridEventRetriever implements ContextRetriever {
     private readonly provider: EmbeddingProvider,
     private readonly index: ContextVectorIndex | undefined,
     private readonly generation: EmbeddingGeneration,
+    private readonly generations?: ContextVectorGenerationStore,
   ) {
     assertEmbeddingDescriptor(provider.descriptor, generation.model);
   }
@@ -62,15 +64,18 @@ export class HybridEventRetriever implements ContextRetriever {
     if (!this.index) return fallback("vector_index_absent");
     if (!allowed.size) return { ...lexical, trace };
     let result: Awaited<ReturnType<ContextVectorIndex["matchAuthorized"]>>;
+    let generation = this.generation;
     try {
+      generation = await this.generations?.activeGeneration(plan.request.org_id) ?? this.generation;
+      assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
       const [tokens] = await this.provider.countTokens([plan.request.query], "query");
       if (!Number.isSafeInteger(tokens) || tokens < 1) throw new EmbeddingError("invalid_response", true);
-      if (tokens > this.generation.model.max_input_tokens) throw new EmbeddingError("input_too_large", false);
+      if (tokens > generation.model.max_input_tokens) throw new EmbeddingError("input_too_large", false);
       const vectors = await this.provider.embed([plan.request.query], "query");
       if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-      validateEmbeddingVector(vectors[0], this.generation.model.dimensions);
+      validateEmbeddingVector(vectors[0], generation.model.dimensions);
       result = await this.index.matchAuthorized({
-        org_id: plan.request.org_id, generation: this.generation.id, query_vector: vectors[0],
+        org_id: plan.request.org_id, generation: generation.id, query_vector: vectors[0],
         authorized: eligible.map((source) => ({
           event_id: source.event.event_id, content_hash: source.event.content_hash!,
         })), limit: ROUTE_LIMIT,
@@ -81,7 +86,7 @@ export class HybridEventRetriever implements ContextRetriever {
       return fallback(error.code === "timeout" ? "embedding_timeout" : "embedding_unavailable");
     }
     // Invalid keys or chunk bindings are a boundary failure, never a lexical fallback.
-    if (!result || result.generation !== this.generation.id || !Array.isArray(result.covered) ||
+    if (!result || result.generation !== generation.id || !Array.isArray(result.covered) ||
       !Array.isArray(result.matched) || result.matched.length > ROUTE_LIMIT) throw new ContextEngineError("invalid_candidate", "Invalid vector result");
     const covered = new Set<string>();
     for (const key of result.covered) {
@@ -112,8 +117,8 @@ export class HybridEventRetriever implements ContextRetriever {
         start: hit.start, end: hit.end });
     });
     trace.mode = "hybrid";
-    trace.generation = this.generation.id;
-    trace.model_revision = this.generation.model.model_revision;
+    trace.generation = generation.id;
+    trace.model_revision = generation.model.model_revision;
     trace.covered_count = covered.size;
     trace.routes = [...ranks.values()].sort((a, b) => compare(a.event_id, b.event_id));
     const candidates = new Map(lexical.candidates.map((candidate) => [candidate.candidate.resource_id, candidate]));
