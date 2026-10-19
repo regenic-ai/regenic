@@ -421,6 +421,47 @@ export interface PersonalContextBundle {
 export interface PersonalContextSnapshot {
   id: string;
   created_at: string;
+  retrieval_profile_version?: string;
+  retrieval_trace?: Array<{
+    retriever_id: string;
+    profile: string;
+    mode: "lexical" | "hybrid";
+    generation?: string;
+    model_revision?: string;
+    authorized_count: number;
+    covered_count: number;
+    routes: Array<{
+      event_id: string;
+      lexical_rank?: number;
+      vector_rank?: number;
+      vector_score?: number;
+      chunk_ordinal?: number;
+      start?: number;
+      end?: number;
+    }>;
+  }>;
+}
+
+export interface PersonalContextSearchResult {
+  request_id: string;
+  snapshot_id: string;
+  read_epoch: string;
+  retrieval_profile: string;
+  generation: string | null;
+  coverage: { authorized_count: number; covered_count: number } | null;
+  items: Array<{
+    event_id: string;
+    content_hash: string;
+    source: string;
+    occurred_at: string;
+    rank: number;
+    snippet: string;
+    snippet_start: number;
+    snippet_end: number;
+    evidence: PersonalContextEvidence[];
+  }>;
+  degradation_flags: string[];
+  truncated: boolean;
 }
 
 export interface PersonalContextSnapshotIndexEntry {
