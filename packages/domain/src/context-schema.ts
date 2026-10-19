@@ -191,6 +191,30 @@ export const ContextBudgetLedgerSchema: z.ZodType<ContextBudgetLedger> = z
     }
   });
 
+const contextFiltersSchema = z.object({
+  sources: uniqueNonEmptyStringsSchema.optional(),
+  thread_ids: uniqueNonEmptyStringsSchema.optional(),
+  actor_ids: uniqueNonEmptyStringsSchema.optional(),
+  occurred_after: timestampSchema.optional(),
+  occurred_before: timestampSchema.optional(),
+}).strict().superRefine((filters, context) => {
+  if (Object.values(filters).every((value) => value === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "At least one context filter is required" });
+  }
+  if (filters.occurred_after && filters.occurred_before &&
+    Date.parse(filters.occurred_after) > Date.parse(filters.occurred_before)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["occurred_before"],
+      message: "occurred_before cannot precede occurred_after" });
+  }
+});
+
+export const ContextSearchInputSchema = z.object({
+  query: querySchema,
+  filters: contextFiltersSchema.optional(),
+  temporal: z.object({ mode: z.literal("current") }).strict().optional(),
+  limit: positiveIntegerSchema.max(100).optional(),
+}).strict();
+
 export const ContextRequestSchema: z.ZodType<ContextRequest> = z
   .object({
     schema_version: z.literal(CONTEXT_REQUEST_SCHEMA_VERSION),
@@ -205,35 +229,7 @@ export const ContextRequestSchema: z.ZodType<ContextRequest> = z
       .array(z.object({ kind: z.enum(CONTEXT_ANCHOR_KINDS), id: nonEmptyStringSchema }).strict())
       .max(100)
       .optional(),
-    filters: z
-      .object({
-        sources: uniqueNonEmptyStringsSchema.optional(),
-        thread_ids: uniqueNonEmptyStringsSchema.optional(),
-        actor_ids: uniqueNonEmptyStringsSchema.optional(),
-        occurred_after: timestampSchema.optional(),
-        occurred_before: timestampSchema.optional(),
-      })
-      .strict()
-      .superRefine((filters, context) => {
-        if (Object.values(filters).every((value) => value === undefined)) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "At least one context filter is required",
-          });
-        }
-        if (
-          filters.occurred_after &&
-          filters.occurred_before &&
-          Date.parse(filters.occurred_after) > Date.parse(filters.occurred_before)
-        ) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["occurred_before"],
-            message: "occurred_before cannot precede occurred_after",
-          });
-        }
-      })
-      .optional(),
+    filters: contextFiltersSchema.optional(),
     temporal: z.discriminatedUnion("mode", [
       z.object({ mode: z.literal("current") }).strict(),
       z.object({ mode: z.literal("history"), valid_at: timestampSchema.optional() }).strict(),

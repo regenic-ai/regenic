@@ -15,6 +15,7 @@ it("maps observed Authority races to 503 and invalid embedding queries to 400", 
   for (const [error, status, code] of [
     [new ContextEngineError("source_boundary", "private detail"), 503, "retrieval_unavailable"],
     [new ContextEngineError("invalid_candidate", "private detail"), 503, "retrieval_unavailable"],
+    [Object.assign(new Error("private detail"), { code: "SQLITE_BUSY" }), 503, "retrieval_unavailable"],
     [new EmbeddingError("input_too_large", false), 400, "invalid_request"],
   ]) {
     const service = new PersonalContextService({

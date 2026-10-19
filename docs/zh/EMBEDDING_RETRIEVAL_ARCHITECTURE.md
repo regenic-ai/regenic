@@ -3,7 +3,7 @@
 Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授权、生命周期和预算构建上下文。
 本文设计在这条链路中加入 `google/embeddinggemma-2` 文本 embedding 与混合检索的方式。
 
-- **状态：** 分批实施中；基础索引与可选的个人 current 混合召回已实现，默认关闭。独立搜索端点与 generation 运维仍待后续批次。当前实施状态见第 14–16 节。
+- **状态：** 个人 SQLite/current 文本首期闭环已实现，默认关闭；包含混合召回、Search API/CLI、快照追踪、generation 运维及真实模型合成评测。上线仍需真实用户数据验收。实施与边界见第 14–19 节。
 - **源码基线：** 默认分支 `main`，提交 [`4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8`](https://github.com/regenic-ai/regenic/commit/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8)，核对日期 2026-10-15。
 - **相关：** [上下文管理架构](CONTEXT_MANAGEMENT_ARCHITECTURE.md) · [采集架构](INGESTION_ARCHITECTURE.md) · [技术栈](TECH_STACK.md) · [ACL 与 Agent 身份](rfcs/0006-acl-agent-identity.md)
 - **文档范围：** 本次按任务要求新增中文专题；英文镜像留待后续文档 PR，不链接尚不存在的译文。
@@ -25,7 +25,7 @@ Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授�
 
 原始设计 PR 仅新增文档；后续首批实施新增词法基础代码与测试，见第 14 节。
 第 14 节首批仅覆盖词法基础；第 15 节第二批新增 embedding 端口、参考推理服务、
-独立向量 sidecar 与任务 worker，不修改 Authority schema，也尚不实现 search API。
+独立向量 sidecar 与任务 worker，不修改 Authority schema。后续第 16–19 节完成个人首期闭环。
 首期方案不做多模态索引、生成式查询改写、reranker、组织 ACL 实现或 Blob 读取优化。
 这些能力需要独立设计与实施；模型名称不意味着运行环境已经具备相应能力。
 
@@ -35,10 +35,10 @@ Regenic 通过 Event 与 Blob 保存记录证据，通过 Context Engine 按授�
 | --- | --- |
 | 已实现 | Event + Blob、SQLite/PostgreSQL Authority、Context Engine、个人 policy、词法检索、投影 outbox、snapshot/replay、`/ask` |
 | 第二批已实现，默认关闭 | 独立 `EmbeddingProvider`、`ContextVectorIndex`、SQLite embedding 任务流与个人文本 worker；见第 15 节 |
-| 后续实施 | Event 级混合召回、`/search`、snapshot 检索追踪与真实数据质量验收 |
+| 后续批次已实现，默认关闭 | Event 级混合召回、`/search`、snapshot 检索追踪、generation 运维与真实模型合成集评测 |
 | 规划能力 | 两阶段检索、组织 ACL 与撤回安全的 replay、选择性永久删除、可选 pgvector、大规模 ANN、多模态 |
 | 已核验官方资料 | 第二代模型标识/revision、声明许可证、维度、模板与官方文本模式示例；见第 2 节 |
-| 已运行初验 | Windows CPU 固定 revision 载入、query/document 推理及 HTTP → CLI 持久化烟测；见第 15.4 节 |
+| 已运行验证 | Windows CPU 固定 revision、49 个合成评测用例、100–10000 Event 扫描与真实 CLI 生命周期闭环；见第 19 节 |
 | 待上线验证 | 真实数据质量、资源占用/吞吐、平台兼容性、权重分发与许可证义务复核 |
 | 待测试确认 | chunk 大小、召回数量、融合参数、批量大小、延迟/内存预算、撤回和擦除时限 |
 
@@ -348,11 +348,10 @@ chunk 命中不能绕过预算。后续片段证据协议和两阶段 materializ
 
 ## 9. 建议 API 协议与 `/ask` 复用
 
-### 9.1 `POST /v1/me/context/search`（尚未实现）
+### 9.1 `POST /v1/me/context/search`
 
-当前 [Controller][api-controller] 提供 assemble、replay、ask 等入口，没有 search。
-建议在同一个个人 API 边界下新增记录搜索入口，不要求 completion 模型可用。
-以下是**协议草案**，不表示现有接口接受这些字段：
+已在同一个个人 API Guard 边界下提供记录搜索入口，不要求 completion 模型可用。
+接口接受以下严格协议：
 
 ```json
 {
@@ -363,13 +362,13 @@ chunk 命中不能绕过预算。后续片段证据协议和两阶段 materializ
 }
 ```
 
-`20` 只是示例，不是已经确认的默认值。首期限定 `temporal.mode = current`；
+默认 `limit=20`，整数范围 1–100；首期限定 `temporal.mode = current`；
 history/as_of 仅在历史版本覆盖和撤回测试通过后开放，之前显式拒绝，不静默改成 current。
 filters 复用现有字段语义，未知字段、空白 query、过长输入、非法时间或超额 limit 返回 `400`。
 服务端设置请求 ID、org/principal、`display` 用途、purpose 与受限预算；不接受客户端传入
 policy hash、向量、授权键、generation、模型 revision 或任意推理服务 URL。
 
-建议响应包含：
+响应包含：
 
 - `request_id`、`snapshot_id`、`read_epoch`、检索 profile 与实际 generation；generation 在纯词法时为空。
 - `items`：Event ID、content hash、来源、发生时间、排名、受限 snippet 及证据引用。
@@ -382,7 +381,7 @@ policy hash、向量、授权键、generation、模型 revision 或任意推理�
 不为首期引入游标；未来分页需绑定 principal/policy epoch、query、generation 和稳定读视图。
 `401/403/404` 遵循个人 Guard 现有边界；限流 `429`、权威/Policy 不可用 `503`。
 模型/索引故障但词法可用时 `200` 并明确降级；无命中 `200` 空数组，不能伪装模型成功。
-上述新增状态与字段需独立实现和协议测试。
+输入和降级路径已有协议测试；`429` 沿用部署边界限流策略，本接口不新增独立限流器。
 
 ### 9.2 `/ask` 的复用
 
@@ -390,7 +389,7 @@ policy hash、向量、授权键、generation、模型 revision 或任意推理�
 当前 [ask service][api-ask-service] 把 question 转成 ContextRequest，再调用
 [ContextQuestionAnswerer][answerer] assemble、生成回答并校验引用。
 
-建议 search 与 ask 共用内部检索/assemble 服务和 Hybrid retriever，不在 ask 内部发 HTTP 请求调用 search。
+search 与 ask 共用内部 assemble 和 Hybrid retriever，不在 ask 内部发 HTTP 请求调用 search。
 ask 按 `display`/`reason` 用途和回答预算构建自己的 ContextRequest，直接消费完整 bundle，
 不把搜索 snippet 当作回答证据；不是直接复用 display-only search snapshot。
 词法降级时仍可基于授权 bundle 回答；completion 失败保留现有错误语义，不生成无引用回答。
@@ -646,7 +645,7 @@ pnpm --filter @regenic/local-cli start context-embedding-retry --database C:\dat
 
 256-token chunk、128 chunks/Event 与 30 秒超时是可调整的实验默认值，不是质量或延迟承诺。
 chunk 参数改变会创建新 generation；本批没有 alias 切换、跨 generation 融合或旧 generation GC。
-参考服务串行处理请求，未提供生产并发、限流或吞吐保证。
+第二批参考服务串行处理请求；第 19 节新增有界并发接入与查询优先调度，仍不提供生产吞吐保证。
 
 依赖安装后可运行不加载真实权重的协议/编码器测试：
 
@@ -709,9 +708,159 @@ CLI host 支持同一装配；CLI 查询命令的环境配置接线与独立 sea
 `model_absent` 仍描述原引擎 completion 能力占位，不代表 embedding 健康；
 embedding 与 vector 的实际运行情况由新标志和 trace 表达。
 
-后续预计三个独立 PR：统一 search/ask 入口、generation 运维、真实模型评测与故障/性能收尾。
+后续实施见第 17 节；generation 运维、真实模型评测与故障/性能收尾仍待完成。
 首期仅个人 SQLite/current 文本；组织 ACL、历史语义覆盖、pgvector/ANN、多模态和选择性永久删除
 仍属单独的后续范围，不以合成评测冒充组织或真实用户数据质量认证。
+
+## 17. 第四批实施：Search API/CLI 与查询入口统一
+
+- `POST /v1/me/context/search` 返回 `200`，严格校验 query（非空、最多 8000 UTF-16 单元）、
+  filters、current temporal 和 limit；不允许覆盖服务端 principal/purpose/预算/generation。
+- 先 assemble 并保存 display-only snapshot，再投影 Event 搜索视图。固定最多 8000 token，
+  limit 仅限制条数上限，长 Event 仍可能被整体预算排除。`truncated` 表示组装预算截断，
+  不代表整个语料库还有多少条，首期没有游标。
+- snippet 从授权 bundle 原文提取，优先采用已验证的匹配 chunk 起点，最多 480 Unicode code point。
+  `snippet_start/end` 是 UTF-16 原文区间；完整 Event 仍是问答证据，snippet 不写回 bundle。
+- 仅回传授权域覆盖摘要；纯词法时 generation 为 null，默认未配置 embedding 时 coverage 为 null。
+  ask 响应新增 degradation_flags、retrieval_profile、generation，不改变原引用约束。
+- CLI `context-search --database <db> --blob-root <dir> --org <org> --query <text>`
+  可加 `--limit 20`、`--source <source>`、`--thread <thread>`，只接受 current temporal。
+  search、assemble、ask 均读取 `REGENIC_EMBEDDING_*`，replay 不配置 embedding，不调用模型。
+- 桌面协议类型同步可选 snapshot trace 与 search 视图；现有面板继续展示 bundle 降级标志，
+  不在本批加入新的搜索页面。
+
+## 18. 第五批实施：个人 generation 运维
+
+vector sidecar schema v2 向前迁移 v1，不修改 Authority。首次注册的配置 generation 是
+兼容原行为的启动基线，可处于部分覆盖；后续切换必须显式通过覆盖校验。
+旧 v1 存在多个 manifest 时不猜测当前代际，由配置注册建立初始指针。
+
+- 每次查询在推理前读取一次持久化 active pointer，整次查询固定同一 manifest。
+  切换中的请求仍可完成旧 generation 查询并将实际代际写入 snapshot；不会拼接不同向量空间。
+- worker 对所有保留 manifest 轮转更新，一次最多处理一个 Event，完整源生命周期 fence
+  仍跨 generation 生效。当前固定模型适配器支持不同 chunk recipe；不支持任意模型 revision 热替换，
+  不兼容模型 descriptor 会显式拒绝，不自动复用旧向量。
+- activate/rollback 先从个人 Authority 完整读取、同步 lifecycle、严格重新绑定文本，
+  再复核 epoch；SQLite 事务检查该 epoch 下所有可检索非空文本 Event/hash 完整 chunk 覆盖，
+  并验证向量形状/归一化后切换指针。纯二进制或空正文不要求向量；损坏文本或未完成文本禁止切换。
+  这是观察到的 Authority epoch 的就绪证明，不是跨库原子事务。切换后新发生的写入仍可能暂时未覆盖，
+  查询继续使用当次授权键与明确 partial 降级；不宣称组织强撤回。
+- 旧代际继续更新，因此 rollback 也必须重新证明当前覆盖，而不是直接改指针。
+- GC 拒绝 active generation、当前配置 write generation 和未过期运行租约；删除向量/任务后保留
+  manifest retirement 记录，拒绝旧 worker 重新注册复活。GC 后不能重新使用同一 recipe ID，
+  除非显式清空整个个人投影；已有 snapshot 仍通过保存的 bundle replay，不依赖索引。
+
+以下命令均需要相同的 `--database`、`--blob-root`、`--org` 及 `REGENIC_EMBEDDING_*`：
+
+```text
+context-embedding-backfill --chunk-tokens 512 --max-jobs 100
+context-embedding-status
+context-embedding-status --generation <id>
+context-embedding-activate --generation <ready-id>
+context-embedding-rollback --generation <retained-ready-id>
+context-embedding-retry --generation <id> --event <current-quarantined-event>
+context-embedding-gc --generation <inactive-id>
+```
+
+`--max-jobs` 默认为 1，最多 1000；进度汇总所有保留代际的实际工作，不只目标代际。
+可重复运行回填；status 给出每个保留 manifest、active 标记、枚举 epoch 及所选代际任务。
+不要将 reconciled epoch 当作完成覆盖水位；激活使用独立的当前 Event/hash 完整覆盖检查。
+GC 之前先停止使用旧配置的进程；主数据库与所有 sidecar 应一致备份，回滚 schema v2 前须恢复备份，
+不能让旧版仅支持 schema v1 的进程直接打开新 sidecar。
+
+## 19. 第六批实施：真实模型评测、资源边界与验收结论
+
+2026-10-17 在 Windows 11 Enterprise 10.0.26300、AMD EPYC 7763（16 个逻辑 CPU）、
+64 GiB RAM、Node 22.23.2、Python 3.12 上重新下载固定 revision，使用第 15 节锁定依赖，
+实际运行 CPU 推理。以下不是假向量结果，也不是用户数据或组织 ACL 的认证。
+
+### 19.1 数据分离与 profile v2
+
+- 开发集：12 个正例、4 个负例。仅在开发集比较 cosine 下限
+  `0.60/0.65/0.70/0.72/0.75/0.78/0.80`。`0.60/0.65` 虽提高召回，
+  却令全部开发负例产生选择；`0.78/0.80` 降低召回。保留实验阈值 `0.70`。
+- 初始独立合成留出集：12 个正例、6 个负例。v1 暴露继承词法链路的单字误匹配：
+  无关授粉问题仅因“日/的”等单字返回 3 个无关 Event，负例选择率 `1/6`。
+  该结果不隐藏；发现问题后此集合转为回归集，不能再称为未使用的 v2 留出集。
+- `personal-hybrid-rrf-v2` 只在向量已完整覆盖的 Event 上，要求词法候选至少命中一个
+  非单字 CJK query term（当 query 存在此类 term 时）；复用已有 Unicode 词法分词，
+  不过滤 ASCII 单字符编号/名称。
+  仍允许纯语义命中；未覆盖的词法候选、模型/索引失败及单字符查询保留原行为。
+  这不是把低余弦一律当作不相关，也不靠忽略错误或删掉失败用例达标。
+- 再冻结一份不同主题的合成确认集：9 个正例、6 个负例；确认集运行后没有再调阈值或准入规则。
+  数据仍是同一开发环境人工构造的小样本，不能代替独立第三方或真实用户盲测。
+
+`k=10` 的最终结果：
+
+| 集合 | 路径 | Recall@10 | MRR@10 | nDCG@10 | 负例选择率 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 开发 | literal / FTS5 | 0.8333 | 0.8333 | 0.8333 | 0 |
+| 开发 | vector / hybrid v2 | 0.9167 | 0.9167 | 0.9167 | 0 |
+| 原留出（现回归） | literal / FTS5 | 0.8333 | 0.7778 | 0.7917 | 0.1667 |
+| 原留出（现回归） | vector / hybrid v2 | 1.0000 | 1.0000 | 1.0000 | 0 |
+| 新确认 | literal / FTS5 | 0.8889 | 0.7593 | 0.7923 | 0.1667 |
+| 新确认 | vector / hybrid v2 | 1.0000 | 1.0000 | 1.0000 | 0 |
+
+49 个用例中所有路径的越权/过期 Event 选择数均为 0，证据引用覆盖为 1；
+v2 三个集合的负例选择率均为 0。仅用合成 policy 测了授权键隔离，不等于组织 ACL。
+开发集 `capacity exhausted` → 中文连接池记录仍未召回；不能把 `0.70` 当作通用拒答概率。
+默认纯词法及故障降级保留上述弱词法局限，由降级标志明确告知，不宣称召回质量不变。
+
+### 19.2 性能和资源测量
+
+固定 768 维、每 Event 一个完整 chunk、重复真实模型向量的 SQLite 精确扫描，各测 5 次。
+这衡量扫描开销，不是该规模完整 Authority/Blob/模型/HTTP 的端到端延迟：
+
+| 授权 Event 数 | 扫描中位数 | 扫描最大值 | sidecar 占用（含 WAL/SHM） |
+| ---: | ---: | ---: | ---: |
+| 100 | 16.5 ms | 21.0 ms | 4.53 MiB |
+| 1000 | 125.8 ms | 150.6 ms | 8.87 MiB |
+| 10000 | 1428.9 ms | 1437.2 ms | 52.93 MiB |
+
+- 各合成集合的逐条暖 query 推理约 160–279 ms；真实模型 + 内存 Authority/快照夹具 assemble
+  约 131–267 ms，每组只抽测 5 个正例，不把它当作生产 P95。
+- 另跑真实 SQLite Authority + Blob + sidecar + HTTP provider 的 CLI 闭环：
+  索引、零词法语义 search、512-token generation 回填/激活、回滚、GC 后快照重放、
+  未重建前 revision 围栏及 tombstone 删除均通过。
+  3 次完整 CLI search（含 host 启停）约 727/747/767 ms；该烟测仅一个小 Event。
+- 10000 Event 扫描时 Node RSS 约 147 MiB；反复运行验收后模型进程观察峰值工作集约 2.23 GiB。
+  WAL 文件与 checkpoint 时机影响占用；不是逐 Event 的固定容量承诺。
+  未进行长时间内存稳定性或多用户压力认证。
+- 首期建议小规模个人试用，先在自身语料上测量；未批准生产 SLO。
+  每次向量扫描硬上限为 10000 个授权 Event；超出时不调用查询模型，
+  返回词法结果及 `vector_index_capacity`，coverage 为 null，不伪造向量成功。
+  Authority 正文读取仍未实现两阶段优化；长 Event 仍受完整证据预算约束。
+
+参考 Python 服务现在最多接入 32 个处理线程、排队 16 个模型操作，超额 `429/503`。
+推理仍单执行，等待的 query 优先于等待的 document；不能抢占已经运行的推理，
+排队最多等待 30 秒。优先级、队列上限、超时释放、推理失败后释放均有确定性测试。
+HTTP 断连/超时无法中止已开始的 PyTorch 计算，因此大批量文档仍可影响单次查询尾延迟。
+日志只含受限状态，不记录正文或向量。API 部署层限流仍需按本地使用环境配置。
+
+### 19.3 重现和上线检查
+
+先按第 15 节启动真实模型，再在仓库根目录设置 `REGENIC_EMBEDDING_BASE_URL`：
+
+```powershell
+pnpm --filter @regenic/local-cli bench:semantic --split development --scale --output development.json
+pnpm --filter @regenic/local-cli bench:semantic --split holdout --output regression.json
+pnpm --filter @regenic/local-cli bench:semantic --split confirmation --output confirmation.json
+pnpm --filter @regenic/local-cli bench:semantic --split pipeline --output pipeline.json
+```
+
+development 的阈值矩阵只在开发集运行；其它集合不调参。报告保存模型 manifest、profile、
+逐例选择/指标/哈希、硬件和实际测量，不输出向量。benchmark 不在常规单测中下载模型。
+运行使用独立临时 SQLite 目录并在结束时清理，不读用户数据库。
+
+故障回归覆盖模型不可用/超时、损坏 sidecar、部分覆盖、超长输入、无效绑定、
+修订/删除与推理竞态、过期租约、重启、切换固定、回滚未就绪与 GC 后迟到写入。
+最终依赖构建、桌面类型检查、203 项受影响回归及 16 项最后针对性复验、
+8 项 Python 协议/编码器/调度测试通过；真实模型另跑上述 49 个用例和持久化 CLI 闭环。
+已识别的 Authority I/O 失败或观察到的边界变化返回受限 `503`；未知编程错误仍显式失败，
+不伪装词法成功。上线前应备份所有 sidecar、运行自己的脱敏语料验收并明确资源预算。
+默认保持 `REGENIC_EMBEDDING_DRIVER=none`；关闭 embedding 即恢复原词法装配，
+无需删除 Authority 或历史 snapshot。上述功能交付不包含组织 ACL、ANN、历史语义、多模态、
+选择性永久擦除、自动默认开启或真实用户数据质量认证。
 
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679
