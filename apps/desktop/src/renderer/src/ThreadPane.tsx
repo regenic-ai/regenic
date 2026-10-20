@@ -64,6 +64,7 @@ function newClientRequestId(): string {
 
 export const ThreadPane = memo(function ThreadPane({
   thread,
+  locateEventId,
   pull,
   opening,
   openError,
@@ -91,6 +92,7 @@ export const ThreadPane = memo(function ThreadPane({
   onForwardCreated,
 }: {
   thread: InboxThread;
+  locateEventId?: string;
   pull?: PersonalEngineView["pull"];
   opening: boolean;
   openError: string | null;
@@ -163,6 +165,19 @@ export const ThreadPane = memo(function ThreadPane({
     };
   }, [thread, pending]);
   const prompts = thread.prompts;
+  const locatedRef = useRef<string | null>(null);
+  const [locateUnavailable, setLocateUnavailable] = useState(false);
+  useEffect(() => {
+    if (!locateEventId) { setLocateUnavailable(false); return; }
+    const key = `${thread.id}:${locateEventId}`;
+    if (locatedRef.current === key) return;
+    const frame = requestAnimationFrame(() => {
+      const located = listRef.current?.scrollToEvent(locateEventId) ?? false;
+      setLocateUnavailable(!located && !opening);
+      if (located) locatedRef.current = key;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [thread.id, locateEventId, merged, opening]);
   const canReply = thread.can_send && prompts.length === 0;
   const syncNote = threadSyncLabel(thread.id, pull);
   const syncTone = threadSyncTone(thread.id, pull);
@@ -622,6 +637,7 @@ export const ThreadPane = memo(function ThreadPane({
           />
         </div>
       </header>
+      {locateUnavailable ? <p role="status" className="muted">{t("search.locateUnavailable")}</p> : null}
       <ThreadMessageList
         ref={listRef}
         threadId={thread.id}

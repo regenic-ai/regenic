@@ -21,6 +21,7 @@ import type {
   PersonalContextDiff,
   PersonalContextSnapshotIndexEntry,
   PersonalContextSearchResult,
+  PersonalSearchSource,
   SemanticIndexStatus,
   PersonalContextView,
   PersonalHeartbeatView,
@@ -1365,12 +1366,34 @@ export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<Se
   return response.json() as Promise<SemanticIndexStatus>;
 }
 
-export async function indexSemanticOnce(): Promise<{ processed: number; failed: number; superseded: number }> {
+export async function fetchSearchSource(
+  input: { event_id: string; content_hash: string },
+  signal: AbortSignal,
+): Promise<PersonalSearchSource> {
+  const response = await kernelFetch(`/v1/me/context/search/source?locale=${activeLocale()}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search source ${response.status}`);
+  return response.json() as Promise<PersonalSearchSource>;
+}
+
+export async function indexSemanticOnce(signal?: AbortSignal): Promise<{ processed: number; failed: number; superseded: number }> {
   const response = await kernelFetch("/v1/me/context/embedding/index", {
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : undefined,
   });
   if (!response.ok) throwKernelError(await response.json(), `embedding index ${response.status}`);
   return response.json() as Promise<{ processed: number; failed: number; superseded: number }>;
+}
+
+export async function retrySemanticJobs(generation: string, signal: AbortSignal): Promise<{ retried: number }> {
+  const response = await kernelFetch("/v1/me/context/embedding/retry", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ generation, limit: 10 }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  });
+  if (!response.ok) throwKernelError(await response.json(), `embedding retry ${response.status}`);
+  return response.json() as Promise<{ retried: number }>;
 }
 
 export async function assemblePersonalContext(

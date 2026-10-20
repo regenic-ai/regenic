@@ -4,10 +4,12 @@ export interface SemanticIndexStatus {
   configured: boolean;
   healthy: boolean;
   vector_status: string;
+  provider_issue?: string;
   generations: Array<{
     id: string;
     active: boolean;
     jobs: { pending: number; running: number; succeeded: number; failed: number; quarantined: number; superseded: number };
+    failures?: Array<{ code: string; failed: number; quarantined: number }>;
   }>;
 }
 
@@ -473,6 +475,14 @@ export interface PersonalContextSearchResult {
   }>;
   degradation_flags: string[];
   truncated: boolean;
+}
+
+export interface PersonalSearchSource {
+  event_id: string;
+  content_hash: string;
+  text: string;
+  snapshot_id: string;
+  item: InboxViewItem | null;
 }
 
 export interface PersonalContextSnapshotIndexEntry {

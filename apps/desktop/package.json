@@ -9,7 +9,8 @@
     "predev": "pnpm --filter @regenic/api... build",
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:semantic:electron": "node scripts/semantic-electron-smoke.cjs"
   },
   "dependencies": {},
   "devDependencies": {

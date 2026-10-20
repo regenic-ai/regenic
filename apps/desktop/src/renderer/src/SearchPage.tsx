@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { searchPersonalContext } from "./api";
 import { contextSearchInput } from "./context-search";
 import { useLocale } from "./LocaleContext";
-import type { PersonalContextSearchResult } from "./types";
+import type { InboxViewItem, PersonalContextSearchResult } from "./types";
 import { isMessageKey } from "../../shared/messages";
+import { SearchSourceDialog } from "./SearchSourceDialog";
 
-export function SearchPage({ onSettings }: { onSettings: () => void }) {
+export function SearchPage({ onSettings, onOpenConversation }: {
+  onSettings: () => void;
+  onOpenConversation: (item: InboxViewItem) => void;
+}) {
   const { t, locale } = useLocale();
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("");
@@ -15,12 +19,15 @@ export function SearchPage({ onSettings }: { onSettings: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pending = useRef<AbortController | null>(null);
+  const [sourceReference, setSourceReference] = useState<{ event_id: string; content_hash: string } | null>(null);
+  const [elapsed, setElapsed] = useState<number | null>(null);
 
   useEffect(() => {
     const reset = () => {
       pending.current?.abort();
       pending.current = null;
       setBusy(false); setResult(null); setError(null);
+      setSourceReference(null); setElapsed(null);
     };
     const unsubscribe = window.regenic?.onApiOriginChanged(reset);
     return () => { pending.current?.abort(); unsubscribe?.(); };
@@ -31,10 +38,14 @@ export function SearchPage({ onSettings }: { onSettings: () => void }) {
     const controller = new AbortController();
     pending.current = controller;
     setResult(null); setError(null); setBusy(true);
+    setSourceReference(null); setElapsed(null);
+    const started = performance.now();
     try {
       const input = contextSearchInput(query, source, thread, limit);
       const next = await searchPersonalContext(input, AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]));
-      if (!controller.signal.aborted && pending.current === controller) setResult(next);
+      if (!controller.signal.aborted && pending.current === controller) {
+        setResult(next); setElapsed(Math.round(performance.now() - started));
+      }
     } catch (caught) {
       if (!controller.signal.aborted && pending.current === controller) {
         const message = caught instanceof Error ? caught.message : "";
@@ -78,6 +89,7 @@ export function SearchPage({ onSettings }: { onSettings: () => void }) {
             <section className="card semantic-search-meta">
               <strong>{t(result.generation ? "search.hybrid" : "search.lexical")}</strong>
               <p className="muted">{t("search.count", { count: result.items.length })}</p>
+              {elapsed !== null ? <p className="muted">{t("search.elapsed", { ms: elapsed })}</p> : null}
               {result.coverage ? <p>{t("search.coverage", {
                 covered: result.coverage.covered_count, authorized: result.coverage.authorized_count,
               })}</p> : null}
@@ -103,6 +115,9 @@ export function SearchPage({ onSettings }: { onSettings: () => void }) {
                   <header><strong>#{item.rank} · {item.source}</strong>
                     <time dateTime={item.occurred_at}>{new Date(item.occurred_at).toLocaleString(locale)}</time></header>
                   <p className="semantic-snippet">{item.snippet}</p>
+                  <button type="button" className="ghost" onClick={() => setSourceReference({
+                    event_id: item.event_id, content_hash: item.content_hash,
+                  })}>{t("search.viewSource")}</button>
                   <details><summary>{t("search.evidence")}</summary>
                     <dl><dt>Event</dt><dd>{item.event_id}</dd>
                       <dt>SHA-256</dt><dd>{item.content_hash}</dd>
@@ -117,6 +132,8 @@ export function SearchPage({ onSettings }: { onSettings: () => void }) {
           </>
         ) : null}
       </div>
+      {sourceReference ? <SearchSourceDialog reference={sourceReference}
+        onClose={() => setSourceReference(null)} onOpenConversation={onOpenConversation} /> : null}
     </div>
   );
 }

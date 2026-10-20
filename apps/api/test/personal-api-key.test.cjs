@@ -23,6 +23,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const health = await (await fetch(`${origin}/health`)).json();
       assert.equal(inbox.status, 404);
       assert.equal(engine.status, 404);
+      for (const path of ["search/source", "embedding/retry"]) {
+        assert.equal((await fetch(`${origin}/v1/me/context/${path}`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+        })).status, 404);
+      }
       assert.equal((await fetch(`${origin}/v1/me/context/embedding/status`)).status, 404);
       assert.equal((await fetch(`${origin}/v1/me/context/embedding/index`, {
         method: "POST", headers: { "content-type": "application/json" }, body: "{}",
@@ -48,6 +53,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     try {
       const health = await (await fetch(`${origin}/health`)).json();
       const inbox = await fetch(`${origin}/v1/me/inbox`);
+      for (const path of ["search/source", "embedding/retry"]) {
+        assert.equal((await fetch(`${origin}/v1/me/context/${path}`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+        })).status, 401);
+      }
       assert.equal((await fetch(`${origin}/v1/me/context/embedding/status`)).status, 401);
       assert.equal((await fetch(`${origin}/v1/me/context/embedding/index`, {
         method: "POST", headers: { "content-type": "application/json" }, body: "{}",

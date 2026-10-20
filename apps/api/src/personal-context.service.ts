@@ -138,6 +138,31 @@ export class PersonalContextService {
     return this.runContext(() => this.runtime.semanticStatus());
   }
 
+  async searchSource(input: unknown) {
+    const body = strictBody(input, new Set(["event_id", "content_hash"]));
+    const eventId = requiredString(body.event_id, "event_id");
+    const contentHash = requiredString(body.content_hash, "content_hash");
+    if (!/^[a-f0-9]{64}$/.test(contentHash)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid content_hash");
+    }
+    return this.runContext(async () => {
+      const result = await this.runtime.requireHost().get("context").assemble({
+        schema_version: "1.0", id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
+        consumer_id: "personal-search-source", purpose: "display the current authorized search source",
+        allowed_uses: ["display"], temporal: { mode: "current" },
+        anchors: [{ kind: "event", id: eventId }], requested_kinds: ["event"],
+        budget: { profile: "personal-search-source-v1", max_tokens: 65_536, max_items: 1, max_raw_evidence: 1 },
+      });
+      const item = result.bundle.sections.flatMap((section) => section.items).find((entry) =>
+        entry.kind === "event" && entry.resource_id === eventId && entry.content_hash === contentHash &&
+        entry.evidence.some((reference) => reference.event_id === eventId && reference.content_hash === contentHash));
+      if (!item || typeof item.text !== "string") {
+        throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Search source is no longer available; search again");
+      }
+      return { event_id: eventId, content_hash: contentHash, text: item.text, snapshot_id: result.snapshot.id };
+    });
+  }
+
   async indexSemantic(input: unknown) {
     strictBody(input, new Set());
     const status = await this.semanticStatus();
@@ -145,7 +170,26 @@ export class PersonalContextService {
       throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
         "Semantic indexing is not configured or the vector store is unavailable");
     }
+
     return this.runContext(() => this.runtime.indexSemanticOnce());
+  }
+
+  async retrySemantic(input: unknown) {
+    const body = strictBody(input, new Set(["generation", "limit"]));
+    const generation = requiredString(body.generation, "generation");
+    const limit = body.limit ?? 10;
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Retry limit must be an integer from 1 to 20");
+    }
+    const status = await this.semanticStatus();
+    if (!status.configured || !status.healthy || status.vector_status !== "ready") {
+      throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+        "Repair the embedding provider and vector store before retrying jobs");
+    }
+    if (!status.generations.some((entry) => entry.id === generation)) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Embedding generation was not found");
+    }
+    return this.runContext(() => this.runtime.retrySemantic(generation, limit));
   }
 
   async getSnapshot(snapshotId: string): Promise<ContextSnapshot> {

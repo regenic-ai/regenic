@@ -17,6 +17,8 @@ import {
   PersonalContextService,
 } from "./personal-context.service";
 import { PersonalKernelStoppedError } from "./personal-runtime.service";
+import { PersonalInboxService } from "./personal-inbox.service";
+import { requestLocale } from "./request-locale";
 
 @Controller("v1/me/context")
 @UseGuards(PersonalApiGuard)
@@ -24,6 +26,8 @@ export class PersonalContextController {
   constructor(
     @Inject(PersonalContextService)
     private readonly context: PersonalContextService,
+    @Inject(PersonalInboxService)
+    private readonly inbox: PersonalInboxService,
   ) {}
 
   @Post("assemble")
@@ -37,6 +41,19 @@ export class PersonalContextController {
     return this.guard(() => this.context.search(body));
   }
 
+  @Post("search/source")
+  @HttpCode(HttpStatus.OK)
+  searchSource(@Body() body: unknown, @Query("locale") locale?: string) {
+    return this.guard(async () => {
+      const source = await this.context.searchSource(body);
+      const item = await this.inbox.getInboxItem(source.event_id, requestLocale(locale));
+      if (item && item.event.content_hash !== source.content_hash) {
+        throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Search source is no longer available; search again");
+      }
+      return { ...source, item };
+    });
+  }
+
   @Get("embedding/status")
   semanticStatus() {
     return this.guard(() => this.context.semanticStatus());
@@ -46,6 +63,12 @@ export class PersonalContextController {
   @HttpCode(HttpStatus.OK)
   indexSemantic(@Body() body: unknown) {
     return this.guard(() => this.context.indexSemantic(body));
+  }
+
+  @Post("embedding/retry")
+  @HttpCode(HttpStatus.OK)
+  retrySemantic(@Body() body: unknown) {
+    return this.guard(() => this.context.retrySemantic(body));
   }
 
   @Get("snapshots/:snapshotId")
