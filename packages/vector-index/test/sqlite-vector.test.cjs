@@ -43,6 +43,48 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("requeues only bounded current failed/quarantined jobs without changing leases, successes or other scopes", async (t) => {
+    const f = await fixture(t);
+    const heads = ["good", "running", "failed", "quarantined", "stale"].map((id) => head(id));
+    await reconcile(f.index, heads);
+    const jobs = await claim(f.index);
+    await f.index.complete({ job: jobs[0], owner: "owner", now: at, chunks: [chunk()] });
+    for (const job of jobs.slice(2)) {
+      await f.index.fail({ job, owner: "owner", now: at, retry_at: later,
+        error_code: "unavailable", retryable: job.event_id === "failed" });
+    }
+    await reconcile(f.index, [...heads.slice(0, 4), head("replacement", {
+      external_id: "stale", operation: "revise", lineage: ["stale", "replacement"],
+    })]);
+    const next = embeddingGeneration(model, 64);
+    for (const [org, gen] of [["other", generation], ["org", next]]) {
+      await f.index.registerGeneration(org, gen);
+      await reconcile(f.index, [head("separate")], org, gen);
+      for (const job of await claim(f.index, "owner", at, org, gen)) {
+        await f.index.fail({ job, owner: "owner", now: at, retry_at: later, error_code: "unavailable", retryable: false });
+      }
+    }
+    for (const limit of [0, 21, 1.5]) await assert.rejects(f.index.retryFailed("org", generation.id, limit));
+    assert.equal(await f.index.retryFailed("org", generation.id, 1), 1);
+    assert.equal(await f.index.retryFailed("org", generation.id, 20), 1);
+    assert.equal(await f.index.retryFailed("org", generation.id, 20), 0);
+    f.reopen();
+    const after = await f.index.listJobs("org", generation.id);
+    assert.equal(after.find((job) => job.event_id === "good").status, "succeeded");
+    assert.equal(after.find((job) => job.event_id === "stale").status, "superseded");
+    assert.equal(after.find((job) => job.event_id === "running").status, "running");
+    for (const id of ["failed", "quarantined"]) {
+      const job = after.find((value) => value.event_id === id);
+      assert.equal(job.status, "pending");
+      assert.equal(job.attempts, 1);
+      assert.equal(job.error_code, undefined);
+    }
+    assert.equal((await f.index.listJobs("other", generation.id))[0].status, "quarantined");
+    assert.equal((await f.index.listJobs("org", next.id))[0].status, "quarantined");
+    assert.deepEqual((await query(f.index, [{ event_id: "good", content_hash: hash }])).matched.map((match) => match.event_id), ["good"]);
+    assert.equal(await f.index.complete({ job: jobs[1], owner: "owner", now: at, chunks: [chunk()] }), true);
+  });
+
   it("switches only fully covered reconciled generations, persists rollback and guards collection", async (t) => {
     const f = await fixture(t);
     const next = embeddingGeneration(model, 64);

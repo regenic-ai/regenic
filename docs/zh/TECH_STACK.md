@@ -45,6 +45,10 @@ generation 回填、激活、回滚、GC 和真实模型合成评测已实现。
 `GET /v1/me/context/embedding/status` 仅返回就绪状态与各代任务聚合计数，
 `POST /v1/me/context/embedding/index` 只接受 `{}`、一次处理至多一个任务；
 二者共用 Personal API 认证边界。详见[桌面操作说明](DESKTOP.md#个人上下文搜索与本地模型)。
+另提供 `POST /v1/me/context/search/source` 复核当前授权 Event/hash 后查看原文并跳转会话；
+`POST /v1/me/context/embedding/retry` 按代限量重新排队失败/隔离任务（默认 10、最多 20）。
+诊断仅暴露固定分类，重试保留租约、围栏和成功覆盖；worker 仍在处理前复核生命周期。
+桌面操作固定最多 10 个并需确认；搜索/索引请求耗时仅含客户端网络等待，不是生产性能指标。
 
 ## 2. 组件
 

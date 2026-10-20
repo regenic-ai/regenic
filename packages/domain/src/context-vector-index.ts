@@ -108,6 +108,7 @@ export interface EmbeddingJobStore {
   }): Promise<boolean>;
   listJobs(orgId: string, generation: string): Promise<EmbeddingJob[]>;
   retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean>;
+  retryFailed(orgId: string, generation: string, limit: number): Promise<number>;
 }
 
 export interface ContextEmbeddingRunner {

@@ -132,6 +132,7 @@ export function ConsoleApp() {
   const engineRef = useRef<PersonalEngineView | null>(null);
   const [drafts, setDrafts] = useState<CreatedConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [locatedEvent, setLocatedEvent] = useState<{ thread_id: string; event_id: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reachability, setReachability] = useState<KernelReachability>("live");
   const [creating, setCreating] = useState(false);
@@ -995,6 +996,7 @@ export function ConsoleApp() {
     setMessagesByThread({});
     setDrafts([]);
     setSelectedId(null);
+    setLocatedEvent(null);
     setOpeningId(null);
     setSeedingId(null);
     setRecipeSeed(null);
@@ -1681,6 +1683,7 @@ export function ConsoleApp() {
         {nav === "inbox" ? (
           <InboxWorkspace
             threads={listThreads}
+            locateEventId={locatedEvent?.thread_id === selected?.id ? locatedEvent?.event_id : undefined}
             selected={selected}
             error={error}
             pull={engine?.pull}
@@ -1708,6 +1711,7 @@ export function ConsoleApp() {
             onCreate={startConversation}
             onCommitDraft={commitDraft}
             onSelect={(id) => {
+              setLocatedEvent(null);
               const unloaded = !loadedThreadsRef.current.has(id);
               if (unloaded && (messagesRef.current[id]?.length ?? 0) === 0) {
                 setOpeningId(id);
@@ -1778,7 +1782,16 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
-        {nav === "search" ? <SearchPage onSettings={() => setNav("settings")} /> : null}
+        {nav === "search" ? <SearchPage onSettings={() => setNav("settings")} onOpenConversation={(item) => {
+          const thread = groupInboxThreads([item])[0];
+          if (!thread) { setError(t("search.noConversation")); return; }
+          selectedThreadRef.current = thread;
+          setMessagesByThread((previous) => rememberThreadMessages(previous, thread.id,
+            mergeRecentInbox(previous[thread.id] ?? [], [item])));
+          setSelectedId(thread.id);
+          setLocatedEvent({ thread_id: thread.id, event_id: item.event.id });
+          setNav("inbox");
+        }} /> : null}
         {nav === "follow-ups" ? <FollowUpsPage /> : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />

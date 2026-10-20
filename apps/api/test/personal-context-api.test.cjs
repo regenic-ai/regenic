@@ -172,6 +172,117 @@ async function getJson(url) {
 }
 
 describe("personal context API", () => {
+  it("maps unknown provider/job errors to a fixed safe diagnostic category", () => {
+    const { semanticIssue } = require("../dist/semantic-diagnostics");
+    assert.equal(semanticIssue("sensitive_error_detail"), "indexing_failed");
+    assert.equal(semanticIssue(undefined), "indexing_failed");
+    assert.equal(semanticIssue("cancelled"), "indexing_failed");
+    assert.equal(semanticIssue("unavailable"), "provider_unavailable");
+    assert.equal(semanticIssue("invalid_input"), "input_invalid");
+  });
+
+  it("opens only the current authorized search source and rejects stale, deleted, foreign or forged references", async () => {
+    const root = await createRoot();
+    const { origin, eventId, database } = await startApi(root);
+    const searched = JSON.parse((await postJson(`${origin}/v1/me/context/search`, { query: "release" })).text);
+    const reference = { event_id: eventId, content_hash: searched.items[0].content_hash };
+    const opened = await postJson(`${origin}/v1/me/context/search/source?locale=zh`, reference);
+    assert.equal(opened.response.status, 200, opened.text);
+    const source = JSON.parse(opened.text);
+    assert.equal(source.text, "The release is approved for Monday.");
+    assert.equal(source.item.event.id, eventId);
+    assert.equal(source.item.event.content_hash, reference.content_hash);
+    assert.ok(source.item.thread_id && source.snapshot_id);
+    for (const body of [{}, { ...reference, org_id: "other" }, { ...reference, content_hash: "bad" }]) {
+      assert.equal((await postJson(`${origin}/v1/me/context/search/source`, body)).response.status, 400);
+    }
+    assert.equal((await postJson(`${origin}/v1/me/context/search/source`, {
+      ...reference, content_hash: "f".repeat(64),
+    })).response.status, 404);
+    const authority = new SqliteAuthorityStore(database);
+    const ingest = new IngestionService(new FsBlobStore(join(root, "blobs")), authority);
+    try {
+      for (const [operation, delivery, org] of [
+        ["create", "foreign", "other"], ["revise", "revised", "local-owner"], ["tombstone", "deleted", "local-owner"],
+      ]) {
+        const accepted = await ingest.ingest({
+          schema_version: INGEST_SCHEMA_VERSION, connector_id: "synthetic-chat", org_id: org,
+          delivery_id: delivery, received_at: new Date().toISOString(),
+          records: [{
+            operation, source: "synthetic-chat", external_id: "chat-1:message-1",
+            occurred_at: new Date().toISOString(), actor: { id: "person-1" }, scope: { id: "chat-1" },
+            type: "message", ...(operation === "tombstone" ? {} : { content: [{
+              role: "body", media_type: "text/plain", text: "The updated release approval.",
+            }] }),
+          }],
+        });
+        assert.ok(accepted.records, JSON.stringify(accepted));
+        assert.equal(accepted.records[0].status, "accepted");
+        const id = accepted.records[0].event_id;
+        if (org === "other") {
+          const foreign = await authority.getEvent(org, id);
+          assert.equal((await postJson(`${origin}/v1/me/context/search/source`, {
+            event_id: id, content_hash: foreign.content_hash,
+          })).response.status, 404);
+        } else {
+          assert.equal((await postJson(`${origin}/v1/me/context/search/source`, reference)).response.status, 404);
+          if (operation === "revise") {
+            const updated = await authority.getEvent(org, id);
+            const current = await postJson(`${origin}/v1/me/context/search/source`, {
+              event_id: id, content_hash: updated.content_hash,
+            });
+            assert.equal(current.response.status, 200, current.text);
+            assert.equal(JSON.parse(current.text).text, "The updated release approval.");
+          }
+        }
+      }
+    } finally { authority.close(); }
+  });
+
+  it("diagnoses failures without raw errors and safely retries a bounded known generation after repair", async () => {
+    const { EMBEDDINGGEMMA_2 } = require("@regenic/embedding-provider");
+    let broken = true;
+    let unhealthy = false;
+    const server = createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      response.setHeader("content-type", "application/json");
+      if (unhealthy || (broken && request.url === "/embed")) {
+        response.statusCode = 409;
+        response.end(JSON.stringify({ error: "private raw error never exposed" }));
+      } else response.end(JSON.stringify({ descriptor: EMBEDDINGGEMMA_2,
+        ...(request.url === "/tokens" ? { counts: input.texts.map(() => 10) }
+          : { vectors: input.texts.map(() => [1, ...Array(767).fill(0)]) }) }));
+    });
+    await listenServer(server);
+    servers.push(server);
+    const { origin } = await startApi(await createRoot(), { driver: "none" }, `http://127.0.0.1:${server.address().port}`);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/embedding/index`, {})).text).failed, 1);
+    const status = JSON.parse((await getJson(`${origin}/v1/me/context/embedding/status`)).text);
+    const generation = status.generations[0];
+    assert.deepEqual(generation.failures, [{ code: "model_mismatch", failed: 0, quarantined: 1 }]);
+    assert.ok(!JSON.stringify(status).includes("private raw"));
+    for (const body of [{}, { generation: generation.id, limit: 0 }, { generation: generation.id, limit: 21 },
+      { generation: generation.id, limit: 1.5 }, { generation: generation.id, org_id: "other" }]) {
+      assert.equal((await postJson(`${origin}/v1/me/context/embedding/retry`, body)).response.status, 400);
+    }
+    assert.equal((await postJson(`${origin}/v1/me/context/embedding/retry`, { generation: "unknown" })).response.status, 404);
+    unhealthy = true;
+    assert.equal((await postJson(`${origin}/v1/me/context/embedding/retry`, { generation: generation.id })).response.status, 503);
+    const offline = JSON.parse((await getJson(`${origin}/v1/me/context/embedding/status`)).text);
+    assert.equal(offline.provider_issue, "model_mismatch");
+    unhealthy = false; broken = false;
+    const retried = await postJson(`${origin}/v1/me/context/embedding/retry`, { generation: generation.id, limit: 1 });
+    assert.equal(retried.response.status, 200, retried.text);
+    assert.deepEqual(JSON.parse(retried.text), { retried: 1 });
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/embedding/retry`, { generation: generation.id })).text).retried, 0);
+    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/embedding/index`, {})).text).processed, 1);
+    const repaired = JSON.parse((await getJson(`${origin}/v1/me/context/embedding/status`)).text).generations[0];
+    assert.equal(repaired.jobs.succeeded, 1);
+    assert.deepEqual(repaired.failures, []);
+  });
+
   it("indexes one bounded job and reports aggregate coverage without exposing content or URLs", async () => {
     const { EMBEDDINGGEMMA_2 } = require("@regenic/embedding-provider");
     const server = createServer(async (request, response) => {

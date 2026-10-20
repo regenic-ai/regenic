@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { fetchSemanticIndexStatus, indexSemanticOnce } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { fetchSemanticIndexStatus, indexSemanticOnce, retrySemanticJobs } from "./api";
 import { useLocale } from "./LocaleContext";
 import { isMessageKey } from "../../shared/messages";
 import type { SemanticAction, SemanticRuntimeView } from "../../shared/semantic-runtime";
@@ -14,6 +14,7 @@ export function SemanticSettings() {
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [indexResult, setIndexResult] = useState<string | null>(null);
+  const operation = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,22 +38,54 @@ export function SemanticSettings() {
       }
     };
     const unsubscribe = window.regenic?.onApiOriginChanged(() => {
+      operation.current?.abort(); operation.current = null; setBusy(false);
       setRuntime(null); setIndex(null); setPollError(null); setError(null); setIndexResult(null);
       void refresh();
     });
     void refresh();
-    return () => { cancelled = true; controller.abort(); clearTimeout(timer); unsubscribe?.(); };
+    return () => { cancelled = true; controller.abort(); operation.current?.abort(); clearTimeout(timer); unsubscribe?.(); };
   }, [t]);
 
   function message(value: string): string { return isMessageKey(value) ? t(value) : value; }
 
   async function action(next: SemanticAction) {
+    const controller = new AbortController();
+    operation.current = controller;
     setBusy(true); setError(null);
     try {
       if (!window.regenic?.semanticAction) throw new Error(t("semantic.localOnly"));
-      setRuntime(await window.regenic.semanticAction(next));
-    } catch (caught) { setError(caught instanceof Error ? message(caught.message) : t("semantic.failed")); }
-    finally { setBusy(false); }
+      const nextRuntime = await window.regenic.semanticAction(next);
+      if (!controller.signal.aborted) setRuntime(nextRuntime);
+    } catch (caught) {
+      if (!controller.signal.aborted) setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
+    }
+    finally { if (!controller.signal.aborted) setBusy(false); }
+  }
+
+  async function indexAction(generation?: string) {
+    if (generation && !window.confirm(t("semantic.retryConfirm"))) return;
+    const controller = new AbortController();
+    operation.current = controller;
+    setBusy(true); setError(null); setIndexResult(null);
+    const started = performance.now();
+    try {
+      const result = generation
+        ? t("semantic.retryResult", await retrySemanticJobs(generation, controller.signal))
+        : t("semantic.indexResult", await indexSemanticOnce(controller.signal));
+      if (controller.signal.aborted) return;
+      setIndexResult(`${result} ${t("semantic.actionElapsed", { ms: Math.round(performance.now() - started) })}`);
+      const next = await fetchSemanticIndexStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]));
+      if (!controller.signal.aborted) setIndex(next);
+    } catch (caught) {
+      if (!controller.signal.aborted) setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
+    } finally {
+      if (!controller.signal.aborted) setBusy(false);
+    }
+  }
+
+  function issue(code: string): string {
+    const key = `semantic.issue.${code}`;
+    return t(isMessageKey(key) ? key : "semantic.issue.indexing_failed");
   }
 
   const disabled = busy || runtime?.busy;
@@ -63,6 +96,7 @@ export function SemanticSettings() {
       <p>{t("semantic.prerequisite")}</p>
       {runtime ? <p role="status">{t(`semantic.stage.${runtime.stage}`)}</p> : <p>{t("semantic.localOnly")}</p>}
       <p>{t(index?.configured ? index.healthy ? "semantic.healthy" : "semantic.unhealthy" : "semantic.lexical")}</p>
+      {index?.provider_issue ? <p role="status">{issue(index.provider_issue)}</p> : null}
       {runtime?.error ? <p className="action-error" role="alert">{message(runtime.error)}</p> : null}
       {error ? <p className="action-error" role="alert">{message(error)}</p> : null}
       {pollError ? <p className="action-error" role="alert">{message(pollError)}</p> : null}
@@ -86,19 +120,22 @@ export function SemanticSettings() {
         <div>
           <h3>{t("semantic.index")}</h3>
           <p className="muted">{t("semantic.indexHint")}</p>
+          <p className="muted">{t("semantic.recoveryHint")}</p>
           {index.generations.map((generation) => (
             <div key={generation.id} className="semantic-generation">
               <code>{generation.id}</code>{generation.active ? <strong> · {t("semantic.active")}</strong> : null}
               <p>{t("semantic.progress", generation.jobs)}</p>
+              {generation.failures?.length ? <ul>{generation.failures.map((failure) => (
+                <li key={failure.code}>{issue(failure.code)} {t("semantic.failureCounts", failure)}</li>
+              ))}</ul> : null}
+              <button type="button" className="ghost"
+                disabled={disabled || !index.healthy || index.vector_status !== "ready" ||
+                  generation.jobs.failed + generation.jobs.quarantined === 0}
+                onClick={() => void indexAction(generation.id)}>{t("semantic.retryJobs")}</button>
             </div>
           ))}
           <button type="button" className="ghost" disabled={disabled || index.vector_status !== "ready"}
-            onClick={() => {
-              setBusy(true); setError(null);
-              void indexSemanticOnce().then((result) => setIndexResult(t("semantic.indexResult", result)))
-                .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : t("semantic.failed")))
-                .finally(() => setBusy(false));
-            }}>{t("semantic.indexNext")}</button>
+            onClick={() => void indexAction()}>{t("semantic.indexNext")}</button>
           {indexResult ? <p role="status">{indexResult}</p> : null}
         </div>
       ) : null}

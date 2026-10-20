@@ -14,3 +14,7 @@
 .semantic-results dt, .semantic-search-meta dt { color: var(--muted); margin-top: 8px; }
 .semantic-generation { border-top: 1px solid var(--line); padding-top: 12px; }
 .titlebar .search { -webkit-app-region: no-drag; text-align: left; cursor: text; }
+.search-source-dialog { color: var(--text); background: var(--surface); max-width: 760px; width: min(90vw, 760px); max-height: 85vh; overflow: auto; }
+.search-source-dialog::backdrop { background: #000a; }
+.search-source-dialog header { justify-content: space-between; }
+.search-source-text { line-height: 1.6; }

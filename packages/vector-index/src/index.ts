@@ -309,6 +309,18 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       .run(orgId, generation, eventId).changes === 1;
   }
 
+  async retryFailed(orgId: string, generation: string, limit: number): Promise<number> {
+    required(orgId); required(generation); bounded(limit, 1, 20);
+    return this.db.prepare(`UPDATE jobs SET status='pending',retry_at=NULL,error_code=NULL
+      WHERE id IN (
+        SELECT j.id FROM jobs j WHERE j.org_id=? AND j.generation=?
+        AND j.status IN ('failed','quarantined') AND j.operation<>'tombstone'
+        AND EXISTS (SELECT 1 FROM source_heads h WHERE h.org_id=j.org_id
+          AND h.source=j.source AND h.external_id=j.external_id AND h.event_id=j.event_id AND h.fence=j.fence)
+        ORDER BY j.id LIMIT ?
+      )`).run(orgId, generation, limit).changes;
+  }
+
   async matchAuthorized(input: Parameters<ContextVectorIndex["matchAuthorized"]>[0]): ReturnType<ContextVectorIndex["matchAuthorized"]> {
     try {
       return await this.matchAuthorizedView(input);

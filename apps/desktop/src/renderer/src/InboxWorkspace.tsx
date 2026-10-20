@@ -51,6 +51,7 @@ import type {
 
 export function InboxWorkspace({
   threads,
+  locateEventId,
   selected,
   error,
   pull,
@@ -88,6 +89,7 @@ export function InboxWorkspace({
   onForwardCreated,
 }: {
   threads: InboxThread[];
+  locateEventId?: string;
   selected: InboxThread | null;
   error: string | null;
   pull?: PersonalEngineView["pull"];
@@ -454,6 +456,7 @@ export function InboxWorkspace({
         {selected ? (
           <ThreadPane
             thread={selected}
+            locateEventId={locateEventId}
             pull={pull}
             opening={openingId === selected.id}
             openError={openError}

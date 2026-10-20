@@ -878,7 +878,8 @@ development 的阈值矩阵只在开发集运行；其它集合不调参。报�
 新增同一 Personal API 边界内的 `GET /v1/me/context/embedding/status`
 （provider/vector 状态与各代任务聚合计数，不暴露原文、原始错误和模型地址）和
 `POST /v1/me/context/embedding/index`（严格空对象，至多一个任务）。
-设置页显示进度并可手动推进一个任务；失败重试、代切换、rollback、GC 仍由 CLI 执行。
+设置页显示进度并可手动推进一个任务；后续可靠性补齐了固定类别诊断与限量重试，
+代切换、rollback、GC 仍由 CLI 执行。
 Python 需要预装，安装不是系统 Python 安装器；依赖与权重下载需要网络、数 GB 磁盘和内存预算。
 详见[桌面操作说明](DESKTOP.md#个人上下文搜索与本地模型)。
 
@@ -890,6 +891,27 @@ Python 需要预装，安装不是系统 Python 安装器；依赖与权重下�
 浏览器受控响应验收覆盖快速连续查询、内核切换清空、安全文本、空结果、错误、
 中英切换、下载同意及自定义内核禁用管理。上述是功能烟测，不代替真实用户语料质量、
 大规模性能、跨平台安装或生产认证；首次版本的合成质量评测结论保持不变。
+
+### 搜索来源定位与索引恢复
+
+`POST /v1/me/context/search/source` 只接受 `{event_id, content_hash}`，由服务端构造
+display-only current 请求，经现有 ContextEngine 的生命周期、授权和证据绑定检查；
+最多展示 65,536 token 的一个 Event。旧 Event、错误 hash、跨组织和 tombstone
+均不会因旧搜索 snapshot 而绕过 current 检查。返回的原文用纯文本展示，能映射到收件箱时
+复用真实会话标识并高亮原消息；不会猜 ID 或自动取消隐藏会话。无收件箱映射时仅提供原文。
+
+索引 status 新增固定分类的失败/隔离计数及 provider issue，不返回原始错误。
+`POST /v1/me/context/embedding/retry` 严格接受 `{generation, limit?}`，
+默认 10、上限 20；provider/vector 需就绪且 generation 必须仍保留。
+一次原子更新只将匹配当前已知 source head/fence 的 failed/quarantined 任务改为 pending，
+不修改 running/succeeded/superseded、attempts 或成功 coverage。Authority 在重试后变化时，
+worker 原有的执行前/发布前生命周期复核仍会拒绝过时任务。桌面每次固定最多 10 个，
+要求修复原因后确认；无效或过大来源需在源侧处理，重试不等于修复。
+
+新增可重复的实际 Electron 烟测 `pnpm --filter @regenic/desktop test:semantic:electron`，
+使用独立 userData、合成库和协议 stub，覆盖原文、隐藏会话跳转/高亮、诊断/重试、
+修订后旧结果拒绝、origin 重置及退出清理。它不是模型质量、规模或生产指标认证；
+真实用户数据验收、资源基线及跨平台安装仍需单独执行。
 
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679

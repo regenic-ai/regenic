@@ -56,6 +56,20 @@ can be restarted by model management; custom kernels are managed independently.
 The guarded `GET /v1/me/context/embedding/status` returns provider/vector readiness
 and aggregate per-generation job counts, never raw job inputs or model URLs.
 `POST /v1/me/context/embedding/index` accepts only `{}` and runs at most one job.
+`POST /v1/me/context/search/source` accepts only an Event/hash reference, rechecks
+current authorized evidence and returns bounded source text plus an optional inbox
+mapping. Desktop previews escaped text and can navigate/highlight the original
+message without unhiding its conversation.
+Status also returns allowlisted failure categories. The guarded
+`POST /v1/me/context/embedding/retry` accepts a retained `generation` and an integer
+`limit` (default 10, maximum 20); it requires healthy provider/vector storage and
+only requeues current-head failed/quarantined jobs, preserving leases and coverage.
+Workers revalidate Authority lifecycle before inference/publication.
+Desktop recovery uses a confirmed batch of at most 10 and ignores stale responses
+after kernel changes. Search and manual indexing display request time including
+network waiting; these are not production latency/resource metrics.
+An opt-in `test:semantic:electron` script runs the real app/API against isolated
+synthetic data and a local inference stub; it does not download model weights.
 See the [desktop runbook](../zh/DESKTOP.md#个人上下文搜索与本地模型).
 Generation backfill/activation/rollback/GC and a reproducible real-model synthetic
 evaluation are available. The v2 hybrid profile gates covered single-CJK-character-only
