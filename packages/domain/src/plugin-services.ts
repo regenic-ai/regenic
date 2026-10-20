@@ -17,7 +17,7 @@ import type { ModelProvider } from "./model-provider";
 import type { ContextProjectionOutboxStore } from "./context-projection-outbox";
 import type { ContextLexicalIndex } from "./context-lexical";
 import type { EmbeddingProvider } from "./embedding-provider";
-import type { ContextVectorIndex, EmbeddingJobStore, ContextEmbeddingRunner } from "./context-vector-index";
+import type { ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore, ContextEmbeddingRunner } from "./context-vector-index";
 import type { DailyDigestProjectionRunner } from "./context-daily-digest";
 import type { DailyDigestJobStore } from "./daily-digest-jobs";
 import type { DailyDigestPolicyStore } from "./daily-digest-policy";
@@ -59,6 +59,7 @@ declare module "@regenic/plugin-host" {
     "context-lexical-index": ContextLexicalIndex;
     embedding: EmbeddingProvider;
     "context-vector-index": ContextVectorIndex;
+    "context-vector-generations": ContextVectorGenerationStore;
     "context-vector-status": { status: "ready" | "unavailable"; error_code?: string };
     "context-embedding-jobs": EmbeddingJobStore;
     "context-embedding-worker": ContextEmbeddingRunner;

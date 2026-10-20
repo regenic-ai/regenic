@@ -41,9 +41,26 @@ Durable embedding jobs reconcile full Authority lifecycle reads independently
 of the existing projection queue. It is off by default
 (`REGENIC_EMBEDDING_DRIVER=none`). Explicitly configured personal API hosts now
 use current-only hybrid Event retrieval (also for `/ask`), with lexical degradation
-and pinned snapshot traces. A separate record-search endpoint and CLI query
-configuration are the next rollout step. See the
+and pinned snapshot traces. `POST /v1/me/context/search` does not require completion;
+CLI `context-search`, `context-assemble`, and `context-ask` share the optional
+embedding configuration. See the
 [implementation status and local setup](../zh/EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影).
+
+Desktop now exposes authorized current-text search, snippets, evidence, coverage,
+fallback flags and pinned snapshot metadata. Settings can install, enable, stop
+and health-check the fixed-revision local CPU model using an isolated Python 3.12
+venv and cache under Electron userData (separate from the personal database).
+Installation needs explicit download consent and several GB of disk space.
+Default remains off; lexical search needs no model. Only an owned local kernel
+can be restarted by model management; custom kernels are managed independently.
+The guarded `GET /v1/me/context/embedding/status` returns provider/vector readiness
+and aggregate per-generation job counts, never raw job inputs or model URLs.
+`POST /v1/me/context/embedding/index` accepts only `{}` and runs at most one job.
+See the [desktop runbook](../zh/DESKTOP.md#个人上下文搜索与本地模型).
+Generation backfill/activation/rollback/GC and a reproducible real-model synthetic
+evaluation are available. The v2 hybrid profile gates covered single-CJK-character-only
+lexical matches, preserves lexical fallback, and remains off by default. Small synthetic
+results are not real-user quality or production performance certification.
 
 ## 2. Components
 

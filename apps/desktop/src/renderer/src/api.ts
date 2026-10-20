@@ -20,6 +20,8 @@ import type {
   PersonalContextBundle,
   PersonalContextDiff,
   PersonalContextSnapshotIndexEntry,
+  PersonalContextSearchResult,
+  SemanticIndexStatus,
   PersonalContextView,
   PersonalHeartbeatView,
   PluginInventoryItem,
@@ -1344,6 +1346,32 @@ export async function clearStore(): Promise<StoreClearView> {
 
 const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
 const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
+
+export async function searchPersonalContext(
+  input: { query: string; limit?: number; filters?: { sources?: string[]; thread_ids?: string[] } },
+  signal?: AbortSignal,
+): Promise<PersonalContextSearchResult> {
+  const response = await kernelFetch("/v1/me/context/search", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(input), signal,
+  });
+  if (!response.ok) throwKernelError(await response.json(), `context search ${response.status}`);
+  return response.json() as Promise<PersonalContextSearchResult>;
+}
+
+export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<SemanticIndexStatus> {
+  const response = await kernelFetch("/v1/me/context/embedding/status", { signal });
+  if (!response.ok) throwKernelError(await response.json(), `embedding status ${response.status}`);
+  return response.json() as Promise<SemanticIndexStatus>;
+}
+
+export async function indexSemanticOnce(): Promise<{ processed: number; failed: number; superseded: number }> {
+  const response = await kernelFetch("/v1/me/context/embedding/index", {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  });
+  if (!response.ok) throwKernelError(await response.json(), `embedding index ${response.status}`);
+  return response.json() as Promise<{ processed: number; failed: number; superseded: number }>;
+}
 
 export async function assemblePersonalContext(
   threadId: string,

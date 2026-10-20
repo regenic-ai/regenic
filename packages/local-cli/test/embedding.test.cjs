@@ -21,7 +21,7 @@ it("runs local HTTP indexing/status/retry commands with durable progress across 
     for await (const chunk of request) body += chunk;
     const input = JSON.parse(body);
     assert.deepEqual(input.descriptor, EMBEDDINGGEMMA_2);
-    assert.equal(input.mode, "document");
+    assert.ok(["document", "query"].includes(input.mode));
     response.setHeader("content-type", "application/json");
     if (reject) {
       response.writeHead(400);
@@ -75,5 +75,26 @@ it("runs local HTTP indexing/status/retry commands with durable progress across 
   assert.equal((await run("context-embedding-status")).jobs[0].status, "succeeded");
   assert.equal((await run("context-embedding-index")).processed, 0);
   assert.equal(embeddings, 1);
+  const searched = await run("context-search", "--query", "release permission", "--limit", "1");
+  assert.equal(searched.items.length, 1);
+  assert.ok(searched.generation);
+  assert.equal(searched.items[0].snippet, "发布批准 RG-2048");
+  assert.equal(searched.coverage.covered_count, 1);
+  assert.equal(embeddings, 2);
+  const assembled = await run("context-assemble", "--query", "release permission");
+  assert.equal(assembled.snapshot.retrieval_trace[0].mode, "hybrid");
+  await assert.rejects(run("context-search", "--query", "release", "--temporal", "history"), /Invalid search/);
+  await assert.rejects(run("context-search", "--query", "release", "--limit", "101"), /Invalid search/);
+  await assert.rejects(run("context-search", "--query", "release", "--generation", "injected"), /Unexpected search/);
   await assert.rejects(run("context-embedding-retry", "--event", "missing"), /No current quarantined/);
+  const before = await run("context-embedding-status");
+  const original = before.generations.find((entry) => entry.active).manifest.id;
+  const built = await run("context-embedding-backfill", "--chunk-tokens", "512", "--max-jobs", "10");
+  assert.notEqual(built.generation, original);
+  assert.equal((await run("context-embedding-activate", "--generation", built.generation)).active, true);
+  assert.equal((await run("context-search", "--query", "release permission")).generation, built.generation);
+  assert.equal((await run("context-embedding-rollback", "--generation", original)).active, true);
+  assert.equal((await run("context-search", "--query", "release permission")).generation, original);
+  assert.equal((await run("context-embedding-gc", "--generation", built.generation)).removed, true);
+  assert.equal((await run("context-embedding-status")).generations.length, 1);
 });

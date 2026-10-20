@@ -3,11 +3,14 @@ import {
   EmbeddingError,
   assertEmbeddingDescriptor,
   validateEmbeddingVector,
+  contextLexicalQueryTerms,
+  contextLexicalTerms,
   type AuthorizedContextRetrievalPlan,
   type ContextRetriever,
   type ContextRetrievalResult,
   type ContextRetrievalTrace,
   type ContextVectorIndex,
+  type ContextVectorGenerationStore,
   type EmbeddingGeneration,
   type EmbeddingProvider,
   type RetrievedContextCandidate,
@@ -17,12 +20,12 @@ import { ContextEngineError } from "./deterministic-context-engine";
 
 export const HYBRID_EVENT_RETRIEVER_ID = "event-hybrid";
 export const HYBRID_RETRIEVAL_PROFILE = {
-  version: "personal-hybrid-rrf-v1",
+  version: "personal-hybrid-rrf-v2",
   score_weights: { anchor: 4, exact_match: 3, lexical: 2, recency: 1, hybrid: 8 },
+  vector_min_score: 0.7,
 };
 const ROUTE_LIMIT = 1000;
 const RRF_K = 60;
-const VECTOR_MIN_SCORE = 0.7;
 
 export class HybridEventRetriever implements ContextRetriever {
   readonly id = HYBRID_EVENT_RETRIEVER_ID;
@@ -32,8 +35,13 @@ export class HybridEventRetriever implements ContextRetriever {
     private readonly provider: EmbeddingProvider,
     private readonly index: ContextVectorIndex | undefined,
     private readonly generation: EmbeddingGeneration,
+    private readonly generations?: ContextVectorGenerationStore,
+    private readonly profile = HYBRID_RETRIEVAL_PROFILE,
   ) {
     assertEmbeddingDescriptor(provider.descriptor, generation.model);
+    if (!Number.isFinite(profile.vector_min_score) || profile.vector_min_score < -1 || profile.vector_min_score > 1) {
+      throw new Error("Invalid hybrid similarity threshold");
+    }
   }
 
   capabilities() {
@@ -46,10 +54,15 @@ export class HybridEventRetriever implements ContextRetriever {
     if (!plan.request.query || (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event"))) return lexical;
     const eligible = eligibleEventSources(plan).filter((source) => source.event.content_hash);
     const allowed = new Map(eligible.map((source) => [source.event.event_id, source]));
+    if (allowed.size > 10000) return {
+      ...lexical, degradation_flags: [...(lexical.degradation_flags ?? []), "vector_index_capacity",
+        ...(plan.request.temporal.mode !== "current" ? ["vector_temporal_unsupported"] : []),
+        ...(!this.index ? ["vector_index_absent"] : [])],
+    };
     const rankedLexical = [...lexical.candidates].sort((a, b) =>
       lexicalScore(b) - lexicalScore(a) || compare(a.candidate.resource_id, b.candidate.resource_id));
     const trace: ContextRetrievalTrace = {
-      retriever_id: this.id, profile: HYBRID_RETRIEVAL_PROFILE.version, mode: "lexical",
+      retriever_id: this.id, profile: this.profile.version, mode: "lexical",
       authorized_count: allowed.size, covered_count: 0,
       routes: rankedLexical.map((candidate, rank) => ({
         event_id: candidate.candidate.resource_id, lexical_rank: rank + 1,
@@ -62,15 +75,18 @@ export class HybridEventRetriever implements ContextRetriever {
     if (!this.index) return fallback("vector_index_absent");
     if (!allowed.size) return { ...lexical, trace };
     let result: Awaited<ReturnType<ContextVectorIndex["matchAuthorized"]>>;
+    let generation = this.generation;
     try {
+      generation = await this.generations?.activeGeneration(plan.request.org_id) ?? this.generation;
+      assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
       const [tokens] = await this.provider.countTokens([plan.request.query], "query");
       if (!Number.isSafeInteger(tokens) || tokens < 1) throw new EmbeddingError("invalid_response", true);
-      if (tokens > this.generation.model.max_input_tokens) throw new EmbeddingError("input_too_large", false);
+      if (tokens > generation.model.max_input_tokens) throw new EmbeddingError("input_too_large", false);
       const vectors = await this.provider.embed([plan.request.query], "query");
       if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-      validateEmbeddingVector(vectors[0], this.generation.model.dimensions);
+      validateEmbeddingVector(vectors[0], generation.model.dimensions);
       result = await this.index.matchAuthorized({
-        org_id: plan.request.org_id, generation: this.generation.id, query_vector: vectors[0],
+        org_id: plan.request.org_id, generation: generation.id, query_vector: vectors[0],
         authorized: eligible.map((source) => ({
           event_id: source.event.event_id, content_hash: source.event.content_hash!,
         })), limit: ROUTE_LIMIT,
@@ -81,7 +97,7 @@ export class HybridEventRetriever implements ContextRetriever {
       return fallback(error.code === "timeout" ? "embedding_timeout" : "embedding_unavailable");
     }
     // Invalid keys or chunk bindings are a boundary failure, never a lexical fallback.
-    if (!result || result.generation !== this.generation.id || !Array.isArray(result.covered) ||
+    if (!result || result.generation !== generation.id || !Array.isArray(result.covered) ||
       !Array.isArray(result.matched) || result.matched.length > ROUTE_LIMIT) throw new ContextEngineError("invalid_candidate", "Invalid vector result");
     const covered = new Set<string>();
     for (const key of result.covered) {
@@ -103,20 +119,29 @@ export class HybridEventRetriever implements ContextRetriever {
       }
       seen.add(hit.event_id);
     }
-    const vector = result.matched.filter((hit) => hit.score >= VECTOR_MIN_SCORE)
+    const vector = result.matched.filter((hit) => hit.score >= this.profile.vector_min_score)
       .sort((a, b) => b.score - a.score || compare(a.event_id, b.event_id));
-    const ranks = new Map(trace.routes.map((route) => [route.event_id, route]));
+    const significantTerms = contextLexicalQueryTerms(plan.request.query).filter((term) =>
+      !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u.test(term));
+    const admittedLexical = rankedLexical.filter((value) => {
+      if (!covered.has(value.candidate.resource_id) || significantTerms.length === 0) return true;
+      const terms = new Set(contextLexicalTerms(allowed.get(value.candidate.resource_id)?.text));
+      return significantTerms.some((term) => terms.has(term));
+    });
+    const ranks = new Map<string, ContextRetrievalTrace["routes"][number]>(admittedLexical.map((value, rank) => [value.candidate.resource_id, {
+      event_id: value.candidate.resource_id, lexical_rank: rank + 1,
+    }]));
     vector.forEach((hit, rank) => {
       ranks.set(hit.event_id, { ...ranks.get(hit.event_id), event_id: hit.event_id,
         vector_rank: rank + 1, vector_score: hit.score, chunk_ordinal: hit.chunk_ordinal,
         start: hit.start, end: hit.end });
     });
     trace.mode = "hybrid";
-    trace.generation = this.generation.id;
-    trace.model_revision = this.generation.model.model_revision;
+    trace.generation = generation.id;
+    trace.model_revision = generation.model.model_revision;
     trace.covered_count = covered.size;
     trace.routes = [...ranks.values()].sort((a, b) => compare(a.event_id, b.event_id));
-    const candidates = new Map(lexical.candidates.map((candidate) => [candidate.candidate.resource_id, candidate]));
+    const candidates = new Map(admittedLexical.map((candidate) => [candidate.candidate.resource_id, candidate]));
     for (const hit of vector) {
       const material = eventCandidateMaterialFor(allowed.get(hit.event_id)!, plan.request, retrievalTimeFor(plan));
       if (material) candidates.set(hit.event_id, material);

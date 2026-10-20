@@ -18,6 +18,9 @@ export interface ContextAnswerResult {
   answer: string;
   citations: ContextAnswerCitation[];
   model: string;
+  degradation_flags: string[];
+  retrieval_profile: string;
+  generation: string | null;
 }
 
 export class ContextQuestionError extends Error {
@@ -71,11 +74,15 @@ export class ContextQuestionAnswerer {
       ],
     });
     const output = validateModelAnswer(completion.text, assembled.bundle);
+    const trace = assembled.snapshot.retrieval_trace?.find((entry) => entry.mode === "hybrid");
     return {
       snapshot_id: assembled.snapshot.id,
       answer: output.answer,
       citations: output.citations,
       model: completion.model,
+      degradation_flags: assembled.bundle.degradation_flags,
+      retrieval_profile: assembled.snapshot.retrieval_profile_version,
+      generation: trace?.generation ?? null,
     };
   }
 }

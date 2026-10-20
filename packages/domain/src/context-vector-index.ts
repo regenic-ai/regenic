@@ -49,6 +49,22 @@ export interface EmbeddingSourceHead {
   lineage: string[];
 }
 
+export interface ContextVectorGenerationStore {
+  listGenerations(orgId: string): Promise<Array<{
+    manifest: EmbeddingGeneration;
+    active: boolean;
+    reconciled_epoch?: string;
+  }>>;
+  activeGeneration(orgId: string): Promise<EmbeddingGeneration | undefined>;
+  activateGeneration(input: {
+    org_id: string;
+    generation: string;
+    read_epoch: string;
+    required: ContextLexicalKey[];
+  }): Promise<void>;
+  removeGeneration(orgId: string, generation: string): Promise<void>;
+}
+
 export interface EmbeddingJob extends EmbeddingSourceHead {
   id: number;
   org_id: string;

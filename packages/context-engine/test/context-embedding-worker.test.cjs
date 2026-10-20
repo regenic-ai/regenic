@@ -7,7 +7,7 @@ const { SqliteSplitAuthorityStore } = require("@regenic/authority-store/sqlite")
 const { FsBlobStore } = require("@regenic/blob-store");
 const { embeddingGeneration, EmbeddingError, IngestionService } = require("@regenic/domain");
 const { SqliteContextVectorIndex } = require("@regenic/vector-index");
-const { AuthorityContextEvidenceSource, ContextEmbeddingWorker, chunkEmbeddingText } = require("../dist");
+const { AuthorityContextEvidenceSource, ContextEmbeddingWorker, chunkEmbeddingText, activateEmbeddingGeneration } = require("../dist");
 
 const descriptor = {
   model_id: "synthetic/test", model_revision: "a".repeat(40), tokenizer_revision: "a".repeat(40),
@@ -42,7 +42,7 @@ async function fixture(t, embedding = provider(), gen = generation) {
   const blobs = new FsBlobStore(join(root, "blobs"));
   const index = new SqliteContextVectorIndex(join(root, "vector.db"));
   const source = new AuthorityContextEvidenceSource(authority, blobs, true);
-  const worker = new ContextEmbeddingWorker("org", source, embedding, index, index, gen);
+  const worker = new ContextEmbeddingWorker("org", source, embedding, index, index, gen, index);
   t.after(async () => {
     await worker.stop();
     index.close();
@@ -53,6 +53,34 @@ async function fixture(t, embedding = provider(), gen = generation) {
 }
 
 describe("independent embedding indexing worker", () => {
+  it("dual-writes retained recipes, refuses incomplete activation and catches up before rollback", async (t) => {
+    const f = await fixture(t);
+    const next = embeddingGeneration(descriptor, 64);
+    await f.ingest.ingest(batch("create", "发布批准，允许上线。"));
+    await f.worker.runOnce();
+    await f.index.registerGeneration("org", next);
+    await assert.rejects(activateEmbeddingGeneration("org", next.id, f.source, f.index, f.index), /not fully covered/);
+    assert.equal((await f.worker.runOnce()).processed, 1);
+    await activateEmbeddingGeneration("org", next.id, f.source, f.index, f.index);
+    assert.equal((await f.index.activeGeneration("org")).id, next.id);
+    await f.ingest.ingest(batch("revise", "发布延期，重新审批。"));
+    await assert.rejects(activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index), /not fully covered/);
+    assert.equal((await f.worker.runOnce()).processed, 1);
+    assert.equal((await f.worker.runOnce()).processed, 1);
+    await activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index);
+    for (const gen of [generation, next]) {
+      const jobs = await f.index.listJobs("org", gen.id);
+      assert.equal(jobs.find((job) => job.operation === "revise").status, "succeeded");
+      assert.equal(jobs.find((job) => job.operation === "create").status, "superseded");
+    }
+    await f.ingest.ingest(batch("tombstone"));
+    await f.worker.runOnce();
+    await f.worker.runOnce();
+    await activateEmbeddingGeneration("org", next.id, f.source, f.index, f.index);
+    assert.equal((await f.index.activeGeneration("org")).id, next.id);
+    await f.index.removeGeneration("org", generation.id);
+    await f.worker.stop();
+  });
   it("quarantines invalid UTF-8 and corrupt blobs before making inference calls", async (t) => {
     let calls = 0;
     const f = await fixture(t, provider({ async embed() { calls++; return [[1, 0]]; } }));

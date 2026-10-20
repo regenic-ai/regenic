@@ -57,6 +57,8 @@ import {
 } from "@regenic/domain";
 import {
   ContextEngineError,
+  ContextSearcher,
+  contextSearchRequest,
   ContextQuestionAnswerer,
   ContextQuestionError,
   type ContextAnswerResult,
@@ -121,6 +123,29 @@ export class PersonalContextService {
   async assemble(input: unknown) {
     const request = this.contextRequest(input);
     return this.runContext(() => this.runtime.requireHost().get("context").assemble(request));
+  }
+
+  async search(input: unknown) {
+    return this.runContext(async () => {
+      const request = contextSearchRequest(input, {
+        id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
+      });
+      return new ContextSearcher(this.runtime.requireHost().get("context")).search(request);
+    });
+  }
+
+  async semanticStatus() {
+    return this.runContext(() => this.runtime.semanticStatus());
+  }
+
+  async indexSemantic(input: unknown) {
+    strictBody(input, new Set());
+    const status = await this.semanticStatus();
+    if (!status.configured || status.vector_status !== "ready") {
+      throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+        "Semantic indexing is not configured or the vector store is unavailable");
+    }
+    return this.runContext(() => this.runtime.indexSemanticOnce());
   }
 
   async getSnapshot(snapshotId: string): Promise<ContextSnapshot> {
@@ -1385,6 +1410,13 @@ export class PersonalContextService {
     } catch (error) {
       if (error instanceof EmbeddingError && (error.code === "invalid_input" || error.code === "input_too_large")) {
         throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Query exceeds embedding input limits or is invalid");
+      }
+      if (error instanceof Error && "code" in error && typeof error.code === "string" &&
+        ["SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_IOERR", "SQLITE_CORRUPT", "SQLITE_NOTADB",
+          "SQLITE_CANTOPEN", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(error.code)) {
+        console.warn("context source unavailable", error.code);
+        throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+          "Context source is unavailable; retry the request");
       }
       if (!(error instanceof ContextEngineError)) {
         throw error;

@@ -56,7 +56,8 @@ import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
-import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
+import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon, SearchIcon } from "./Icons";
+import { SearchPage } from "./SearchPage";
 import { FollowUpsPage } from "./FollowUpsPage";
 import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
@@ -1602,7 +1603,7 @@ export function ConsoleApp() {
         <div className="titlebar-brand" title="Regenic">
           <BrandBadge />
         </div>
-        <div className="search">{t("chrome.searchSoon")}</div>
+        <button type="button" className="search" onClick={() => setNav("search")}>{t("nav.search")}</button>
         <div className="titlebar-meta">
           <EngineChip state={chip} />
           {host && host.memory.kind !== "ok" ? (
@@ -1617,6 +1618,9 @@ export function ConsoleApp() {
       </header>
       <nav className="rail" aria-label="Main">
         <div className="rail-top">
+          <RailButton label={t("nav.search")} active={nav === "search"} onClick={() => setNav("search")}>
+            <SearchIcon />
+          </RailButton>
           <RailButton
             label={t("nav.inbox")}
             active={nav === "inbox"}
@@ -1774,6 +1778,7 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
+        {nav === "search" ? <SearchPage onSettings={() => setNav("settings")} /> : null}
         {nav === "follow-ups" ? <FollowUpsPage /> : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />

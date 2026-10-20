@@ -135,6 +135,34 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     return this.host !== null;
   }
 
+  async semanticStatus() {
+    const host = this.requireHost();
+    if (!this.embeddingEnabled) return { configured: false, healthy: false, vector_status: "disabled", generations: [] };
+    const health = await host.get("embedding").health();
+    const vector = host.get("context-vector-status");
+    if (vector.status !== "ready") return {
+      configured: true, healthy: health.status === "ok", vector_status: vector.status, generations: [],
+    };
+    const generations = await host.get("context-vector-generations").listGenerations(this.orgId());
+    return {
+      configured: true, healthy: health.status === "ok", vector_status: vector.status,
+      generations: await Promise.all(generations.map(async ({ manifest, active }) => {
+        const jobs = await host.get("context-embedding-jobs").listJobs(this.orgId(), manifest.id);
+        const counts = { pending: 0, running: 0, succeeded: 0, failed: 0, quarantined: 0, superseded: 0 };
+        for (const job of jobs) counts[job.status]++;
+        return { id: manifest.id, active, jobs: counts };
+      })),
+    };
+  }
+
+  async indexSemanticOnce() {
+    const host = this.requireHost();
+    if (!this.embeddingEnabled || host.get("context-vector-status").status !== "ready") {
+      throw new Error("Semantic indexing is not configured or the vector store is unavailable");
+    }
+    return host.get("context-embedding-worker").runOnce();
+  }
+
   /**
    * Probe the mounted authority through its own pool/connection.
    * Sqlite has no live remote dependency — host presence is enough.

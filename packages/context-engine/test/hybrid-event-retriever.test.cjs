@@ -93,6 +93,65 @@ it("admits semantic zero-lexical evidence, deduplicates and pins replayable retr
   assert.deepEqual(await f.engine.assemble(request), result);
 });
 
+it("pins one selected generation across query inference even when the active pointer switches", async () => {
+  const next = embeddingGeneration(descriptor, 64);
+  let active = next;
+  let selected = 0;
+  const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
+    descriptor,
+    async countTokens() { active = generation; return [12]; },
+    async embed() { return [[1, 0]]; },
+  }, {
+    async matchAuthorized(input) {
+      assert.equal(input.generation, next.id);
+      return { generation: input.generation, covered: [], matched: [] };
+    },
+  }, generation, {
+    async activeGeneration() { selected++; return active; },
+  });
+
+  const result = await retriever.retrieve(fixture().plan);
+  assert.equal(result.trace.generation, next.id);
+  assert.equal(active.id, generation.id);
+  assert.equal(selected, 1);
+});
+
+it("explicitly degrades over-capacity authorized scopes without query inference or an invalid trace", async () => {
+  const f = fixture();
+  const result = await f.retriever.retrieve({ ...f.plan, events: Array.from({ length: 10001 },
+    (_, index) => event(`capacity-${index}`, "unrelated text")) });
+  assert.equal(f.calls, 0);
+  assert.equal(result.trace, undefined);
+  assert.ok(result.degradation_flags.includes("vector_index_capacity"));
+});
+
+it("rejects covered single-character weak matches but preserves uncovered lexical evidence", async () => {
+  const weak = event("weak", "每月十日核对账单。");
+  for (const covered of [true, false]) {
+    const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
+      descriptor, async countTokens() { return [12]; }, async embed() { return [[1, 0]]; },
+    }, { async matchAuthorized() { return {
+      generation: generation.id, matched: [],
+      covered: covered ? [{ event_id: weak.event.event_id, content_hash: weak.event.content_hash }] : [],
+    }; } }, generation);
+    const result = await retriever.retrieve({ ...fixture().plan, events: [weak],
+      request: { ...request, query: "火星上的向日葵怎样授粉？" } });
+    assert.equal(result.candidates.length, covered ? 0 : 1);
+  }
+});
+
+it("preserves explicit CJK single-character queries and ASCII single-letter identifiers", async () => {
+  for (const [text, query] of [["每月十日核对账单。", "日"], ["C", "C API"]]) {
+    const value = event("single", text);
+    const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
+      descriptor, async countTokens() { return [12]; }, async embed() { return [[1, 0]]; },
+    }, { async matchAuthorized() { return { generation: generation.id, matched: [],
+      covered: [{ event_id: value.event.event_id, content_hash: value.event.content_hash }] }; } }, generation);
+    assert.equal((await retriever.retrieve({ ...fixture().plan, events: [value],
+      request: { ...request, query } })).candidates.length, 1);
+  }
+});
+
 it("preserves lexical candidates and records explicit model/index degradation", async () => {
   for (const [options, flag] of [
     [{ error: new EmbeddingError("timeout", true) }, "embedding_timeout"],
