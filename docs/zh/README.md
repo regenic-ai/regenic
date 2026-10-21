@@ -9,6 +9,7 @@
 - [个人 WhatsApp 测试与验收](WHATSAPP_PERSONAL_TESTING.md)
 - [技术栈](TECH_STACK.md)
 - [桌面端](DESKTOP.md)
+- [本地模型服务配置](LOCAL_MODEL_SERVICE.md)
 - [采集架构](INGESTION_ARCHITECTURE.md)
 - [协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)
 - [上下文管理架构](CONTEXT_MANAGEMENT_ARCHITECTURE.md)

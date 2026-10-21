@@ -663,7 +663,8 @@ Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本机上的飞书
 [连接器](docs/zh/CONNECTOR.md) ·
 [执行器](docs/zh/EXECUTOR.md) ·
 [产品](docs/zh/PRODUCT.md) · [路线图](docs/zh/ROADMAP.md) ·
-[技术栈](docs/zh/TECH_STACK.md) · [桌面端](docs/zh/DESKTOP.md) · [采集架构](docs/zh/INGESTION_ARCHITECTURE.md)
+[技术栈](docs/zh/TECH_STACK.md) · [桌面端](docs/zh/DESKTOP.md) ·
+[本地模型服务](docs/zh/LOCAL_MODEL_SERVICE.md) · [采集架构](docs/zh/INGESTION_ARCHITECTURE.md)
 
 ## 贡献
 
