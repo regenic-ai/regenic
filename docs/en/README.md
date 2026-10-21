@@ -8,6 +8,7 @@
 - [WhatsApp Web Live Connector](WHATSAPP_WEB_LIVE_CONNECTOR.md)
 - [WhatsApp Personal Test and Acceptance](WHATSAPP_PERSONAL_TESTING.md)
 - [Technology stack](TECH_STACK.md)
+- [Local model service setup](LOCAL_MODEL_SERVICE.md)
 - [Ingestion architecture](INGESTION_ARCHITECTURE.md)
 - [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md)
 - [Context management architecture](CONTEXT_MANAGEMENT_ARCHITECTURE.md)

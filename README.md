@@ -683,6 +683,7 @@ Do not put tokens in the install form, the repo, or chat logs.
 [PRODUCT](docs/en/PRODUCT.md) · [ROADMAP](docs/en/ROADMAP.md) ·
 [TECH_STACK](docs/en/TECH_STACK.md) ·
 [Desktop](docs/zh/DESKTOP.md) ·
+[Local model service](docs/en/LOCAL_MODEL_SERVICE.md) ·
 [Ingestion](docs/en/INGESTION_ARCHITECTURE.md)
 
 ## Contributing
