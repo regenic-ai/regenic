@@ -1792,7 +1792,7 @@ export function ConsoleApp() {
           setLocatedEvent({ thread_id: thread.id, event_id: item.event.id });
           setNav("inbox");
         }} /> : null}
-        {nav === "follow-ups" ? <FollowUpsPage /> : null}
+        {nav === "follow-ups" ? <FollowUpsPage onChanged={refresh} /> : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
         ) : null}

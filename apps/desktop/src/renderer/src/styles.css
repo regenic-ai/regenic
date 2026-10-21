@@ -8,6 +8,7 @@
 @import "./styles/composer.css";
 @import "./styles/page.css";
 @import "./styles/semantic.css";
+@import "./styles/settings.css";
 @import "./styles/tray.css";
 
 :root {

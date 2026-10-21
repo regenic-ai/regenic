@@ -81,6 +81,207 @@
   width: 130px;
 }
 
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--g300);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.triage-lead {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.triage-bar,
+.triage-toast {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--g500) 40%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--g900) 70%, var(--surface));
+  font-size: 13px;
+}
+
+.triage-toast {
+  position: static;
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.triage-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.triage-bar-meter {
+  flex: 0 1 240px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.triage-bar-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--g500);
+  transition: width 0.2s ease;
+}
+
+.triage-groups {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.triage-group {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.triage-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--bg) 42%, var(--surface));
+}
+
+.triage-group-title {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.triage-group-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.triage-group-title .muted {
+  font-size: 12px;
+}
+
+.triage-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.triage-check {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.triage-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--g500);
+}
+
+.triage-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.triage-items li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.triage-items li:hover,
+.triage-items li.is-selected {
+  background: color-mix(in srgb, var(--g500) 6%, transparent);
+}
+
+.triage-item-body {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.triage-item-text {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.triage-actor {
+  margin-right: 6px;
+  color: var(--muted);
+}
+
+.triage-item-body time {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.triage-item-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+
+.triage-items li:hover .triage-item-actions,
+.triage-item-actions:focus-within {
+  opacity: 1;
+}
+
+.triage-item-actions .ghost {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.triage-more {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+.triage-more-groups {
+  margin-top: 12px;
+  align-self: flex-start;
+}
+
 .follow-ups-check {
   display: flex;
   align-items: center;
@@ -496,19 +697,6 @@
 
 .kv code {
   word-break: break-all;
-}
-
-.pending-review-item {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.pending-review-item .kv {
-  grid-template-columns: minmax(0, 120px) minmax(0, 1fr);
-}
-
-.pending-review-item strong {
-  overflow-wrap: anywhere;
 }
 
 .install {
