@@ -109,6 +109,7 @@ import {
   projectStandardUsageCommand,
   transitionCliStandardVersion,
 } from "./commands/standards";
+import { runCustomerServiceMcp } from "./commands/customer-service-mcp";
 
 export interface LocalCliOptions {
   env?: NodeJS.ProcessEnv;
@@ -131,6 +132,9 @@ export async function runLocalCli(
   const createId = options.createId ?? randomUUID;
 
   switch (command) {
+    case "customer-service-mcp":
+      await runCustomerServiceMcp(commandOptions, env, stdout);
+      return;
     case "context-embedding-index":
     case "context-embedding-status":
     case "context-embedding-retry":

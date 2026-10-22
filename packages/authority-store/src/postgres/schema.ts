@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 48;
+export const PG_SCHEMA_VERSION = 49;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -500,6 +500,23 @@ ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT '{}'
     version: 48,
     sql: `
 SELECT 1;
+`,
+  },
+  {
+    version: 49,
+    sql: `
+CREATE TABLE IF NOT EXISTS customer_service_tasks (
+  id TEXT NOT NULL,
+  org_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (org_id, id)
+);
+CREATE INDEX IF NOT EXISTS customer_service_tasks_status_idx
+  ON customer_service_tasks (org_id, status, updated_at DESC, id DESC);
 `,
   },
 ] as const;

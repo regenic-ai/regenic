@@ -75,6 +75,7 @@ export * from "./daily-digest-period";
 export * from "./proposal";
 export * from "./decision";
 export * from "./review";
+export * from "./customer-service-task";
 export * from "./handoff";
 export * from "./standard";
 export * from "./standard-gap";

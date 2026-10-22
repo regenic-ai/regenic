@@ -30,6 +30,7 @@ import type { StandardStore } from "./standard";
 import type { StandardGapStore } from "./standard-gap";
 import type { AgentRunStore } from "./agent-run";
 import type { StandardUsageStore } from "./standard-usage";
+import type { CustomerServiceTaskStore } from "./customer-service-task";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -55,6 +56,7 @@ declare module "@regenic/plugin-host" {
     "standard-gaps": StandardGapStore;
     "agent-runs": AgentRunStore;
     "standard-usage": StandardUsageStore;
+    "customer-service-tasks": CustomerServiceTaskStore;
     "context-projection-outbox": ContextProjectionOutboxStore;
     "context-lexical-index": ContextLexicalIndex;
     embedding: EmbeddingProvider;

@@ -56,6 +56,8 @@ import type {
   AgentRunOutput,
   StandardUsageSourceKind,
   StandardUsageRecord,
+  CustomerServiceTask,
+  CustomerServiceTaskStatus,
   ArrangementDecision,
   InboxQuery,
   InboxItem,
@@ -127,6 +129,11 @@ import {
   recordSyncDuration,
   processSyncMetrics,
 } from "@regenic/domain";
+import {
+  getCustomerServiceTask,
+  listCustomerServiceTasks,
+  putCustomerServiceTask,
+} from "./customer-service-tasks";
 import {
   PgSql,
   asNumber,
@@ -630,6 +637,18 @@ export class PostgresAuthorityStore
     return listReviews(this.sql, input);
   }
 
+  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
+    return putCustomerServiceTask(this.sql, input, expectedRevision);
+  }
+
+  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
+    return getCustomerServiceTask(this.sql, orgId, taskId);
+  }
+
+  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
+    return listCustomerServiceTasks(this.sql, input);
+  }
+
   async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
     return putHandoff(this.sql, input);
   }
@@ -890,6 +909,7 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM customer_service_tasks WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshot_index WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_bundles WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshots WHERE org_id = $1`, [orgId], client);
@@ -1535,4 +1555,3 @@ export class PostgresAuthorityStore
   }
 
 }
-

@@ -85,6 +85,20 @@ async function seedLegacyEmptyAttachment(authorityStore, blobStore) {
 }
 
 describe("IngestionService", () => {
+  it("preserves native thread and reply identities without using revision lineage", async () => {
+    const { authorityStore, service } = createHarness();
+    const result = await service.ingest(createBatch({
+      thread: { id: "native-thread-1" },
+      parent_external_id: "source-event-parent",
+    }));
+
+    assert.equal(result.valid, true);
+    const [event] = authorityStore.allEvents();
+    assert.equal(event.parent_event_id, undefined);
+    assert.equal(event.attrs.native_thread_id, "native-thread-1");
+    assert.equal(event.attrs.parent_external_id, "source-event-parent");
+  });
+
   it("rejects an invalid batch before writing any state", async () => {
     const { authorityStore, blobStore, service } = createHarness();
     const batch = createBatch();

@@ -1243,7 +1243,7 @@ describe("SQLite context artifact store", () => {
     legacy.close();
 
     const reopened = new SqliteAuthorityStore(path);
-    assert.equal(reopened.schemaVersion, 47);
+    assert.equal(reopened.schemaVersion, 48);
     reopened.close();
     const checked = new Database(path);
     try {

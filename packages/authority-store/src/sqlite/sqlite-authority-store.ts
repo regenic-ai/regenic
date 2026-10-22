@@ -52,6 +52,8 @@ import type {
   AgentRunOutput,
   StandardUsageSourceKind,
   StandardUsageRecord,
+  CustomerServiceTask,
+  CustomerServiceTaskStatus,
   ArrangementDecision,
   InboxQuery,
   InboxItem,
@@ -172,6 +174,11 @@ import {
   listContextProjectionJobs,
   renewContextProjectionJob,
 } from "./context-projection";
+import {
+  getCustomerServiceTask,
+  listCustomerServiceTasks,
+  putCustomerServiceTask,
+} from "./customer-service-tasks";
 import {
   claimDailyDigestJobs,
   completeDailyDigestJob,
@@ -660,6 +667,19 @@ export class SqliteAuthorityStore
     return listReviews(this.database, input);
   }
 
+  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
+    this.assertWritable();
+    return putCustomerServiceTask(this.database, input, expectedRevision);
+  }
+
+  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
+    return getCustomerServiceTask(this.database, orgId, taskId);
+  }
+
+  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
+    return listCustomerServiceTasks(this.database, input);
+  }
+
   async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
     this.assertWritable();
     return putHandoff(this.database, input);
@@ -931,6 +951,7 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM customer_service_tasks WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);

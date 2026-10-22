@@ -59,6 +59,7 @@ import { connectPersonalEvents } from "./personal-events";
 import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon, SearchIcon } from "./Icons";
 import { SearchPage } from "./SearchPage";
 import { FollowUpsPage } from "./FollowUpsPage";
+import { CustomerTasksPage } from "./CustomerTasksPage";
 import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
@@ -1638,6 +1639,13 @@ export function ConsoleApp() {
             <RecipesIcon />
           </RailButton>
           <RailButton
+            label={t("nav.customerTasks")}
+            active={nav === "customer-tasks"}
+            onClick={() => setNav("customer-tasks")}
+          >
+            <FollowUpIcon />
+          </RailButton>
+          <RailButton
             label={t("nav.followUps")}
             active={nav === "follow-ups"}
             onClick={() => setNav("follow-ups")}
@@ -1793,6 +1801,7 @@ export function ConsoleApp() {
           setNav("inbox");
         }} /> : null}
         {nav === "follow-ups" ? <FollowUpsPage onChanged={refresh} /> : null}
+        {nav === "customer-tasks" ? <CustomerTasksPage /> : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
         ) : null}

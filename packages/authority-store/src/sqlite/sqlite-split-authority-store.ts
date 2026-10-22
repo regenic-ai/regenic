@@ -43,6 +43,8 @@ import type {
   AgentRunStatus,
   StandardUsageRecord,
   StandardUsageSourceKind,
+  CustomerServiceTask,
+  CustomerServiceTaskStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -392,6 +394,18 @@ export class SqliteSplitAuthorityStore
 
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
     return this.reader.call("listReviews", [input]);
+  }
+
+  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
+    return this.writer.call("putCustomerServiceTask", [input, expectedRevision]);
+  }
+
+  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
+    return this.reader.call("getCustomerServiceTask", [orgId, taskId]);
+  }
+
+  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
+    return this.reader.call("listCustomerServiceTasks", [input]);
   }
 
   async putHandoff(handoff: HandoffRecord): Promise<HandoffRecord> {
