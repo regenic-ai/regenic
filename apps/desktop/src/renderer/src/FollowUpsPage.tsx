@@ -8,9 +8,10 @@ import {
   unsnoozeFollowUp,
 } from "./api";
 import { useLocale } from "./LocaleContext";
+import { PendingTriage } from "./PendingTriage";
 import type { PersonalFollowUpPolicy, PersonalFollowUpView } from "./types";
 
-export function FollowUpsPage() {
+export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> }) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PersonalFollowUpView[]>([]);
   const [snoozes, setSnoozes] = useState<Record<string, string>>({});
@@ -18,6 +19,7 @@ export function FollowUpsPage() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [triageKey, setTriageKey] = useState(0);
 
   const refresh = async () => {
     const [nextItems, nextSnoozes] = await Promise.all([
@@ -70,12 +72,14 @@ export function FollowUpsPage() {
           <h1>{t("followUps.title")}</h1>
         </div>
         <button type="button" className="ghost" disabled={busy || loading} onClick={() => void run(async () => {
+          setTriageKey((value) => value + 1);
           if (!policy) setPolicy(await fetchFollowUpPolicy());
         })}>
           {t("followUps.refresh")}
         </button>
       </header>
       {error ? <p className="action-error" role="alert">{error}</p> : null}
+      <PendingTriage key={triageKey} onChanged={onChanged} />
       <section className="follow-ups-section" aria-label={t("followUps.due")}>
         <div className="follow-ups-section-head">
           <h2>{t("followUps.due")}</h2>
