@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchPendingInbox, triagePendingInbox } from "./api";
 import { useLocale } from "./LocaleContext";
 import type { InboxViewItem } from "./types";
@@ -16,6 +16,7 @@ interface TriageGroup {
 const GROUP_PREVIEW = 3;
 const GROUP_PAGE = 8;
 const CONCURRENCY = 4;
+const BATCH_CONFIRM_THRESHOLD = 10;
 
 function groupItems(items: InboxViewItem[]): TriageGroup[] {
   const groups = new Map<string, TriageGroup>();
@@ -38,17 +39,30 @@ function groupItems(items: InboxViewItem[]): TriageGroup[] {
   return [...groups.values()].sort((a, b) => b.latest.localeCompare(a.latest));
 }
 
-async function runPool(ids: string[], work: (id: string) => Promise<void>): Promise<string[]> {
+async function runPool(
+  ids: string[],
+  signal: AbortSignal,
+  work: (id: string, signal: AbortSignal) => Promise<void>,
+  onSettled: () => void,
+): Promise<{ succeeded: string[]; failed: string[] }> {
+  const succeeded: string[] = [];
   const failed: string[] = [];
   let next = 0;
   const worker = async () => {
-    while (next < ids.length) {
+    while (!signal.aborted && next < ids.length) {
       const id = ids[next++]!;
-      try { await work(id); } catch { failed.push(id); }
+      try {
+        await work(id, signal);
+        succeeded.push(id);
+      } catch {
+        if (!signal.aborted) failed.push(id);
+      } finally {
+        onSettled();
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
-  return failed;
+  return { succeeded, failed };
 }
 
 export function PendingTriage({ onChanged }: { onChanged: () => Promise<void> }) {
@@ -60,20 +74,33 @@ export function PendingTriage({ onChanged }: { onChanged: () => Promise<void> })
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [groupLimit, setGroupLimit] = useState(GROUP_PAGE);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [last, setLast] = useState<{ ids: string[]; disposition: Disposition | "pending" } | null>(null);
+  const [last, setLast] = useState<{
+    ids: string[];
+    disposition: Disposition | "pending";
+    cancelled?: boolean;
+  } | null>(null);
+  const operation = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setItems(await fetchPendingInbox());
+      const next = await fetchPendingInbox();
+      const pendingIds = new Set(next.map((item) => item.event.id));
+      setItems(next);
+      setSelected((current) => new Set([...current].filter((id) => pendingIds.has(id))));
       setError(null);
+      return next;
     } catch {
       setError(t("triage.loadFailed"));
+      return null;
     } finally {
       setLoading(false);
     }
   }, [t]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => operation.current?.abort();
+  }, [load]);
 
   const groups = useMemo(() => groupItems(items), [items]);
   const busy = progress !== null;
@@ -83,20 +110,46 @@ export function PendingTriage({ onChanged }: { onChanged: () => Promise<void> })
 
   async function apply(ids: string[], disposition: Disposition | "pending") {
     if (busy || ids.length === 0) return;
+    if (
+      disposition !== "pending" &&
+      ids.length > BATCH_CONFIRM_THRESHOLD &&
+      !window.confirm(t(
+        disposition === "current_work" ? "triage.confirmCurrent" : "triage.confirmOutside",
+        { count: ids.length },
+      ))
+    ) return;
+    const controller = new AbortController();
+    operation.current = controller;
     setError(null);
     setLast(null);
     setProgress({ done: 0, total: ids.length });
-    const failed = await runPool(ids, async (id) => {
-      await triagePendingInbox(id, disposition);
+    const { succeeded, failed } = await runPool(ids, controller.signal, async (id, signal) => {
+      await triagePendingInbox(id, disposition, signal);
       if (disposition !== "pending") setItems((current) => current.filter((item) => item.event.id !== id));
+    }, () => {
       setProgress((current) => current && { ...current, done: current.done + 1 });
     });
+    const cancelled = controller.signal.aborted;
+    if (operation.current === controller) operation.current = null;
     setProgress(null);
-    setSelected(new Set());
+    let completed = succeeded;
+    if (disposition === "pending") {
+      await load();
+    } else if (cancelled) {
+      const pending = await load();
+      if (pending) {
+        const pendingIds = new Set(pending.map((item) => item.event.id));
+        completed = ids.filter((id) => !pendingIds.has(id));
+      }
+    }
+    const succeededIds = new Set(completed);
+    setSelected((current) => new Set([...current].filter((id) => !succeededIds.has(id))));
     if (failed.length) setError(t("triage.partialFailed", { count: failed.length }));
-    const succeeded = ids.filter((id) => !failed.includes(id));
-    if (disposition === "pending") await load();
-    else if (succeeded.length) setLast({ ids: succeeded, disposition });
+    if (disposition !== "pending" && (completed.length || cancelled)) {
+      setLast({ ids: completed, disposition, cancelled });
+    } else if (cancelled) {
+      setError(t("triage.cancelled", { count: 0 }));
+    }
     await onChanged();
   }
 
@@ -138,7 +191,12 @@ export function PendingTriage({ onChanged }: { onChanged: () => Promise<void> })
               : t("triage.selected", { count: selected.size })}
           </span>
           {busy ? (
-            <span className="triage-bar-meter"><span style={{ width: `${(progress!.done / progress!.total) * 100}%` }} /></span>
+            <span className="triage-bar-actions">
+              <span className="triage-bar-meter"><span style={{ width: `${(progress!.done / progress!.total) * 100}%` }} /></span>
+              <button type="button" className="ghost" onClick={() => operation.current?.abort()}>
+                {t("triage.cancel")}
+              </button>
+            </span>
           ) : (
             <span className="triage-bar-actions">
               <button type="button" className="primary" onClick={() => void apply([...selected], "current_work")}>
@@ -155,8 +213,17 @@ export function PendingTriage({ onChanged }: { onChanged: () => Promise<void> })
 
       {last ? (
         <div className="triage-toast" role="status">
-          <span>{t(last.disposition === "current_work" ? "triage.doneCurrent" : "triage.doneOutside", { count: last.ids.length })}</span>
-          <button type="button" className="link" onClick={() => void apply(last.ids, "pending")}>{t("triage.undo")}</button>
+          <span>{t(
+            last.cancelled
+              ? "triage.cancelled"
+              : last.disposition === "current_work"
+                ? "triage.doneCurrent"
+                : "triage.doneOutside",
+            { count: last.ids.length },
+          )}</span>
+          {last.ids.length ? (
+            <button type="button" className="link" onClick={() => void apply(last.ids, "pending")}>{t("triage.undo")}</button>
+          ) : null}
         </div>
       ) : null}
       {error ? <p className="action-error" role="alert">{error}</p> : null}

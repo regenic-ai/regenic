@@ -1595,11 +1595,13 @@ export async function fetchPendingInbox(): Promise<InboxViewItem[]> {
 export async function triagePendingInbox(
   eventId: string,
   disposition: MessageDisposition,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${origin()}/v1/me/inbox/${encodeURIComponent(eventId)}/triage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ disposition }),
+    signal,
   });
   if (!response.ok) {
     throw new Error(`inbox triage ${response.status}`);
