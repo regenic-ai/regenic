@@ -46,6 +46,12 @@ export class PersonalContextController {
     return this.guard(() => this.context.search(body));
   }
 
+  @Post("search/expand")
+  @HttpCode(HttpStatus.OK)
+  searchExpanded(@Body() body: unknown) {
+    return this.guard(() => this.context.searchExpanded(body));
+  }
+
   @Post("search/source")
   @HttpCode(HttpStatus.OK)
   searchSource(@Body() body: unknown, @Query("locale") locale?: string) {

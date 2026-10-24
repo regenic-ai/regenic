@@ -27,6 +27,52 @@ it("maps observed Authority races to 503 and invalid embedding queries to 400", 
   }
 });
 
+it("rejects stale expanded-search anchors instead of returning partial context", async () => {
+  const service = new PersonalContextService({
+    orgId: () => "owner",
+    requireHost: () => ({
+      get(name) {
+        if (name === "authority") {
+          return { async getEvent() { return null; } };
+        }
+        if (name === "context-authority") {
+          return { async openContextReadForThread() { throw new Error("Unexpected context read"); } };
+        }
+        if (name === "blobs") {
+          return { async getMany() { throw new Error("Unexpected blob read"); } };
+        }
+        throw new Error(`Unexpected host port: ${name}`);
+      },
+    }),
+  });
+  service.search = async () => ({
+    request_id: "request",
+    snapshot_id: "snapshot",
+    read_epoch: "epoch",
+    retrieval_profile: "test",
+    generation: null,
+    coverage: null,
+    degradation_flags: [],
+    truncated: false,
+    items: [{
+      event_id: "event-1",
+      content_hash: "a".repeat(64),
+      source: "fixture",
+      occurred_at: "2026-10-24T00:00:00.000Z",
+      rank: 1,
+      snippet: "stale",
+      snippet_start: 0,
+      snippet_end: 5,
+      evidence: [],
+    }],
+  });
+
+  await assert.rejects(
+    service.searchExpanded({ query: "stale" }),
+    (error) => error.code === "context_changed" && error.httpStatus === 409,
+  );
+});
+
 it("indexes and assembles zero-lexical semantic evidence through the actual kernel", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "regenic-api-hybrid-"));
   const database = join(root, "authority.db");

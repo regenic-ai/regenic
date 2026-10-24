@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
   ModelTimeoutError,
@@ -54,6 +54,8 @@ import {
   type AgentRunOutput,
   type AgentRunRecord,
   type AgentRunStatus,
+  bodyTextFromStored,
+  type ContextAuthorityRead,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -98,6 +100,7 @@ export class PersonalContextError extends Error {
     readonly code:
       | "invalid_request"
       | "not_found"
+      | "context_changed"
       | "replay_forbidden"
       | "no_context"
       | "model_unavailable"
@@ -131,6 +134,153 @@ export class PersonalContextService {
         id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
       });
       return new ContextSearcher(this.runtime.requireHost().get("context")).search(request);
+    });
+  }
+
+  async searchExpanded(input: unknown) {
+    const body = strictBody(input, new Set(["query", "limit", "filters", "context"]));
+    const context = body.context === undefined
+      ? {}
+      : strictNestedBody(body.context, new Set([
+        "before", "after", "reply_depth", "max_messages",
+      ]), "context");
+    const before = boundedInteger(context.before ?? 4, "context.before", 0, 12);
+    const after = boundedInteger(context.after ?? 4, "context.after", 0, 12);
+    const replyDepth = boundedInteger(context.reply_depth ?? 8, "context.reply_depth", 0, 8);
+    const maxMessages = boundedInteger(context.max_messages ?? 40, "context.max_messages", 1, 100);
+    const requestedLimit = body.limit ?? 20;
+    const limit = boundedInteger(requestedLimit, "limit", 1, 20);
+    if (limit > maxMessages) {
+      throw new PersonalContextError(
+        "invalid_request",
+        HttpStatus.BAD_REQUEST,
+        "limit cannot exceed context.max_messages",
+      );
+    }
+    const search = await this.search({
+      query: body.query,
+      limit,
+      ...(body.filters === undefined ? {} : { filters: body.filters }),
+    });
+    if (!search.items.length) {
+      return { ...search, conversations: [], expansion: expansionSummary(0, maxMessages) };
+    }
+
+    return this.runContext(async () => {
+      const host = this.runtime.requireHost();
+      const authority = host.get("authority");
+      const contextAuthority = host.get("context-authority");
+      const blobs = host.get("blobs");
+      const seedsByThread = new Map<string, Array<{
+        event_id: string;
+        content_hash: string;
+        rank: number;
+      }>>();
+      for (const hit of search.items) {
+        const event = await authority.getEvent(this.runtime.orgId(), hit.event_id);
+        if (!event?.thread_id || event.content_hash !== hit.content_hash) {
+          throw contextChanged();
+        }
+        const seeds = seedsByThread.get(event.thread_id) ?? [];
+        seeds.push({
+          event_id: hit.event_id,
+          content_hash: hit.content_hash,
+          rank: hit.rank,
+        });
+        seedsByThread.set(event.thread_id, seeds);
+      }
+
+      const threadEntries = [...seedsByThread.entries()];
+      const remainingForNeighbors = maxMessages - search.items.length;
+      const baseExtra = Math.floor(remainingForNeighbors / threadEntries.length);
+      let extraRemainder = remainingForNeighbors % threadEntries.length;
+      const conversations = [];
+      let returnedMessages = 0;
+
+      for (const [threadId, seeds] of threadEntries) {
+        const maxThreadMessages = seeds.length + baseExtra + (extraRemainder-- > 0 ? 1 : 0);
+        const read = await contextAuthority.openContextReadForThread(this.runtime.orgId(), threadId);
+        const heads = new Set(read.lifecycle_heads.map((head) => head.head_event_id));
+        const events = read.events
+          .filter((event) =>
+            event.thread_id === threadId
+            && event.operation !== "tombstone"
+            && heads.has(event.id)
+            && event.content_hash
+            && event.content_media_type)
+          .sort(compareContextEvent);
+        const indexes = new Map(events.map((event, index) => [event.id, index]));
+        for (const seed of seeds) {
+          const index = indexes.get(seed.event_id);
+          if (index === undefined || events[index].content_hash !== seed.content_hash) {
+            throw contextChanged();
+          }
+        }
+
+        const selected = selectContextIndexes(events, seeds.map((seed) => seed.event_id), {
+          before, after, replyDepth, maxMessages: maxThreadMessages,
+        });
+        const chosenEvents = selected.indexes.map((index) => events[index]);
+        const bodies = await blobs.getMany(chosenEvents.flatMap((event) =>
+          event.content_hash ? [event.content_hash] : []));
+        const messages = [];
+        for (const index of selected.indexes) {
+          const event = events[index];
+          const contentHash = event.content_hash!;
+          const bytes = bodies.get(contentHash);
+          if (!bytes || createHash("sha256").update(bytes).digest("hex") !== contentHash) {
+            throw contextChanged();
+          }
+          const text = bodyTextFromStored(bytes, event.content_media_type!)?.trim();
+          if (!text) {
+            throw contextChanged();
+          }
+          const parentExternalId = stringAttribute(event.attrs, "parent_external_id");
+          const replyTarget = parentExternalId
+            ? events.find((candidate) =>
+              candidate.source === event.source
+              && candidate.external_id === parentExternalId)
+            : undefined;
+          messages.push({
+            event_id: event.id,
+            external_id: event.external_id,
+            content_hash: contentHash,
+            source: event.source,
+            thread_id: threadId,
+            ...(event.actor_id ? { actor_id: event.actor_id } : {}),
+            ...(parentExternalId ? { parent_external_id: parentExternalId } : {}),
+            ...(replyTarget ? { reply_to_event_id: replyTarget.id } : {}),
+            occurred_at: event.occurred_at,
+            text,
+            selection_reason: selected.reasons.get(index) ?? "neighbor",
+          });
+        }
+        returnedMessages += messages.length;
+        const first = selected.indexes[0];
+        const last = selected.indexes.at(-1);
+        const hasEarlier = first !== undefined && first > 0;
+        const hasLater = last !== undefined && last < events.length - 1;
+        const gaps = contextGaps(events, selected.indexes);
+        conversations.push({
+          thread_id: threadId,
+          read_epoch: read.read_epoch,
+          anchor_event_ids: seeds.sort((left, right) => left.rank - right.rank)
+            .map((seed) => seed.event_id),
+          messages,
+          continuation: {
+            before: hasEarlier ? contextBoundary(events[first!]) : null,
+            after: hasLater ? contextBoundary(events[last!]) : null,
+            gaps,
+          },
+          truncated: selected.truncated || hasEarlier || hasLater || gaps.length > 0,
+        });
+      }
+
+      return {
+        ...search,
+        conversations,
+        expansion: expansionSummary(returnedMessages, maxMessages),
+      };
     });
   }
 
@@ -1511,6 +1661,137 @@ function strictBody(input: unknown, allowed: ReadonlySet<string>): Record<string
     );
   }
   return body;
+}
+
+function boundedInteger(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw new PersonalContextError(
+      "invalid_request",
+      HttpStatus.BAD_REQUEST,
+      `${field} must be an integer from ${min} to ${max}`,
+    );
+  }
+  return value;
+}
+
+function selectContextIndexes(
+  events: ContextAuthorityRead["events"],
+  seedIds: string[],
+  options: { before: number; after: number; replyDepth: number; maxMessages: number },
+): {
+  indexes: number[];
+  reasons: Map<number, "hit" | "reply_target" | "neighbor">;
+  truncated: boolean;
+} {
+  const priorities = new Map<number, { priority: number; distance: number; reason: "hit" | "reply_target" | "neighbor" }>();
+  const offer = (
+    index: number,
+    priority: number,
+    distance: number,
+    reason: "hit" | "reply_target" | "neighbor",
+  ) => {
+    const current = priorities.get(index);
+    if (!current || priority < current.priority || (priority === current.priority && distance < current.distance)) {
+      priorities.set(index, { priority, distance, reason });
+    }
+  };
+  for (const seedId of seedIds) {
+    const seedIndex = events.findIndex((event) => event.id === seedId);
+    if (seedIndex < 0) continue;
+    offer(seedIndex, 0, 0, "hit");
+    let replyIndex = seedIndex;
+    for (let depth = 0; depth < options.replyDepth; depth += 1) {
+      const parentExternalId = stringAttribute(events[replyIndex].attrs, "parent_external_id");
+      if (!parentExternalId) break;
+      const parent = events.findIndex((event) =>
+        event.source === events[replyIndex].source
+        && event.external_id === parentExternalId);
+      if (parent < 0 || parent === replyIndex) break;
+      offer(parent, 1, depth + 1, "reply_target");
+      replyIndex = parent;
+    }
+    for (let index = Math.max(0, seedIndex - options.before); index < seedIndex; index += 1) {
+      offer(index, 2, seedIndex - index, "neighbor");
+    }
+    for (
+      let index = seedIndex + 1;
+      index <= Math.min(events.length - 1, seedIndex + options.after);
+      index += 1
+    ) {
+      offer(index, 2, index - seedIndex, "neighbor");
+    }
+  }
+  const ranked = [...priorities.entries()].sort((left, right) =>
+    left[1].priority - right[1].priority
+    || left[1].distance - right[1].distance
+    || left[0] - right[0]);
+  const indexes = ranked.slice(0, options.maxMessages).map(([index]) => index)
+    .sort((left, right) => left - right);
+  return {
+    indexes,
+    reasons: new Map(indexes.map((index) => [index, priorities.get(index)!.reason])),
+    truncated: ranked.length > indexes.length,
+  };
+}
+
+function compareContextEvent(
+  left: ContextAuthorityRead["events"][number],
+  right: ContextAuthorityRead["events"][number],
+): number {
+  const leftKey = `${left.occurred_at}\u0000${left.id}`;
+  const rightKey = `${right.occurred_at}\u0000${right.id}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+function contextBoundary(event: ContextAuthorityRead["events"][number]) {
+  return { occurred_at: event.occurred_at, event_id: event.id };
+}
+
+function contextGaps(
+  events: ContextAuthorityRead["events"],
+  indexes: number[],
+): Array<{
+  after: { occurred_at: string; event_id: string };
+  before: { occurred_at: string; event_id: string };
+}> {
+  const gaps = [];
+  for (let index = 1; index < indexes.length; index += 1) {
+    const previous = indexes[index - 1];
+    const current = indexes[index];
+    if (current - previous > 1) {
+      gaps.push({
+        after: contextBoundary(events[previous]),
+        before: contextBoundary(events[current]),
+      });
+    }
+  }
+  return gaps;
+}
+
+function stringAttribute(
+  attrs: ContextAuthorityRead["events"][number]["attrs"],
+  key: string,
+): string | undefined {
+  const value = attrs?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function expansionSummary(returnedMessages: number, maxMessages: number) {
+  return {
+    returned_messages: returnedMessages,
+    max_messages: maxMessages,
+    message_content: "complete_or_explicitly_omitted" as const,
+    local_read_scope: "bounded" as const,
+    source_sync: "unknown" as const,
+  };
+}
+
+function contextChanged(): PersonalContextError {
+  return new PersonalContextError(
+    "context_changed",
+    HttpStatus.CONFLICT,
+    "Search results changed while expanding context; search again",
+  );
 }
 
 function modelError(error: unknown): PersonalContextError {

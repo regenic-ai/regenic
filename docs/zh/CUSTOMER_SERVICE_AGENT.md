@@ -112,9 +112,46 @@ pnpm --filter @regenic/local-cli... build
 
 只有客户和项目范围已核验后，`include_related: true` 才允许搜索其他已授权会话。跨会话命中仍只是证据候选，不能自行改变权限。
 
-## 4. 运行边界
+## 4. 通过 HTTP 获取 Agent 可直接使用的对话上下文
 
-- 现有 `/v1/me/context/search`、`/search/source` 和 `/ask` 行为不变。
+外部应用不应把搜索摘要当作对话历史，而应调用聚合检索接口：
+
+```http
+POST /v1/me/context/search/expand
+Content-Type: application/json
+X-Regenic-Personal-Key: <personal API key>
+```
+
+```json
+{
+  "query": "上次选中的 2 位都还没回复吗？",
+  "limit": 10,
+  "context": {
+    "before": 4,
+    "after": 4,
+    "reply_depth": 8,
+    "max_messages": 40
+  }
+}
+```
+
+每个返回会话包含：
+
+- 标识对话的 `thread_id`；
+- 标识检索命中的 `anchor_event_ids`；
+- 每条消息的 `event_id`、来源原生 `external_id`、`content_hash`、时间、发送者和正文；
+- 存在回复关系时的 `parent_external_id` 和已解析的 `reply_to_event_id`；
+- `selection_reason`：`hit`、`reply_target` 或 `neighbor`；
+- 有历史被省略时的 `continuation.before`、`continuation.after` 和 `continuation.gaps` 边界；
+- 返回消息并非连续完整本地会话时的 `truncated: true`。
+
+服务端会在扩展前重新核验每个命中是否仍是当前生命周期 head，正文哈希是否仍一致。收到 `409 context_changed` 时，应用必须重新搜索。`limit` 上限为 20，扩展消息上限为 100，并且 `limit` 不能超过 `context.max_messages`。
+
+这里的“完整”仍然是有界完整：选中的每条消息要么返回完整正文，要么请求显式失败；接口不声称连接器已经同步完全部来源历史。对话证据可以帮助识别业务对象和问题含义，但实时业务状态仍必须从受控业务查询服务获取。
+
+## 5. 运行边界
+
+- 现有 `/v1/me/context/search`、`/search/source` 和 `/ask` 行为不变；`/search/expand` 是面向 Agent 的聚合接口。
 - 客服任务、brief 版本、业务证据、草稿、审核和发送状态都持久化在 Authority store。
 - 清理 Regenic 运行数据时会同时清理客服任务。
 - 本地 Embedding 不代表远端 Cursor 或业务服务也在本地，仍须遵守部署的数据出站策略。

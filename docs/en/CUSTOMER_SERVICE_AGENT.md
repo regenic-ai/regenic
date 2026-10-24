@@ -112,9 +112,46 @@ It intentionally does **not** expose review or send tools. Conversation evidence
 
 `include_related: true` can search other authorized conversations only after customer and project scope are verified. Returned matches remain evidence candidates; they do not change authorization by themselves.
 
-## 4. Operational boundaries
+## 4. Retrieve Agent-ready conversation context over HTTP
 
-- Existing `/v1/me/context/search`, `/search/source`, and `/ask` behavior is unchanged.
+External applications should use the expanded search endpoint instead of treating search snippets as conversation history:
+
+```http
+POST /v1/me/context/search/expand
+Content-Type: application/json
+X-Regenic-Personal-Key: <personal API key>
+```
+
+```json
+{
+  "query": "Did both selected creators reply?",
+  "limit": 10,
+  "context": {
+    "before": 4,
+    "after": 4,
+    "reply_depth": 8,
+    "max_messages": 40
+  }
+}
+```
+
+Each returned conversation contains:
+
+- `thread_id` for the conversation;
+- `anchor_event_ids` for the search hits;
+- message `event_id`, source-native `external_id`, `content_hash`, timestamp, actor, and text;
+- `parent_external_id` and resolved `reply_to_event_id` when a reply relationship is available;
+- `selection_reason` (`hit`, `reply_target`, or `neighbor`);
+- `continuation.before`, `continuation.after`, and `continuation.gaps` boundaries when history was omitted;
+- `truncated: true` whenever the returned messages are not a continuous complete local thread.
+
+The server rechecks each hit against the current lifecycle head and content hash before expanding it. A `409 context_changed` response means the application must repeat the search. `limit` is capped at 20, message expansion is capped at 100, and `limit` cannot exceed `context.max_messages`.
+
+“Complete” remains bounded: the endpoint returns all selected message bodies or fails explicitly, but it does not claim connector source sync is complete. Conversation evidence may identify business entities and intent; current business status must still come from the authorized business query service.
+
+## 5. Operational boundaries
+
+- Existing `/v1/me/context/search`, `/search/source`, and `/ask` behavior is unchanged. `/search/expand` is the Agent-oriented aggregation endpoint.
 - Customer tasks, brief versions, business evidence, drafts, reviews, and send state persist in the Authority store.
 - Clearing Regenic operational data also clears customer-service tasks.
 - Local embeddings do not make a remote Cursor or business service local. Apply the deployment's outbound-data policy.
