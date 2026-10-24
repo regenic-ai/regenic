@@ -63,6 +63,53 @@ async function ingestEvidence(database, blobRoot, suffix = "", threadId = "chat-
   return result.records[0].event_id;
 }
 
+async function ingestConversationEvidence(database, blobRoot) {
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const result = await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "synthetic-chat",
+    org_id: "local-owner",
+    delivery_id: "delivery-expanded-context",
+    received_at: "2026-08-30T01:00:00.000Z",
+    records: [
+      {
+        operation: "create",
+        source: "synthetic-chat",
+        external_id: "customer-a:1",
+        occurred_at: "2026-08-30T00:00:00.000Z",
+        actor: { id: "owner" },
+        scope: { id: "customer-a" },
+        type: "message",
+        content: [{ role: "body", media_type: "text/plain", text: "Customer customer-a selected Alice and Bob." }],
+      },
+      {
+        operation: "create",
+        source: "synthetic-chat",
+        external_id: "customer-a:2",
+        occurred_at: "2026-08-30T00:01:00.000Z",
+        actor: { id: "customer" },
+        scope: { id: "customer-a" },
+        type: "message",
+        content: [{ role: "body", media_type: "text/plain", text: "pending-answer-question: did both selected creators reply?" }],
+      },
+      {
+        operation: "create",
+        source: "synthetic-chat",
+        external_id: "customer-a:3",
+        parent_external_id: "customer-a:1",
+        occurred_at: "2026-08-30T00:02:00.000Z",
+        actor: { id: "owner" },
+        scope: { id: "customer-a" },
+        type: "thread_reply",
+        content: [{ role: "body", media_type: "text/plain", text: "identity-follow-up: Alice is creator-1 and Bob is creator-2." }],
+      },
+    ],
+  });
+  authority.close();
+  return result.records.map((record) => record.event_id);
+}
+
 async function startModelStub(mode = "valid") {
   const requests = [];
   const server = createServer(async (request, response) => {
@@ -109,7 +156,7 @@ async function startModelStub(mode = "valid") {
   };
 }
 
-async function startApi(root, model = { driver: "none" }, embedding) {
+async function startApi(root, model = { driver: "none" }, embedding, seed = ingestEvidence) {
   const database = join(root, "authority.db");
   const blobRoot = join(root, "blobs");
   const env = {
@@ -133,7 +180,8 @@ async function startApi(root, model = { driver: "none" }, embedding) {
     REGENIC_EMBEDDING_BASE_URL: embedding,
   };
   setEnv(env);
-  const eventId = await ingestEvidence(database, blobRoot);
+  const seeded = await seed(database, blobRoot);
+  const eventId = Array.isArray(seeded) ? seeded[0] : seeded;
   const app = await createHttpApp({ logger: false });
   await app.listen(0, "127.0.0.1");
   apps.push(app);
@@ -367,6 +415,76 @@ describe("personal context API", () => {
       query: "release", filters: { sources: ["not-authorized-source"] },
     });
     assert.deepEqual(JSON.parse(filtered.text).items, []);
+  });
+  it("expands a search hit into a bounded conversation with stable message and reply locators", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationEvidence,
+    );
+    const expanded = await postJson(`${origin}/v1/me/context/search/expand`, {
+      query: "pending-answer-question",
+      limit: 1,
+      context: { before: 1, after: 1, reply_depth: 8, max_messages: 3 },
+    });
+    assert.equal(expanded.response.status, 200, expanded.text);
+    const result = JSON.parse(expanded.text);
+    assert.equal(result.items.length, 1);
+    assert.equal(result.conversations.length, 1);
+    assert.equal(result.conversations[0].thread_id, "synthetic-chat:customer-a");
+    assert.deepEqual(result.conversations[0].anchor_event_ids, [result.items[0].event_id]);
+    assert.deepEqual(
+      result.conversations[0].messages.map((message) => message.external_id),
+      ["customer-a:1", "customer-a:2", "customer-a:3"],
+    );
+    assert.deepEqual(
+      result.conversations[0].messages.map((message) => message.selection_reason),
+      ["neighbor", "hit", "neighbor"],
+    );
+    assert.equal(result.conversations[0].messages[2].parent_external_id, "customer-a:1");
+    assert.equal(
+      result.conversations[0].messages[2].reply_to_event_id,
+      result.conversations[0].messages[0].event_id,
+    );
+    assert.equal(result.conversations[0].continuation.before, null);
+    assert.equal(result.conversations[0].continuation.after, null);
+    assert.deepEqual(result.conversations[0].continuation.gaps, []);
+    assert.equal(result.conversations[0].truncated, false);
+    assert.deepEqual(result.expansion, {
+      returned_messages: 3,
+      max_messages: 3,
+      message_content: "complete_or_explicitly_omitted",
+      local_read_scope: "bounded",
+      source_sync: "unknown",
+    });
+
+    const replyChain = await postJson(`${origin}/v1/me/context/search/expand`, {
+      query: "identity-follow-up",
+      limit: 1,
+      context: { before: 0, after: 0, reply_depth: 8, max_messages: 2 },
+    });
+    assert.equal(replyChain.response.status, 200, replyChain.text);
+    const chain = JSON.parse(replyChain.text).conversations[0];
+    assert.deepEqual(
+      chain.messages.map((message) => message.selection_reason),
+      ["reply_target", "hit"],
+    );
+    assert.equal(chain.truncated, true);
+    assert.equal(chain.continuation.gaps.length, 1);
+    assert.equal(chain.continuation.gaps[0].after.event_id, chain.messages[0].event_id);
+    assert.equal(chain.continuation.gaps[0].before.event_id, chain.messages[1].event_id);
+
+    for (const body of [
+      { query: "pending-answer-question", context: { unknown: true } },
+      { query: "pending-answer-question", context: { before: 13 } },
+      { query: "pending-answer-question", limit: 2, context: { max_messages: 1 } },
+      { query: "pending-answer-question", limit: 21, context: { max_messages: 40 } },
+    ]) {
+      const invalid = await postJson(`${origin}/v1/me/context/search/expand`, body);
+      assert.equal(invalid.response.status, 400, invalid.text);
+    }
   });
   it("reviews a snapshot-pinned Proposal and atomically commits one Decision", async () => {
     const root = await createRoot();

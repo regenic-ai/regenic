@@ -1,4 +1,58 @@
-export type NavId = "inbox" | "search" | "follow-ups" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "search" | "customer-tasks" | "follow-ups" | "recipes" | "engine" | "settings";
+
+export interface CustomerServiceTaskView {
+  id: string;
+  status: string;
+  revision: number;
+  updated_at: string;
+  brief: {
+    version: number;
+    question: string;
+    customer: { status: string; value?: string };
+    project: { status: string; value?: string };
+    batch: { status: string; value?: string };
+    intent: { status: string; value?: string };
+    expected_member_count?: number;
+    members_closed: boolean;
+    members: Array<{
+      member_key: string;
+      display_name: string;
+      business_id?: string;
+      status: string;
+    }>;
+    requested_fields: string[];
+    unresolved: string[];
+  };
+  business_evidence: Array<{
+    query_id: string;
+    queried_at: string;
+    complete: boolean;
+    results: Array<{
+      member_key: string;
+      status: string;
+      fields: Array<{
+        field: string;
+        value: string | number | boolean | null;
+        visibility: string;
+        updated_at: string;
+      }>;
+    }>;
+  }>;
+  draft?: {
+    version: number;
+    text: string;
+    covered_member_keys: string[];
+    unresolved: string[];
+    review?: {
+      result: string;
+      reviewed_at: string;
+    };
+    sent?: {
+      event_id: string;
+      sent_at: string;
+    };
+  };
+}
 
 export interface SemanticIndexStatus {
   configured: boolean;

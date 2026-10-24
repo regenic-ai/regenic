@@ -1,6 +1,7 @@
 import type {
   ConversationPrefView,
   CreatedConversation,
+  CustomerServiceTaskView,
   DataDirectoryAction,
   DataDirectoryPlan,
   EngineExecutorView,
@@ -1365,6 +1366,48 @@ export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<Se
   const response = await kernelFetch("/v1/me/context/embedding/status", { signal });
   if (!response.ok) throwKernelError(await response.json(), `embedding status ${response.status}`);
   return response.json() as Promise<SemanticIndexStatus>;
+}
+
+export async function fetchCustomerServiceTasks(
+  signal?: AbortSignal,
+): Promise<CustomerServiceTaskView[]> {
+  const response = await kernelFetch("/v1/me/context/customer-tasks?limit=100", { signal });
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `customer tasks ${response.status}`);
+  return Array.isArray(body) ? body as CustomerServiceTaskView[] : [];
+}
+
+export async function reviewCustomerServiceTask(
+  taskId: string,
+  result: "approved" | "rejected",
+): Promise<CustomerServiceTaskView> {
+  const response = await kernelFetch(
+    `/v1/me/context/customer-tasks/${encodeURIComponent(taskId)}/review`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ result }),
+    },
+  );
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `customer task review ${response.status}`);
+  return body as CustomerServiceTaskView;
+}
+
+export async function sendCustomerServiceTask(
+  taskId: string,
+): Promise<CustomerServiceTaskView> {
+  const response = await kernelFetch(
+    `/v1/me/context/customer-tasks/${encodeURIComponent(taskId)}/send`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `customer task send ${response.status}`);
+  return body as CustomerServiceTaskView;
 }
 
 export async function fetchSearchSource(

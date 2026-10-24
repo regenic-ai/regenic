@@ -919,6 +919,11 @@ function previewCreate(
 function eventContextMetadata(
   record: IngestRecord,
 ): Pick<NewEvent, "thread_id" | "actor_id" | "required_scope_ids" | "direction_tags" | "weight_hints" | "attrs"> {
+  const attrs = {
+    ...(record.attrs ? structuredClone(record.attrs) : {}),
+    ...(record.thread?.id ? { native_thread_id: record.thread.id } : {}),
+    ...(record.parent_external_id ? { parent_external_id: record.parent_external_id } : {}),
+  };
   return {
     thread_id: conversationId(record.source, record.external_id),
     actor_id: record.actor.id,
@@ -927,7 +932,7 @@ function eventContextMetadata(
     ],
     ...(record.direction_tags ? { direction_tags: [...new Set(record.direction_tags)].sort() } : {}),
     ...(record.weight_hints ? { weight_hints: structuredClone(record.weight_hints) } : {}),
-    ...(record.attrs ? { attrs: structuredClone(record.attrs) } : {}),
+    ...(Object.keys(attrs).length ? { attrs } : {}),
   };
 }
 

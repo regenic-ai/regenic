@@ -19,6 +19,9 @@ import {
 import { PersonalKernelStoppedError } from "./personal-runtime.service";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { requestLocale } from "./request-locale";
+import { CustomerServiceError } from "@regenic/context-engine";
+import { CustomerServiceTaskConflictError } from "@regenic/domain";
+import { PersonalCustomerService } from "./personal-customer-service";
 
 @Controller("v1/me/context")
 @UseGuards(PersonalApiGuard)
@@ -28,6 +31,8 @@ export class PersonalContextController {
     private readonly context: PersonalContextService,
     @Inject(PersonalInboxService)
     private readonly inbox: PersonalInboxService,
+    @Inject(PersonalCustomerService)
+    private readonly customerService: PersonalCustomerService,
   ) {}
 
   @Post("assemble")
@@ -41,6 +46,12 @@ export class PersonalContextController {
     return this.guard(() => this.context.search(body));
   }
 
+  @Post("search/expand")
+  @HttpCode(HttpStatus.OK)
+  searchExpanded(@Body() body: unknown) {
+    return this.guard(() => this.context.searchExpanded(body));
+  }
+
   @Post("search/source")
   @HttpCode(HttpStatus.OK)
   searchSource(@Body() body: unknown, @Query("locale") locale?: string) {
@@ -52,6 +63,59 @@ export class PersonalContextController {
       }
       return { ...source, item };
     });
+  }
+
+  @Post("customer-tasks")
+  createCustomerTask(@Body() body: unknown) {
+    return this.guard(() => this.customerService.create(body));
+  }
+
+  @Get("customer-tasks")
+  listCustomerTasks(
+    @Query("statuses") statuses?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.guard(() => this.customerService.list(statuses, limit));
+  }
+
+  @Get("customer-tasks/:taskId")
+  getCustomerTask(@Param("taskId") taskId: string) {
+    return this.guard(() => this.customerService.get(taskId));
+  }
+
+  @Post("customer-tasks/:taskId/search")
+  searchCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
+    return this.guard(() => this.customerService.search(taskId, body));
+  }
+
+  @Post("customer-tasks/:taskId/read")
+  readCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
+    return this.guard(() => this.customerService.read(taskId, body));
+  }
+
+  @Post("customer-tasks/:taskId/brief")
+  updateCustomerTaskBrief(@Param("taskId") taskId: string, @Body() body: unknown) {
+    return this.guard(() => this.customerService.updateBrief(taskId, body));
+  }
+
+  @Post("customer-tasks/:taskId/query")
+  queryCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
+    return this.guard(() => this.customerService.query(taskId, body));
+  }
+
+  @Post("customer-tasks/:taskId/draft")
+  draftCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
+    return this.guard(() => this.customerService.draft(taskId, body));
+  }
+
+  @Post("customer-tasks/:taskId/review")
+  reviewCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
+    return this.guard(() => this.customerService.review(taskId, body));
+  }
+
+  @Post("customer-tasks/:taskId/send")
+  sendCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
+    return this.guard(() => this.customerService.send(taskId, body));
   }
 
   @Get("embedding/status")
@@ -444,6 +508,25 @@ export class PersonalContextController {
         throw new HttpException(
           { error: { code: error.code, message: error.message } },
           error.httpStatus,
+        );
+      }
+      if (error instanceof CustomerServiceError) {
+        const status = error.code === "not_found"
+          ? HttpStatus.NOT_FOUND
+          : error.code === "invalid_request"
+            ? HttpStatus.BAD_REQUEST
+            : error.code === "business_unavailable"
+              ? HttpStatus.SERVICE_UNAVAILABLE
+              : HttpStatus.CONFLICT;
+        throw new HttpException(
+          { error: { code: error.code, message: error.message } },
+          status,
+        );
+      }
+      if (error instanceof CustomerServiceTaskConflictError) {
+        throw new HttpException(
+          { error: { code: "task_conflict", message: error.message } },
+          HttpStatus.CONFLICT,
         );
       }
       throw error;

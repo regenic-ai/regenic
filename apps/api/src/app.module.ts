@@ -31,6 +31,7 @@ import { PersonalEventsService } from "./personal-events.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
 import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.service";
+import { PersonalCustomerService } from "./personal-customer-service";
 
 @Module({
   controllers: [
@@ -47,6 +48,7 @@ import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.se
     KernelRuntimeService,
     PersonalRuntimeService,
     PersonalContextService,
+    PersonalCustomerService,
     PersonalContextProjectionService,
     PersonalDailyDigestService,
     PersonalInboxService,
