@@ -12,6 +12,7 @@ export interface PersonalContextPolicyOptions {
 }
 
 export class PersonalContextPolicyEvaluator implements ContextPolicyEvaluator {
+  readonly metadata_only = true;
   private readonly orgId: string;
   private readonly principal: ActorRef;
 

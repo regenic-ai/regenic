@@ -17,7 +17,6 @@ import {
 } from "@regenic/domain";
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
-const MAX_AUTHORIZED_KEYS = 10_000;
 const QUERY_CHUNK_SIZE = 300;
 const MAX_DOCUMENT_CHARACTERS = 200_000;
 const MAX_DOCUMENT_TERMS = 50_000;
@@ -297,7 +296,7 @@ function assertWrite(input: ReplaceContextLexicalIndex | UpsertContextLexicalInd
   assertNonEmpty(input?.org_id, "organization");
   assertNonEmpty(input?.generation, "generation");
   assertNonEmpty(input?.watermark, "watermark");
-  if (!Array.isArray(input.documents) || input.documents.length > MAX_AUTHORIZED_KEYS) {
+  if (!Array.isArray(input.documents)) {
     throw new Error("Invalid Context lexical documents");
   }
   assertUniqueKeys(input.documents);
@@ -317,7 +316,7 @@ function assertMatch(input: MatchAuthorizedContextLexicalInput): void {
   if (typeof input.query !== "string" || input.query.length > 8_000) {
     throw new Error("Invalid Context lexical query");
   }
-  if (!Array.isArray(input.authorized) || input.authorized.length > MAX_AUTHORIZED_KEYS) {
+  if (!Array.isArray(input.authorized)) {
     throw new Error("Invalid authorized Context lexical keys");
   }
   assertUniqueKeys(input.authorized);

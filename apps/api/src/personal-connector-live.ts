@@ -20,7 +20,7 @@ import {
 import { shouldHydrateOpenedInbox } from "./personal-inbox-query";
 import { shouldPullOlderFocus } from "./personal-conversation-focus";
 
-import type { ConnectorState } from "./personal-connector-state";
+import type { ConnectorLiveState as ConnectorState } from "./personal-connector-state";
 import {
   wrapDriverError,
   pollStream,

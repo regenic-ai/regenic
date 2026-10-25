@@ -179,6 +179,7 @@ export function deliveryNeedsYou(delivery?: {
 export function workNextStepCopy(thread: {
   work?: {
     status?: string;
+    start_state?: string;
     recipe_id?: string;
     head_event_id?: string;
     updated_at?: string;
@@ -201,6 +202,12 @@ export function workNextStepCopy(thread: {
     return null;
   }
   const delivery = thread.work.delivery;
+  if (thread.work.start_state === "pending") {
+    return t("work.hint.startPending");
+  }
+  if (thread.work.start_state === "uncertain") {
+    return t("work.hint.startUncertain");
+  }
   if (delivery?.status === "dead") {
     return t("work.hint.dead");
   }

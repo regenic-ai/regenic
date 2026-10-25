@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { conversationId } = require("@regenic/connector-contract");
+const { conversationId, SendNotAcceptedError } = require("@regenic/connector-contract");
 const { verifyChannelDriverConformance } = require("@regenic/connector-test-utils");
 const {
   isWhatsAppChatId,
@@ -100,6 +100,25 @@ describe("whatsapp ids", () => {
 });
 
 describe("whatsapp-web-live driver", () => {
+  it("marks pre-enqueue validation rejection and permits a corrected send", async () => {
+    const installed = whatsappWebLiveDriver.install({
+      id: "wa-send-rejection", org_id: "local-owner", config: {},
+      now: "2026-08-21T00:00:00.000Z", secrets: memorySecrets(),
+    });
+    const egress = await whatsappWebLiveDriver.bindEgress(
+      installed, { source: "whatsapp-personal", target: "15550001999@c.us" }, fakeHost(), {},
+    );
+    const intent = (text) => ({
+      installation_id: installed.id,
+      content: [{ role: "body", media_type: "text/plain", text }],
+    });
+    for (const text of ["", "x".repeat(4_001)]) {
+      await assert.rejects(egress.send(intent(text)),
+        (error) => error instanceof SendNotAcceptedError && error.code === "invalid_config");
+    }
+    assert.equal((await egress.send(intent("corrected reply"))).accepted, true);
+  });
+
   it("conforms to the channel driver contract", () => {
     verifyChannelDriverConformance({
       driver: whatsappWebLiveDriver,

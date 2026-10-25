@@ -138,7 +138,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     }
   });
 
-  it("starts a new inferior after dismiss leaves a leftover active run", async () => {
+  it("reserves a new attempt after cancelling a dismissed item's leftover run", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
@@ -172,6 +172,8 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       eventId: ingested.records[0].event_id,
       status: "skipped",
     });
+    const recipe = await authority.getRecipe("local-owner", "recipe-leftover");
+    await authority.putRecipe({ ...recipe, enabled: false });
     authority.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
@@ -180,7 +182,8 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         headers: { "content-type": "application/json" },
         body: "{}",
       });
-      assert.equal(started.status, 501);
+      assert.equal(started.status, 409);
+      assert.match(await started.text(), /execution_start_uncertain/);
     } finally {
       await app.close();
     }
@@ -189,7 +192,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const leftover = await store.getWorkRun("local-owner", "run-leftover-1");
       assert.equal(leftover.status, "cancelled");
       const item = await store.getWorkItem("local-owner", "work-leftover-1");
-      assert.equal(item.status, "open");
+      assert.equal(item.status, "waiting_human");
+      const active = await store.getActiveWorkRun("local-owner", item.id);
+      assert.notEqual(active.id, leftover.id);
+      assert.equal(active.start_state, "uncertain");
     } finally {
       store.close();
     }

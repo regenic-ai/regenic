@@ -6,8 +6,10 @@ import type {
   SourceIdentityAliasBind,
   OutboundAttemptRecord,
   OutboundAttemptPut,
+  NewOutboundAttempt,
   EventListQuery,
   ContextAuthorityRead,
+  ContextAuthorityReadQuery,
   BlobRecord,
   RepointContentInput,
   IngestCommitRequest,
@@ -37,6 +39,7 @@ import {
   putDispositionWithinTransaction,
   refreshThreadHeadWithinTransaction,
 } from "./inbox";
+import { contextReadScope } from "../context-read-scope";
 
 export interface EventRow {
   id: string;
@@ -121,14 +124,16 @@ export async function getOutboundAttempt(db: PgSql, orgId: string, clientRequest
       client_request_id: string;
       thread_id: string;
       event_id: string | null;
-      status: "pending" | "accepted" | "sent" | "failed";
+      status: OutboundAttemptRecord["status"];
       channel_message_ids: unknown;
+      recovery_hash: string | null;
+      receipt_json: unknown;
       created_at: unknown;
       updated_at: unknown;
     }>(
       `
         SELECT org_id, client_request_id, thread_id, event_id, status,
-               channel_message_ids, created_at, updated_at
+               channel_message_ids, recovery_hash, receipt_json, created_at, updated_at
         FROM outbound_attempts
         WHERE org_id = $1 AND client_request_id = $2
       `,
@@ -147,10 +152,34 @@ export async function getOutboundAttempt(db: PgSql, orgId: string, clientRequest
       thread_id: row.thread_id,
       ...(row.event_id ? { event_id: row.event_id } : {}),
       status: row.status,
+      ...(row.recovery_hash ? { recovery_hash: row.recovery_hash } : {}),
+      ...(row.receipt_json
+        ? { receipt: asJson<OutboundAttemptRecord["receipt"]>(row.receipt_json) }
+        : {}),
       ...(channelMessageIds ? { channel_message_ids: channelMessageIds } : {}),
       created_at: toIso(row.created_at),
       updated_at: toIso(row.updated_at),
     };
+  }
+
+export async function claimOutboundAttempt(db: PgSql, input: NewOutboundAttempt): Promise<boolean> {
+    return await db.execute(`
+      INSERT INTO outbound_attempts (
+        org_id, client_request_id, thread_id, status, recovery_hash, created_at, updated_at
+      ) VALUES ($1, $2, $3, 'pending', $4, $5, $5)
+      ON CONFLICT (org_id, client_request_id) DO UPDATE SET
+        status = 'pending',
+        recovery_hash = EXCLUDED.recovery_hash,
+        updated_at = EXCLUDED.updated_at
+      WHERE outbound_attempts.status = 'rejected'
+        AND outbound_attempts.thread_id = EXCLUDED.thread_id
+        AND outbound_attempts.event_id IS NULL
+        AND outbound_attempts.receipt_json IS NULL
+        AND outbound_attempts.channel_message_ids IS NULL
+    `, [
+      input.org_id, input.client_request_id, input.thread_id,
+      input.recovery_hash ?? null, input.now,
+    ]) === 1;
   }
 
 export async function putOutboundAttempt(db: PgSql, input: OutboundAttemptPut): Promise<OutboundAttemptRecord> {
@@ -163,13 +192,15 @@ export async function putOutboundAttempt(db: PgSql, input: OutboundAttemptPut): 
       `
         INSERT INTO outbound_attempts (
           org_id, client_request_id, thread_id, event_id, status,
-          channel_message_ids, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          channel_message_ids, recovery_hash, receipt_json, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (org_id, client_request_id) DO UPDATE SET
           thread_id = EXCLUDED.thread_id,
           event_id = EXCLUDED.event_id,
           status = EXCLUDED.status,
           channel_message_ids = EXCLUDED.channel_message_ids,
+          recovery_hash = COALESCE(EXCLUDED.recovery_hash, outbound_attempts.recovery_hash),
+          receipt_json = COALESCE(EXCLUDED.receipt_json, outbound_attempts.receipt_json),
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -179,6 +210,8 @@ export async function putOutboundAttempt(db: PgSql, input: OutboundAttemptPut): 
         input.event_id ?? null,
         input.status,
         jsonb(input.channel_message_ids),
+        input.recovery_hash ?? null,
+        jsonb(input.receipt),
         createdAt,
         input.now,
       ],
@@ -189,6 +222,8 @@ export async function putOutboundAttempt(db: PgSql, input: OutboundAttemptPut): 
       thread_id: input.thread_id,
       ...(input.event_id ? { event_id: input.event_id } : {}),
       status: input.status,
+      recovery_hash: input.recovery_hash ?? previous?.recovery_hash,
+      receipt: input.receipt ?? previous?.receipt,
       ...(input.channel_message_ids
         ? { channel_message_ids: [...input.channel_message_ids] }
         : {}),
@@ -255,6 +290,7 @@ export async function listEvents(db: PgSql, orgId: string, query?: EventListQuer
       `
         SELECT id, org_id, source, external_id, operation, content_hash,
                parent_event_id, thread_id, actor_id, required_scope_ids,
+               direction_tags, weight_hints, attrs,
                occurred_at, ingested_at
         FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${order}
         ${limitSql}
@@ -264,8 +300,8 @@ export async function listEvents(db: PgSql, orgId: string, query?: EventListQuer
     return rows.map((row) => toEvent(db, row));
   }
 
-export async function openContextRead(db: PgSql, orgId: string): Promise<ContextAuthorityRead> {
-    return openContextReadInternal(db, orgId);
+export async function openContextRead(db: PgSql, orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    return openContextReadInternal(db, orgId, query);
   }
 
 export async function openContextReadForThread(db: PgSql, orgId: string, threadId: string): Promise<ContextAuthorityRead> {
@@ -273,69 +309,37 @@ export async function openContextReadForThread(db: PgSql, orgId: string, threadI
     if (!scopedThreadId) {
       throw new Error("Context thread read requires a thread id");
     }
-    return openContextReadInternal(db, orgId, scopedThreadId);
+    return openContextReadInternal(db, orgId, { filters: { thread_ids: [scopedThreadId] } });
   }
 
-async function openContextReadInternal(db: PgSql, orgId: string, threadId?: string): Promise<ContextAuthorityRead> {
+async function openContextReadInternal(db: PgSql, orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    const scope = contextReadScope(orgId, query, "postgres");
     return db.withTx(async (client) => {
-      const rows = threadId
-        ? await db.query<ContextEventRow>(
-            `
+      const rows = await db.query<ContextEventRow>(
+            `${scope.sql}
               SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                      e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
                      e.required_scope_ids, e.direction_tags, e.weight_hints, e.attrs,
                      e.occurred_at, e.ingested_at,
                      b.media_type AS content_media_type
               FROM events e
+              JOIN selected_identities s
+                ON s.org_id = e.org_id AND s.source = e.source AND s.external_id = e.external_id
               LEFT JOIN blobs b ON b.content_hash = e.content_hash
-              WHERE e.org_id = $1 AND e.thread_id = $2
               ORDER BY e.sequence ASC
             `,
-            [orgId, threadId],
-            client,
-          )
-        : await db.query<ContextEventRow>(
-            `
-              SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
-                     e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                     e.required_scope_ids, e.direction_tags, e.weight_hints, e.attrs,
-                     e.occurred_at, e.ingested_at,
-                     b.media_type AS content_media_type
-              FROM events e
-              LEFT JOIN blobs b ON b.content_hash = e.content_hash
-              WHERE e.org_id = $1
-              ORDER BY e.sequence ASC
-            `,
-            [orgId],
+            scope.params,
             client,
           );
-      const lifecycleHeads = threadId
-        ? await db.query<ContextAuthorityRead["lifecycle_heads"][number]>(
-            `
+      const lifecycleHeads = await db.query<ContextAuthorityRead["lifecycle_heads"][number]>(
+            `${scope.sql}
               SELECT sh.source, sh.external_id, sh.current_event_id AS head_event_id
               FROM source_heads sh
-              WHERE sh.org_id = $1
-                AND EXISTS (
-                  SELECT 1
-                  FROM events e
-                  WHERE e.org_id = sh.org_id
-                    AND e.source = sh.source
-                    AND e.external_id = sh.external_id
-                    AND e.thread_id = $2
-                )
+              JOIN selected_identities s
+                ON s.org_id = sh.org_id AND s.source = sh.source AND s.external_id = sh.external_id
               ORDER BY sh.source ASC, sh.external_id ASC
             `,
-            [orgId, threadId],
-            client,
-          )
-        : await db.query<ContextAuthorityRead["lifecycle_heads"][number]>(
-            `
-              SELECT source, external_id, current_event_id AS head_event_id
-              FROM source_heads
-              WHERE org_id = $1
-              ORDER BY source ASC, external_id ASC
-            `,
-            [orgId],
+            scope.params,
             client,
           );
       const recordedAt = new Date().toISOString();
@@ -348,8 +352,6 @@ async function openContextReadInternal(db: PgSql, orgId: string, threadId?: stri
       return {
         read_epoch: `authority:${hashCanonicalContext({
           org_id: orgId,
-          ...(threadId ? { thread_id: threadId } : {}),
-          recorded_at: recordedAt,
           events,
           lifecycle_heads: lifecycleHeads,
         })}`,
@@ -495,7 +497,8 @@ async function findCurrent(db: PgSql, identity: SourceIdentity, client?: PoolCli
       `
         SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-               e.required_scope_ids, e.occurred_at, e.ingested_at
+               e.required_scope_ids, e.direction_tags, e.weight_hints, e.attrs,
+               e.occurred_at, e.ingested_at
         FROM source_heads h
         JOIN events e ON e.id = h.current_event_id
         WHERE h.org_id = $1 AND h.source = $2 AND h.external_id = $3

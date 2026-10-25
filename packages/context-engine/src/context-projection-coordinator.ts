@@ -111,6 +111,9 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
 
     for (const projector of this.projectors.list()) {
       const previous = await this.artifacts.getCheckpoint(orgId, projector.id, generation);
+      if (previous && previous.algorithm_version !== projector.algorithm_version) {
+        throw new Error("Projection algorithm changed; rebuild in a new generation");
+      }
       if (previous && previous.sequence > sequence) {
         throw new Error("Projection checkpoint exceeds the authority read");
       }
@@ -143,7 +146,15 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
           read.recorded_at,
           eventsByEvidence,
         );
-        if (artifact.attrs !== undefined && artifact.body_hash) {
+        const existing = await this.artifacts.getArtifact(orgId, artifact.id);
+        if (existing) {
+          if (canonicalContextJson({ ...existing, status: artifact.status, recorded_at: artifact.recorded_at })
+            !== canonicalContextJson(artifact)) {
+            throw new Error("Cannot replace immutable context artifact");
+          }
+          continue;
+        }
+        if (artifact.body_storage !== "artifact" && artifact.attrs !== undefined && artifact.body_hash) {
           await this.blobs?.put(
             artifact.body_hash,
             Buffer.from(canonicalContextJson(artifact.attrs), "utf8"),

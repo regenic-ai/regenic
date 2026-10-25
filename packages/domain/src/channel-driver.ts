@@ -1,5 +1,6 @@
 import {
   ChannelDriverError,
+  SendNotAcceptedError,
   parseConversationThread,
   type ChannelCapabilities,
   type ChannelDriver,
@@ -20,6 +21,7 @@ import {
 } from "@regenic/connector-contract";
 export {
   ChannelDriverError,
+  SendNotAcceptedError,
   parseConversationThread,
 };
 export type {

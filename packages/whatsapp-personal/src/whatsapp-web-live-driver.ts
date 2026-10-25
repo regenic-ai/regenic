@@ -2,6 +2,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  EgressQueueRejectedError,
+  SendNotAcceptedError,
   INGEST_SCHEMA_VERSION,
   channelRecord,
   envCredentialsRef,
@@ -12,6 +14,7 @@ import {
   type ConnectorInstallation,
   type ConversationThread,
   type DeliveryReceipt,
+  type EgressQueueItem,
   type IngestBatch,
   type IngestRecord,
   type VerifiedWebhook,
@@ -166,13 +169,21 @@ export const whatsappWebLiveDriver: ChannelDriver = {
           .flatMap((part) => ("text" in part && part.text ? [part.text] : []))
           .join("\n")
           .trim();
-        const command = enqueueWhatsAppLiveCommand({
-          installationId: installation.id,
-          chatId: thread.target,
-          text,
-          sendNow: true,
-          delayMs: 0,
-        });
+        let command: EgressQueueItem;
+        try {
+          command = enqueueWhatsAppLiveCommand({
+            installationId: installation.id,
+            chatId: thread.target,
+            text,
+            sendNow: true,
+            delayMs: 0,
+          });
+        } catch (error) {
+          if (error instanceof EgressQueueRejectedError) {
+            throw new SendNotAcceptedError(error.code, error.message, error.reason);
+          }
+          throw error;
+        }
         return { accepted: true, rpc_id: command.id };
       },
     };

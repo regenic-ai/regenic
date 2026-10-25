@@ -7,6 +7,7 @@ import {
   contextLexicalTerms,
   type AuthorizedContextRetrievalPlan,
   type ContextRetriever,
+  type ContextEventMaterializer,
   type ContextRetrievalResult,
   type ContextRetrievalTrace,
   type ContextVectorIndex,
@@ -20,7 +21,7 @@ import { ContextEngineError } from "./deterministic-context-engine";
 
 export const HYBRID_EVENT_RETRIEVER_ID = "event-hybrid";
 export const HYBRID_RETRIEVAL_PROFILE = {
-  version: "personal-hybrid-rrf-v2",
+  version: "personal-hybrid-rrf-v3",
   score_weights: { anchor: 4, exact_match: 3, lexical: 2, recency: 1, hybrid: 8 },
   vector_min_score: 0.7,
 };
@@ -45,20 +46,21 @@ export class HybridEventRetriever implements ContextRetriever {
   }
 
   capabilities() {
-    return { ...this.lexical.capabilities(), vector: true };
+    return { ...this.lexical.capabilities(), vector: true, lazy_materialization: true };
   }
 
-  async retrieve(plan: AuthorizedContextRetrievalPlan): Promise<ContextRetrievalResult> {
-    const lexicalResult = await this.lexical.retrieve(plan);
+  async retrieve(
+    plan: AuthorizedContextRetrievalPlan,
+    materialize?: ContextEventMaterializer,
+  ): Promise<ContextRetrievalResult> {
+    const lexicalPlan = materialize && !this.lexical.capabilities().lazy_materialization
+      ? { ...plan, events: await materialize(plan.events.map((source) => source.event.event_id)) }
+      : plan;
+    const lexicalResult = await this.lexical.retrieve(lexicalPlan, materialize);
     const lexical = Array.isArray(lexicalResult) ? { candidates: lexicalResult } : lexicalResult;
     if (!plan.request.query || (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event"))) return lexical;
     const eligible = eligibleEventSources(plan).filter((source) => source.event.content_hash);
     const allowed = new Map(eligible.map((source) => [source.event.event_id, source]));
-    if (allowed.size > 10000) return {
-      ...lexical, degradation_flags: [...(lexical.degradation_flags ?? []), "vector_index_capacity",
-        ...(plan.request.temporal.mode !== "current" ? ["vector_temporal_unsupported"] : []),
-        ...(!this.index ? ["vector_index_absent"] : [])],
-    };
     const rankedLexical = [...lexical.candidates].sort((a, b) =>
       lexicalScore(b) - lexicalScore(a) || compare(a.candidate.resource_id, b.candidate.resource_id));
     const trace: ContextRetrievalTrace = {
@@ -114,10 +116,26 @@ export class HybridEventRetriever implements ContextRetriever {
         hit.content_hash !== source.event.content_hash || !Number.isFinite(hit.score) ||
         hit.score < -1 || hit.score > 1 || !Number.isSafeInteger(hit.chunk_ordinal) || hit.chunk_ordinal < 0 ||
         !Number.isSafeInteger(hit.start) || !Number.isSafeInteger(hit.end) || hit.start < 0 ||
-        hit.end <= hit.start || typeof source.text !== "string" || hit.end > source.text.length) {
+        hit.end <= hit.start) {
         throw new ContextEngineError("invalid_candidate", "Invalid authorized vector chunk binding");
       }
       seen.add(hit.event_id);
+    }
+    if (materialize) {
+      for (const source of await materialize([...seen])) {
+        allowed.set(source.event.event_id, source);
+      }
+    }
+    for (const hit of result.matched) {
+      const text = allowed.get(hit.event_id)!.text;
+      if (typeof text !== "string" || hit.end > text.length) {
+        throw new ContextEngineError("invalid_candidate", "Invalid authorized vector chunk binding");
+      }
+    }
+    if (materialize) {
+      for (const source of await materialize(rankedLexical.map((value) => value.candidate.resource_id))) {
+        allowed.set(source.event.event_id, source);
+      }
     }
     const vector = result.matched.filter((hit) => hit.score >= this.profile.vector_min_score)
       .sort((a, b) => b.score - a.score || compare(a.event_id, b.event_id));

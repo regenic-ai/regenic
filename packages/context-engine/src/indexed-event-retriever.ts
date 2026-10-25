@@ -4,6 +4,7 @@ import {
   type AuthorizedContextRetrievalPlan,
   type ContextLexicalIndex,
   type ContextLexicalKey,
+  type ContextEventMaterializer,
   type ContextRetrievalCapabilities,
   type ContextRetrievalResult,
   type ContextRetriever,
@@ -32,16 +33,24 @@ export class IndexedEventRetriever implements ContextRetriever {
       graph: false,
       rerank: false,
       multilingual: true,
+      lazy_materialization: true,
     };
   }
 
-  async retrieve(plan: AuthorizedContextRetrievalPlan): Promise<ContextRetrievalResult> {
+  async retrieve(
+    plan: AuthorizedContextRetrievalPlan,
+    materialize?: ContextEventMaterializer,
+  ): Promise<ContextRetrievalResult> {
     if (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event")) {
       return { candidates: [] };
     }
     const eligible = eligibleEventSources(plan);
+    const candidatesFor = async (sources: typeof eligible) => toCandidates(
+      materialize ? await materialize(sources.map((source) => source.event.event_id)) : sources,
+      plan,
+    );
     if (!plan.request.query) {
-      return { candidates: toCandidates(eligible, plan) };
+      return { candidates: await candidatesFor(eligible) };
     }
     const authorized = eligible.flatMap((source) => source.event.content_hash
       ? [{ event_id: source.event.event_id, content_hash: source.event.content_hash }]
@@ -62,7 +71,7 @@ export class IndexedEventRetriever implements ContextRetriever {
         return matched.has(key) || !covered.has(key);
       });
     return {
-      candidates: toCandidates(candidates, plan),
+      candidates: await candidatesFor(candidates),
       degradation_flags: degradationFlags(result, covered.size, authorized.length),
     };
   }

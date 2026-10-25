@@ -418,11 +418,13 @@ export const ThreadPane = memo(function ThreadPane({
   const awaitingPrompt = prompts.length > 0;
   const conversationClosed = !awaitingPrompt && !thread.can_send;
   const needsDeliveryRetry = deliveryNeedsYou(thread.work?.delivery);
+  const startNeedsConfirmation = thread.work?.start_state === "pending" ||
+    thread.work?.start_state === "uncertain";
   // While a prompt is up, skip generic next-step hints — but keep delivery failures.
   const workHint =
-    awaitingPrompt && !needsDeliveryRetry
+    awaitingPrompt && !needsDeliveryRetry && !startNeedsConfirmation
       ? null
-      : needsDeliveryRetry || !resultSummary
+      : startNeedsConfirmation || needsDeliveryRetry || !resultSummary
         ? workNextStepCopy(thread)
         : null;
   const heading = threadTitle(thread);

@@ -50,7 +50,7 @@ import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 
 import { catalogMembersFromStreams } from "./connector-sync-members";
 
-import type { ConnectorState } from "./personal-connector-state";
+import type { ConnectorDueWorkState as ConnectorState } from "./personal-connector-state";
 import {
   pollStream,
   mapLimit,

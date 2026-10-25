@@ -81,20 +81,50 @@ Recipe 的 `executor_type: "dsh"` 不用改。`GET /v1/me/executors` 只列出
 
 填了 `session_id` 的 DSH 安装 `create: false`，不能当本机执行器。
 
+## 持久化启动与恢复
+
+内核在调用 `TaskExecutor.start` 前，原子创建 `start_state: pending` 的
+WorkRun，同时把开放的 WorkItem 标记为运行中并占用自动执行名额。
+多个进程不能同时认领同一个工单。`input.run_id` 是提前落盘的运行 ID。
+
+本机会话执行器通过 `spawnSysout` 创建会话后，先保存会话 ID，再允许
+`writeStdin` 发送任务。stdin 确认成功后保存 `start_state: submitted`；
+若最终收尾中断，监督器通过 `status` 恢复已有会话，不重新创建会话或发送任务。
+执行器返回的句柄也会在应用结果之前落盘。正常收尾后清除 `start_state`。
+
+启动中断留下的 `pending`，或调用异常留下的 `uncertain`，都不能当作确定失败。
+异常尝试转为等待人工核对，不会被自动重试、恢复输入或判定完成；
+手动运行、恢复接口返回 `execution_start_uncertain`（409）。
+请先核对外部会话或远端运行记录，再移除本次尝试并明确开始新一次。
+已记录提交但启动收尾中断时返回 `execution_recovery_pending`（503），
+刷新即可恢复已有执行；并发手动启动返回 `execution_start_conflict`（409）。
+创建会话后、首次会话 ID 落盘前宕机，仍可能留下空闲孤立会话，
+但持久化认领会阻止重复提交任务。数据库与执行器之间不承诺端到端 exactly-once。
+
 ## HTTP 协议
 
 远端执行器实现这三条。内核把 `executor_config` 原样转交，不读 key。
 
 | 方法 | 路径 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| POST | `/v1/runs` | `work_item_id`、`thread_id`、`recipe_id`、`evidence_text`、`executor_config` | `external_run_id`、`status`，可选 `agent_thread_id` / `prompts` / `result` |
+| POST | `/v1/runs` | `run_id`、`work_item_id`、`thread_id`、`recipe_id`、`evidence_text`、`executor_config` | `external_run_id`、`status`，可选 `agent_thread_id` / `prompts` / `result` |
 | GET | `/v1/runs/:id` | — | 同上 |
 | POST | `/v1/runs/:id/resume` | `work_item_id`、`recipe_id`、`answer` | 同上 |
+
+以下旧版降级说明保留用于升级对照；当前版本的错误处理规则见后文：
 
 `status` 只能是 `running` / `waiting_human` / `completed` / `failed` /
 `cancelled`。缺省或未知值按 `failed`，避免工单一直挂着。Bearer token
 来自安装声明的环境变量名（`[A-Za-z_][A-Za-z0-9_]*`）。云 metadata
 地址不能当 `base_url`。
+
+当前版本不再把协议错误伪造成失败运行：缺省或未知状态、无效 JSON、
+非 2xx 响应及网络异常均明确抛错。启动时保留不确定尝试，
+状态轮询时保留已有运行，不转成可自动重试的失败。
+监督器按运行记录轮询错误，并继续处理其他运行；异常运行保留已落盘状态，
+下一轮再次轮询。内核关闭仍会中止本轮监督。
+启动请求在正文传递 `run_id`，并用相同值设置 `Idempotency-Key` 请求头。
+远端可以据此去重或查询；内核不假定远端具备去重能力，也不重试不确定启动。
 
 ## 调用目录
 

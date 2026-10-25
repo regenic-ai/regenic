@@ -5,6 +5,7 @@ import type {
   WorkDelivery,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkStore,
 } from "./work";
 import { isActiveWorkStatus } from "./work";
@@ -127,6 +128,32 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     this.runs.set(run.id, cloneRun(run));
     return cloneRun(run);
+  }
+
+  async claimWorkRunStart({ run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
+    const item = this.items.get(run.work_item_id);
+    const recipe = this.recipes.get(run.recipe_id);
+    if (
+      !item || item.org_id !== run.org_id || item.status !== "open" ||
+      item.recipe_id !== run.recipe_id || recipe?.org_id !== run.org_id ||
+      [...this.runs.values()].some((current) =>
+        current.org_id === run.org_id && current.work_item_id === item.id &&
+        (current.status === "running" || current.status === "waiting_human"))
+    ) {
+      return false;
+    }
+    const occupied = [...this.items.values()].filter((current) =>
+      current.org_id === run.org_id && current.recipe_id === run.recipe_id &&
+      (current.status === "running" || current.status === "waiting_human")).length;
+    if (max_concurrent !== undefined && occupied >= max_concurrent) {
+      return false;
+    }
+    if (this.runs.has(run.id)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    this.runs.set(run.id, cloneRun(run));
+    this.items.set(item.id, { ...item, status: "running", updated_at: run.updated_at });
+    return true;
   }
 
   async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {

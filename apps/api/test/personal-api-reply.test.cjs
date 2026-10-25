@@ -477,11 +477,33 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         body: JSON.stringify({
           thread_id: "dsh:session-hosted",
           text: "pong",
+          client_request_id: "hosted-reply-1",
+          attachments: [{
+            filename: "proof.png",
+            media_type: "image/png",
+            data_base64: Buffer.from([1, 2, 3]).toString("base64"),
+          }],
         }),
       });
       const body = await replied.json();
       assert.equal(replied.status, 201, JSON.stringify(body));
       assert.equal(dsh.prompts[0].payload.sessionId, "session-hosted");
+      assert.equal(body.client_request_id, "hosted-reply-1");
+      assert.equal(dsh.prompts[0].payload.content.find((part) => part.type === "image").name, "proof.png");
+      const retried = await fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-hosted",
+          text: "must not be sent again",
+          client_request_id: "hosted-reply-1",
+        }),
+      });
+      const replay = await retried.json();
+      assert.equal(retried.status, 201, JSON.stringify(replay));
+      assert.equal(replay.item.event.id, body.item.event.id);
+      assert.equal(replay.rpc_id, body.rpc_id);
+      assert.equal(dsh.prompts.length, 1);
     } finally {
       await app.close();
       await dsh.close();

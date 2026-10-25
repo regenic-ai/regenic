@@ -43,6 +43,23 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("searches an authorization set above 10000 and retains the global top-k, not the first k", async (t) => {
+    const { index } = await fixture(t);
+    await reconcile(index, [head("event-00000"), head("event-05000"), head("event-10004"), head("hidden")]);
+    const vectors = new Map([
+      ["event-00000", [0, 1]], ["event-05000", [0.6, 0.8]], ["event-10004", [1, 0]], ["hidden", [1, 0]],
+    ]);
+    for (const job of await claim(index)) {
+      await index.complete({ job, owner: "owner", now: at, chunks: [chunk(vectors.get(job.event_id))] });
+    }
+    const authorized = Array.from({ length: 10005 }, (_, id) => ({
+      event_id: `event-${String(id).padStart(5, "0")}`, content_hash: hash,
+    }));
+    const result = await query(index, authorized, { limit: 1 });
+    assert.equal(result.covered.length, 3);
+    assert.deepEqual(result.matched.map((hit) => [hit.event_id, hit.score]), [["event-10004", 1]]);
+  });
+
   it("requeues only bounded current failed/quarantined jobs without changing leases, successes or other scopes", async (t) => {
     const f = await fixture(t);
     const heads = ["good", "running", "failed", "quarantined", "stale"].map((id) => head(id));

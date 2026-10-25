@@ -177,13 +177,15 @@ describe("PersonalContextProjectionService", () => {
     assert.equal(artifacts.length, 1);
     assert.equal(artifacts[0].attrs.thread_id, "thread-1");
     assert.equal(artifacts[0].attrs.messages[0].text, "A durable summary source");
-    assert.equal(await host.get("blobs").exists(artifacts[0].body_hash), true);
+    assert.equal(artifacts[0].body_storage, "artifact");
+    assert.equal(await host.get("blobs").exists(artifacts[0].body_hash), false);
+    assert.equal(await host.get("blobs").exists(contentHash), true);
     const lexical = await host.get("context-lexical-index").matchAuthorized({
       org_id: "example-org",
       query: "durable summary",
       authorized: [{ event_id: event.id, content_hash: contentHash }],
     });
-    assert.equal(lexical.generation, "continuous-v1");
+    assert.equal(lexical.generation, "continuous-v2");
     assert.deepEqual(lexical.matched, [{ event_id: event.id, content_hash: contentHash }]);
     const assembled = await host.get("context").assemble({
       schema_version: "1.0",
@@ -227,25 +229,25 @@ describe("PersonalContextProjectionService", () => {
     assert.equal(calls.claims.length, 1);
     assert.equal(calls.claims[0].limit, 5);
     assert.deepEqual(calls.projects, [
-      { orgId: "example-org", generation: "continuous-v1", threadId: "thread-1" },
-      { orgId: "other-org", generation: "continuous-v1", threadId: "thread-other" },
+      { orgId: "example-org", generation: "continuous-v2", threadId: "thread-1" },
+      { orgId: "other-org", generation: "continuous-v2", threadId: "thread-other" },
     ]);
     assert.deepEqual(calls.indexSyncs, [
       {
         orgId: "example-org",
-        generation: "continuous-v1",
+        generation: "continuous-v2",
         eventIds: undefined,
         threadId: undefined,
       },
       {
         orgId: "example-org",
-        generation: "continuous-v1",
+        generation: "continuous-v2",
         eventIds: ["event-1", "event-2"],
         threadId: "thread-1",
       },
       {
         orgId: "other-org",
-        generation: "continuous-v1",
+        generation: "continuous-v2",
         eventIds: ["event-3"],
         threadId: "thread-other",
       },
@@ -269,7 +271,7 @@ describe("PersonalContextProjectionService", () => {
     assert.equal(calls.projects.length, 0);
     assert.deepEqual(calls.indexSyncs[1], {
       orgId: "example-org",
-      generation: "continuous-v1",
+      generation: "continuous-v2",
       eventIds: ["event-1"],
       threadId: undefined,
     });
@@ -425,7 +427,7 @@ describe("PersonalContextProjectionService", () => {
     );
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
     assert.deepEqual(calls.projects, [
-      { orgId: "example-org", generation: "continuous-v1", threadId: "feishu:1" },
+      { orgId: "example-org", generation: "continuous-v2", threadId: "feishu:1" },
     ]);
     assert.equal(calls.failures.length, 0);
     await service.onModuleDestroy();
@@ -442,7 +444,7 @@ describe("PersonalContextProjectionService", () => {
     assert.deepEqual(calls.projects, []);
     assert.deepEqual(calls.indexSyncs, [{
       orgId: "example-org",
-      generation: "continuous-v1",
+      generation: "continuous-v2",
       eventIds: undefined,
       threadId: undefined,
     }]);

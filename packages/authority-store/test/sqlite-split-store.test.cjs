@@ -56,6 +56,107 @@ function createBatch(externalId = "source-event-1") {
 }
 
 describe("sqlite read/write split", () => {
+  it("reclaims rejected replies once across writer workers and restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const first = await SqliteSplitAuthorityStore.open(path);
+    const second = await SqliteSplitAuthorityStore.open(path);
+    const input = {
+      org_id: "local-owner", client_request_id: "retry-rejected", thread_id: "feishu:oc_1",
+      recovery_hash: "a".repeat(64), now: "2026-08-24T00:00:00.000Z",
+    };
+    try {
+      await first.putOutboundAttempt({ ...input, status: "rejected" });
+      const claims = await Promise.all(Array.from({ length: 20 }, (_, index) =>
+        (index % 2 ? first : second).claimOutboundAttempt(input)));
+      assert.equal(claims.filter(Boolean).length, 1);
+      assert.equal((await second.getOutboundAttempt(input.org_id, input.client_request_id)).status, "pending");
+      await first.putOutboundAttempt({ ...input, status: "rejected" });
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+    const restarted = await SqliteSplitAuthorityStore.open(path);
+    try {
+      assert.equal(await restarted.claimOutboundAttempt(input), true);
+      assert.equal(await restarted.claimOutboundAttempt(input), false);
+    } finally {
+      await restarted.close();
+    }
+  });
+
+  it("reserves executor starts across independent writers and restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const first = await SqliteSplitAuthorityStore.open(path);
+    const second = await SqliteSplitAuthorityStore.open(path);
+    const now = "2026-08-24T00:00:00.000Z";
+    const recipe = {
+      id: "r1", org_id: "local-owner", name: "Atomic starts", match: { record_class: "task" },
+      trigger: { kind: "push" }, executor_type: "session", executor_config: {},
+      include_context: false, can_write_back: false, enabled: true, created_at: now, updated_at: now,
+    };
+    let winner;
+    try {
+      await first.putRecipe(recipe);
+      const claims = [];
+      for (let index = 0; index < 6; index += 1) {
+        const id = `work-${index}`;
+        await first.putWorkItem({
+          id, org_id: recipe.org_id, recipe_id: recipe.id, thread_id: "feishu:oc_1",
+          unit_key: id, record_class: "task", thread_facet: "ticket", status: "open",
+          created_at: now, updated_at: now,
+        });
+        claims.push({
+          run: {
+            id: `run-${index}`, org_id: recipe.org_id, recipe_id: recipe.id, work_item_id: id,
+            executor_type: "session", status: "running", start_state: "pending",
+            created_at: now, updated_at: now,
+          },
+          max_concurrent: 1,
+        });
+      }
+      const results = await Promise.all(claims.map((claim, index) =>
+        (index % 2 ? first : second).claimWorkRunStart(claim)));
+      assert.equal(results.filter(Boolean).length, 1);
+      winner = claims[results.indexOf(true)];
+      assert.equal((await second.getWorkRun(recipe.org_id, winner.run.id)).start_state, "pending");
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+    const reopened = await SqliteSplitAuthorityStore.open(path);
+    try {
+      assert.equal(await reopened.claimWorkRunStart(winner), false);
+      assert.equal((await reopened.getWorkItem(recipe.org_id, winner.run.work_item_id)).status, "running");
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  it("allows only one outbound claim across independent writers and restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const first = await SqliteSplitAuthorityStore.open(path);
+    const second = await SqliteSplitAuthorityStore.open(path);
+    const input = {
+      org_id: "local-owner", client_request_id: "shared-reply", thread_id: "feishu:oc_1",
+      recovery_hash: "a".repeat(64), now: "2026-08-24T00:00:00.000Z",
+    };
+    try {
+      const claims = await Promise.all(Array.from({ length: 20 }, (_, index) =>
+        (index % 2 ? first : second).claimOutboundAttempt(input)));
+      assert.equal(claims.filter(Boolean).length, 1);
+      assert.equal((await second.getOutboundAttempt(input.org_id, input.client_request_id)).recovery_hash, input.recovery_hash);
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+    const reopened = await SqliteSplitAuthorityStore.open(path);
+    try {
+      assert.equal(await reopened.claimOutboundAttempt(input), false);
+    } finally {
+      await reopened.close();
+    }
+  });
+
   it("routes snapshot index writes and reads through the RPC allowlists", async () => {
     const root = await createRoot();
     const store = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));

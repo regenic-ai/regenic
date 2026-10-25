@@ -201,9 +201,39 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         body: JSON.stringify({
           thread_id: "whatsapp-personal:queue-overflow@c.us",
           text: "Overflow draft",
+          client_request_id: "overflow-retry",
         }),
       });
       assert.equal(queueFull.status, 429);
+      const fullQueue = await (await fetch(`${origin}/v1/me/connectors/${installId}/egress`, {
+        headers: { "x-regenic-live-key": "live-key" },
+      })).json();
+      assert.equal(fullQueue.commands.length, 100);
+      const freed = await fetch(
+        `${origin}/v1/me/connectors/${installId}/egress/${fullQueue.commands[0].id}/ack`,
+        { method: "POST", headers: { "x-regenic-live-key": "live-key" } },
+      );
+      assert.equal(freed.status, 201);
+      const retry = async () => fetch(`${origin}/v1/me/replies`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "whatsapp-personal:queue-overflow@c.us",
+          text: "Overflow draft",
+          client_request_id: "overflow-retry",
+        }),
+      });
+      const retried = await retry();
+      const retriedBody = await retried.json();
+      assert.equal(retried.status, 201, JSON.stringify(retriedBody));
+      const replayed = await retry();
+      assert.equal(replayed.status, 201);
+      assert.equal((await replayed.json()).item.event.id, retriedBody.item.event.id);
+      const afterRetry = await (await fetch(`${origin}/v1/me/connectors/${installId}/egress`, {
+        headers: { "x-regenic-live-key": "live-key" },
+      })).json();
+      assert.equal(afterRetry.commands.length, 100);
+      assert.equal(afterRetry.commands.filter((command) => command.chat_id === "queue-overflow@c.us").length, 1);
     } finally {
       await app.close();
     }

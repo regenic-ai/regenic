@@ -3,6 +3,7 @@ import type {
   Recipe,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkDelivery,
   ExecutorInstallation,
 } from "@regenic/domain";
@@ -225,20 +226,24 @@ export async function listHiddenExecutorThreadIds(db: Database.Database, orgId: 
   }
 
 export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<WorkRun> {
-    
+    return writeWorkRun(db, run);
+  }
+
+function writeWorkRun(db: Database.Database, run: WorkRun): WorkRun {
     db
       .prepare(
         `
           INSERT INTO work_runs (
             id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-            agent_thread_id, status, result_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            agent_thread_id, status, start_state, result_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             recipe_id = excluded.recipe_id,
             executor_type = excluded.executor_type,
             external_run_id = excluded.external_run_id,
             agent_thread_id = excluded.agent_thread_id,
             status = excluded.status,
+            start_state = excluded.start_state,
             result_json = excluded.result_json,
             updated_at = excluded.updated_at
         `,
@@ -252,12 +257,42 @@ export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<W
         run.external_run_id ?? null,
         run.agent_thread_id ?? null,
         run.status,
+        run.start_state ?? null,
         run.result ? JSON.stringify(run.result) : null,
         run.created_at,
         run.updated_at,
       );
     return run;
   }
+
+export async function claimWorkRunStart(db: Database.Database, input: WorkRunStartClaim): Promise<boolean> {
+  const { run, max_concurrent } = input;
+  return db.transaction(() => {
+    const item = db.prepare(`
+      SELECT w.id FROM work_items w JOIN recipes r ON r.id = w.recipe_id AND r.org_id = w.org_id
+      WHERE w.org_id = ? AND w.id = ? AND w.recipe_id = ? AND w.status = 'open'
+        AND NOT EXISTS (
+          SELECT 1 FROM work_runs WHERE org_id = w.org_id AND work_item_id = w.id
+            AND status IN ('running', 'waiting_human')
+        )
+    `).get(run.org_id, run.work_item_id, run.recipe_id);
+    if (!item) return false;
+    if (max_concurrent !== undefined) {
+      const occupied = db.prepare(`
+        SELECT COUNT(*) AS count FROM work_items
+        WHERE org_id = ? AND recipe_id = ? AND status IN ('running', 'waiting_human')
+      `).get(run.org_id, run.recipe_id) as { count: number };
+      if (occupied.count >= max_concurrent) return false;
+    }
+    if (db.prepare("SELECT 1 FROM work_runs WHERE id = ?").get(run.id)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    writeWorkRun(db, run);
+    db.prepare("UPDATE work_items SET status = 'running', updated_at = ? WHERE org_id = ? AND id = ?")
+      .run(run.updated_at, run.org_id, run.work_item_id);
+    return true;
+  }).immediate();
+}
 
 export async function listWorkDeliveries(db: Database.Database, orgId: string): Promise<WorkDelivery[]> {
     const rows = db
@@ -501,6 +536,7 @@ interface WorkRunRow {
   external_run_id: string | null;
   agent_thread_id: string | null;
   status: WorkRun["status"];
+  start_state: WorkRun["start_state"] | null;
   result_json: string | null;
   created_at: string;
   updated_at: string;
@@ -579,6 +615,7 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     external_run_id: row.external_run_id ?? undefined,
     agent_thread_id: row.agent_thread_id ?? undefined,
     status: row.status,
+    start_state: row.start_state ?? undefined,
     result: row.result_json
       ? (JSON.parse(row.result_json) as WorkRun["result"])
       : undefined,

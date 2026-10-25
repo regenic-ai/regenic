@@ -1,3 +1,12 @@
+import { randomUUID } from "node:crypto";
+import {
+  DEFAULT_BOOTSTRAP_DUE_WORK_CLAIM_LIMIT,
+  DEFAULT_DUE_WORK_CLAIM_LIMIT,
+  DueWorkClaimLimiter,
+  InstallationQuotaBook,
+  MAX_DUE_WORK_CLAIM_LIMIT,
+  MIN_DUE_WORK_CLAIM_LIMIT,
+} from "@regenic/domain";
 import type {
   ChannelDriverRegistry,
   ConnectorInstallation,
@@ -5,13 +14,11 @@ import type {
   ConnectorRuntimeStore,
   ConnectorSecrets,
   ConnectorStream,
-  DueWorkClaimLimiter,
-  InstallationQuotaBook,
 } from "@regenic/domain";
 import type { KernelRuntimeService } from "./kernel-runtime.service";
 import type { PersonalInboxService } from "./personal-inbox.service";
 import type { PersonalRuntimeService } from "./personal-runtime.service";
-import type { CreatedConversationView } from "./personal-connector.service";
+import type { CreatedConversationView } from "./personal-connector-types";
 
 export interface ConnectorFocusSlot {
   threadId: string;
@@ -21,15 +28,14 @@ export interface ConnectorFocusSlot {
   promise: Promise<void>;
 }
 
-/**
- * Mutable personal-connector state. Timers, leases, and these fields stay on
- * PersonalConnectorService; extracted functions borrow the same instance.
- */
+/** One explicitly owned coordination state per PersonalConnectorService instance. */
 export interface ConnectorState {
-  readonly runtime: PersonalRuntimeService;
-  readonly inbox: PersonalInboxService;
+  readonly runtime: Pick<PersonalRuntimeService, "orgId" | "requireHost">;
+  readonly inbox: Pick<PersonalInboxService,
+    "listInbox" | "publishInboxDigest" | "publishThreadUpdated" | "touchInboxDigest">;
   readonly drivers: ChannelDriverRegistry;
-  readonly kernelRuntime: KernelRuntimeService;
+  readonly kernelRuntime: Pick<KernelRuntimeService,
+    "clearInstallationSnapshots" | "pressureView" | "publishInstallAttempt" | "publishSyncSnapshot" | "shouldDeferHistorySync">;
   readonly quota: InstallationQuotaBook;
   readonly streamCatchingUp: Set<string>;
   readonly streamMeta: Map<
@@ -70,4 +76,59 @@ export interface ConnectorState {
     installationId: string,
   ): Promise<ConnectorInstallation>;
   installSecrets(): ConnectorSecrets;
+  catchUp(installationId: string): Promise<void>;
 }
+
+type ConnectorDependencies = Pick<ConnectorState,
+  "runtime" | "inbox" | "drivers" | "kernelRuntime" | "exclusiveStream" |
+  "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" | "installSecrets" | "catchUp"
+> & { maintenanceHeld(): boolean };
+
+export function createConnectorState(input: ConnectorDependencies): ConnectorState {
+  const { maintenanceHeld, ...dependencies } = input;
+  return {
+    ...dependencies,
+    get maintenanceHold() {
+      return maintenanceHeld();
+    },
+    quota: new InstallationQuotaBook(),
+    streamCatchingUp: new Set(),
+    streamMeta: new Map(),
+    streamPulling: new Set(),
+    streamPullingHistory: new Set(),
+    focusSlot: null,
+    focusGeneration: 0,
+    hydrateCooldown: new Map(),
+    liveKickCooldown: new Map(),
+    dueWorkOwner: `personal-due:${randomUUID()}`,
+    dueWorkLimiters: {
+      steady: new DueWorkClaimLimiter(
+        MIN_DUE_WORK_CLAIM_LIMIT, MAX_DUE_WORK_CLAIM_LIMIT, DEFAULT_DUE_WORK_CLAIM_LIMIT,
+      ),
+      bootstrap: new DueWorkClaimLimiter(
+        MIN_DUE_WORK_CLAIM_LIMIT, MAX_DUE_WORK_CLAIM_LIMIT, DEFAULT_BOOTSTRAP_DUE_WORK_CLAIM_LIMIT,
+      ),
+    },
+    creatingByClient: new Map(),
+    catalogSizeByInstall: new Map(),
+  };
+}
+
+export type ConnectorConversationState = Pick<ConnectorState,
+  "runtime" | "drivers" | "quota" | "creatingByClient" | "catchUp">;
+export type ConnectorInstallState = Pick<ConnectorState,
+  "runtime" | "drivers" | "kernelRuntime" | "requireInstallation" | "installSecrets" | "catchUp">;
+export type ConnectorEgressState = Pick<ConnectorState,
+  "runtime" | "drivers" | "requireInstallation" | "installSecrets">;
+export type ConnectorWebhookState = Pick<ConnectorState,
+  "runtime" | "drivers" | "inbox" | "maintenanceHold" | "quota" | "requireInstallation">;
+export type ConnectorDueWorkState = Pick<ConnectorState,
+  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "quota" | "maintenanceHold" |
+  "catalogSizeByInstall" | "dueWorkLimiters" | "dueWorkOwner" | "exclusiveStream" |
+  "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" |
+  "streamCatchingUp" | "streamPulling" | "streamPullingHistory">;
+export type ConnectorLiveState = Pick<ConnectorState,
+  "runtime" | "drivers" | "inbox" | "quota" | "maintenanceHold" | "exclusiveStream" |
+  "focusSlot" | "focusGeneration" | "hydrateCooldown" | "liveKickCooldown" |
+  "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" |
+  "streamMeta" | "streamPulling" | "streamPullingHistory">;

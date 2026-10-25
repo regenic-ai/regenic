@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 49;
+export const PG_SCHEMA_VERSION = 53;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -519,6 +519,35 @@ CREATE INDEX IF NOT EXISTS customer_service_tasks_status_idx
   ON customer_service_tasks (org_id, status, updated_at DESC, id DESC);
 `,
   },
+  {
+    version: 50,
+    sql: `
+ALTER TABLE outbound_attempts ADD COLUMN recovery_hash TEXT;
+ALTER TABLE outbound_attempts ADD COLUMN receipt_json JSONB;
+`,
+  },
+  {
+    version: 51,
+    sql: `ALTER TABLE work_runs ADD COLUMN start_state TEXT
+      CHECK (start_state IN ('pending', 'submitted', 'uncertain'));`,
+  },
+  {
+    version: 52,
+    sql: `CREATE TABLE context_artifact_segments (
+      org_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      PRIMARY KEY (org_id, content_hash)
+    );`,
+  },
+  {
+    version: 53,
+    sql: `
+ALTER TABLE outbound_attempts DROP CONSTRAINT outbound_attempts_status_check;
+ALTER TABLE outbound_attempts ADD CONSTRAINT outbound_attempts_status_check
+  CHECK (status IN ('pending', 'accepted', 'sent', 'failed', 'rejected'));
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -717,6 +746,7 @@ CREATE TABLE work_runs (
   external_run_id TEXT,
   agent_thread_id TEXT,
   status TEXT NOT NULL,
+  start_state TEXT CHECK (start_state IN ('pending', 'submitted', 'uncertain')),
   result_json JSONB,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
@@ -813,6 +843,13 @@ CREATE INDEX connector_sync_state_gap_idx
   ON connector_sync_state (
     installation_id, phase, stream_key, generation, media_pending, idle_until
   );
+
+CREATE TABLE context_artifact_segments (
+  org_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  PRIMARY KEY (org_id, content_hash)
+);
 
 CREATE TABLE context_artifacts (
   org_id TEXT NOT NULL,
@@ -1085,9 +1122,11 @@ CREATE TABLE outbound_attempts (
   thread_id TEXT NOT NULL,
   event_id TEXT REFERENCES events(id),
   status TEXT NOT NULL CHECK (
-    status IN ('pending', 'accepted', 'sent', 'failed')
+    status IN ('pending', 'accepted', 'sent', 'failed', 'rejected')
   ),
   channel_message_ids JSONB,
+  recovery_hash TEXT,
+  receipt_json JSONB,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (org_id, client_request_id)

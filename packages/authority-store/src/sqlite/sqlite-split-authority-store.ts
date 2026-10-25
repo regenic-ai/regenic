@@ -15,6 +15,7 @@ import type {
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextAuthorityRead,
+  ContextAuthorityReadQuery,
   ContextAuthorityReader,
   ContextBundle,
   ContextBundleLookup,
@@ -65,6 +66,7 @@ import type {
   IngestQuarantine,
   NewConnectorInstallation,
   NewEvent,
+  NewOutboundAttempt,
   NewIngestAttempt,
   OutboundAttemptPut,
   OutboundAttemptRecord,
@@ -88,6 +90,7 @@ import type {
   WorkDelivery,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkStore,
   ExecutorInstallation,
   ExecutorStore,
@@ -178,6 +181,10 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getOutboundAttempt", [orgId, clientRequestId]);
   }
 
+  async claimOutboundAttempt(input: NewOutboundAttempt): Promise<boolean> {
+    return this.writer.call("claimOutboundAttempt", [input]);
+  }
+
   async putOutboundAttempt(
     input: OutboundAttemptPut,
   ): Promise<OutboundAttemptRecord> {
@@ -195,8 +202,8 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listEvents", [orgId, query]);
   }
 
-  async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
-    return this.reader.call("openContextRead", [orgId]);
+  async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    return this.reader.call("openContextRead", [orgId, query]);
   }
 
   async openContextReadForThread(
@@ -789,6 +796,10 @@ export class SqliteSplitAuthorityStore
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return this.writer.call("putWorkRun", [run]);
+  }
+
+  async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
+    return this.writer.call("claimWorkRunStart", [input]);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

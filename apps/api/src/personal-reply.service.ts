@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  SendNotAcceptedError,
   driverCanReply,
   INGEST_SCHEMA_VERSION,
   channelRecord,
@@ -13,6 +14,7 @@ import {
   toReplyParts,
   type ContentPart,
   type DeliveryReceipt,
+  type IngestBatch,
 } from "@regenic/domain";
 import type { Host } from "@regenic/plugin-host";
 import {
@@ -26,6 +28,7 @@ import {
 } from "./personal-inbox.service";
 import { conversationStampForReply } from "./personal-reply-stamp";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { loadReplyRecovery, saveReplyRecovery } from "./personal-reply-recovery";
 
 export {
   conversationStampForReply,
@@ -82,7 +85,10 @@ interface PreparedAttachment {
 
 @Injectable()
 export class PersonalReplyService {
-  private readonly sendingByClient = new Map<string, Promise<ReplyView>>();
+  private readonly sendingByClient = new Map<
+    string,
+    { threadId: string; promise: Promise<ReplyView> }
+  >();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -96,20 +102,27 @@ export class PersonalReplyService {
   ) {}
 
   async send(input: ReplyInput): Promise<ReplyView> {
-    const clientRequestId = input.client_request_id?.trim() || undefined;
-    if (!clientRequestId) {
-      return this.sendOnce(input, undefined);
-    }
+    const clientRequestId = input.client_request_id?.trim() || randomUUID();
     const key = this.clientKey(clientRequestId);
     const inflight = this.sendingByClient.get(key);
     if (inflight) {
-      return inflight;
+      if (inflight.threadId !== input.thread_id?.trim()) {
+        throw new PersonalConnectorError(
+          "invalid_reply",
+          "client_request_id was already used for another conversation",
+          409,
+        );
+      }
+      return inflight.promise;
     }
     // Register before any await so concurrent retries coalesce on this promise.
     const run = this.runIdempotentSend(input, clientRequestId).finally(() => {
       this.sendingByClient.delete(key);
     });
-    this.sendingByClient.set(key, run);
+    this.sendingByClient.set(key, {
+      threadId: input.thread_id?.trim() ?? "",
+      promise: run,
+    });
     return run;
   }
 
@@ -126,7 +139,7 @@ export class PersonalReplyService {
 
   private async sendOnce(
     input: ReplyInput,
-    clientRequestId: string | undefined,
+    clientRequestId: string,
   ): Promise<ReplyView> {
     const threadId = input.thread_id?.trim() ?? "";
     let thread;
@@ -188,75 +201,25 @@ export class PersonalReplyService {
       ),
     ];
 
-    const claimNow = new Date().toISOString();
-    if (clientRequestId) {
-      await host.get("authority").putOutboundAttempt({
-        org_id: this.runtime.orgId(),
-        client_request_id: clientRequestId,
-        thread_id: threadId,
-        status: "pending",
-        now: claimNow,
-      });
-    }
-
-    let receipt: DeliveryReceipt;
-    let outboundId: ReturnType<typeof requireReplyPorts>["outboundId"];
-    try {
-      const ports = requireReplyPorts(driver);
-      outboundId = ports.outboundId;
-      const egress = await ports.bindEgress(
-        installation,
-        thread,
-        asConnectorHost(host),
-        process.env,
-      );
-      receipt = await egress.send({
-        installation_id: installation.id,
-        target: { scope_id: thread.target },
-        content,
-        ...(clientRequestId ? { idempotency_key: clientRequestId } : {}),
-      });
-    } catch (error) {
-      if (clientRequestId) {
-        await host
-          .get("authority")
-          .putOutboundAttempt({
-            org_id: this.runtime.orgId(),
-            client_request_id: clientRequestId,
-            thread_id: threadId,
-            status: "failed",
-            now: new Date().toISOString(),
-          })
-          .catch(() => undefined);
-      }
+    const ports = requireReplyPorts(driver);
+    const egress = await ports.bindEgress(
+      installation,
+      thread,
+      asConnectorHost(host),
+      process.env,
+    ).catch((error) => {
       throw wrapDriverError(error, "send_failed");
-    }
-
-    const channelIds = channelMessageIds(receipt);
-    const acceptedAt = new Date().toISOString();
-    if (clientRequestId) {
-      // Persist channel ids before ingest so a crash cannot double-send on retry.
-      await host.get("authority").putOutboundAttempt({
-        org_id: this.runtime.orgId(),
-        client_request_id: clientRequestId,
-        thread_id: threadId,
-        status: "accepted",
-        channel_message_ids: channelIds,
-        now: acceptedAt,
-      });
-    }
-
-    const now = acceptedAt;
+    });
+    const now = new Date().toISOString();
     const stamp = await this.conversationStamp(thread.target, threadId, quoted, {
       installationId: installation.id,
       host,
     });
-    const primaryExternalId = outboundId(thread, receipt);
     const record = channelRecord({
       channel: driver.source,
       kind: "user",
       direction: "outbound",
-      external_id: primaryExternalId,
+      external_id: `reply:${clientRequestId}`,
       occurred_at: now,
       actor_id: "local-owner",
       scope_id: thread.target,
@@ -276,14 +239,116 @@ export class PersonalReplyService {
       }),
     });
     record.weight_hints = { importance: 1 };
-    const ingested = await host.get("ingest").ingest({
+    const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: installation.id,
       org_id: this.runtime.orgId(),
-      delivery_id: `reply:${clientRequestId ?? randomUUID()}`,
+      delivery_id: `reply:${clientRequestId}`,
       received_at: now,
       records: [record],
+    };
+    const recoveryHash = await saveReplyRecovery(host.get("blobs"), batch);
+    const claimed = await host.get("authority").claimOutboundAttempt({
+      org_id: this.runtime.orgId(),
+      client_request_id: clientRequestId,
+      thread_id: threadId,
+      recovery_hash: recoveryHash,
+      now,
     });
+    if (!claimed) {
+      const prior = await this.replayPriorAttempt(clientRequestId, threadId);
+      if (prior) {
+        return prior;
+      }
+      throw new PersonalConnectorError("send_in_progress", "Reply is already claimed", 409);
+    }
+
+    let receipt: DeliveryReceipt;
+    try {
+      receipt = await egress.send({
+        installation_id: installation.id,
+        target: { scope_id: thread.target },
+        content,
+        idempotency_key: clientRequestId,
+      });
+      if (!receipt.accepted) {
+        throw new Error("Channel did not confirm acceptance");
+      }
+    } catch (error) {
+      if (error instanceof SendNotAcceptedError) {
+        try {
+          await host.get("authority").putOutboundAttempt({
+            org_id: this.runtime.orgId(),
+            client_request_id: clientRequestId,
+            thread_id: threadId,
+            status: "rejected",
+            recovery_hash: recoveryHash,
+            now: new Date().toISOString(),
+          });
+        } catch (persistenceError) {
+          console.error("reply rejection persistence failed", {
+            client_request_id: clientRequestId,
+            error: persistenceError,
+          });
+          throw new PersonalConnectorError(
+            "send_rejection_pending",
+            "The channel rejected the reply, but retry state could not be saved. Do not resend automatically.",
+            503,
+          );
+        }
+        throw wrapDriverError(error, "send_failed");
+      }
+      // A rejected promise can mean a lost response after delivery. Keep the
+      // durable claim: neither a retry nor another replica may send it again.
+      console.error("reply delivery outcome unknown", {
+        client_request_id: clientRequestId,
+        error,
+      });
+      throw new PersonalConnectorError(
+        "send_uncertain",
+        `Delivery could not be confirmed. Check the conversation before sending again (request ${clientRequestId}).`,
+        409,
+      );
+    }
+
+    try {
+      record.external_id = ports.outboundId(thread, receipt);
+      const deliveredHash = await saveReplyRecovery(host.get("blobs"), batch);
+      await host.get("authority").putOutboundAttempt({
+        org_id: this.runtime.orgId(),
+        client_request_id: clientRequestId,
+        thread_id: threadId,
+        status: "accepted",
+        recovery_hash: deliveredHash,
+        receipt,
+        channel_message_ids: channelMessageIds(receipt),
+        now: new Date().toISOString(),
+      });
+      return await this.storeDeliveredReply(host, batch, receipt, threadId, clientRequestId);
+    } catch (error) {
+      console.error("delivered reply persistence failed", {
+        client_request_id: clientRequestId,
+        error,
+      });
+      throw new PersonalConnectorError(
+        "send_recovery_pending",
+        `Reply was delivered but local storage is incomplete. Retry the same request for recovery; do not send a new request (request ${clientRequestId}).`,
+        503,
+      );
+    }
+  }
+
+  private async storeDeliveredReply(
+    host: Host,
+    batch: IngestBatch,
+    receipt: DeliveryReceipt,
+    threadId: string,
+    clientRequestId: string,
+  ): Promise<ReplyView> {
+    const record = batch.records[0]!;
+    const thread = parseConversationThread(threadId);
+    const channelIds = channelMessageIds(receipt);
+    const ingested = await host.get("ingest").ingest(batch);
     if (!ingested.valid) {
       throw new PersonalConnectorError(
         "send_failed",
@@ -302,29 +367,27 @@ export class PersonalReplyService {
 
     await this.bindChannelAliases({
       host,
-      source: driver.source,
+      source: record.source,
       threadTarget: thread.target,
       eventId,
-      primaryExternalId,
+      primaryExternalId: record.external_id,
       channelIds,
     });
 
-    if (clientRequestId) {
-      await host.get("authority").putOutboundAttempt({
-        org_id: this.runtime.orgId(),
-        client_request_id: clientRequestId,
-        thread_id: threadId,
-        event_id: eventId,
-        status: "sent",
-        channel_message_ids: channelIds,
-        now: new Date().toISOString(),
-      });
-    }
+    await host.get("authority").putOutboundAttempt({
+      org_id: this.runtime.orgId(),
+      client_request_id: clientRequestId,
+      thread_id: threadId,
+      event_id: eventId,
+      status: "sent",
+      channel_message_ids: channelIds,
+      now: new Date().toISOString(),
+    });
 
     // Follow asynchronously — do not block the reply HTTP response on pull.
     void this.connectors
-      .followThread(installation.id, thread)
-      .catch(() => undefined);
+      .followThread(batch.connector_id, thread)
+      .catch((error) => console.error("reply follow-up sync failed", error));
 
     const item = await this.inbox.getInboxItem(eventId);
     if (!item) {
@@ -336,10 +399,10 @@ export class PersonalReplyService {
     }
     return {
       accepted: true,
-      source: driver.source,
+      source: record.source,
       thread_id: threadId,
       rpc_id: receipt.rpc_id,
-      ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
+      client_request_id: clientRequestId,
       item,
     };
   }
@@ -362,27 +425,44 @@ export class PersonalReplyService {
         409,
       );
     }
-    if (prior.status === "failed") {
-      // Allow a conscious client retry with the same key after a hard failure.
+    if (prior.status === "rejected") {
+      if (prior.event_id != null || prior.receipt != null || prior.channel_message_ids != null) {
+        throw new PersonalConnectorError(
+          "send_recovery_unavailable",
+          "A rejected reply has conflicting delivery evidence. Check the conversation; do not resend.",
+          409,
+        );
+      }
       return null;
     }
-    if (prior.status === "pending") {
+    if (prior.status === "failed" || prior.status === "pending") {
       throw new PersonalConnectorError(
-        "send_in_progress",
-        "Reply with this client_request_id is still in progress",
+        "send_uncertain",
+        "Delivery is in progress or its outcome is unknown. Check the conversation before sending again.",
         409,
       );
     }
     if (prior.status === "accepted") {
-      // Channel already got the message; never egress again.
-      throw new PersonalConnectorError(
-        "send_in_progress",
-        "Reply was already delivered to the channel; refresh the conversation",
-        409,
+      if (!prior.recovery_hash || !prior.receipt?.accepted) {
+        throw new PersonalConnectorError(
+          "send_recovery_unavailable",
+          "Reply was delivered, but this older attempt has no recovery payload. Refresh the conversation; do not resend.",
+          409,
+        );
+      }
+      const batch = await loadReplyRecovery(
+        host.get("blobs"),
+        prior.recovery_hash,
+        this.runtime.orgId(),
       );
+      return this.storeDeliveredReply(host, batch, prior.receipt, prior.thread_id, clientRequestId);
     }
     if (prior.status !== "sent" || !prior.event_id) {
-      return null;
+      throw new PersonalConnectorError(
+        "send_recovery_unavailable",
+        "Reply attempt has no stored event. Check the conversation; do not resend.",
+        409,
+      );
     }
     const item = await this.inbox.getInboxItem(prior.event_id);
     if (!item) {
@@ -398,6 +478,7 @@ export class PersonalReplyService {
       source: item.channel,
       thread_id: prior.thread_id,
       client_request_id: clientRequestId,
+      rpc_id: prior.receipt?.rpc_id,
       item,
     };
   }

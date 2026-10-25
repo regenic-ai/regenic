@@ -17,14 +17,11 @@ import {
   toInstallationView,
   type EngineInstallationView,
 } from "./personal-connector-view";
-import type { ConnectorState } from "./personal-connector-state";
-import type { ConnectorInstallInput } from "./personal-connector.service";
+import type { ConnectorInstallState as ConnectorState } from "./personal-connector-state";
+import type { ConnectorInstallInput } from "./personal-connector-types";
 import {
   wrapDriverError,
 } from "./personal-connector-poll";
-import {
-  catchUp,
-} from "./personal-connector-due-work";
 
 export async function install(state: ConnectorState, input: ConnectorInstallInput): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
@@ -59,7 +56,7 @@ export async function install(state: ConnectorState, input: ConnectorInstallInpu
       stored: drafted.config ?? {},
     }),
   });
-  void catchUp(state, created.id);
+  void state.catchUp(created.id);
   return viewWithPairingCode(state, store, created);
 }
 
@@ -110,7 +107,7 @@ export async function updateConfig(
     );
   }
   if (updated.status === "enabled") {
-    void catchUp(state, updated.id);
+    void state.catchUp(updated.id);
   }
   return viewOf(state, store, updated);
 }
@@ -147,7 +144,7 @@ export async function setStatus(
     );
   }
   if (status === "enabled") {
-    void catchUp(state, updated.id);
+    void state.catchUp(updated.id);
   }
   return viewOf(state, store, updated);
 }

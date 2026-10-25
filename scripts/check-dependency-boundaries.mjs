@@ -10,6 +10,16 @@ for (const relative of coreApps) {
   scan(relative, (file, source) => {
     for (const spec of importedSpecs(source)) {
       if (
+        relative === "apps/api/src" &&
+        path.basename(file).startsWith("personal-connector-") &&
+        path.resolve(path.dirname(file), spec).replace(/\.(?:ts|js)$/, "") ===
+          path.join(root, "apps/api/src/personal-connector.service")
+      ) {
+        violations.push(
+          `${relativePath(file)}: Connector helper imports its owning service; use leaf types or explicit state capabilities`,
+        );
+      }
+      if (
         /^@regenic\/.+-connector$/.test(spec) ||
         spec === "@regenic/whatsapp-personal"
       ) {

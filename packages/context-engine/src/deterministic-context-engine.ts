@@ -28,6 +28,7 @@ import {
   type ContextConflict,
   type ContextEngine,
   type ContextEvidenceSource,
+  type ContextEventMaterializer,
   type ContextPolicyEvaluator,
   type ContextReplayRequest,
   type ContextRequest,
@@ -154,20 +155,53 @@ export class DeterministicContextEngine implements ContextEngine {
       stableRequest,
       sourceRead.recorded_at,
     );
-    const lifecycleEvents = await this.materialize(lifecycleMetadata);
+    const materialized = new Map<string, AuthorizedContextSourceEvent>();
+    const loading = new Map<string, Promise<AuthorizedContextSourceEvent>>();
+    const metadataById = new Map(lifecycleMetadata.map((source) => [source.event.event_id, source]));
+    const materialize: ContextEventMaterializer = async (eventIds) => {
+      if (eventIds.some((id) => !metadataById.has(id))) {
+        throw new ContextEngineError("source_boundary", "Retriever requested unauthorized Event material");
+      }
+      const missing = [...new Set(eventIds)].filter((id) => !loading.has(id));
+      if (missing.length) {
+        const batch = this.materialize(missing.map((id) => metadataById.get(id)!)).then((events) => {
+          for (const source of events) {
+            materialized.set(source.event.event_id, source);
+          }
+          return new Map(events.map((source) => [source.event.event_id, source]));
+        });
+        for (const id of missing) {
+          loading.set(id, batch.then((events) => events.get(id)!));
+        }
+      }
+      return clone(await Promise.all(eventIds.map((id) => loading.get(id)!)));
+    };
+    const allEventIds = lifecycleMetadata.map((source) => source.event.event_id);
+    const policyEvents = this.policy.metadata_only
+      ? lifecycleMetadata
+      : await materialize(allEventIds);
     const plan = {
       request: stableRequest,
       read_epoch: authorizedReadEpoch,
       recorded_at: sourceRead.recorded_at,
       principal_policy_hash: policyHash,
-      events: lifecycleEvents,
+      events: policyEvents,
     };
     const protectedEventIds = await this.protectedEventIds(plan);
     const retrievers = this.supportingRetrievers(stableRequest);
-    const retrievalRuns = await Promise.all(retrievers.map(async (active) => ({
-      active,
-      result: normalizeRetrievalResult(await active.retriever.retrieve(clone(plan))),
-    })));
+    const retrievalRuns = await Promise.all(retrievers.map(async (active) => {
+      const events = active.capabilities.lazy_materialization
+        ? lifecycleMetadata
+        : await materialize(allEventIds);
+      return {
+        active,
+        result: normalizeRetrievalResult(await active.retriever.retrieve(
+          clone({ ...plan, events }),
+          materialize,
+        )),
+      };
+    }));
+    const lifecycleEvents = lifecycleMetadata.map((source) => materialized.get(source.event.event_id) ?? source);
     const retrievalTrace = retrievalRuns.flatMap((run) => run.result.trace ? [run.result.trace] : []);
     if (retrievalTrace.length) {
       const latest = await this.source.openRead(clone(stableRequest));

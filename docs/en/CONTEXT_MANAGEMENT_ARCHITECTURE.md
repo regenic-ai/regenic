@@ -52,6 +52,29 @@ The authorized candidate universe is computed before lexical, vector, graph, or
 model ranking. Hidden resources do not participate in scores, result counts,
 cache keys, or diagnostics visible to the caller.
 
+Authority reads push source, conversation, actor, time, and anchor restrictions
+into lifecycle selection. A matching identity brings its entire revision and
+tombstone chain into the read; filtering individual revisions must not resurrect
+an old version or hide a later permission change. Policy checks still precede
+index lookup, and index results remain bound to authorized Event/hash pairs.
+
+The personal policy declares `metadata_only`; built-in retrievers declare
+`lazy_materialization`. The engine then shares a request-local materializer:
+lexical retrieval reads only matches and uncovered keys, vector retrieval adds
+validated semantic hits, and deterministic fallback filters metadata before
+opening text. Returned metadata and candidate text are checked against the
+authorized source. Policies or retrievers without these declarations retain
+eager materialization for compatibility.
+
+Lexical writes and authorized index lookups have no 10,000-key ceiling.
+The hybrid profile is `personal-hybrid-rrf-v3`; existing snapshots retain their
+original profile and v2 scoring and admission rules are unchanged.
+Lexical SQL remains chunked; vector retrieval retains the global top-k rather
+than truncating the authorization set. Retrieval trace counts cover the full
+authorized universe independently of bundle item budgets. Broad, unfiltered
+queries still enumerate authorized metadata, and exact vector search still
+scans covered vectors; this is not an ANN index or constant-time retrieval.
+
 ### 2.4 Snapshots are immutable
 
 A `ContextSnapshot` records an exact selection at a fixed read epoch. Changes to
@@ -562,9 +585,29 @@ The D0 `thread-summary-deterministic` projector requires no model. At a fixed
 authority read epoch it groups evidence by thread, resolves each source
 lifecycle to its declared head, uses revised text, excludes tombstoned text,
 and emits a structured `thread_summary`. Its ID, input hash, body hash,
-Evidence references, and scope union are deterministic. The canonical summary
-body is content-addressed in Blob storage; the Artifact remains a replaceable,
-evidence-bound proposal rather than authority.
+Evidence references, and scope union are deterministic. The Artifact remains
+a replaceable, evidence-bound proposal rather than authority.
+
+`thread-summary-deterministic-v2` preserves the complete transcript, not a
+length-limited excerpt. SQLite and PostgreSQL persist its body, evidence list,
+and scope union as organization-scoped, hash-verified immutable JSON segments.
+Arrays use fixed-position 32-way trees: appending messages reuses unchanged
+segments and writes updated leaves and ancestors instead of another complete
+transcript and growing manifest. `getArtifact` and `listArtifacts` restore the
+original logical structure; preview queries do not need to load the segments.
+With `body_storage: "artifact"`, `body_hash` still verifies the canonical body,
+but retrieval reconstructs it from the manifest rather than a duplicate Blob.
+
+API and worker projections use `continuous-v2`, separate from the old algorithm's
+checkpoints. Legacy Blob-backed manifests and existing snapshots remain readable
+and are not rewritten or deleted; this stops new duplication, not historical
+space reclamation. Old snapshots replay their pinned bundles unchanged. Reads
+and projection hashing still materialize the complete logical transcript;
+editing earlier messages can replace additional reference segments. This is a
+persistent-storage improvement, not a claim of constant-time projection.
+Upgrade API and worker processes sharing the authority database together:
+backward reading of legacy data does not mean older binaries can read the new
+shared manifests or reopen the upgraded schema.
 
 ### 8.2 Personal lexical index
 
@@ -601,7 +644,8 @@ the authority transaction accepts the replacement and marks the previous
 Artifact superseded together. Terminal Artifacts cannot transition again.
 
 Only accepted `thread_summary` Artifacts are eligible for retrieval. The
-retriever loads the canonical body through `body_hash`, verifies it matches the
+retriever loads the legacy Blob body or restores an artifact-backed body,
+verifies its `body_hash` and that it matches the
 immutable manifest, requires every evidence reference in the authorized source
 view, and requires an exact evidence-scope union. Failure to verify any of
 these conditions withholds the Artifact rather than falling back to a prior

@@ -9,6 +9,7 @@ import {
   recipeWantsWriteBack,
   shouldWriteBackHandle,
   workStatusFromHandle,
+  workRunNeedsStartConfirmation,
   type ExecutorContext,
   type ExecutorRunHandle,
   type Recipe,
@@ -19,6 +20,7 @@ import {
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import type { PersonalWorkWait } from "./personal-work-wait";
+import { isWorkTickShutdown } from "./personal-work-support";
 import {
   handleFromInboxEnd,
   isStaleWork,
@@ -83,7 +85,19 @@ export class PersonalWorkSupervise {
       if (!recipe || !run) {
         continue;
       }
-      await this.refreshOne(item, recipe, run);
+      try {
+        await this.refreshOne(item, recipe, run);
+      } catch (error) {
+        if (isWorkTickShutdown(error)) {
+          throw error;
+        }
+        console.error("personal work run refresh failed", {
+          org_id: orgId,
+          work_item_id: item.id,
+          run_id: run.id,
+          executor_type: run.executor_type,
+        }, error);
+      }
     }
   }
 
@@ -92,6 +106,9 @@ export class PersonalWorkSupervise {
     recipe: Recipe,
     run: WorkRun,
   ): Promise<void> {
+    if (workRunNeedsStartConfirmation(run)) {
+      return;
+    }
     const host = this.runtime.requireHost();
     const executor = host.get("executors").get(run.executor_type);
     if (!executor) {
@@ -238,6 +255,7 @@ export class PersonalWorkSupervise {
     const now = new Date().toISOString();
     const nextRun: WorkRun = {
       ...run,
+      start_state: undefined,
       external_run_id: handle.external_run_id,
       agent_thread_id: handle.agent_thread_id ?? run.agent_thread_id,
       status:

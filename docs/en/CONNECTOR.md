@@ -174,6 +174,16 @@ does not spawn a child process by default.
 - A stdio out-of-process host is for untrusted third-party plugins, not
   this phase.
 
+Personal API orchestration has a separate, compile-time capability boundary.
+Each `PersonalConnectorService` constructs one owned `ConnectorState`; helpers
+never receive the service itself. Installation, egress, conversation creation,
+webhooks, live pulls, and due-work helpers declare only their required state
+capabilities. Installation and conversation recovery request catch-up through
+an explicit callback, not scheduler internals. Maintenance is read live rather
+than copied into a context snapshot; timers and stream locks remain private to
+the service. Shared DTOs live in `personal-connector-types.ts`, and the dependency
+boundary check rejects helper imports back into the owning service.
+
 ## Message format
 
 A connector stops at L0: it translates one channel's wire. What it hands over is the L1 envelope (`IngestRecord`: identity, time, author, body, idempotency) and a closed L2 `record_class` (`utterance` / `task` / `status` / `prompt`, mapped from `type`). Speaker (L3) is written only on `utterance`. Thread facet (L4) is a kernel projection. A WorkItem (L5) is opened by policy. Execution (L6) is a separate plugin. See [Message orchestration · Layers](MESSAGE_ORCHESTRATION.md) and [RFC 0009](rfcs/0009-work-orchestration.md). Do not label an install as human-chat or agent.
@@ -420,6 +430,42 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 
 `SendIntent.content` is `ContentPart[]` (`body` plus attachments). The
 adapter writes that envelope back to the same source and thread.
+
+Reply clients should generate one `client_request_id` per send and reuse it on
+retries. Before calling the channel, the API persists an atomic claim: only one
+caller can send a given organization/request key. If omitted, a key is generated
+and returned on success; clients that must survive response loss need to provide
+their own key in advance.
+Network errors, unconfirmed acceptance, and legacy `failed` / `pending` attempts
+return `send_uncertain` and are never automatically reclaimed for another send.
+Check the channel before sending a new request.
+An adapter may throw `SendNotAcceptedError` only when the entire send was rejected
+before any message was accepted or queued. Error codes such as `throttled` alone
+are not proof, especially after a partial multipart send. The API durably records
+these attempts as `rejected` and returns the original error (for example, 429).
+Same-key, same-thread retries atomically reclaim only this explicit state; old
+`failed` attempts remain uncertain. WhatsApp Web live uses this path for queue
+validation, capacity, and rate-limit rejections before enqueue. A queue rejection
+describes only that enqueue, not earlier operations in a multipart send.
+If recording the rejection fails, the API returns `send_rejection_pending` (503)
+and does not authorize an automatic resend. SQLite schema 52 / PostgreSQL schema
+53 add this state without reclassifying existing records; upgrade API and worker
+together, since older binaries cannot open the new schema.
+After confirmed acceptance, the API persists the receipt and recovery material
+containing the original body and attachments. Same-key retries then repair only
+local ingestion and message aliases, using the original content without egress.
+Initial local persistence failures return `send_recovery_pending` (503); reuse
+the original key for recovery rather than start a new send.
+Legacy `accepted` attempts without recovery material return
+`send_recovery_unavailable`; refresh the channel rather than resend.
+A crash after channel acceptance but before receipt persistence can still leave
+an uncertain attempt; this is not an end-to-end exactly-once guarantee.
+
+Supporting adapters should derive stable, distinct per-message keys from
+`SendIntent.idempotency_key`. Feishu derives UUIDs from the installation, chat,
+request key, and text/image/file position. Upstream deduplication may be
+time-bounded and other adapters may not support it; a key alone does not make
+retries safe.
 
 ## Catalog
 
