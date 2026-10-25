@@ -117,17 +117,19 @@ describe("owned connector coordination state", () => {
 
   it("preserves per-stream serialization, skip-if-busy and independent streams", async () => {
     const state = createService().connectorState();
-    const gate = Promise.withResolvers();
-    const entered = Promise.withResolvers();
+    let releaseGate;
+    let markEntered;
+    const gate = new Promise((resolve) => { releaseGate = resolve; });
+    const entered = new Promise((resolve) => { markEntered = resolve; });
     const calls = [];
     const first = state.exclusiveStream("install", "one", async () => {
       calls.push("first");
-      entered.resolve();
-      await gate.promise;
+      markEntered();
+      await gate;
       calls.push("released");
       return 1;
     });
-    await entered.promise;
+    await entered;
     const second = state.exclusiveStream("install", "one", async () => {
       calls.push("second");
       return 2;
@@ -139,7 +141,7 @@ describe("owned connector coordination state", () => {
       assert.equal(await state.exclusiveStream("install", "two", async () => 3), 3);
       assert.deepEqual(calls, ["first"]);
     } finally {
-      gate.resolve();
+      releaseGate();
       await Promise.all([first, second]);
     }
     assert.deepEqual(calls, ["first", "released", "second"]);

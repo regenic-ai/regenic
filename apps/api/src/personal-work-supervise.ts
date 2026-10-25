@@ -20,6 +20,7 @@ import {
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import type { PersonalWorkWait } from "./personal-work-wait";
+import { isWorkTickShutdown } from "./personal-work-support";
 import {
   handleFromInboxEnd,
   isStaleWork,
@@ -84,7 +85,19 @@ export class PersonalWorkSupervise {
       if (!recipe || !run) {
         continue;
       }
-      await this.refreshOne(item, recipe, run);
+      try {
+        await this.refreshOne(item, recipe, run);
+      } catch (error) {
+        if (isWorkTickShutdown(error)) {
+          throw error;
+        }
+        console.error("personal work run refresh failed", {
+          org_id: orgId,
+          work_item_id: item.id,
+          run_id: run.id,
+          executor_type: run.executor_type,
+        }, error);
+      }
     }
   }
 

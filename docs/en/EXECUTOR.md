@@ -145,6 +145,9 @@ allowed as `base_url`.
 Network errors, non-2xx responses, and invalid JSON are surfaced as errors, not
 fabricated failed executions. During start they leave an uncertain attempt;
 during status polling they do not turn an existing run into a retryable failure.
+Supervision logs polling errors per run and continues processing other runs.
+The affected run keeps its recorded state and is polled again on the next tick;
+kernel shutdown still stops the sweep.
 Start requests carry the durable `run_id` in the body and `Idempotency-Key`
 header. Remote runtimes may use this identity for deduplication or inspection;
 the kernel does not assume upstream deduplication or retry an uncertain start.

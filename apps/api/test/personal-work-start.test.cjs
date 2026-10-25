@@ -10,6 +10,7 @@ const { PersonalWorkDispatch } = require("../dist/personal-work-dispatch");
 const { PersonalWorkSupervise } = require("../dist/personal-work-supervise");
 const { PersonalWorkService } = require("../dist/personal-work.service");
 const { PersonalExecutorService } = require("../dist/personal-executor.service");
+const { PersonalKernelStoppedError } = require("../dist/personal-runtime.service");
 
 const ORG = "local-owner";
 const code = (expected) => (error) => error.code === expected;
@@ -365,6 +366,99 @@ describe("durable executor start", () => {
     assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).status, "completed");
     assert.equal(requests.filter((request) => request.method === "POST").length, 1);
     assert.equal(requests.filter((request) => request.method === "GET").length, 1);
+  });
+
+  for (const [failure, respond] of [
+    ["network failure", () => { throw new Error("offline"); }],
+    ["HTTP failure", () => new Response(null, { status: 503 })],
+    ["invalid JSON", () => new Response("{")],
+    ["invalid status", () => Response.json({ status: "unknown" })],
+  ]) {
+    it(`isolates HTTP polling ${failure} without starving healthy runs`, async (t) => {
+      const f = await fixture(t, 1);
+      const now = new Date().toISOString();
+      const healthyRecipe = { ...f.recipe, id: "recipe-healthy", can_write_back: true };
+      const failedItem = {
+        ...f.item, status: "running",
+        created_at: new Date(Date.now() - 1_000).toISOString(),
+      };
+      const healthyItem = {
+        ...f.item, id: "work-healthy", recipe_id: healthyRecipe.id,
+        thread_id: "feishu:oc_healthy", unit_key: "task-healthy",
+        status: "running", created_at: now,
+      };
+      const failedRun = {
+        id: "run-offline", org_id: ORG, work_item_id: failedItem.id,
+        recipe_id: f.recipe.id, executor_type: "session",
+        external_run_id: "offline", status: "running",
+        created_at: failedItem.created_at, updated_at: now,
+      };
+      const healthyRun = {
+        ...failedRun, id: "run-healthy", work_item_id: healthyItem.id,
+        recipe_id: healthyRecipe.id, external_run_id: "healthy",
+        created_at: now,
+      };
+      const authority = f.ports.authority;
+      await authority.putRecipe(healthyRecipe);
+      await authority.putWorkItem(failedItem);
+      await authority.putWorkItem(healthyItem);
+      await authority.putWorkRun(failedRun);
+      await authority.putWorkRun(healthyRun);
+      const beforeRun = await authority.getWorkRun(ORG, failedRun.id);
+      const beforeItem = await authority.getWorkItem(ORG, failedItem.id);
+      const calls = { offline: 0, healthy: 0 };
+      f.setExecutor(createHttpTaskExecutor({
+        executor_type: "session", label: "Remote", base_url: "https://agent.example",
+        fetch: async (url, init) => {
+          assert.equal(init.method, "GET");
+          if (String(url).endsWith("/offline")) {
+            calls.offline += 1;
+            return respond();
+          }
+          calls.healthy += 1;
+          return Response.json({
+            external_run_id: "healthy", status: "completed",
+            result: { summary: "remote result" },
+          });
+        },
+      }));
+      const errors = t.mock.method(console, "error", () => {});
+      const supervisor = f.supervise();
+      for (let tick = 0; tick < 3; tick += 1) {
+        await supervisor.refreshRuns();
+      }
+      assert.deepEqual(calls, { offline: 3, healthy: 1 });
+      assert.deepEqual(await authority.getWorkRun(ORG, failedRun.id), beforeRun);
+      assert.deepEqual(await authority.getWorkItem(ORG, failedItem.id), beforeItem);
+      assert.equal(await authority.getWorkDeliveryByItem(ORG, failedItem.id), null);
+      assert.equal((await authority.getWorkRun(ORG, healthyRun.id)).status, "completed");
+      assert.equal((await authority.getWorkItem(ORG, healthyItem.id)).status, "done");
+      const delivery = await authority.getWorkDeliveryByItem(ORG, healthyItem.id);
+      assert.equal(delivery.status, "queued");
+      assert.equal(delivery.write_back, "pending");
+      assert.equal(delivery.payload.summary, "remote result");
+      assert.equal(errors.mock.callCount(), 3);
+      for (const { arguments: args } of errors.mock.calls) {
+        assert.equal(args[0], "personal work run refresh failed");
+        assert.deepEqual(args[1], {
+          org_id: ORG, work_item_id: failedItem.id,
+          run_id: failedRun.id, executor_type: failedRun.executor_type,
+        });
+        assert.ok(args[2] instanceof Error);
+      }
+      await assert.rejects(supervisor.refreshOne(failedItem, f.recipe, failedRun));
+    });
+  }
+
+  it("propagates kernel shutdown instead of continuing supervision", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    const supervisor = f.supervise();
+    const error = new PersonalKernelStoppedError();
+    const errors = t.mock.method(console, "error", () => {});
+    t.mock.method(supervisor, "refreshOne", async () => { throw error; });
+    await assert.rejects(supervisor.refreshRuns(), (actual) => actual === error);
+    assert.equal(errors.mock.callCount(), 0);
   });
 
   for (const [status, itemStatus] of [["completed", "done"], ["failed", "failed"]]) {
