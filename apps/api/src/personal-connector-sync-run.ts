@@ -19,8 +19,8 @@ import {
   preferredThreadId,
 } from "./personal-pull-status";
 
-import type { ConnectorState } from "./personal-connector-state";
-import type { StartSyncRunInput } from "./personal-connector.service";
+import type { ConnectorDueWorkState as ConnectorState } from "./personal-connector-state";
+import type { StartSyncRunInput } from "./personal-connector-types";
 import {
   safeErrorCode,
   LEASE_MS,

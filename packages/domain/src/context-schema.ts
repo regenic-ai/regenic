@@ -23,6 +23,7 @@ import {
   type ContextCandidate,
 } from "./context-candidate";
 import {
+  hashCanonicalContext,
   hashContextArtifactInputs,
   hashContextBundle,
   hashContextSnapshot,
@@ -287,6 +288,7 @@ export const ContextArtifactSchema: z.ZodType<ContextArtifact> = z
     input_refs: z.array(EvidenceReferenceSchema).max(10_000),
     input_hash: contentHashSchema,
     body_hash: contentHashSchema.optional(),
+    body_storage: z.literal("artifact").optional(),
     status: z.enum(CONTEXT_ARTIFACT_STATUSES),
     required_scope_ids: z.array(nonEmptyStringSchema).max(1_000),
     recorded_at: timestampSchema,
@@ -295,6 +297,10 @@ export const ContextArtifactSchema: z.ZodType<ContextArtifact> = z
   })
   .strict()
   .superRefine((artifact, context) => {
+    if (artifact.body_storage === "artifact" && (artifact.attrs === undefined
+      || artifact.body_hash !== hashCanonicalContext(artifact.attrs))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["body_hash"], message: "Artifact-backed body must match its manifest" });
+    }
     if (artifact.status === "accepted" && artifact.input_refs.length === 0) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["input_refs"], message: "Accepted artifacts require evidence" });
     }
@@ -404,8 +410,8 @@ export const ContextRetrievalTraceSchema = z.object({
   mode: z.enum(["lexical", "hybrid"]),
   generation: contentHashSchema.optional(),
   model_revision: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
-  authorized_count: z.number().int().min(0).max(10000),
-  covered_count: z.number().int().min(0).max(10000),
+  authorized_count: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  covered_count: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   routes: z.array(z.object({
     event_id: nonEmptyStringSchema,
     lexical_rank: z.number().int().positive().optional(),
@@ -414,7 +420,7 @@ export const ContextRetrievalTraceSchema = z.object({
     chunk_ordinal: z.number().int().min(0).optional(),
     start: z.number().int().min(0).optional(),
     end: z.number().int().positive().optional(),
-  }).strict()).max(10000),
+  }).strict()),
 }).strict().superRefine((trace, context) => {
   if (trace.covered_count > trace.authorized_count ||
     new Set(trace.routes.map((route) => route.event_id)).size !== trace.routes.length ||

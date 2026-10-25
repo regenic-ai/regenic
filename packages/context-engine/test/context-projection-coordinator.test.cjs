@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   ContextProjectionCoordinator,
+  DeterministicThreadSummaryProjector,
 } = require("../dist");
 const {
   MemoryContextArtifactStore,
@@ -56,6 +57,71 @@ function projector(transform = (artifact) => artifact) {
 }
 
 describe("ContextProjectionCoordinator", () => {
+  it("recovers a committed shared manifest after checkpoint failure without rewriting its original read time", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const registry = new MemoryContextProjectorRegistry();
+    registry.register(new DeterministicThreadSummaryProjector());
+    const read = {
+      ...await authority().openContextRead(),
+      events: [{ ...event, content_media_type: "text/plain" }],
+      lifecycle_heads: [{ source: event.source, external_id: event.external_id, head_event_id: event.id }],
+    };
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead() { return read; },
+    }, artifacts, registry, {
+      async getMany() { return new Map([[HASH, Buffer.from("Full retained source text")]]); },
+      async put() { throw new Error("No transcript Blob should be written"); },
+    });
+    const putCheckpoint = artifacts.putCheckpoint.bind(artifacts);
+    let fail = true;
+    artifacts.putCheckpoint = async (value) => {
+      if (fail) { fail = false; throw new Error("Checkpoint unavailable"); }
+      return putCheckpoint(value);
+    };
+    await assert.rejects(coordinator.project("example-org", "generation-2"), /Checkpoint unavailable/);
+    const [first] = await artifacts.listArtifacts({ org_id: "example-org" });
+    await artifacts.decideArtifact({
+      org_id: first.org_id, artifact_id: first.id, status: "accepted", decided_at: first.recorded_at,
+    });
+    read.recorded_at = "2026-09-01T00:02:00.000Z";
+    assert.equal((await coordinator.project("example-org", "generation-2"))[0].stored_artifacts, 0);
+    const [recovered] = await artifacts.listArtifacts({ org_id: "example-org" });
+    assert.equal(recovered.recorded_at, first.recorded_at);
+    assert.equal(recovered.status, "accepted");
+    assert.equal((await artifacts.getCheckpoint("example-org", "thread-summary-deterministic", "generation-2")).watermark, read.read_epoch);
+  });
+
+  it("writes shared-body manifests without duplicating the full transcript into Blob storage", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const registry = new MemoryContextProjectorRegistry();
+    registry.register(new DeterministicThreadSummaryProjector());
+    const coordinator = new ContextProjectionCoordinator(authority({
+      events: [{ ...event, content_media_type: "text/plain" }],
+      lifecycle_heads: [{ source: event.source, external_id: event.external_id, head_event_id: event.id }],
+    }), artifacts, registry, {
+      async getMany() { return new Map([[HASH, Buffer.from("The complete source message")]]); },
+      async put() { throw new Error("A full transcript Blob must not be written"); },
+    });
+    await coordinator.project("example-org", "generation-2");
+    const [artifact] = await artifacts.listArtifacts({ org_id: "example-org" });
+    assert.equal(artifact.body_storage, "artifact");
+    assert.equal(artifact.attrs.messages[0].text, "The complete source message");
+  });
+
+  it("requires a new generation when the projector algorithm changes", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    await artifacts.putCheckpoint({
+      org_id: "example-org", projector_id: "test-projector", algorithm_version: "old-rules",
+      generation: "generation-1", sequence: 1, watermark: "authority:1",
+      updated_at: event.ingested_at,
+    });
+    const registry = new MemoryContextProjectorRegistry();
+    registry.register(projector());
+    const coordinator = new ContextProjectionCoordinator(authority(), artifacts, registry);
+    await assert.rejects(coordinator.project("example-org", "generation-1"), /new generation/);
+    assert.equal((await coordinator.project("example-org", "generation-2"))[0].stored_artifacts, 1);
+  });
+
   it("stores bounded proposals once and advances an append-only checkpoint", async () => {
     const artifacts = new MemoryContextArtifactStore();
     const registry = new MemoryContextProjectorRegistry();

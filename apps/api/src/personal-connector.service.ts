@@ -1,26 +1,17 @@
-import { randomUUID } from "node:crypto";
 import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
   type CopyLocale,
   isSyncSoftMiss,
-  InstallationQuotaBook,
   asConnectorHost,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
   type ConnectorRuntimeStore,
   type ConnectorStream,
-  type ConnectorWebhookRunResult,
   type ConversationThread,
   type IngestQuarantine,
-  DEFAULT_BOOTSTRAP_DUE_WORK_CLAIM_LIMIT,
-  DEFAULT_DUE_WORK_CLAIM_LIMIT,
-  DueWorkClaimLimiter,
-  MAX_DUE_WORK_CLAIM_LIMIT,
-  MIN_DUE_WORK_CLAIM_LIMIT,
   type SyncRun,
-  type SyncRunMode,
   type WebhookRequest,
   historySyncClaimLanes,
   shouldRunHistoryTick,
@@ -47,7 +38,13 @@ import {
   markBackgroundListen,
 } from "./personal-interactive-gate";
 import { PersonalRuntimeService } from "./personal-runtime.service";
-import type { ConnectorFocusSlot, ConnectorState } from "./personal-connector-state";
+import { createConnectorState, type ConnectorState } from "./personal-connector-state";
+import type {
+  ConnectorInstallInput,
+  ConnectorWebhookView,
+  CreatedConversationView,
+  StartSyncRunInput,
+} from "./personal-connector-types";
 import { summarizeRuns } from "./personal-connector-poll";
 import {
   bootstrapPullIntervalMs,
@@ -63,63 +60,29 @@ import { delay } from "./personal-connector-live";
 import * as connectorConversation from "./personal-connector-conversation";
 import * as connectorInstall from "./personal-connector-install";
 import {
+  catchUp,
   runCatalogTick,
   runDueWorkPlane,
 } from "./personal-connector-due-work";
 
 export { PersonalConnectorError } from "./personal-errors";
 export { wrapDriverError } from "./personal-connector-poll";
+export type {
+  ConnectorInstallInput,
+  ConnectorWebhookView,
+  CreatedConversationView,
+  StartSyncRunInput,
+} from "./personal-connector-types";
 
 const START_PULL_DELAY_MS = 1_000;
 
-export interface ConnectorInstallInput {
-  connector_type: string;
-  config?: Record<string, unknown>;
-}
-
-export interface CreatedConversationView {
-  thread_id: string;
-  channel: string;
-  channel_label: string;
-  can_send: boolean;
-  await_reply: boolean;
-  list_title: "conversation" | "face" | "prompt";
-}
-
-export interface StartSyncRunInput {
-  mode?: SyncRunMode;
-  max_pages?: number;
-  stream_keys?: string[];
-  archive_from?: string;
-  archive_to?: string;
-  run_window?: { start_hour: number; end_hour: number; timezone?: string };
-}
-
-export interface ConnectorWebhookView {
-  installation_id: string;
-  accepted_count: number;
-  duplicate_count: number;
-  quarantined_count: number;
-  last_run_status: ConnectorWebhookRunResult["status"];
-}
-
 @Injectable()
 export class PersonalConnectorService implements OnModuleDestroy {
+  private readonly state: ConnectorState;
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly streamIdleUntil = new Map<string, number>();
-  private readonly streamCatchingUp = new Set<string>();
   private readonly streamSeeded = new Set<string>();
-  private readonly streamMeta = new Map<
-    string,
-    { thread_id: string | null; label: string | null }
-  >();
   private readonly streamErrors = new Map<string, string>();
-  private readonly streamPulling = new Set<string>();
-  private readonly streamPullingHistory = new Set<string>();
-  private focusSlot: ConnectorFocusSlot | null = null;
-  private focusGeneration = 0;
-  private readonly hydrateCooldown = new Map<string, number>();
-  private readonly liveKickCooldown = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | undefined;
   private bootstrapTimer: ReturnType<typeof setInterval> | undefined;
   private catalogTimer: ReturnType<typeof setInterval> | undefined;
@@ -131,22 +94,6 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private catalogTicking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
-  private readonly quota = new InstallationQuotaBook();
-  private readonly creatingByClient = new Map<string, Promise<CreatedConversationView>>();
-  private readonly dueWorkOwner = `personal-due:${randomUUID()}`;
-  private readonly dueWorkLimiters = {
-    steady: new DueWorkClaimLimiter(
-      MIN_DUE_WORK_CLAIM_LIMIT,
-      MAX_DUE_WORK_CLAIM_LIMIT,
-      DEFAULT_DUE_WORK_CLAIM_LIMIT,
-    ),
-    bootstrap: new DueWorkClaimLimiter(
-      MIN_DUE_WORK_CLAIM_LIMIT,
-      MAX_DUE_WORK_CLAIM_LIMIT,
-      DEFAULT_BOOTSTRAP_DUE_WORK_CLAIM_LIMIT,
-    ),
-  };
-  private readonly catalogSizeByInstall = new Map<string, number>();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -157,10 +104,23 @@ export class PersonalConnectorService implements OnModuleDestroy {
     private readonly drivers: ChannelDriverRegistry,
     @Inject(KernelRuntimeService)
     private readonly kernelRuntime: KernelRuntimeService,
-  ) {}
+  ) {
+    this.state = createConnectorState({
+      runtime, inbox, drivers, kernelRuntime,
+      maintenanceHeld: () => this.maintenanceHold,
+      exclusiveStream: (installationId, streamKey, work, options) =>
+        this.exclusiveStream(installationId, streamKey, work, options),
+      publishStreams: () => this.publishStreams(),
+      rememberStreamMeta: (key, stream) => this.rememberStreamMeta(key, stream),
+      rememberStreamPace: (input) => this.rememberStreamPace(input),
+      requireInstallation: (store, installationId) => this.requireInstallation(store, installationId),
+      installSecrets: () => this.installSecrets(),
+      catchUp: (installationId) => catchUp(this.state, installationId),
+    });
+  }
 
   private connectorState(): ConnectorState {
-    return this as unknown as ConnectorState;
+    return this.state;
   }
 
   startAfterListen(): void {
@@ -403,7 +363,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       this.bootstrapTicking ||
       this.catalogTicking ||
       this.streamLocks.size > 0 ||
-      this.focusSlot != null
+      this.state.focusSlot != null
     ) {
       if (Date.now() - started > timeoutMs) {
         throw storeBusyError();
@@ -414,19 +374,19 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   private resetLivePullState(): void {
     const interval = pullStatus.interval_ms;
-    if (this.focusSlot) {
-      this.focusSlot.abort.abort();
-      this.focusSlot = null;
+    if (this.state.focusSlot) {
+      this.state.focusSlot.abort.abort();
+      this.state.focusSlot = null;
     }
     this.streamIdleUntil.clear();
-    this.streamCatchingUp.clear();
+    this.state.streamCatchingUp.clear();
     this.streamSeeded.clear();
-    this.streamMeta.clear();
+    this.state.streamMeta.clear();
     this.streamErrors.clear();
-    this.streamPulling.clear();
-    this.streamPullingHistory.clear();
-    this.hydrateCooldown.clear();
-    this.liveKickCooldown.clear();
+    this.state.streamPulling.clear();
+    this.state.streamPullingHistory.clear();
+    this.state.hydrateCooldown.clear();
+    this.state.liveKickCooldown.clear();
     resetPullStatus();
     pullStatus.interval_ms = interval;
   }
@@ -619,27 +579,27 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const prefix = `${installationId}:`;
     for (const key of [
       ...this.streamIdleUntil.keys(),
-      ...this.streamCatchingUp,
+      ...this.state.streamCatchingUp,
       ...this.streamSeeded,
-      ...this.streamMeta.keys(),
+      ...this.state.streamMeta.keys(),
       ...this.streamErrors.keys(),
-      ...this.streamPulling,
-      ...this.streamPullingHistory,
+      ...this.state.streamPulling,
+      ...this.state.streamPullingHistory,
     ]) {
       if (key.startsWith(prefix) && !live.has(key)) {
         this.streamIdleUntil.delete(key);
-        this.streamCatchingUp.delete(key);
+        this.state.streamCatchingUp.delete(key);
         this.streamSeeded.delete(key);
-        this.streamMeta.delete(key);
+        this.state.streamMeta.delete(key);
         this.streamErrors.delete(key);
-        this.streamPulling.delete(key);
-        this.streamPullingHistory.delete(key);
+        this.state.streamPulling.delete(key);
+        this.state.streamPullingHistory.delete(key);
       }
     }
   }
 
   private rememberStreamMeta(key: string, stream: ConnectorStream): void {
-    this.streamMeta.set(key, {
+    this.state.streamMeta.set(key, {
       thread_id: stream.thread_id ?? null,
       label: stream.label ?? null,
     });
@@ -648,25 +608,25 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private publishStreams(): void {
     const preferred = preferredThreadId();
     const keys = new Set([
-      ...this.streamCatchingUp,
-      ...this.streamPulling,
+      ...this.state.streamCatchingUp,
+      ...this.state.streamPulling,
       ...this.streamErrors.keys(),
     ]);
     if (preferred) {
-      for (const [key, meta] of this.streamMeta) {
+      for (const [key, meta] of this.state.streamMeta) {
         if (meta.thread_id === preferred) {
           keys.add(key);
         }
       }
     }
     const streams: PullStreamStatus[] = [...keys].map((key) => {
-      const meta = this.streamMeta.get(key);
+      const meta = this.state.streamMeta.get(key);
       const error = this.streamErrors.get(key) ?? null;
-      const phase = this.streamPulling.has(key)
+      const phase = this.state.streamPulling.has(key)
         ? "pulling"
         : error
           ? "error"
-          : this.streamCatchingUp.has(key)
+          : this.state.streamCatchingUp.has(key)
             ? "catching_up"
             : "idle";
       return {
@@ -674,8 +634,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
         thread_id: meta?.thread_id ?? null,
         label: this.streamDisplayLabel(meta?.thread_id ?? null, meta?.label ?? null),
         phase,
-        work: this.streamPulling.has(key)
-          ? this.streamPullingHistory.has(key)
+        work: this.state.streamPulling.has(key)
+          ? this.state.streamPullingHistory.has(key)
             ? "history"
             : "live"
           : null,
@@ -715,7 +675,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
     this.streamSeeded.add(input.key);
     if (softMiss && input.pages.length === 0) {
       // Empty deadline: back off instead of sticky catch-up + error banner.
-      this.streamCatchingUp.delete(input.key);
+      this.state.streamCatchingUp.delete(input.key);
       if (input.idleMs !== undefined) {
         this.streamIdleUntil.set(input.key, Date.now() + input.idleMs);
       } else {
@@ -733,11 +693,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
         error: softMiss ? undefined : input.error,
       })
     ) {
-      this.streamCatchingUp.add(input.key);
+      this.state.streamCatchingUp.add(input.key);
       this.streamIdleUntil.delete(input.key);
       return;
     }
-    this.streamCatchingUp.delete(input.key);
+    this.state.streamCatchingUp.delete(input.key);
     if (input.idleMs !== undefined) {
       this.streamIdleUntil.set(input.key, Date.now() + input.idleMs);
       return;
@@ -746,11 +706,11 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   private isThreadStreamBusy(threadId: string): boolean {
-    for (const [key, meta] of this.streamMeta) {
+    for (const [key, meta] of this.state.streamMeta) {
       if (meta.thread_id !== threadId) {
         continue;
       }
-      if (this.streamPulling.has(key) || this.streamLocks.has(key)) {
+      if (this.state.streamPulling.has(key) || this.streamLocks.has(key)) {
         return true;
       }
     }
@@ -795,16 +755,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
     );
     const mounted = new Set(streams.map((stream) => stream.stream_key));
     const prefix = `${installationId}:`;
-    for (const key of [...this.streamCatchingUp]) {
+    for (const key of [...this.state.streamCatchingUp]) {
       if (!key.startsWith(prefix)) {
         continue;
       }
-      if (this.streamPulling.has(key) || this.streamPullingHistory.has(key)) {
+      if (this.state.streamPulling.has(key) || this.state.streamPullingHistory.has(key)) {
         continue;
       }
       const streamKey = key.slice(prefix.length);
       if (!mounted.has(streamKey)) {
-        this.streamCatchingUp.delete(key);
+        this.state.streamCatchingUp.delete(key);
         continue;
       }
       const state = byKey.get(streamKey);
@@ -813,7 +773,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       }
       // Coverage already moved this stream to live/steady; drop the sticky
       // "还剩 N" chip instead of waiting for another empty tip poll.
-      this.streamCatchingUp.delete(key);
+      this.state.streamCatchingUp.delete(key);
     }
   }
 

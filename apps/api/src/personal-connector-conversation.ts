@@ -17,15 +17,12 @@ import {
   PersonalConnectorError,
 } from "./personal-errors";
 
-import type { ConnectorState } from "./personal-connector-state";
-import type { CreatedConversationView } from "./personal-connector.service";
+import type { ConnectorConversationState as ConnectorState } from "./personal-connector-state";
+import type { CreatedConversationView } from "./personal-connector-types";
 import {
   wrapDriverError,
   pollStream,
 } from "./personal-connector-poll";
-import {
-  catchUp,
-} from "./personal-connector-due-work";
 
 export async function createConversation(
   state: ConnectorState,
@@ -90,7 +87,7 @@ export async function openCreatedThread(state: ConnectorState, input: {
     if (withTask) {
       void seedCreatedThread(state, found.installation, found.driver, thread, host).catch(
         () => {
-          void catchUp(state, found.installation.id);
+          void state.catchUp(found.installation.id);
         },
       );
     } else {

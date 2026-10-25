@@ -6,8 +6,10 @@ import type {
   SourceIdentityAliasBind,
   OutboundAttemptRecord,
   OutboundAttemptPut,
+  NewOutboundAttempt,
   EventListQuery,
   ContextAuthorityRead,
+  ContextAuthorityReadQuery,
   BlobRecord,
   RepointContentInput,
   IngestCommitRequest,
@@ -28,6 +30,7 @@ import {
   putDispositionWithinTransaction,
   refreshThreadHeadWithinTransaction,
 } from "./inbox";
+import { contextReadScope } from "../context-read-scope";
 
 export interface EventRow {
   id: string;
@@ -111,7 +114,7 @@ export async function getOutboundAttempt(db: Database.Database, orgId: string, c
       .prepare(
         `
           SELECT org_id, client_request_id, thread_id, event_id, status,
-                 channel_message_ids_json, created_at, updated_at
+                 channel_message_ids_json, recovery_hash, receipt_json, created_at, updated_at
           FROM outbound_attempts
           WHERE org_id = ? AND client_request_id = ?
         `,
@@ -122,8 +125,10 @@ export async function getOutboundAttempt(db: Database.Database, orgId: string, c
           client_request_id: string;
           thread_id: string;
           event_id: string | null;
-          status: "pending" | "accepted" | "sent" | "failed";
+          status: OutboundAttemptRecord["status"];
           channel_message_ids_json: string | null;
+          recovery_hash: string | null;
+          receipt_json: string | null;
           created_at: string;
           updated_at: string;
         }
@@ -137,6 +142,10 @@ export async function getOutboundAttempt(db: Database.Database, orgId: string, c
       thread_id: row.thread_id,
       ...(row.event_id ? { event_id: row.event_id } : {}),
       status: row.status,
+      ...(row.recovery_hash ? { recovery_hash: row.recovery_hash } : {}),
+      ...(row.receipt_json
+        ? { receipt: JSON.parse(row.receipt_json) as OutboundAttemptRecord["receipt"] }
+        : {}),
       ...(row.channel_message_ids_json
         ? {
             channel_message_ids: JSON.parse(row.channel_message_ids_json) as string[],
@@ -145,6 +154,27 @@ export async function getOutboundAttempt(db: Database.Database, orgId: string, c
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
+  }
+
+export async function claimOutboundAttempt(db: Database.Database, input: NewOutboundAttempt): Promise<boolean> {
+    const result = db.prepare(`
+      INSERT INTO outbound_attempts (
+        org_id, client_request_id, thread_id, status, recovery_hash, created_at, updated_at
+      ) VALUES (?, ?, ?, 'pending', ?, ?, ?)
+      ON CONFLICT(org_id, client_request_id) DO UPDATE SET
+        status = 'pending',
+        recovery_hash = excluded.recovery_hash,
+        updated_at = excluded.updated_at
+      WHERE outbound_attempts.status = 'rejected'
+        AND outbound_attempts.thread_id = excluded.thread_id
+        AND outbound_attempts.event_id IS NULL
+        AND outbound_attempts.receipt_json IS NULL
+        AND outbound_attempts.channel_message_ids_json IS NULL
+    `).run(
+      input.org_id, input.client_request_id, input.thread_id,
+      input.recovery_hash ?? null, input.now, input.now,
+    );
+    return result.changes === 1;
   }
 
 export async function putOutboundAttempt(db: Database.Database, input: OutboundAttemptPut): Promise<OutboundAttemptRecord> {
@@ -159,13 +189,15 @@ export async function putOutboundAttempt(db: Database.Database, input: OutboundA
         `
           INSERT INTO outbound_attempts (
             org_id, client_request_id, thread_id, event_id, status,
-            channel_message_ids_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            channel_message_ids_json, recovery_hash, receipt_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(org_id, client_request_id) DO UPDATE SET
             thread_id = excluded.thread_id,
             event_id = excluded.event_id,
             status = excluded.status,
             channel_message_ids_json = excluded.channel_message_ids_json,
+            recovery_hash = COALESCE(excluded.recovery_hash, outbound_attempts.recovery_hash),
+            receipt_json = COALESCE(excluded.receipt_json, outbound_attempts.receipt_json),
             updated_at = excluded.updated_at
         `,
       )
@@ -178,6 +210,8 @@ export async function putOutboundAttempt(db: Database.Database, input: OutboundA
         input.channel_message_ids
           ? JSON.stringify(input.channel_message_ids)
           : null,
+        input.recovery_hash ?? null,
+        input.receipt ? JSON.stringify(input.receipt) : null,
         createdAt,
         input.now,
       );
@@ -187,6 +221,8 @@ export async function putOutboundAttempt(db: Database.Database, input: OutboundA
       thread_id: input.thread_id,
       ...(input.event_id ? { event_id: input.event_id } : {}),
       status: input.status,
+      recovery_hash: input.recovery_hash ?? previous?.recovery_hash,
+      receipt: input.receipt ?? previous?.receipt,
       ...(input.channel_message_ids
         ? { channel_message_ids: [...input.channel_message_ids] }
         : {}),
@@ -260,8 +296,8 @@ export async function listEvents(db: Database.Database, orgId: string, query?: E
     return rows.map((row) => toEvent(db, row));
   }
 
-export async function openContextRead(db: Database.Database, orgId: string): Promise<ContextAuthorityRead> {
-    return openContextReadInternal(db, orgId);
+export async function openContextRead(db: Database.Database, orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    return openContextReadInternal(db, orgId, query);
   }
 
 export async function openContextReadForThread(db: Database.Database, orgId: string, threadId: string): Promise<ContextAuthorityRead> {
@@ -269,67 +305,39 @@ export async function openContextReadForThread(db: Database.Database, orgId: str
     if (!scopedThreadId) {
       throw new Error("Context thread read requires a thread id");
     }
-    return openContextReadInternal(db, orgId, scopedThreadId);
+    return openContextReadInternal(db, orgId, { filters: { thread_ids: [scopedThreadId] } });
   }
 
-async function openContextReadInternal(db: Database.Database, orgId: string, threadId?: string): Promise<ContextAuthorityRead> {
+async function openContextReadInternal(db: Database.Database, orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    const scope = contextReadScope(orgId, query, "sqlite");
     const read = db.transaction(() => {
       const rows = db
         .prepare(
-          threadId
-            ? `
+            `${scope.sql}
                  SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
                    e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
                    e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
                    e.occurred_at, e.ingested_at,
                    b.media_type AS content_media_type
                  FROM events e
+                 JOIN selected_identities s
+                   ON s.org_id = e.org_id AND s.source = e.source AND s.external_id = e.external_id
                  LEFT JOIN blobs b ON b.content_hash = e.content_hash
-                 WHERE e.org_id = ? AND e.thread_id = ?
-                 ORDER BY e.sequence ASC
-          `
-            : `
-                 SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
-                   e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                   e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
-                   e.occurred_at, e.ingested_at,
-                   b.media_type AS content_media_type
-                 FROM events e
-                 LEFT JOIN blobs b ON b.content_hash = e.content_hash
-                 WHERE e.org_id = ?
                  ORDER BY e.sequence ASC
           `,
         )
-        .all(...(threadId ? [orgId, threadId] : [orgId])) as ContextEventRow[];
-      const lifecycleHeads = threadId
-        ? (db
+        .all(...scope.params) as ContextEventRow[];
+      const lifecycleHeads = db
             .prepare(
-              `
+              `${scope.sql}
             SELECT sh.source, sh.external_id, sh.current_event_id AS head_event_id
             FROM source_heads sh
-            WHERE sh.org_id = ?
-              AND EXISTS (
-                SELECT 1
-                FROM events e
-                WHERE e.org_id = sh.org_id
-                  AND e.source = sh.source
-                  AND e.external_id = sh.external_id
-                  AND e.thread_id = ?
-              )
+            JOIN selected_identities s
+              ON s.org_id = sh.org_id AND s.source = sh.source AND s.external_id = sh.external_id
             ORDER BY sh.source ASC, sh.external_id ASC
           `,
             )
-            .all(orgId, threadId) as ContextAuthorityRead["lifecycle_heads"])
-        : (db
-            .prepare(
-              `
-            SELECT source, external_id, current_event_id AS head_event_id
-            FROM source_heads
-            WHERE org_id = ?
-            ORDER BY source ASC, external_id ASC
-          `,
-            )
-            .all(orgId) as ContextAuthorityRead["lifecycle_heads"]);
+            .all(...scope.params) as ContextAuthorityRead["lifecycle_heads"];
       const recordedAt = new Date().toISOString();
       const events = rows.map((row) => ({
         ...toEvent(db, row),
@@ -340,7 +348,6 @@ async function openContextReadInternal(db: Database.Database, orgId: string, thr
       return {
         read_epoch: `authority:${hashCanonicalContext({
           org_id: orgId,
-          ...(threadId ? { thread_id: threadId } : {}),
           events,
           lifecycle_heads: lifecycleHeads,
         })}`,

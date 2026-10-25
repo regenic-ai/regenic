@@ -27,6 +27,7 @@ export class AcceptedThreadSummaryRetriever implements ContextRetriever {
       graph: false,
       rerank: false,
       multilingual: true,
+      lazy_materialization: true,
     };
   }
 
@@ -44,8 +45,9 @@ export class AcceptedThreadSummaryRetriever implements ContextRetriever {
       if (!artifact.body_hash || artifact.input_refs.some((reference) => !visible.has(reference.event_id))) {
         continue;
       }
-      const bytes = await this.blobs.get(artifact.body_hash);
-      const text = Buffer.from(bytes).toString("utf8");
+      const text = artifact.body_storage === "artifact"
+        ? canonicalContextJson(artifact.attrs)
+        : Buffer.from(await this.blobs.get(artifact.body_hash)).toString("utf8");
       let body: unknown;
       try {
         body = JSON.parse(text);

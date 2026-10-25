@@ -230,6 +230,7 @@ export interface WorkDeliveryFace {
 export interface WorkFace {
   id: string;
   status: WorkItemStatus;
+  start_state?: "pending" | "submitted" | "uncertain";
   recipe_id?: string;
   executor_type?: string;
   agent_thread_id?: string;

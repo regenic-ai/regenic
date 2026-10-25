@@ -15,6 +15,7 @@ import type {
   CommitSyncPageResult,
   IngestCommitRequest,
   NewEvent,
+  NewOutboundAttempt,
   OutboundAttemptPut,
   OutboundAttemptRecord,
   RepointContentInput,
@@ -169,7 +170,28 @@ export class MemoryAuthorityStore
     clientRequestId: string,
   ): Promise<OutboundAttemptRecord | null> {
     const row = this.outboundAttempts.get(`${orgId}\0${clientRequestId}`);
-    return row ? { ...row, channel_message_ids: row.channel_message_ids?.slice() } : null;
+    return row ? structuredClone(row) : null;
+  }
+
+  async claimOutboundAttempt(input: NewOutboundAttempt): Promise<boolean> {
+    const key = `${input.org_id}\0${input.client_request_id}`;
+    const previous = this.outboundAttempts.get(key);
+    if (previous && (
+      previous.status !== "rejected" || previous.thread_id !== input.thread_id ||
+      previous.event_id != null || previous.receipt != null || previous.channel_message_ids != null
+    )) {
+      return false;
+    }
+    this.outboundAttempts.set(key, {
+      org_id: input.org_id,
+      client_request_id: input.client_request_id,
+      thread_id: input.thread_id,
+      status: "pending",
+      recovery_hash: input.recovery_hash,
+      created_at: previous?.created_at ?? input.now,
+      updated_at: input.now,
+    });
+    return true;
   }
 
   async putOutboundAttempt(
@@ -184,14 +206,13 @@ export class MemoryAuthorityStore
       event_id: input.event_id,
       status: input.status,
       channel_message_ids: input.channel_message_ids?.slice(),
+      recovery_hash: input.recovery_hash ?? previous?.recovery_hash,
+      receipt: structuredClone(input.receipt ?? previous?.receipt),
       created_at: previous?.created_at ?? input.now,
       updated_at: input.now,
     };
     this.outboundAttempts.set(key, record);
-    return {
-      ...record,
-      channel_message_ids: record.channel_message_ids?.slice(),
-    };
+    return structuredClone(record);
   }
 
   async getEvent(orgId: string, eventId: string): Promise<EventRecord | null> {

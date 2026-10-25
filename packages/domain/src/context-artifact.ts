@@ -32,6 +32,8 @@ export interface ContextArtifact {
   input_refs: EvidenceReference[];
   input_hash: string;
   body_hash?: string;
+  /** The body is restored from the immutable manifest instead of a separate Blob. */
+  body_storage?: "artifact";
   status: ContextArtifactStatus;
   required_scope_ids: string[];
   recorded_at: string;

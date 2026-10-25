@@ -62,6 +62,7 @@ export interface WorkRun {
   external_run_id?: string;
   agent_thread_id?: string;
   status: WorkRunStatus;
+  start_state?: "pending" | "submitted" | "uncertain";
   result?: ResultEnvelope;
   created_at: string;
   updated_at: string;
@@ -153,6 +154,8 @@ export interface ExecutorRecipeRef {
 }
 
 export interface ExecutorStartInput {
+  /** Durable kernel run identity, allocated before any external side effect. */
+  run_id?: string;
   work_item: ExecutorWorkRef;
   recipe: ExecutorRecipeRef;
   evidence_text: string;

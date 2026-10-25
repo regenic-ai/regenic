@@ -15,6 +15,7 @@ import type {
   OutboundAttemptPut,
   EventListQuery,
   ContextAuthorityRead,
+  ContextAuthorityReadQuery,
   ContextArtifact,
   ContextArtifactQuery,
   ContextArtifactIndex,
@@ -65,11 +66,13 @@ import type {
   Recipe,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkDelivery,
   DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
   NewEvent,
+  NewOutboundAttempt,
   RepointContentInput,
   IngestCommitRequest,
   EventRevision,
@@ -130,11 +133,13 @@ import {
 import {
   LATEST_SCHEMA_VERSION,
   MIGRATIONS,
+  OUTBOUND_REJECTION_MIGRATION_SQL,
 } from "./migrations";
 import {
   append,
   appendRevision,
   bindSourceIdentityAliases,
+  claimOutboundAttempt,
   commitIngestUnlocked,
   findBlob,
   findBlobs,
@@ -262,6 +267,7 @@ import {
   summarizeInbox,
 } from "./inbox";
 import {
+  claimWorkRunStart,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
@@ -430,6 +436,11 @@ export class SqliteAuthorityStore
     return getOutboundAttempt(this.database, orgId, clientRequestId);
   }
 
+  async claimOutboundAttempt(input: NewOutboundAttempt): Promise<boolean> {
+    this.assertWritable();
+    return claimOutboundAttempt(this.database, input);
+  }
+
   async putOutboundAttempt(
     input: OutboundAttemptPut,
   ): Promise<OutboundAttemptRecord> {
@@ -445,8 +456,8 @@ export class SqliteAuthorityStore
     return listEvents(this.database, orgId, query);
   }
 
-  async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
-    return openContextRead(this.database, orgId);
+  async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    return openContextRead(this.database, orgId, query);
   }
 
   async openContextReadForThread(
@@ -957,6 +968,7 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifact_states WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifacts WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_artifact_segments WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(`DELETE FROM context_projection_checkpoints WHERE org_id = ?`)
         .run(orgId);
@@ -1212,6 +1224,11 @@ export class SqliteAuthorityStore
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     this.assertWritable();
     return putWorkRun(this.database, run);
+  }
+
+  async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
+    this.assertWritable();
+    return claimWorkRunStart(this.database, input);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
@@ -1658,6 +1675,12 @@ export class SqliteAuthorityStore
     }
     const repair = this.database.transaction(() => {
       this.database.exec(`
+        CREATE TABLE IF NOT EXISTS context_artifact_segments (
+          org_id TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+          PRIMARY KEY (org_id, content_hash)
+        );
         CREATE INDEX IF NOT EXISTS events_org_occurred_idx
           ON events (org_id, occurred_at, id);
         CREATE TABLE IF NOT EXISTS context_snapshot_index (
@@ -1696,6 +1719,16 @@ export class SqliteAuthorityStore
         );
       }
       rebuildArtifactPreviews(this.database);
+      if (!this.columnExists("outbound_attempts", "recovery_hash")) {
+        this.database.exec("ALTER TABLE outbound_attempts ADD COLUMN recovery_hash TEXT");
+      }
+      if (!this.columnExists("outbound_attempts", "receipt_json")) {
+        this.database.exec("ALTER TABLE outbound_attempts ADD COLUMN receipt_json TEXT");
+      }
+      if (!this.columnExists("work_runs", "start_state")) {
+        this.database.exec("ALTER TABLE work_runs ADD COLUMN start_state TEXT CHECK (start_state IN ('pending', 'submitted', 'uncertain'))");
+      }
+      this.database.exec(OUTBOUND_REJECTION_MIGRATION_SQL);
       this.database.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
     });
     repair.immediate();

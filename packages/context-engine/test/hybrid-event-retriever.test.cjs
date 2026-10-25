@@ -4,6 +4,7 @@ const { it } = require("node:test");
 const {
   embeddingGeneration, EmbeddingError, ContextVectorUnavailableError,
   MemoryContextArtifactStore, MemoryContextRetrieverRegistry, validateContextSnapshot,
+  ContextRetrievalTraceSchema,
 } = require("@regenic/domain");
 const {
   HybridEventRetriever, DeterministicEventRetriever, DeterministicContextEngine, HYBRID_RETRIEVAL_PROFILE,
@@ -116,13 +117,30 @@ it("pins one selected generation across query inference even when the active poi
   assert.equal(selected, 1);
 });
 
-it("explicitly degrades over-capacity authorized scopes without query inference or an invalid trace", async () => {
-  const f = fixture();
-  const result = await f.retriever.retrieve({ ...f.plan, events: Array.from({ length: 10001 },
-    (_, index) => event(`capacity-${index}`, "unrelated text")) });
-  assert.equal(f.calls, 0);
-  assert.equal(result.trace, undefined);
-  assert.ok(result.degradation_flags.includes("vector_index_capacity"));
+it("searches beyond 10000 authorized events and validates a complete large-scope trace", async () => {
+  const sources = Array.from({ length: 10001 }, (_, index) =>
+    event(`capacity-${String(index).padStart(5, "0")}`, "rollback approved"));
+  let calls = 0;
+  const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
+    descriptor, async countTokens() { return [12]; }, async embed() { calls++; return [[1, 0]]; },
+  }, {
+    async matchAuthorized(input) {
+      assert.equal(input.authorized.length, 10001);
+      return {
+        generation: generation.id,
+        covered: input.authorized,
+        matched: [{ ...input.authorized.at(-1), score: 1, chunk_ordinal: 0, start: 0, end: 8 }],
+      };
+    },
+  }, generation);
+  const result = await retriever.retrieve({ ...fixture().plan, events: sources });
+  assert.equal(calls, 1);
+  assert.equal(result.trace.authorized_count, 10001);
+  assert.equal(result.trace.covered_count, 10001);
+  assert.equal(result.trace.routes.length, 10001);
+  assert.equal(result.trace.routes.find((route) => route.event_id === sources.at(-1).event.event_id).vector_rank, 1);
+  assert.ok(ContextRetrievalTraceSchema.safeParse(result.trace).success);
+  assert.ok(!result.degradation_flags.includes("vector_index_capacity"));
 });
 
 it("rejects covered single-character weak matches but preserves uncovered lexical evidence", async () => {

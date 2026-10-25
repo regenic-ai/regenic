@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { ChannelDriverError, type EgressQueueItem } from "./driver";
 
+/** This enqueue was rejected; does not describe earlier operations in a send. */
+export class EgressQueueRejectedError extends ChannelDriverError {}
+
 export interface MemoryEgressEnqueueInput {
   installation_id: string;
   thread_id: string;
@@ -50,10 +53,10 @@ export function createMemoryEgressQueue(
     enqueue(input) {
       const text = input.text.trim();
       if (!text) {
-        throw new ChannelDriverError("invalid_config", "text is required");
+        throw new EgressQueueRejectedError("invalid_config", "text is required");
       }
       if (text.length > maxTextChars) {
-        throw new ChannelDriverError(
+        throw new EgressQueueRejectedError(
           "invalid_config",
           `text must be ${maxTextChars} characters or shorter`,
         );
@@ -64,13 +67,13 @@ export function createMemoryEgressQueue(
         (command) => command.installation_id === input.installation_id,
       );
       if (pending.length >= maxPending) {
-        throw new ChannelDriverError("throttled", "Send command queue is full");
+        throw new EgressQueueRejectedError("throttled", "Send command queue is full");
       }
       if (rateLimitMs > 0) {
         const rateKey = `${input.installation_id}:${input.chat_id}`;
         const last = lastSend.get(rateKey) ?? 0;
         if (at - last < rateLimitMs) {
-          throw new ChannelDriverError("throttled", "Send commands are rate limited");
+          throw new EgressQueueRejectedError("throttled", "Send commands are rate limited");
         }
         lastSend.set(rateKey, at);
       }

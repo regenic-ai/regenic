@@ -1,7 +1,9 @@
+import type { PoolClient } from "pg";
 import type {
   Recipe,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkDelivery,
   ExecutorInstallation,
 } from "@regenic/domain";
@@ -227,19 +229,20 @@ export async function listHiddenExecutorThreadIds(db: PgSql, orgId: string): Pro
     return rows.map((row) => row.thread_id);
   }
 
-export async function putWorkRun(db: PgSql, run: WorkRun): Promise<WorkRun> {
+export async function putWorkRun(db: PgSql, run: WorkRun, client?: PoolClient): Promise<WorkRun> {
     await db.execute(
       `
         INSERT INTO work_runs (
           id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-          agent_thread_id, status, result_json, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          agent_thread_id, status, start_state, result_json, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (id) DO UPDATE SET
           recipe_id = EXCLUDED.recipe_id,
           executor_type = EXCLUDED.executor_type,
           external_run_id = EXCLUDED.external_run_id,
           agent_thread_id = EXCLUDED.agent_thread_id,
           status = EXCLUDED.status,
+          start_state = EXCLUDED.start_state,
           result_json = EXCLUDED.result_json,
           updated_at = EXCLUDED.updated_at
       `,
@@ -252,13 +255,49 @@ export async function putWorkRun(db: PgSql, run: WorkRun): Promise<WorkRun> {
         run.external_run_id ?? null,
         run.agent_thread_id ?? null,
         run.status,
+        run.start_state ?? null,
         jsonb(run.result),
         run.created_at,
         run.updated_at,
       ],
+      client,
     );
     return run;
   }
+
+export async function claimWorkRunStart(db: PgSql, { run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
+  return db.withTx(async (client) => {
+    // Recipe lock also serializes capacity checks for different work items.
+    const recipe = await db.queryOne(`
+      SELECT id FROM recipes WHERE org_id = $1 AND id = $2 FOR UPDATE
+    `, [run.org_id, run.recipe_id], client);
+    if (!recipe) return false;
+    const item = await db.queryOne(`
+      SELECT id FROM work_items WHERE org_id = $1 AND id = $2 AND recipe_id = $3
+        AND status = 'open' FOR UPDATE
+    `, [run.org_id, run.work_item_id, run.recipe_id], client);
+    if (!item) return false;
+    const active = await db.queryOne(`
+      SELECT id FROM work_runs WHERE org_id = $1 AND work_item_id = $2
+        AND status IN ('running', 'waiting_human') LIMIT 1
+    `, [run.org_id, run.work_item_id], client);
+    if (active) return false;
+    if (max_concurrent !== undefined) {
+      const occupied = await db.queryOne<{ count: string }>(`
+        SELECT COUNT(*) AS count FROM work_items WHERE org_id = $1 AND recipe_id = $2
+          AND status IN ('running', 'waiting_human')
+      `, [run.org_id, run.recipe_id], client);
+      if (Number(occupied?.count) >= max_concurrent) return false;
+    }
+    if (await db.queryOne("SELECT id FROM work_runs WHERE id = $1", [run.id], client)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    await putWorkRun(db, run, client);
+    await db.execute("UPDATE work_items SET status = 'running', updated_at = $1 WHERE org_id = $2 AND id = $3",
+      [run.updated_at, run.org_id, run.work_item_id], client);
+    return true;
+  });
+}
 
 export async function listWorkDeliveries(db: PgSql, orgId: string): Promise<WorkDelivery[]> {
     const rows = await db.query<WorkDeliveryRow>(
@@ -494,6 +533,7 @@ interface WorkRunRow {
   external_run_id: string | null;
   agent_thread_id: string | null;
   status: WorkRun["status"];
+  start_state: WorkRun["start_state"] | null;
   result_json: unknown;
   created_at: unknown;
   updated_at: unknown;
@@ -574,6 +614,7 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     external_run_id: row.external_run_id ?? undefined,
     agent_thread_id: row.agent_thread_id ?? undefined,
     status: row.status,
+    start_state: row.start_state ?? undefined,
     result: row.result_json
       ? asJson<WorkRun["result"]>(row.result_json)
       : undefined,

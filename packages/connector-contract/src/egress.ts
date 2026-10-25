@@ -15,7 +15,10 @@ export interface SendIntent {
   installation_id: string;
   target?: SendTarget;
   content: ContentPart[];
-  /** Stable key for at-least-once write-back. Drivers may ignore it. */
+  /**
+   * Stable operation key. Supporting drivers derive a distinct key per message.
+   * Passing a key alone does not guarantee that an adapter supports safe retries.
+   */
   idempotency_key?: string;
 }
 
@@ -34,6 +37,7 @@ export interface DeliveryReceipt {
 export interface EgressAdapter {
   readonly source: string;
   capabilities(): EgressCapabilities;
+  /** Use SendNotAcceptedError only if no part was accepted or queued; other failures are ambiguous. */
   send(intent: SendIntent): Promise<DeliveryReceipt>;
 }
 

@@ -335,7 +335,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     validateEmbeddingVector(input.query_vector, generation.model.dimensions);
     const queryNorm = Math.sqrt(input.query_vector.reduce((sum, value) => sum + value * value, 0));
     bounded(input.limit, 1, 1000);
-    if (!Array.isArray(input.authorized) || input.authorized.length > 10000) throw new Error("Invalid vector authorization set");
+    if (!Array.isArray(input.authorized)) throw new Error("Invalid vector authorization set");
     const seen = new Set<string>();
     for (const key of input.authorized) {
       required(key.event_id);
@@ -345,13 +345,19 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     return this.db.transaction(() => {
       const covered = [];
       const matched = [];
+      const coverageQuery = this.db.prepare(`SELECT c.chunk_count FROM coverage c JOIN source_heads h
+        ON h.org_id=c.org_id AND h.source=c.source AND h.external_id=c.external_id AND h.event_id=c.event_id
+        WHERE c.org_id=? AND c.generation=? AND c.event_id=? AND c.content_hash=?`);
+      const chunksQuery = this.db.prepare(
+        "SELECT * FROM chunks WHERE org_id=? AND generation=? AND event_id=? ORDER BY ordinal",
+      );
+      const rank = (a: { score: number; event_id: string }, b: { score: number; event_id: string }) =>
+        b.score - a.score || compare(a.event_id, b.event_id);
       for (const key of input.authorized) {
-        const coverage = this.db.prepare(`SELECT c.chunk_count FROM coverage c JOIN source_heads h
-          ON h.org_id=c.org_id AND h.source=c.source AND h.external_id=c.external_id AND h.event_id=c.event_id
-          WHERE c.org_id=? AND c.generation=? AND c.event_id=? AND c.content_hash=?`)
+        const coverage = coverageQuery
           .get(input.org_id, input.generation, key.event_id, key.content_hash) as { chunk_count: number } | undefined;
         if (!coverage) continue;
-        const chunks = this.db.prepare("SELECT * FROM chunks WHERE org_id=? AND generation=? AND event_id=? ORDER BY ordinal")
+        const chunks = chunksQuery
           .all(input.org_id, input.generation, key.event_id) as Array<{ ordinal: number; start: number; end: number; vector: Buffer }>;
         if (chunks.length !== coverage.chunk_count || chunks.length === 0) throw new ContextVectorUnavailableError("corrupt");
         let best: { score: number; chunk_ordinal: number; start: number; end: number } | undefined;
@@ -371,8 +377,12 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         }
         covered.push({ ...key });
         matched.push({ ...key, ...best! });
+        if (matched.length >= input.limit * 2) {
+          matched.sort(rank);
+          matched.length = input.limit;
+        }
       }
-      matched.sort((a, b) => b.score - a.score || compare(a.event_id, b.event_id));
+      matched.sort(rank);
       covered.sort((a, b) => compare(a.event_id, b.event_id));
       const meta = this.db.prepare("SELECT reconciled_epoch FROM generations WHERE org_id=? AND generation=?")
         .get(input.org_id, input.generation) as { reconciled_epoch: string | null };

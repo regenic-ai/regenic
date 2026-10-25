@@ -187,6 +187,10 @@ interface AuthorityStore {
 }
 ```
 
+Every read returning an `EventRecord`, including identity lookups, Event lists, all inbox views, and context reads, preserves `direction_tags`, `weight_hints`, and `attrs`. Explicit empty arrays or objects remain distinct from absent fields. Revisions retain their own metadata; tombstones do not inherit optional metadata from the previous head.
+
+For context reads, `recorded_at` is observational wall time, not part of `read_epoch`. The epoch identifies the selected Events and lifecycle heads: repeated reads of unchanged data retain it, while relevant revisions or tombstones change it. Shared driver contract tests cover these behaviors; running the PostgreSQL cases requires `TEST_DATABASE_URL`. Database-free SQL projection tests are not a substitute for live PostgreSQL integration coverage.
+
 `listInbox` defaults to current source heads whose disposition is `current_work` and whose conversation is not `conversation_prefs.hidden` (shown list). `list=hidden` returns folded conversations; the list face is still the last non-tombstone visible message. Hidden is a list-surface pref, not derived from tombstone / `work_acked` / WorkItem status. A human fold writes `hidden_reason=human` and stays put when new work arrives. A policy fold writes `policy` (tombstone off the desk, a finished or dismissed job) and unhides when new `current_work` is accepted. Tombstoned Events stay in the store. A current head with no disposition is arranged on the next ingest of that source identity, including a duplicate replay. The kernel applies fold policy after each ingest batch; connectors never see this layer.
 
 ## 6. Canonical Input Contract

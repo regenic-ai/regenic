@@ -26,6 +26,7 @@ import {
   recordClassFromType,
   shouldFlushDelivery,
   shouldRefreshActiveRun,
+  workRunNeedsStartConfirmation,
   type ConversationThread,
   type InboxListView,
   type InboxSortMode,
@@ -689,12 +690,29 @@ export class PersonalWorkService implements OnModuleDestroy {
     promptId: string,
     sourceHasPrompt: boolean,
   ): Promise<ConversationThread> {
+    const authority = this.runtime.requireHost().get("authority");
+    const orgId = this.runtime.orgId();
+    const item = await authority.getWorkItemByThread(orgId, threadId);
+    const run = item ? await authority.getActiveWorkRun(orgId, item.id) : null;
+    if (run) {
+      this.assertStartConfirmed(run);
+    }
     if (sourceHasPrompt) {
       return parseConversationThread(threadId);
     }
     const faces = await this.inboxFaces([threadId]);
     const agentId = faces.get(threadId)?.agent_thread_id;
     return parseConversationThread(agentId || threadId);
+  }
+
+  private assertStartConfirmed(run: WorkRun): void {
+    if (workRunNeedsStartConfirmation(run)) {
+      throw new PersonalConnectorError(
+        "execution_start_uncertain",
+        "Executor start is pending or unconfirmed. Check the executor before dismissing this attempt and starting another.",
+        409,
+      );
+    }
   }
 
   async afterPrompt(threadId: string, answer?: PromptAnswer): Promise<void> {
@@ -708,6 +726,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!run) {
       return;
     }
+    this.assertStartConfirmed(run);
     const recipe = item.recipe_id
       ? await host.get("authority").getRecipe(orgId, item.recipe_id)
       : null;
@@ -761,6 +780,7 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 
   async runWorkItem(id: string): Promise<WorkRunView> {
+    await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const item = await host.get("authority").getWorkItem(orgId, id);
@@ -790,6 +810,9 @@ export class PersonalWorkService implements OnModuleDestroy {
       };
     }
     const active = await host.get("authority").getActiveWorkRun(orgId, item.id);
+    if (active) {
+      this.assertStartConfirmed(active);
+    }
     if (active && shouldRefreshActiveRun(item.status)) {
       await this.supervise.refreshOne(item, recipe, active);
       return {

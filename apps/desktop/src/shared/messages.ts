@@ -355,6 +355,8 @@ export const en = {
     "A rule matches this chat. New messages start on their own. Handle now if you want it immediately.",
   "work.hint.failed": "The last run failed. Handle now, or change the rule.",
   "work.hint.running": "Working in the background. A chat reply is not the same as finishing.",
+  "work.hint.startPending": "Executor start is pending. If interrupted, check the executor before starting another attempt.",
+  "work.hint.startUncertain": "Executor start could not be confirmed. Check its session or remote runtime before dismissing this attempt and starting another.",
   "work.hint.held":
     "{count} newer messages are waiting. They will be handled after this run.",
   "work.hint.waiting": "Waiting on you. Answer below.",
@@ -1376,6 +1378,8 @@ export const zh: Record<MessageKey, string> = {
   "work.hint.open": "已有规则对上这条会话。有新消息会自己开始。要现在处理，点「立即处理」。",
   "work.hint.failed": "上次没做成。可以再处理一次，或改规则。",
   "work.hint.running": "正在处理。聊天里回一句，不等于这件事做完。",
+  "work.hint.startPending": "正在启动执行器。如果启动中断，请先核对执行器，再开始新的一次。",
+  "work.hint.startUncertain": "执行器是否已启动尚不确定。请先核对外部会话或远程运行记录，再移除本次尝试并重新开始。",
   "work.hint.held": "还有 {count} 条新消息，这轮结束后会接着处理。",
   "work.hint.waiting": "等你确认。在下面选一下即可。",
   "work.hint.doneWrite": "已完成。结果可以发回原会话。",

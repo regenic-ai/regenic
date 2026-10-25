@@ -35,6 +35,8 @@ export interface ContextRetrievalCapabilities {
   graph: boolean;
   rerank: boolean;
   multilingual: boolean;
+  /** Accepts metadata-only plans and loads Event text through the supplied materializer. */
+  lazy_materialization?: boolean;
 }
 
 export interface ContextProjectionCheckpoint {
@@ -164,12 +166,17 @@ export interface ContextAuthorityRead {
 }
 
 export interface ContextAuthorityReader {
-  openContextRead(orgId: string): Promise<ContextAuthorityRead>;
+  openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead>;
   /** Thread-scoped read for incremental projection without scanning the org. */
   openContextReadForThread(
     orgId: string,
     threadId: string,
   ): Promise<ContextAuthorityRead>;
+}
+
+export interface ContextAuthorityReadQuery {
+  filters?: ContextRequest["filters"];
+  anchors?: ContextRequest["anchors"];
 }
 
 export interface ContextVisibilityInput {
@@ -182,6 +189,8 @@ export interface ContextVisibilityInput {
 }
 
 export interface ContextPolicyEvaluator {
+  /** Protected Event selection does not require text; absent means eager compatibility. */
+  metadata_only?: boolean;
   policyHash(request: ContextRequest): Promise<string>;
   visible(input: ContextVisibilityInput): Promise<boolean>;
   protectedEventIds(input: {
@@ -222,8 +231,13 @@ export interface ContextRetriever {
   capabilities(): ContextRetrievalCapabilities;
   retrieve(
     plan: AuthorizedContextRetrievalPlan,
+    materialize?: ContextEventMaterializer,
   ): Promise<RetrievedContextCandidate[] | ContextRetrievalResult>;
 }
+
+export type ContextEventMaterializer = (
+  eventIds: readonly string[],
+) => Promise<AuthorizedContextSourceEvent[]>;
 
 export interface ContextProjectorRegistry {
   register(projector: ContextProjector): () => void;

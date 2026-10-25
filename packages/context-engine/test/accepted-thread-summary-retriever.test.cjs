@@ -56,6 +56,22 @@ function plan() {
 }
 
 describe("accepted thread summary retriever", () => {
+  it("restores an artifact-backed full body without reading a duplicate transcript Blob", async () => {
+    const artifacts = new MemoryContextArtifactStore();
+    const value = artifact({ body_storage: "artifact" });
+    await artifacts.putArtifact(value);
+    await artifacts.decideArtifact({
+      org_id: value.org_id, artifact_id: value.id, status: "accepted", decided_at: value.recorded_at,
+    });
+    const retriever = new AcceptedThreadSummaryRetriever(artifacts, {
+      async get() { throw new Error("Artifact-backed bodies must not use transcript Blobs"); },
+    });
+    const [result] = await retriever.retrieve(plan());
+    assert.equal(result.item.text, canonicalContextJson(value.attrs));
+    assert.equal(result.item.content_hash, value.body_hash);
+    assert.deepEqual(await retriever.retrieve({ ...plan(), events: [] }), []);
+  });
+
   it("returns only an accepted evidence-bound summary with its canonical body", async () => {
     const artifacts = new MemoryContextArtifactStore();
     const blobs = new MemoryBlobStore();

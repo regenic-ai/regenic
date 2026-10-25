@@ -11,10 +11,15 @@ const {
   INGEST_SCHEMA_VERSION,
   IngestionService,
   MemoryContextRetrieverRegistry,
+  MemoryContextProjectorRegistry,
+  canonicalContextJson,
 } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const {
   AuthorityContextEvidenceSource,
+  AcceptedThreadSummaryRetriever,
+  ContextProjectionCoordinator,
+  DeterministicThreadSummaryProjector,
   DeterministicContextEngine,
   DeterministicEventRetriever,
   PersonalContextPolicyEvaluator,
@@ -99,6 +104,135 @@ function createEngine(authority, blobs, sourceOverride) {
 }
 
 describe("authority-backed context integration", () => {
+  it("preserves full shared summaries and old snapshot replay across revision, tombstone, and restart", async (t) => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let authority = await SqliteSplitAuthorityStore.open(path);
+    t.after(() => authority.close());
+    const blobs = new FsBlobStore(join(root, "blobs"));
+    const ingestion = new IngestionService(blobs, authority);
+    await ingestion.ingest(ingestBatch("create", "The release is approved.", "shared-create"));
+    const projectors = new MemoryContextProjectorRegistry();
+    projectors.register(new DeterministicThreadSummaryProjector());
+    const coordinator = new ContextProjectionCoordinator(authority, authority, projectors, blobs);
+    await coordinator.project("local-owner", "continuous-v2");
+    const [original] = await authority.listArtifacts({ org_id: "local-owner" });
+    assert.equal(original.body_storage, "artifact");
+    assert.equal(original.attrs.messages[0].text, "The release is approved.");
+    assert.equal(await blobs.exists(original.body_hash), false);
+    await authority.decideArtifact({
+      org_id: "local-owner", artifact_id: original.id, status: "accepted", decided_at: original.recorded_at,
+    });
+    function summaryEngine() {
+      const retrievers = new MemoryContextRetrieverRegistry();
+      retrievers.register(new AcceptedThreadSummaryRetriever(authority, blobs));
+      return new DeterministicContextEngine({
+        source: new AuthorityContextEvidenceSource(authority, blobs),
+        policy: new PersonalContextPolicyEvaluator({
+          org_id: "local-owner", principal: { actor_type: "human", actor_id: "local-owner" },
+        }),
+        artifacts: authority, retrievers,
+      });
+    }
+    const assembled = await summaryEngine().assemble(contextRequest({
+      requested_kinds: ["artifact"],
+      budget: { profile: "shared-summary", max_tokens: 2_000, max_items: 5, max_raw_evidence: 5 },
+    }));
+    assert.equal(assembled.bundle.sections[0].items[0].text, canonicalContextJson(original.attrs));
+    await ingestion.ingest(ingestBatch("revise", "The release is postponed.", "shared-revise"));
+    await coordinator.project("local-owner", "continuous-v2");
+    const summaries = await authority.listArtifacts({ org_id: "local-owner" });
+    const revised = summaries.find((value) => value.id !== original.id);
+    assert.equal(revised.attrs.messages[0].text, "The release is postponed.");
+    assert.equal(revised.input_refs.length, 2);
+    await ingestion.ingest(ingestBatch("tombstone", undefined, "shared-tombstone"));
+    await coordinator.project("local-owner", "continuous-v2");
+    const deleted = (await authority.listArtifacts({ org_id: "local-owner" }))
+      .find((value) => value.input_refs.length === 3);
+    assert.deepEqual(deleted.attrs.messages, []);
+    assert.deepEqual((await authority.getArtifact("local-owner", original.id)).attrs, original.attrs);
+    await authority.close();
+    authority = await SqliteSplitAuthorityStore.open(path);
+    const replayed = await summaryEngine().replay({
+      org_id: "local-owner", snapshot_id: assembled.snapshot.id,
+      principal: { actor_type: "human", actor_id: "local-owner" }, consumer_id: "integration-test",
+      purpose: "answer a synthetic release question", allowed_uses: ["display"],
+    });
+    assert.equal(replayed.content_hash, assembled.bundle.content_hash);
+    assert.equal(replayed.sections[0].items[0].text, canonicalContextJson(original.attrs));
+    assert.deepEqual((await authority.getArtifact("local-owner", deleted.id)).attrs.messages, []);
+  });
+
+  it("preserves exact JavaScript time-filter boundaries despite SQLite fractional-second rounding", async (t) => {
+    const root = await createRoot();
+    const authority = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    t.after(() => authority.close());
+    const blobs = new FsBlobStore(join(root, "blobs"));
+    const ingestion = new IngestionService(blobs, authority);
+    const batch = ingestBatch("create", "The release is approved.", "fractional-time");
+    batch.records[0].occurred_at = "2026-08-30T00:00:00.9999Z";
+    const target = await ingestion.ingest(batch);
+    const later = ingestBatch("create", "The release is approved.", "next-second");
+    later.records[0].external_id = "chat-1:message-2";
+    later.records[0].occurred_at = "2026-08-30T00:00:01.000Z";
+    await ingestion.ingest(later);
+    const result = await createEngine(authority, blobs).assemble(contextRequest({
+      filters: {
+        occurred_after: "2026-08-30T08:00:00.999+08:00",
+        occurred_before: "2026-08-30T00:00:00.999Z",
+      },
+    }));
+    assert.deepEqual(result.snapshot.selected.map((item) => item.resource_id), [target.records[0].event_id]);
+  });
+
+  it("pushes request scope through the split reader and never opens unrelated bodies", async (t) => {
+    const root = await createRoot();
+    const authority = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    t.after(() => authority.close());
+    const blobs = new FsBlobStore(join(root, "blobs"));
+    const ingestion = new IngestionService(blobs, authority);
+    const target = await ingestion.ingest(ingestBatch("create", "The release is approved.", "target"));
+    const other = ingestBatch("create", "Unrelated body.", "other");
+    other.records[0].external_id = "chat-2:message-2";
+    other.records[0].scope.id = "chat-2";
+    const unrelated = await ingestion.ingest(other);
+    const unrelatedEvent = await authority.getEvent("local-owner", unrelated.records[0].event_id);
+    await blobs.delete(unrelatedEvent.content_hash);
+    const requested = [];
+    const source = new AuthorityContextEvidenceSource(authority, {
+      async getMany(hashes) {
+        requested.push(...hashes);
+        return blobs.getMany(hashes);
+      },
+    });
+    const scoped = await source.openRead(contextRequest());
+    assert.deepEqual(scoped.events.map((event) => event.event.event_id), [target.records[0].event_id]);
+    const result = await createEngine(authority, blobs, source).assemble(contextRequest());
+    assert.equal(result.snapshot.selected[0].resource_id, target.records[0].event_id);
+    assert.equal(requested.length, 1);
+    assert.notEqual(requested[0], unrelatedEvent.content_hash);
+  });
+
+  it("fails closed rather than resurrecting a version whose revision moves outside the requested thread", async (t) => {
+    const root = await createRoot();
+    const authority = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
+    t.after(() => authority.close());
+    const blobs = new FsBlobStore(join(root, "blobs"));
+    const ingestion = new IngestionService(blobs, authority);
+    await ingestion.ingest(ingestBatch("create", "The release is approved.", "before-move"));
+    const moved = ingestBatch("revise", "The release is delayed.", "after-move");
+    moved.records[0].scope.id = "chat-2";
+    await ingestion.ingest(moved);
+    const source = new AuthorityContextEvidenceSource(authority, blobs);
+    assert.equal((await source.openRead(contextRequest())).events.length, 2);
+    const engine = createEngine(authority, blobs, source);
+    await assert.rejects(engine.assemble(contextRequest()), /parent crosses identity or time order/);
+    await assert.rejects(
+      engine.assemble(contextRequest({ temporal: { mode: "history" } })),
+      /parent crosses identity or time order/,
+    );
+  });
+
   it("assembles current SQLite evidence and replays its bundle after restart", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

@@ -18,6 +18,7 @@ const {
   SqliteSplitAuthorityStore,
   sqliteAuthorityPlugin,
 } = require("../dist/sqlite");
+const { LATEST_SCHEMA_VERSION, MIGRATIONS } = require("../dist/sqlite/migrations");
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -283,6 +284,12 @@ describe("SQLite context artifact store", () => {
       ...metadata,
       content_media_type: "text/plain",
     });
+    assert.deepEqual((await split.openContextRead("example-org", {
+      filters: { thread_ids: ["not-thread-1"] },
+    })).events, []);
+    assert.equal((await split.openContextRead("example-org", {
+      filters: { thread_ids: ["thread-1"] },
+    })).events.length, 1);
     await split.close();
   });
 
@@ -1239,11 +1246,27 @@ describe("SQLite context artifact store", () => {
     const legacy = new Database(path);
     legacy.exec("DROP TABLE context_snapshot_index");
     legacy.exec("DROP INDEX IF EXISTS events_org_occurred_idx");
+    legacy.exec("DROP TABLE outbound_attempts");
+    legacy.exec(MIGRATIONS.find((migration) => migration.version === 23).sql);
+    legacy.exec("ALTER TABLE work_runs DROP COLUMN start_state");
     legacy.pragma("user_version = 45");
     legacy.close();
 
     const reopened = new SqliteAuthorityStore(path);
-    assert.equal(reopened.schemaVersion, 48);
+    assert.equal(reopened.schemaVersion, LATEST_SCHEMA_VERSION);
+    assert.equal(await reopened.claimOutboundAttempt({
+      org_id: "local-owner", client_request_id: "after-legacy-repair",
+      thread_id: "feishu:oc_1", recovery_hash: HASH_A,
+      now: "2026-08-30T00:00:00.000Z",
+    }), true);
+    await reopened.putOutboundAttempt({
+      org_id: "local-owner", client_request_id: "repaired-rejection", thread_id: "feishu:oc_1",
+      status: "rejected", now: "2026-08-30T00:00:00.000Z",
+    });
+    assert.equal(await reopened.claimOutboundAttempt({
+      org_id: "local-owner", client_request_id: "repaired-rejection", thread_id: "feishu:oc_1",
+      now: "2026-08-30T00:00:01.000Z",
+    }), true);
     reopened.close();
     const checked = new Database(path);
     try {
@@ -1268,6 +1291,9 @@ describe("SQLite context artifact store", () => {
     store.close();
     const legacy = new Database(path);
     legacy.exec("ALTER TABLE context_artifacts DROP COLUMN preview_json");
+    legacy.exec("ALTER TABLE outbound_attempts DROP COLUMN recovery_hash");
+    legacy.exec("ALTER TABLE outbound_attempts DROP COLUMN receipt_json");
+    legacy.exec("ALTER TABLE work_runs DROP COLUMN start_state");
     // Last migration before preview_json (46) and the preview rebuild (47).
     legacy.pragma("user_version = 45");
     const payload = JSON.stringify({

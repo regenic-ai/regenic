@@ -74,6 +74,7 @@ export function attentionForWork(
     extraPrompts > 0 ||
     work.status === "waiting_human" ||
     work.status === "failed" ||
+    work.start_state === "uncertain" ||
     deliveryNeedsAttention(work.delivery)
   ) {
     return "waiting_you";

@@ -26,7 +26,10 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
   ) {}
 
   async openRead(request: ContextRequest) {
-    const read = structuredClone(await this.authority.openContextRead(request.org_id));
+    const read = structuredClone(await this.authority.openContextRead(request.org_id, {
+      filters: request.filters,
+      anchors: request.anchors,
+    }));
     validateAuthorityRead(request.org_id, read);
     const heads = new Map(
       read.lifecycle_heads.map((head) => [identityKey(head.source, head.external_id), head]),

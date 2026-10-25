@@ -132,6 +132,14 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
 - `probeCatalog`、inbox 回执和会话名查找已经按驱动吞掉失败。
 - stdio 出进程宿主留给不可信第三方插件，不在本阶段。
 
+Personal API 编排另有编译期能力边界：每个 `PersonalConnectorService` 显式
+创建并持有一份 `ConnectorState`，不再把服务实例强转后交给 helper。安装、
+发送、创建会话、webhook、实时拉取和 due-work 模块只声明自身需要的状态能力；
+安装和创建会话的恢复通过回调请求 catch-up，不直接操作调度器内部状态。
+维护开关始终读取当前值，不复制成上下文快照；定时器和 stream 锁仍由服务
+私有持有。共享 DTO 位于 `personal-connector-types.ts`，依赖检查禁止 helper
+反向导入所属服务。
+
 ## 消息格式
 
 连接器停在 L0：只翻译本渠道的 wire。交出去的是 L1 信封（`IngestRecord`：身份、时间、作者、正文、幂等）和 L2 封闭 `record_class`（`utterance` / `task` / `status` / `prompt`，由 `type` 映射）。L3 发言者只写在 `utterance` 上。L4 线程面由内核投影，L5 WorkItem 由策略开单，L6 执行器另挂。见[消息编排 · 分层](MESSAGE_ORCHESTRATION.md)与 [RFC 0009](rfcs/0009-work-orchestration.md)。不得在安装上标注「人聊 / Agent」。
@@ -331,6 +339,30 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 ```
 
 `SendIntent.content` 是 `ContentPart[]`（`body` 加附件）。适配器把这份信封写回同一来源和线程。
+
+回复客户端应为一次发送固定 `client_request_id`，重试时复用同一个值。
+API 在调用渠道前持久化原子发送认领；同一组织、同一请求键只有一个调用者能发送。
+未提供键时 API 会生成，并在成功响应中返回；需要应对响应丢失的客户端必须预先生成键。
+网络错误、未确认接收和历史 `failed` / `pending` 记录均视为结果不确定，
+返回 `send_uncertain`，不会超时后自动重发；请先核对渠道中的消息。
+只有能确认整次发送尚无任何消息被接收或入队时，适配器才能抛出
+`SendNotAcceptedError`；不能仅凭 `throttled` 等错误码判断，多段发送尤其如此。
+API 将这类记录持久化为 `rejected` 并返回原错误（例如 429），同键、同会话
+重试通过原子认领恢复发送；历史 `failed` 仍视为不确定。WhatsApp Web live
+对入队前的参数校验、队列容量和限流拒绝使用此分支。队列拒绝只证明本次
+enqueue 未成功，不代表此前的多段发送没有副作用。
+拒绝状态落盘失败时返回 `send_rejection_pending`（503），不授权自动重发。
+SQLite schema 52 / PostgreSQL schema 53 增加此状态，不重新解释旧记录；
+API 与 worker 需一起升级，旧二进制不能打开新版本数据库。
+确认渠道接收后，API 保存回执及原始正文、附件的恢复材料。
+此后同键重试只修复本地入库和消息别名，不再调用渠道，且使用原始内容。
+首次本地持久化失败返回 `send_recovery_pending`（503）；仍只允许复用原键恢复。
+旧 `accepted` 记录若没有恢复材料，返回 `send_recovery_unavailable`，应刷新渠道而不是重发。
+渠道已接收、回执尚未落盘时崩溃，仍可能留下不确定记录；这里不承诺端到端 exactly-once。
+
+支持幂等的适配器应从 `SendIntent.idempotency_key` 为每条渠道消息派生稳定且不同的键。
+飞书按安装、会话、请求键及文本 / 图片 / 文件位置派生 UUID。
+上游去重可能有时间窗口，其他适配器也可能不支持；仅提供幂等键不代表可以安全重试。
 
 ## 目录
 
