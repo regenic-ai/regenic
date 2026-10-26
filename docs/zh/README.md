@@ -9,6 +9,7 @@
 - [个人 WhatsApp 测试与验收](WHATSAPP_PERSONAL_TESTING.md)
 - [技术栈](TECH_STACK.md)
 - [桌面端](DESKTOP.md)
+- [桌面设计规范](DESKTOP_DESIGN.html)
 - [本地模型服务配置](LOCAL_MODEL_SERVICE.md)
 - [客服 Agent 配置与使用](CUSTOMER_SERVICE_AGENT.md)
 - [采集架构](INGESTION_ARCHITECTURE.md)
