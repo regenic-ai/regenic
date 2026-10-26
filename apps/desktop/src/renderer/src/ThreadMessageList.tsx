@@ -15,6 +15,7 @@ import {
   collectPreviewImages,
   previewImageId,
 } from "./image-preview";
+import { IdentityAvatar } from "./IdentityAvatar";
 import { ImageLightbox } from "./ImageLightbox";
 import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
@@ -811,9 +812,21 @@ function ChatAvatar({
   item: Pick<InboxViewItem, "kind" | "actor_label" | "direction">;
 }) {
   const role = messageRole(item);
+  const mark = messageSpeakerMark(item);
+  const kind =
+    role === "assistant"
+      ? "bot"
+      : role === "system"
+        ? "system"
+        : item.direction === "outbound"
+          ? "self"
+          : "contact";
   return (
-    <span className={`chat-avatar chat-avatar-${role}`}>
-      {messageSpeakerMark(item)}
-    </span>
+    <IdentityAvatar
+      className={`chat-avatar chat-avatar-${role}`}
+      seed={item.actor_label?.trim() || mark}
+      label={mark}
+      kind={kind}
+    />
   );
 }

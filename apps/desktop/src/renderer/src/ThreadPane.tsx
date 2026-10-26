@@ -553,6 +553,26 @@ export const ThreadPane = memo(function ThreadPane({
           <div className="thread-meta-row">
             <div className="thread-tags">
               <ThreadFaceTags tags={tags} />
+              <p className="thread-sub">
+                {threadLoadedCountCopy({
+                  opening,
+                  loaded: merged.length,
+                  hasOlder,
+                })}
+                {showSubLabel ? ` · ${subLabel}` : ""}
+                {loadingOlder ? (
+                  <span className="thread-sync">
+                    <span className="dot" />
+                    {t("thread.loadingEarlier")}
+                  </span>
+                ) : null}
+                {syncNote && (!loadingOlder || syncTone === "error") ? (
+                  <span className={`thread-sync${syncTone === "error" ? " is-error" : ""}`}>
+                    <span className="dot" />
+                    {syncNote}
+                  </span>
+                ) : null}
+              </p>
             </div>
             {canForwardConversation || canRun || canDismiss || canBind ? (
               <div className="thread-actions">
@@ -609,26 +629,6 @@ export const ThreadPane = memo(function ThreadPane({
               </div>
             ) : null}
           </div>
-          <p className="thread-sub">
-            {threadLoadedCountCopy({
-              opening,
-              loaded: merged.length,
-              hasOlder,
-            })}
-            {showSubLabel ? ` · ${subLabel}` : ""}
-            {loadingOlder ? (
-              <span className="thread-sync">
-                <span className="dot" />
-                {t("thread.loadingEarlier")}
-              </span>
-            ) : null}
-            {syncNote && (!loadingOlder || syncTone === "error") ? (
-              <span className={`thread-sync${syncTone === "error" ? " is-error" : ""}`}>
-                <span className="dot" />
-                {syncNote}
-              </span>
-            ) : null}
-          </p>
           {workHint ? <p className="work-hint">{workHint}</p> : null}
           {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
           {!conversationClosed && !awaitingPrompt ? workResult : null}

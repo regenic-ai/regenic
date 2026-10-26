@@ -2,12 +2,12 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--chrome);
 }
 
 .tray-head {
   padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-8);
 }
 
 .tray-brand {
@@ -21,6 +21,12 @@
 .tray-head h1 {
   margin: 0;
   font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+}
+
+.tray-list {
+  padding-top: 6px;
 }
 
 .item.is-hidden {
@@ -36,25 +42,35 @@
   display: flex;
   gap: 8px;
   padding: 12px 16px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-8);
 }
 
 .primary,
 .ghost {
   height: 30px;
-  padding: 0 12px;
-  border-radius: 6px;
-  font-weight: 550;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .primary {
-  background: var(--g500);
-  color: var(--on-accent);
+  background: var(--ink);
+  color: var(--chrome);
+}
+
+.primary:hover:not(:disabled) {
+  background: #000;
 }
 
 .ghost {
-  border: 1px solid var(--line);
+  border: 0;
+  background: var(--wash-6);
   color: var(--text);
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--wash-8);
 }
 
 .muted {
@@ -62,6 +78,6 @@
 }
 
 code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 11px;
 }

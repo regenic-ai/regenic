@@ -205,7 +205,7 @@ export function Composer({
       {quote ? (
         <div className="composer-quote">
           <div>
-            <strong>Replying</strong>
+            <strong>{t("composer.replying")}</strong>
             <span>{firstLine(quote.body_text, 72) || t("composer.message")}</span>
           </div>
           <button type="button" className="icon-btn" onClick={onCancelQuote} aria-label={t("composer.cancelReply")}>
@@ -305,7 +305,7 @@ export function Composer({
           type="button"
           className="composer-plus"
           disabled={blocked}
-          aria-label="Attach"
+          aria-label={t("composer.attach")}
           title={t("composer.attach")}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => fileRef.current?.click()}

@@ -1006,9 +1006,10 @@ export const en = {
 
   "composer.message": "Message",
   "composer.sendMessage": "Send a message",
-  "composer.sendTo": "Send to {name}",
+  "composer.sendTo": "Message {name}",
   "composer.unavailable": "Sending back to this channel is not available yet",
   "composer.cancelReply": "Cancel reply",
+  "composer.replying": "Replying",
   "composer.attach": "Attach image or file",
   "composer.sending": "Sending",
   "composer.send": "Send",
@@ -2015,9 +2016,10 @@ export const zh: Record<MessageKey, string> = {
 
   "composer.message": "消息",
   "composer.sendMessage": "发消息",
-  "composer.sendTo": "发给 {name}",
+  "composer.sendTo": "给 {name} 发消息",
   "composer.unavailable": "这条渠道暂时还不能发回",
   "composer.cancelReply": "取消引用",
+  "composer.replying": "引用回复",
   "composer.attach": "添加图片或文件",
   "composer.sending": "发送中",
   "composer.send": "发送",

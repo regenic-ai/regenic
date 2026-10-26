@@ -806,8 +806,8 @@ function createMainWindow(): BrowserWindow {
     minHeight: 600,
     title: "Regenic",
     titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
-    backgroundColor: "#0a0a0a",
+    trafficLightPosition: { x: 18, y: 19 },
+    backgroundColor: "#f5f5f5",
     icon: appIconFile(),
     webPreferences: {
       preload: preloadPath(),
@@ -841,7 +841,7 @@ function createTrayWindow(): BrowserWindow {
     movable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    backgroundColor: "#171c18",
+    backgroundColor: "#fcfcfc",
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,
