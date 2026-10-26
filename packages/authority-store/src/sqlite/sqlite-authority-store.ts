@@ -68,6 +68,7 @@ import type {
   WorkRun,
   WorkRunStartClaim,
   WorkDelivery,
+  SearchAnswerRecord,
   DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
@@ -273,6 +274,7 @@ import {
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
+  getSearchAnswer,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -288,6 +290,7 @@ import {
   listWorkRuns,
   putExecutorInstallation,
   putRecipe,
+  putSearchAnswer,
   putWorkDelivery,
   putWorkItem,
   putWorkRun,
@@ -1231,6 +1234,20 @@ export class SqliteAuthorityStore
     return claimWorkRunStart(this.database, input);
   }
 
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    return getSearchAnswer(this.database, orgId, id);
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    this.assertWritable();
+    return putSearchAnswer(this.database, record);
+  }
+
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return listWorkDeliveries(this.database, orgId);
   }
@@ -1729,6 +1746,20 @@ export class SqliteAuthorityStore
         this.database.exec("ALTER TABLE work_runs ADD COLUMN start_state TEXT CHECK (start_state IN ('pending', 'submitted', 'uncertain'))");
       }
       this.database.exec(OUTBOUND_REJECTION_MIGRATION_SQL);
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS search_answers (
+          id TEXT PRIMARY KEY,
+          org_id TEXT NOT NULL,
+          work_item_id TEXT NOT NULL REFERENCES work_items(id),
+          query TEXT NOT NULL,
+          event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+          outcome TEXT CHECK (outcome IN ('timed_out')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
+          ON search_answers (org_id, work_item_id);
+      `);
       this.database.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
     });
     repair.immediate();

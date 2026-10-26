@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
   ModelTimeoutError,
@@ -54,7 +54,7 @@ import {
   type AgentRunOutput,
   type AgentRunRecord,
   type AgentRunStatus,
-  bodyTextFromStored,
+  selectContextIndexes,
   type ContextAuthorityRead,
 } from "@regenic/domain";
 import {
@@ -73,6 +73,9 @@ import {
   type ContextRecordSummary,
 } from "./context-record-view";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { PersonalContextError } from "./personal-context-error";
+import { PersonalConversationContextService } from "./personal-conversation-context.service";
+export { PersonalContextError } from "./personal-context-error";
 
 const FORBIDDEN_PERSONAL_KEYS = new Set(["id", "org_id", "principal", "schema_version"]);
 const ASK_KEYS = new Set([
@@ -95,32 +98,13 @@ const DIFF_KEYS = new Set([
 const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
 const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
 
-export class PersonalContextError extends Error {
-  constructor(
-    readonly code:
-      | "invalid_request"
-      | "not_found"
-      | "context_changed"
-      | "replay_forbidden"
-      | "no_context"
-      | "model_unavailable"
-      | "model_timeout"
-      | "model_upstream"
-      | "retrieval_unavailable"
-      | "invalid_model_output",
-    readonly httpStatus: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "PersonalContextError";
-  }
-}
-
 @Injectable()
 export class PersonalContextService {
   constructor(
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(PersonalConversationContextService)
+    private readonly conversations: PersonalConversationContextService,
   ) {}
 
   async assemble(input: unknown) {
@@ -167,10 +151,7 @@ export class PersonalContextService {
     }
 
     return this.runContext(async () => {
-      const host = this.runtime.requireHost();
-      const authority = host.get("authority");
-      const contextAuthority = host.get("context-authority");
-      const blobs = host.get("blobs");
+      const authority = this.runtime.requireHost().get("authority");
       const seedsByThread = new Map<string, Array<{
         event_id: string;
         content_hash: string;
@@ -199,16 +180,7 @@ export class PersonalContextService {
 
       for (const [threadId, seeds] of threadEntries) {
         const maxThreadMessages = seeds.length + baseExtra + (extraRemainder-- > 0 ? 1 : 0);
-        const read = await contextAuthority.openContextReadForThread(this.runtime.orgId(), threadId);
-        const heads = new Set(read.lifecycle_heads.map((head) => head.head_event_id));
-        const events = read.events
-          .filter((event) =>
-            event.thread_id === threadId
-            && event.operation !== "tombstone"
-            && heads.has(event.id)
-            && event.content_hash
-            && event.content_media_type)
-          .sort(compareContextEvent);
+        const { read_epoch, events } = await this.conversations.readThread(threadId);
         const indexes = new Map(events.map((event, index) => [event.id, index]));
         for (const seed of seeds) {
           const index = indexes.get(seed.event_id);
@@ -217,53 +189,40 @@ export class PersonalContextService {
           }
         }
 
-        const selected = selectContextIndexes(events, seeds.map((seed) => seed.event_id), {
+        const selected = selectContextIndexes(events.map((event) => ({
+          id: event.id,
+          source: event.source,
+          external_id: event.external_id,
+          parent_external_id: stringAttribute(event.attrs, "parent_external_id"),
+        })), seeds.map((seed) => seed.event_id), {
           before, after, replyDepth, maxMessages: maxThreadMessages,
         });
-        const chosenEvents = selected.indexes.map((index) => events[index]);
-        const bodies = await blobs.getMany(chosenEvents.flatMap((event) =>
-          event.content_hash ? [event.content_hash] : []));
-        const messages = [];
-        for (const index of selected.indexes) {
-          const event = events[index];
-          const contentHash = event.content_hash!;
-          const bytes = bodies.get(contentHash);
-          if (!bytes || createHash("sha256").update(bytes).digest("hex") !== contentHash) {
-            throw contextChanged();
-          }
-          const text = bodyTextFromStored(bytes, event.content_media_type!)?.trim();
-          if (!text) {
-            throw contextChanged();
-          }
-          const parentExternalId = stringAttribute(event.attrs, "parent_external_id");
-          const replyTarget = parentExternalId
-            ? events.find((candidate) =>
-              candidate.source === event.source
-              && candidate.external_id === parentExternalId)
-            : undefined;
-          messages.push({
-            event_id: event.id,
-            external_id: event.external_id,
-            content_hash: contentHash,
-            source: event.source,
-            thread_id: threadId,
-            ...(event.actor_id ? { actor_id: event.actor_id } : {}),
-            ...(parentExternalId ? { parent_external_id: parentExternalId } : {}),
-            ...(replyTarget ? { reply_to_event_id: replyTarget.id } : {}),
-            occurred_at: event.occurred_at,
-            text,
-            selection_reason: selected.reasons.get(index) ?? "neighbor",
-          });
+        const decoded = await this.conversations.readMessages(
+          threadId,
+          events,
+          selected.indexes,
+          selected.reasons,
+        );
+        const seedIds = new Set(seeds.map((seed) => seed.event_id));
+        if ([...decoded.unreadable].some((index) => seedIds.has(events[index].id))) {
+          throw contextChanged();
         }
+        const { messages, kept, unreadable } = decoded;
         returnedMessages += messages.length;
-        const first = selected.indexes[0];
-        const last = selected.indexes.at(-1);
-        const hasEarlier = first !== undefined && first > 0;
-        const hasLater = last !== undefined && last < events.length - 1;
-        const gaps = contextGaps(events, selected.indexes);
+        const readableBetween = (from: number, to: number) => {
+          for (let index = from; index < to; index += 1) {
+            if (!unreadable.has(index)) return true;
+          }
+          return false;
+        };
+        const first = kept[0];
+        const last = kept.at(-1);
+        const hasEarlier = first !== undefined && readableBetween(0, first);
+        const hasLater = last !== undefined && readableBetween(last + 1, events.length);
+        const gaps = contextGaps(events, kept, unreadable);
         conversations.push({
           thread_id: threadId,
-          read_epoch: read.read_epoch,
+          read_epoch,
           anchor_event_ids: seeds.sort((left, right) => left.rank - right.rank)
             .map((seed) => seed.event_id),
           messages,
@@ -282,6 +241,10 @@ export class PersonalContextService {
         expansion: expansionSummary(returnedMessages, maxMessages),
       };
     });
+  }
+
+  async searchWindow(input: unknown) {
+    return this.runContext(() => this.conversations.window(input));
   }
 
   async semanticStatus() {
@@ -1674,75 +1637,6 @@ function boundedInteger(value: unknown, field: string, min: number, max: number)
   return value;
 }
 
-function selectContextIndexes(
-  events: ContextAuthorityRead["events"],
-  seedIds: string[],
-  options: { before: number; after: number; replyDepth: number; maxMessages: number },
-): {
-  indexes: number[];
-  reasons: Map<number, "hit" | "reply_target" | "neighbor">;
-  truncated: boolean;
-} {
-  const priorities = new Map<number, { priority: number; distance: number; reason: "hit" | "reply_target" | "neighbor" }>();
-  const offer = (
-    index: number,
-    priority: number,
-    distance: number,
-    reason: "hit" | "reply_target" | "neighbor",
-  ) => {
-    const current = priorities.get(index);
-    if (!current || priority < current.priority || (priority === current.priority && distance < current.distance)) {
-      priorities.set(index, { priority, distance, reason });
-    }
-  };
-  for (const seedId of seedIds) {
-    const seedIndex = events.findIndex((event) => event.id === seedId);
-    if (seedIndex < 0) continue;
-    offer(seedIndex, 0, 0, "hit");
-    let replyIndex = seedIndex;
-    for (let depth = 0; depth < options.replyDepth; depth += 1) {
-      const parentExternalId = stringAttribute(events[replyIndex].attrs, "parent_external_id");
-      if (!parentExternalId) break;
-      const parent = events.findIndex((event) =>
-        event.source === events[replyIndex].source
-        && event.external_id === parentExternalId);
-      if (parent < 0 || parent === replyIndex) break;
-      offer(parent, 1, depth + 1, "reply_target");
-      replyIndex = parent;
-    }
-    for (let index = Math.max(0, seedIndex - options.before); index < seedIndex; index += 1) {
-      offer(index, 2, seedIndex - index, "neighbor");
-    }
-    for (
-      let index = seedIndex + 1;
-      index <= Math.min(events.length - 1, seedIndex + options.after);
-      index += 1
-    ) {
-      offer(index, 2, index - seedIndex, "neighbor");
-    }
-  }
-  const ranked = [...priorities.entries()].sort((left, right) =>
-    left[1].priority - right[1].priority
-    || left[1].distance - right[1].distance
-    || left[0] - right[0]);
-  const indexes = ranked.slice(0, options.maxMessages).map(([index]) => index)
-    .sort((left, right) => left - right);
-  return {
-    indexes,
-    reasons: new Map(indexes.map((index) => [index, priorities.get(index)!.reason])),
-    truncated: ranked.length > indexes.length,
-  };
-}
-
-function compareContextEvent(
-  left: ContextAuthorityRead["events"][number],
-  right: ContextAuthorityRead["events"][number],
-): number {
-  const leftKey = `${left.occurred_at}\u0000${left.id}`;
-  const rightKey = `${right.occurred_at}\u0000${right.id}`;
-  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-}
-
 function contextBoundary(event: ContextAuthorityRead["events"][number]) {
   return { occurred_at: event.occurred_at, event_id: event.id };
 }
@@ -1750,6 +1644,7 @@ function contextBoundary(event: ContextAuthorityRead["events"][number]) {
 function contextGaps(
   events: ContextAuthorityRead["events"],
   indexes: number[],
+  unreadable: ReadonlySet<number>,
 ): Array<{
   after: { occurred_at: string; event_id: string };
   before: { occurred_at: string; event_id: string };
@@ -1758,7 +1653,11 @@ function contextGaps(
   for (let index = 1; index < indexes.length; index += 1) {
     const previous = indexes[index - 1];
     const current = indexes[index];
-    if (current - previous > 1) {
+    let skipped = false;
+    for (let between = previous + 1; between < current && !skipped; between += 1) {
+      skipped = !unreadable.has(between);
+    }
+    if (skipped) {
       gaps.push({
         after: contextBoundary(events[previous]),
         before: contextBoundary(events[current]),

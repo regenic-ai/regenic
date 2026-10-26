@@ -6,6 +6,7 @@ import type {
   WorkRunStartClaim,
   WorkDelivery,
   ExecutorInstallation,
+  SearchAnswerRecord,
 } from "@regenic/domain";
 import {
   recipeTriggerOf,
@@ -294,6 +295,44 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
   }).immediate();
 }
 
+export async function getSearchAnswer(
+  db: Database.Database,
+  orgId: string,
+  id: string,
+): Promise<SearchAnswerRecord | null> {
+  const row = db.prepare(
+    `SELECT * FROM search_answers WHERE org_id = ? AND id = ?`,
+  ).get(orgId, id) as SearchAnswerRow | undefined;
+  return row ? toSearchAnswer(row) : null;
+}
+
+export async function putSearchAnswer(
+  db: Database.Database,
+  record: SearchAnswerRecord,
+): Promise<SearchAnswerRecord> {
+  db.prepare(`
+    INSERT INTO search_answers (
+      id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      work_item_id = excluded.work_item_id,
+      query = excluded.query,
+      event_ids_json = excluded.event_ids_json,
+      outcome = excluded.outcome,
+      updated_at = excluded.updated_at
+  `).run(
+    record.id,
+    record.org_id,
+    record.work_item_id,
+    record.query,
+    JSON.stringify(record.event_ids),
+    record.outcome ?? null,
+    record.created_at,
+    record.updated_at,
+  );
+  return record;
+}
+
 export async function listWorkDeliveries(db: Database.Database, orgId: string): Promise<WorkDelivery[]> {
     const rows = db
       .prepare(
@@ -542,6 +581,17 @@ interface WorkRunRow {
   updated_at: string;
 }
 
+interface SearchAnswerRow {
+  id: string;
+  org_id: string;
+  work_item_id: string;
+  query: string;
+  event_ids_json: string;
+  outcome: SearchAnswerRecord["outcome"] | null;
+  created_at: string;
+  updated_at: string;
+}
+
 function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
   return {
     id: row.id,
@@ -619,6 +669,19 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     result: row.result_json
       ? (JSON.parse(row.result_json) as WorkRun["result"])
       : undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    work_item_id: row.work_item_id,
+    query: row.query,
+    event_ids: JSON.parse(row.event_ids_json) as string[],
+    ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

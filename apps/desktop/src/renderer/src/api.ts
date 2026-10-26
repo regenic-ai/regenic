@@ -22,7 +22,10 @@ import type {
   PersonalContextBundle,
   PersonalContextDiff,
   PersonalContextSnapshotIndexEntry,
-  PersonalContextSearchResult,
+  PersonalExpandedSearchResult,
+  PersonalSearchAnswer,
+  PersonalSearchBoundary,
+  PersonalSearchWindow,
   PersonalSearchSource,
   SemanticIndexStatus,
   PersonalContextView,
@@ -1351,15 +1354,66 @@ const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
 const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
 
 export async function searchPersonalContext(
-  input: { query: string; limit?: number; filters?: { sources?: string[]; thread_ids?: string[] } },
+  input: {
+    query: string;
+    limit?: number;
+    filters?: { sources?: string[]; thread_ids?: string[] };
+    context?: { before?: number; after?: number; reply_depth?: number; max_messages?: number };
+  },
   signal?: AbortSignal,
-): Promise<PersonalContextSearchResult> {
-  const response = await kernelFetch("/v1/me/context/search", {
+): Promise<PersonalExpandedSearchResult> {
+  const response = await kernelFetch(`/v1/me/context/search/expand?locale=${activeLocale()}`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify(input), signal,
   });
   if (!response.ok) throwKernelError(await response.json(), `context search ${response.status}`);
-  return response.json() as Promise<PersonalContextSearchResult>;
+  return response.json() as Promise<PersonalExpandedSearchResult>;
+}
+
+export async function fetchSearchWindow(
+  input: {
+    thread_id: string;
+    direction: "before" | "after";
+    boundary: PersonalSearchBoundary;
+    until?: PersonalSearchBoundary;
+    limit?: number;
+  },
+  signal?: AbortSignal,
+): Promise<PersonalSearchWindow> {
+  const response = await kernelFetch(`/v1/me/context/search/window?locale=${activeLocale()}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(input), signal,
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search window ${response.status}`);
+  return response.json() as Promise<PersonalSearchWindow>;
+}
+
+export async function startSearchAnswer(
+  input: {
+    query: string;
+    conversations: Array<{ thread_id: string; event_ids: string[] }>;
+    executor_type?: string;
+  },
+  signal?: AbortSignal,
+): Promise<PersonalSearchAnswer> {
+  const response = await kernelFetch(`/v1/me/context/search/answers?locale=${activeLocale()}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(input), signal,
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search answer ${response.status}`);
+  return response.json() as Promise<PersonalSearchAnswer>;
+}
+
+export async function fetchSearchAnswer(answerId: string, signal?: AbortSignal): Promise<PersonalSearchAnswer> {
+  const response = await kernelFetch(`/v1/me/context/search/answers/${encodeURIComponent(answerId)}`, { signal });
+  if (!response.ok) throwKernelError(await response.json(), `search answer ${response.status}`);
+  return response.json() as Promise<PersonalSearchAnswer>;
+}
+
+export async function cancelSearchAnswer(answerId: string): Promise<void> {
+  await kernelFetch(`/v1/me/context/search/answers/${encodeURIComponent(answerId)}/cancel`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  }).catch(() => undefined);
 }
 
 export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<SemanticIndexStatus> {

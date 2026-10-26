@@ -91,6 +91,7 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  SearchAnswerRecord,
   WorkStore,
   ExecutorInstallation,
   ExecutorStore,
@@ -800,6 +801,19 @@ export class SqliteSplitAuthorityStore
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     return this.writer.call("claimWorkRunStart", [input]);
+  }
+
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    return this.reader.call("getSearchAnswer", [orgId, id]);
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    return this.writer.call("putSearchAnswer", [record]);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

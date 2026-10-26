@@ -30,6 +30,7 @@ import {
   WORK_REAP_FOLLOW_COOLDOWN_MS,
   WORK_REAP_LOG_EVERY_MS,
 } from "./personal-work-reap";
+import { isSystemRecipeId } from "./personal-system-work";
 
 export class PersonalWorkSupervise {
   private waits?: PersonalWorkWait;
@@ -42,6 +43,7 @@ export class PersonalWorkSupervise {
     private readonly runtime: PersonalRuntimeService,
     private readonly channel: PersonalWorkChannel,
     private readonly touchInboxDigest?: () => void,
+    private readonly workUpdated?: (workItemId: string) => void,
   ) {}
 
   bindWaits(waits: PersonalWorkWait): void {
@@ -272,6 +274,7 @@ export class PersonalWorkSupervise {
     if (await this.abandonIfSkipped(item, nextRun)) {
       return;
     }
+    const changed = workRunChanged(run, nextRun);
     await authority.putWorkRun(nextRun);
     if (await this.abandonIfSkipped(item, nextRun)) {
       return;
@@ -313,9 +316,14 @@ export class PersonalWorkSupervise {
       if (!isActiveWorkStatus(status)) {
         this.writeBackOverride.delete(item.id);
         this.waits?.drop(run.id);
-        await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
-        this.touchInboxDigest?.();
+        if (!isSystemRecipeId(recipe.id)) {
+          await foldThreadByPolicy(authority, item.org_id, item.thread_id, now);
+          this.touchInboxDigest?.();
+        }
       }
+    }
+    if (changed || item.status !== status) {
+      this.workUpdated?.(item.id);
     }
   }
 
@@ -336,4 +344,12 @@ export class PersonalWorkSupervise {
     this.waits?.drop(run.id);
     return true;
   }
+}
+
+function workRunChanged(before: WorkRun, after: WorkRun): boolean {
+  return before.status !== after.status
+    || before.start_state !== after.start_state
+    || before.external_run_id !== after.external_run_id
+    || before.agent_thread_id !== after.agent_thread_id
+    || JSON.stringify(before.result) !== JSON.stringify(after.result);
 }

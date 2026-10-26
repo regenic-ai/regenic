@@ -6,6 +6,7 @@ import type {
   WorkRunStartClaim,
   WorkDelivery,
   ExecutorInstallation,
+  SearchAnswerRecord,
 } from "@regenic/domain";
 import {
   recipeTriggerOf,
@@ -299,6 +300,48 @@ export async function claimWorkRunStart(db: PgSql, { run, max_concurrent }: Work
   });
 }
 
+export async function getSearchAnswer(
+  db: PgSql,
+  orgId: string,
+  id: string,
+): Promise<SearchAnswerRecord | null> {
+  const row = await db.queryOne<SearchAnswerRow>(
+    `SELECT * FROM search_answers WHERE org_id = $1 AND id = $2`,
+    [orgId, id],
+  );
+  return row ? toSearchAnswer(row) : null;
+}
+
+export async function putSearchAnswer(
+  db: PgSql,
+  record: SearchAnswerRecord,
+): Promise<SearchAnswerRecord> {
+  await db.execute(
+    `
+      INSERT INTO search_answers (
+        id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (id) DO UPDATE SET
+        work_item_id = EXCLUDED.work_item_id,
+        query = EXCLUDED.query,
+        event_ids_json = EXCLUDED.event_ids_json,
+        outcome = EXCLUDED.outcome,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      record.id,
+      record.org_id,
+      record.work_item_id,
+      record.query,
+      jsonb(record.event_ids),
+      record.outcome ?? null,
+      record.created_at,
+      record.updated_at,
+    ],
+  );
+  return record;
+}
+
 export async function listWorkDeliveries(db: PgSql, orgId: string): Promise<WorkDelivery[]> {
     const rows = await db.query<WorkDeliveryRow>(
       `SELECT * FROM work_deliveries WHERE org_id = $1 ORDER BY updated_at DESC, id`,
@@ -539,6 +582,17 @@ interface WorkRunRow {
   updated_at: unknown;
 }
 
+interface SearchAnswerRow {
+  id: string;
+  org_id: string;
+  work_item_id: string;
+  query: string;
+  event_ids_json: unknown;
+  outcome: SearchAnswerRecord["outcome"] | null;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
 function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
   return {
     id: row.id,
@@ -618,6 +672,19 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     result: row.result_json
       ? asJson<WorkRun["result"]>(row.result_json)
       : undefined,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  };
+}
+
+function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    work_item_id: row.work_item_id,
+    query: row.query,
+    event_ids: asJson<string[]>(row.event_ids_json),
+    ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };

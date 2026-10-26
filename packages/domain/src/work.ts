@@ -6,6 +6,7 @@ import type {
 import type { ContentPart, JsonValue } from "./ingestion";
 import type { RecordClass } from "./record-class";
 import type { ThreadFacet } from "./thread-facet";
+import type { SearchAnswerRecord } from "./search-answer";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
 
@@ -236,4 +237,9 @@ export interface WorkStore {
     value: string,
     updatedAt: string,
   ): Promise<void>;
+  getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null>;
+  putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
 }

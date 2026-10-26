@@ -532,6 +532,72 @@ export interface PersonalContextSearchResult {
   truncated: boolean;
 }
 
+export interface PersonalSearchBoundary {
+  occurred_at: string;
+  event_id: string;
+}
+
+export interface PersonalSearchMessage {
+  event_id: string;
+  external_id: string;
+  content_hash: string;
+  source: string;
+  thread_id: string;
+  actor_id?: string;
+  actor_label: string | null;
+  parent_external_id?: string;
+  reply_to_event_id?: string;
+  occurred_at: string;
+  text: string;
+  attachments?: Array<{ media_type: string; filename?: string }>;
+  selection_reason: "hit" | "reply_target" | "neighbor";
+}
+
+export interface PersonalSearchConversation {
+  thread_id: string;
+  title: string | null;
+  channel_label: string | null;
+  read_epoch: string;
+  anchor_event_ids: string[];
+  messages: PersonalSearchMessage[];
+  continuation: {
+    before: PersonalSearchBoundary | null;
+    after: PersonalSearchBoundary | null;
+    gaps: Array<{ after: PersonalSearchBoundary; before: PersonalSearchBoundary }>;
+  };
+  truncated: boolean;
+}
+
+export interface PersonalSearchWindow {
+  thread_id: string;
+  read_epoch: string;
+  messages: PersonalSearchMessage[];
+  has_more: boolean;
+}
+
+export type PersonalSearchAnswerStatus =
+  | "running"
+  | "waiting_human"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled";
+
+export interface PersonalSearchAnswer {
+  answer_id: string;
+  work_item_id: string;
+  status: PersonalSearchAnswerStatus;
+  executor_type: string;
+  agent_thread_id?: string;
+  answer?: string;
+  citations?: Array<{ ref: number; event_id: string }>;
+}
+
+export interface PersonalExpandedSearchResult extends PersonalContextSearchResult {
+  conversations: PersonalSearchConversation[];
+  expansion: { returned_messages: number; max_messages: number };
+}
+
 export interface PersonalSearchSource {
   event_id: string;
   content_hash: string;

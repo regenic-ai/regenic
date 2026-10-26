@@ -22,6 +22,8 @@ import { requestLocale } from "./request-locale";
 import { CustomerServiceError } from "@regenic/context-engine";
 import { CustomerServiceTaskConflictError } from "@regenic/domain";
 import { PersonalCustomerService } from "./personal-customer-service";
+import { PersonalSearchAnswerService } from "./personal-search-answer.service";
+import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
 
 @Controller("v1/me/context")
 @UseGuards(PersonalApiGuard)
@@ -33,6 +35,10 @@ export class PersonalContextController {
     private readonly inbox: PersonalInboxService,
     @Inject(PersonalCustomerService)
     private readonly customerService: PersonalCustomerService,
+    @Inject(PersonalSearchAnswerService)
+    private readonly answers: PersonalSearchAnswerService,
+    @Inject(PersonalConversationLabelsService)
+    private readonly conversationLabels: PersonalConversationLabelsService,
   ) {}
 
   @Post("assemble")
@@ -48,8 +54,64 @@ export class PersonalContextController {
 
   @Post("search/expand")
   @HttpCode(HttpStatus.OK)
-  searchExpanded(@Body() body: unknown) {
-    return this.guard(() => this.context.searchExpanded(body));
+  searchExpanded(@Body() body: unknown, @Query("locale") locale?: string) {
+    return this.guard(async () => {
+      const result = await this.context.searchExpanded(body);
+      if (!result.conversations.length) return result;
+      const labels = await this.conversationLabels.describe(
+        result.conversations,
+        requestLocale(locale),
+      );
+      return {
+        ...result,
+        conversations: result.conversations.map((conversation) => ({
+          ...conversation,
+          title: labels.threads.get(conversation.thread_id)?.title ?? null,
+          channel_label: labels.threads.get(conversation.thread_id)?.channel_label ?? null,
+          messages: conversation.messages.map((message) => ({
+            ...message,
+            actor_label: labels.actors.get(message.event_id) ?? null,
+          })),
+        })),
+      };
+    });
+  }
+
+  @Post("search/window")
+  @HttpCode(HttpStatus.OK)
+  searchWindow(@Body() body: unknown, @Query("locale") locale?: string) {
+    return this.guard(async () => {
+      const result = await this.context.searchWindow(body);
+      if (!result.messages.length) return result;
+      const labels = await this.conversationLabels.describe(
+        [result],
+        requestLocale(locale),
+      );
+      return {
+        ...result,
+        messages: result.messages.map((message) => ({
+          ...message,
+          actor_label: labels.actors.get(message.event_id) ?? null,
+        })),
+      };
+    });
+  }
+
+  @Post("search/answers")
+  @HttpCode(HttpStatus.ACCEPTED)
+  startSearchAnswer(@Body() body: unknown, @Query("locale") locale?: string) {
+    return this.guard(() => this.answers.start(body, requestLocale(locale)));
+  }
+
+  @Get("search/answers/:answerId")
+  searchAnswer(@Param("answerId") answerId: string) {
+    return this.guard(() => this.answers.get(answerId));
+  }
+
+  @Post("search/answers/:answerId/cancel")
+  @HttpCode(HttpStatus.OK)
+  cancelSearchAnswer(@Param("answerId") answerId: string) {
+    return this.guard(() => this.answers.cancel(answerId));
   }
 
   @Post("search/source")

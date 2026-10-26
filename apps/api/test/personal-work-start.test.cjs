@@ -9,6 +9,7 @@ const { dshTaskExecutor } = require("../../../packages/dsh-connector/dist");
 const { PersonalWorkDispatch } = require("../dist/personal-work-dispatch");
 const { PersonalWorkSupervise } = require("../dist/personal-work-supervise");
 const { PersonalWorkService } = require("../dist/personal-work.service");
+const { PersonalConnectorError } = require("../dist/personal-errors");
 const { PersonalExecutorService } = require("../dist/personal-executor.service");
 const { PersonalKernelStoppedError } = require("../dist/personal-runtime.service");
 
@@ -65,7 +66,9 @@ async function fixture(t, maxConcurrent) {
     threadContextLines: async () => ({ lines: [], overflow: false }),
     evidenceText: async () => "evidence",
   };
-  const supervise = () => new PersonalWorkSupervise(runtime, channel);
+  const supervise = (workUpdated) => new PersonalWorkSupervise(
+    runtime, channel, undefined, workUpdated,
+  );
   const dispatch = (supervisor = supervise()) => new PersonalWorkDispatch(
     runtime, channel, supervisor, { attach: () => { calls.attach += 1; } },
   );
@@ -138,6 +141,26 @@ describe("durable executor start", () => {
     assert.equal(f.calls.spawn, 0);
     assert.equal(f.calls.stdin, 0);
     assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 0);
+  });
+
+  it("fails a sessionless executor start instead of leaving it waiting", async (t) => {
+    const f = await fixture(t);
+    f.hooks.spawn = async () => {
+      throw new PersonalConnectorError(
+        "unsupported_channel",
+        "No enabled connector can create an executor session",
+        501,
+      );
+    };
+    await assert.rejects(
+      f.dispatch().startItem(f.item, f.recipe, "evidence", "auxiliary"),
+      code("unsupported_channel"),
+    );
+    const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
+    assert.equal(run.status, "failed");
+    assert.equal(run.start_state, undefined);
+    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "failed");
+    assert.equal(f.calls.stdin, 0);
   });
 
   it("reports an unknown executor before any external startup", async (t) => {
@@ -295,8 +318,50 @@ describe("durable executor start", () => {
     assert.equal(results.filter(Boolean).length, 1);
     assert.equal(f.calls.spawn, 1);
     const remaining = (await f.ports.authority.listWorkItems(ORG)).find((item) => item.status === "open");
+    assert.equal(
+      await f.dispatch().startItem(remaining, f.recipe, "evidence", "auxiliary"),
+      undefined,
+    );
     assert.ok(await f.dispatch().startItem(remaining, f.recipe, "evidence", "manual"));
     assert.equal(f.calls.spawn, 2);
+  });
+
+  it("keeps system executions out of user work surfaces", async (t) => {
+    const f = await fixture(t);
+    const now = new Date().toISOString();
+    const recipe = {
+      ...f.recipe,
+      id: "system:search-answer:session",
+      trigger: { kind: "manual" },
+    };
+    const item = {
+      ...f.item,
+      id: "search-answer:1",
+      recipe_id: recipe.id,
+      thread_id: "system:search-answer:search-answer:1",
+      unit_key: "search-answer:1",
+      status: "running",
+    };
+    await f.ports.authority.putRecipe(recipe);
+    await f.ports.authority.putWorkItem(item);
+    await f.ports.authority.putWorkRun({
+      id: "run-search-answer",
+      org_id: ORG,
+      work_item_id: item.id,
+      recipe_id: recipe.id,
+      executor_type: "session",
+      external_run_id: "dsh:answer-1",
+      agent_thread_id: "dsh:answer-1",
+      status: "running",
+      created_at: now,
+      updated_at: now,
+    });
+    const service = f.service();
+    assert.equal((await service.activeSessionIds()).has(item.thread_id), false);
+    assert.equal((await service.inboxFaces([item.thread_id])).has(item.thread_id), false);
+    assert.equal((await service.boundPromptThreads()).has(item.thread_id), false);
+    await assert.rejects(service.runWorkItem(item.id), code("not_found"));
+    await assert.rejects(service.dismissWorkItem(item.id), code("not_found"));
   });
 
   it("does not send stdin or resurrect work dismissed while spawn was in flight", async (t) => {
@@ -366,6 +431,27 @@ describe("durable executor start", () => {
     assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).status, "completed");
     assert.equal(requests.filter((request) => request.method === "POST").length, 1);
     assert.equal(requests.filter((request) => request.method === "GET").length, 1);
+  });
+
+  it("emits a work update only when executor state changes", async (t) => {
+    const f = await fixture(t);
+    const updated = [];
+    let status = "running";
+    f.setExecutor(createHttpTaskExecutor({
+      executor_type: "session", label: "Remote", base_url: "https://agent.example",
+      fetch: async () => Response.json({
+        external_run_id: "ext-running",
+        status,
+        ...(status === "completed" ? { result: { summary: "done" } } : {}),
+      }),
+    }));
+    const supervisor = f.supervise((id) => updated.push(id));
+    await f.dispatch(supervisor).startItem(f.item, f.recipe, "evidence");
+    await supervisor.refreshRuns();
+    assert.deepEqual(updated, []);
+    status = "completed";
+    await supervisor.refreshRuns();
+    assert.deepEqual(updated, [f.item.id]);
   });
 
   for (const [failure, respond] of [

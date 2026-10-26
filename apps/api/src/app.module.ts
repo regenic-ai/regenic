@@ -17,6 +17,9 @@ import { PersonalApiGuard } from "./personal-api.guard";
 import { PersonalPairingService } from "./personal-pairing.service";
 import { PersonalContextController } from "./personal-context.controller";
 import { PersonalContextService } from "./personal-context.service";
+import { PersonalSearchAnswerService } from "./personal-search-answer.service";
+import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
+import { PersonalConversationContextService } from "./personal-conversation-context.service";
 import { PersonalContextProjectionService } from "./personal-context-projection.service";
 import { PersonalDailyDigestService } from "./personal-daily-digest.service";
 import { PersonalController } from "./personal.controller";
@@ -48,6 +51,9 @@ import { PersonalCustomerService } from "./personal-customer-service";
     KernelRuntimeService,
     PersonalRuntimeService,
     PersonalContextService,
+    PersonalSearchAnswerService,
+    PersonalConversationLabelsService,
+    PersonalConversationContextService,
     PersonalCustomerService,
     PersonalContextProjectionService,
     PersonalDailyDigestService,

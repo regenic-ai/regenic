@@ -71,6 +71,7 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  SearchAnswerRecord,
   WorkDelivery,
   DailyDigestPolicy,
   ExecutorInstallation,
@@ -317,6 +318,7 @@ import {
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
+  getSearchAnswer,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -332,6 +334,7 @@ import {
   listWorkRuns,
   putExecutorInstallation,
   putRecipe,
+  putSearchAnswer,
   putWorkDelivery,
   putWorkItem,
   putWorkRun,
@@ -1196,6 +1199,19 @@ export class PostgresAuthorityStore
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     return claimWorkRunStart(this.sql, input);
+  }
+
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    return getSearchAnswer(this.sql, orgId, id);
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    return putSearchAnswer(this.sql, record);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

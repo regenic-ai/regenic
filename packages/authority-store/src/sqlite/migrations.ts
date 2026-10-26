@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 52;
+export const LATEST_SCHEMA_VERSION = 53;
 
 export const OUTBOUND_REJECTION_MIGRATION_SQL = `
   CREATE TABLE outbound_attempts_next (
@@ -1074,5 +1074,22 @@ export const MIGRATIONS = [
   {
     version: 52,
     sql: OUTBOUND_REJECTION_MIGRATION_SQL,
+  },
+  {
+    version: 53,
+    sql: `
+      CREATE TABLE IF NOT EXISTS search_answers (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        query TEXT NOT NULL,
+        event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+        outcome TEXT CHECK (outcome IN ('timed_out')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
+        ON search_answers (org_id, work_item_id);
+    `,
   },
 ] as const;

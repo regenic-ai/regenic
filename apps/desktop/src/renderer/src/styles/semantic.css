@@ -110,18 +110,6 @@
   transition: border-color 0.12s ease;
 }
 .semantic-result:hover { border-color: color-mix(in srgb, var(--g500) 45%, var(--line)); }
-.semantic-result-main {
-  display: grid;
-  gap: 8px;
-  width: 100%;
-  padding: 14px 16px 10px;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
 .semantic-result-head { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; }
 .semantic-result-source { color: var(--g300); font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .semantic-result-head time { flex-shrink: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -136,14 +124,76 @@
   user-select: text;
 }
 .semantic-snippet mark { padding: 0 1px; border-radius: 3px; background: color-mix(in srgb, var(--g500) 32%, transparent); color: var(--text); }
-.semantic-result-open { color: var(--muted); font-size: 12px; opacity: 0; transition: opacity 0.12s ease; }
-.semantic-result:hover .semantic-result-open,
-.semantic-result-main:focus-visible .semantic-result-open { opacity: 1; color: var(--g300); }
-.semantic-result-evidence { padding: 0 16px 12px; font-size: 12px; }
-.semantic-result-evidence summary { color: var(--muted); cursor: pointer; width: fit-content; }
-.semantic-result-evidence dl { margin: 8px 0 0; user-select: text; }
-.semantic-result-evidence dt { color: var(--muted); margin-top: 6px; }
-.semantic-result-evidence dd { margin: 0; overflow-wrap: anywhere; }
+
+.search-thread-head { align-items: baseline; padding: 12px 16px 6px; }
+.search-thread-head .muted { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.search-thread-messages { list-style: none; margin: 0; padding: 0 0 8px; }
+.search-message-main {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 16px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.search-message-main:hover:not(:disabled) { background: color-mix(in srgb, var(--g500) 8%, transparent); }
+.search-message-main:disabled { cursor: progress; }
+.search-message.is-hit .search-message-main { border-left-color: var(--g500); }
+.search-message.is-neighbor .search-message-main { color: var(--muted); }
+.search-message .semantic-snippet { -webkit-line-clamp: 8; }
+.search-message-head { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+.search-message-sender { color: var(--text); font-weight: 550; }
+.search-message.is-neighbor .search-message-sender { color: var(--muted); }
+.search-message-head time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.search-message-quote {
+  overflow: hidden;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-thread-gap { padding: 2px 16px; font-size: 12px; }
+.search-message.is-cited .search-message-main {
+  background: color-mix(in srgb, var(--g500) 14%, transparent);
+  transition: background 0.4s ease;
+}
+
+.search-answer {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--g500) 35%, var(--line));
+  border-radius: 10px;
+}
+.search-answer-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.search-answer-title { font-weight: 600; }
+.search-answer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.search-answer-row p { margin: 0; }
+.search-answer-text { margin: 0; line-height: 1.7; white-space: pre-wrap; }
+.search-answer-cite {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  margin: 0 2px;
+  padding: 0 5px;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--g500) 22%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  vertical-align: 1px;
+  cursor: pointer;
+}
+.search-answer-cite:hover { background: color-mix(in srgb, var(--g500) 40%, transparent); }
 
 .search-skeleton { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
 .search-skeleton span {
