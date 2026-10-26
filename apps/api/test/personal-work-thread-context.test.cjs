@@ -16,7 +16,7 @@ function minute(index) {
   return new Date(Date.UTC(2026, 9, 20, 0, index)).toISOString();
 }
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "regenic-thread-context-"));
   const authority = new SqliteAuthorityStore(join(root, "authority.db"));
   const blobs = new FsBlobStore(join(root, "blobs"));
@@ -39,7 +39,14 @@ async function fixture(t) {
       actor: { id: index === 0 ? "owner" : "customer" },
       scope: { id: "customer-a" },
       type: "message",
-      content: [{ role: "body", media_type: "text/plain", text: `message ${index}` }],
+      content: index === ANCHOR && options.attachmentAnchor
+        ? [{
+            role: "attachment",
+            media_type: "image/png",
+            source_filename: "anchor.png",
+            external_locator: "source://anchor.png",
+          }]
+        : [{ role: "body", media_type: "text/plain", text: `message ${index}` }],
     })),
   });
   const ids = result.records.map((record) => record.event_id);
@@ -84,5 +91,18 @@ describe("work thread context", () => {
     assert.equal(byText.get("message 10").gap_before, true);
     assert.equal(byText.get("message 220").gap_before, true);
     assert.ok(!byText.get("message 221").gap_before);
+  });
+
+  it("keeps an attachment-only trigger as the evidence anchor", async (t) => {
+    const { channel, ids, threadId } = await fixture(t, {
+      attachmentAnchor: true,
+    });
+    const { lines } = await channel.threadContextLines(threadId, {
+      fetchLimit: 40,
+      anchorEventId: ids[ANCHOR],
+    });
+    const anchor = lines.find((line) => line.event_id === ids[ANCHOR]);
+    assert.equal(anchor.text, "[Attachment: anchor.png]");
+    assert.equal(anchor.rank, 0);
   });
 });

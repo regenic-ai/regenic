@@ -333,6 +333,16 @@ export async function putSearchAnswer(
   return record;
 }
 
+export async function deleteSearchAnswer(
+  db: Database.Database,
+  orgId: string,
+  id: string,
+): Promise<boolean> {
+  return db.prepare(
+    "DELETE FROM search_answers WHERE org_id = ? AND id = ?",
+  ).run(orgId, id).changes > 0;
+}
+
 export async function listWorkDeliveries(db: Database.Database, orgId: string): Promise<WorkDelivery[]> {
     const rows = db
       .prepare(

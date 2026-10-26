@@ -164,7 +164,14 @@ export function SearchPage({ onSettings, onOpenConversation }: {
       setCards((current) => current.map((entry) =>
         entry.thread_id === card.thread_id ? applySearchWindow(entry, target, page) : entry));
     } catch (caught) {
-      if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : t("search.failed"));
+      if (
+        caught instanceof KernelRequestError &&
+        caught.code === "context_changed"
+      ) {
+        await search(submitted, { source, thread, limit });
+      } else if (!controller.signal.aborted) {
+        setError(caught instanceof Error ? caught.message : t("search.failed"));
+      }
     } finally {
       if (morePending.current === controller) { morePending.current = null; setLoadingMore(null); }
     }

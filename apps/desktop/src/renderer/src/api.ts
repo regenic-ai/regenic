@@ -1373,6 +1373,7 @@ export async function searchPersonalContext(
 export async function fetchSearchWindow(
   input: {
     thread_id: string;
+    read_epoch: string;
     direction: "before" | "after";
     boundary: PersonalSearchBoundary;
     until?: PersonalSearchBoundary;
@@ -1410,10 +1411,12 @@ export async function fetchSearchAnswer(answerId: string, signal?: AbortSignal):
   return response.json() as Promise<PersonalSearchAnswer>;
 }
 
-export async function cancelSearchAnswer(answerId: string): Promise<void> {
-  await kernelFetch(`/v1/me/context/search/answers/${encodeURIComponent(answerId)}/cancel`, {
+export async function cancelSearchAnswer(answerId: string): Promise<PersonalSearchAnswer> {
+  const response = await kernelFetch(`/v1/me/context/search/answers/${encodeURIComponent(answerId)}/cancel`, {
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
-  }).catch(() => undefined);
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search answer cancel ${response.status}`);
+  return response.json() as Promise<PersonalSearchAnswer>;
 }
 
 export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<SemanticIndexStatus> {

@@ -97,6 +97,7 @@ test("search cards load windows from their boundaries and close them when exhaus
   const message = (id: string, minute: number) => ({ event_id: id, occurred_at: `2026-10-20T00:0${minute}:00.000Z` });
   const card = {
     thread_id: "t",
+    read_epoch: "epoch-1",
     messages: [message("c", 3), message("f", 6)],
     continuation: {
       before: { event_id: "c", occurred_at: message("c", 3).occurred_at },
@@ -105,7 +106,7 @@ test("search cards load windows from their boundaries and close them when exhaus
     },
   };
   assert.deepEqual(searchWindowRequest(card, { kind: "gap", index: 0 }), {
-    thread_id: "t", limit: SEARCH_WINDOW_PAGE, direction: "after",
+    thread_id: "t", read_epoch: "epoch-1", limit: SEARCH_WINDOW_PAGE, direction: "after",
     boundary: card.continuation.gaps[0].after, until: card.continuation.gaps[0].before,
   });
 

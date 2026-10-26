@@ -816,6 +816,10 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("putSearchAnswer", [record]);
   }
 
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    return this.writer.call("deleteSearchAnswer", [orgId, id]);
+  }
+
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return this.reader.call("listWorkDeliveries", [orgId]);
   }

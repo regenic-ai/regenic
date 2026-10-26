@@ -131,10 +131,18 @@ export class PersonalConversationContextService {
   async window(input: unknown): Promise<ConversationWindow> {
     const body = strictObject(
       input,
-      new Set(["thread_id", "direction", "boundary", "until", "limit"]),
+      new Set([
+        "thread_id",
+        "read_epoch",
+        "direction",
+        "boundary",
+        "until",
+        "limit",
+      ]),
       "body",
     );
     const threadId = requiredString(body.thread_id, "thread_id");
+    const expectedEpoch = requiredString(body.read_epoch, "read_epoch");
     if (body.direction !== "before" && body.direction !== "after") {
       invalid("direction must be before or after");
     }
@@ -145,6 +153,13 @@ export class PersonalConversationContextService {
       : boundaryKey(body.until, "until");
     const limit = boundedInteger(body.limit ?? 10, "limit", 1, 50);
     const { read_epoch, events } = await this.readThread(threadId);
+    if (read_epoch !== expectedEpoch) {
+      throw new PersonalContextError(
+        "context_changed",
+        HttpStatus.CONFLICT,
+        "Conversation context changed; search again",
+      );
+    }
     const candidates: number[] = [];
     events.forEach((event, index) => {
       const key = eventKey(event);

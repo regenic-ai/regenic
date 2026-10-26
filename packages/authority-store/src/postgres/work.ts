@@ -342,6 +342,17 @@ export async function putSearchAnswer(
   return record;
 }
 
+export async function deleteSearchAnswer(
+  db: PgSql,
+  orgId: string,
+  id: string,
+): Promise<boolean> {
+  return (await db.execute(
+    "DELETE FROM search_answers WHERE org_id = $1 AND id = $2",
+    [orgId, id],
+  )) > 0;
+}
+
 export async function listWorkDeliveries(db: PgSql, orgId: string): Promise<WorkDelivery[]> {
     const rows = await db.query<WorkDeliveryRow>(
       `SELECT * FROM work_deliveries WHERE org_id = $1 ORDER BY updated_at DESC, id`,

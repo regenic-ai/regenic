@@ -24,6 +24,7 @@ export function SearchAnswerCard({ query, conversations, onCite }: {
   const [executor, setExecutor] = useState("");
   const [answer, setAnswer] = useState<PersonalSearchAnswer | null>(null);
   const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -43,22 +44,28 @@ export function SearchAnswerCard({ query, conversations, onCite }: {
       return;
     }
     const controller = new AbortController();
-    const refresh = () => {
-      fetchSearchAnswer(answer.answer_id, controller.signal)
-        .then(setAnswer)
-        .catch((caught: unknown) => {
-          if (controller.signal.aborted) return;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        setAnswer(await fetchSearchAnswer(answer.answer_id, controller.signal));
+        setError(null);
+      } catch (caught) {
+        if (!controller.signal.aborted) {
           setError(caught instanceof Error ? caught.message : t("search.answer.failed"));
-          setAnswer({ ...answer, status: "failed" });
-        });
+        }
+      } finally {
+        refreshing = false;
+      }
     };
     const unsubscribe = subscribeWorkUpdates((workItemId) => {
-      if (workItemId === answer.work_item_id) refresh();
+      if (workItemId === answer.work_item_id) void refresh();
     });
-    const timer = window.setTimeout(refresh, POLL_FALLBACK_MS);
+    const timer = window.setInterval(() => void refresh(), POLL_FALLBACK_MS);
     return () => {
       unsubscribe();
-      window.clearTimeout(timer);
+      window.clearInterval(timer);
       controller.abort();
     };
   }, [answer, t]);
@@ -68,6 +75,7 @@ export function SearchAnswerCard({ query, conversations, onCite }: {
   async function ask() {
     setError(null);
     setStarting(true);
+    setAnswer(null);
     try {
       setAnswer(await startSearchAnswer({
         query,
@@ -89,8 +97,15 @@ export function SearchAnswerCard({ query, conversations, onCite }: {
 
   async function stop() {
     if (!answer) return;
-    await cancelSearchAnswer(answer.answer_id);
-    setAnswer({ ...answer, status: "cancelled" });
+    setError(null);
+    setStopping(true);
+    try {
+      setAnswer(await cancelSearchAnswer(answer.answer_id));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t("search.answer.failed"));
+    } finally {
+      setStopping(false);
+    }
   }
 
   const choose = executors && executors.length > 1 && !isActive(answer) ? (
@@ -103,6 +118,8 @@ export function SearchAnswerCard({ query, conversations, onCite }: {
   let body;
   if (executors && executors.length === 0) {
     body = <p className="muted">{t("search.answer.noExecutor")}</p>;
+  } else if (!answer && starting) {
+    body = <p className="muted" role="status">{t("search.answer.running", { executor: label(executor) })}</p>;
   } else if (!answer) {
     body = (
       <div className="search-answer-row">
@@ -119,7 +136,8 @@ export function SearchAnswerCard({ query, conversations, onCite }: {
           {t(answer.status === "waiting_human" ? "search.answer.waiting" : "search.answer.running",
             { executor: label(answer.executor_type) })}
         </p>
-        <button type="button" className="link muted-link" onClick={() => void stop()}>{t("search.answer.cancel")}</button>
+        <button type="button" className="link muted-link" disabled={stopping}
+          onClick={() => void stop()}>{t("search.answer.cancel")}</button>
       </div>
     );
   } else if (answer.status === "completed" && answer.answer) {

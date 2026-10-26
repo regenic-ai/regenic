@@ -10,8 +10,11 @@ import { PersonalConversationContextService } from "./personal-conversation-cont
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWorkService } from "./personal-work.service";
+import {
+  SEARCH_ANSWER_PURPOSE,
+  SEARCH_ANSWER_WORK_ITEM_PREFIX,
+} from "./personal-system-work";
 
-const SEARCH_ANSWER_TIMEOUT_MS = 5 * 60_000;
 const SEARCH_ANSWER_ACTIVE_MAX = 3;
 const SEARCH_ANSWER_TEXT_MAX = 16_000;
 
@@ -84,11 +87,11 @@ export class PersonalSearchAnswerService {
     const evidence = await this.context.answerEvidence(input, (conversations) =>
       this.labels.describe(conversations, locale));
     const id = randomUUID();
-    const workItemId = `search-answer:${id}`;
+    const workItemId = `${SEARCH_ANSWER_WORK_ITEM_PREFIX}${id}`;
     const now = new Date().toISOString();
     const prepared = await this.work.prepareAuxiliaryExecution({
       id: workItemId,
-      purpose: "search-answer",
+      purpose: SEARCH_ANSWER_PURPOSE,
       executor_type: evidence.executor_type,
       prompt: SEARCH_ANSWER_PROMPT,
       max_concurrent: SEARCH_ANSWER_ACTIVE_MAX,
@@ -104,34 +107,24 @@ export class PersonalSearchAnswerService {
       created_at: now,
       updated_at: now,
     };
-    await this.runtime.requireHost().get("authority").putSearchAnswer(record);
-    const started = await this.work.startPreparedAuxiliaryExecution(
-      prepared,
-      evidence.evidence_text,
-    ).catch((error: unknown) => {
+    const authority = this.runtime.requireHost().get("authority");
+    await authority.putSearchAnswer(record);
+    let started;
+    try {
+      started = await this.work.startPreparedAuxiliaryExecution(
+        prepared,
+        evidence.evidence_text,
+      );
+    } catch (error) {
+      await authority.deleteSearchAnswer(record.org_id, record.id)
+        .catch(() => undefined);
       throw searchAnswerStartError(error);
-    });
+    }
     return view(record, started.run);
   }
 
   async get(id: string): Promise<SearchAnswerView> {
-    let record = await this.record(id);
-    if (
-      !record.outcome &&
-      Date.now() - Date.parse(record.created_at) > SEARCH_ANSWER_TIMEOUT_MS
-    ) {
-      const current = await this.work.refreshAuxiliaryExecution(
-        record.work_item_id,
-      );
-      if (isActiveRun(current.run)) {
-        await this.work.cancelAuxiliaryExecution(record.work_item_id);
-        record = await this.runtime.requireHost().get("authority").putSearchAnswer({
-          ...record,
-          outcome: "timed_out",
-          updated_at: new Date().toISOString(),
-        });
-      }
-    }
+    const record = await this.record(id);
     const state = await this.work.refreshAuxiliaryExecution(
       record.work_item_id,
     );
@@ -166,7 +159,8 @@ function searchAnswerStartError(error: unknown): PersonalContextError {
     ? String(error.code)
     : "";
   return new PersonalContextError(
-    status === HttpStatus.TOO_MANY_REQUESTS
+    status === HttpStatus.TOO_MANY_REQUESTS ||
+      code === "execution_start_conflict"
       ? "busy"
       : code === "unsupported_channel"
         ? "executor_session_unavailable"
@@ -174,10 +168,6 @@ function searchAnswerStartError(error: unknown): PersonalContextError {
     Number.isInteger(status) ? status : HttpStatus.BAD_GATEWAY,
     error instanceof Error ? error.message : "Executor failed to start",
   );
-}
-
-function isActiveRun(run: WorkRun | undefined): boolean {
-  return run?.status === "running" || run?.status === "waiting_human";
 }
 
 function view(

@@ -58,6 +58,7 @@ export type SearchWindowTarget = { kind: "before" } | { kind: "after" } | { kind
 
 interface SearchCardShape<T> {
   thread_id: string;
+  read_epoch: string;
   messages: T[];
   continuation: {
     before: SearchBoundary | null;
@@ -69,8 +70,12 @@ interface SearchCardShape<T> {
 export function searchWindowRequest(
   card: SearchCardShape<unknown>,
   target: SearchWindowTarget,
-): { thread_id: string; direction: "before" | "after"; boundary: SearchBoundary; until?: SearchBoundary; limit: number } | undefined {
-  const base = { thread_id: card.thread_id, limit: SEARCH_WINDOW_PAGE };
+): { thread_id: string; read_epoch: string; direction: "before" | "after"; boundary: SearchBoundary; until?: SearchBoundary; limit: number } | undefined {
+  const base = {
+    thread_id: card.thread_id,
+    read_epoch: card.read_epoch,
+    limit: SEARCH_WINDOW_PAGE,
+  };
   if (target.kind === "before") {
     return card.continuation.before ? { ...base, direction: "before", boundary: card.continuation.before } : undefined;
   }

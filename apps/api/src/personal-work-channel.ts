@@ -35,7 +35,7 @@ import {
   type WorkEvidenceLine,
   type WorkItem,
 } from "@regenic/domain";
-import { resolveInboxBodies } from "./inbox-body";
+import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { stampFromThreadSurfaces } from "./personal-reply-stamp";
 import { writeWorkContextFiles } from "./personal-work-context";
@@ -450,7 +450,7 @@ export class PersonalWorkChannel {
             status: item.decision.reason_codes.includes("thread_status"),
             working: body?.surface?.activity === "working",
             speaker: body?.surface?.actor_label || body?.surface?.kind,
-            text: body?.body_text,
+            text: body?.body_text || attachmentEvidence(body?.attachments),
             gap_before: index > 0 && ordered[index - 1].segment !== segment,
           };
         }),
@@ -556,6 +556,17 @@ export class PersonalWorkChannel {
     }
     return driverCanReply(found.driver, found.installation);
   }
+}
+
+function attachmentEvidence(
+  attachments: InboxBody["attachments"] | undefined,
+): string | undefined {
+  if (!attachments?.length) {
+    return undefined;
+  }
+  return attachments.map((attachment) =>
+    `[Attachment: ${attachment.filename || attachment.media_type}]`,
+  ).join(" ");
 }
 
 async function readThreadTail(

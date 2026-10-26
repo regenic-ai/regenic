@@ -242,4 +242,5 @@ export interface WorkStore {
     id: string,
   ): Promise<SearchAnswerRecord | null>;
   putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
+  deleteSearchAnswer(orgId: string, id: string): Promise<boolean>;
 }

@@ -622,6 +622,7 @@ describe("personal context API", () => {
 
     const earlier = await postJson(`${origin}/v1/me/context/search/window?locale=en`, {
       thread_id: expanded.thread_id,
+      read_epoch: expanded.read_epoch,
       direction: "before",
       boundary: expanded.continuation.before,
       limit: 1,
@@ -634,6 +635,7 @@ describe("personal context API", () => {
 
     const rest = JSON.parse((await postJson(`${origin}/v1/me/context/search/window`, {
       thread_id: expanded.thread_id,
+      read_epoch: expanded.read_epoch,
       direction: "before",
       boundary: { occurred_at: page.messages[0].occurred_at, event_id: page.messages[0].event_id },
       limit: 10,
@@ -643,6 +645,7 @@ describe("personal context API", () => {
 
     const between = JSON.parse((await postJson(`${origin}/v1/me/context/search/window`, {
       thread_id: expanded.thread_id,
+      read_epoch: expanded.read_epoch,
       direction: "after",
       boundary: { occurred_at: rest.messages[0].occurred_at, event_id: rest.messages[0].event_id },
       until: expanded.continuation.before,
@@ -650,10 +653,19 @@ describe("personal context API", () => {
     })).text);
     assert.deepEqual(between.messages.map((message) => message.external_id), ["customer-a:2"]);
 
+    const stale = await postJson(`${origin}/v1/me/context/search/window`, {
+      thread_id: expanded.thread_id,
+      read_epoch: "stale-epoch",
+      direction: "before",
+      boundary: expanded.continuation.before,
+    });
+    assert.equal(stale.response.status, 409, stale.text);
+    assert.equal(JSON.parse(stale.text).error.code, "context_changed");
+
     for (const body of [
-      { thread_id: expanded.thread_id, direction: "sideways", boundary: expanded.continuation.before },
-      { thread_id: expanded.thread_id, direction: "before", boundary: { occurred_at: "x" } },
-      { thread_id: expanded.thread_id, direction: "before", boundary: expanded.continuation.before, limit: 51 },
+      { thread_id: expanded.thread_id, read_epoch: expanded.read_epoch, direction: "sideways", boundary: expanded.continuation.before },
+      { thread_id: expanded.thread_id, read_epoch: expanded.read_epoch, direction: "before", boundary: { occurred_at: "x" } },
+      { thread_id: expanded.thread_id, read_epoch: expanded.read_epoch, direction: "before", boundary: expanded.continuation.before, limit: 51 },
     ]) {
       const invalid = await postJson(`${origin}/v1/me/context/search/window`, body);
       assert.equal(invalid.response.status, 400, invalid.text);
@@ -742,6 +754,50 @@ describe("personal context API", () => {
     ]) {
       const invalid = await postJson(`${origin}/v1/me/context/search/answers`, body);
       assert.equal(invalid.response.status, 400, invalid.text);
+    }
+  });
+  it("removes answer metadata when executor startup fails definitively", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationEvidence,
+    );
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      { query: "pending-answer-question", limit: 1 },
+    )).text).conversations[0];
+    const failed = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "Who was selected?",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [conversation.messages[0].event_id],
+        }],
+      },
+    );
+    assert.equal(failed.response.status, 501, failed.text);
+    assert.equal(
+      JSON.parse(failed.text).error.code,
+      "executor_session_unavailable",
+    );
+    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    try {
+      const failedItem = (await ledger.listWorkItems("local-owner"))
+        .find((item) => item.id.startsWith("search-answer:"));
+      assert.ok(failedItem);
+      assert.equal(failedItem.status, "failed");
+      assert.equal(
+        await ledger.getSearchAnswer(
+          "local-owner",
+          failedItem.id.slice("search-answer:".length),
+        ),
+        null,
+      );
+    } finally {
+      ledger.close();
     }
   });
   it("recovers an in-flight executor answer after the API restarts", async () => {

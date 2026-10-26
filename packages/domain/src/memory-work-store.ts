@@ -242,6 +242,11 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     return structuredClone(record);
   }
 
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    const record = this.searchAnswers.get(id);
+    return record?.org_id === orgId && this.searchAnswers.delete(id);
+  }
+
   async listExecutorInstallations(orgId: string): Promise<ExecutorInstallation[]> {
     return [...this.executors.values()]
       .filter((item) => item.org_id === orgId)

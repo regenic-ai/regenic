@@ -149,6 +149,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "putWorkRun",
   "claimWorkRunStart",
   "putSearchAnswer",
+  "deleteSearchAnswer",
   "putWorkDelivery",
   "putUiPref",
   "putDailyDigestPolicy",

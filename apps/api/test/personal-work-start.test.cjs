@@ -72,8 +72,8 @@ async function fixture(t, maxConcurrent) {
   const dispatch = (supervisor = supervise()) => new PersonalWorkDispatch(
     runtime, channel, supervisor, { attach: () => { calls.attach += 1; } },
   );
-  const service = () => new PersonalWorkService(
-    runtime, {}, { ensureMounted: async () => {} }, { touchInboxDigest() {} }, {},
+  const service = (events = { workUpdated() {} }) => new PersonalWorkService(
+    runtime, {}, { ensureMounted: async () => {} }, { touchInboxDigest() {} }, {}, events,
   );
   return {
     ports, item, recipe, calls, hooks, channel, supervise, dispatch, service, runtime,
@@ -362,6 +362,68 @@ describe("durable executor start", () => {
     assert.equal((await service.boundPromptThreads()).has(item.thread_id), false);
     await assert.rejects(service.runWorkItem(item.id), code("not_found"));
     await assert.rejects(service.dismissWorkItem(item.id), code("not_found"));
+  });
+
+  it("expires abandoned search answers without a client GET", async (t) => {
+    const f = await fixture(t);
+    const createdAt = new Date(Date.now() - 6 * 60_000).toISOString();
+    const recipe = {
+      ...f.recipe,
+      id: "system:search-answer:session",
+      trigger: { kind: "manual" },
+    };
+    const item = {
+      ...f.item,
+      id: "search-answer:timeout",
+      recipe_id: recipe.id,
+      thread_id: "system:search-answer:search-answer:timeout",
+      unit_key: "search-answer:timeout",
+      status: "running",
+      created_at: createdAt,
+      updated_at: createdAt,
+    };
+    await f.ports.authority.putRecipe(recipe);
+    await f.ports.authority.putWorkItem(item);
+    await f.ports.authority.putWorkRun({
+      id: "run-search-answer-timeout",
+      org_id: ORG,
+      work_item_id: item.id,
+      recipe_id: recipe.id,
+      executor_type: "session",
+      external_run_id: "dsh:answer-timeout",
+      agent_thread_id: "dsh:answer-timeout",
+      status: "running",
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+    await f.ports.authority.putSearchAnswer({
+      id: "timeout",
+      org_id: ORG,
+      work_item_id: item.id,
+      query: "Question",
+      event_ids: ["event-1"],
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+    const updates = [];
+    await f.service({ workUpdated: (id) => updates.push(id) })
+      .expireSearchAnswers(Date.now());
+    assert.equal(
+      (await f.ports.authority.getSearchAnswer(ORG, "timeout")).outcome,
+      "timed_out",
+    );
+    assert.equal(
+      (await f.ports.authority.getWorkRun(
+        ORG,
+        "run-search-answer-timeout",
+      )).status,
+      "cancelled",
+    );
+    assert.equal(
+      (await f.ports.authority.getWorkItem(ORG, item.id)).status,
+      "skipped",
+    );
+    assert.deepEqual(updates, [item.id]);
   });
 
   it("does not send stdin or resurrect work dismissed while spawn was in flight", async (t) => {

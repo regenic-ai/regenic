@@ -24,6 +24,7 @@ import { CustomerServiceTaskConflictError } from "@regenic/domain";
 import { PersonalCustomerService } from "./personal-customer-service";
 import { PersonalSearchAnswerService } from "./personal-search-answer.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
+import { PersonalConnectorError } from "./personal-errors";
 
 @Controller("v1/me/context")
 @UseGuards(PersonalApiGuard)
@@ -567,6 +568,12 @@ export class PersonalContextController {
         );
       }
       if (error instanceof PersonalContextError) {
+        throw new HttpException(
+          { error: { code: error.code, message: error.message } },
+          error.httpStatus,
+        );
+      }
+      if (error instanceof PersonalConnectorError) {
         throw new HttpException(
           { error: { code: error.code, message: error.message } },
           error.httpStatus,

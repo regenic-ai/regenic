@@ -313,6 +313,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
@@ -1212,6 +1213,10 @@ export class PostgresAuthorityStore
     record: SearchAnswerRecord,
   ): Promise<SearchAnswerRecord> {
     return putSearchAnswer(this.sql, record);
+  }
+
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    return deleteSearchAnswer(this.sql, orgId, id);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

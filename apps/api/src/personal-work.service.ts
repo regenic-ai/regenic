@@ -15,6 +15,7 @@ import {
   deliveryAbandoned,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
+  ACTIVE_WORK_STATUSES,
   isDeadLetter,
   normalizeInboxListView,
   normalizeInboxSort,
@@ -60,7 +61,13 @@ import {
 import { PersonalWorkWait } from "./personal-work-wait";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalEventsService } from "./personal-events.service";
-import { isSystemRecipeId, systemRecipeId } from "./personal-system-work";
+import {
+  isSearchAnswerRecipeId,
+  isSystemRecipeId,
+  SEARCH_ANSWER_TIMEOUT_MS,
+  searchAnswerIdFromWorkItem,
+  systemRecipeId,
+} from "./personal-system-work";
 
 export type { RecipeInput } from "./personal-work-recipe";
 export type { WorkInboxFace } from "./personal-work-faces";
@@ -323,12 +330,68 @@ export class PersonalWorkService implements OnModuleDestroy {
         return;
       }
       await this.supervise.refreshRuns();
+      await this.expireSearchAnswers();
     } catch (error) {
       if (!isWorkTickShutdown(error)) {
         console.error("personal work supervise failed", error);
       }
     } finally {
       this.supervising = false;
+    }
+  }
+
+  private async expireSearchAnswers(now = Date.now()): Promise<void> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const items = await authority.listWorkItems(orgId, {
+      statuses: [...ACTIVE_WORK_STATUSES],
+    });
+    for (const item of items) {
+      const answerId = searchAnswerIdFromWorkItem(item.id);
+      if (
+        !answerId ||
+        !isSearchAnswerRecipeId(item.recipe_id) ||
+        !isActiveWorkStatus(item.status) ||
+        now - Date.parse(item.created_at) <= SEARCH_ANSWER_TIMEOUT_MS
+      ) {
+        continue;
+      }
+      try {
+        const [latest, active, record] = await Promise.all([
+          authority.getWorkItem(orgId, item.id),
+          authority.getActiveWorkRun(orgId, item.id),
+          authority.getSearchAnswer(orgId, answerId),
+        ]);
+        if (
+          !latest ||
+          !active ||
+          !record ||
+          record.outcome ||
+          !isActiveWorkStatus(latest.status)
+        ) {
+          continue;
+        }
+        const cancelled = await this.cancelAuxiliaryExecution(item.id, {
+          emit: false,
+        });
+        if (cancelled.run?.status !== "cancelled") {
+          continue;
+        }
+        await authority.putSearchAnswer({
+          ...record,
+          outcome: "timed_out",
+          updated_at: new Date(now).toISOString(),
+        });
+        this.events.workUpdated(item.id);
+      } catch (error) {
+        if (!isWorkTickShutdown(error)) {
+          console.error("search answer timeout failed", {
+            answer_id: answerId,
+            work_item_id: item.id,
+          }, error);
+        }
+      }
     }
   }
 
@@ -540,6 +603,7 @@ export class PersonalWorkService implements OnModuleDestroy {
 
   async cancelAuxiliaryExecution(
     workItemId: string,
+    options: { emit?: boolean } = {},
   ): Promise<WorkRunView> {
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
@@ -547,6 +611,12 @@ export class PersonalWorkService implements OnModuleDestroy {
     const item = await host.get("authority").getWorkItem(orgId, workItemId);
     if (!item || !isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Execution not found", 404);
+    }
+    if (!isActiveWorkStatus(item.status)) {
+      return {
+        work_item: item,
+        run: (await host.get("authority").listWorkRuns(orgId, item.id))[0],
+      };
     }
     const now = new Date().toISOString();
     const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
@@ -564,7 +634,9 @@ export class PersonalWorkService implements OnModuleDestroy {
       status: "skipped",
       updated_at: now,
     });
-    this.events.workUpdated(item.id);
+    if (options.emit !== false) {
+      this.events.workUpdated(item.id);
+    }
     return {
       work_item: next,
       run:

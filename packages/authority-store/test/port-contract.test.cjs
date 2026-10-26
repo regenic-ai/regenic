@@ -482,6 +482,10 @@ for (const driver of drivers) {
       };
       await store.putSearchAnswer(timedOut);
       assert.deepEqual(await store.getSearchAnswer(orgId, record.id), timedOut);
+      assert.equal(await store.deleteSearchAnswer("other-org", record.id), false);
+      assert.equal(await store.deleteSearchAnswer(orgId, record.id), true);
+      assert.equal(await store.deleteSearchAnswer(orgId, record.id), false);
+      assert.equal(await store.getSearchAnswer(orgId, record.id), null);
     });
 
     it("rolls back a conflicting ingest page", async () => {

@@ -269,6 +269,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
@@ -1246,6 +1247,11 @@ export class SqliteAuthorityStore
   ): Promise<SearchAnswerRecord> {
     this.assertWritable();
     return putSearchAnswer(this.database, record);
+  }
+
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    this.assertWritable();
+    return deleteSearchAnswer(this.database, orgId, id);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

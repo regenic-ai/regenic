@@ -18,4 +18,5 @@ export interface SearchAnswerRecord {
 export interface SearchAnswerStore {
   getSearchAnswer(orgId: string, id: string): Promise<SearchAnswerRecord | null>;
   putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
+  deleteSearchAnswer(orgId: string, id: string): Promise<boolean>;
 }
