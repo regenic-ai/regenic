@@ -9,11 +9,13 @@ import {
   PERSONAL_DISPATCH_POLICY_PREF_KEY,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
+  DEFAULT_LOCAL_EXECUTOR_ID,
   cancelWorkRun,
   foldThreadByPolicy,
   deliveryAbandoned,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
+  ACTIVE_WORK_STATUSES,
   isDeadLetter,
   normalizeInboxListView,
   normalizeInboxSort,
@@ -58,6 +60,14 @@ import {
 } from "./personal-work-support";
 import { PersonalWorkWait } from "./personal-work-wait";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
+import { PersonalEventsService } from "./personal-events.service";
+import {
+  isSearchAnswerRecipeId,
+  isSystemRecipeId,
+  SEARCH_ANSWER_TIMEOUT_MS,
+  searchAnswerIdFromWorkItem,
+  systemRecipeId,
+} from "./personal-system-work";
 
 export type { RecipeInput } from "./personal-work-recipe";
 export type { WorkInboxFace } from "./personal-work-faces";
@@ -69,6 +79,20 @@ export const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1"
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
   inbox_list: InboxListView;
+}
+
+export interface AuxiliaryExecutionInput {
+  id: string;
+  purpose: string;
+  executor_type?: string;
+  prompt: string;
+  evidence_text: string;
+  max_concurrent?: number;
+}
+
+export interface PreparedAuxiliaryExecution {
+  work_item: WorkItem;
+  recipe: Recipe;
 }
 
 export interface WorkRunView {
@@ -114,11 +138,13 @@ export class PersonalWorkService implements OnModuleDestroy {
     private readonly inbox: PersonalInboxService,
     @Inject(forwardRef(() => PersonalConnectorService))
     connectors: PersonalConnectorService,
+    @Inject(PersonalEventsService)
+    private readonly events: PersonalEventsService,
   ) {
     this.channel = new PersonalWorkChannel(runtime, drivers);
     this.supervise = new PersonalWorkSupervise(runtime, this.channel, () => {
       this.inbox.touchInboxDigest();
-    });
+    }, (workItemId) => this.events.workUpdated(workItemId));
     this.waits = new PersonalWorkWait(runtime, drivers, connectors, this.supervise);
     this.supervise.bindWaits(this.waits);
     this.dispatch = new PersonalWorkDispatch(runtime, this.channel, this.supervise, this.waits);
@@ -304,12 +330,68 @@ export class PersonalWorkService implements OnModuleDestroy {
         return;
       }
       await this.supervise.refreshRuns();
+      await this.expireSearchAnswers();
     } catch (error) {
       if (!isWorkTickShutdown(error)) {
         console.error("personal work supervise failed", error);
       }
     } finally {
       this.supervising = false;
+    }
+  }
+
+  private async expireSearchAnswers(now = Date.now()): Promise<void> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const items = await authority.listWorkItems(orgId, {
+      statuses: [...ACTIVE_WORK_STATUSES],
+    });
+    for (const item of items) {
+      const answerId = searchAnswerIdFromWorkItem(item.id);
+      if (
+        !answerId ||
+        !isSearchAnswerRecipeId(item.recipe_id) ||
+        !isActiveWorkStatus(item.status) ||
+        now - Date.parse(item.created_at) <= SEARCH_ANSWER_TIMEOUT_MS
+      ) {
+        continue;
+      }
+      try {
+        const [latest, active, record] = await Promise.all([
+          authority.getWorkItem(orgId, item.id),
+          authority.getActiveWorkRun(orgId, item.id),
+          authority.getSearchAnswer(orgId, answerId),
+        ]);
+        if (
+          !latest ||
+          !active ||
+          !record ||
+          record.outcome ||
+          !isActiveWorkStatus(latest.status)
+        ) {
+          continue;
+        }
+        const cancelled = await this.cancelAuxiliaryExecution(item.id, {
+          emit: false,
+        });
+        if (cancelled.run?.status !== "cancelled") {
+          continue;
+        }
+        await authority.putSearchAnswer({
+          ...record,
+          outcome: "timed_out",
+          updated_at: new Date(now).toISOString(),
+        });
+        this.events.workUpdated(item.id);
+      } catch (error) {
+        if (!isWorkTickShutdown(error)) {
+          console.error("search answer timeout failed", {
+            answer_id: answerId,
+            work_item_id: item.id,
+          }, error);
+        }
+      }
     }
   }
 
@@ -345,7 +427,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     const threadByWorkItem = new Map(
       items.map((item) => [item.id, item.thread_id] as const),
     );
-    return recipes.map((recipe) => {
+    return recipes.filter((recipe) => !isSystemRecipeId(recipe.id)).map((recipe) => {
       const recent_runs = recentRunsForRecipe(
         runs,
         recipe.id,
@@ -363,7 +445,209 @@ export class PersonalWorkService implements OnModuleDestroy {
     return this.executors.listCatalog(locale);
   }
 
+  /**
+   * Persistent executor work that belongs to a feature rather than a user rule.
+   * It uses the normal WorkItem/WorkRun supervisor but an unmatchable manual
+   * system recipe, so ingest can never dispatch it and no write-back is possible.
+   */
+  async prepareAuxiliaryExecution(
+    input: Omit<AuxiliaryExecutionInput, "evidence_text">,
+  ): Promise<PreparedAuxiliaryExecution> {
+    await this.executors.ensureMounted();
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const executorType = input.executor_type
+      ?? (host.get("executors").get(DEFAULT_LOCAL_EXECUTOR_ID)
+        ? DEFAULT_LOCAL_EXECUTOR_ID
+        : host.get("executors").list()[0]?.executor_type);
+    if (!executorType || !host.get("executors").get(executorType)) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        input.executor_type
+          ? `Unknown executor: ${input.executor_type}`
+          : "No executor is installed",
+        409,
+      );
+    }
+    const now = new Date().toISOString();
+    const recipeId = systemRecipeId(input.purpose, executorType);
+    const recipe: Recipe = {
+      id: recipeId,
+      org_id: orgId,
+      name: `System: ${input.purpose}`,
+      match: { unit_kind: `__system.${input.purpose}` },
+      trigger: { kind: "manual" },
+      executor_type: executorType,
+      executor_config: { prompt: input.prompt },
+      can_write_back: false,
+      include_context: false,
+      ...(input.max_concurrent === undefined
+        ? {}
+        : { max_concurrent: input.max_concurrent }),
+      enabled: true,
+      created_at: now,
+      updated_at: now,
+    };
+    await host.get("authority").putRecipe(recipe);
+    const item: WorkItem = {
+      id: input.id,
+      org_id: orgId,
+      thread_id: `system:${input.purpose}:${input.id}`,
+      unit_key: input.id,
+      record_class: "utterance",
+      thread_facet: "agent",
+      status: "open",
+      recipe_id: recipe.id,
+      created_at: now,
+      updated_at: now,
+    };
+    await host.get("authority").putWorkItem(item);
+    return { work_item: item, recipe };
+  }
+
+  async startPreparedAuxiliaryExecution(
+    prepared: PreparedAuxiliaryExecution,
+    evidenceText: string,
+  ): Promise<{ work_item: WorkItem; run: WorkRun }> {
+    const host = this.runtime.requireHost();
+    let run: WorkRun | undefined;
+    try {
+      run = await this.dispatch.startItem(
+        prepared.work_item,
+        prepared.recipe,
+        evidenceText,
+        "auxiliary",
+      );
+    } catch (error) {
+      // A submitted/uncertain start is still durable and must remain recoverable.
+      const durable = (await host.get("authority").listWorkRuns(
+        prepared.work_item.org_id,
+        prepared.work_item.id,
+      ))[0];
+      if (durable && recoverableAuxiliaryStart(durable)) {
+        run = durable;
+      } else {
+        if (!durable || durable.status !== "failed") {
+          await host.get("authority").putWorkItem({
+            ...prepared.work_item,
+            status: "failed",
+            updated_at: new Date().toISOString(),
+          });
+        }
+        throw error;
+      }
+    }
+    if (!run) {
+      await host.get("authority").putWorkItem({
+        ...prepared.work_item,
+        status: "skipped",
+        updated_at: new Date().toISOString(),
+      });
+      throw new PersonalConnectorError(
+        "execution_start_conflict",
+        "No executor slot is available",
+        429,
+      );
+    }
+    return {
+      work_item:
+        (await host.get("authority").getWorkItem(
+          prepared.work_item.org_id,
+          prepared.work_item.id,
+        )) ?? prepared.work_item,
+      run,
+    };
+  }
+
+  async startAuxiliaryExecution(
+    input: AuxiliaryExecutionInput,
+  ): Promise<{ work_item: WorkItem; run: WorkRun }> {
+    const prepared = await this.prepareAuxiliaryExecution(input);
+    return this.startPreparedAuxiliaryExecution(
+      prepared,
+      input.evidence_text,
+    );
+  }
+
+  async refreshAuxiliaryExecution(
+    workItemId: string,
+  ): Promise<WorkRunView> {
+    await this.executors.ensureMounted();
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const item = await host.get("authority").getWorkItem(orgId, workItemId);
+    if (!item || !isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Execution not found", 404);
+    }
+    const recipe = await host.get("authority").getRecipe(
+      orgId,
+      item.recipe_id!,
+    );
+    if (!recipe) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "System execution recipe is missing",
+        500,
+      );
+    }
+    const active = await host.get("authority").getActiveWorkRun(orgId, item.id);
+    if (active) {
+      await this.supervise.refreshOne(item, recipe, active);
+    }
+    const [latestItem, runs] = await Promise.all([
+      host.get("authority").getWorkItem(orgId, item.id),
+      host.get("authority").listWorkRuns(orgId, item.id),
+    ]);
+    return { work_item: latestItem ?? item, run: runs[0] };
+  }
+
+  async cancelAuxiliaryExecution(
+    workItemId: string,
+    options: { emit?: boolean } = {},
+  ): Promise<WorkRunView> {
+    await this.executors.ensureMounted();
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const item = await host.get("authority").getWorkItem(orgId, workItemId);
+    if (!item || !isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Execution not found", 404);
+    }
+    if (!isActiveWorkStatus(item.status)) {
+      return {
+        work_item: item,
+        run: (await host.get("authority").listWorkRuns(orgId, item.id))[0],
+      };
+    }
+    const now = new Date().toISOString();
+    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
+    if (run) {
+      const executor = host.get("executors").get(run.executor_type);
+      await executor?.cancel?.(
+        run,
+        this.channel.contextFor(executor),
+      ).catch(() => undefined);
+      await host.get("authority").putWorkRun(cancelWorkRun(run, now));
+      this.waits.drop(run.id);
+    }
+    const next = await host.get("authority").putWorkItem({
+      ...item,
+      status: "skipped",
+      updated_at: now,
+    });
+    if (options.emit !== false) {
+      this.events.workUpdated(item.id);
+    }
+    return {
+      work_item: next,
+      run:
+        (await host.get("authority").listWorkRuns(orgId, item.id))[0],
+    };
+  }
+
   async putRecipe(input: RecipeInput, id?: string): Promise<Recipe> {
+    if (isSystemRecipeId(id)) {
+      throw new PersonalConnectorError("not_found", "Recipe not found", 404);
+    }
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
@@ -408,6 +692,9 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 
   async deleteRecipe(id: string): Promise<{ id: string; removed: true }> {
+    if (isSystemRecipeId(id)) {
+      throw new PersonalConnectorError("not_found", "Recipe not found", 404);
+    }
     const host = this.runtime.requireHost();
     const removed = await host.get("authority").deleteRecipe(this.runtime.orgId(), id);
     if (!removed) {
@@ -424,6 +711,9 @@ export class PersonalWorkService implements OnModuleDestroy {
     id: string,
     input?: { thread_id?: string; write_back?: boolean },
   ): Promise<WorkRunView & { thread_id: string }> {
+    if (isSystemRecipeId(id)) {
+      throw new PersonalConnectorError("not_found", "Recipe not found", 404);
+    }
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
@@ -625,12 +915,15 @@ export class PersonalWorkService implements OnModuleDestroy {
       authority.listRecipes(orgId),
       authority.listWorkDeliveries(orgId),
     ]);
+    const visibleItems = items.filter((item) => !isSystemRecipeId(item.recipe_id));
+    const visibleItemIds = new Set(visibleItems.map((item) => item.id));
     return workInboxFaces({
       threadIds,
-      items,
-      runs,
-      recipes,
-      deliveries,
+      items: visibleItems,
+      runs: runs.filter((run) => visibleItemIds.has(run.work_item_id)),
+      recipes: recipes.filter((recipe) => !isSystemRecipeId(recipe.id)),
+      deliveries: deliveries.filter((delivery) =>
+        visibleItemIds.has(delivery.work_item_id)),
       extraPrompts,
     });
   }
@@ -645,7 +938,8 @@ export class PersonalWorkService implements OnModuleDestroy {
       .listWorkItems(this.runtime.orgId());
     return new Set(
       items
-        .filter((item) => isActiveWorkStatus(item.status))
+        .filter((item) =>
+          isActiveWorkStatus(item.status) && !isSystemRecipeId(item.recipe_id))
         .map((item) => item.thread_id),
     );
   }
@@ -678,7 +972,7 @@ export class PersonalWorkService implements OnModuleDestroy {
         continue;
       }
       const item = itemById.get(run.work_item_id);
-      if (item) {
+      if (item && !isSystemRecipeId(item.recipe_id)) {
         bound.set(item.thread_id, run.agent_thread_id);
       }
     }
@@ -787,6 +1081,9 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!item) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
+    if (isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
     const recipe = item.recipe_id
       ? await host.get("authority").getRecipe(orgId, item.recipe_id)
       : null;
@@ -857,6 +1154,9 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!item) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
+    if (isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
     const now = new Date().toISOString();
     const next =
       item.status === "skipped"
@@ -900,6 +1200,13 @@ export class PersonalWorkService implements OnModuleDestroy {
 }
 
 const RECIPE_RECENT_RUN_LIMIT = 5;
+
+function recoverableAuxiliaryStart(run: WorkRun): boolean {
+  return run.start_state === "submitted" ||
+    run.start_state === "uncertain" ||
+    run.status === "running" ||
+    run.status === "waiting_human";
+}
 
 function recentRunsForRecipe(
   runs: WorkRun[],

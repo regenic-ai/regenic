@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 53;
+export const PG_SCHEMA_VERSION = 54;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -548,6 +548,23 @@ ALTER TABLE outbound_attempts ADD CONSTRAINT outbound_attempts_status_check
   CHECK (status IN ('pending', 'accepted', 'sent', 'failed', 'rejected'));
 `,
   },
+  {
+    version: 54,
+    sql: `
+CREATE TABLE search_answers (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id),
+  query TEXT NOT NULL,
+  event_ids_json JSONB NOT NULL,
+  outcome TEXT CHECK (outcome IN ('timed_out')),
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE UNIQUE INDEX search_answers_work_item_idx
+  ON search_answers (org_id, work_item_id);
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -753,6 +770,20 @@ CREATE TABLE work_runs (
 );
 
 CREATE INDEX work_runs_item_idx ON work_runs (org_id, work_item_id, updated_at);
+
+CREATE TABLE search_answers (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id),
+  query TEXT NOT NULL,
+  event_ids_json JSONB NOT NULL,
+  outcome TEXT CHECK (outcome IN ('timed_out')),
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE UNIQUE INDEX search_answers_work_item_idx
+  ON search_answers (org_id, work_item_id);
 
 CREATE TABLE ui_prefs (
   org_id TEXT NOT NULL,

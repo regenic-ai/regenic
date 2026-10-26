@@ -279,6 +279,8 @@ function exitedFromTranscript(
 }
 
 export const WORK_EVIDENCE_OMITTED = "[Earlier messages omitted]";
+export const WORK_EVIDENCE_GAP = "[Messages omitted]";
+export const WORK_EVIDENCE_AFTER_CURRENT = "[Sent after the current message]";
 export const WORK_CONVERSATION_FILENAME = "conversation.md";
 export const WORK_AGENTS_FILENAME = "AGENTS.md";
 export const WORK_AGENTS_INLINE_LIMIT = 4_000;

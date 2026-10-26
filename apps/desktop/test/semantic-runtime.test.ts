@@ -7,7 +7,18 @@ import { test } from "node:test";
 import { SemanticRuntime } from "../src/main/semantic-runtime.ts";
 import { semanticAction } from "../src/shared/semantic-runtime.ts";
 import { loadDesktopPreference, saveDesktopPreference, saveKernelPreference, saveLocalePreference } from "../src/main/kernel-settings.ts";
-import { contextSearchInput } from "../src/renderer/src/context-search.ts";
+import {
+  SEARCH_CONTEXT,
+  SEARCH_WINDOW_PAGE,
+  applySearchWindow,
+  contextSearchInput,
+  mergeSearchMessages,
+  searchAnswerConversations,
+  searchAnswerSegments,
+  searchHighlightRanges,
+  searchMessageText,
+  searchWindowRequest,
+} from "../src/renderer/src/context-search.ts";
 import { en, zh, type MessageKey } from "../src/shared/messages.ts";
 
 const revision = "914f7f89142e33e77833254d9c9b90c3cef7303b";
@@ -63,12 +74,89 @@ test("semantic actions and search input are bounded and literal", () => {
   for (const action of [null, {}, "exec", "START"]) assert.throws(() => semanticAction(action));
   assert.deepEqual(contextSearchInput(" query ", " mail ", " literal/thread ", 20), {
     query: "query", limit: 20, filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
+    context: SEARCH_CONTEXT,
   });
 
-  assert.deepEqual(contextSearchInput("x", "", "", 1), { query: "x", limit: 1 });
-  for (const [query, limit] of [["", 20], ["x".repeat(8001), 20], ["x", 101], ["x", 1.2]] as const) {
+  assert.deepEqual(contextSearchInput("x", "", "", 1), { query: "x", limit: 1, context: SEARCH_CONTEXT });
+  for (const [query, limit] of [["", 20], ["x".repeat(8001), 20], ["x", 21], ["x", 1.2]] as const) {
     assert.throws(() => contextSearchInput(query, "", "", limit), /search.invalid/);
   }
+  assert.ok(contextSearchInput("x", "", "", 20).limit <= SEARCH_CONTEXT.max_messages);
+});
+
+test("search highlighting finds Chinese runs without whitespace and Latin terms case-insensitively", () => {
+  const query = "上次选中的 2 位都还没回复吗？";
+  assert.deepEqual(searchHighlightRanges("上次选中的 2 位都还没回复吗？", query), [[0, 5], [8, 15]]);
+  assert.deepEqual(searchHighlightRanges("上次确认小王和小李，共 2 位。", query), [[0, 2]]);
+  assert.deepEqual(searchHighlightRanges("这里的回复指邀约回复。", query), [[3, 5], [8, 10]]);
+  assert.deepEqual(searchHighlightRanges("Alice is Creator-1", "creator alice"), [[0, 5], [9, 16]]);
+  assert.deepEqual(searchHighlightRanges("无关内容", query), []);
+});
+
+test("search cards load windows from their boundaries and close them when exhausted", () => {
+  const message = (id: string, minute: number) => ({ event_id: id, occurred_at: `2026-10-20T00:0${minute}:00.000Z` });
+  const card = {
+    thread_id: "t",
+    read_epoch: "epoch-1",
+    messages: [message("c", 3), message("f", 6)],
+    continuation: {
+      before: { event_id: "c", occurred_at: message("c", 3).occurred_at },
+      after: { event_id: "f", occurred_at: message("f", 6).occurred_at },
+      gaps: [{ after: { event_id: "c", occurred_at: message("c", 3).occurred_at }, before: { event_id: "f", occurred_at: message("f", 6).occurred_at } }],
+    },
+  };
+  assert.deepEqual(searchWindowRequest(card, { kind: "gap", index: 0 }), {
+    thread_id: "t", read_epoch: "epoch-1", limit: SEARCH_WINDOW_PAGE, direction: "after",
+    boundary: card.continuation.gaps[0].after, until: card.continuation.gaps[0].before,
+  });
+
+  const earlier = applySearchWindow(card, { kind: "before" }, { messages: [message("b", 2)], has_more: true });
+  assert.deepEqual(earlier.messages.map((entry) => entry.event_id), ["b", "c", "f"]);
+  assert.deepEqual(earlier.continuation.before, { event_id: "b", occurred_at: message("b", 2).occurred_at });
+
+  const partGap = applySearchWindow(earlier, { kind: "gap", index: 0 }, { messages: [message("d", 4)], has_more: true });
+  assert.deepEqual(partGap.continuation.gaps, [{
+    after: { event_id: "d", occurred_at: message("d", 4).occurred_at }, before: card.continuation.gaps[0].before,
+  }]);
+  const closedGap = applySearchWindow(partGap, { kind: "gap", index: 0 }, { messages: [message("e", 5)], has_more: false });
+  assert.deepEqual(closedGap.messages.map((entry) => entry.event_id), ["b", "c", "d", "e", "f"]);
+  assert.deepEqual(closedGap.continuation.gaps, []);
+
+  const end = applySearchWindow(closedGap, { kind: "after" }, { messages: [], has_more: false });
+  assert.equal(end.continuation.after, null);
+  assert.equal(searchWindowRequest(end, { kind: "after" }), undefined);
+  assert.deepEqual(mergeSearchMessages([message("b", 2)], [message("b", 2), message("a", 1)]).map((entry) => entry.event_id), ["a", "b"]);
+});
+
+test("search answers send visible cards and turn resolved [n] markers into citations", () => {
+  const many = Array.from({ length: 150 }, (_, index) => ({ event_id: `e${index}` }));
+  const selected = searchAnswerConversations([
+    { thread_id: "a", messages: many },
+    { thread_id: "b", messages: many },
+    { thread_id: "c", messages: many },
+  ]);
+  assert.deepEqual(selected.map((entry) => [entry.thread_id, entry.event_ids.length]), [["a", 150], ["b", 50]]);
+
+  assert.deepEqual(searchAnswerSegments("Alice [1], Bob [3]. [9] [x]", [
+    { ref: 1, event_id: "e1" },
+    { ref: 3, event_id: "e3" },
+  ]), [
+    { text: "Alice " },
+    { ref: 1, event_id: "e1" },
+    { text: ", Bob " },
+    { ref: 3, event_id: "e3" },
+    { text: ". [9] [x]" },
+  ]);
+});
+
+test("search cards render attachment-only messages as placeholders", () => {
+  const labels = { image: "[图片]", file: (name: string) => `[文件 ${name}]` };
+  assert.equal(searchMessageText({ text: "", attachments: [{ media_type: "image/png" }] }, labels), "[图片]");
+  assert.equal(
+    searchMessageText({ text: "看下这个", attachments: [{ media_type: "application/pdf", filename: "brief.pdf" }] }, labels),
+    "看下这个 [文件 brief.pdf]",
+  );
+  assert.equal(searchMessageText({ text: "纯文本" }, labels), "纯文本");
 });
 
 test("search and model messages preserve English/Chinese interpolation variables", () => {

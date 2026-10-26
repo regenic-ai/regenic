@@ -94,6 +94,8 @@ export * from "./context-canonical";
 export * from "./context-diff";
 export * from "./context-compatibility";
 export * from "./context-lexical";
+export * from "./context-selection";
+export * from "./search-answer";
 export * from "./embedding-provider";
 export * from "./context-vector-index";
 export * from "./context-projection-outbox";

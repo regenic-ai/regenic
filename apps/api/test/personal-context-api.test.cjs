@@ -110,6 +110,98 @@ async function ingestConversationEvidence(database, blobRoot) {
   return result.records.map((record) => record.event_id);
 }
 
+async function ingestAttachmentConversation(database, blobRoot) {
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const message = (index, content) => ({
+    operation: "create",
+    source: "synthetic-chat",
+    external_id: `customer-b:${index}`,
+    occurred_at: `2026-08-30T00:0${index}:00.000Z`,
+    actor: { id: "customer" },
+    scope: { id: "customer-b" },
+    type: "message",
+    content,
+  });
+  await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "synthetic-chat",
+    org_id: "local-owner",
+    delivery_id: "delivery-attachment-context",
+    received_at: "2026-08-30T01:00:00.000Z",
+    records: [
+      message(1, [{ role: "body", media_type: "text/plain", text: "opening-line before the photos" }]),
+      message(2, [{
+        role: "attachment", media_type: "image/png", source_filename: "image.png",
+        external_locator: "synthetic:image:1",
+      }]),
+      message(3, [{ role: "body", media_type: "text/plain", text: "photo-caption-question: which one?" }]),
+      message(4, [{
+        role: "attachment", media_type: "application/pdf", source_filename: "brief.pdf",
+        external_locator: "synthetic:file:1",
+      }]),
+      message(5, [{ role: "body", media_type: "text/plain", text: "closing-line after the photos" }]),
+    ],
+  });
+  authority.close();
+}
+
+async function ingestConversationMetadataOnly(database, blobRoot) {
+  const ids = await ingestConversationEvidence(database, blobRoot);
+  const authority = new SqliteAuthorityStore(database);
+  await new IngestionService(new FsBlobStore(blobRoot), authority).ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "synthetic-chat",
+    org_id: "local-owner",
+    delivery_id: "delivery-metadata-only",
+    received_at: "2026-08-30T01:00:00.000Z",
+    records: [{
+      operation: "create",
+      source: "synthetic-chat",
+      external_id: "customer-a:4",
+      occurred_at: "2026-08-30T00:03:00.000Z",
+      actor: { id: "customer" },
+      scope: { id: "customer-a" },
+      type: "message",
+      content: [{
+        role: "metadata",
+        media_type: "application/vnd.regenic.surface+json",
+        text: JSON.stringify({ channel: "synthetic", kind: "user" }),
+      }],
+    }],
+  });
+  authority.close();
+  return ids;
+}
+
+async function startExecutorStub(summary) {
+  const requests = [];
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const text = Buffer.concat(chunks).toString("utf8");
+    requests.push({ method: request.method, url: request.url, body: text ? JSON.parse(text) : undefined });
+    const done = request.method === "GET" && summary !== undefined;
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(done
+      ? { status: "completed", external_run_id: "run-1", agent_thread_id: "dsh:answer-1", result: { summary } }
+      : { status: "running", external_run_id: "run-1", agent_thread_id: "dsh:answer-1" }));
+  });
+  await listenServer(server);
+  servers.push(server);
+  return { baseUrl: `http://127.0.0.1:${server.address().port}`, requests };
+}
+
+async function installHttpExecutor(origin, baseUrl) {
+  const response = await postJson(`${origin}/v1/me/executors`, {
+    kind: "http",
+    name: "Answer agent",
+    config: { base_url: baseUrl },
+  });
+  assert.equal(response.response.status, 201, response.text);
+  return JSON.parse(response.text).id;
+}
+
 async function startModelStub(mode = "valid") {
   const requests = [];
   const server = createServer(async (request, response) => {
@@ -180,12 +272,12 @@ async function startApi(root, model = { driver: "none" }, embedding, seed = inge
     REGENIC_EMBEDDING_BASE_URL: embedding,
   };
   setEnv(env);
-  const seeded = await seed(database, blobRoot);
+  const seeded = seed ? await seed(database, blobRoot) : undefined;
   const eventId = Array.isArray(seeded) ? seeded[0] : seeded;
   const app = await createHttpApp({ logger: false });
   await app.listen(0, "127.0.0.1");
   apps.push(app);
-  return { origin: await app.getUrl(), eventId, database };
+  return { app, origin: await app.getUrl(), eventId, database };
 }
 
 function assembleBody() {
@@ -434,6 +526,9 @@ describe("personal context API", () => {
     assert.equal(result.items.length, 1);
     assert.equal(result.conversations.length, 1);
     assert.equal(result.conversations[0].thread_id, "synthetic-chat:customer-a");
+    assert.equal(typeof result.conversations[0].channel_label, "string");
+    assert.ok("title" in result.conversations[0]);
+    assert.ok(result.conversations[0].messages.every((message) => "actor_label" in message));
     assert.deepEqual(result.conversations[0].anchor_event_ids, [result.items[0].event_id]);
     assert.deepEqual(
       result.conversations[0].messages.map((message) => message.external_id),
@@ -485,6 +580,313 @@ describe("personal context API", () => {
       const invalid = await postJson(`${origin}/v1/me/context/search/expand`, body);
       assert.equal(invalid.response.status, 400, invalid.text);
     }
+  });
+  it("expands around attachment-only neighbors instead of failing the search", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestAttachmentConversation,
+    );
+    const expanded = await postJson(`${origin}/v1/me/context/search/expand`, {
+      query: "photo-caption-question",
+      limit: 1,
+      context: { before: 2, after: 2, reply_depth: 0, max_messages: 5 },
+    });
+    assert.equal(expanded.response.status, 200, expanded.text);
+    const [conversation] = JSON.parse(expanded.text).conversations;
+    assert.deepEqual(
+      conversation.messages.map((message) => [message.external_id, message.text, message.attachments]),
+      [
+        ["customer-b:1", "opening-line before the photos", undefined],
+        ["customer-b:2", "", [{ media_type: "image/png", filename: "image.png" }]],
+        ["customer-b:3", "photo-caption-question: which one?", undefined],
+        ["customer-b:4", "", [{ media_type: "application/pdf", filename: "brief.pdf" }]],
+        ["customer-b:5", "closing-line after the photos", undefined],
+      ],
+    );
+    assert.deepEqual(conversation.continuation.gaps, []);
+    assert.equal(conversation.truncated, false);
+  });
+  it("loads more messages around a search card from its continuation boundaries", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(root, { driver: "none" }, undefined, ingestConversationEvidence);
+    const expanded = JSON.parse((await postJson(`${origin}/v1/me/context/search/expand`, {
+      query: "identity-follow-up",
+      limit: 1,
+      context: { before: 0, after: 0, reply_depth: 0, max_messages: 1 },
+    })).text).conversations[0];
+    assert.equal(expanded.messages.length, 1);
+    assert.ok(expanded.continuation.before);
+
+    const earlier = await postJson(`${origin}/v1/me/context/search/window?locale=en`, {
+      thread_id: expanded.thread_id,
+      read_epoch: expanded.read_epoch,
+      direction: "before",
+      boundary: expanded.continuation.before,
+      limit: 1,
+    });
+    assert.equal(earlier.response.status, 200, earlier.text);
+    const page = JSON.parse(earlier.text);
+    assert.deepEqual(page.messages.map((message) => message.external_id), ["customer-a:2"]);
+    assert.equal(page.has_more, true);
+    assert.ok("actor_label" in page.messages[0]);
+
+    const rest = JSON.parse((await postJson(`${origin}/v1/me/context/search/window`, {
+      thread_id: expanded.thread_id,
+      read_epoch: expanded.read_epoch,
+      direction: "before",
+      boundary: { occurred_at: page.messages[0].occurred_at, event_id: page.messages[0].event_id },
+      limit: 10,
+    })).text);
+    assert.deepEqual(rest.messages.map((message) => message.external_id), ["customer-a:1"]);
+    assert.equal(rest.has_more, false);
+
+    const between = JSON.parse((await postJson(`${origin}/v1/me/context/search/window`, {
+      thread_id: expanded.thread_id,
+      read_epoch: expanded.read_epoch,
+      direction: "after",
+      boundary: { occurred_at: rest.messages[0].occurred_at, event_id: rest.messages[0].event_id },
+      until: expanded.continuation.before,
+      limit: 10,
+    })).text);
+    assert.deepEqual(between.messages.map((message) => message.external_id), ["customer-a:2"]);
+
+    const stale = await postJson(`${origin}/v1/me/context/search/window`, {
+      thread_id: expanded.thread_id,
+      read_epoch: "stale-epoch",
+      direction: "before",
+      boundary: expanded.continuation.before,
+    });
+    assert.equal(stale.response.status, 409, stale.text);
+    assert.equal(JSON.parse(stale.text).error.code, "context_changed");
+
+    for (const body of [
+      { thread_id: expanded.thread_id, read_epoch: expanded.read_epoch, direction: "sideways", boundary: expanded.continuation.before },
+      { thread_id: expanded.thread_id, read_epoch: expanded.read_epoch, direction: "before", boundary: { occurred_at: "x" } },
+      { thread_id: expanded.thread_id, read_epoch: expanded.read_epoch, direction: "before", boundary: expanded.continuation.before, limit: 51 },
+    ]) {
+      const invalid = await postJson(`${origin}/v1/me/context/search/window`, body);
+      assert.equal(invalid.response.status, 400, invalid.text);
+    }
+  });
+  it("answers a search through an installed executor and maps its bracket citations", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub("Alice and Bob were selected [1]; Alice is creator-1 [3]. [9]");
+    const { origin } = await startApi(root, { driver: "none" }, undefined, ingestConversationEvidence);
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(`${origin}/v1/me/context/search/expand`, {
+      query: "pending-answer-question",
+      limit: 1,
+      context: { before: 1, after: 1, reply_depth: 8, max_messages: 3 },
+    })).text).conversations[0];
+    const eventIds = conversation.messages.map((message) => message.event_id);
+
+    const started = await postJson(`${origin}/v1/me/context/search/answers`, {
+      query: "Who was selected?",
+      conversations: [{ thread_id: conversation.thread_id, event_ids: eventIds }],
+      executor_type: executorType,
+    });
+    assert.equal(started.response.status, 202, started.text);
+    const job = JSON.parse(started.text);
+    assert.equal(job.status, "running");
+    assert.equal(job.executor_type, executorType);
+
+    const run = executor.requests.find((request) => request.method === "POST" && request.url === "/v1/runs");
+    assert.match(run.body.executor_config.prompt, /bracket numbers/);
+    assert.match(run.body.evidence_text, /\n\nQUESTION\nWho was selected\?\n\nCONVERSATIONS\n## /);
+    assert.match(run.body.evidence_text, /\[1\] 2026-08-30 00:00 UTC · .+: Customer customer-a selected Alice and Bob\./);
+    assert.match(run.body.evidence_text, /\[3\] .+ \(reply to \[1\]\): identity-follow-up/);
+
+    const finished = JSON.parse((await fetch(`${origin}/v1/me/context/search/answers/${job.answer_id}`).then((r) => r.text())));
+    assert.equal(finished.status, "completed");
+    assert.equal(finished.agent_thread_id, "dsh:answer-1");
+    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    const persisted = await ledger.getSearchAnswer("local-owner", job.answer_id);
+    assert.equal(persisted.query, "Who was selected?");
+    assert.deepEqual(persisted.event_ids, eventIds);
+    const item = await ledger.getWorkItem("local-owner", persisted.work_item_id);
+    const runs = await ledger.listWorkRuns("local-owner", persisted.work_item_id);
+    assert.equal(item.status, "done");
+    assert.equal(runs[0].status, "completed");
+    assert.equal(runs[0].result.summary, "Alice and Bob were selected [1]; Alice is creator-1 [3]. [9]");
+    assert.ok((await ledger.listHiddenExecutorThreadIds("local-owner")).includes("dsh:answer-1"));
+    const systemRecipeId = item.recipe_id;
+    ledger.close();
+    const visibleRecipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+    assert.ok(visibleRecipes.every((recipe) => !recipe.id.startsWith("system:")));
+    const systemRecipeUrl = `${origin}/v1/me/recipes/${encodeURIComponent(systemRecipeId)}`;
+    assert.equal((await postJson(systemRecipeUrl, {})).response.status, 404);
+    assert.equal((await postJson(`${systemRecipeUrl}/try`, {})).response.status, 404);
+    assert.equal((await fetch(systemRecipeUrl, { method: "DELETE" })).status, 404);
+    assert.equal(finished.answer, "Alice and Bob were selected [1]; Alice is creator-1 [3]. [9]");
+    assert.deepEqual(finished.citations, [
+      { ref: 1, event_id: eventIds[0] },
+      { ref: 3, event_id: eventIds[2] },
+    ]);
+
+    const unknown = await postJson(`${origin}/v1/me/context/search/answers`, {
+      query: "Who was selected?",
+      conversations: [{ thread_id: conversation.thread_id, event_ids: eventIds }],
+      executor_type: "missing-executor",
+    });
+    assert.equal(unknown.response.status, 409, unknown.text);
+    assert.equal(JSON.parse(unknown.text).error.code, "executor_unavailable");
+    const missing = await fetch(`${origin}/v1/me/context/search/answers/not-an-answer`);
+    assert.equal(missing.status, 404);
+    const changed = await postJson(`${origin}/v1/me/context/search/answers`, {
+      query: "Who was selected?",
+      conversations: [{
+        thread_id: conversation.thread_id,
+        event_ids: [eventIds[0], "forged-event"],
+      }],
+      executor_type: executorType,
+    });
+    assert.equal(changed.response.status, 409, changed.text);
+    assert.equal(JSON.parse(changed.text).error.code, "context_changed");
+    for (const body of [
+      { query: "x", conversations: [] },
+      { query: "x", conversations: [{ thread_id: conversation.thread_id, event_ids: [] }] },
+      { query: "x", conversations: [{ thread_id: conversation.thread_id, event_ids: [eventIds[0], eventIds[0]] }] },
+      { query: " ", conversations: [{ thread_id: conversation.thread_id, event_ids: eventIds }] },
+      { query: "x", conversations: [{ thread_id: conversation.thread_id, event_ids: eventIds }], model: "x" },
+    ]) {
+      const invalid = await postJson(`${origin}/v1/me/context/search/answers`, body);
+      assert.equal(invalid.response.status, 400, invalid.text);
+    }
+  });
+  it("removes answer metadata when executor startup fails definitively", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationEvidence,
+    );
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      { query: "pending-answer-question", limit: 1 },
+    )).text).conversations[0];
+    const failed = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "Who was selected?",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [conversation.messages[0].event_id],
+        }],
+      },
+    );
+    assert.equal(failed.response.status, 501, failed.text);
+    assert.equal(
+      JSON.parse(failed.text).error.code,
+      "executor_session_unavailable",
+    );
+    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    try {
+      const failedItem = (await ledger.listWorkItems("local-owner"))
+        .find((item) => item.id.startsWith("search-answer:"));
+      assert.ok(failedItem);
+      assert.equal(failedItem.status, "failed");
+      assert.equal(
+        await ledger.getSearchAnswer(
+          "local-owner",
+          failedItem.id.slice("search-answer:".length),
+        ),
+        null,
+      );
+    } finally {
+      ledger.close();
+    }
+  });
+  it("recovers an in-flight executor answer after the API restarts", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub("Recovered answer [1].");
+    const first = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationEvidence,
+    );
+    const executorType = await installHttpExecutor(first.origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(
+      `${first.origin}/v1/me/context/search/expand`,
+      { query: "pending-answer-question", limit: 1 },
+    )).text).conversations[0];
+    const eventId = conversation.messages[0].event_id;
+    const started = JSON.parse((await postJson(
+      `${first.origin}/v1/me/context/search/answers`,
+      {
+        query: "Who was selected?",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [eventId],
+        }],
+        executor_type: executorType,
+      },
+    )).text);
+    assert.equal(started.status, "running");
+    await first.app.close();
+    apps.splice(apps.indexOf(first.app), 1);
+
+    const second = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      null,
+    );
+    const recovered = await fetch(
+      `${second.origin}/v1/me/context/search/answers/${started.answer_id}`,
+    );
+    assert.equal(recovered.status, 200);
+    const result = await recovered.json();
+    assert.equal(result.status, "completed");
+    assert.equal(result.answer, "Recovered answer [1].");
+    assert.deepEqual(result.citations, [{ ref: 1, event_id: eventId }]);
+  });
+  it("cancels a running executor answer", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub();
+    const { origin } = await startApi(root, { driver: "none" }, undefined, ingestConversationEvidence);
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(`${origin}/v1/me/context/search/expand`, {
+      query: "pending-answer-question",
+      limit: 1,
+    })).text).conversations[0];
+    const job = JSON.parse((await postJson(`${origin}/v1/me/context/search/answers`, {
+      query: "Who was selected?",
+      conversations: [{ thread_id: conversation.thread_id, event_ids: [conversation.messages[0].event_id] }],
+      executor_type: executorType,
+    })).text);
+    const polled = JSON.parse(await fetch(`${origin}/v1/me/context/search/answers/${job.answer_id}`).then((r) => r.text()));
+    assert.equal(polled.status, "running");
+    const cancelled = await postJson(`${origin}/v1/me/context/search/answers/${job.answer_id}/cancel`, {});
+    assert.equal(JSON.parse(cancelled.text).status, "cancelled");
+    assert.ok(executor.requests.some((request) => request.url === "/v1/runs/run-1/cancel"));
+  });
+  it("skips an unreadable neighbor without reporting it as omitted context", async () => {
+    const root = await createRoot();
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationMetadataOnly,
+    );
+    const expanded = await postJson(`${origin}/v1/me/context/search/expand`, {
+      query: "identity-follow-up",
+      limit: 1,
+      context: { before: 2, after: 1, reply_depth: 0, max_messages: 4 },
+    });
+    assert.equal(expanded.response.status, 200, expanded.text);
+    const [conversation] = JSON.parse(expanded.text).conversations;
+    assert.deepEqual(
+      conversation.messages.map((message) => message.external_id),
+      ["customer-a:1", "customer-a:2", "customer-a:3"],
+    );
+    assert.deepEqual(conversation.continuation.gaps, []);
+    assert.equal(conversation.continuation.after, null);
+    assert.equal(conversation.truncated, false);
   });
   it("reviews a snapshot-pinned Proposal and atomically commits one Decision", async () => {
     const root = await createRoot();

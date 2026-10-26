@@ -1271,11 +1271,11 @@ describe("SQLite context artifact store", () => {
     const checked = new Database(path);
     try {
       const names = checked
-        .prepare("SELECT name FROM sqlite_master WHERE name IN ('context_snapshot_index', 'events_org_occurred_idx')")
+        .prepare("SELECT name FROM sqlite_master WHERE name IN ('context_snapshot_index', 'events_org_occurred_idx', 'search_answers')")
         .all()
         .map((row) => row.name)
         .sort();
-      assert.deepEqual(names, ["context_snapshot_index", "events_org_occurred_idx"]);
+      assert.deepEqual(names, ["context_snapshot_index", "events_org_occurred_idx", "search_answers"]);
       const preview = checked.prepare("PRAGMA table_info(context_artifacts)").all();
       assert.ok(preview.some((column) => column.name === "preview_json"));
     } finally {

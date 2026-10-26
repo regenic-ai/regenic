@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import {
   PERSONAL_SSE_INBOX_DIGEST,
   PERSONAL_SSE_THREAD_UPDATED,
+  PERSONAL_SSE_WORK_UPDATED,
   type PersonalSseEventType,
   type PersonalSsePayload,
 } from "@regenic/domain";
@@ -34,16 +35,28 @@ export class PersonalEventsService {
     this.bus.emit(PERSONAL_SSE_THREAD_UPDATED, { thread_id: id });
   }
 
+  workUpdated(work_item_id: string): void {
+    const id = work_item_id.trim();
+    if (!id) {
+      return;
+    }
+    this.bus.emit(PERSONAL_SSE_WORK_UPDATED, { work_item_id: id });
+  }
+
   subscribe(listener: PersonalEventListener): () => void {
     const onDigest = (payload: PersonalEventPayload["inbox.digest"]) =>
       listener(PERSONAL_SSE_INBOX_DIGEST, payload);
     const onThread = (payload: PersonalEventPayload["thread.updated"]) =>
       listener(PERSONAL_SSE_THREAD_UPDATED, payload);
+    const onWork = (payload: PersonalEventPayload["work.updated"]) =>
+      listener(PERSONAL_SSE_WORK_UPDATED, payload);
     this.bus.on(PERSONAL_SSE_INBOX_DIGEST, onDigest);
     this.bus.on(PERSONAL_SSE_THREAD_UPDATED, onThread);
+    this.bus.on(PERSONAL_SSE_WORK_UPDATED, onWork);
     return () => {
       this.bus.off(PERSONAL_SSE_INBOX_DIGEST, onDigest);
       this.bus.off(PERSONAL_SSE_THREAD_UPDATED, onThread);
+      this.bus.off(PERSONAL_SSE_WORK_UPDATED, onWork);
     };
   }
 }

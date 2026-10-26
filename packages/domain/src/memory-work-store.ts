@@ -11,6 +11,7 @@ import type {
 import { isActiveWorkStatus } from "./work";
 import type { WorkItemStatus } from "./work";
 import { shouldFlushDelivery } from "./work-delivery";
+import type { SearchAnswerRecord } from "./search-answer";
 
 export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly recipes = new Map<string, Recipe>();
@@ -18,6 +19,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly runs = new Map<string, WorkRun>();
   private readonly deliveries = new Map<string, WorkDelivery>();
   private readonly uiPrefs = new Map<string, string>();
+  private readonly searchAnswers = new Map<string, SearchAnswerRecord>();
   private readonly executors = new Map<string, ExecutorInstallation>();
 
   async listRecipes(orgId: string): Promise<Recipe[]> {
@@ -223,6 +225,26 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     _updatedAt: string,
   ): Promise<void> {
     this.uiPrefs.set(`${orgId}\0${key}`, value);
+  }
+
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    const record = this.searchAnswers.get(id);
+    return record?.org_id === orgId ? structuredClone(record) : null;
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    this.searchAnswers.set(record.id, structuredClone(record));
+    return structuredClone(record);
+  }
+
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    const record = this.searchAnswers.get(id);
+    return record?.org_id === orgId && this.searchAnswers.delete(id);
   }
 
   async listExecutorInstallations(orgId: string): Promise<ExecutorInstallation[]> {

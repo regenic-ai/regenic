@@ -449,6 +449,45 @@ for (const driver of drivers) {
       assert.equal((await store.listWorkRuns(orgId)).length, 2);
     });
 
+    it("persists search-answer metadata beside its work ledger", async () => {
+      const { store, orgId } = await openBoundStore();
+      const now = "2026-08-24T00:00:00.000Z";
+      const itemId = `search-answer-${randomUUID()}`;
+      await store.putWorkItem({
+        id: itemId,
+        org_id: orgId,
+        thread_id: `system:search-answer:${itemId}`,
+        unit_key: itemId,
+        record_class: "utterance",
+        thread_facet: "agent",
+        status: "open",
+        created_at: now,
+        updated_at: now,
+      });
+      const record = {
+        id: `answer-${randomUUID()}`,
+        org_id: orgId,
+        work_item_id: itemId,
+        query: "Who was selected?",
+        event_ids: ["event-1", "event-2"],
+        created_at: now,
+        updated_at: now,
+      };
+      assert.deepEqual(await store.putSearchAnswer(record), record);
+      assert.deepEqual(await store.getSearchAnswer(orgId, record.id), record);
+      const timedOut = {
+        ...record,
+        outcome: "timed_out",
+        updated_at: "2026-08-24T00:05:00.000Z",
+      };
+      await store.putSearchAnswer(timedOut);
+      assert.deepEqual(await store.getSearchAnswer(orgId, record.id), timedOut);
+      assert.equal(await store.deleteSearchAnswer("other-org", record.id), false);
+      assert.equal(await store.deleteSearchAnswer(orgId, record.id), true);
+      assert.equal(await store.deleteSearchAnswer(orgId, record.id), false);
+      assert.equal(await store.getSearchAnswer(orgId, record.id), null);
+    });
+
     it("rolls back a conflicting ingest page", async () => {
       const { store, orgId } = await openBoundStore();
       const first = await store.append({
