@@ -9,22 +9,26 @@
   gap: 10px;
   width: 100%;
   padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
+  border: 1px solid var(--line-12);
+  border-radius: var(--radius-control);
+  background: var(--elevated);
   color: var(--text);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
+.menu-select-btn:hover {
+  border-color: var(--ink-40);
+}
+
 .menu-select-btn.is-open {
-  border-color: var(--g700);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 22%, transparent);
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
 }
 
 .menu-select-btn.is-placeholder {
-  color: var(--muted);
+  color: var(--placeholder);
 }
 
 .menu-select-btn span {
@@ -36,20 +40,21 @@
 
 .menu-select-btn svg {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--subtle);
 }
 
 .menu-select-pop {
   position: absolute;
   z-index: 20;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   right: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: 0 16px 40px rgb(0 0 0 / 42%);
+  border-radius: var(--radius-menu);
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
+  animation: pop-in var(--dur-slow) var(--ease-out);
+  transform-origin: top center;
 }
 
 .menu-select-search {
@@ -58,8 +63,8 @@
   height: 34px;
   padding: 0 10px;
   border: 0;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  border-bottom: 1px solid var(--line-8);
+  background: transparent;
   color: var(--text);
   font: inherit;
   outline: none;

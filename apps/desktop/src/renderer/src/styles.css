@@ -12,33 +12,94 @@
 @import "./styles/tray.css";
 
 :root {
-  --g50: #f5fff2;
-  --g100: #eafbe6;
-  --g300: #b8f3a6;
-  --g500: #6bed4a;
-  --g700: #2d7a25;
-  --g900: #153b12;
-  --result: #6bed4a;
-  --ai: #36d6e7;
-  --data: #b69cff;
-  --risk: #ffb347;
-  --ink: #0a0a0a;
-  --surface: #171c18;
-  --text: #f7f8f7;
-  --muted: #aeb5af;
-  --bg: var(--ink);
-  --line: #253028;
-  --accent: var(--g500);
-  --accent-soft: var(--g900);
-  --hover: #1e2620;
-  --rail: #0d100e;
-  --danger: var(--risk);
-  --danger-soft: #2a2010;
-  --warning: var(--ai);
-  --warning-soft: #102428;
-  --on-accent: #0a0a0a;
-  --font: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
-  color-scheme: dark;
+  /* Surfaces */
+  --sidebar: #f5f5f5;
+  --chrome: #fcfcfc;
+  --canvas: #ffffff;
+  --elevated: #ffffff;
+
+  /* Ink ladder */
+  --ink: #1c1c1c;
+  --ink-68: #1c1c1cad;
+  --ink-56: #1c1c1c8f;
+  --ink-40: #1c1c1c66;
+  --wash-6: #1c1c1c0f;
+  --wash-8: #1c1c1c14;
+  --line-12: #1c1c1c1f;
+  --line-8: #1c1c1c14;
+
+  /* Fixed blue */
+  --blue: #1680f3;
+  --focus: #1e86fc;
+  --user: #126fd4;
+  --blue-text: #126fd4;
+  --blue-soft: #1680f314;
+
+  /* Status hues: bright / primary pairs from the identity ladder */
+  --green: #10ab61;
+  --teal: #10a693;
+  --purple: #8351e4;
+  --orange: #e5620d;
+
+  /* Legacy names mapped onto the Sand system */
+  --g50: var(--blue-soft);
+  --g100: var(--blue-soft);
+  --g300: var(--blue-text);
+  --g500: var(--blue);
+  --g700: var(--focus);
+  --g900: var(--blue-soft);
+  --result: var(--green);
+  --ai: var(--teal);
+  --process: var(--teal);
+  --data: var(--purple);
+  --risk: var(--orange);
+  --text: var(--ink);
+  --muted: var(--ink-68);
+  --subtle: var(--ink-56);
+  --placeholder: var(--ink-40);
+  --surface: var(--chrome);
+  --bg: var(--canvas);
+  --line: var(--line-8);
+  --line-strong: var(--line-12);
+  --accent: var(--blue);
+  --accent-soft: var(--wash-8);
+  --hover: var(--wash-6);
+  --rail: var(--sidebar);
+  --danger: var(--orange);
+  --danger-soft: #fd690f14;
+  --warning: var(--teal);
+  --warning-soft: #13b7a214;
+  --on-accent: #ffffff;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Shape */
+  --radius-bubble: 18px;
+  --radius-card: 14px;
+  --radius-row: 10px;
+  --radius-control: 8px;
+  --radius-menu: 12px;
+  --radius-menu-row: 6px;
+
+  /* Elevation */
+  --shadow-control: 0 1px 3px #1c1c1c1f;
+  --shadow-inline: 0 4px 12px -1px #1c1c1c14, 0 2px 4px -2px #1c1c1c0f, 0 0 0 1px #1c1c1c0a;
+  --shadow-pop: 0 10px 20px -3px #1c1c1c1a, 0 4px 6px -4px #1c1c1c14, 0 0 0 1px #1c1c1c14;
+  --shadow-modal: 0 20px 32px -5px #1c1c1c1f, 0 8px 12px -6px #1c1c1c14, 0 0 0 1px #1c1c1c14;
+  --scrim: #1c1c1c47;
+
+  /* Motion */
+  --dur-instant: 50ms;
+  --dur-fast: 100ms;
+  --dur-normal: 150ms;
+  --dur-slow: 200ms;
+  --dur-slower: 300ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-press: cubic-bezier(0.2, 0, 0.2, 1);
+  --ease-fade: cubic-bezier(0.1, 0.9, 0.2, 1);
+
+  --font: "XVF", -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Segoe UI",
+    system-ui, sans-serif;
+  color-scheme: light;
 }
 
 * {
@@ -54,11 +115,13 @@ body,
 
 body {
   font-family: var(--font);
+  font-weight: 420;
   color: var(--text);
-  background: var(--bg);
+  background: var(--chrome);
   font-size: 13px;
   line-height: 1.45;
   user-select: none;
+  -webkit-font-smoothing: antialiased;
 }
 
 button {
@@ -68,4 +131,61 @@ button {
   border: 0;
   padding: 0;
   cursor: pointer;
+  transition:
+    background-color var(--dur-normal) var(--ease-out),
+    border-color var(--dur-normal) var(--ease-out),
+    color var(--dur-normal) var(--ease-out),
+    box-shadow var(--dur-normal) var(--ease-out),
+    opacity var(--dur-normal) var(--ease-out),
+    transform var(--dur-fast) var(--ease-press);
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+::placeholder {
+  color: var(--placeholder);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #1e86fc33;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--line-12) padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-40) padding-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }

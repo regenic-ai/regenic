@@ -22,6 +22,7 @@ import {
   threadTitle,
 } from "./message-view";
 import { ThreadFaceTags } from "./ThreadFaceTags";
+import { IdentityAvatar } from "./IdentityAvatar";
 import { useLocale } from "./LocaleContext";
 import {
   ChevronIcon,
@@ -616,6 +617,7 @@ function WorkRow({
       }}
     >
       <div className="item-main">
+        <IdentityAvatar seed={thread.id} label={title} />
         <div className="item-copy">
           <div className="item-top">
             <ThreadTitleField

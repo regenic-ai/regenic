@@ -11,7 +11,7 @@
   margin-bottom: 2px;
   color: var(--text);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .recipe-params-lead,
@@ -26,9 +26,10 @@
 .menu-select-option {
   display: block;
   width: 100%;
-  padding: 8px 10px;
+  min-height: 30px;
+  padding: 6px 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-menu-row);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -38,11 +39,12 @@
 
 .menu-select-option.is-active,
 .menu-select-option:hover {
-  background: var(--hover);
+  background: var(--wash-6);
 }
 
 .menu-select-option.is-on {
-  color: var(--g300);
+  color: var(--text);
+  font-weight: 500;
 }
 
 .seg button:focus-visible,
@@ -50,7 +52,7 @@
 .menu-select-btn:focus-visible,
 .recipe-card-hit:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 25%, transparent);
+  box-shadow: 0 0 0 2px var(--focus);
 }
 
 .recipe-advanced {

@@ -16,7 +16,7 @@
   height: 30px;
   padding: 0 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: none;
   color: var(--muted);
   font: inherit;
@@ -27,13 +27,13 @@
 
 .settings-nav button:hover {
   color: var(--text);
-  background: color-mix(in srgb, var(--line) 50%, transparent);
+  background: var(--wash-6);
 }
 
 .settings-nav button.active {
-  color: var(--g300);
-  background: var(--g900);
-  font-weight: 550;
+  color: var(--text);
+  background: var(--wash-8);
+  font-weight: 500;
 }
 
 .settings-sections {
@@ -73,16 +73,16 @@
   display: inline-flex;
   flex-shrink: 0;
   padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
+  border: 0;
+  border-radius: 999px;
+  background: var(--wash-6);
 }
 
 .segmented button {
   height: 26px;
   padding: 0 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
   background: none;
   color: var(--muted);
   font: inherit;
@@ -96,10 +96,10 @@
 }
 
 .segmented button.active {
-  background: var(--surface);
+  background: var(--elevated);
   color: var(--text);
-  font-weight: 550;
-  box-shadow: 0 0 0 1px var(--line);
+  font-weight: 500;
+  box-shadow: var(--shadow-control);
 }
 
 .dispatch-rules {
@@ -222,7 +222,7 @@
 }
 
 .danger-zone {
-  border-color: color-mix(in srgb, var(--risk) 35%, var(--line));
+  box-shadow: var(--shadow-inline), 0 0 0 1px color-mix(in srgb, var(--orange) 30%, transparent);
 }
 
 .danger-zone h2 {

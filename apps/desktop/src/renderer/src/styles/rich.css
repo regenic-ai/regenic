@@ -10,8 +10,8 @@
 
 .rich-heading {
   margin: 12px 0 6px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: 500;
+  letter-spacing: -0.008em;
   color: var(--text);
 }
 
@@ -34,16 +34,16 @@
 .rich-quote {
   margin: 0 0 8px;
   padding: 6px 10px;
-  border-left: 2px solid var(--line);
-  border-radius: 0 6px 6px 0;
-  background: #121812;
+  border-left: 2px solid var(--line-12);
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  background: var(--wash-6);
   color: var(--muted);
   font-size: 12px;
   white-space: pre-wrap;
 }
 
 .rich-p {
-  margin: 0 0 8px;
+  margin: 0 0 7px;
   white-space: pre-wrap;
 }
 
@@ -67,6 +67,9 @@
   max-width: 100%;
   margin: 8px 0;
   overflow-x: auto;
+  border-radius: var(--radius-row);
+  box-shadow: 0 0 0 1px var(--line-8);
+  background: var(--elevated);
 }
 
 .rich-table {
@@ -78,30 +81,34 @@
 
 .rich-table th,
 .rich-table td {
-  border: 1px solid var(--line);
+  border-top: 1px solid var(--line-8);
   padding: 6px 10px;
   text-align: left;
   white-space: nowrap;
   vertical-align: top;
 }
 
+.rich-table tr:first-child > * {
+  border-top: 0;
+}
+
 .rich-table th {
-  background: #121812;
-  color: var(--muted);
-  font-weight: 550;
+  background: var(--chrome);
+  color: var(--subtle);
+  font-weight: 500;
 }
 
 .rich-table td {
-  background: var(--bg);
+  background: transparent;
 }
 
 .rich-code {
   margin: 8px 0;
   overflow-x: auto;
   padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #0d100e;
+  border-radius: var(--radius-row);
+  background: var(--wash-6);
+  font-family: var(--mono);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -121,8 +128,9 @@
 
 .rich-body code {
   padding: 1px 5px;
-  border-radius: 4px;
-  background: #1e2620;
+  border-radius: 5px;
+  background: var(--wash-8);
+  font-family: var(--mono);
   font-size: 12px;
 }
 
@@ -141,10 +149,11 @@
 .msg-image {
   max-width: min(360px, 100%);
   max-height: 240px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  border: 0;
+  box-shadow: 0 0 0 1px var(--line-8);
   object-fit: contain;
-  background: #0d100e;
+  background: var(--elevated);
 }
 
 .msg-image-btn {
@@ -152,7 +161,7 @@
   max-width: 100%;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: none;
   cursor: zoom-in;
 }
@@ -163,12 +172,12 @@
 
 .msg-image-btn:hover .msg-image,
 .msg-image-btn:focus-visible .msg-image {
-  border-color: color-mix(in srgb, var(--text) 32%, var(--line));
-  filter: brightness(1.08);
+  box-shadow: 0 0 0 1px var(--line-12), var(--shadow-control);
+  filter: brightness(0.98);
 }
 
 .msg-image-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -179,7 +188,9 @@
   display: grid;
   grid-template-rows: auto 1fr;
   padding: 16px 24px 28px;
-  background: rgb(10 10 10 / 88%);
+  background: #fcfcfcf0;
+  backdrop-filter: blur(20px);
+  animation: fade-in var(--dur-slower) var(--ease-fade);
 }
 
 .image-lightbox:focus {
@@ -213,7 +224,8 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #0a0a0acc;
+  background: var(--elevated);
+  box-shadow: var(--shadow-control);
   color: var(--text);
   font-size: 22px;
   line-height: 1;
@@ -221,7 +233,16 @@
 
 .image-lightbox-close:hover,
 .image-lightbox-nav:hover {
-  background: #1e2620;
+  background: var(--sidebar);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .image-lightbox-stage {
@@ -246,7 +267,8 @@
   max-width: 100%;
   max-height: calc(100vh - 160px);
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-modal);
   transform-origin: center center;
   cursor: zoom-in;
   user-select: none;
@@ -269,7 +291,8 @@
   height: 40px;
   margin-top: -20px;
   border-radius: 50%;
-  background: #0a0a0acc;
+  background: var(--elevated);
+  box-shadow: var(--shadow-control);
   color: var(--text);
   font-size: 28px;
   line-height: 1;
@@ -288,10 +311,10 @@
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #121812;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--line-8);
+  border-radius: var(--radius-row);
+  background: var(--elevated);
   color: var(--text);
   font-size: 12px;
 }
@@ -300,7 +323,7 @@
   width: 28px;
   height: 28px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .file-chip button {
@@ -310,8 +333,8 @@
 
 .composer-dock {
   flex-shrink: 0;
-  background: var(--bg);
-  padding: 16px 32px 24px;
+  background: var(--chrome);
+  padding: 12px 32px 20px;
 }
 
 .sr-only {
