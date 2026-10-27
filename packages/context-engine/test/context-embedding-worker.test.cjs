@@ -24,12 +24,12 @@ function provider(overrides = {}) {
     ...overrides,
   };
 }
-function batch(operation, text, delivery = operation) {
+function batch(operation, text, delivery = operation, externalId = "message") {
   return {
     schema_version: "1.0", connector_id: "synthetic", org_id: "org", delivery_id: delivery,
     received_at: "2026-10-16T00:00:00.000Z",
     records: [{
-      operation, source: "synthetic", external_id: "message",
+      operation, source: "synthetic", external_id: externalId,
       occurred_at: "2026-10-16T00:00:00.000Z",
       actor: { id: "actor" }, scope: { id: "thread" }, type: "message",
       ...(text === undefined ? {} : { content: [{ role: "body", media_type: "text/plain", text }] }),
@@ -65,8 +65,7 @@ describe("independent embedding indexing worker", () => {
     assert.equal((await f.index.activeGeneration("org")).id, next.id);
     await f.ingest.ingest(batch("revise", "发布延期，重新审批。"));
     await assert.rejects(activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index), /not fully covered/);
-    assert.equal((await f.worker.runOnce()).processed, 1);
-    assert.equal((await f.worker.runOnce()).processed, 1);
+    assert.equal((await f.worker.runOnce()).processed, 2);
     await activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index);
     for (const gen of [generation, next]) {
       const jobs = await f.index.listJobs("org", gen.id);
@@ -136,6 +135,50 @@ describe("independent embedding indexing worker", () => {
     assert.deepEqual(await f.worker.runOnce(), { processed: 0, failed: 0, superseded: 0 });
     assert.equal(calls, 1);
     assert.equal((await f.authority.listContextProjectionJobs("org"))[0].status, "pending");
+  });
+
+  it("drains a bounded idle batch, reuses reads and yields between jobs", async (t) => {
+    const f = await fixture(t);
+    for (let index = 0; index < 3; index++) {
+      await f.ingest.ingest(batch("create", `message-${index}`, `create-${index}`, `message-${index}`));
+    }
+    let reads = 0;
+    const openRead = f.source.openRead.bind(f.source);
+    f.source.openRead = async (...args) => {
+      reads += 1;
+      return openRead(...args);
+    };
+
+    let pauseChecks = 0;
+    const first = await f.worker.runOnce({
+      max_jobs: 3,
+      time_budget_ms: 30_000,
+      pause_if: () => pauseChecks++ > 0,
+    });
+    assert.deepEqual(first, { processed: 1, failed: 0, superseded: 0 });
+
+    const second = await f.worker.runOnce({ max_jobs: 2, time_budget_ms: 30_000 });
+    assert.deepEqual(second, { processed: 2, failed: 0, superseded: 0 });
+    assert.equal(reads, 5);
+  });
+
+  it("uses one token-count request for fitting text", async () => {
+    let countCalls = 0;
+    let embedCalls = 0;
+    const embedding = provider({
+      async countTokens(texts) {
+        countCalls += 1;
+        return texts.map((text) => Array.from(text).length + 5);
+      },
+      async embed(texts) {
+        embedCalls += 1;
+        return texts.map(() => [1, 0]);
+      },
+    });
+    const chunks = await chunkEmbeddingText("short text", embedding, generation);
+    assert.equal(chunks.length, 1);
+    assert.equal(countCalls, 1);
+    assert.equal(embedCalls, 1);
   });
 
   it("preserves Unicode source intervals and obeys tokenizer budgets without truncation", async () => {
@@ -223,8 +266,7 @@ describe("independent embedding indexing worker", () => {
     }));
     ingest = f.ingest;
     await ingest.ingest(batch("create", "旧版本等待批准。"));
-    assert.equal((await f.worker.runOnce()).superseded, 1);
-    assert.equal((await f.worker.runOnce()).processed, 1);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 1 });
     const jobs = await f.index.listJobs("org", generation.id);
     assert.deepEqual(jobs.map((job) => job.status), ["superseded", "succeeded"]);
   });

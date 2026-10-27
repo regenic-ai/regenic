@@ -102,7 +102,9 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       this.embeddingTimer = setInterval(() => {
         if (!isHumanIdle() || !this.host) return;
         if (this.host.get("context-vector-status").status !== "ready") return;
-        void this.host.get("context-embedding-worker").runOnce().then((result) => {
+        void this.host.get("context-embedding-worker").runOnce({
+          pause_if: () => !isHumanIdle(),
+        }).then((result) => {
           if (result.failed) console.warn("embedding jobs failed", result.failed);
         }).catch(() => {
           console.error("embedding reconciliation failed", "indexing_failed");
