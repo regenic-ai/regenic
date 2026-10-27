@@ -18,6 +18,14 @@ import {
 } from "@regenic/domain";
 import { ContextTextMaterialError } from "./authority-context-source";
 
+const DEFAULT_RUN_MAX_JOBS = 16;
+const DEFAULT_RUN_BUDGET_MS = 1_500;
+const MAX_RUN_JOBS = 100;
+const MAX_RUN_BUDGET_MS = 30_000;
+
+type EmbeddingRunOptions = NonNullable<Parameters<ContextEmbeddingRunner["runOnce"]>[0]>;
+type EmbeddingRunResult = Awaited<ReturnType<ContextEmbeddingRunner["runOnce"]>>;
+
 export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   private readonly owner = `embedding:${randomUUID()}`;
   private abort = new AbortController();
@@ -38,9 +46,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     assertEmbeddingDescriptor(provider.descriptor, generation.model);
   }
 
-  async runOnce(): ReturnType<ContextEmbeddingRunner["runOnce"]> {
+  async runOnce(options: EmbeddingRunOptions = {}): ReturnType<ContextEmbeddingRunner["runOnce"]> {
     if (this.stopped || this.clearing || this.running) return { processed: 0, failed: 0, superseded: 0 };
-    this.running = this.runGenerations();
+    this.running = this.runGenerations(options);
     try {
       return await this.running;
     } finally {
@@ -78,32 +86,49 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     return read;
   }
 
-  private async runGenerations() {
+  private async runGenerations(options: EmbeddingRunOptions) {
     await this.index.registerGeneration(this.orgId, this.generation);
     const manifests = this.generations
       ? (await this.generations.listGenerations(this.orgId)).map((entry) => entry.manifest)
       : [this.generation];
-    for (let offset = 0; offset < manifests.length; offset++) {
-      const cursor = (this.generationCursor + offset) % manifests.length;
-      const generation = manifests[cursor];
-      assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
-      if (this.abort.signal.aborted) break;
-      const result = await this.run(generation);
-      if (result.processed + result.failed + result.superseded > 0) {
-        this.generationCursor = (cursor + 1) % manifests.length;
-        return result;
+    const maxJobs = boundedRunOption(options.max_jobs, DEFAULT_RUN_MAX_JOBS, 1, MAX_RUN_JOBS);
+    const budgetMs = boundedRunOption(options.time_budget_ms, DEFAULT_RUN_BUDGET_MS, 1, MAX_RUN_BUDGET_MS);
+    const deadline = Date.now() + budgetMs;
+    const total: EmbeddingRunResult = { processed: 0, failed: 0, superseded: 0 };
+    const reads = new Map<string, ContextSourceRead>();
+    let attempted = 0;
+
+    while (attempted < maxJobs && Date.now() < deadline && !this.abort.signal.aborted && !options.pause_if?.()) {
+      let found = false;
+      for (let offset = 0; offset < manifests.length; offset++) {
+        const cursor = (this.generationCursor + offset) % manifests.length;
+        const generation = manifests[cursor];
+        assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
+        const run = await this.run(generation, reads.get(generation.id));
+        reads.set(generation.id, run.read);
+        if (run.claimed) {
+          found = true;
+          attempted += 1;
+          total.processed += run.result.processed;
+          total.failed += run.result.failed;
+          total.superseded += run.result.superseded;
+          this.generationCursor = (cursor + 1) % manifests.length;
+          break;
+        }
       }
+      if (!found) break;
     }
-    return { processed: 0, failed: 0, superseded: 0 };
+    return total;
   }
 
-  private async run(generation: EmbeddingGeneration) {
-    await this.read(generation);
+  private async run(generation: EmbeddingGeneration, previous?: ContextSourceRead) {
+    let read = previous ?? await this.read(generation);
     const claimed = await this.jobs.claim({
       org_id: this.orgId, generation: generation.id, owner: this.owner,
       now: new Date().toISOString(), lease_ms: 90000, limit: 1,
     });
     const result = { processed: 0, failed: 0, superseded: 0 };
+    if (claimed.length === 0) return { claimed: false, read, result };
     for (const job of claimed) {
       if (this.abort.signal.aborted) break;
       let leaseLost = false;
@@ -115,7 +140,6 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         }).catch(() => { leaseLost = true; heartbeatFailed = true; });
       }, 20000);
       try {
-        const read = await this.read(generation);
         const event = read.events.find((event) => event.event.event_id === job.event_id);
         if (!event || !isHead(read, job)) {
           result.superseded += 1;
@@ -129,10 +153,10 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         if (typeof text !== "string" || !text.trim()) throw new EmbeddingError("invalid_input", false);
         if (Buffer.byteLength(text, "utf8") > 262144) throw new EmbeddingError("input_too_large", false);
         const chunks = await chunkEmbeddingText(text, this.provider, generation, this.abort.signal);
-        const latest = await this.read(generation);
+        read = await this.read(generation);
         await heartbeat;
         if (heartbeatFailed) throw new Error("Embedding lease renewal failed");
-        if (leaseLost || !isHead(latest, job)) {
+        if (leaseLost || !isHead(read, job)) {
           result.superseded += 1;
           continue;
         }
@@ -159,8 +183,16 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         await heartbeat;
       }
     }
-    return result;
+    return { claimed: true, read, result };
   }
+}
+
+function boundedRunOption(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`Embedding run option must be an integer between ${min} and ${max}`);
+  }
+  return value;
 }
 
 export async function activateEmbeddingGeneration(
@@ -210,6 +242,18 @@ export async function chunkEmbeddingText(
 ): Promise<ContextVectorChunk[]> {
   const characters = Array.from(text);
   const chunks: ContextVectorChunk[] = [];
+  const [wholeTokens] = await provider.countTokens([text], "document", signal);
+  if (!Number.isSafeInteger(wholeTokens) || wholeTokens < 1) {
+    throw new EmbeddingError("invalid_response", true);
+  }
+  if (wholeTokens <= generation.chunk_tokens) {
+    const vectors = await provider.embed([text], "document", signal);
+    if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
+    return [{
+      ordinal: 0, start: 0, end: text.length,
+      text_hash: createHash("sha256").update(text).digest("hex"), vector: vectors[0],
+    }];
+  }
   let offset = 0;
   let start = 0;
   while (offset < characters.length) {

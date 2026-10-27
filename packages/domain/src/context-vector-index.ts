@@ -112,7 +112,14 @@ export interface EmbeddingJobStore {
 }
 
 export interface ContextEmbeddingRunner {
-  runOnce(): Promise<{ processed: number; failed: number; superseded: number }>;
+  runOnce(options?: {
+    /** Stop claiming new work after this many jobs. In-flight work is always drained. */
+    max_jobs?: number;
+    /** Soft wall-clock budget checked between jobs. */
+    time_budget_ms?: number;
+    /** Yield before claiming another job, for example when interactive work resumes. */
+    pause_if?: () => boolean;
+  }): Promise<{ processed: number; failed: number; superseded: number }>;
   stop(): Promise<void>;
   clearProjection(): Promise<void>;
 }
