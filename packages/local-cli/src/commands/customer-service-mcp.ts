@@ -1,25 +1,21 @@
-import { createInterface } from "node:readline";
 import {
   assertObjectKeys,
   optionString,
   type CliOutput,
   type CommandOptions,
 } from "../cli-runtime";
-
-type JsonRpcId = string | number | null;
-
-interface JsonRpcRequest {
-  jsonrpc: "2.0";
-  id?: JsonRpcId;
-  method: string;
-  params?: unknown;
-}
-
-interface McpTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
+import {
+  asObject,
+  integerProperty,
+  objectProperty,
+  requestPersonalApi,
+  requiredString,
+  runMcpStdio,
+  safeMcpBaseUrl,
+  stringProperty,
+  tool,
+  type McpTool,
+} from "./mcp-runtime";
 
 const TOOLS: McpTool[] = [
   tool("create_customer_task", "Bind a customer question to its current authorized source message.", {
@@ -86,56 +82,20 @@ export async function runCustomerServiceMcp(
   stdout: CliOutput,
 ): Promise<void> {
   assertObjectKeys(options, new Set(["base-url"]), "customer-service-mcp option");
-  const baseUrl = safeBaseUrl(
+  const baseUrl = safeMcpBaseUrl(
     optionString(options, "base-url")
       ?? env.REGENIC_API_URL
       ?? "http://127.0.0.1:4370",
+    "Customer service MCP",
   );
   const apiKey = env.REGENIC_PERSONAL_API_KEY?.trim();
-  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    let request: JsonRpcRequest;
-    try {
-      request = parseRequest(JSON.parse(line));
-    } catch (error) {
-      writeResponse(stdout, null, undefined, rpcError(-32700, message(error)));
-      continue;
-    }
-    if (request.id === undefined) continue;
-    try {
-      if (request.method === "initialize") {
-        writeResponse(stdout, request.id, {
-          protocolVersion: protocolVersion(request.params),
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "regenic-customer-service", version: "1.0.0" },
-        });
-        continue;
-      }
-      if (request.method === "ping") {
-        writeResponse(stdout, request.id, {});
-        continue;
-      }
-      if (request.method === "tools/list") {
-        writeResponse(stdout, request.id, { tools: TOOLS });
-        continue;
-      }
-      if (request.method === "tools/call") {
-        const result = await callTool(baseUrl, apiKey, request.params);
-        writeResponse(stdout, request.id, {
-          content: [{ type: "text", text: JSON.stringify(result) }],
-          structuredContent: result,
-        });
-        continue;
-      }
-      writeResponse(stdout, request.id, undefined, rpcError(-32601, "Method not found"));
-    } catch (error) {
-      writeResponse(stdout, request.id, {
-        content: [{ type: "text", text: message(error) }],
-        isError: true,
-      });
-    }
-  }
+  await runMcpStdio({
+    name: "regenic-customer-service",
+    tools: TOOLS,
+    stdout,
+    callTool: (params) => callTool(baseUrl, apiKey, params),
+    errorFallback: "Customer service MCP request failed",
+  });
 }
 
 async function callTool(
@@ -191,142 +151,16 @@ async function callTool(
   const payload = Object.fromEntries(
     Object.entries(args).filter(([key]) => !route.omit.includes(key)),
   );
-  const response = await fetch(new URL(route.path, baseUrl), {
+  return requestPersonalApi({
+    baseUrl,
+    apiKey,
     method: route.method,
-    headers: {
-      accept: "application/json",
-      ...(route.method === "POST" ? { "content-type": "application/json" } : {}),
-      ...(apiKey ? { "x-regenic-personal-key": apiKey } : {}),
-    },
-    ...(route.method === "POST" ? { body: JSON.stringify(payload) } : {}),
+    path: route.path,
+    ...(route.method === "POST" ? { payload } : {}),
   });
-  const text = await response.text();
-  let body: unknown;
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`Regenic API returned invalid JSON (${response.status})`);
-  }
-  if (!response.ok) {
-    const error = asOptionalObject(asOptionalObject(body)?.error);
-    throw new Error(typeof error?.message === "string"
-      ? error.message
-      : `Regenic API request failed (${response.status})`);
-  }
-  return body;
-}
-
-function parseRequest(value: unknown): JsonRpcRequest {
-  const object = asObject(value, "JSON-RPC request");
-  if (object.jsonrpc !== "2.0" || typeof object.method !== "string") {
-    throw new Error("Invalid JSON-RPC request");
-  }
-  if (object.id !== undefined
-    && object.id !== null
-    && typeof object.id !== "string"
-    && typeof object.id !== "number") {
-    throw new Error("Invalid JSON-RPC id");
-  }
-  return {
-    jsonrpc: "2.0",
-    method: object.method,
-    ...(object.id === undefined ? {} : { id: object.id as JsonRpcId }),
-    ...(object.params === undefined ? {} : { params: object.params }),
-  };
-}
-
-function writeResponse(
-  stdout: CliOutput,
-  id: JsonRpcId,
-  result?: unknown,
-  error?: { code: number; message: string },
-): void {
-  stdout.write(`${JSON.stringify({
-    jsonrpc: "2.0",
-    id,
-    ...(error ? { error } : { result }),
-  })}\n`);
-}
-
-function tool(
-  name: string,
-  description: string,
-  properties: Record<string, unknown>,
-  required: string[],
-): McpTool {
-  return {
-    name,
-    description,
-    inputSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties,
-      required,
-    },
-  };
-}
-
-function stringProperty() {
-  return { type: "string", minLength: 1 };
-}
-
-function integerProperty(minimum: number, maximum: number) {
-  return { type: "integer", minimum, maximum };
-}
-
-function objectProperty() {
-  return { type: "object" };
-}
-
-function safeBaseUrl(value: string): URL {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("Customer service MCP base URL must be absolute");
-  }
-  const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-    throw new Error("Customer service MCP base URL must use HTTPS or loopback HTTP");
-  }
-  if (url.username || url.password || url.search || url.hash) {
-    throw new Error("Customer service MCP base URL must not contain credentials, query or fragment");
-  }
-  return url;
-}
-
-function protocolVersion(params: unknown): string {
-  const version = asOptionalObject(params)?.protocolVersion;
-  return typeof version === "string" && version ? version : "2025-03-26";
 }
 
 function requiredTaskId(value: string | undefined): string {
   if (!value) throw new Error("task_id is required");
   return value;
-}
-
-function requiredString(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
-  return value.trim();
-}
-
-function asObject(value: unknown, name: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${name} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function asOptionalObject(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function rpcError(code: number, value: string) {
-  return { code, message: value };
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : "Customer service MCP request failed";
 }
