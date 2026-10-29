@@ -68,4 +68,4 @@ This gate certifies deterministic local retrieval and workflow safety boundaries
 - remote business-service correctness;
 - production latency, concurrency, or capacity.
 
-After this gate passes, run the same scenario classes with a real Cursor/MCP client, production-like connectors, a scoped business test service, and a separately governed held-out confirmation set.
+After this gate passes, run the [system-level acceptance suite](./CUSTOMER_SERVICE_SYSTEM_ACCEPTANCE.md) across MCP, the Personal API, and a controlled business service. A real Cursor/MCP client, production-like connectors, and a separately governed held-out confirmation set are still required for deployment acceptance.
