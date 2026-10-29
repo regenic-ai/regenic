@@ -24,9 +24,7 @@
     "@regenic/plugin-host": "workspace:*",
     "@regenic/vector-index": "workspace:*",
     "@regenic/dsh-connector": "workspace:*",
-    "@regenic/model-provider": "workspace:*",
-    "@regenic/slack-connector": "workspace:*",
-    "@regenic/whatsapp-personal": "workspace:*"
+    "@regenic/model-provider": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

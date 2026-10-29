@@ -4,24 +4,15 @@ import { PersonalConnectorError } from "./personal-errors";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 const DEFAULT_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
-const LEGACY_WHATSAPP_CONNECTOR_TYPE = "whatsapp-web-live";
 
 @Injectable()
-export class PersonalWhatsAppImportService {
+export class PersonalConnectorImportService {
   constructor(
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
     @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
   ) {}
-
-  import(content: string | undefined, fileName?: string) {
-    return this.importFile({
-      connector_type: LEGACY_WHATSAPP_CONNECTOR_TYPE,
-      content,
-      file_name: fileName,
-    });
-  }
 
   async importFile(input: {
     connector_type?: string;

@@ -19,7 +19,7 @@
 `source` 由驱动声明，不必事先写进 `CHANNELS`。展示名来自
 `installCatalog().channel_label`；没有则回退 `CHANNELS`，再回退 catalog
 `title`，最后是 `SOURCE`。这些 catalog 字段是 `CopyRef`，由 API 视图按
-`GET /v1/me/engine?locale=` 或 `Accept-Language` 解析。内置 dsh / slack /
+`GET /v1/me/engine?locale=` 或 `Accept-Language` 解析。内置 dsh /
 feishu 仍在 `CHANNELS` 里，给没有加载驱动的旧 Event 用。
 
 Event、Blob、ACL、身份只能由采集服务写入。`ChannelConnector` 和
@@ -253,23 +253,23 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 
 | 方法 | 说明 |
 | --- | --- |
-| `install` | 只持久化非密钥配置。Slack 必须有 `channel_id`。飞书存 `sync_mode`（默认 `conversation`：当前会话优先 / `balanced`：均衡 / `context`：后台慢慢检查）加 `selection=recent`（默认）加 `kinds`（`group` / `p2p`），`selection=all` 加 `kinds`，或勾选的 `chat_ids`。`sync_mode` 与收取范围独立；内核按通用键映射 idle 预设，不按渠道名分支。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
+| `install` | 只持久化非密钥配置。飞书存 `sync_mode`（默认 `conversation`：当前会话优先 / `balanced`：均衡 / `context`：后台慢慢检查）加 `selection=recent`（默认）加 `kinds`（`group` / `p2p`），`selection=all` 加 `kinds`，或勾选的 `chat_ids`。`sync_mode` 与收取范围独立；内核按通用键映射 idle 预设，不按渠道名分支。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
-| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`、`create_with_task`、`hold_while_working`。`await_reply`：DSH / Cursor 为 true；飞书 / Slack 不写。`list_title`：飞书 / Slack 为 `conversation`；DSH / Cursor 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时拉最近一页；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Slack / Cursor 不写。`create_with_task` / `hold_while_working`：Cursor 为 true；DSH 不写。 |
-| `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。只读本地已有名字：飞书用安装里的 `chat_names`，Slack 用 `channel_name`。不得为了补名去 `listAllChats` 或挡住打开会话。 |
+| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`、`create_with_task`、`hold_while_working`。`await_reply`：DSH / Cursor 为 true；飞书不写。`list_title`：飞书为 `conversation`；DSH / Cursor 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时拉最近一页；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Cursor 不写。`create_with_task` / `hold_while_working`：Cursor 为 true；DSH 不写。 |
+| `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。只读本地已有名字：飞书用安装里的 `chat_names`。不得为了补名去 `listAllChats` 或挡住打开会话。 |
 | `listPrompts` / `answerPrompt` | 可选。活的待决决策。DSH web 挂 mux，把 `question/requested` / `approval/requested` 映射成渠道无关 Prompt，答题走 `/api/respond`。`not-pending` 视为已解决。 |
 | `waitThread` | 可选。该线程 inferior 的 wait fd。DSH web 订阅 mux 上的 `session/event`（`turn/start` / `turn/end`）和提问帧；内核 follow 该流把活页入库，再 `status()` reap。连接器不得写 Event。没有 wait 的渠道仍靠 history poll 兜底。 |
 | `readAttention` / `ackAttention` | 可选。来源已读覆盖（我看对方）。飞书对最新 inbound `om_` 调用户态 `read_status`；失败或官方已读都不消本机未读。ack 先写本地游标。 |
 | `readReceipts` | 可选。对端是否已读我的出站。飞书对 `:out:om_` 调用户态 `read_users`。空 items 是 Sent。不得用来源会话未读。 |
 | `surfaceGeneration` | 可选。活 surface 世代，拼进 `inbox_digest` 的 `&s=`，审批弹出时桌面轮询能看见。 |
-| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。Slack：`channel:<id>`。飞书：勾选的 `chat:<id>`；`selection=recent` 或 `selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。`selection=recent` 的目录只列最近活跃一页；`selection=all` 才分页 census 全部会话。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转提示）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页（DSH 不写 `pace`，保持每 tick）。内核只读声明，不按渠道名分支；当流声明了 `idle_ms` 或安装配置了通用 `sync_mode` 时，内核套用活跃面 / 非活跃面 idle（`pacedStreamIdleMs` + 意图预设），连接器不得自行编码 active/inactive。 |
+| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。飞书：勾选的 `chat:<id>`；`selection=recent` 或 `selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。`selection=recent` 的目录只列最近活跃一页；`selection=all` 才分页 census 全部会话。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转提示）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页（DSH 不写 `pace`，保持每 tick）。内核只读声明，不按渠道名分支；当流声明了 `idle_ms` 或安装配置了通用 `sync_mode` 时，内核套用活跃面 / 非活跃面 idle（`pacedStreamIdleMs` + 意图预设），连接器不得自行编码 active/inactive。 |
 | `createThread` | 可选。`create` 为 true 时必须实现。未声明则内核 501。声明了 `create_with_task` 时收 `options.text` 并开工；未声明则只建空会话，第一条用户文本走普通 send。 |
 | `bindEgress` | 可选。`reply` 为 true 时必须实现。未声明则内核 501。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
 | `listEgressQueue` / `ackEgressQueue` | 可选。给无法在进程内写回渠道的适配器（本机浏览器扩展）排空队列。暴露为 `GET/POST /v1/me/connectors/:id/egress`，不是按渠道单独开的 API。 |
 | `locales` | 可选。插件自带的英文（源）和中文表。第一方驱动必须实现，否则 catalog 会露出 key。 |
-| `installCatalog` | 可选。引擎页卡片。不写则不出现。Slack、DSH、飞书和额外插件用同一个方法。文案字段是 `CopyRef`，不是已译句子。`setup_steps` 是弹层里的编号步骤；桌面渲染已经解析好的字符串。 |
+| `installCatalog` | 可选。引擎页卡片。不写则不出现。DSH、飞书、Cursor 和额外插件用同一个方法。文案字段是 `CopyRef`，不是已译句子。`setup_steps` 是弹层里的编号步骤；桌面渲染已经解析好的字符串。 |
 | `presentInstall` | 可选。已装行的标题和细节（`CopyRef`）。 |
 | `writeBackLabels` | 可选。某个待办选项的精确别名。内核只对结果第一行做匹配。 |
 | `subjectCatalog` | 可选。工单类型词表。规则页按 `id` / `label` 渲染；内核只做相等匹配。不写则该来源没有类型维。 |
@@ -348,7 +348,7 @@ API 在调用渠道前持久化原子发送认领；同一组织、同一请求�
 只有能确认整次发送尚无任何消息被接收或入队时，适配器才能抛出
 `SendNotAcceptedError`；不能仅凭 `throttled` 等错误码判断，多段发送尤其如此。
 API 将这类记录持久化为 `rejected` 并返回原错误（例如 429），同键、同会话
-重试通过原子认领恢复发送；历史 `failed` 仍视为不确定。WhatsApp Web live
+重试通过原子认领恢复发送；历史 `failed` 仍视为不确定。带 egress 队列的驱动
 对入队前的参数校验、队列容量和限流拒绝使用此分支。队列拒绝只证明本次
 enqueue 未成功，不代表此前的多段发送没有副作用。
 拒绝状态落盘失败时返回 `send_rejection_pending`（503），不授权自动重发。
@@ -368,7 +368,7 @@ API 与 worker 需一起升级，旧二进制不能打开新版本数据库。
 
 `GET /v1/me/engine` 返回 catalog。引擎页在安装和「编辑范围」时用弹窗渲染这些字段。未齐前置时主按钮写「设置」，仍打开同一张弹层。
 
-驱动只有声明 `installCatalog()` 才会出现；Slack、DSH、飞书和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段、标题或导入器。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
+驱动只有声明 `installCatalog()` 才会出现；DSH、飞书、Cursor 和额外插件用同一个方法。宿主不另写一份名单。`singleton: true` 只允许装一条。已装行的文案由 `presentInstall` 提供；不写则用 catalog 的 `instance_label` / `instance_detail_key`，再退到安装 id。桌面不按类型写死字段、标题或导入器。安装记录带 `settings`（非密钥配置的字符串形式），用来回填编辑表单。引擎 catalog 还会带上驱动的 `source` 和 `subjectCatalog` 词表，给规则页选 `unit_kind`。
 
 catalog、展示、词表标签、探测 hint 和执行器调用字段返回 `CopyRef`：消息 id、`{ key, params }` 或 `{ literal }`。表里没有的裸字符串按原样显示（extra 和机器名）。`locales()` 是插件表。API 视图按 `GET /v1/me/engine?locale=` / `Accept-Language` 解析（收件箱、会话、执行器同样）。poll / ingest / send 永不收 locale。文档 URL 用 `href: string | { en, zh }`，不用 `_zh` 后缀。宿主不另维护一份翻译表。
 
@@ -391,11 +391,10 @@ token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起
 
 监测写在驱动的 `probeCatalog()` 里。API 把上次探测结果缓存后立刻返回引擎快照，不在这条请求上等待 CLI / 远端。表单选项走 `GET /v1/me/engine/catalog-options`。加来源不用改 API 或桌面。
 
-内置 Slack / DSH / 飞书的能力表、kind 映射和安装前置见[内置驱动](CONNECTOR_DRIVERS.md)。
+内置 DSH / 飞书 / Cursor 的能力表、kind 映射和安装前置见[内置驱动](CONNECTOR_DRIVERS.md)。
 
 ## 范围外
 
 - OAuth 安装
 - 连接器市场
-- Slack 回写
 - 出进程 / stdio 插件宿主

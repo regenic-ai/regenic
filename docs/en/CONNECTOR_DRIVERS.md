@@ -1,7 +1,7 @@
 # Built-in connectors
 
 The contract is in [Connectors](CONNECTOR.md). This page is implementation
-notes for Slack / DSH / Feishu / Cursor / WhatsApp Web, not kernel branching
+notes for DSH / Feishu / Cursor, not kernel branching
 rules. First-party packages declare `regenic.plugin` and `contributes` in
 `package.json`; the kernel discovers them from its dependencies and
 loads only the named exports. Built-in chat / agent channels
@@ -16,16 +16,13 @@ contract.
 
 | Driver | `source` | Sync | Reply | Create | Credentials |
 | --- | --- | --- | --- | --- | --- |
-| `slack-channel` | `slack` | one channel | no | no | `REGENIC_SLACK_TOKEN` |
 | `dsh-session` web, no `session_id` | `dsh` | every session | yes | yes | `REGENIC_DSH_TOKEN` if the host asks |
 | `dsh-session` web, with `session_id` | `dsh` | that session | yes | no | same |
 | `dsh-session` cli | `dsh` | one mailbox | yes | no | local `dsh` |
 | `feishu-chat` | `feishu` | selected conversations, or all visible groups and/or p2p chats | yes | no | local `lark-cli` user login |
 | `cursor-agent` | `cursor` | local SDK sessions | yes | yes | paste on install or `CURSOR_API_KEY` |
-| `whatsapp-web-live` | `whatsapp-personal` | visible WhatsApp Web chats via local extension webhook | yes | no | pairing code created on install |
 
-Slack does not implement `createThread` / `bindEgress`. Feishu does not
-implement `createThread`. Undeclared methods do not exist. DSH web
+Feishu does not implement `createThread`. Undeclared methods do not exist. DSH web
 create opens an empty `session.create`; the first user text is a normal
 reply (`session.prompt` queue) and the kernel awaits the first poll.
 Cursor declares `create_with_task`: the desktop keeps a local draft;
@@ -34,19 +31,15 @@ outbound and does not await the first poll. A pasted Cursor API key is stored in
 machine keychain (or `~/.regenic/credentials/cursor`), never in install
 config.
 
-Credential refs: Slack uses `env:REGENIC_SLACK_TOKEN`; DSH web uses
+Credential refs: DSH web uses
 `env:REGENIC_DSH_TOKEN` (optional); Feishu uses `keychain:lark-cli`;
 Cursor uses `keychain:regenic-cursor:<install id>` or
-`env:CURSOR_API_KEY`. WhatsApp Web live stores a pairing code in the
-machine keychain on install (`REGENIC_PERSONAL_LIVE_KEY` is an optional
-CLI override). `oauth:HANDLE` / `app:HANDLE` are reserved;
+`env:CURSOR_API_KEY`. `oauth:HANDLE` / `app:HANDLE` are reserved;
 built-in drivers do not use them in this phase.
 
-WhatsApp Web live is webhook-only. The local extension posts observed
-messages to `POST /v1/me/connectors/:id/webhook` and drains
-`bindEgress` through the generic connector egress queue. Chat identity is
-the WhatsApp JID, shared with a personal export import. See
-[WhatsApp Web live connector](WHATSAPP_WEB_LIVE_CONNECTOR.md).
+Other connectors are not built in. They ship as separate plugin packages
+loaded from `REGENIC_PLUGIN_DIR` (default `~/.regenic/plugins`) or a single
+`REGENIC_CHANNEL_PLUGIN` path, with the same `regenic.plugin` manifest.
 
 ## Kind maps
 
@@ -57,8 +50,6 @@ DSH:
 | `user/message` with `source.kind=user` | `user` |
 | `assistant/message` (text) | `assistant` |
 | plugin-injected `user/message` | `system` |
-
-Slack humans map to `user`.
 
 Cursor local agents:
 
@@ -122,14 +113,12 @@ them; the kernel only probes.
 
 | Driver | When `ready` is false | What to run |
 | --- | --- | --- |
-| `slack-channel` | `REGENIC_SLACK_TOKEN` unset | Set a bot token from your Slack app, then restart the desktop |
 | `dsh-session` web | `dsh` not on PATH | `dsh` must work in the terminal. Then `dsh web --port 3080` |
 | `dsh-session` web | `dsh` present, port 3080 down | `dsh web --port 3080` |
 | `dsh-session` cli | local `dsh` | `dsh` must work in the terminal |
 | `feishu-chat` | `lark-cli` not on PATH | `npx @larksuite/cli@latest install` ([lark-cli](https://github.com/larksuite/cli)) |
 | `feishu-chat` | CLI present, user not signed in | `lark-cli config init` then `lark-cli auth login --recommend` |
 | `cursor-agent` | no key | Paste a Cursor API key on the install form, or set `CURSOR_API_KEY` |
-| `whatsapp-web-live` | — | Install in Engine, copy the pairing code into the extension |
 
 Feishu tokens stay in the OS credential store. Optional `REGENIC_LARK_CLI` points
 at a binary that is not on PATH.

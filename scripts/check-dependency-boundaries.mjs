@@ -19,10 +19,7 @@ for (const relative of coreApps) {
           `${relativePath(file)}: Connector helper imports its owning service; use leaf types or explicit state capabilities`,
         );
       }
-      if (
-        /^@regenic\/.+-connector$/.test(spec) ||
-        spec === "@regenic/whatsapp-personal"
-      ) {
+      if (/^@regenic\/.+-connector$/.test(spec)) {
         violations.push(
           `${relativePath(file)}: Core application imports concrete connector ${spec}`,
         );
@@ -34,11 +31,7 @@ for (const relative of coreApps) {
 for (const entry of readdirSync(path.join(root, "packages"), {
   withFileTypes: true,
 })) {
-  if (
-    !entry.isDirectory() ||
-    (!entry.name.endsWith("-connector") &&
-      entry.name !== "whatsapp-personal")
-  ) {
+  if (!entry.isDirectory() || !entry.name.endsWith("-connector")) {
     continue;
   }
   for (const folder of ["src", "test"]) {
@@ -75,8 +68,7 @@ scan("packages/connector-test-utils/src", (file, source) => {
       spec === "@regenic/blob-store" ||
       spec.startsWith("@regenic/authority-store/") ||
       spec.startsWith("@regenic/blob-store/") ||
-      /^@regenic\/.+-connector$/.test(spec) ||
-      spec === "@regenic/whatsapp-personal"
+      /^@regenic\/.+-connector$/.test(spec)
     ) {
       violations.push(
         `${relativePath(file)}: Connector test SDK imports kernel or connector package ${spec}`,
