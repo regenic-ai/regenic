@@ -411,7 +411,7 @@ export async function getWorkDeliveryByItem(db: PgSql, orgId: string, workItemId
   }
 
 export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promise<WorkDelivery> {
-    await db.execute(
+    const row = await db.queryOne<WorkDeliveryRow>(
       `
         INSERT INTO work_deliveries (
           id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
@@ -419,7 +419,8 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
           payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
           created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (org_id, work_item_id) DO UPDATE SET
+          id = EXCLUDED.id,
           recipe_id = EXCLUDED.recipe_id,
           kind = EXCLUDED.kind,
           unit_key = EXCLUDED.unit_key,
@@ -434,6 +435,7 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
           idempotency_key = EXCLUDED.idempotency_key,
           channel_receipt_json = EXCLUDED.channel_receipt_json,
           updated_at = EXCLUDED.updated_at
+        RETURNING *
       `,
       [
         delivery.id,
@@ -456,7 +458,10 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
         delivery.updated_at,
       ],
     );
-    return delivery;
+    if (!row) {
+      throw new Error("work delivery upsert returned no row");
+    }
+    return toWorkDelivery(row);
   }
 
 export async function listExecutorInstallations(db: PgSql, orgId: string): Promise<ExecutorInstallation[]> {
