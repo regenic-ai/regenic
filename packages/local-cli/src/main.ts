@@ -110,6 +110,7 @@ import {
   transitionCliStandardVersion,
 } from "./commands/standards";
 import { runCustomerServiceMcp } from "./commands/customer-service-mcp";
+import { runContextSearchMcp } from "./commands/context-search-mcp";
 
 export interface LocalCliOptions {
   env?: NodeJS.ProcessEnv;
@@ -132,6 +133,9 @@ export async function runLocalCli(
   const createId = options.createId ?? randomUUID;
 
   switch (command) {
+    case "context-search-mcp":
+      await runContextSearchMcp(commandOptions, env, stdout);
+      return;
     case "customer-service-mcp":
       await runCustomerServiceMcp(commandOptions, env, stdout);
       return;
