@@ -6,31 +6,38 @@
 
 [简体中文](README.zh-CN.md) | [English](README.md)
 
-**Your work messages, ready for your AI.**
+**Give your AI the context behind your work.**
 
-Regenic is an open-source, local-first context layer for work messages. The important conversation might be in a Feishu group, a customer chat, Slack, email, or an agent session — but the AI you use usually cannot see it. So you copy, forward, and explain the same context again.
+Work happens across Feishu groups, customer chats, email, and agent sessions. But the AI tools you use can’t see those conversations. To get help, you have to find the messages, paste them in, and explain the context all over again.
 
-Regenic connects those work-message streams to the AI you already use. Its pluggable connector standard lets built-in, community, or your own connectors bring messages into one attributable context. Your AI can then find what was said, catch up on a project, surface follow-ups, or draft a customer reply grounded in the original conversation. Messages stay in their original apps; Regenic does not replace your messenger or require you to switch to a Regenic-owned AI.
+Regenic is an open-source, local-first app that connects those conversations to the AI you already use. Add sources with built-in connectors, community plugins, or connectors of your own. Once connected, your AI can find what someone said, catch you up on a project, flag messages that need a reply, or draft a customer response grounded in the conversation.
 
-The connector contract is extensible, but that does **not** mean every channel is built in or available out of the box. See [connectors](docs/en/CONNECTOR.md) for the extension model and [features](#features) for current support. Today Regenic is **one person, with data authoritative on this machine**; shared team records come later. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
+Your messages stay in their original apps. Regenic doesn’t replace them or lock you into a particular AI.
+
+> Connectors are extensible, but that doesn’t mean every source is built in. See [connectors](docs/en/CONNECTOR.md) for how to add one and [features](#features) for what’s supported today. Regenic is currently for individual use, with your device as the source of truth. Shared team records aren’t available yet. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
 
 [Install](#installation--quick-start) · [Add Feishu or DSH](#add-feishu-or-dsh) · [Login and tokens](#login-and-tokens) · [Local CLI](#local-cli) · [Status](#status) · [Security](#security) · [Docs](#documentation) · [Contributing](#contributing)
 
-## Why work-message context
+## Why Regenic
 
-Work happens across channels, while AI is often separated from the conversations it could help with. When you need to answer “What did we agree with this customer?”, catch up after a day of meetings, or find the message behind a project decision, the context is scattered — and you end up searching manually or pasting it into an AI chat.
+You might need to:
 
-Regenic gives your existing AI a way to work with those conversations without moving the conversations themselves. It keeps source and thread context attached, and focuses the workbench on messages that may need attention instead of dumping every channel into another inbox. For example, you can use it to find a missed follow-up, summarize progress across connected conversations, or draft a support reply with the source messages in view.
+- Track down what a customer said in a busy group chat.
+- Catch up on conversations after a day of meetings.
+- Pull together project updates from several chats.
+- Ask AI to draft a reply without first copying the conversation into the chat.
+
+Regenic makes those conversations available to your AI without moving them out of their original apps. It keeps each message’s source and thread details, then brings forward what needs attention—not another firehose of every group chat.
 
 ## What it does
 
-- **Connect work-message sources** — built-in connectors cover selected sources today; the connector contract also lets users and contributors add other work-message streams. Each connector's capabilities and permissions vary.
-- **Give your AI conversation context** — messages become attributable records that agents and tools can read through Regenic's API and context integrations.
-- **Help you act on work** — find a message, catch up on a project, spot a follow-up, or draft a reply grounded in the conversation.
-- **Keep the original apps in place** — Feishu stays Feishu, DSH stays DSH. Sending is available only where a connector supports it and the required permission is granted.
-- **Keep the workbench focused** — surface what may need attention, rather than copying every conversation into another firehose.
-- **Tokens stay out of the database** — environment variables or the OS keychain. The install form does not take them.
-- **Start with personal, local-first use** — one person's data is authoritative on this machine; shared team records come later.
+- **Connect work conversations** — selected sources have built-in connectors; add others with plugins. What a connector can read or send depends on how it’s built and what you authorize.
+- **Give your AI searchable context** — messages keep their source and thread details and can be read through Regenic’s API and context integrations.
+- **Help you follow through** — find the original message, catch up on a project, spot a message that needs a reply, or draft a response.
+- **Keep using the apps you already have** — Feishu stays Feishu; DSH stays DSH. Sending is available only when a connector supports it and you grant permission.
+- **Focus on what needs attention** — the workbench surfaces relevant messages instead of recreating every channel’s firehose.
+- **Keep credentials out of the database** — tokens live in environment variables or your OS keychain; the installer never asks you to paste them.
+- **Start with personal, local-first use** — your device is the source of truth today. Shared team records aren’t available yet.
 
 ## Personal or team
 
