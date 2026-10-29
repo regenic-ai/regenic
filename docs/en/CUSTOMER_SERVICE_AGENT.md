@@ -158,3 +158,4 @@ The server rechecks each hit against the current lifecycle head and content hash
 - The first release is read-only for business systems and always human-approved for customer sends.
 
 See the [implementation proposal](../zh/AGENT_CONTEXT_RETRIEVAL_PROPOSAL.md) for rationale, completeness semantics, and acceptance criteria.
+Run the [customer-service evaluation gate](CUSTOMER_SERVICE_EVALUATION.md) before changing retrieval or workflow safety behavior.

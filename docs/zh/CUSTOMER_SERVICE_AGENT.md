@@ -158,3 +158,4 @@ X-Regenic-Personal-Key: <personal API key>
 - 首版对业务系统只读，对客发送始终需要人工批准。
 
 设计依据、完整性语义和验收指标见[客服 Agent 问题补全与业务查询改造方案](AGENT_CONTEXT_RETRIEVAL_PROPOSAL.md)。
+修改检索或工作流安全行为前后，应运行[客服场景评测门禁](CUSTOMER_SERVICE_EVALUATION.md)。

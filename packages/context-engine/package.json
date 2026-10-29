@@ -14,6 +14,7 @@
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "bench:retrieval": "pnpm --filter @regenic/context-engine... build && node test/chinese-retrieval.bench.cjs",
+    "eval:customer-service": "pnpm --filter @regenic/context-engine... build && node test/customer-service-evaluation.bench.cjs",
     "test": "pnpm --filter @regenic/context-engine... build && node --test test/*.test.cjs"
   },
   "dependencies": {
