@@ -119,35 +119,6 @@ async function ingestActionable(database, blobRoot) {
   return result.records[0].event_id;
 }
 
-async function startSlackHistoryStub() {
-  const server = createServer((request, response) => {
-    response.setHeader("content-type", "application/json");
-    response.end(
-      JSON.stringify({
-        ok: true,
-        messages: [
-          {
-            ts: "1710000000.000100",
-            user: "U1",
-            text: "Need a decision from the desk.",
-          },
-        ],
-      }),
-    );
-  });
-  await new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  return {
-    endpoint: `http://127.0.0.1:${address.port}/conversations.history`,
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
-  };
-}
-
 async function startDshWebStub() {
   const prompts = [];
   const responds = [];
@@ -394,7 +365,6 @@ module.exports = {
   setEnv,
   restoreEnv,
   ingestActionable,
-  startSlackHistoryStub,
   startDshWebStub,
   waitUntil,
   seedHostedWork,

@@ -1,30 +1,30 @@
 import { t } from "../../shared/i18n.ts";
-import type { WhatsAppImportView } from "./types";
+import type { ConnectorImportView } from "./types";
 
-export interface WhatsAppImportFile {
+export interface ConnectorImportFile {
   name: string;
   text(): Promise<string>;
 }
 
-export interface WhatsAppImportFailure {
+export interface ConnectorImportFailure {
   file_name: string;
   message: string;
 }
 
-export interface WhatsAppImportBatchResult {
+export interface ConnectorImportBatchResult {
   total_files: number;
   completed_files: number;
   accepted_count: number;
   duplicate_count: number;
   invalid_line_count: number;
-  failures: WhatsAppImportFailure[];
+  failures: ConnectorImportFailure[];
 }
 
-export async function importWhatsAppFiles(
-  files: readonly WhatsAppImportFile[],
-  importOne: (content: string, fileName: string) => Promise<WhatsAppImportView>,
-): Promise<WhatsAppImportBatchResult> {
-  const result: WhatsAppImportBatchResult = {
+export async function importConnectorFiles(
+  files: readonly ConnectorImportFile[],
+  importOne: (content: string, fileName: string) => Promise<ConnectorImportView>,
+): Promise<ConnectorImportBatchResult> {
+  const result: ConnectorImportBatchResult = {
     total_files: files.length,
     completed_files: 0,
     accepted_count: 0,
@@ -50,7 +50,7 @@ export async function importWhatsAppFiles(
   return result;
 }
 
-export function whatsAppImportSummary(result: WhatsAppImportBatchResult): string {
+export function connectorImportSummary(result: ConnectorImportBatchResult): string {
   return t("connector.importSummary", {
     completed: result.completed_files,
     total: result.total_files,

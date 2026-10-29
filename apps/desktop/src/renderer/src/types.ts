@@ -1023,6 +1023,3 @@ export interface ConnectorImportView {
   invalid_line_count: number;
   errors: Array<{ line?: number; code?: string; message: string }>;
 }
-
-/** @deprecated Use ConnectorImportView. */
-export type WhatsAppImportView = ConnectorImportView;

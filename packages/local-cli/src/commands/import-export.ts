@@ -1,16 +1,10 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { basename } from "node:path";
 import {
   createGenericImport,
   type GenericImportDefaults,
   type GenericImportFormat,
   type GenericImportMapping,
 } from "@regenic/domain";
-import {
-  createPurrWhatsAppImport,
-  createWhatsAppPersonalImport,
-  WHATSAPP_PERSONAL_SOURCE,
-} from "@regenic/whatsapp-personal";
 import {
   isObject,
   optionalString,
@@ -50,67 +44,6 @@ export async function importFile(
       const result = await host.get("ingest").ingest(batch);
       if (!result.valid) {
         throw new Error(`Generated import batch was rejected: ${result.error_code}`);
-      }
-      batches.push(result);
-    }
-    writeJson(stdout, {
-      file_hash: imported.file_hash,
-      batches,
-      errors: imported.errors,
-    });
-  });
-}
-
-export async function importWhatsAppPersonal(
-  options: CommandOptions,
-  stdout: CliOutput,
-  now: () => string,
-): Promise<void> {
-  const database = requirePath(options, "database");
-  const blobRoot = requirePath(options, "blob-root");
-  const file = requirePath(options, "file");
-  const common = {
-    data: await readFile(file),
-    org_id: requireOption(options, "org"),
-    local_principal_id: requireOption(options, "local-principal"),
-    received_at: now(),
-  };
-  const isPurr = file.toLowerCase().endsWith(".csv");
-  const imported = isPurr
-    ? createPurrWhatsAppImport({ ...common, file_name: basename(file) })
-    : createWhatsAppPersonalImport(common);
-  await withLocalHost({ database, blobRoot }, async (host) => {
-    const authority = host.get("authority");
-    const existingPurrIds = isPurr
-      ? new Set(
-          (
-            await authority.listEvents(common.org_id, {
-              source: WHATSAPP_PERSONAL_SOURCE,
-            })
-          ).map((event) => event.external_id),
-        )
-      : null;
-    const batches = [];
-    for (const batch of imported.batches) {
-      const records = isPurr
-        ? batch.records.map((record) => {
-            if (
-              record.operation !== "create" ||
-              !existingPurrIds?.has(record.external_id)
-            ) {
-              existingPurrIds?.add(record.external_id);
-              return record;
-            }
-            return {
-              ...record,
-              operation: "revise" as const,
-              revision_id: "purr-wa-surface-v1",
-            };
-          })
-        : batch.records;
-      const result = await host.get("ingest").ingest({ ...batch, records });
-      if (!result.valid) {
-        throw new Error(`Generated WhatsApp batch was rejected: ${result.error_code}`);
       }
       batches.push(result);
     }

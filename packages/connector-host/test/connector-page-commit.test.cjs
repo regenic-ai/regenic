@@ -16,7 +16,6 @@ const {
   MemoryDshRunLog,
 } = require("@regenic/dsh-connector");
 const { feishuChatDriver, FeishuChatPollConnector } = require("@regenic/feishu-connector");
-const { SlackChannelPollConnector } = require("@regenic/slack-connector");
 
 describe("connector pages commit through the host runtime", () => {
   it("settles a Feishu page and keeps the cursor", async () => {
@@ -74,52 +73,6 @@ describe("connector pages commit through the host runtime", () => {
         recent_seeded: true,
       }),
     );
-  });
-
-  it("settles a Slack page and keeps the cursor", async () => {
-    const connector = new SlackChannelPollConnector(
-      {
-        async conversationsHistory() {
-          return {
-            ok: true,
-            messages: [{ ts: "1723420800.000001", user: "U123", text: "Message" }],
-            response_metadata: { next_cursor: "cursor-2" },
-          };
-        },
-      },
-      {
-        connector_id: "slack-channel",
-        org_id: "local-owner",
-        channel_id: "C123",
-        channel_name: "engineering",
-        now: () => "2026-08-12T00:00:00.000Z",
-      },
-    );
-    const { runtime, store } = coupledStores();
-    await runtime.createInstallation({
-      id: "slack-installation",
-      org_id: "local-owner",
-      connector_type: "slack-channel",
-      status: "enabled",
-      config: { channel_id: "C123" },
-      created_at: "2026-08-12T00:00:00.000Z",
-    });
-    const run = await new ConnectorRunner(
-      connector,
-      new IngestionService(new MemoryBlobStore(), store),
-      store,
-      () => "2026-08-12T00:00:00.000Z",
-    ).poll({
-      installation_id: "slack-installation",
-      stream_key: "channel:C123",
-      lease_owner: "worker-a",
-      lease_duration_ms: 30_000,
-    });
-    const cursor = await runtime.getCursor("slack-installation", "channel:C123");
-
-    assert.equal(run.status, "completed");
-    assert.equal(run.result.records[0].status, "accepted");
-    assert.equal(cursor.cursor, "cursor-2");
   });
 
   it("settles a Cursor page", async () => {

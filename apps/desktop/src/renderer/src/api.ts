@@ -41,7 +41,7 @@ import type {
   SyncRunView,
   ThreadPrompt,
   UiPrefsView,
-  WhatsAppImportView,
+  ConnectorImportView,
 } from "./types";
 import { activeLocale } from "../../shared/i18n.ts";
 import { throwKernelError } from "./kernel-request.ts";
@@ -861,7 +861,7 @@ export async function importConnectorFile(
   connectorType: string,
   content: string,
   fileName: string,
-): Promise<WhatsAppImportView> {
+): Promise<ConnectorImportView> {
   const response = await fetch(`${origin()}/v1/me/imports`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -872,7 +872,7 @@ export async function importConnectorFile(
     }),
   });
   const body = (await response.json()) as
-    | WhatsAppImportView
+    | ConnectorImportView
     | { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(
@@ -881,14 +881,7 @@ export async function importConnectorFile(
         : `import ${response.status}`,
     );
   }
-  return body as WhatsAppImportView;
-}
-
-export async function importWhatsAppExport(
-  content: string,
-  fileName: string,
-): Promise<WhatsAppImportView> {
-  return importConnectorFile("whatsapp-web-live", content, fileName);
+  return body as ConnectorImportView;
 }
 
 export async function createConversation(input: {

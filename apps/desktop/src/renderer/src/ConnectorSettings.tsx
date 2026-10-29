@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchConnectorPairingCode, fetchCatalogFieldOptions, importConnectorFile } from "./api";
 import {
-  importWhatsAppFiles,
-  whatsAppImportSummary,
-} from "./whatsapp-import";
+  importConnectorFiles,
+  connectorImportSummary,
+} from "./connector-import";
 import {
   catalogFieldUsesSelect,
   configWithOptionNames,
@@ -215,10 +215,10 @@ function ConnectorFileImport({
             setError(null);
             setStatus(null);
             try {
-              const result = await importWhatsAppFiles(files, (content, fileName) =>
+              const result = await importConnectorFiles(files, (content, fileName) =>
                 importConnectorFile(kind.connector_type, content, fileName),
               );
-              setStatus(whatsAppImportSummary(result));
+              setStatus(connectorImportSummary(result));
               if (result.completed_files > 0) {
                 await onImported?.();
               }

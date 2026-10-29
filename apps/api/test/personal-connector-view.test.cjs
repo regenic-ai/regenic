@@ -2,8 +2,8 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   builtinChannelDrivers,
+  dshSessionDriver,
   feishuChatDriver,
-  slackChannelDriver,
 } = require("@regenic/connector-host");
 const {
   catalogFromDrivers,
@@ -61,19 +61,9 @@ describe("connector catalog hints", () => {
 
   it("projects setup steps from each first-party catalog", () => {
     const catalog = catalogOf({ env: {} });
-    const slack = catalog.find((item) => item.connector_type === "slack-channel");
     const dsh = catalog.find((item) => item.connector_type === "dsh-session");
     const feishu = catalog.find((item) => item.connector_type === "feishu-chat");
     const cursor = catalog.find((item) => item.connector_type === "cursor-agent");
-    assert.deepEqual(
-      slack.setup_steps.map((step) => step.title),
-      [
-        "Create a Slack app and copy a bot token",
-        "Set REGENIC_SLACK_TOKEN, then fully quit and reopen the desktop",
-        "Enter the channel ID",
-      ],
-    );
-    assert.equal(slack.setup_steps[0].href, "https://api.slack.com/apps");
     assert.equal(dsh.setup_steps[1].command, "dsh web --port 3080");
     assert.equal(dsh.setup_steps[1].visible_when.value, "web");
     assert.equal(dsh.setup_steps.at(-1).visible_when.value, "cli");
@@ -84,12 +74,6 @@ describe("connector catalog hints", () => {
     assert.equal(feishu.setup_steps[0].href, "https://github.com/larksuite/cli");
     assert.equal(cursor.setup_steps[0].href, "https://cursor.com/dashboard");
     assert.match(cursor.setup_steps[1].body, /keychain/);
-    const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
-    assert.equal(whatsapp.setup_ready, true);
-    assert.deepEqual(whatsapp.prerequisites, []);
-    assert.equal(whatsapp.setup_steps[0].title, "Install this connector");
-    assert.equal(whatsapp.setup_steps[0].title_zh, undefined);
-    assert.match(whatsapp.credential_hint, /Pairing code/);
     const hosted = catalogOf({
       env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
     }).find((item) => item.connector_type === "dsh-session");
@@ -103,16 +87,9 @@ describe("connector catalog hints", () => {
   it("resolves plugin catalog copy for Chinese", () => {
     const catalog = catalogOf({ env: {}, locale: "zh" });
     const feishu = catalog.find((item) => item.connector_type === "feishu-chat");
-    const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
     assert.equal(feishu.title, "飞书");
     assert.equal(feishu.fields[0].label, "同步模式");
     assert.equal(feishu.fields[1].label, "同步范围");
-    assert.equal(whatsapp.setup_steps[0].title, "安装这个连接器");
-    assert.match(whatsapp.import_files.description, /只读/);
-    assert.equal(
-      whatsapp.setup_steps[1].href,
-      "https://github.com/regenic-ai/regenic/blob/main/docs/zh/WHATSAPP_WEB_LIVE_CONNECTOR.md",
-    );
   });
 
   it("drops empty setup titles and non-http hrefs", () => {
@@ -193,11 +170,6 @@ describe("connector catalog hints", () => {
   });
 
   it("lists DSH web and CLI service prerequisites from the catalog", () => {
-    const slack = catalogOf({ env: {} }).find(
-      (item) => item.connector_type === "slack-channel",
-    );
-    assert.match(slack.prerequisites[0].hint, /REGENIC_SLACK_TOKEN/);
-    assert.equal(slack.setup_ready, false);
     const dsh = catalogOf({ env: {} }).find(
       (item) => item.connector_type === "dsh-session",
     );
@@ -306,10 +278,7 @@ describe("connector catalog hints", () => {
 
   it("projects file import only when the driver can parseImport", () => {
     const catalog = catalogOf({ env: {} });
-    const whatsapp = catalog.find((item) => item.connector_type === "whatsapp-web-live");
-    assert.equal(whatsapp.import_files.accept.includes(".csv"), true);
-    assert.equal(whatsapp.import_files.max_bytes, 20 * 1024 * 1024);
-    assert.equal(whatsapp.import_files.title, "WhatsApp personal export");
+    assert.ok(catalog.every((item) => item.import_files === undefined));
 
     const extras = catalogFromDrivers({
       list: () => [
@@ -360,17 +329,16 @@ describe("connector catalog hints", () => {
     assert.deepEqual(catalog.map((item) => item.connector_type), []);
     assert.deepEqual(
       firstParty({}).map((item) => item.connector_type),
-      ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent", "whatsapp-web-live"],
+      ["dsh-session", "feishu-chat", "cursor-agent"],
     );
-    assert.equal(connectorAllowsMultiple("slack-channel", firstParty()), true);
-    assert.equal(connectorAllowsMultiple("whatsapp-web-live", firstParty()), false);
+    assert.equal(connectorAllowsMultiple("dsh-session", firstParty()), true);
     assert.equal(connectorAllowsMultiple("extra-review"), true);
   });
 
   it("appends install cards from loaded extra drivers", () => {
     const extras = catalogFromDrivers({
       list: () => [
-        slackChannelDriver,
+        dshSessionDriver,
         {
           connector_type: "extra-review",
           source: "extra",
@@ -400,7 +368,7 @@ describe("connector catalog hints", () => {
       env: { EXTRA_URL: "https://extra.internal" },
       extras,
     });
-    assert.equal(catalog[0].connector_type, "slack-channel");
+    assert.equal(catalog[0].connector_type, "dsh-session");
     const extra = catalog.find((item) => item.connector_type === "extra-review");
     assert.equal(extra.title, "Extra review");
     assert.deepEqual(extra.setup_steps, []);

@@ -8,68 +8,11 @@ const {
   ingestActionable,
   startDshWebStub,
   startPersonalApi,
-  startSlackHistoryStub,
   waitForSyncRun,
   waitUntil,
 } = require("./personal-api-harness.cjs");
 
 describe("personal /v1/me", { concurrency: 1 }, () => {
-  it("syncs a slack connector from the personal API", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const blobRoot = join(root, "blobs");
-    await ingestActionable(database, blobRoot);
-    const slack = await startSlackHistoryStub();
-    const { app, origin } = await startPersonalApi(database, blobRoot, {
-      REGENIC_SLACK_TOKEN: "xoxb-test-token",
-      REGENIC_SLACK_API_ENDPOINT: slack.endpoint,
-    });
-    try {
-      const missing = await fetch(`${origin}/v1/me/connectors/missing/sync`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      assert.equal(missing.status, 404);
-
-      const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      const body = await synced.json();
-      assert.equal(synced.status, 201);
-      const run = await waitForSyncRun(origin, body.id);
-      assert.equal(run.status, "succeeded");
-      const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
-      const slackItem = inbox.find(
-        (item) => item.event.external_id === "C123:1710000000.000100",
-      );
-      assert.equal(Boolean(slackItem), true);
-      assert.equal(slackItem.can_send, false);
-      assert.equal(slackItem.await_reply, false);
-      assert.equal(slackItem.list_title, "conversation");
-      assert.equal(body.installation_id, "slack-1");
-      assert.equal(JSON.stringify(body).includes("xoxb-test-token"), false);
-      assert.equal(JSON.stringify(body).includes("credentials_ref"), false);
-
-      const disabled = await fetch(`${origin}/v1/me/connectors/slack-1/disable`, {
-        method: "POST",
-      });
-      assert.equal(disabled.status, 201);
-      assert.equal((await disabled.json()).status, "disabled");
-      const blocked = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      assert.equal(blocked.status, 409);
-    } finally {
-      await app.close();
-      await slack.close();
-    }
-  });
-
   it("pauses and cancels an async connector sync run", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
@@ -80,19 +23,31 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       hanging.listen(0, "127.0.0.1", resolve);
     });
     const { app, origin } = await startPersonalApi(database, blobRoot, {
-      REGENIC_SLACK_TOKEN: "xoxb-test-token",
-      REGENIC_SLACK_API_ENDPOINT: `http://127.0.0.1:${hanging.address().port}/conversations.history`,
       REGENIC_CONNECTOR_POLL_TIMEOUT_MS: "250",
     });
     try {
-      const synced = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: {
+            transport: "web",
+            session_id: "desk-1",
+            base_url: `http://127.0.0.1:${hanging.address().port}`,
+          },
+        }),
+      });
+      const installation = await created.json();
+      assert.equal(created.status, 201, JSON.stringify(installation));
+      const synced = await fetch(`${origin}/v1/me/connectors/${installation.id}/sync`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mode: "quick_start" }),
       });
       const body = await synced.json();
       assert.equal(synced.status, 201);
-      assert.equal(body.installation_id, "slack-1");
+      assert.equal(body.installation_id, installation.id);
       assert.ok(["queued", "running"].includes(body.status));
 
       const paused = await fetch(
@@ -125,7 +80,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const invalid = await fetch(`${origin}/v1/me/connectors`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ connector_type: "slack-channel", config: {} }),
+        body: JSON.stringify({ connector_type: "not-a-connector", config: {} }),
       });
       assert.equal(invalid.status, 400);
 
@@ -443,29 +398,15 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       });
       assert.equal(cli.status, 201);
 
-      const slack = await fetch(`${origin}/v1/me/connectors`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          connector_type: "slack-channel",
-          config: { channel_id: "C999", token_env: "DEEPSEEK_API_KEY" },
-        }),
-      });
-      assert.equal(slack.status, 201);
-
       const store = new SqliteAuthorityStore(database);
       try {
         const installations = await store.listInstallations("local-owner");
         const dsh = installations.find(
           (item) => item.config.mailbox === "box-1",
         );
-        const installedSlack = installations.find(
-          (item) => item.config.channel_id === "C999",
-        );
         assert.equal(dsh.connector_type, "dsh-session");
         assert.equal(dsh.config.command, undefined);
         assert.equal(dsh.config.workdir, undefined);
-        assert.equal(installedSlack.credentials_ref, "env:REGENIC_SLACK_TOKEN");
       } finally {
         store.close();
       }
