@@ -2,8 +2,6 @@ import { dirname, join } from "node:path";
 import { INGEST_ATTEMPT_KEEP_PER_INSTALLATION } from "@regenic/authority-store";
 import {
   ConnectorRunner,
-  envCredentialsRef,
-  requireEnvCredentialName,
   type JsonValue,
 } from "@regenic/domain";
 import {
@@ -14,7 +12,6 @@ import {
   type DshFetch,
   type DshSpawn,
 } from "@regenic/dsh-connector";
-import { slackChannelPlugin, type SlackFetch } from "@regenic/slack-connector";
 import {
   optionPath,
   optionString,
@@ -26,107 +23,6 @@ import {
   type CommandOptions,
 } from "../cli-runtime";
 import { withLocalHost } from "../host";
-
-export async function installSlack(
-  options: CommandOptions,
-  stdout: CliOutput,
-  now: () => string,
-  createId: () => string,
-): Promise<void> {
-  const orgId = requireOption(options, "org");
-  const channelId = requireOption(options, "channel");
-  const tokenEnv = optionString(options, "token-env") ?? "REGENIC_SLACK_TOKEN";
-  await withLocalHost({ database: requirePath(options, "database") }, async (host) => {
-    writeJson(stdout, await host.get("authority").createInstallation({
-      id: optionString(options, "id") ?? createId(),
-      org_id: orgId,
-      connector_type: "slack-channel",
-      status: "enabled",
-      config: slackConfig(channelId, optionString(options, "channel-name")),
-      credentials_ref: envCredentialsRef(tokenEnv),
-      created_at: now(),
-    }));
-  });
-}
-
-export async function syncSlack(
-  options: CommandOptions,
-  env: NodeJS.ProcessEnv,
-  stdout: CliOutput,
-  now: () => string,
-  createId: () => string,
-  fetchOverride?: SlackFetch,
-): Promise<void> {
-  const installationId = requireOption(options, "installation");
-  await withLocalHost({
-    database: requirePath(options, "database"),
-    blobRoot: requirePath(options, "blob-root"),
-  }, async (host) => {
-    const store = host.get("authority");
-    const installation = await store.findInstallation(installationId);
-    if (!installation || installation.connector_type !== "slack-channel") {
-      throw new Error(`Slack installation not found: ${installationId}`);
-    }
-    if (installation.status !== "enabled") {
-      throw new Error(`Slack installation is disabled: ${installationId}`);
-    }
-    const channelId = configString(installation.config, "channel_id");
-    if (!channelId) {
-      throw new Error("Slack installation is missing channel_id configuration");
-    }
-    const tokenEnv = credentialsEnvironment(installation.credentials_ref);
-    const token = env[tokenEnv];
-    if (!token) {
-      throw new Error(`Slack access token is missing from environment variable ${tokenEnv}`);
-    }
-    await host.plugin(slackChannelPlugin, {
-      installation_id: installation.id,
-      org_id: installation.org_id,
-      channel_id: channelId,
-      channel_name: configString(installation.config, "channel_name"),
-      access_token: token,
-      endpoint: env.REGENIC_SLACK_API_ENDPOINT,
-      fetch: fetchOverride,
-      now,
-    });
-    const connector = host.get("connectors").get(
-      installation.id,
-      `channel:${channelId}`,
-    );
-    if (!connector) {
-      throw new Error(`Slack connector failed to mount: ${installationId}`);
-    }
-    const runner = new ConnectorRunner(connector, host.get("ingest"), store, now);
-    const maxPages = requirePositiveInteger(options, "max-pages", 1);
-    const runs = [];
-    const seenCursors = new Set<string>();
-    for (let page = 0; page < maxPages; page += 1) {
-      const run = await runner.poll({
-        installation_id: installation.id,
-        stream_key: `channel:${channelId}`,
-        lease_owner: `local-cli:${createId()}`,
-        lease_duration_ms: 60_000,
-      });
-      runs.push(run);
-      if (run.status !== "completed" || !run.next_cursor) {
-        break;
-      }
-      if (seenCursors.has(run.next_cursor)) {
-        throw new Error("Slack cursor repeated before synchronization completed");
-      }
-      seenCursors.add(run.next_cursor);
-    }
-    const lastRun = runs.at(-1);
-    writeJson(stdout, {
-      pages_attempted: runs.length,
-      stopped_at_page_limit:
-        runs.length === maxPages &&
-        lastRun?.status === "completed" &&
-        lastRun.next_cursor !== undefined,
-      runs,
-    });
-  });
-}
 
 export async function installDsh(
   options: CommandOptions,
@@ -373,27 +269,3 @@ export async function resetConnectorCursor(
     writeJson(stdout, cursor);
   });
 }
-
-function credentialsEnvironment(credentialsRef: string | undefined): string {
-  try {
-    return requireEnvCredentialName(credentialsRef);
-  } catch {
-    throw new Error("Slack installation credentials_ref must reference an environment variable");
-  }
-}
-
-function configString(
-  config: Record<string, JsonValue>,
-  name: string,
-): string | undefined {
-  const value = config[name];
-  return typeof value === "string" ? value : undefined;
-}
-
-function slackConfig(
-  channelId: string,
-  channelName: string | undefined,
-): Record<string, JsonValue> {
-  return channelName ? { channel_id: channelId, channel_name: channelName } : { channel_id: channelId };
-}
-

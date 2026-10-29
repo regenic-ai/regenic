@@ -53,6 +53,13 @@ export async function startSyncRun(
       409,
     );
   }
+  if (!state.drivers.get(installation.connector_type)) {
+    throw new PersonalConnectorError(
+      "unsupported_connector",
+      `Connector type cannot be synced: ${installation.connector_type}`,
+      409,
+    );
+  }
   const mode = input.mode ?? "quick_start";
   const now = new Date().toISOString();
   const runId = randomUUID();

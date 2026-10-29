@@ -14,7 +14,7 @@ Regenic 把这些工作消息流接到你已经在用的 AI。可插拔连接器
 
 连接器标准可扩展，**不等于所有渠道都已内置或开箱即用**。扩展方式见[连接器文档](docs/zh/CONNECTOR.md)，当前支持范围见[功能列表](#功能)。目前产品是**单人使用、数据以本机为准**；多人共用记录以后再做。见[产品](docs/zh/PRODUCT.md)与[消息编排](docs/zh/MESSAGE_ORCHESTRATION.md)。
 
-[安装](#安装与快速开始) · [加上飞书、Slack 或 DSH](#加上飞书slack-或-dsh) · [登录和 token](#登录和-token) · [本地 CLI](#本地-cli) · [状态](#状态) · [安全](#安全) · [文档](#文档) · [贡献](#贡献)
+[安装](#安装与快速开始) · [加上飞书或 DSH](#加上飞书或-dsh) · [登录和 token](#登录和-token) · [本地 CLI](#本地-cli) · [状态](#状态) · [安全](#安全) · [文档](#文档) · [贡献](#贡献)
 
 ## 为什么要接通工作消息与 AI
 
@@ -27,15 +27,16 @@ Regenic 让你已有的 AI 能处理这些对话，同时不搬走对话本身�
 - **接入工作消息来源** — 当前内置连接器支持部分来源；连接器标准也允许用户和贡献者接入其他工作消息流。不同连接器支持的能力和权限各不相同。
 - **让 AI 获得对话上下文** — 消息成为保留出处的记录，Agent 和工具可通过 Regenic 的 API 与上下文集成读取。
 - **帮你推进工作** — 查找原话、补项目进度、发现待跟进事项，或依据对话起草回复。
-- **保留原来的应用** — 飞书还是飞书，Slack 还是 Slack。只有连接器支持且获得所需授权时，才能发送消息。
+- **保留原来的应用** — 飞书还是飞书，DSH 还是 DSH。只有连接器支持且获得所需授权时，才能发送消息。
 - **让工作台聚焦** — 展示可能需要处理的内容，而不是把所有对话再倒进一个瀑布流。
+- **token 不进数据库** — 放在环境变量或系统钥匙串。安装表单不收。
 - **先从个人、本地优先开始** — 以单人数据为准，多人共享记录以后再做。
 
 ## 个人还是组织
 
 | 你是… | 怎么走 |
 | --- | --- |
-| **个人** — 在这台电脑上用桌面应用，加上飞书、Slack 或 DSH | 按下面[快速开始](#安装与快速开始) |
+| **个人** — 在这台电脑上用桌面应用，加上飞书或 DSH | 按下面[快速开始](#安装与快速开始) |
 | **在终端里同步、导入、导出** | 看[本地 CLI](#本地-cli) |
 | **组织 / 多人共用一份记录** | 还没做。见[从个人到组织](docs/zh/rfcs/personal-to-org.md) |
 
@@ -46,9 +47,7 @@ Regenic 让你已有的 AI 能处理这些对话，同时不搬走对话本身�
 | 桌面应用 | 本机窗口：要处理的消息、引擎、设置。关掉窗口不会退出 | 能用 |
 | DSH | 读会话、回文字；不填 session 就跟全部会话，也可以新建 | 能用 |
 | 飞书 | 读群和单聊，回文字。用官方 `lark-cli` 登录你自己的账号 | 能用 |
-| Slack | 读一个频道 | 只能读，不能回 |
 | 文件导入 | CSV / JSONL，用一份对照表说明哪一列是什么 | CLI |
-| WhatsApp | 用户明确选择的只读 Purr WA CSV 或 Export v1 JSONL | 桌面端 + CLI |
 | 导出 | 消息记录 JSONL、按日整理的 Markdown、给外部用的引用清单 | CLI |
 | Context | 确定性 snapshot 与可选的带引用模型回答 | API + CLI |
 
@@ -59,7 +58,7 @@ Regenic 让你已有的 AI 能处理这些对话，同时不搬走对话本身�
 - Node.js 20+
 - [pnpm](https://pnpm.io)
 
-飞书、Slack、DSH 各自还要先装好自己的工具，见[加上飞书、Slack 或 DSH](#加上飞书slack-或-dsh)。
+飞书、DSH 各自还要先装好自己的工具，见[加上飞书或 DSH](#加上飞书或-dsh)。
 
 ### 快速开始（给你）
 
@@ -70,11 +69,11 @@ pnpm install
 pnpm dev:desktop
 ```
 
-#### 在应用里加上飞书、Slack 或 DSH
+#### 在应用里加上飞书或 DSH
 
-打开应用：**Engine** → 选 **DSH** / **Feishu** / **Slack** → **Install**。
+打开应用：**Engine** → 选 **DSH** / **Feishu** → **Install**。
 
-先把对应软件装好并登录，再点 Install。飞书要先登录 `lark-cli`，DSH 要先起 `dsh web`。具体步骤在[加上飞书、Slack 或 DSH](#加上飞书slack-或-dsh)。
+先把对应软件装好并登录，再点 Install。飞书要先登录 `lark-cli`，DSH 要先起 `dsh web`。具体步骤在[加上飞书或 DSH](#加上飞书或-dsh)。
 
 ### 快速开始（给 AI 助手）
 
@@ -103,7 +102,7 @@ DSH：先确认终端能跑 `dsh`，再执行 `dsh web --port 3080`。
 
 **Engine** → 选刚准备好的那一项 → **Install**。飞书默认同步**最近活跃**会话（推荐）；需要更大范围时再选「全部」或「自选会话」。装好后用 **Edit sync** 再改。DSH 的 Session ID 可以空着。
 
-## 加上飞书、Slack 或 DSH
+## 加上飞书或 DSH
 
 ### DSH
 
@@ -148,9 +147,9 @@ lark-cli auth status
 
 `lark-cli` 不在 PATH 上时，启动桌面应用前设 `REGENIC_LARK_CLI` 指向这个命令。按你的选择拉群和单聊，可以回文字，不能从这里开新群。
 
-### Slack
+### 其他连接器
 
-启动桌面应用前设好 `REGENIC_SLACK_TOKEN`。打开应用：**Engine** → **Slack** → **Install**。填频道 ID（`C…`）。频道名可选。现在只读这个频道，不能回复。
+核心仓库只内置 DSH、飞书和 Cursor 连接器。其他连接器是独立的插件包：启动应用前放进 `REGENIC_PLUGIN_DIR`（或用 `REGENIC_CHANNEL_PLUGIN` 指向单个包），它们就会出现在 **Engine** 里。Slack：[regenic-connector-slack](https://github.com/regenic-ai/regenic-connector-slack)；WhatsApp：[regenic-connector-whatsapp](https://github.com/regenic-ai/regenic-connector-whatsapp)。见[连接器驱动](docs/zh/CONNECTOR_DRIVERS.md)。
 
 ## 登录和 token
 
@@ -158,9 +157,8 @@ lark-cli auth status
 | --- | --- | --- |
 | DSH | 本机 `dsh`；web 要 token 时用 `REGENIC_DSH_TOKEN` | 不收 token |
 | 飞书 | `lark-cli auth login`，登录信息在系统钥匙串 | 不收 token |
-| Slack | `REGENIC_SLACK_TOKEN` | 不收 token |
 
-表单只收群选择、频道 ID、session 这类非密钥项。token 不会写入数据库，也不会出现在 `/v1/me`。
+表单只收群选择、session 这类非密钥项。token 不会写入数据库，也不会出现在 `/v1/me`。
 
 ## 本地开发
 
@@ -185,28 +183,6 @@ POST /v1/dsh/api/session.create
 
 和桌面应用做的是同一件事，只是走终端。数据在 SQLite 和本地文件目录里。token 不写入数据库，同步时用环境变量传入。
 
-### Slack
-
-```bash
-pnpm local slack-install --database ./regenic.db --org local-owner \
-	--channel C123 --channel-name engineering --id slack-engineering
-
-REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
-	--database ./regenic.db --blob-root ./blobs --installation slack-engineering \
-	--max-pages 20
-
-pnpm local status --database ./regenic.db --org local-owner
-pnpm local inbox --database ./regenic.db --org local-owner
-pnpm local quarantines --database ./regenic.db --installation slack-engineering
-
-pnpm local connector-disable --database ./regenic.db --org local-owner \
-	--installation slack-engineering
-pnpm local connector-enable --database ./regenic.db --org local-owner \
-	--installation slack-engineering
-pnpm local reset-cursor --database ./regenic.db --org local-owner \
-	--installation slack-engineering --stream channel:C123
-```
-
 ### DSH
 
 和[加上 DSH](#dsh)同一件事。用 Web 的话先跑 `dsh web --port 3080`。
@@ -221,6 +197,16 @@ pnpm local dsh-sync --database ./regenic.db --blob-root ./blobs \
 
 pnpm local dsh-send --database ./regenic.db --installation dsh-main \
 	--text "Follow up on the last turn"
+
+pnpm local status --database ./regenic.db --org local-owner
+pnpm local quarantines --database ./regenic.db --installation dsh-main
+
+pnpm local connector-disable --database ./regenic.db --org local-owner \
+	--installation dsh-main
+pnpm local connector-enable --database ./regenic.db --org local-owner \
+	--installation dsh-main
+pnpm local reset-cursor --database ./regenic.db --org local-owner \
+	--installation dsh-main --stream <stream-key>
 ```
 
 `--session` 可以不填，不填就跟所有会话。不跑 `dsh web`、直接调本机 `dsh`：
@@ -234,7 +220,7 @@ pnpm local dsh-install --database ./regenic.db --org local-owner \
 
 ### 文件导入
 
-导入 CSV 或 JSONL 时，另备一份 JSON，写明哪一列是消息 ID、时间、正文、作者。坏行会被报告；合格的行会收成和飞书、Slack 同步进来的同一种消息。
+导入 CSV 或 JSONL 时，另备一份 JSON，写明哪一列是消息 ID、时间、正文、作者。坏行会被报告；合格的行会收成和飞书、DSH 同步进来的同一种消息。
 
 ```json
 {
@@ -256,18 +242,6 @@ pnpm local dsh-install --database ./regenic.db --org local-owner \
 pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--file ./messages.csv --mapping ./mapping.json --format csv \
 	--org local-owner --source local-file
-```
-
-### 个人 WhatsApp 导出
-
-个人 WhatsApp 是由用户明确触发的只读流程。桌面端可一次导入多份经审计的开源 [Purr WA Export](https://github.com/0xheycat/purr-wa) CSV，也支持 WhatsApp Personal Export v1 JSONL。Regenic 不接收浏览器 Cookie、不在后台扫描聊天，也不发送消息。
-
-一次性设置、每次导出步骤、手动/自动边界、已知 `@lid` 限制和验收清单见[个人 WhatsApp Bridge](docs/zh/WHATSAPP_PERSONAL.md)与[WhatsApp 测试与验收](docs/zh/WHATSAPP_PERSONAL_TESTING.md)。
-
-```bash
-pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
-	--file ./whatsapp-personal.jsonl --org local-owner \
-	--local-principal local-user
 ```
 
 ### Inbox
@@ -630,12 +604,12 @@ loopback sidecar 每次生成并自动注入临时 key。远程内核若未设 `
 
 ## 状态
 
-Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本机上的飞书 / Slack / DSH 和后台服务。
+Phase 0 已完成。RFC 0001–0007 均已接纳。Phase 1 是本机上的飞书 / DSH / Cursor 和后台服务。
 
 | 能力 | 说明 | 状态 |
 | --- | --- | --- |
 | 处理消息 | 读进来 → 收成同一种消息 → 排序 → 决定要不要处理 → 可选回复 | [PRODUCT](docs/zh/PRODUCT.md) · [架构](docs/zh/MESSAGE_ORCHESTRATION.md) |
-| 飞书 / Slack / DSH | 已能加上这几个；文件导入也有；更多以后再加 | Phase 1（进行中） |
+| 飞书 / DSH / Cursor | 已能加上这几个；文件导入也有；更多以后再加 | Phase 1（进行中） |
 | 个人 | 单人；可导出；远端备份可选 | Phase 1（进行中） |
 | 组织 | 多人共用一份记录，每人看到自己的那一份 | Phase 3（[从个人到组织](docs/zh/rfcs/personal-to-org.md)） |
 | 判断规则 | 可改、可版本化的共用规则 | RFC 已接纳（[0001](docs/zh/rfcs/0001-standards-data-model.md)） |

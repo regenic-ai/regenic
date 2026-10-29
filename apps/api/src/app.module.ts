@@ -29,7 +29,7 @@ import { PersonalReplyService } from "./personal-reply.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalPluginService } from "./personal-plugin.service";
-import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
+import { PersonalConnectorImportService } from "./personal-connector-import.service";
 import { PersonalEventsService } from "./personal-events.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
@@ -66,7 +66,7 @@ import { PersonalCustomerService } from "./personal-customer-service";
     PersonalConnectorService,
     PersonalEventsService,
     PersonalApiGuard,
-    PersonalWhatsAppImportService,
+    PersonalConnectorImportService,
     PersonalPluginService,
     {
       provide: ChannelDriverRegistry,

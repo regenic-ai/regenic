@@ -25,9 +25,7 @@ COPY packages/local-cli/package.json packages/local-cli/
 COPY packages/lexical-index/package.json packages/lexical-index/
 COPY packages/model-provider/package.json packages/model-provider/
 COPY packages/plugin-host/package.json packages/plugin-host/
-COPY packages/slack-connector/package.json packages/slack-connector/
 COPY packages/vector-index/package.json packages/vector-index/
-COPY packages/whatsapp-personal/package.json packages/whatsapp-personal/
 # Optional native accel for BullMQ; JS fallback is fine for the spike.
 ENV npm_config_build_from_source=false
 RUN pnpm install --frozen-lockfile --filter @regenic/api... --filter @regenic/worker...
@@ -51,8 +49,6 @@ RUN pnpm --filter @regenic/plugin-host build \
   && pnpm --filter @regenic/model-provider build \
   && pnpm --filter @regenic/dsh-connector build \
   && pnpm --filter @regenic/feishu-connector build \
-  && pnpm --filter @regenic/slack-connector build \
-  && pnpm --filter @regenic/whatsapp-personal build \
   && pnpm --filter @regenic/connector-host build \
   && ls -la packages/authority-store/dist packages/blob-store/dist packages/config/dist packages/context-engine/dist packages/cursor-connector/dist packages/domain/dist packages/lexical-index/dist packages/model-provider/dist \
   && test -f packages/config/dist/index.d.ts \

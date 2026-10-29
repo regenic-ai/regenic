@@ -36,7 +36,7 @@ describe("history policy", () => {
   });
 
   it("is not read by connector packages", () => {
-    const roots = ["feishu-connector", "slack-connector", "dsh-connector"].map(
+    const roots = ["feishu-connector", "dsh-connector", "cursor-connector"].map(
       (name) => join(__dirname, "..", "..", name, "src"),
     );
     const hits = [];

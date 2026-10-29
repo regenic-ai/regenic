@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  importWhatsAppFiles,
-  whatsAppImportSummary,
-} from "../src/renderer/src/whatsapp-import.ts";
+  importConnectorFiles,
+  connectorImportSummary,
+} from "../src/renderer/src/connector-import.ts";
 
-describe("WhatsApp multi-file import", () => {
+describe("connector multi-file import", () => {
   it("imports sequentially, isolates a failed file, and totals successful files", async () => {
     let active = 0;
     let maxActive = 0;
@@ -16,7 +16,7 @@ describe("WhatsApp multi-file import", () => {
       },
     }));
 
-    const result = await importWhatsAppFiles(files, async (content, fileName) => {
+    const result = await importConnectorFiles(files, async (content, fileName) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       await Promise.resolve();
@@ -44,7 +44,7 @@ describe("WhatsApp multi-file import", () => {
       failures: [{ file_name: "bad.csv", message: "invalid header" }],
     });
     assert.equal(
-      whatsAppImportSummary(result),
+      connectorImportSummary(result),
       "Imported 2/3 files · 5 new · 2 duplicates · 0 invalid lines",
     );
   });

@@ -49,7 +49,7 @@ import {
   type ReplyInput,
 } from "./personal-reply.service";
 import { PersonalPluginService } from "./personal-plugin.service";
-import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
+import { PersonalConnectorImportService } from "./personal-connector-import.service";
 import {
   PersonalExecutorService,
   type ExecutorInput,
@@ -78,8 +78,8 @@ export class PersonalController {
     private readonly work: PersonalWorkService,
     @Inject(forwardRef(() => PersonalExecutorService))
     private readonly executors: PersonalExecutorService,
-    @Inject(PersonalWhatsAppImportService)
-    private readonly whatsapp: PersonalWhatsAppImportService,
+    @Inject(PersonalConnectorImportService)
+    private readonly imports: PersonalConnectorImportService,
     @Inject(PersonalPluginService)
     private readonly plugins: PersonalPluginService,
     @Inject(PersonalEventsService)
@@ -384,12 +384,7 @@ export class PersonalController {
       | { connector_type?: string; content?: string; file_name?: string }
       | undefined,
   ) {
-    return this.guard(() => this.whatsapp.importFile(body ?? {}));
-  }
-
-  @Post("imports/whatsapp")
-  importWhatsApp(@Body() body: { content?: string; file_name?: string } | undefined) {
-    return this.guard(() => this.whatsapp.import(body?.content, body?.file_name));
+    return this.guard(() => this.imports.importFile(body ?? {}));
   }
 
   @Get("plugins")

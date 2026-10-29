@@ -976,7 +976,7 @@ export const en = {
   "connector.installTitle": "Install {title}",
   "connector.pairingCode": "Pairing code",
   "connector.pairingHint":
-    "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not a WhatsApp password.",
+    "Paste this into the browser extension. It proves the extension is talking to your local Regenic — it is not an account password.",
   "connector.showPairing": "Show pairing code",
   "connector.hidePairing": "Hide",
   "connector.installConfirmRequired": "Confirm the install choice first",
@@ -1986,7 +1986,7 @@ export const zh: Record<MessageKey, string> = {
   "connector.installTitle": "安装 {title}",
   "connector.pairingCode": "配对码",
   "connector.pairingHint":
-    "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是 WhatsApp 密码。",
+    "贴进浏览器扩展。这是扩展和本机 Regenic 之间的口令，不是账号密码。",
   "connector.showPairing": "显示配对码",
   "connector.hidePairing": "隐藏",
   "connector.installConfirmRequired": "请先确认安装选项",
