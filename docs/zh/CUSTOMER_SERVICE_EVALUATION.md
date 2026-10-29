@@ -68,4 +68,4 @@ pnpm --filter @regenic/context-engine test
 - 远端业务服务正确性；
 - 生产延迟、并发或容量。
 
-该门禁通过后，还应使用真实 Cursor/MCP 客户端、生产近似连接器、受控业务测试服务和单独治理的真实保留确认集复验同类场景。
+该门禁通过后，还应运行跨 MCP、Personal API 和受控业务服务的[系统级验收](./CUSTOMER_SERVICE_SYSTEM_ACCEPTANCE.md)。部署验收仍需真实 Cursor/MCP 客户端、生产近似连接器和单独治理的真实保留确认集。
