@@ -16,6 +16,8 @@ import type {
 import type { ModelProvider } from "./model-provider";
 import type { ContextProjectionOutboxStore } from "./context-projection-outbox";
 import type { ContextLexicalIndex } from "./context-lexical";
+import type { EmbeddingProvider } from "./embedding-provider";
+import type { ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore, ContextEmbeddingRunner } from "./context-vector-index";
 import type { DailyDigestProjectionRunner } from "./context-daily-digest";
 import type { DailyDigestJobStore } from "./daily-digest-jobs";
 import type { DailyDigestPolicyStore } from "./daily-digest-policy";
@@ -28,6 +30,7 @@ import type { StandardStore } from "./standard";
 import type { StandardGapStore } from "./standard-gap";
 import type { AgentRunStore } from "./agent-run";
 import type { StandardUsageStore } from "./standard-usage";
+import type { CustomerServiceTaskStore } from "./customer-service-task";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -53,8 +56,15 @@ declare module "@regenic/plugin-host" {
     "standard-gaps": StandardGapStore;
     "agent-runs": AgentRunStore;
     "standard-usage": StandardUsageStore;
+    "customer-service-tasks": CustomerServiceTaskStore;
     "context-projection-outbox": ContextProjectionOutboxStore;
     "context-lexical-index": ContextLexicalIndex;
+    embedding: EmbeddingProvider;
+    "context-vector-index": ContextVectorIndex;
+    "context-vector-generations": ContextVectorGenerationStore;
+    "context-vector-status": { status: "ready" | "unavailable"; error_code?: string };
+    "context-embedding-jobs": EmbeddingJobStore;
+    "context-embedding-worker": ContextEmbeddingRunner;
     "context-projectors": ContextProjectorRegistry;
     "context-retrievers": ContextRetrieverRegistry;
     model: ModelProvider;

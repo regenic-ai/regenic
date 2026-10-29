@@ -79,7 +79,9 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
           recipe_id: input.recipe.id,
           evidence_text: input.evidence_text,
           executor_config: input.recipe.executor_config,
+          ...(input.run_id ? { run_id: input.run_id } : {}),
         },
+        idempotencyKey: input.run_id,
       });
       return handleFromHttp(body, `${options.executor_type}:${input.work_item.id}`);
     },
@@ -163,6 +165,7 @@ async function callHttpExecutor(
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
     payload?: Record<string, unknown>;
+    idempotencyKey?: string;
   },
 ): Promise<unknown> {
   const headers: Record<string, string> = {
@@ -177,6 +180,9 @@ async function callHttpExecutor(
     headers,
     signal: AbortSignal.timeout(input.timeoutMs),
   };
+  if (input.idempotencyKey) {
+    headers["idempotency-key"] = input.idempotencyKey;
+  }
   if (input.payload) {
     headers["content-type"] = "application/json";
     init.body = JSON.stringify(input.payload);
@@ -184,16 +190,16 @@ async function callHttpExecutor(
   let response: Response;
   try {
     response = await request(input.url, init);
-  } catch {
-    return { status: "failed", external_run_id: input.url };
+  } catch (error) {
+    throw new Error("HTTP executor request could not be confirmed", { cause: error });
   }
   if (!response.ok) {
-    return { status: "failed", external_run_id: input.url };
+    throw new Error(`HTTP executor returned HTTP ${response.status}`);
   }
   try {
     return await response.json();
-  } catch {
-    return { status: "failed", external_run_id: input.url };
+  } catch (error) {
+    throw new Error("HTTP executor returned invalid JSON", { cause: error });
   }
 }
 
@@ -207,7 +213,7 @@ function parseHttpRunStatus(value: unknown): WorkRunStatus {
   ) {
     return value;
   }
-  return "failed";
+  throw new Error("HTTP executor returned an invalid run status");
 }
 
 function parseHttpResult(value: unknown): ResultEnvelope | undefined {

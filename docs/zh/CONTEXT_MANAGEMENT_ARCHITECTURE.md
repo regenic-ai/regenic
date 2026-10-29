@@ -42,6 +42,25 @@
 先确定已授权候选全集，再运行 lexical、vector、graph 或 model 排序。隐藏资源不能参与
 分数、结果数量、缓存键，也不能出现在调用方可见的诊断中。
 
+Authority 读取会把来源、会话、参与者、时间和锚点条件前推到生命周期选择。
+匹配的来源身份必须带回完整修订、撤回链；不能只保留匹配的某一版本，
+以免旧内容复活或遗漏后续权限变化。授权检查仍先于索引查询，
+索引返回值仍逐一绑定已授权的 Event/hash。
+
+个人策略声明 `metadata_only`，内置检索器声明 `lazy_materialization`，
+由引擎提供请求内共享的正文加载器：词法索引只读取命中和未覆盖项，
+向量检索补充经过绑定校验的语义命中，确定性回退也先过滤元数据再读取正文。
+加载结果的元数据和候选正文仍须与授权来源一致。
+未声明这些能力的策略、检索器保留原有的提前加载行为，兼容现有扩展。
+
+词法索引写入和授权索引查询不再设一万条硬上限。
+混合检索 profile 更新为 `personal-hybrid-rrf-v3`，保留 v2 的评分和准入规则，
+已有 snapshot 仍使用原 profile。词法 SQL 保持分块，
+向量检索保留全体授权范围内的 top-k，而不是截取前一部分授权记录。
+trace 的授权、覆盖计数不受 bundle 条目预算限制。
+无范围限制的查询仍需枚举授权元数据，精确向量搜索仍需扫描已覆盖向量；
+本次改动不将其变成 ANN 索引或常数时间检索。
+
 ### 2.4 Snapshot 不可变
 
 `ContextSnapshot` 在固定 read epoch 下记录一次精确选择。证据、策略、投影 generation
@@ -477,8 +496,22 @@ coordinator。若进程在投影成功后、任务完成前崩溃，任务会安
 D0 `thread-summary-deterministic` projector 不依赖模型。它在固定 authority read epoch 下
 按 thread 聚合证据，把每条来源生命周期解析到声明的 head，采用 revision 后的正文，排除
 tombstone 正文，并输出结构化 `thread_summary`。Artifact ID、input hash、body hash、
-Evidence 引用及 scope 并集均为确定性结果。Canonical summary body 按内容寻址写入 Blob；
-Artifact 仍是可替换、绑定证据的 proposal，而不是权威记录。
+Evidence 引用及 scope 并集均为确定性结果。Artifact 仍是可替换、绑定证据的 proposal，
+而不是权威记录。
+
+`thread-summary-deterministic-v2` 保留完整对话，不生成有长度上限的摘录。SQLite 与
+PostgreSQL 将正文、证据清单及 scope 并集保存为按组织隔离、验证内容哈希的不可变 JSON
+分段。数组采用固定位置的 32 叉树：追加消息时复用未变化分段，仅新增变化的叶节点和
+祖先节点，不再反复复制完整对话和不断增长的 manifest。`getArtifact`、`listArtifacts`
+还原原有逻辑结构；预览查询无需读取分段。`body_storage: "artifact"` 表示 `body_hash`
+仍校验 canonical 正文，但检索从 manifest 还原正文，不再保存一份重复的 Blob。
+
+API 与 worker 使用 `continuous-v2`，与旧算法的 checkpoint 隔离。旧版 Blob-backed
+manifest 和已有 snapshot 保持可读，不改写、不删除；本次阻止新增重复，不回收历史占用。
+旧 snapshot 仍重放原先固定的 bundle。读取和投影哈希计算仍需物化完整逻辑对话；修改较早
+消息也可能替换更多引用分段。这是持久化存储优化，不代表投影计算变成常数时间。
+共享同一 authority 数据库的 API 与 worker 应一起升级；兼容读取旧数据不意味着旧版
+程序能够读取新分段 manifest，或重新打开已升级的 schema。
 
 ### 8.2 个人版词法索引
 
@@ -508,8 +541,8 @@ proposal 可以被 accepted、rejected 或标记为 `needs_clarify`，但不会�
 或 body hash。已接受的 Artifact 只能由 `supersedes_id` 显式指向它的 proposal 替换；authority
 transaction 会同时接受 replacement 并将旧 Artifact 标为 superseded。终态 Artifact 不能再次转换。
 
-只有 accepted 的 `thread_summary` Artifact 可以进入检索。Retriever 通过 `body_hash` 加载
-canonical body，验证其与 immutable manifest 一致，要求每条 evidence reference 都存在于
+只有 accepted 的 `thread_summary` Artifact 可以进入检索。Retriever 加载旧版 Blob 正文，
+或还原 artifact-backed 正文，验证 `body_hash` 及其与 immutable manifest 的一致性，要求每条 evidence reference 都存在于
 authorized source view 中，并要求 scope 恰好是 evidence scope 的并集。任一条件无法验证时，
 必须隐藏 Artifact，不能回退到旧 summary。
 

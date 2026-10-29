@@ -5,11 +5,13 @@ import type {
   WorkDelivery,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkStore,
 } from "./work";
 import { isActiveWorkStatus } from "./work";
 import type { WorkItemStatus } from "./work";
 import { shouldFlushDelivery } from "./work-delivery";
+import type { SearchAnswerRecord } from "./search-answer";
 
 export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly recipes = new Map<string, Recipe>();
@@ -17,6 +19,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly runs = new Map<string, WorkRun>();
   private readonly deliveries = new Map<string, WorkDelivery>();
   private readonly uiPrefs = new Map<string, string>();
+  private readonly searchAnswers = new Map<string, SearchAnswerRecord>();
   private readonly executors = new Map<string, ExecutorInstallation>();
 
   async listRecipes(orgId: string): Promise<Recipe[]> {
@@ -129,6 +132,32 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     return cloneRun(run);
   }
 
+  async claimWorkRunStart({ run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
+    const item = this.items.get(run.work_item_id);
+    const recipe = this.recipes.get(run.recipe_id);
+    if (
+      !item || item.org_id !== run.org_id || item.status !== "open" ||
+      item.recipe_id !== run.recipe_id || recipe?.org_id !== run.org_id ||
+      [...this.runs.values()].some((current) =>
+        current.org_id === run.org_id && current.work_item_id === item.id &&
+        (current.status === "running" || current.status === "waiting_human"))
+    ) {
+      return false;
+    }
+    const occupied = [...this.items.values()].filter((current) =>
+      current.org_id === run.org_id && current.recipe_id === run.recipe_id &&
+      (current.status === "running" || current.status === "waiting_human")).length;
+    if (max_concurrent !== undefined && occupied >= max_concurrent) {
+      return false;
+    }
+    if (this.runs.has(run.id)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    this.runs.set(run.id, cloneRun(run));
+    this.items.set(item.id, { ...item, status: "running", updated_at: run.updated_at });
+    return true;
+  }
+
   async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {
     const sources = new Set(
       [...this.items.values()]
@@ -196,6 +225,26 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     _updatedAt: string,
   ): Promise<void> {
     this.uiPrefs.set(`${orgId}\0${key}`, value);
+  }
+
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    const record = this.searchAnswers.get(id);
+    return record?.org_id === orgId ? structuredClone(record) : null;
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    this.searchAnswers.set(record.id, structuredClone(record));
+    return structuredClone(record);
+  }
+
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    const record = this.searchAnswers.get(id);
+    return record?.org_id === orgId && this.searchAnswers.delete(id);
   }
 
   async listExecutorInstallations(orgId: string): Promise<ExecutorInstallation[]> {

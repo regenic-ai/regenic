@@ -16,9 +16,17 @@
   gap: 0;
   padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: var(--radius-row);
   background: transparent;
+  transition: background-color var(--dur-normal) var(--ease-out);
+}
+
+.recipe-card + .recipe-card {
+  margin-top: 2px;
+}
+
+.recipe-card:hover {
+  background: var(--wash-6);
 }
 
 .recipe-card:last-child {
@@ -134,10 +142,10 @@
 
 .recipe-preview-title {
   margin: 0;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--subtle);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
   color: var(--muted);
 }
 
@@ -202,9 +210,9 @@
 }
 
 .recipe-priority-rank {
-  color: var(--g300);
+  color: var(--subtle);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.03em;
 }
 
@@ -253,10 +261,10 @@
 
 .recipe-run-history-title {
   margin: 0;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  color: var(--subtle);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
   color: var(--muted);
 }
 
@@ -299,12 +307,12 @@
 
 .recipe-run-status {
   grid-row: 1;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.02em;
 }
 
 .recipe-run-status.is-done {
-  color: var(--g300);
+  color: var(--green);
 }
 
 .recipe-run-status.is-failed {
@@ -312,7 +320,7 @@
 }
 
 .recipe-run-status.is-running {
-  color: var(--process, #36d6e7);
+  color: var(--teal);
 }
 
 .recipe-run-when {
@@ -344,15 +352,15 @@
   border: 1px solid var(--line);
   color: var(--muted);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.04em;
   line-height: 16px;
 }
 
 .recipe-pill.is-on {
-  color: var(--g300);
-  border-color: color-mix(in srgb, var(--g500) 35%, var(--line));
-  background: var(--accent-soft);
+  color: var(--text);
+  border-color: transparent;
+  background: var(--wash-8);
 }
 
 .recipe-steps {
@@ -384,10 +392,10 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--g500) 16%, var(--surface));
-  color: var(--g300);
+  background: var(--wash-8);
+  color: var(--text);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
   display: grid;
   place-items: center;
   margin-top: 1px;
@@ -464,7 +472,7 @@
 
 .recipe-starter:hover {
   background: var(--hover);
-  border-color: color-mix(in srgb, var(--g500) 28%, var(--line));
+  border-color: var(--line-12);
 }
 
 .recipe-starter strong {
@@ -553,7 +561,7 @@
   margin: 0;
   color: var(--text);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.01em;
 }
 
@@ -596,7 +604,7 @@
   width: max-content;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -656,8 +664,8 @@
   min-width: 0;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--line-12);
+  border-radius: var(--radius-control);
   color: var(--text);
   background: var(--bg);
   font: inherit;
@@ -667,7 +675,7 @@
 .recipe-name input:focus {
   outline: none;
   border-color: var(--g700);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 22%, transparent);
+  box-shadow: 0 0 0 1px var(--focus);
 }
 
 .recipe-actions {
@@ -703,8 +711,8 @@
 .recipe-row-body textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--line-12);
+  border-radius: var(--radius-control);
   color: var(--text);
   background: var(--bg);
   font: inherit;
@@ -727,7 +735,7 @@
 .recipe-row-body .menu-select-btn:focus-visible {
   outline: none;
   border-color: var(--g700);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 22%, transparent);
+  box-shadow: 0 0 0 1px var(--focus);
 }
 
 .recipe-scope {
@@ -742,7 +750,7 @@
   padding: 0;
   color: var(--text);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .recipe-row {
@@ -780,21 +788,21 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
+  padding: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--wash-6);
 }
 
 .seg button {
   height: 30px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -804,9 +812,9 @@
 }
 
 .seg button.active {
-  background: var(--g900);
-  color: var(--g300);
-  box-shadow: none;
+  background: var(--elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-control);
 }
 
 /* Compact track: equal options, never stretched across a wide pane */
@@ -820,8 +828,8 @@
   gap: 2px;
   padding: 2px;
   border: 0;
-  border-radius: 6px;
-  background: var(--hover);
+  border-radius: 999px;
+  background: var(--wash-6);
 }
 
 .page-recipes .seg button {
@@ -831,13 +839,13 @@
   padding: 0 10px;
   flex: unset;
   white-space: nowrap;
-  border-radius: 5px;
+  border-radius: 999px;
 }
 
 .page-recipes .seg button.active {
-  background: var(--surface);
+  background: var(--elevated);
   color: var(--text);
-  box-shadow: 0 0 0 1px var(--line);
+  box-shadow: var(--shadow-control);
 }
 
 .page-recipes > .page-hero {
@@ -846,13 +854,12 @@
 
 .page-recipes > .page-hero h1 {
   margin-bottom: 4px;
-  font-size: 20px;
 }
 
 .page-recipes > .page-lead,
 .page-recipes .page-lead {
   max-width: 40em;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .recipe-chip {
@@ -865,7 +872,7 @@
   background: transparent;
   color: var(--text);
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .recipe-row-body > .switch-row {
@@ -916,8 +923,9 @@
   padding: 0;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--line) 78%, var(--bg));
+  background: var(--line-12);
   position: relative;
+  transition: background-color var(--dur-normal) var(--ease-out);
   cursor: pointer;
 }
 
@@ -929,17 +937,17 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--muted);
-  transition: transform 120ms ease;
+  background: #fff;
+  box-shadow: var(--shadow-control);
+  transition: transform var(--dur-slow) var(--ease-out);
 }
 
 .switch.is-on {
-  background: var(--g700);
+  background: var(--ink);
 }
 
 .switch.is-on::after {
   transform: translateX(16px);
-  background: var(--g500);
 }
 
 .schedule-field {

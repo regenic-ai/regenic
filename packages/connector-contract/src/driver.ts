@@ -323,6 +323,14 @@ export class ChannelDriverError extends Error {
   }
 }
 
+/** Only for a whole send rejected before any message was accepted or queued. */
+export class SendNotAcceptedError extends ChannelDriverError {
+  constructor(code: ChannelDriverError["code"], message: string, reason?: string) {
+    super(code, message, reason);
+    this.name = "SendNotAcceptedError";
+  }
+}
+
 /** Identity, install, match, and declared capabilities. Every driver implements this. */
 export interface ChannelDriverCore {
   readonly connector_type: string;

@@ -35,7 +35,7 @@ export async function createHttpApp(
   return app;
 }
 
-/** Personal API CORS is loopback and extension pages only — never WhatsApp Web. */
+/** Personal API CORS is loopback and extension pages only — never third-party web pages. */
 export function enablePersonalCors(
   app: NestApplication,
   env: AppEnv | NodeJS.ProcessEnv = process.env,

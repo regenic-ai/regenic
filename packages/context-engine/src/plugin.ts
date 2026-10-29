@@ -1,5 +1,6 @@
 import { definePlugin } from "@regenic/plugin-host";
 import {
+  embeddingGeneration,
   type ContextEvidenceSource,
   type ContextLexicalIndex,
   type ContextPolicyEvaluator,
@@ -13,6 +14,46 @@ import { ContextProjectionCoordinator } from "./context-projection-coordinator";
 import { DeterministicThreadSummaryProjector } from "./deterministic-thread-summary-projector";
 import { DailyDigestProjectionCoordinator } from "./daily-digest-projection-runner";
 import { PersonalContextPolicyEvaluator } from "./personal-context-policy";
+import { ContextEmbeddingWorker } from "./context-embedding-worker";
+import { HybridEventRetriever, HYBRID_RETRIEVAL_PROFILE } from "./hybrid-event-retriever";
+
+export const hybridEventRetrieverPlugin = definePlugin<{
+  lexical_index?: ContextLexicalIndex;
+  chunk_tokens: number;
+  max_chunks_per_event: number;
+}>({
+  name: "context-retriever-event-hybrid",
+  inject: ["context-retrievers", "embedding", "context-vector-status"],
+  apply(ctx, config) {
+    const provider = ctx.get("embedding");
+    return ctx.get("context-retrievers").register(new HybridEventRetriever(
+      config.lexical_index ? new IndexedEventRetriever(config.lexical_index) : new DeterministicEventRetriever(),
+      provider,
+      ctx.get("context-vector-status").status === "ready" ? ctx.get("context-vector-index") : undefined,
+      embeddingGeneration(provider.descriptor, config.chunk_tokens, config.max_chunks_per_event),
+      ctx.get("context-vector-status").status === "ready" ? ctx.get("context-vector-generations") : undefined,
+    ));
+  },
+});
+
+export const contextEmbeddingWorkerPlugin = definePlugin<{
+  org_id: string; chunk_tokens: number; max_chunks_per_event: number;
+}>({
+  name: "context-embedding-worker",
+  inject: ["context-authority", "blobs", "embedding", "context-vector-index", "context-embedding-jobs"],
+  apply(ctx, config) {
+    const provider = ctx.get("embedding");
+    const worker = new ContextEmbeddingWorker(
+      config.org_id,
+      new AuthorityContextEvidenceSource(ctx.get("context-authority"), ctx.get("blobs"), true),
+      provider, ctx.get("context-vector-index"), ctx.get("context-embedding-jobs"),
+      embeddingGeneration(provider.descriptor, config.chunk_tokens, config.max_chunks_per_event),
+      ctx.get("context-vector-generations"),
+    );
+    ctx.provide("context-embedding-worker", worker);
+    ctx.effect(() => () => worker.stop());
+  },
+});
 
 export const deterministicEventRetrieverPlugin = definePlugin({
   name: "context-retriever-event-deterministic",
@@ -43,6 +84,7 @@ export const deterministicContextEnginePlugin = definePlugin<DeterministicContex
 export interface PersonalContextEnginePluginConfig {
   org_id: string;
   actor_id?: string;
+  hybrid?: boolean;
 }
 
 export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePluginConfig>({
@@ -65,6 +107,7 @@ export const personalContextEnginePlugin = definePlugin<PersonalContextEnginePlu
       policy,
       artifacts: ctx.get("context-artifacts"),
       retrievers: ctx.get("context-retrievers"),
+      retrieval_profile: config.hybrid ? HYBRID_RETRIEVAL_PROFILE : undefined,
     }));
   },
 });

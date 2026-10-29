@@ -1,4 +1,71 @@
-export type NavId = "inbox" | "follow-ups" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "search" | "customer-tasks" | "follow-ups" | "recipes" | "engine" | "settings";
+
+export interface CustomerServiceTaskView {
+  id: string;
+  status: string;
+  revision: number;
+  updated_at: string;
+  brief: {
+    version: number;
+    question: string;
+    customer: { status: string; value?: string };
+    project: { status: string; value?: string };
+    batch: { status: string; value?: string };
+    intent: { status: string; value?: string };
+    expected_member_count?: number;
+    members_closed: boolean;
+    members: Array<{
+      member_key: string;
+      display_name: string;
+      business_id?: string;
+      status: string;
+    }>;
+    requested_fields: string[];
+    unresolved: string[];
+  };
+  business_evidence: Array<{
+    query_id: string;
+    queried_at: string;
+    complete: boolean;
+    results: Array<{
+      member_key: string;
+      status: string;
+      fields: Array<{
+        field: string;
+        value: string | number | boolean | null;
+        visibility: string;
+        updated_at: string;
+      }>;
+    }>;
+  }>;
+  draft?: {
+    version: number;
+    text: string;
+    covered_member_keys: string[];
+    unresolved: string[];
+    review?: {
+      result: string;
+      reviewed_at: string;
+    };
+    sent?: {
+      event_id: string;
+      sent_at: string;
+    };
+  };
+}
+
+export interface SemanticIndexStatus {
+  configured: boolean;
+  healthy: boolean;
+  vector_status: string;
+  provider_issue?: string;
+  generations: Array<{
+    id: string;
+    active: boolean;
+    jobs: { pending: number; running: number; succeeded: number; failed: number; quarantined: number; superseded: number };
+    failures?: Array<{ code: string; failed: number; quarantined: number }>;
+  }>;
+}
 
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
@@ -163,6 +230,7 @@ export interface WorkDeliveryFace {
 export interface WorkFace {
   id: string;
   status: WorkItemStatus;
+  start_state?: "pending" | "submitted" | "uncertain";
   recipe_id?: string;
   executor_type?: string;
   agent_thread_id?: string;
@@ -426,6 +494,121 @@ export interface PersonalContextBundle {
 export interface PersonalContextSnapshot {
   id: string;
   created_at: string;
+  retrieval_profile_version?: string;
+  retrieval_trace?: Array<{
+    retriever_id: string;
+    profile: string;
+    mode: "lexical" | "hybrid";
+    generation?: string;
+    model_revision?: string;
+    authorized_count: number;
+    covered_count: number;
+    routes: Array<{
+      event_id: string;
+      lexical_rank?: number;
+      vector_rank?: number;
+      vector_score?: number;
+      chunk_ordinal?: number;
+      start?: number;
+      end?: number;
+    }>;
+  }>;
+}
+
+export interface PersonalContextSearchResult {
+  request_id: string;
+  snapshot_id: string;
+  read_epoch: string;
+  retrieval_profile: string;
+  generation: string | null;
+  coverage: { authorized_count: number; covered_count: number } | null;
+  items: Array<{
+    event_id: string;
+    content_hash: string;
+    source: string;
+    occurred_at: string;
+    rank: number;
+    snippet: string;
+    snippet_start: number;
+    snippet_end: number;
+    evidence: PersonalContextEvidence[];
+  }>;
+  degradation_flags: string[];
+  truncated: boolean;
+}
+
+export interface PersonalSearchBoundary {
+  occurred_at: string;
+  event_id: string;
+}
+
+export interface PersonalSearchMessage {
+  event_id: string;
+  external_id: string;
+  content_hash: string;
+  source: string;
+  thread_id: string;
+  actor_id?: string;
+  actor_label: string | null;
+  parent_external_id?: string;
+  reply_to_event_id?: string;
+  occurred_at: string;
+  text: string;
+  attachments?: Array<{ media_type: string; filename?: string }>;
+  selection_reason: "hit" | "reply_target" | "neighbor";
+}
+
+export interface PersonalSearchConversation {
+  thread_id: string;
+  title: string | null;
+  channel_label: string | null;
+  read_epoch: string;
+  anchor_event_ids: string[];
+  messages: PersonalSearchMessage[];
+  continuation: {
+    before: PersonalSearchBoundary | null;
+    after: PersonalSearchBoundary | null;
+    gaps: Array<{ after: PersonalSearchBoundary; before: PersonalSearchBoundary }>;
+  };
+  truncated: boolean;
+}
+
+export interface PersonalSearchWindow {
+  thread_id: string;
+  read_epoch: string;
+  messages: PersonalSearchMessage[];
+  has_more: boolean;
+}
+
+export type PersonalSearchAnswerStatus =
+  | "running"
+  | "waiting_human"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "cancelled";
+
+export interface PersonalSearchAnswer {
+  answer_id: string;
+  work_item_id: string;
+  status: PersonalSearchAnswerStatus;
+  executor_type: string;
+  agent_thread_id?: string;
+  answer?: string;
+  citations?: Array<{ ref: number; event_id: string }>;
+}
+
+export interface PersonalExpandedSearchResult extends PersonalContextSearchResult {
+  conversations: PersonalSearchConversation[];
+  expansion: { returned_messages: number; max_messages: number };
+}
+
+export interface PersonalSearchSource {
+  event_id: string;
+  content_hash: string;
+  text: string;
+  snapshot_id: string;
+  item: InboxViewItem | null;
 }
 
 export interface PersonalContextSnapshotIndexEntry {
@@ -845,6 +1028,3 @@ export interface ConnectorImportView {
   invalid_line_count: number;
   errors: Array<{ line?: number; code?: string; message: string }>;
 }
-
-/** @deprecated Use ConnectorImportView. */
-export type WhatsAppImportView = ConnectorImportView;

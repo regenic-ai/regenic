@@ -4,6 +4,7 @@ import {
   ModelTimeoutError,
   ModelUnavailableError,
   ModelUpstreamError,
+  EmbeddingError,
   PROPOSAL_SCHEMA_VERSION,
   DECISION_SCHEMA_VERSION,
   REVIEW_SCHEMA_VERSION,
@@ -53,9 +54,13 @@ import {
   type AgentRunOutput,
   type AgentRunRecord,
   type AgentRunStatus,
+  selectContextIndexes,
+  type ContextAuthorityRead,
 } from "@regenic/domain";
 import {
   ContextEngineError,
+  ContextSearcher,
+  contextSearchRequest,
   ContextQuestionAnswerer,
   ContextQuestionError,
   type ContextAnswerResult,
@@ -68,6 +73,9 @@ import {
   type ContextRecordSummary,
 } from "./context-record-view";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { PersonalContextError } from "./personal-context-error";
+import { PersonalConversationContextService } from "./personal-conversation-context.service";
+export { PersonalContextError } from "./personal-context-error";
 
 const FORBIDDEN_PERSONAL_KEYS = new Set(["id", "org_id", "principal", "schema_version"]);
 const ASK_KEYS = new Set([
@@ -90,35 +98,211 @@ const DIFF_KEYS = new Set([
 const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
 const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
 
-export class PersonalContextError extends Error {
-  constructor(
-    readonly code:
-      | "invalid_request"
-      | "not_found"
-      | "replay_forbidden"
-      | "no_context"
-      | "model_unavailable"
-      | "model_timeout"
-      | "model_upstream"
-      | "invalid_model_output",
-    readonly httpStatus: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "PersonalContextError";
-  }
-}
-
 @Injectable()
 export class PersonalContextService {
   constructor(
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(PersonalConversationContextService)
+    private readonly conversations: PersonalConversationContextService,
   ) {}
 
   async assemble(input: unknown) {
     const request = this.contextRequest(input);
     return this.runContext(() => this.runtime.requireHost().get("context").assemble(request));
+  }
+
+  async search(input: unknown) {
+    return this.runContext(async () => {
+      const request = contextSearchRequest(input, {
+        id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
+      });
+      return new ContextSearcher(this.runtime.requireHost().get("context")).search(request);
+    });
+  }
+
+  async searchExpanded(input: unknown) {
+    const body = strictBody(input, new Set(["query", "limit", "filters", "context"]));
+    const context = body.context === undefined
+      ? {}
+      : strictNestedBody(body.context, new Set([
+        "before", "after", "reply_depth", "max_messages",
+      ]), "context");
+    const before = boundedInteger(context.before ?? 4, "context.before", 0, 12);
+    const after = boundedInteger(context.after ?? 4, "context.after", 0, 12);
+    const replyDepth = boundedInteger(context.reply_depth ?? 8, "context.reply_depth", 0, 8);
+    const maxMessages = boundedInteger(context.max_messages ?? 40, "context.max_messages", 1, 100);
+    const requestedLimit = body.limit ?? 20;
+    const limit = boundedInteger(requestedLimit, "limit", 1, 20);
+    if (limit > maxMessages) {
+      throw new PersonalContextError(
+        "invalid_request",
+        HttpStatus.BAD_REQUEST,
+        "limit cannot exceed context.max_messages",
+      );
+    }
+    const search = await this.search({
+      query: body.query,
+      limit,
+      ...(body.filters === undefined ? {} : { filters: body.filters }),
+    });
+    if (!search.items.length) {
+      return { ...search, conversations: [], expansion: expansionSummary(0, maxMessages) };
+    }
+
+    return this.runContext(async () => {
+      const authority = this.runtime.requireHost().get("authority");
+      const seedsByThread = new Map<string, Array<{
+        event_id: string;
+        content_hash: string;
+        rank: number;
+      }>>();
+      for (const hit of search.items) {
+        const event = await authority.getEvent(this.runtime.orgId(), hit.event_id);
+        if (!event?.thread_id || event.content_hash !== hit.content_hash) {
+          throw contextChanged();
+        }
+        const seeds = seedsByThread.get(event.thread_id) ?? [];
+        seeds.push({
+          event_id: hit.event_id,
+          content_hash: hit.content_hash,
+          rank: hit.rank,
+        });
+        seedsByThread.set(event.thread_id, seeds);
+      }
+
+      const threadEntries = [...seedsByThread.entries()];
+      const remainingForNeighbors = maxMessages - search.items.length;
+      const baseExtra = Math.floor(remainingForNeighbors / threadEntries.length);
+      let extraRemainder = remainingForNeighbors % threadEntries.length;
+      const conversations = [];
+      let returnedMessages = 0;
+
+      for (const [threadId, seeds] of threadEntries) {
+        const maxThreadMessages = seeds.length + baseExtra + (extraRemainder-- > 0 ? 1 : 0);
+        const { read_epoch, events } = await this.conversations.readThread(threadId);
+        const indexes = new Map(events.map((event, index) => [event.id, index]));
+        for (const seed of seeds) {
+          const index = indexes.get(seed.event_id);
+          if (index === undefined || events[index].content_hash !== seed.content_hash) {
+            throw contextChanged();
+          }
+        }
+
+        const selected = selectContextIndexes(events.map((event) => ({
+          id: event.id,
+          source: event.source,
+          external_id: event.external_id,
+          parent_external_id: stringAttribute(event.attrs, "parent_external_id"),
+        })), seeds.map((seed) => seed.event_id), {
+          before, after, replyDepth, maxMessages: maxThreadMessages,
+        });
+        const decoded = await this.conversations.readMessages(
+          threadId,
+          events,
+          selected.indexes,
+          selected.reasons,
+        );
+        const seedIds = new Set(seeds.map((seed) => seed.event_id));
+        if ([...decoded.unreadable].some((index) => seedIds.has(events[index].id))) {
+          throw contextChanged();
+        }
+        const { messages, kept, unreadable } = decoded;
+        returnedMessages += messages.length;
+        const readableBetween = (from: number, to: number) => {
+          for (let index = from; index < to; index += 1) {
+            if (!unreadable.has(index)) return true;
+          }
+          return false;
+        };
+        const first = kept[0];
+        const last = kept.at(-1);
+        const hasEarlier = first !== undefined && readableBetween(0, first);
+        const hasLater = last !== undefined && readableBetween(last + 1, events.length);
+        const gaps = contextGaps(events, kept, unreadable);
+        conversations.push({
+          thread_id: threadId,
+          read_epoch,
+          anchor_event_ids: seeds.sort((left, right) => left.rank - right.rank)
+            .map((seed) => seed.event_id),
+          messages,
+          continuation: {
+            before: hasEarlier ? contextBoundary(events[first!]) : null,
+            after: hasLater ? contextBoundary(events[last!]) : null,
+            gaps,
+          },
+          truncated: selected.truncated || hasEarlier || hasLater || gaps.length > 0,
+        });
+      }
+
+      return {
+        ...search,
+        conversations,
+        expansion: expansionSummary(returnedMessages, maxMessages),
+      };
+    });
+  }
+
+  async searchWindow(input: unknown) {
+    return this.runContext(() => this.conversations.window(input));
+  }
+
+  async semanticStatus() {
+    return this.runContext(() => this.runtime.semanticStatus());
+  }
+
+  async searchSource(input: unknown) {
+    const body = strictBody(input, new Set(["event_id", "content_hash"]));
+    const eventId = requiredString(body.event_id, "event_id");
+    const contentHash = requiredString(body.content_hash, "content_hash");
+    if (!/^[a-f0-9]{64}$/.test(contentHash)) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid content_hash");
+    }
+    return this.runContext(async () => {
+      const result = await this.runtime.requireHost().get("context").assemble({
+        schema_version: "1.0", id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
+        consumer_id: "personal-search-source", purpose: "display the current authorized search source",
+        allowed_uses: ["display"], temporal: { mode: "current" },
+        anchors: [{ kind: "event", id: eventId }], requested_kinds: ["event"],
+        budget: { profile: "personal-search-source-v1", max_tokens: 65_536, max_items: 1, max_raw_evidence: 1 },
+      });
+      const item = result.bundle.sections.flatMap((section) => section.items).find((entry) =>
+        entry.kind === "event" && entry.resource_id === eventId && entry.content_hash === contentHash &&
+        entry.evidence.some((reference) => reference.event_id === eventId && reference.content_hash === contentHash));
+      if (!item || typeof item.text !== "string") {
+        throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Search source is no longer available; search again");
+      }
+      return { event_id: eventId, content_hash: contentHash, text: item.text, snapshot_id: result.snapshot.id };
+    });
+  }
+
+  async indexSemantic(input: unknown) {
+    strictBody(input, new Set());
+    const status = await this.semanticStatus();
+    if (!status.configured || status.vector_status !== "ready") {
+      throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+        "Semantic indexing is not configured or the vector store is unavailable");
+    }
+
+    return this.runContext(() => this.runtime.indexSemanticOnce());
+  }
+
+  async retrySemantic(input: unknown) {
+    const body = strictBody(input, new Set(["generation", "limit"]));
+    const generation = requiredString(body.generation, "generation");
+    const limit = body.limit ?? 10;
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20) {
+      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Retry limit must be an integer from 1 to 20");
+    }
+    const status = await this.semanticStatus();
+    if (!status.configured || !status.healthy || status.vector_status !== "ready") {
+      throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+        "Repair the embedding provider and vector store before retrying jobs");
+    }
+    if (!status.generations.some((entry) => entry.id === generation)) {
+      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Embedding generation was not found");
+    }
+    return this.runContext(() => this.runtime.retrySemantic(generation, limit));
   }
 
   async getSnapshot(snapshotId: string): Promise<ContextSnapshot> {
@@ -1381,8 +1565,23 @@ export class PersonalContextService {
     try {
       return await run();
     } catch (error) {
+      if (error instanceof EmbeddingError && (error.code === "invalid_input" || error.code === "input_too_large")) {
+        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Query exceeds embedding input limits or is invalid");
+      }
+      if (error instanceof Error && "code" in error && typeof error.code === "string" &&
+        ["SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_IOERR", "SQLITE_CORRUPT", "SQLITE_NOTADB",
+          "SQLITE_CANTOPEN", "ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(error.code)) {
+        console.warn("context source unavailable", error.code);
+        throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+          "Context source is unavailable; retry the request");
+      }
       if (!(error instanceof ContextEngineError)) {
         throw error;
+      }
+      if (error.code === "source_boundary" || error.code === "invalid_candidate") {
+        console.warn("context retrieval unavailable", error.code);
+        throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
+          "Context retrieval changed or is unavailable; retry the request");
       }
       const status = error.code === "not_found"
         ? HttpStatus.NOT_FOUND
@@ -1425,6 +1624,73 @@ function strictBody(input: unknown, allowed: ReadonlySet<string>): Record<string
     );
   }
   return body;
+}
+
+function boundedInteger(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw new PersonalContextError(
+      "invalid_request",
+      HttpStatus.BAD_REQUEST,
+      `${field} must be an integer from ${min} to ${max}`,
+    );
+  }
+  return value;
+}
+
+function contextBoundary(event: ContextAuthorityRead["events"][number]) {
+  return { occurred_at: event.occurred_at, event_id: event.id };
+}
+
+function contextGaps(
+  events: ContextAuthorityRead["events"],
+  indexes: number[],
+  unreadable: ReadonlySet<number>,
+): Array<{
+  after: { occurred_at: string; event_id: string };
+  before: { occurred_at: string; event_id: string };
+}> {
+  const gaps = [];
+  for (let index = 1; index < indexes.length; index += 1) {
+    const previous = indexes[index - 1];
+    const current = indexes[index];
+    let skipped = false;
+    for (let between = previous + 1; between < current && !skipped; between += 1) {
+      skipped = !unreadable.has(between);
+    }
+    if (skipped) {
+      gaps.push({
+        after: contextBoundary(events[previous]),
+        before: contextBoundary(events[current]),
+      });
+    }
+  }
+  return gaps;
+}
+
+function stringAttribute(
+  attrs: ContextAuthorityRead["events"][number]["attrs"],
+  key: string,
+): string | undefined {
+  const value = attrs?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function expansionSummary(returnedMessages: number, maxMessages: number) {
+  return {
+    returned_messages: returnedMessages,
+    max_messages: maxMessages,
+    message_content: "complete_or_explicitly_omitted" as const,
+    local_read_scope: "bounded" as const,
+    source_sync: "unknown" as const,
+  };
+}
+
+function contextChanged(): PersonalContextError {
+  return new PersonalContextError(
+    "context_changed",
+    HttpStatus.CONFLICT,
+    "Search results changed while expanding context; search again",
+  );
 }
 
 function modelError(error: unknown): PersonalContextError {

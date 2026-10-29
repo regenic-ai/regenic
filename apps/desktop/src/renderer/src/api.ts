@@ -1,6 +1,7 @@
 import type {
   ConversationPrefView,
   CreatedConversation,
+  CustomerServiceTaskView,
   DataDirectoryAction,
   DataDirectoryPlan,
   EngineExecutorView,
@@ -12,6 +13,7 @@ import type {
   InboxViewItem,
   KernelSettingsView,
   Locale,
+  MessageDisposition,
   MessageReceipt,
   PersonalDispatchPolicy,
   PersonalEngineView,
@@ -20,6 +22,12 @@ import type {
   PersonalContextBundle,
   PersonalContextDiff,
   PersonalContextSnapshotIndexEntry,
+  PersonalExpandedSearchResult,
+  PersonalSearchAnswer,
+  PersonalSearchBoundary,
+  PersonalSearchWindow,
+  PersonalSearchSource,
+  SemanticIndexStatus,
   PersonalContextView,
   PersonalHeartbeatView,
   PluginInventoryItem,
@@ -33,7 +41,7 @@ import type {
   SyncRunView,
   ThreadPrompt,
   UiPrefsView,
-  WhatsAppImportView,
+  ConnectorImportView,
 } from "./types";
 import { activeLocale } from "../../shared/i18n.ts";
 import { throwKernelError } from "./kernel-request.ts";
@@ -853,7 +861,7 @@ export async function importConnectorFile(
   connectorType: string,
   content: string,
   fileName: string,
-): Promise<WhatsAppImportView> {
+): Promise<ConnectorImportView> {
   const response = await fetch(`${origin()}/v1/me/imports`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -864,7 +872,7 @@ export async function importConnectorFile(
     }),
   });
   const body = (await response.json()) as
-    | WhatsAppImportView
+    | ConnectorImportView
     | { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(
@@ -873,14 +881,7 @@ export async function importConnectorFile(
         : `import ${response.status}`,
     );
   }
-  return body as WhatsAppImportView;
-}
-
-export async function importWhatsAppExport(
-  content: string,
-  fileName: string,
-): Promise<WhatsAppImportView> {
-  return importConnectorFile("whatsapp-web-live", content, fileName);
+  return body as ConnectorImportView;
 }
 
 export async function createConversation(input: {
@@ -1345,6 +1346,150 @@ export async function clearStore(): Promise<StoreClearView> {
 const DESKTOP_CONTEXT_CONSUMER = "desktop-context-pilot";
 const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversation";
 
+export async function searchPersonalContext(
+  input: {
+    query: string;
+    limit?: number;
+    filters?: { sources?: string[]; thread_ids?: string[] };
+    context?: { before?: number; after?: number; reply_depth?: number; max_messages?: number };
+  },
+  signal?: AbortSignal,
+): Promise<PersonalExpandedSearchResult> {
+  const response = await kernelFetch(`/v1/me/context/search/expand?locale=${activeLocale()}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(input), signal,
+  });
+  if (!response.ok) throwKernelError(await response.json(), `context search ${response.status}`);
+  return response.json() as Promise<PersonalExpandedSearchResult>;
+}
+
+export async function fetchSearchWindow(
+  input: {
+    thread_id: string;
+    read_epoch: string;
+    direction: "before" | "after";
+    boundary: PersonalSearchBoundary;
+    until?: PersonalSearchBoundary;
+    limit?: number;
+  },
+  signal?: AbortSignal,
+): Promise<PersonalSearchWindow> {
+  const response = await kernelFetch(`/v1/me/context/search/window?locale=${activeLocale()}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(input), signal,
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search window ${response.status}`);
+  return response.json() as Promise<PersonalSearchWindow>;
+}
+
+export async function startSearchAnswer(
+  input: {
+    query: string;
+    conversations: Array<{ thread_id: string; event_ids: string[] }>;
+    executor_type?: string;
+  },
+  signal?: AbortSignal,
+): Promise<PersonalSearchAnswer> {
+  const response = await kernelFetch(`/v1/me/context/search/answers?locale=${activeLocale()}`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(input), signal,
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search answer ${response.status}`);
+  return response.json() as Promise<PersonalSearchAnswer>;
+}
+
+export async function fetchSearchAnswer(answerId: string, signal?: AbortSignal): Promise<PersonalSearchAnswer> {
+  const response = await kernelFetch(`/v1/me/context/search/answers/${encodeURIComponent(answerId)}`, { signal });
+  if (!response.ok) throwKernelError(await response.json(), `search answer ${response.status}`);
+  return response.json() as Promise<PersonalSearchAnswer>;
+}
+
+export async function cancelSearchAnswer(answerId: string): Promise<PersonalSearchAnswer> {
+  const response = await kernelFetch(`/v1/me/context/search/answers/${encodeURIComponent(answerId)}/cancel`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search answer cancel ${response.status}`);
+  return response.json() as Promise<PersonalSearchAnswer>;
+}
+
+export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<SemanticIndexStatus> {
+  const response = await kernelFetch("/v1/me/context/embedding/status", { signal });
+  if (!response.ok) throwKernelError(await response.json(), `embedding status ${response.status}`);
+  return response.json() as Promise<SemanticIndexStatus>;
+}
+
+export async function fetchCustomerServiceTasks(
+  signal?: AbortSignal,
+): Promise<CustomerServiceTaskView[]> {
+  const response = await kernelFetch("/v1/me/context/customer-tasks?limit=100", { signal });
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `customer tasks ${response.status}`);
+  return Array.isArray(body) ? body as CustomerServiceTaskView[] : [];
+}
+
+export async function reviewCustomerServiceTask(
+  taskId: string,
+  result: "approved" | "rejected",
+): Promise<CustomerServiceTaskView> {
+  const response = await kernelFetch(
+    `/v1/me/context/customer-tasks/${encodeURIComponent(taskId)}/review`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ result }),
+    },
+  );
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `customer task review ${response.status}`);
+  return body as CustomerServiceTaskView;
+}
+
+export async function sendCustomerServiceTask(
+  taskId: string,
+): Promise<CustomerServiceTaskView> {
+  const response = await kernelFetch(
+    `/v1/me/context/customer-tasks/${encodeURIComponent(taskId)}/send`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `customer task send ${response.status}`);
+  return body as CustomerServiceTaskView;
+}
+
+export async function fetchSearchSource(
+  input: { event_id: string; content_hash: string },
+  signal: AbortSignal,
+): Promise<PersonalSearchSource> {
+  const response = await kernelFetch(`/v1/me/context/search/source?locale=${activeLocale()}`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search source ${response.status}`);
+  return response.json() as Promise<PersonalSearchSource>;
+}
+
+export async function indexSemanticOnce(signal?: AbortSignal): Promise<{ processed: number; failed: number; superseded: number }> {
+  const response = await kernelFetch("/v1/me/context/embedding/index", {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : undefined,
+  });
+  if (!response.ok) throwKernelError(await response.json(), `embedding index ${response.status}`);
+  return response.json() as Promise<{ processed: number; failed: number; superseded: number }>;
+}
+
+export async function retrySemanticJobs(generation: string, signal: AbortSignal): Promise<{ retried: number }> {
+  const response = await kernelFetch("/v1/me/context/embedding/retry", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ generation, limit: 10 }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  });
+  if (!response.ok) throwKernelError(await response.json(), `embedding retry ${response.status}`);
+  return response.json() as Promise<{ retried: number }>;
+}
+
 export async function assemblePersonalContext(
   threadId: string,
   signal?: AbortSignal,
@@ -1542,12 +1687,14 @@ export async function fetchPendingInbox(): Promise<InboxViewItem[]> {
 
 export async function triagePendingInbox(
   eventId: string,
-  disposition: "current_work" | "outside_current_work",
+  disposition: MessageDisposition,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${origin()}/v1/me/inbox/${encodeURIComponent(eventId)}/triage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ disposition }),
+    signal,
   });
   if (!response.ok) {
     throw new Error(`inbox triage ${response.status}`);

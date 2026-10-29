@@ -45,13 +45,17 @@ describe("personalEventsUrl", () => {
 });
 
 describe("connectPersonalEventsWithDeps", () => {
-  it("opens the SSE stream and forwards inbox.digest", () => {
+  it("opens the SSE stream and forwards inbox and work updates", () => {
     MockEventSource.instances.length = 0;
     const digests: string[] = [];
+    const workItems: string[] = [];
     const disconnect = connectPersonalEventsWithDeps(
       {
         onInboxDigest: (digest) => {
           digests.push(digest);
+        },
+        onWorkUpdated: (workItemId) => {
+          workItems.push(workItemId);
         },
       },
       {
@@ -68,7 +72,11 @@ describe("connectPersonalEventsWithDeps", () => {
       "http://127.0.0.1:4370/v1/me/events",
     );
     MockEventSource.instances[0]?.emit("inbox.digest", { digest: "1:abc" });
+    MockEventSource.instances[0]?.emit("work.updated", {
+      work_item_id: "search-answer:1",
+    });
     assert.deepEqual(digests, ["1:abc"]);
+    assert.deepEqual(workItems, ["search-answer:1"]);
     disconnect();
     assert.equal(MockEventSource.instances[0]?.closed, true);
   });

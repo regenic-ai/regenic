@@ -19,8 +19,8 @@ import {
   preferredThreadId,
 } from "./personal-pull-status";
 
-import type { ConnectorState } from "./personal-connector-state";
-import type { StartSyncRunInput } from "./personal-connector.service";
+import type { ConnectorDueWorkState as ConnectorState } from "./personal-connector-state";
+import type { StartSyncRunInput } from "./personal-connector-types";
 import {
   safeErrorCode,
   LEASE_MS,
@@ -50,6 +50,13 @@ export async function startSyncRun(
     throw new PersonalConnectorError(
       "disabled",
       "Connector installation is disabled",
+      409,
+    );
+  }
+  if (!state.drivers.get(installation.connector_type)) {
+    throw new PersonalConnectorError(
+      "unsupported_connector",
+      `Connector type cannot be synced: ${installation.connector_type}`,
       409,
     );
   }

@@ -210,11 +210,9 @@ describe("extraChannelDrivers", () => {
 describe("first-party channel plugins", () => {
   it("discovers kernel dependencies that declare regenic.plugin", () => {
     assert.deepEqual(firstPartyPluginSpecs(), [
-      "@regenic/slack-connector",
       "@regenic/dsh-connector",
       "@regenic/feishu-connector",
       "@regenic/cursor-connector",
-      "@regenic/whatsapp-personal",
     ]);
   });
 
@@ -277,11 +275,9 @@ describe("first-party channel plugins", () => {
   it("assembles registries without Nest importing driver symbols", () => {
     const drivers = createChannelDriverRegistry({}).list().map((item) => item.connector_type);
     assert.deepEqual(drivers, [
-      "slack-channel",
       "dsh-session",
       "feishu-chat",
       "cursor-agent",
-      "whatsapp-web-live",
     ]);
     assert.equal(createExecutorPluginRegistry({}).default()?.executor_type, "dsh");
     const appModule = readFileSync(join(__dirname, "../src/app.module.ts"), "utf8");
@@ -293,8 +289,6 @@ describe("first-party channel plugins", () => {
         "@regenic/cursor-connector",
         "@regenic/dsh-connector",
         "@regenic/feishu-connector",
-        "@regenic/slack-connector",
-        "@regenic/whatsapp-personal",
       ],
     );
     assert.ok(firstParty.every((item) => item.trust === "core" && item.status === "loaded"));

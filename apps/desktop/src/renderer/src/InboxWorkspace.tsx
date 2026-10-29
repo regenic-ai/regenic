@@ -22,6 +22,7 @@ import {
   threadTitle,
 } from "./message-view";
 import { ThreadFaceTags } from "./ThreadFaceTags";
+import { IdentityAvatar } from "./IdentityAvatar";
 import { useLocale } from "./LocaleContext";
 import {
   ChevronIcon,
@@ -51,6 +52,7 @@ import type {
 
 export function InboxWorkspace({
   threads,
+  locateEventId,
   selected,
   error,
   pull,
@@ -88,6 +90,7 @@ export function InboxWorkspace({
   onForwardCreated,
 }: {
   threads: InboxThread[];
+  locateEventId?: string;
   selected: InboxThread | null;
   error: string | null;
   pull?: PersonalEngineView["pull"];
@@ -454,6 +457,7 @@ export function InboxWorkspace({
         {selected ? (
           <ThreadPane
             thread={selected}
+            locateEventId={locateEventId}
             pull={pull}
             opening={openingId === selected.id}
             openError={openError}
@@ -613,6 +617,7 @@ function WorkRow({
       }}
     >
       <div className="item-main">
+        <IdentityAvatar seed={thread.id} label={title} />
         <div className="item-copy">
           <div className="item-top">
             <ThreadTitleField

@@ -466,7 +466,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const light = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.deepEqual(
         light.catalog.map((item) => item.connector_type),
-        ["slack-channel", "dsh-session", "feishu-chat", "cursor-agent", "whatsapp-web-live"],
+        ["dsh-session", "feishu-chat", "cursor-agent"],
       );
       assert.ok(light.installations.every((item) => item.last_attempt == null));
       assert.match(light.inbox_digest, /^\d+:/);
@@ -619,8 +619,6 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.deepEqual(
         engine.catalog.map((item) => item.docs.map((doc) => doc.id)),
         [
-          ["connector", "rfc0009"],
-          ["connector", "rfc0009"],
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],
           ["connector", "rfc0009"],

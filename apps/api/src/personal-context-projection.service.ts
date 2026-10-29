@@ -19,7 +19,7 @@ const PROJECTION_TICK_MS = 2_000;
 const PROJECTION_LEASE_MS = 30_000;
 const PROJECTION_BATCH_SIZE = 5;
 const PROJECTION_HEARTBEAT_MS = 10_000;
-const PROJECTION_GENERATION = "continuous-v1";
+const PROJECTION_GENERATION = "continuous-v2";
 const MAX_RETRY_MS = 5 * 60_000;
 
 @Injectable()
@@ -115,20 +115,22 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
               }
               continue;
             }
-            await withProjectionLease(outbox, group.jobs, this.owner, async () => {
-              await runner.syncLexicalIndex(
-                group.org_id,
-                PROJECTION_GENERATION,
-                group.jobs.map((job) => job.event_id),
-                group.thread_id!,
-              );
+          }
+          await withProjectionLease(outbox, group.jobs, this.owner, async () => {
+            await runner.syncLexicalIndex(
+              group.org_id,
+              PROJECTION_GENERATION,
+              group.jobs.map((job) => job.event_id),
+              group.thread_id ?? undefined,
+            );
+            if (group.thread_id) {
               await runner.projectThread(
                 group.org_id,
                 PROJECTION_GENERATION,
-                group.thread_id!,
+                group.thread_id,
               );
-            });
-          }
+            }
+          });
           const completedAt = new Date().toISOString();
           for (const job of group.jobs) {
             const completed = await outbox.completeContextProjectionJob({

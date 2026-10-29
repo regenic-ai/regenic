@@ -24,6 +24,7 @@ const {
   hiddenExecutorThreadIds,
   matchRecipe,
   MemoryExecutorRegistry,
+  MemoryWorkStore,
   normalizeInboxSort,
   openOrUpdateWorkItem,
   projectThreadFacet,
@@ -709,6 +710,48 @@ describe("session job face and wait status", () => {
 });
 
 describe("work face", () => {
+  it("exposes startup uncertainty and clears it on dismissal", () => {
+    const run = {
+      executor_type: "session", status: "waiting_human", start_state: "uncertain",
+      updated_at: "2026-08-24T00:00:00.000Z",
+    };
+    const item = { id: "w1", status: "waiting_human" };
+    assert.equal(workFaceOf(item, undefined, run).start_state, "uncertain");
+    assert.equal(workFaceOf({ ...item, status: "skipped" }, undefined,
+      cancelWorkRun(run, "2026-08-24T00:01:00.000Z")).start_state, undefined);
+  });
+
+  it("atomically reserves memory starts and refuses stale or occupied claims", async () => {
+    const store = new MemoryWorkStore();
+    const now = "2026-08-24T00:00:00.000Z";
+    const recipe = { ...makeRecipe("r1", { record_class: "task" }), org_id: "local-owner" };
+    await store.putRecipe(recipe);
+    const item = {
+      id: "w1", org_id: recipe.org_id, recipe_id: recipe.id, thread_id: "feishu:oc_1",
+      unit_key: "task-1", record_class: "task", thread_facet: "ticket", status: "open",
+      created_at: now, updated_at: now,
+    };
+    await store.putWorkItem(item);
+    const input = {
+      run: {
+        id: "run-1", org_id: recipe.org_id, recipe_id: recipe.id, work_item_id: item.id,
+        executor_type: "session", status: "running", start_state: "pending",
+        created_at: now, updated_at: now,
+      },
+      max_concurrent: 1,
+    };
+    const claims = await Promise.all(Array.from({ length: 10 }, (_, index) =>
+      store.claimWorkRunStart({ ...input, run: { ...input.run, id: `run-${index}` } })));
+    assert.equal(claims.filter(Boolean).length, 1);
+    assert.equal((await store.getWorkItem(item.org_id, item.id)).status, "running");
+    assert.equal((await store.getActiveWorkRun(item.org_id, item.id)).start_state, "pending");
+    await store.putWorkItem({ ...item, id: "w2", unit_key: "task-2" });
+    assert.equal(await store.claimWorkRunStart({
+      ...input, run: { ...input.run, id: "run-2-new", work_item_id: "w2" },
+    }), false);
+    assert.equal((await store.getWorkItem(item.org_id, "w2")).status, "open");
+  });
+
   it("exposes the run summary on the inbox face", () => {
     const face = workFaceOf(
       {

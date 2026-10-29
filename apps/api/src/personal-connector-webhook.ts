@@ -14,8 +14,8 @@ import {
   PersonalConnectorError,
 } from "./personal-errors";
 
-import type { ConnectorState } from "./personal-connector-state";
-import type { ConnectorWebhookView } from "./personal-connector.service";
+import type { ConnectorWebhookState as ConnectorState } from "./personal-connector-state";
+import type { ConnectorWebhookView } from "./personal-connector-types";
 import {
   wrapDriverError,
 } from "./personal-connector-poll";

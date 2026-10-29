@@ -58,9 +58,12 @@ export function intervalMs(count: number, unit: IntervalUnit): number {
   return safe * step;
 }
 
-export function intervalParts(ms: number): { count: number; unit: IntervalUnit } {
+export function intervalParts(
+  ms: number,
+  editingUnit?: IntervalUnit,
+): { count: number; unit: IntervalUnit } {
   const safe = clampIntervalMs(ms);
-  if (safe % 3_600_000 === 0) {
+  if (editingUnit === "hours" || (!editingUnit && safe % 3_600_000 === 0)) {
     return { count: safe / 3_600_000, unit: "hours" };
   }
   return { count: safe / INTERVAL_MIN_MS, unit: "minutes" };

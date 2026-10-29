@@ -15,6 +15,7 @@ import type {
   ContextArtifactSupersession,
   ContextArtifactProposedSupersession,
   ContextAuthorityRead,
+  ContextAuthorityReadQuery,
   ContextAuthorityReader,
   ContextBundle,
   ContextBundleLookup,
@@ -43,6 +44,8 @@ import type {
   AgentRunStatus,
   StandardUsageRecord,
   StandardUsageSourceKind,
+  CustomerServiceTask,
+  CustomerServiceTaskStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -63,6 +66,7 @@ import type {
   IngestQuarantine,
   NewConnectorInstallation,
   NewEvent,
+  NewOutboundAttempt,
   NewIngestAttempt,
   OutboundAttemptPut,
   OutboundAttemptRecord,
@@ -86,6 +90,8 @@ import type {
   WorkDelivery,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
+  SearchAnswerRecord,
   WorkStore,
   ExecutorInstallation,
   ExecutorStore,
@@ -176,6 +182,10 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getOutboundAttempt", [orgId, clientRequestId]);
   }
 
+  async claimOutboundAttempt(input: NewOutboundAttempt): Promise<boolean> {
+    return this.writer.call("claimOutboundAttempt", [input]);
+  }
+
   async putOutboundAttempt(
     input: OutboundAttemptPut,
   ): Promise<OutboundAttemptRecord> {
@@ -193,8 +203,8 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listEvents", [orgId, query]);
   }
 
-  async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
-    return this.reader.call("openContextRead", [orgId]);
+  async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    return this.reader.call("openContextRead", [orgId, query]);
   }
 
   async openContextReadForThread(
@@ -392,6 +402,18 @@ export class SqliteSplitAuthorityStore
 
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
     return this.reader.call("listReviews", [input]);
+  }
+
+  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
+    return this.writer.call("putCustomerServiceTask", [input, expectedRevision]);
+  }
+
+  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
+    return this.reader.call("getCustomerServiceTask", [orgId, taskId]);
+  }
+
+  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
+    return this.reader.call("listCustomerServiceTasks", [input]);
   }
 
   async putHandoff(handoff: HandoffRecord): Promise<HandoffRecord> {
@@ -775,6 +797,27 @@ export class SqliteSplitAuthorityStore
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return this.writer.call("putWorkRun", [run]);
+  }
+
+  async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
+    return this.writer.call("claimWorkRunStart", [input]);
+  }
+
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    return this.reader.call("getSearchAnswer", [orgId, id]);
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    return this.writer.call("putSearchAnswer", [record]);
+  }
+
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    return this.writer.call("deleteSearchAnswer", [orgId, id]);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

@@ -2,6 +2,7 @@ import {
   CONTEXT_BUNDLE_SCHEMA_VERSION,
   CONTEXT_SECTION_KINDS,
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+  ContextRetrievalTraceSchema,
   canonicalContextJson,
   hashCanonicalContext,
   hashContextEvidenceReferences,
@@ -27,12 +28,14 @@ import {
   type ContextConflict,
   type ContextEngine,
   type ContextEvidenceSource,
+  type ContextEventMaterializer,
   type ContextPolicyEvaluator,
   type ContextReplayRequest,
   type ContextRequest,
   type ContextRetriever,
   type ContextRetrievalResult,
   type ContextRetrievalCapabilities,
+  type ContextRetrievalTrace,
   type ContextRetrieverRegistry,
   type ContextSectionKind,
   type ContextSelectedReference,
@@ -46,6 +49,15 @@ const RETRIEVAL_DEGRADATION_FLAGS = new Set([
   "lexical_index_absent",
   "lexical_index_partial",
   "lexical_index_unbuilt",
+  "embedding_unavailable",
+  "embedding_timeout",
+  "vector_index_absent",
+  "vector_index_unbuilt",
+  "vector_index_corrupt",
+  "vector_index_unavailable",
+  "vector_index_partial",
+  "vector_index_capacity",
+  "vector_temporal_unsupported",
 ]);
 
 export interface ContextRetrievalProfile {
@@ -143,20 +155,65 @@ export class DeterministicContextEngine implements ContextEngine {
       stableRequest,
       sourceRead.recorded_at,
     );
-    const lifecycleEvents = await this.materialize(lifecycleMetadata);
+    const materialized = new Map<string, AuthorizedContextSourceEvent>();
+    const loading = new Map<string, Promise<AuthorizedContextSourceEvent>>();
+    const metadataById = new Map(lifecycleMetadata.map((source) => [source.event.event_id, source]));
+    const materialize: ContextEventMaterializer = async (eventIds) => {
+      if (eventIds.some((id) => !metadataById.has(id))) {
+        throw new ContextEngineError("source_boundary", "Retriever requested unauthorized Event material");
+      }
+      const missing = [...new Set(eventIds)].filter((id) => !loading.has(id));
+      if (missing.length) {
+        const batch = this.materialize(missing.map((id) => metadataById.get(id)!)).then((events) => {
+          for (const source of events) {
+            materialized.set(source.event.event_id, source);
+          }
+          return new Map(events.map((source) => [source.event.event_id, source]));
+        });
+        for (const id of missing) {
+          loading.set(id, batch.then((events) => events.get(id)!));
+        }
+      }
+      return clone(await Promise.all(eventIds.map((id) => loading.get(id)!)));
+    };
+    const allEventIds = lifecycleMetadata.map((source) => source.event.event_id);
+    const policyEvents = this.policy.metadata_only
+      ? lifecycleMetadata
+      : await materialize(allEventIds);
     const plan = {
       request: stableRequest,
       read_epoch: authorizedReadEpoch,
       recorded_at: sourceRead.recorded_at,
       principal_policy_hash: policyHash,
-      events: lifecycleEvents,
+      events: policyEvents,
     };
     const protectedEventIds = await this.protectedEventIds(plan);
     const retrievers = this.supportingRetrievers(stableRequest);
-    const retrievalRuns = await Promise.all(retrievers.map(async (active) => ({
-      active,
-      result: normalizeRetrievalResult(await active.retriever.retrieve(clone(plan))),
-    })));
+    const retrievalRuns = await Promise.all(retrievers.map(async (active) => {
+      const events = active.capabilities.lazy_materialization
+        ? lifecycleMetadata
+        : await materialize(allEventIds);
+      return {
+        active,
+        result: normalizeRetrievalResult(await active.retriever.retrieve(
+          clone({ ...plan, events }),
+          materialize,
+        )),
+      };
+    }));
+    const lifecycleEvents = lifecycleMetadata.map((source) => materialized.get(source.event.event_id) ?? source);
+    const retrievalTrace = retrievalRuns.flatMap((run) => run.result.trace ? [run.result.trace] : []);
+    if (retrievalTrace.length) {
+      const latest = await this.source.openRead(clone(stableRequest));
+      if (latest.read_epoch !== sourceRead.read_epoch ||
+        await this.policy.policyHash(clone(stableRequest)) !== policyHash) {
+        throw new ContextEngineError("source_boundary", "Authority or policy changed during retrieval; retry the request");
+      }
+      const allowedIds = new Set(lifecycleEvents.map((source) => source.event.event_id));
+      if (retrievalTrace.some((trace) => trace.routes.some((route) => !allowedIds.has(route.event_id)))) {
+        throw new ContextEngineError("invalid_candidate", "Retrieval trace contains an unauthorized Event");
+      }
+    }
     const retrieved = retrievalRuns.flatMap(({ active, result }) =>
       result.candidates.map((value) => ({ active, value })),
     );
@@ -184,6 +241,7 @@ export class DeterministicContextEngine implements ContextEngine {
       readEpoch: authorizedReadEpoch,
       recordedAt: sourceRead.recorded_at,
       retrievalProfileVersion: this.retrievalProfile.version,
+      retrievalTrace,
       assemblyProfileVersion: this.assemblyProfile.version,
       bundlePayloadHash: hashContextBundlePayload(bundlePayload),
       selected: assembled.selected,
@@ -534,6 +592,7 @@ function createSnapshot(input: {
   readEpoch: string;
   recordedAt: string;
   retrievalProfileVersion: string;
+  retrievalTrace: ContextRetrievalTrace[];
   assemblyProfileVersion: string;
   bundlePayloadHash: string;
   selected: ScoredRetrievedCandidate[];
@@ -549,6 +608,7 @@ function createSnapshot(input: {
     principal_policy_hash: input.policyHash,
     read_epoch: input.readEpoch,
     retrieval_profile_version: input.retrievalProfileVersion,
+    ...(input.retrievalTrace.length ? { retrieval_trace: input.retrievalTrace } : {}),
     assembly_profile_version: input.assemblyProfileVersion,
     bundle_payload_hash: input.bundlePayloadHash,
     selected,
@@ -779,6 +839,7 @@ function normalizeRetrievalResult(
   if (
     !result ||
     !Array.isArray(result.candidates) ||
+    (result.trace !== undefined && !ContextRetrievalTraceSchema.safeParse(result.trace).success) ||
     (result.degradation_flags !== undefined &&
       (!Array.isArray(result.degradation_flags) ||
         result.degradation_flags.length > 100 ||

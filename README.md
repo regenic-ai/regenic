@@ -6,40 +6,44 @@
 
 [简体中文](README.zh-CN.md) | [English](README.md)
 
-**Everything is Context. Unified Context.**
+**Give your AI the context behind your work.**
 
-Regenic is an open-source message orchestration layer for people and agents.
+Work happens across Feishu groups, customer chats, email, and agent sessions. But the AI tools you use can’t see those conversations. To get help, you have to find the messages, paste them in, and explain the context all over again.
 
-It does not replace Feishu, Slack, WhatsApp, or your local agent. Those tools keep writing messages where they already live. Regenic sits underneath them: it turns channel traffic into one shared context — evidence with provenance, a console that lists only what needs you now, and replies that go back to the original app.
+Regenic is an open-source, local-first app that connects those conversations to the AI you already use. Add sources with built-in connectors, community plugins, or connectors of your own. Once connected, your AI can find what someone said, catch you up on a project, flag messages that need a reply, or draft a customer response grounded in the conversation.
 
-If an agent harness says *everything is a plugin*, Regenic says *everything is context*. Chat, agent turns, files, and digests become the same kind of record. Versioned judgment standards decide what enters the workbench. Humans and automation share one `/v1`. Accounts, tokens, and rules stay on this computer.
+Your messages stay in their original apps. Regenic doesn’t replace them or lock you into a particular AI.
 
-What ships today is **one person, data on this machine**. Shared records across a team come later. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
+> Connectors are extensible, but that doesn’t mean every source is built in. See [connectors](docs/en/CONNECTOR.md) for how to add one and [features](#features) for what’s supported today. Regenic is currently for individual use, with your device as the source of truth. Shared team records aren’t available yet. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
 
-[Install](#installation--quick-start) · [Add Feishu, Slack, or DSH](#add-feishu-slack-or-dsh) · [Login and tokens](#login-and-tokens) · [Local CLI](#local-cli) · [Status](#status) · [Security](#security) · [Docs](#documentation) · [Contributing](#contributing)
+[Install](#installation--quick-start) · [Add Feishu or DSH](#add-feishu-or-dsh) · [Login and tokens](#login-and-tokens) · [Local CLI](#local-cli) · [Status](#status) · [Security](#security) · [Docs](#documentation) · [Contributing](#contributing)
 
-## Why context
+## Why Regenic
 
-Agents need tools. People need channels. Both already exist.
+You might need to:
 
-What is missing is a place where Feishu, Slack, a local agent session, and a file export mean the **same thing** — one message shape, one evidence trail, one inbox of work that actually needs a human or an agent right now. That place is Regenic.
+- Track down what a customer said in a busy group chat.
+- Catch up on conversations after a day of meetings.
+- Pull together project updates from several chats.
+- Ask AI to draft a reply without first copying the conversation into the chat.
 
-Context is not a dump of every chat. It is the curated, attributable record that judgment standards and personal habits use to decide what enters the console and what stays outside the current work.
+Regenic makes those conversations available to your AI without moving them out of their original apps. It keeps each message’s source and thread details, then brings forward what needs attention—not another firehose of every group chat.
 
 ## What it does
 
-- **Channels stay channels** — Feishu stays Feishu, Slack stays Slack. Regenic reads, ranks, and writes back. It does not replace them.
-- **One context, many sources** — connectors normalize traffic into Event / Blob; digests and claims keep provenance.
-- **The console lists what needs you now** — not every group chat dumped in one place.
-- **People and automation share one API** — the desktop app and scripts both use `/v1`.
-- **Tokens stay out of the database** — environment variables or the OS keychain. The install form does not take them.
-- **One person first, then a team** — this computer is the source of truth. Shared records across people come later.
+- **Connect work conversations** — selected sources have built-in connectors; add others with plugins. What a connector can read or send depends on how it’s built and what you authorize.
+- **Give your AI searchable context** — messages keep their source and thread details and can be read through Regenic’s API and context integrations.
+- **Help you follow through** — find the original message, catch up on a project, spot a message that needs a reply, or draft a response.
+- **Keep using the apps you already have** — Feishu stays Feishu; DSH stays DSH. Sending is available only when a connector supports it and you grant permission.
+- **Focus on what needs attention** — the workbench surfaces relevant messages instead of recreating every channel’s firehose.
+- **Keep credentials out of the database** — tokens live in environment variables or your OS keychain; the installer never asks you to paste them.
+- **Start with personal, local-first use** — your device is the source of truth today. Shared team records aren’t available yet.
 
 ## Personal or team
 
 | You are… | What to do |
 | --- | --- |
-| **One person** — desktop app on this computer, plus Feishu, Slack, or DSH | Follow [Quick Start](#installation--quick-start) |
+| **One person** — desktop app on this computer, plus Feishu or DSH | Follow [Quick Start](#installation--quick-start) |
 | **Working from a terminal** — sync, import, export | See [Local CLI](#local-cli) |
 | **A team sharing one record** | Not built yet. See [personal → org](docs/en/rfcs/personal-to-org.md) |
 
@@ -50,9 +54,7 @@ Context is not a dump of every chat. It is the curated, attributable record that
 | Desktop app | Local window: messages that need you, engine, settings. Closing it does not quit | works |
 | DSH | Read sessions, send text; leave session empty to follow all of them, and create new ones | works |
 | Feishu | Read groups and direct messages, send text. Sign in as yourself with official `lark-cli` | works |
-| Slack | Read one channel | read only, no reply |
 | File import | CSV / JSONL, with a map of which column is which | CLI |
-| WhatsApp | Read-only Purr WA CSV or Export v1 JSONL selected by the user | desktop + CLI |
 | Export | Message JSONL, daily Markdown, a citation list for another tool | CLI |
 | Context | Deterministic snapshots and optional cited model answers | API + CLI |
 
@@ -63,7 +65,7 @@ Context is not a dump of every chat. It is the curated, attributable record that
 - Node.js 20+
 - [pnpm](https://pnpm.io)
 
-Feishu, Slack, and DSH each need their own tool installed first. See [Add Feishu, Slack, or DSH](#add-feishu-slack-or-dsh).
+Feishu and DSH each need their own tool installed first. See [Add Feishu or DSH](#add-feishu-or-dsh).
 
 ### Quick Start (for you)
 
@@ -74,11 +76,11 @@ pnpm install
 pnpm dev:desktop
 ```
 
-#### Add Feishu, Slack, or DSH in the app
+#### Add Feishu or DSH in the app
 
-In the app: **Engine** → **DSH** / **Feishu** / **Slack** → **Install**.
+In the app: **Engine** → **DSH** / **Feishu** → **Install**.
 
-Install and sign in to that tool first, then click Install. Feishu needs `lark-cli` signed in. DSH needs `dsh web` running. Steps are under [Add Feishu, Slack, or DSH](#add-feishu-slack-or-dsh).
+Install and sign in to that tool first, then click Install. Feishu needs `lark-cli` signed in. DSH needs `dsh web` running. Steps are under [Add Feishu or DSH](#add-feishu-or-dsh).
 
 ### Quick Start (for an AI assistant)
 
@@ -107,7 +109,7 @@ DSH: confirm `dsh` works in the terminal, then `dsh web --port 3080`.
 
 **Engine** → the one you just prepared → **Install**. Feishu defaults to **recently active** conversations (recommended); switch to **All** or **Choose conversations** if you need a wider set. Change later with **Edit sync**. DSH Session ID can stay empty.
 
-## Add Feishu, Slack, or DSH
+## Add Feishu or DSH
 
 ### DSH
 
@@ -152,9 +154,9 @@ The Engine page checks whether `lark-cli` is installed and whether you are signe
 
 If `lark-cli` is not on PATH, set `REGENIC_LARK_CLI` to the command before you start the desktop app. This version follows the conversations you select and can send text back. It does not create a new group.
 
-### Slack
+### Other connectors
 
-Set `REGENIC_SLACK_TOKEN` before you start the desktop app. In the app: **Engine** → **Slack** → **Install**. Fill the channel ID (`C…`). Channel name is optional. This version only reads that channel and cannot reply.
+The core repository ships only the DSH, Feishu, and Cursor connectors. Other connectors are separate plugin packages: put them in `REGENIC_PLUGIN_DIR` (or point `REGENIC_CHANNEL_PLUGIN` at one package) before you start the app, and they appear under **Engine**. Slack: [regenic-connector-slack](https://github.com/regenic-ai/regenic-connector-slack). WhatsApp: [regenic-connector-whatsapp](https://github.com/regenic-ai/regenic-connector-whatsapp). See [Connector drivers](docs/en/CONNECTOR_DRIVERS.md).
 
 ## Login and tokens
 
@@ -162,9 +164,8 @@ Set `REGENIC_SLACK_TOKEN` before you start the desktop app. In the app: **Engine
 | --- | --- | --- |
 | DSH | Local `dsh`; `REGENIC_DSH_TOKEN` if the web host asks | no token |
 | Feishu | `lark-cli auth login`; login stays in the OS keychain | no token |
-| Slack | `REGENIC_SLACK_TOKEN` | no token |
 
-The form only takes non-secret fields (group selection, channel ID, session). Tokens are not written to the database and do not appear on `/v1/me`.
+The form only takes non-secret fields (group selection, session). Tokens are not written to the database and do not appear on `/v1/me`.
 
 ## Local development
 
@@ -189,28 +190,6 @@ POST /v1/dsh/api/session.create
 
 Same job as the desktop app, from a terminal. Data lives in SQLite and a local file directory. Tokens are not written to the database. Pass them in through the environment when you sync.
 
-### Slack
-
-```bash
-pnpm local slack-install --database ./regenic.db --org local-owner \
-	--channel C123 --channel-name engineering --id slack-engineering
-
-REGENIC_SLACK_TOKEN=xoxb-... pnpm local slack-sync \
-	--database ./regenic.db --blob-root ./blobs --installation slack-engineering \
-	--max-pages 20
-
-pnpm local status --database ./regenic.db --org local-owner
-pnpm local inbox --database ./regenic.db --org local-owner
-pnpm local quarantines --database ./regenic.db --installation slack-engineering
-
-pnpm local connector-disable --database ./regenic.db --org local-owner \
-	--installation slack-engineering
-pnpm local connector-enable --database ./regenic.db --org local-owner \
-	--installation slack-engineering
-pnpm local reset-cursor --database ./regenic.db --org local-owner \
-	--installation slack-engineering --stream channel:C123
-```
-
 ### DSH
 
 Same job as [Add DSH](#dsh). Start `dsh web --port 3080` first if you use Web.
@@ -225,6 +204,16 @@ pnpm local dsh-sync --database ./regenic.db --blob-root ./blobs \
 
 pnpm local dsh-send --database ./regenic.db --installation dsh-main \
 	--text "Follow up on the last turn"
+
+pnpm local status --database ./regenic.db --org local-owner
+pnpm local quarantines --database ./regenic.db --installation dsh-main
+
+pnpm local connector-disable --database ./regenic.db --org local-owner \
+	--installation dsh-main
+pnpm local connector-enable --database ./regenic.db --org local-owner \
+	--installation dsh-main
+pnpm local reset-cursor --database ./regenic.db --org local-owner \
+	--installation dsh-main --stream <stream-key>
 ```
 
 `--session` is optional; omit it to follow every session. Call local `dsh` directly (no `dsh web`):
@@ -238,7 +227,7 @@ If `dsh web` wants a token, set `REGENIC_DSH_TOKEN`.
 
 ### File import
 
-When you import CSV or JSONL, also provide a JSON file that says which column is the message ID, time, body, and author. Bad rows are reported. Good rows become the same kind of message as a Feishu or Slack sync.
+When you import CSV or JSONL, also provide a JSON file that says which column is the message ID, time, body, and author. Bad rows are reported. Good rows become the same kind of message as a Feishu or DSH sync.
 
 ```json
 {
@@ -260,18 +249,6 @@ When you import CSV or JSONL, also provide a JSON file that says which column is
 pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 	--file ./messages.csv --mapping ./mapping.json --format csv \
 	--org local-owner --source local-file
-```
-
-### Personal WhatsApp export
-
-Personal WhatsApp is a user-triggered, read-only flow. The desktop imports one or more CSV files from the reviewed open-source [Purr WA Export](https://github.com/0xheycat/purr-wa), or WhatsApp Personal Export v1 JSONL. Regenic does not receive browser cookies, scan chats in the background, or send messages.
-
-For the complete one-time setup, per-export steps, manual/automatic boundary, known `@lid` limitation, and acceptance checks, see [Personal WhatsApp Bridge](docs/en/WHATSAPP_PERSONAL.md) and [WhatsApp test and acceptance](docs/en/WHATSAPP_PERSONAL_TESTING.md).
-
-```bash
-pnpm local whatsapp-import --database ./regenic.db --blob-root ./blobs \
-	--file ./whatsapp-personal.jsonl --org local-owner \
-	--local-principal local-user
 ```
 
 ### Inbox
@@ -652,12 +629,12 @@ set `REGENIC_PERSONAL_API=1` on that server so a desktop can point at it.
 
 ## Status
 
-Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is Feishu / Slack / DSH on this machine, plus the local service.
+Phase 0 is complete. RFCs 0001–0007 are Accepted. Phase 1 is Feishu / DSH / Cursor on this machine, plus the local service.
 
 | Capability | Description | Status |
 | --- | --- | --- |
 | Handle messages | Read in → one message shape → rank → decide whether to handle → optional reply | [PRODUCT](docs/en/PRODUCT.md) · [architecture](docs/en/MESSAGE_ORCHESTRATION.md) |
-| Feishu / Slack / DSH | These work now, plus file import; more later | Phase 1 (now) |
+| Feishu / DSH / Cursor | These work now, plus file import; more later | Phase 1 (now) |
 | Personal | One person; export; optional remote backup | Phase 1 (now) |
 | Team | One shared record, each person sees their own view | Phase 3 ([personal → org](docs/en/rfcs/personal-to-org.md)) |
 | Rules | Shared rules you can change and version | RFC Accepted ([0001](docs/en/rfcs/0001-standards-data-model.md)) |
@@ -683,6 +660,7 @@ Do not put tokens in the install form, the repo, or chat logs.
 [PRODUCT](docs/en/PRODUCT.md) · [ROADMAP](docs/en/ROADMAP.md) ·
 [TECH_STACK](docs/en/TECH_STACK.md) ·
 [Desktop](docs/zh/DESKTOP.md) ·
+[Local model service](docs/en/LOCAL_MODEL_SERVICE.md) ·
 [Ingestion](docs/en/INGESTION_ARCHITECTURE.md)
 
 ## Contributing

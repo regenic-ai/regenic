@@ -55,6 +55,32 @@ interface TaskExecutor {
 
 ## Requirements
 
+### Durable start and recovery
+
+Before calling `TaskExecutor.start`, the kernel atomically creates a `WorkRun`
+with `start_state: pending` and reserves its open WorkItem and automatic recipe
+slot. Competing processes cannot start the same item. `input.run_id` is this
+durable identity, allocated before any external start call.
+
+For local executors, `spawnSysout` checkpoints the session identity before
+`writeStdin` can send the task. A confirmed stdin write checkpoints
+`start_state: submitted`. If finalization is interrupted, supervision recovers
+that existing session using `status`, without spawning or submitting again.
+A returned executor handle is also checkpointed before applying its outcome.
+Successfully finalized runs clear `start_state`.
+
+An interrupted `pending` start or an ambiguous start exception is not proof of
+failure. Exceptions leave `start_state: uncertain` and require human attention;
+these attempts are not automatically retried, resumed, or reaped as completed.
+Manual run/resume calls return `execution_start_uncertain` (409). Check the
+external session/runtime before dismissing the attempt and explicitly starting
+another. A recorded submission interrupted before finalization returns
+`execution_recovery_pending` (503); refresh to recover the existing execution.
+A competing manual start returns `execution_start_conflict` (409).
+A crash before the first session checkpoint can leave an idle orphan
+session; the durable claim still prevents a duplicate task submission.
+There is no end-to-end exactly-once guarantee across the database and executor.
+
 Each executor must:
 
 - Implement `catalog()`. The Recipes page only renders those fields. The
@@ -106,15 +132,25 @@ A remote executor implements these three calls. The kernel forwards
 
 | Method | Path | Request | Success |
 | --- | --- | --- | --- |
-| POST | `/v1/runs` | `work_item_id`, `thread_id`, `recipe_id`, `evidence_text`, `executor_config` | `external_run_id`, `status`, optional `agent_thread_id` / `prompts` / `result` |
+| POST | `/v1/runs` | `run_id`, `work_item_id`, `thread_id`, `recipe_id`, `evidence_text`, `executor_config` | `external_run_id`, `status`, optional `agent_thread_id` / `prompts` / `result` |
 | GET | `/v1/runs/:id` | — | Same |
 | POST | `/v1/runs/:id/resume` | `work_item_id`, `recipe_id`, `answer` | Same |
 
 `status` is `running` / `waiting_human` / `completed` / `failed` /
-`cancelled`. Missing or unknown values are `failed`, so a job does not
+`cancelled`. Missing or unknown statuses raise protocol errors; status polling lets the recorded job
 stay running. The Bearer token comes from the environment variable named
 on the install (`[A-Za-z_][A-Za-z0-9_]*`). Cloud metadata hosts are not
 allowed as `base_url`.
+
+Network errors, non-2xx responses, and invalid JSON are surfaced as errors, not
+fabricated failed executions. During start they leave an uncertain attempt;
+during status polling they do not turn an existing run into a retryable failure.
+Supervision logs polling errors per run and continues processing other runs.
+The affected run keeps its recorded state and is polled again on the next tick;
+kernel shutdown still stops the sweep.
+Start requests carry the durable `run_id` in the body and `Idempotency-Key`
+header. Remote runtimes may use this identity for deduplication or inspection;
+the kernel does not assume upstream deduplication or retry an uncertain start.
 
 ## Invoke catalog
 

@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grok Bot 设计标准</title>
+<style>
+  :root {
+    --sidebar: #f5f5f5;
+    --chrome: #fcfcfc;
+    --elevated: #fff;
+    --ink: #1c1c1c;
+    --ink-68: #1c1c1cad;
+    --ink-56: #1c1c1c8f;
+    --ink-40: #1c1c1c66;
+    --wash-6: #1c1c1c0f;
+    --wash-8: #1c1c1c14;
+    --line-12: #1c1c1c1f;
+    --line-8: #1c1c1c14;
+    --accent: #1680f3;
+    --focus: #1e86fc;
+    --user: #126fd4;
+    --radius-bubble: 18px;
+    --radius-row: 10px;
+    --shadow-inline: 0 4px 12px -1px #1c1c1c14, 0 2px 4px -2px #1c1c1c0f, 0 0 0 1px #1c1c1c01;
+    --font: "XVF", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --ease-out: cubic-bezier(0.2, 0, 0, 1);
+    --ease-press: cubic-bezier(0.2, 0, 0.2, 1);
+    --ease-fade: cubic-bezier(0.1, 0.9, 0.2, 1);
+    --flight: linear(0 0%, 0.118 8.3%, 0.330 16.7%, 0.530 25%, 0.686 33.3%, 0.798 41.7%, 0.873 50%, 0.922 58.3%, 0.953 66.7%, 0.972 75%, 0.984 83.3%, 0.991 91.7%, 0.995 100%);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--font);
+    font-weight: 420;
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--ink);
+    background: var(--sidebar);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input { font: inherit; color: inherit; }
+
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 40px 28px 80px;
+  }
+
+  header.top h1 {
+    margin: 0;
+    font-size: 26px;
+    line-height: 32px;
+    font-weight: 500;
+    letter-spacing: -0.015em;
+  }
+  header.top p.lede {
+    margin: 8px 0 0;
+    max-width: 68ch;
+    color: var(--ink-68);
+  }
+
+  h2 {
+    margin: 36px 0 12px;
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 500;
+    letter-spacing: -0.012em;
+  }
+  h3 {
+    margin: 22px 0 8px;
+    font-size: 17px;
+    line-height: 24px;
+    font-weight: 500;
+    letter-spacing: -0.008em;
+  }
+  p { margin: 0 0 10px; }
+  .muted { color: var(--ink-68); }
+  .small { font-size: 12px; line-height: 16px; color: var(--ink-56); }
+
+  .principles {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-top: 28px;
+  }
+  .principle {
+    background: var(--elevated);
+    border-radius: var(--radius-bubble);
+    padding: 16px 16px 14px;
+    box-shadow: var(--shadow-inline);
+  }
+  .principle .idx {
+    font-size: 11px;
+    line-height: 16px;
+    letter-spacing: 0.005em;
+    color: var(--ink-56);
+  }
+  .principle strong {
+    display: block;
+    margin: 4px 0 6px;
+    font-size: 15px;
+    line-height: 22px;
+    font-weight: 600;
+  }
+  .principle p { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-68); }
+
+  .specimen {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    height: 520px;
+    background: var(--chrome);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 22px 70px 4px #1c1c1c14, 0 0 0 0.5px #1c1c1c1a;
+  }
+  .side {
+    background: var(--sidebar);
+    padding: 16px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .traffic { display: flex; gap: 6px; padding: 0 4px 8px; }
+  .traffic i { width: 10px; height: 10px; border-radius: 999px; display: block; }
+  .mark {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 0 12px;
+    font-size: 13px;
+    line-height: 18px;
+  }
+  .blob {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    background: #000;
+  }
+  .blob .eye {
+    position: absolute;
+    top: 15px;
+    width: 8px;
+    height: 11px;
+    border-radius: 999px;
+    background: #fff;
+  }
+  .blob .eye.l { left: 10px; }
+  .blob .eye.r { right: 10px; }
+  .blob .dot {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 2.5px var(--sidebar);
+  }
+  .list { display: flex; flex-direction: column; gap: 2px; position: relative; }
+  .row {
+    position: relative;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    border-radius: var(--radius-row);
+    padding: 7px 8px;
+    cursor: pointer;
+  }
+  .row .wash {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius-row);
+    background: var(--wash-8);
+    opacity: 0;
+    transition: opacity 150ms var(--ease-out);
+  }
+  .row.on .wash { opacity: 1; }
+  .row:hover:not(.on) .wash { opacity: 0.7; background: var(--wash-6); }
+  .avatar, .chip-avatar {
+    position: relative;
+    z-index: 1;
+    width: 28px;
+    height: 28px;
+    flex: none;
+  }
+  .avatar i, .chip-avatar i {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .shape-blob { border-radius: 999px; }
+  .shape-flower { border-radius: 8px 12px 8px 12px; }
+  .shape-wedge { clip-path: polygon(18% 8%, 92% 50%, 18% 92%); }
+  .row .meta { position: relative; z-index: 1; min-width: 0; }
+  .row .name { font-size: 13px; line-height: 18px; font-weight: 500; }
+  .row .preview {
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-68);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+  }
+  .account {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--elevated);
+    border-radius: 999px;
+    padding: 4px 6px 4px 4px;
+    box-shadow: var(--shadow-inline);
+  }
+  .initial {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: #8a8a8a;
+    color: #fff;
+    font-size: 12px;
+    display: grid;
+    place-items: center;
+  }
+  .account span { flex: 1; font-size: 13px; }
+  .up {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+
+  .main {
+    display: flex;
+    flex-direction: column;
+    padding: 18px 18px 14px;
+    min-width: 0;
+  }
+  .thread {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+  }
+  .chip {
+    align-self: flex-end;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--elevated);
+    border: 1px solid var(--line-8);
+    border-radius: 999px;
+    padding: 4px 10px 4px 4px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .chip-avatar { width: 18px; height: 18px; }
+  .agent {
+    background: var(--wash-6);
+    border-radius: var(--radius-bubble);
+    padding: 16px 16px 14px;
+    line-height: 22px;
+  }
+  .agent strong { font-weight: 600; }
+  .user {
+    align-self: flex-end;
+    max-width: 78%;
+    background: var(--user);
+    color: #fff;
+    border-radius: var(--radius-bubble);
+    padding: 8px 14px;
+    line-height: 22px;
+  }
+  .composer {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--elevated);
+    border-radius: 999px;
+    padding: 8px 8px 8px 14px;
+    box-shadow: var(--shadow-inline);
+  }
+  .composer .ph { flex: 1; color: var(--ink-40); }
+  .mic { color: var(--ink-56); font-size: 12px; }
+  .voice {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: background-color 150ms var(--ease-out);
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .swatch {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    background: var(--elevated);
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+  .swatch b {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--line-8);
+    flex: none;
+  }
+  .swatch .t { font-size: 13px; font-weight: 500; line-height: 18px; }
+  .swatch .s { font-size: 12px; line-height: 16px; color: var(--ink-56); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--elevated);
+    border-radius: 14px;
+    overflow: hidden;
+    font-size: 13px;
+    line-height: 18px;
+  }
+  th, td { text-align: left; padding: 10px 12px; vertical-align: top; }
+  th {
+    font-weight: 500;
+    color: var(--ink-56);
+    font-size: 12px;
+    background: var(--chrome);
+    border-bottom: 1px solid var(--line-8);
+  }
+  td { border-top: 1px solid var(--line-8); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+
+  .demo {
+    background: var(--elevated);
+    border-radius: var(--radius-bubble);
+    padding: 16px;
+    box-shadow: var(--shadow-inline);
+  }
+  .stage {
+    position: relative;
+    height: 148px;
+    background: var(--sidebar);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .stage .label {
+    position: absolute;
+    top: 10px;
+    font-size: 11px;
+    color: var(--ink-56);
+  }
+  .stage .label.r { right: 14px; }
+  .stage .label.l { left: 14px; }
+  .flyer {
+    position: absolute;
+    left: 24px;
+    top: 64px;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: #000;
+    transition: transform 531ms var(--flight);
+  }
+  .flyer.go { transform: translate(240px, -8px); }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .btn {
+    border: 0;
+    background: var(--ink);
+    color: #fcfcfc;
+    border-radius: 999px;
+    padding: 7px 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .btn.ghost {
+    background: var(--wash-6);
+    color: var(--ink);
+  }
+  .btn:active { transition: transform 100ms var(--ease-press); transform: scale(0.98); }
+
+  .note {
+    margin-top: 28px;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-56);
+  }
+
+  @media (max-width: 860px) {
+    .principles, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .specimen { grid-template-columns: 1fr; height: auto; }
+    .side { min-height: 280px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Grok Bot 设计标准</h1>
+    <p class="lede">桌面端浅色 Sand。表面、选中条和语音按钮对照了当前窗口的像素。时长来自应用内的弹簧和时长刻度。切换 Bot 时，选中条、会话、输入占位和语音按钮一起换。</p>
+  </header>
+
+  <section class="principles">
+    <article class="principle">
+      <div class="idx">01</div>
+      <strong>墨水做结构</strong>
+      <p>侧栏、画布、气泡只差几级中性灰。选中是 8% 墨水洗，不铺彩色底。</p>
+    </article>
+    <article class="principle">
+      <div class="idx">02</div>
+      <strong>彩色只属于身份</strong>
+      <p>每个 Bot 一个色相。头像用亮色，语音按钮用同色相的主色。链接和未读点固定蓝色。</p>
+    </article>
+    <article class="principle">
+      <div class="idx">03</div>
+      <strong>胶囊留给输入</strong>
+      <p>输入条、账号条、发送者芯片是全圆。气泡 18，列表选中约 10。</p>
+    </article>
+    <article class="principle">
+      <div class="idx">04</div>
+      <strong>动效短，头像可以飞</strong>
+      <p>颜色 150ms。列表重排约 219ms。头像飞行约 531ms。减弱动态时位移时长为 0。</p>
+    </article>
+  </section>
+
+  <h2>界面样张</h2>
+  <p class="muted">点左侧会话。选中条、芯片、占位文案和语音按钮会一起换。语音色跟当前 Bot 走。</p>
+  <div class="specimen" id="specimen">
+    <aside class="side">
+      <div class="traffic">
+        <i style="background:#ff5f57"></i>
+        <i style="background:#febc2e"></i>
+        <i style="background:#28c840"></i>
+      </div>
+      <div class="mark">
+        <div class="blob">
+          <i class="eye l"></i>
+          <i class="eye r"></i>
+          <i class="dot"></i>
+        </div>
+        Grok Bot
+      </div>
+      <div class="list" id="bot-list"></div>
+      <div class="account">
+        <div class="initial">b</div>
+        <span>biqi li</span>
+        <div class="up"></div>
+      </div>
+    </aside>
+    <section class="main">
+      <div class="thread">
+        <div class="chip" id="chip"></div>
+        <div class="agent" id="agent"></div>
+        <div class="user">用户消息靠右，填充 #126fd4，白字，圆角 18。</div>
+      </div>
+      <div class="composer">
+        <span style="color:var(--ink-40)">+</span>
+        <span class="ph" id="placeholder"></span>
+        <span class="mic">麦克风</span>
+        <div class="voice" id="voice"></div>
+      </div>
+    </section>
+  </div>
+
+  <h2>色彩</h2>
+  <h3>表面</h3>
+  <div class="grid-3">
+    <div class="swatch"><b style="background:#f5f5f5"></b><div><div class="t">侧栏</div><div class="s">#f5f5f5 · neutral/3</div></div></div>
+    <div class="swatch"><b style="background:#fcfcfc"></b><div><div class="t">画布</div><div class="s">#fcfcfc · neutral/2</div></div></div>
+    <div class="swatch"><b style="background:#fff"></b><div><div class="t">抬升面</div><div class="s">#ffffff · 输入条、芯片</div></div></div>
+    <div class="swatch"><b style="background:#f1f1f1"></b><div><div class="t">对方气泡</div><div class="s">#1c1c1c 的 6%</div></div></div>
+    <div class="swatch"><b style="background:#e4e4e4"></b><div><div class="t">选中</div><div class="s">#1c1c1c 的 8%，侧栏上约 #e4e4e4</div></div></div>
+    <div class="swatch"><b style="background:#1c1c1c"></b><div><div class="t">墨水</div><div class="s">#1c1c1c · 正文、主按钮底</div></div></div>
+  </div>
+
+  <h3>墨水阶</h3>
+  <table>
+    <thead><tr><th>令牌</th><th>值</th><th>用在</th></tr></thead>
+    <tbody>
+      <tr><td>text / icon 主色</td><td><code>#1c1c1c</code></td><td>名字、正文</td></tr>
+      <tr><td>secondary</td><td><code>#1c1c1c</code> / 68%</td><td>列表预览</td></tr>
+      <tr><td>tertiary</td><td><code>#1c1c1c</code> / 56%</td><td>时间、日期分隔</td></tr>
+      <tr><td>quaternary</td><td><code>#1c1c1c</code> / 40%</td><td>输入占位</td></tr>
+      <tr><td>边框 secondary</td><td><code>#1c1c1c</code> / 12%</td><td>输入条、芯片</td></tr>
+      <tr><td>边框 tertiary</td><td><code>#1c1c1c</code> / 8%</td><td>卡片内分割</td></tr>
+    </tbody>
+  </table>
+
+  <h3>一个 Bot 的两档色</h3>
+  <p class="muted">头像用 bright，语音按钮用 primary。前三行是当前窗口量到的。</p>
+  <table>
+    <thead><tr><th>Bot</th><th>头像 bright</th><th>语音 primary</th></tr></thead>
+    <tbody>
+      <tr><td>BB</td><td><code>#1e86fc</code></td><td><code>#1680f3</code></td></tr>
+      <tr><td>RedNote</td><td><code>#fb2b3e</code></td><td><code>#e72e3b</code></td></tr>
+      <tr><td>Jeson</td><td><code>#14c16f</code></td><td><code>#10ab61</code></td></tr>
+      <tr><td>橙</td><td><code>#fd690f</code></td><td><code>#ee620d</code></td></tr>
+      <tr><td>黄</td><td><code>#f59312</code></td><td><code>#da830e</code></td></tr>
+      <tr><td>青</td><td><code>#13b7a2</code></td><td><code>#10a693</code></td></tr>
+      <tr><td>紫</td><td><code>#8f59f9</code></td><td><code>#8351e4</code></td></tr>
+      <tr><td>品红</td><td><code>#f93498</code></td><td><code>#e52f8b</code></td></tr>
+      <tr><td>棕</td><td><code>#a06b39</code></td><td><code>#9d6937</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>固定蓝色</h3>
+  <div class="grid-3">
+    <div class="swatch"><b style="background:#1680f3"></b><div><div class="t">强调 / 未读点</div><div class="s">#1680f3</div></div></div>
+    <div class="swatch"><b style="background:#1e86fc"></b><div><div class="t">焦点环</div><div class="s">#1e86fc</div></div></div>
+    <div class="swatch"><b style="background:#126fd4"></b><div><div class="t">用户气泡</div><div class="s">#126fd4 · 白字</div></div></div>
+  </div>
+
+  <h3>深色表面</h3>
+  <table>
+    <thead><tr><th>角色</th><th>深色</th><th>浅色</th></tr></thead>
+    <tbody>
+      <tr><td>侧栏</td><td><code>#0e0e0e</code></td><td><code>#f5f5f5</code></td></tr>
+      <tr><td>chrome</td><td><code>#121212</code></td><td><code>#fcfcfc</code></td></tr>
+      <tr><td>画布</td><td><code>#161616</code></td><td><code>#ffffff</code></td></tr>
+      <tr><td>抬升</td><td><code>#1f1f1f</code></td><td><code>#ffffff</code></td></tr>
+      <tr><td>正文</td><td><code>#f5f5f5</code></td><td><code>#1c1c1c</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>文字</h2>
+  <p>优先 XVF，否则系统无衬线。macOS 上 regular 的光学校正是 420（令牌写 400）。medium 500，semibold 600。</p>
+  <table>
+    <thead><tr><th>样式</th><th>字号</th><th>行高</th><th>字距</th><th>字重</th></tr></thead>
+    <tbody>
+      <tr><td>heading-1</td><td>26</td><td>32</td><td>-0.015em</td><td>medium</td></tr>
+      <tr><td>heading-2</td><td>22</td><td>28</td><td>-0.012em</td><td>regular / medium / semibold</td></tr>
+      <tr><td>heading-3</td><td>17</td><td>24</td><td>-0.008em</td><td>regular / medium / semibold</td></tr>
+      <tr><td>body-1</td><td>14</td><td>20</td><td>0</td><td>三档都有</td></tr>
+      <tr><td>body-2 列表</td><td>13</td><td>18</td><td>0</td><td>三档都有</td></tr>
+      <tr><td>label</td><td>12</td><td>16</td><td>0</td><td>三档都有</td></tr>
+      <tr><td>caption</td><td>11</td><td>16</td><td>+0.005em</td><td>regular / medium</td></tr>
+    </tbody>
+  </table>
+  <h3>会话里的用法</h3>
+  <table>
+    <thead><tr><th>位置</th><th>规格</th></tr></thead>
+    <tbody>
+      <tr><td>列表名字</td><td>13 / 18 medium，主色</td></tr>
+      <tr><td>列表预览</td><td>13 / 18 regular，secondary，单行省略</td></tr>
+      <tr><td>对方正文</td><td>沿用 body，行盒按 22 排，块间距 7</td></tr>
+      <tr><td>你的正文</td><td>同字号，字色 #fff</td></tr>
+      <tr><td>时间、昨天</td><td>caption 或 tertiary，居中成日期条</td></tr>
+      <tr><td>发送者芯片</td><td>13 medium，跟在头像右边</td></tr>
+      <tr><td>输入占位</td><td>quaternary，「给 {名字} 发消息」</td></tr>
+    </tbody>
+  </table>
+
+  <h2>形状</h2>
+  <table>
+    <thead><tr><th>控件</th><th>圆角</th></tr></thead>
+    <tbody>
+      <tr><td>对方 / 你的气泡</td><td>18</td></tr>
+      <tr><td>列表选中条</td><td>约 10，宽条，不是胶囊</td></tr>
+      <tr><td>菜单</td><td>外框 12，行 6</td></tr>
+      <tr><td>搜索、新建菜单</td><td>外框 14，行 8，行高 32</td></tr>
+      <tr><td>输入条、账号条、发送者芯片</td><td>全圆</td></tr>
+      <tr><td>基础阶</td><td>8 / 10 / 14 / 16 / 18</td></tr>
+    </tbody>
+  </table>
+  <h3>头像</h3>
+  <p>列表默认从 8 个里按 id 哈希：blob、pebble、squircle、tablet、wedge、hex、cloud、teardrop。主 Bot 固定黑色 blob，带两只白眼睛。账号自己用首字母圆。</p>
+  <h3>阴影</h3>
+  <table>
+    <thead><tr><th>层级</th><th>配方</th></tr></thead>
+    <tbody>
+      <tr><td>控件</td><td>0 1px 3px，墨水 12%</td></tr>
+      <tr><td>输入条、内联卡片</td><td>0 4px 12px -1px 环境光，0 2px 4px -2px 投影，再加 1px 环</td></tr>
+      <tr><td>弹出层</td><td>0 10px 20px -3px，0 4px 6px -4px，1px 环</td></tr>
+      <tr><td>模态</td><td>0 20px 32px -5px，0 8px 12px -6px，1px 环</td></tr>
+      <tr><td>窗口</td><td>0 22px 70px 4px，边缘 0.5px</td></tr>
+      <tr><td>状态点</td><td>2.5px 环，环色等于所在表面</td></tr>
+    </tbody>
+  </table>
+
+  <h2>动效</h2>
+  <table>
+    <thead><tr><th>名字</th><th>时长</th><th>用在</th></tr></thead>
+    <tbody>
+      <tr><td>instant</td><td>50ms</td><td>几乎无过渡的状态切换</td></tr>
+      <tr><td>fast</td><td>100ms</td><td>按下</td></tr>
+      <tr><td>normal</td><td>150ms</td><td>颜色、悬停、背景</td></tr>
+      <tr><td>slow</td><td>200ms</td><td>稍大的显隐</td></tr>
+      <tr><td>slower</td><td>300ms</td><td>进出场</td></tr>
+    </tbody>
+  </table>
+  <h3>具名曲线</h3>
+  <table>
+    <thead><tr><th>场景</th><th>参数</th><th>收束</th></tr></thead>
+    <tbody>
+      <tr><td>列表重排</td><td>弹簧 mass 1，刚度 1000，阻尼 63</td><td>约 219ms</td></tr>
+      <tr><td>进入时的位移</td><td>300ms，cubic-bezier(0.2, 0, 0, 1)</td><td>300ms</td></tr>
+      <tr><td>进入时的透明度</td><td>300ms，cubic-bezier(0.1, 0.9, 0.2, 1)</td><td>300ms</td></tr>
+      <tr><td>按下</td><td>100ms，cubic-bezier(0.2, 0, 0.2, 1)</td><td>100ms</td></tr>
+      <tr><td>头像飞行</td><td>弹簧 mass 1，刚度 175，阻尼 26，48 步 linear()</td><td>约 531ms</td></tr>
+      <tr><td>减弱动态</td><td>duration 0，替换位移</td><td>0</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">颜色用 150ms 的减速，不用弹簧。弹簧只给位置。</p>
+
+  <div class="grid-2">
+    <div class="demo">
+      <h3 style="margin-top:0">头像飞行</h3>
+      <div class="stage" id="flight-stage">
+        <span class="label l">侧栏</span>
+        <span class="label r">会话</span>
+        <div class="flyer" id="flyer"></div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="fly" type="button">飞到会话</button>
+      </div>
+      <p class="small">刚度 175、阻尼 26，约 531ms。只移动头像。</p>
+    </div>
+    <div class="demo">
+      <h3 style="margin-top:0">角色状态</h3>
+      <p>头像是一套状态，跟着真实任务走，不是装饰循环。</p>
+      <table>
+        <thead><tr><th>组</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>生命周期</td><td>idle、listening、thinking、streaming、searching、working、finished、failed</td></tr>
+          <tr><td>反应</td><td>happy、curious、surprised、confused、celebrate</td></tr>
+          <tr><td>变形</td><td>sending、receiving、writing、bouncing、powering-down</td></tr>
+          <tr><td>产品</td><td>humming、notifying、dragging</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h2>组件</h2>
+  <table>
+    <thead><tr><th>区域</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr><td>标题栏</td><td>搜索、新建 Bot。图标按钮，高度 44 或 52。侧栏默认宽 280，可拖到 240–400。</td></tr>
+      <tr><td>置顶</td><td>Grok Bot 主 Bot。黑色带眼睛的圆，未读点用蓝。</td></tr>
+      <tr><td>列表行</td><td>双行。头像约 32。名字 13 medium，预览 13 secondary。选中 8% 墨水、圆角 10。行间不画分隔线。</td></tr>
+      <tr><td>对方气泡</td><td>一整张 6% 灰卡片，圆角 18。里面放正文、列表和附图。附图是白卡片。发送者芯片是白胶囊，压在右上。</td></tr>
+      <tr><td>用户气泡</td><td>靠右。填充 #126fd4，字 #fff，圆角 18。</td></tr>
+      <tr><td>输入条</td><td>左加号，中占位「给 {Bot} 发消息」，右麦克风。语音是圆形，填充为当前 Bot 的 primary。有字之后主发送用墨水底 #1c1c1c、字 #fcfcfc。</td></tr>
+      <tr><td>账号</td><td>首字母圆 + 名字 + 连接应用 + 蓝色更新。更新按钮不跟着 Bot 变。</td></tr>
+    </tbody>
+  </table>
+
+  <p class="note">来源：Grok Bot 浅色主题令牌，以及 2026-10-26 对当前窗口的取样。BB、RedNote、Jeson 的头像和语音色是像素读数，其余色相沿同一套 bright / primary 阶。</p>
+</div>
+<script>
+const bots = [
+  { name: "RedNote", bright: "#fb2b3e", primary: "#e72e3b", shape: "shape-flower", preview: "兴趣池按词云排", body: "对方气泡是 6% 墨水。正文、列表和附图待在同一张圆角 18 的卡片里。" },
+  { name: "Jeson", bright: "#14c16f", primary: "#10ab61", shape: "shape-wedge", preview: "动态摘要", body: "小标题用 medium，不升到大标题。数字可以 semibold，整段不用。" },
+  { name: "BB", bright: "#1e86fc", primary: "#1680f3", shape: "shape-blob", preview: "先说结论", body: "先说结论。彩色不铺在选中条上，选中始终是中性的 8% 墨水洗。" }
+];
+
+const list = document.getElementById("bot-list");
+const chip = document.getElementById("chip");
+const agent = document.getElementById("agent");
+const placeholder = document.getElementById("placeholder");
+const voice = document.getElementById("voice");
+let current = 2;
+
+function avatar(bot, cls) {
+  return `<span class="${cls}"><i class="${bot.shape}" style="background:${bot.bright}"></i></span>`;
+}
+
+function render() {
+  list.innerHTML = bots.map((bot, i) => `
+    <button class="row${i === current ? " on" : ""}" type="button" data-i="${i}">
+      <span class="wash"></span>
+      ${avatar(bot, "avatar")}
+      <span class="meta"><div class="name">${bot.name}</div><div class="preview">${bot.preview}</div></span>
+    </button>
+  `).join("");
+  const bot = bots[current];
+  chip.innerHTML = `${avatar(bot, "chip-avatar")}<span>${bot.name}</span>`;
+  agent.innerHTML = `<strong>${bot.name}。</strong> ${bot.body}`;
+  placeholder.textContent = `给 ${bot.name} 发消息`;
+  voice.style.background = bot.primary;
+}
+
+list.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  current = Number(button.dataset.i);
+  render();
+});
+render();
+
+const flyer = document.getElementById("flyer");
+const fly = document.getElementById("fly");
+fly.addEventListener("click", () => {
+  const going = !flyer.classList.contains("go");
+  flyer.classList.toggle("go", going);
+  fly.textContent = going ? "飞回侧栏" : "飞到会话";
+});
+</script>
+</body>
+</html>

@@ -15,6 +15,7 @@ import type {
   OutboundAttemptPut,
   EventListQuery,
   ContextAuthorityRead,
+  ContextAuthorityReadQuery,
   ContextArtifact,
   ContextArtifactQuery,
   ContextArtifactIndex,
@@ -52,6 +53,8 @@ import type {
   AgentRunOutput,
   StandardUsageSourceKind,
   StandardUsageRecord,
+  CustomerServiceTask,
+  CustomerServiceTaskStatus,
   ArrangementDecision,
   InboxQuery,
   InboxItem,
@@ -63,11 +66,14 @@ import type {
   Recipe,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkDelivery,
+  SearchAnswerRecord,
   DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
   NewEvent,
+  NewOutboundAttempt,
   RepointContentInput,
   IngestCommitRequest,
   EventRevision,
@@ -128,11 +134,13 @@ import {
 import {
   LATEST_SCHEMA_VERSION,
   MIGRATIONS,
+  OUTBOUND_REJECTION_MIGRATION_SQL,
 } from "./migrations";
 import {
   append,
   appendRevision,
   bindSourceIdentityAliases,
+  claimOutboundAttempt,
   commitIngestUnlocked,
   findBlob,
   findBlobs,
@@ -172,6 +180,11 @@ import {
   listContextProjectionJobs,
   renewContextProjectionJob,
 } from "./context-projection";
+import {
+  getCustomerServiceTask,
+  listCustomerServiceTasks,
+  putCustomerServiceTask,
+} from "./customer-service-tasks";
 import {
   claimDailyDigestJobs,
   completeDailyDigestJob,
@@ -255,11 +268,14 @@ import {
   summarizeInbox,
 } from "./inbox";
 import {
+  claimWorkRunStart,
+  deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
+  getSearchAnswer,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -275,6 +291,7 @@ import {
   listWorkRuns,
   putExecutorInstallation,
   putRecipe,
+  putSearchAnswer,
   putWorkDelivery,
   putWorkItem,
   putWorkRun,
@@ -423,6 +440,11 @@ export class SqliteAuthorityStore
     return getOutboundAttempt(this.database, orgId, clientRequestId);
   }
 
+  async claimOutboundAttempt(input: NewOutboundAttempt): Promise<boolean> {
+    this.assertWritable();
+    return claimOutboundAttempt(this.database, input);
+  }
+
   async putOutboundAttempt(
     input: OutboundAttemptPut,
   ): Promise<OutboundAttemptRecord> {
@@ -438,8 +460,8 @@ export class SqliteAuthorityStore
     return listEvents(this.database, orgId, query);
   }
 
-  async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
-    return openContextRead(this.database, orgId);
+  async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    return openContextRead(this.database, orgId, query);
   }
 
   async openContextReadForThread(
@@ -658,6 +680,19 @@ export class SqliteAuthorityStore
 
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
     return listReviews(this.database, input);
+  }
+
+  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
+    this.assertWritable();
+    return putCustomerServiceTask(this.database, input, expectedRevision);
+  }
+
+  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
+    return getCustomerServiceTask(this.database, orgId, taskId);
+  }
+
+  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
+    return listCustomerServiceTasks(this.database, input);
   }
 
   async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
@@ -931,11 +966,13 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM customer_service_tasks WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifact_states WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_artifacts WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM context_artifact_segments WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(`DELETE FROM context_projection_checkpoints WHERE org_id = ?`)
         .run(orgId);
@@ -1191,6 +1228,30 @@ export class SqliteAuthorityStore
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     this.assertWritable();
     return putWorkRun(this.database, run);
+  }
+
+  async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
+    this.assertWritable();
+    return claimWorkRunStart(this.database, input);
+  }
+
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    return getSearchAnswer(this.database, orgId, id);
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    this.assertWritable();
+    return putSearchAnswer(this.database, record);
+  }
+
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    this.assertWritable();
+    return deleteSearchAnswer(this.database, orgId, id);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
@@ -1637,6 +1698,12 @@ export class SqliteAuthorityStore
     }
     const repair = this.database.transaction(() => {
       this.database.exec(`
+        CREATE TABLE IF NOT EXISTS context_artifact_segments (
+          org_id TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+          PRIMARY KEY (org_id, content_hash)
+        );
         CREATE INDEX IF NOT EXISTS events_org_occurred_idx
           ON events (org_id, occurred_at, id);
         CREATE TABLE IF NOT EXISTS context_snapshot_index (
@@ -1675,6 +1742,30 @@ export class SqliteAuthorityStore
         );
       }
       rebuildArtifactPreviews(this.database);
+      if (!this.columnExists("outbound_attempts", "recovery_hash")) {
+        this.database.exec("ALTER TABLE outbound_attempts ADD COLUMN recovery_hash TEXT");
+      }
+      if (!this.columnExists("outbound_attempts", "receipt_json")) {
+        this.database.exec("ALTER TABLE outbound_attempts ADD COLUMN receipt_json TEXT");
+      }
+      if (!this.columnExists("work_runs", "start_state")) {
+        this.database.exec("ALTER TABLE work_runs ADD COLUMN start_state TEXT CHECK (start_state IN ('pending', 'submitted', 'uncertain'))");
+      }
+      this.database.exec(OUTBOUND_REJECTION_MIGRATION_SQL);
+      this.database.exec(`
+        CREATE TABLE IF NOT EXISTS search_answers (
+          id TEXT PRIMARY KEY,
+          org_id TEXT NOT NULL,
+          work_item_id TEXT NOT NULL REFERENCES work_items(id),
+          query TEXT NOT NULL,
+          event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+          outcome TEXT CHECK (outcome IN ('timed_out')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
+          ON search_answers (org_id, work_item_id);
+      `);
       this.database.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
     });
     repair.immediate();

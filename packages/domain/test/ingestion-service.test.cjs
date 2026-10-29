@@ -85,6 +85,68 @@ async function seedLegacyEmptyAttachment(authorityStore, blobStore) {
 }
 
 describe("IngestionService", () => {
+  it("claims memory outbound attempts atomically and isolates receipt mutations", async () => {
+    const store = new MemoryAuthorityStore();
+    const input = {
+      org_id: "local-owner", client_request_id: "shared-reply", thread_id: "feishu:oc_1",
+      recovery_hash: "a".repeat(64), now: "2026-08-24T00:00:00.000Z",
+    };
+    const claims = await Promise.all(Array.from({ length: 20 }, () => store.claimOutboundAttempt(input)));
+    assert.equal(claims.filter(Boolean).length, 1);
+    assert.equal(await store.claimOutboundAttempt({ ...input, org_id: "other-owner" }), true);
+    const receipt = { accepted: true, channel_message_ids: ["om_1"] };
+    const accepted = await store.putOutboundAttempt({ ...input, status: "accepted", receipt });
+    receipt.channel_message_ids.push("input-mutation");
+    accepted.receipt.channel_message_ids.push("output-mutation");
+    const read = await store.getOutboundAttempt(input.org_id, input.client_request_id);
+    assert.deepEqual(read.receipt.channel_message_ids, ["om_1"]);
+    read.receipt.channel_message_ids.push("read-mutation");
+    const sent = await store.putOutboundAttempt({
+      org_id: input.org_id, client_request_id: input.client_request_id,
+      thread_id: input.thread_id, status: "sent", now: input.now,
+    });
+    assert.deepEqual(sent.receipt.channel_message_ids, ["om_1"]);
+    assert.equal(sent.recovery_hash, input.recovery_hash);
+  });
+
+  it("reclaims only confirmed memory rejections for the same thread", async () => {
+    const store = new MemoryAuthorityStore();
+    const input = {
+      org_id: "local-owner", client_request_id: "rejected-reply", thread_id: "feishu:oc_1",
+      recovery_hash: "a".repeat(64), now: "2026-08-24T00:00:00.000Z",
+    };
+    await store.putOutboundAttempt({ ...input, status: "rejected" });
+    assert.equal(await store.claimOutboundAttempt({ ...input, thread_id: "feishu:other" }), false);
+    const claims = await Promise.all(Array.from({ length: 20 }, () => store.claimOutboundAttempt({
+      ...input, recovery_hash: "b".repeat(64), now: "2026-08-25T00:00:00.000Z",
+    })));
+    assert.equal(claims.filter(Boolean).length, 1);
+    const pending = await store.getOutboundAttempt(input.org_id, input.client_request_id);
+    assert.equal(pending.status, "pending");
+    assert.equal(pending.created_at, input.now);
+    assert.equal(pending.recovery_hash, "b".repeat(64));
+    for (const evidence of [{ receipt: { accepted: true } }, { channel_message_ids: [] }]) {
+      await store.putOutboundAttempt({ ...input, status: "rejected", ...evidence });
+      assert.equal(await store.claimOutboundAttempt(input), false);
+    }
+    await store.putOutboundAttempt({ ...input, status: "failed" });
+    assert.equal(await store.claimOutboundAttempt(input), false);
+  });
+
+  it("preserves native thread and reply identities without using revision lineage", async () => {
+    const { authorityStore, service } = createHarness();
+    const result = await service.ingest(createBatch({
+      thread: { id: "native-thread-1" },
+      parent_external_id: "source-event-parent",
+    }));
+
+    assert.equal(result.valid, true);
+    const [event] = authorityStore.allEvents();
+    assert.equal(event.parent_event_id, undefined);
+    assert.equal(event.attrs.native_thread_id, "native-thread-1");
+    assert.equal(event.attrs.parent_external_id, "source-event-parent");
+  });
+
   it("rejects an invalid batch before writing any state", async () => {
     const { authorityStore, blobStore, service } = createHarness();
     const batch = createBatch();

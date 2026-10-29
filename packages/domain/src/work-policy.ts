@@ -178,11 +178,15 @@ export function shouldRefreshActiveRun(status: WorkItemStatus): boolean {
   return !isAbandonedWorkItem(status);
 }
 
+export function workRunNeedsStartConfirmation(run: Pick<WorkRun, "start_state">): boolean {
+  return run.start_state === "pending" || run.start_state === "uncertain";
+}
+
 export function cancelWorkRun<T extends { status: WorkRunStatus; updated_at: string }>(
   run: T,
   now: string,
 ): T {
-  return { ...run, status: "cancelled", updated_at: now };
+  return { ...run, status: "cancelled", start_state: undefined, updated_at: now };
 }
 
 export function workStatusFromRun(status: WorkRunStatus): WorkItemStatus {
@@ -300,6 +304,7 @@ export function workFaceOf(
     status: item.status,
     recipe_id: item.recipe_id,
     executor_type: run?.executor_type ?? recipe?.executor_type,
+    ...(run?.start_state ? { start_state: run.start_state } : {}),
     agent_thread_id: run?.agent_thread_id,
     head_event_id: item.head_event_id,
     can_write_back: recipe ? recipeWantsWriteBack(recipe) : undefined,

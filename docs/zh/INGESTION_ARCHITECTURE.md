@@ -187,6 +187,10 @@ interface AuthorityStore {
 }
 ```
 
+所有返回 `EventRecord` 的读取入口，包括来源身份查询、Event 列表、各类收件箱视图和上下文读取，都必须保留 `direction_tags`、`weight_hints`、`attrs`。显式空数组或空对象不能变成字段缺失。修订保留各自的元数据；tombstone 不自动继承前一个 head 的可选元数据。
+
+上下文读取的 `recorded_at` 仅表示观测时刻，不参与 `read_epoch`。epoch 标识所选 Event 与生命周期 head：相同数据重复读取保持稳定，相关修订或撤回则会改变。共享驱动合同测试覆盖这些行为；运行 PostgreSQL 用例需要设置 `TEST_DATABASE_URL`。不连接数据库的 SQL 投影测试不能替代 PostgreSQL 实库集成验证。
+
 `listInbox` 默认只返回各来源身份当前 head 且 disposition 为 `current_work`、且未 `conversation_prefs.hidden` 的项（显示列表）。`list=hidden` 返回被折叠的会话，列表脸仍是最后一条非 tombstone 可见消息。隐藏是列表表面，不由 tombstone / `work_acked` / 工单状态推导。人折叠写 `hidden_reason=human`（新活也不自动回来）；策略折叠写 `policy`（tombstone 离桌、工单结束或稍后处理；新的 `current_work` 会自动取消折叠）。被 tombstone 的 Event 仍留在库里。当前 head 若还没有 disposition，下一次采集该来源身份时补写，包括 duplicate 重放。采集批次结束后内核按线程应用折叠策略，连接器零感知。
 
 ## 6. 规范输入协议

@@ -8,7 +8,7 @@ import {
   PersonalConnectorError,
 } from "./personal-errors";
 
-import type { ConnectorState } from "./personal-connector-state";
+import type { ConnectorEgressState as ConnectorState } from "./personal-connector-state";
 import {
   wrapDriverError,
 } from "./personal-connector-poll";

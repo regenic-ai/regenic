@@ -9,7 +9,7 @@ import {
   type ContextSourceEvent,
 } from "@regenic/domain";
 
-export const DETERMINISTIC_THREAD_SUMMARY_ALGORITHM = "thread-summary-deterministic-v1";
+export const DETERMINISTIC_THREAD_SUMMARY_ALGORITHM = "thread-summary-deterministic-v2";
 
 export class DeterministicThreadSummaryProjector implements ContextProjector {
   readonly id = "thread-summary-deterministic";
@@ -67,7 +67,7 @@ export class DeterministicThreadSummaryProjector implements ContextProjector {
       const inputHash = hashContextArtifactInputs({ input_refs: inputRefs });
       const bodyHash = sha256(canonicalContextJson(body));
       proposals.push({
-        id: `thread-summary:${sha256(canonicalContextJson([input.org_id, threadId, input.generation, inputHash]))}`,
+        id: `thread-summary:${sha256(canonicalContextJson([input.org_id, threadId, this.algorithm_version, input.generation, inputHash]))}`,
         org_id: input.org_id,
         kind: "thread_summary",
         schema_version: "1.0",
@@ -76,6 +76,7 @@ export class DeterministicThreadSummaryProjector implements ContextProjector {
         input_refs: inputRefs,
         input_hash: inputHash,
         body_hash: bodyHash,
+        body_storage: "artifact",
         status: "proposed",
         required_scope_ids: [...new Set(ordered.flatMap((value) => value.required_scope_ids))].sort(),
         recorded_at: input.recorded_at,

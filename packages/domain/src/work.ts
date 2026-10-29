@@ -6,6 +6,7 @@ import type {
 import type { ContentPart, JsonValue } from "./ingestion";
 import type { RecordClass } from "./record-class";
 import type { ThreadFacet } from "./thread-facet";
+import type { SearchAnswerRecord } from "./search-answer";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
 
@@ -187,6 +188,7 @@ export interface WorkDeliveryFace {
 export interface WorkFace {
   id: string;
   status: WorkItemStatus;
+  start_state?: WorkRun["start_state"];
   recipe_id?: string;
   executor_type?: string;
   agent_thread_id?: string;
@@ -196,6 +198,12 @@ export interface WorkFace {
   result_summary?: string;
   delivery?: WorkDeliveryFace;
   updated_at?: string;
+}
+
+export interface WorkRunStartClaim {
+  run: WorkRun & { status: "running"; start_state: "pending" };
+  /** Auto-start limit; manual starts may omit it. */
+  max_concurrent?: number;
 }
 
 export interface WorkStore {
@@ -228,6 +236,8 @@ export interface WorkStore {
   /** Executor sessions that are not themselves a work thread. */
   listHiddenExecutorThreadIds(orgId: string): Promise<string[]>;
   putWorkRun(run: WorkRun): Promise<WorkRun>;
+  /** Atomically reserve an open item and persist its run before external start. */
+  claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean>;
   listWorkDeliveries(orgId: string): Promise<WorkDelivery[]>;
   /** Deliveries a flush tick may still send. Acked and dead rows stay out. */
   listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]>;
@@ -244,4 +254,10 @@ export interface WorkStore {
     value: string,
     updatedAt: string,
   ): Promise<void>;
+  getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null>;
+  putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
+  deleteSearchAnswer(orgId: string, id: string): Promise<boolean>;
 }

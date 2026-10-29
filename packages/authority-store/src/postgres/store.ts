@@ -19,6 +19,7 @@ import type {
   OutboundAttemptPut,
   EventListQuery,
   ContextAuthorityRead,
+  ContextAuthorityReadQuery,
   ContextArtifact,
   ContextArtifactQuery,
   ContextArtifactIndex,
@@ -56,6 +57,8 @@ import type {
   AgentRunOutput,
   StandardUsageSourceKind,
   StandardUsageRecord,
+  CustomerServiceTask,
+  CustomerServiceTaskStatus,
   ArrangementDecision,
   InboxQuery,
   InboxItem,
@@ -67,11 +70,14 @@ import type {
   Recipe,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
+  SearchAnswerRecord,
   WorkDelivery,
   DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
   NewEvent,
+  NewOutboundAttempt,
   RepointContentInput,
   IngestCommitRequest,
   EventRevision,
@@ -128,6 +134,11 @@ import {
   processSyncMetrics,
 } from "@regenic/domain";
 import {
+  getCustomerServiceTask,
+  listCustomerServiceTasks,
+  putCustomerServiceTask,
+} from "./customer-service-tasks";
+import {
   PgSql,
   asNumber,
   jsonb,
@@ -179,6 +190,7 @@ import {
   append,
   appendRevision,
   bindSourceIdentityAliases,
+  claimOutboundAttempt,
   commitIngestOn,
   findBlob,
   findBlobs,
@@ -300,11 +312,14 @@ import {
   summarizeInbox,
 } from "./inbox";
 import {
+  claimWorkRunStart,
+  deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
+  getSearchAnswer,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -320,6 +335,7 @@ import {
   listWorkRuns,
   putExecutorInstallation,
   putRecipe,
+  putSearchAnswer,
   putWorkDelivery,
   putWorkItem,
   putWorkRun,
@@ -417,6 +433,10 @@ export class PostgresAuthorityStore
     return getOutboundAttempt(this.sql, orgId, clientRequestId, client);
   }
 
+  async claimOutboundAttempt(input: NewOutboundAttempt): Promise<boolean> {
+    return claimOutboundAttempt(this.sql, input);
+  }
+
   async putOutboundAttempt(
     input: OutboundAttemptPut,
   ): Promise<OutboundAttemptRecord> {
@@ -435,8 +455,8 @@ export class PostgresAuthorityStore
     return listEvents(this.sql, orgId, query);
   }
 
-  async openContextRead(orgId: string): Promise<ContextAuthorityRead> {
-    return openContextRead(this.sql, orgId);
+  async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    return openContextRead(this.sql, orgId, query);
   }
 
   async openContextReadForThread(
@@ -628,6 +648,18 @@ export class PostgresAuthorityStore
 
   async listReviews(input: { org_id: string; subject_id?: string; limit?: number }): Promise<ReviewRecord[]> {
     return listReviews(this.sql, input);
+  }
+
+  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
+    return putCustomerServiceTask(this.sql, input, expectedRevision);
+  }
+
+  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
+    return getCustomerServiceTask(this.sql, orgId, taskId);
+  }
+
+  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
+    return listCustomerServiceTasks(this.sql, input);
   }
 
   async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
@@ -890,11 +922,13 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM customer_service_tasks WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshot_index WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_bundles WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshots WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_artifact_states WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_artifacts WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM context_artifact_segments WHERE org_id = $1`, [orgId], client);
       await this.execute(
         `DELETE FROM context_projection_checkpoints WHERE org_id = $1`,
         [orgId],
@@ -1162,6 +1196,27 @@ export class PostgresAuthorityStore
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return putWorkRun(this.sql, run);
+  }
+
+  async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
+    return claimWorkRunStart(this.sql, input);
+  }
+
+  async getSearchAnswer(
+    orgId: string,
+    id: string,
+  ): Promise<SearchAnswerRecord | null> {
+    return getSearchAnswer(this.sql, orgId, id);
+  }
+
+  async putSearchAnswer(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    return putSearchAnswer(this.sql, record);
+  }
+
+  async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
+    return deleteSearchAnswer(this.sql, orgId, id);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
@@ -1535,4 +1590,3 @@ export class PostgresAuthorityStore
   }
 
 }
-

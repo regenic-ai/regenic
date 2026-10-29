@@ -1,11 +1,13 @@
 import {
   PERSONAL_SSE_INBOX_DIGEST,
   PERSONAL_SSE_THREAD_UPDATED,
+  PERSONAL_SSE_WORK_UPDATED,
 } from "../../shared/personal-events.ts";
 
 export type PersonalEventHandlers = {
   onInboxDigest?: (digest: string) => void;
   onThreadUpdated?: (threadId: string) => void;
+  onWorkUpdated?: (workItemId: string) => void;
   onConnected?: () => void;
   onDisconnected?: () => void;
 };
@@ -56,6 +58,18 @@ export function connectPersonalEventsWithDeps(
         };
         if (payload.thread_id) {
           handlers.onThreadUpdated?.(payload.thread_id);
+        }
+      } catch {
+        // Ignore malformed push payloads.
+      }
+    });
+    source.addEventListener(PERSONAL_SSE_WORK_UPDATED, (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          work_item_id?: string;
+        };
+        if (payload.work_item_id) {
+          handlers.onWorkUpdated?.(payload.work_item_id);
         }
       } catch {
         // Ignore malformed push payloads.

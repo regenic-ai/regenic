@@ -180,7 +180,12 @@ export function lexicalDatabaseFile(database: string): string {
 
 export function databasePayloadFiles(database: string): string[] {
   const lexical = lexicalDatabaseFile(database);
-  return [database, ...sidecarFiles(database), lexical, ...sidecarFiles(lexical)];
+  const vector = `${database}.vector.db`;
+  return [
+    database, ...sidecarFiles(database),
+    lexical, ...sidecarFiles(lexical),
+    vector, ...sidecarFiles(vector),
+  ];
 }
 
 export function kernelDatabaseMatches(

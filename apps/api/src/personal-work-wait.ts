@@ -2,6 +2,7 @@ import {
   ChannelDriverRegistry,
   asConnectorHost,
   isActiveWorkStatus,
+  workRunNeedsStartConfirmation,
   parseConversationThread,
   type ConversationThread,
   type TaskExecutor,
@@ -100,6 +101,9 @@ export class PersonalWorkWait {
     run: WorkRun,
     executor: TaskExecutor,
   ): void {
+    if (workRunNeedsStartConfirmation(run)) {
+      return;
+    }
     if (!executor.capabilities().wait) {
       return;
     }

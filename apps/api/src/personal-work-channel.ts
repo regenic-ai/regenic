@@ -2,8 +2,11 @@ import { randomUUID } from "node:crypto";
 import {
   ChannelDriverRegistry,
   driverCanReply,
+  INBOX_PAGE_MAX,
   INGEST_SCHEMA_VERSION,
+  WORK_EVIDENCE_ANCHOR_WINDOW,
   WORK_EVIDENCE_FETCH_LIMIT,
+  WORK_EVIDENCE_REPLY_DEPTH,
   channelRecord,
   deliveryChannelReceipt,
   isAbandonedWorkItem,
@@ -13,23 +16,26 @@ import {
   recipeWantsWriteBack,
   asConnectorHost,
   requireCreateThread,
+  rankThreadEvidenceLines,
   requireReplyPorts,
-  selectThreadEvidenceLines,
   toReplyParts,
   transcriptFromAbsenteeLive,
+  type AuthorityStore,
   type ChannelDriver,
   type ConnectorInstallation,
   type ContentPart,
   type ConversationThread,
   type DeliveryReceipt,
+  type EventRecord,
   type ExecutorContext,
+  type InboxItem,
   type TaskExecutor,
   type Transcript,
   type WorkDelivery,
   type WorkEvidenceLine,
   type WorkItem,
 } from "@regenic/domain";
-import { resolveInboxBodies } from "./inbox-body";
+import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { stampFromThreadSurfaces } from "./personal-reply-stamp";
 import { writeWorkContextFiles } from "./personal-work-context";
@@ -355,40 +361,100 @@ export class PersonalWorkChannel {
     return { transcript: await this.readTranscript(threadId), scan };
   }
 
+  /**
+   * Thread lines ranked around the anchor event: the recent tail, a window
+   * ending at the anchor when it is older than the tail, and its reply chain.
+   */
   async threadContextLines(
     threadId: string,
-    options?: { fetchLimit?: number },
+    options?: { fetchLimit?: number; anchorEventId?: string },
   ): Promise<{ lines: WorkEvidenceLine[]; overflow: boolean }> {
     const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
     const fetchLimit = options?.fetchLimit ?? WORK_EVIDENCE_FETCH_LIMIT;
-    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
-      thread_ids: [threadId],
-      siblings: true,
-      limit: fetchLimit + 1,
-    });
-    const overflow = items.length > fetchLimit;
-    const windowed = overflow ? items.slice(1) : items;
+    const rows = new Map<string, { item: InboxItem; segment: number }>();
+    let segments = 0;
+    const add = (items: InboxItem[]) => {
+      const segment = segments++;
+      for (const item of items) {
+        if (!rows.has(item.event.id)) rows.set(item.event.id, { item, segment });
+      }
+    };
+    const tail = await readThreadTail(authority, orgId, threadId, fetchLimit);
+    add(tail.rows);
+    let overflow = tail.overflow;
+
+    const anchor = options?.anchorEventId
+      ? await authority.getEvent(orgId, options.anchorEventId)
+      : null;
+    const anchorRow = anchor?.thread_id === threadId
+      ? rows.get(anchor.id)?.item ?? await inboxRowOf(authority, anchor)
+      : undefined;
+    if (anchorRow && !rows.has(anchorRow.event.id)) {
+      const window = await authority.listInbox(orgId, {
+        thread_ids: [threadId],
+        siblings: true,
+        before: anchorRow.event.occurred_at,
+        before_id: anchorRow.event.id,
+        limit: WORK_EVIDENCE_ANCHOR_WINDOW,
+      });
+      add([...window, anchorRow]);
+      overflow ||= window.length >= WORK_EVIDENCE_ANCHOR_WINDOW;
+    }
+
+    let cursor = anchorRow?.event ?? tail.rows[tail.rows.length - 1]?.event;
+    for (let depth = 0; cursor && depth < WORK_EVIDENCE_REPLY_DEPTH; depth += 1) {
+      const parentExternalId = cursor.attrs?.parent_external_id;
+      if (typeof parentExternalId !== "string" || !parentExternalId.trim()) break;
+      const loaded = [...rows.values()].find(({ item }) =>
+        item.event.source === cursor!.source && item.event.external_id === parentExternalId);
+      if (loaded) {
+        cursor = loaded.item.event;
+        continue;
+      }
+      const parent = await authority.findBySourceIdentity({
+        org_id: orgId, source: cursor.source, external_id: parentExternalId,
+      });
+      const parentRow = parent?.thread_id === threadId ? await inboxRowOf(authority, parent) : undefined;
+      if (!parentRow) break;
+      add([parentRow]);
+      cursor = parentRow.event;
+    }
+
+    const ordered = [...rows.values()].sort((left, right) =>
+      left.item.event.occurred_at < right.item.event.occurred_at ? -1
+        : left.item.event.occurred_at > right.item.event.occurred_at ? 1
+          : left.item.event.id < right.item.event.id ? -1 : 1);
     const bodies = await resolveInboxBodies(
-      host.get("authority"),
+      authority,
       host.get("blobs"),
-      windowed.map((row) => row.event.content_hash),
+      ordered.map(({ item }) => item.event.content_hash),
       "meta",
     );
     return {
       overflow,
-      lines: selectThreadEvidenceLines(
-        windowed.map((row) => {
-          const body = row.event.content_hash
-            ? bodies.get(row.event.content_hash)
+      lines: rankThreadEvidenceLines(
+        ordered.map(({ item, segment }, index) => {
+          const body = item.event.content_hash
+            ? bodies.get(item.event.content_hash)
             : undefined;
+          const parentExternalId = item.event.attrs?.parent_external_id;
           return {
-            tombstone: row.event.operation === "tombstone",
-            status: row.decision.reason_codes.includes("thread_status"),
+            event_id: item.event.id,
+            source: item.event.source,
+            external_id: item.event.external_id,
+            ...(typeof parentExternalId === "string" ? { parent_external_id: parentExternalId } : {}),
+            occurred_at: item.event.occurred_at,
+            tombstone: item.event.operation === "tombstone",
+            status: item.decision.reason_codes.includes("thread_status"),
             working: body?.surface?.activity === "working",
             speaker: body?.surface?.actor_label || body?.surface?.kind,
-            text: body?.body_text,
+            text: body?.body_text || attachmentEvidence(body?.attachments),
+            gap_before: index > 0 && ordered[index - 1].segment !== segment,
           };
         }),
+        anchorRow?.event.id,
       ),
     };
   }
@@ -490,6 +556,49 @@ export class PersonalWorkChannel {
     }
     return driverCanReply(found.driver, found.installation);
   }
+}
+
+function attachmentEvidence(
+  attachments: InboxBody["attachments"] | undefined,
+): string | undefined {
+  if (!attachments?.length) {
+    return undefined;
+  }
+  return attachments.map((attachment) =>
+    `[Attachment: ${attachment.filename || attachment.media_type}]`,
+  ).join(" ");
+}
+
+async function readThreadTail(
+  authority: AuthorityStore,
+  orgId: string,
+  threadId: string,
+  limit: number,
+): Promise<{ rows: InboxItem[]; overflow: boolean }> {
+  let rows: InboxItem[] = [];
+  let before: EventRecord | undefined;
+  while (rows.length <= limit) {
+    const want = Math.min(INBOX_PAGE_MAX, limit + 1 - rows.length);
+    const page = await authority.listInbox(orgId, {
+      thread_ids: [threadId],
+      siblings: true,
+      limit: want,
+      ...(before ? { before: before.occurred_at, before_id: before.id } : {}),
+    });
+    rows = [...page, ...rows];
+    if (page.length < want) break;
+    before = page[0].event;
+  }
+  const overflow = rows.length > limit;
+  return { rows: overflow ? rows.slice(1) : rows, overflow };
+}
+
+async function inboxRowOf(
+  authority: AuthorityStore,
+  event: EventRecord,
+): Promise<InboxItem | undefined> {
+  const decision = await authority.getDisposition(event.id);
+  return decision ? { decision, event } : undefined;
 }
 
 function pinnedCreatable(

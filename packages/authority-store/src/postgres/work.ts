@@ -1,9 +1,12 @@
+import type { PoolClient } from "pg";
 import type {
   Recipe,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkDelivery,
   ExecutorInstallation,
+  SearchAnswerRecord,
 } from "@regenic/domain";
 import {
   recipeTriggerOf,
@@ -236,19 +239,20 @@ export async function listHiddenExecutorThreadIds(db: PgSql, orgId: string): Pro
     return rows.map((row) => row.thread_id);
   }
 
-export async function putWorkRun(db: PgSql, run: WorkRun): Promise<WorkRun> {
+export async function putWorkRun(db: PgSql, run: WorkRun, client?: PoolClient): Promise<WorkRun> {
     await db.execute(
       `
         INSERT INTO work_runs (
           id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-          agent_thread_id, status, result_json, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          agent_thread_id, status, start_state, result_json, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (id) DO UPDATE SET
           recipe_id = EXCLUDED.recipe_id,
           executor_type = EXCLUDED.executor_type,
           external_run_id = EXCLUDED.external_run_id,
           agent_thread_id = EXCLUDED.agent_thread_id,
           status = EXCLUDED.status,
+          start_state = EXCLUDED.start_state,
           result_json = EXCLUDED.result_json,
           updated_at = EXCLUDED.updated_at
       `,
@@ -261,13 +265,102 @@ export async function putWorkRun(db: PgSql, run: WorkRun): Promise<WorkRun> {
         run.external_run_id ?? null,
         run.agent_thread_id ?? null,
         run.status,
+        run.start_state ?? null,
         jsonb(run.result),
         run.created_at,
         run.updated_at,
       ],
+      client,
     );
     return run;
   }
+
+export async function claimWorkRunStart(db: PgSql, { run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
+  return db.withTx(async (client) => {
+    // Recipe lock also serializes capacity checks for different work items.
+    const recipe = await db.queryOne(`
+      SELECT id FROM recipes WHERE org_id = $1 AND id = $2 FOR UPDATE
+    `, [run.org_id, run.recipe_id], client);
+    if (!recipe) return false;
+    const item = await db.queryOne(`
+      SELECT id FROM work_items WHERE org_id = $1 AND id = $2 AND recipe_id = $3
+        AND status = 'open' FOR UPDATE
+    `, [run.org_id, run.work_item_id, run.recipe_id], client);
+    if (!item) return false;
+    const active = await db.queryOne(`
+      SELECT id FROM work_runs WHERE org_id = $1 AND work_item_id = $2
+        AND status IN ('running', 'waiting_human') LIMIT 1
+    `, [run.org_id, run.work_item_id], client);
+    if (active) return false;
+    if (max_concurrent !== undefined) {
+      const occupied = await db.queryOne<{ count: string }>(`
+        SELECT COUNT(*) AS count FROM work_items WHERE org_id = $1 AND recipe_id = $2
+          AND status IN ('running', 'waiting_human')
+      `, [run.org_id, run.recipe_id], client);
+      if (Number(occupied?.count) >= max_concurrent) return false;
+    }
+    if (await db.queryOne("SELECT id FROM work_runs WHERE id = $1", [run.id], client)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    await putWorkRun(db, run, client);
+    await db.execute("UPDATE work_items SET status = 'running', updated_at = $1 WHERE org_id = $2 AND id = $3",
+      [run.updated_at, run.org_id, run.work_item_id], client);
+    return true;
+  });
+}
+
+export async function getSearchAnswer(
+  db: PgSql,
+  orgId: string,
+  id: string,
+): Promise<SearchAnswerRecord | null> {
+  const row = await db.queryOne<SearchAnswerRow>(
+    `SELECT * FROM search_answers WHERE org_id = $1 AND id = $2`,
+    [orgId, id],
+  );
+  return row ? toSearchAnswer(row) : null;
+}
+
+export async function putSearchAnswer(
+  db: PgSql,
+  record: SearchAnswerRecord,
+): Promise<SearchAnswerRecord> {
+  await db.execute(
+    `
+      INSERT INTO search_answers (
+        id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (id) DO UPDATE SET
+        work_item_id = EXCLUDED.work_item_id,
+        query = EXCLUDED.query,
+        event_ids_json = EXCLUDED.event_ids_json,
+        outcome = EXCLUDED.outcome,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [
+      record.id,
+      record.org_id,
+      record.work_item_id,
+      record.query,
+      jsonb(record.event_ids),
+      record.outcome ?? null,
+      record.created_at,
+      record.updated_at,
+    ],
+  );
+  return record;
+}
+
+export async function deleteSearchAnswer(
+  db: PgSql,
+  orgId: string,
+  id: string,
+): Promise<boolean> {
+  return (await db.execute(
+    "DELETE FROM search_answers WHERE org_id = $1 AND id = $2",
+    [orgId, id],
+  )) > 0;
+}
 
 export async function listWorkDeliveries(db: PgSql, orgId: string): Promise<WorkDelivery[]> {
     const rows = await db.query<WorkDeliveryRow>(
@@ -327,7 +420,7 @@ export async function getWorkDeliveryByItem(db: PgSql, orgId: string, workItemId
   }
 
 export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promise<WorkDelivery> {
-    await db.execute(
+    const row = await db.queryOne<WorkDeliveryRow>(
       `
         INSERT INTO work_deliveries (
           id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
@@ -335,7 +428,8 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
           payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
           created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (org_id, work_item_id) DO UPDATE SET
+          id = EXCLUDED.id,
           recipe_id = EXCLUDED.recipe_id,
           kind = EXCLUDED.kind,
           unit_key = EXCLUDED.unit_key,
@@ -350,6 +444,7 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
           idempotency_key = EXCLUDED.idempotency_key,
           channel_receipt_json = EXCLUDED.channel_receipt_json,
           updated_at = EXCLUDED.updated_at
+        RETURNING *
       `,
       [
         delivery.id,
@@ -372,7 +467,10 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
         delivery.updated_at,
       ],
     );
-    return delivery;
+    if (!row) {
+      throw new Error("work delivery upsert returned no row");
+    }
+    return toWorkDelivery(row);
   }
 
 export async function listExecutorInstallations(db: PgSql, orgId: string): Promise<ExecutorInstallation[]> {
@@ -506,7 +604,19 @@ interface WorkRunRow {
   external_run_id: string | null;
   agent_thread_id: string | null;
   status: WorkRun["status"];
+  start_state: WorkRun["start_state"] | null;
   result_json: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
+interface SearchAnswerRow {
+  id: string;
+  org_id: string;
+  work_item_id: string;
+  query: string;
+  event_ids_json: unknown;
+  outcome: SearchAnswerRecord["outcome"] | null;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -584,9 +694,23 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     external_run_id: row.external_run_id ?? undefined,
     agent_thread_id: row.agent_thread_id ?? undefined,
     status: row.status,
+    start_state: row.start_state ?? undefined,
     result: row.result_json
       ? asJson<WorkRun["result"]>(row.result_json)
       : undefined,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  };
+}
+
+function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    work_item_id: row.work_item_id,
+    query: row.query,
+    event_ids: asJson<string[]>(row.event_ids_json),
+    ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };

@@ -37,6 +37,9 @@ importers:
       '@regenic/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@regenic/embedding-provider':
+        specifier: workspace:*
+        version: link:../../packages/embedding-provider
       '@regenic/lexical-index':
         specifier: workspace:*
         version: link:../../packages/lexical-index
@@ -46,6 +49,9 @@ importers:
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../../packages/plugin-host
+      '@regenic/vector-index':
+        specifier: workspace:*
+        version: link:../../packages/vector-index
       pg:
         specifier: ^8.13.1
         version: 8.22.0
@@ -253,12 +259,6 @@ importers:
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
-      '@regenic/slack-connector':
-        specifier: workspace:*
-        version: link:../slack-connector
-      '@regenic/whatsapp-personal':
-        specifier: workspace:*
-        version: link:../whatsapp-personal
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -298,6 +298,12 @@ importers:
       '@regenic/blob-store':
         specifier: workspace:*
         version: link:../blob-store
+      '@regenic/lexical-index':
+        specifier: workspace:*
+        version: link:../lexical-index
+      '@regenic/vector-index':
+        specifier: workspace:*
+        version: link:../vector-index
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -368,6 +374,22 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/embedding-provider:
+    dependencies:
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/feishu-connector:
     dependencies:
       '@regenic/connector-contract':
@@ -426,6 +448,9 @@ importers:
       '@regenic/dsh-connector':
         specifier: workspace:*
         version: link:../dsh-connector
+      '@regenic/embedding-provider':
+        specifier: workspace:*
+        version: link:../embedding-provider
       '@regenic/lexical-index':
         specifier: workspace:*
         version: link:../lexical-index
@@ -435,12 +460,9 @@ importers:
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
-      '@regenic/slack-connector':
+      '@regenic/vector-index':
         specifier: workspace:*
-        version: link:../slack-connector
-      '@regenic/whatsapp-personal':
-        specifier: workspace:*
-        version: link:../whatsapp-personal
+        version: link:../vector-index
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -478,39 +500,21 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/slack-connector:
+  packages/vector-index:
     dependencies:
-      '@regenic/connector-contract':
+      '@regenic/domain':
         specifier: workspace:*
-        version: link:../connector-contract
+        version: link:../domain
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
+      better-sqlite3:
+        specifier: 11.10.0
+        version: 11.10.0
     devDependencies:
-      '@regenic/connector-test-utils':
-        specifier: workspace:*
-        version: link:../connector-test-utils
-      '@types/node':
-        specifier: ^22.10.2
-        version: 22.20.1
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-
-  packages/web-extension-whatsapp: {}
-
-  packages/whatsapp-personal:
-    dependencies:
-      '@regenic/connector-contract':
-        specifier: workspace:*
-        version: link:../connector-contract
-      csv-parse:
-        specifier: 7.0.2
-        version: 7.0.2
-    devDependencies:
-      '@regenic/connector-test-utils':
-        specifier: workspace:*
-        version: link:../connector-test-utils
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -1484,9 +1488,6 @@ packages:
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
-
-  csv-parse@7.0.2:
-    resolution: {integrity: sha512-uKZghv9UmPkMVLYy//KZ9HFAIJsl7wkhoEdIL0+rhuSY9pZQlhaeGEDPIe+/w7eh81MOql8Q/9+inAGWG6ZHYA==}
 
   debug@2.6.9:
     resolution: {integrity: sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA==}
@@ -3168,8 +3169,6 @@ snapshots:
       luxon: 3.7.2
 
   csstype@3.2.3: {}
-
-  csv-parse@7.0.2: {}
 
   debug@2.6.9:
     dependencies:

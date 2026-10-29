@@ -13,9 +13,10 @@ describe("desktop locale", () => {
 
   it("keeps language-option copy on the selected catalog", () => {
     assert.equal(translate("en", "settings.title"), "Settings");
-    assert.equal(translate("en", "settings.englishHint"), "Default interface language.");
+    assert.equal(translate("en", "settings.english"), "English");
     assert.equal(translate("zh", "settings.title"), "设置");
-    assert.equal(translate("zh", "settings.englishHint"), "默认界面语言。");
+    assert.equal(translate("zh", "settings.english"), "English");
+    assert.equal(translate("zh", "settings.chinese"), "中文");
   });
 
   it("keeps English as the default catalog", () => {

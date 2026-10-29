@@ -864,188 +864,53 @@ describe("regenic-local", () => {
     }
   });
 
-  it("installs Slack without persisting its token and reports safe status", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const installation = await run([
-      "slack-install", "--database", database, "--org", "local-owner",
-      "--channel", "C123", "--channel-name", "engineering", "--id", "slack-1",
-    ]);
-    const status = await run(["status", "--database", database, "--org", "local-owner"]);
-
-    assert.equal(installation.id, "slack-1");
-    assert.deepEqual(installation.config, { channel_id: "C123", channel_name: "engineering" });
-    assert.equal(installation.credentials_ref, "env:REGENIC_SLACK_TOKEN");
-    assert.equal(JSON.stringify(status).includes("token"), false);
-    assert.deepEqual(status[0].attempts, []);
-  });
-
-  it("syncs one Slack page using an environment token and records its attempt", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const blobRoot = join(root, "blobs");
-    await run([
-      "slack-install", "--database", database, "--org", "local-owner",
-      "--channel", "C123", "--id", "slack-1",
-    ]);
-    const synced = await run([
-      "slack-sync", "--database", database, "--blob-root", blobRoot,
-      "--installation", "slack-1",
-    ], {
-      env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
-      async fetch(url, init) {
-        assert.match(url, /channel=C123/);
-        assert.equal(init.headers.authorization, "Bearer runtime-only-token");
-        return {
-          ok: true,
-          async json() {
-            return {
-              ok: true,
-              messages: [{ ts: "1723420800.000001", user: "U123", text: "Message" }],
-              response_metadata: { next_cursor: "cursor-2" },
-            };
-          },
-        };
-      },
-    });
-    const status = await run(["status", "--database", database, "--org", "local-owner"]);
-
-    assert.equal(synced.pages_attempted, 1);
-    assert.equal(synced.runs[0].status, "completed");
-    assert.equal(synced.runs[0].result.records[0].status, "accepted");
-    assert.equal(status[0].attempts[0].status, "succeeded");
-    assert.equal(JSON.stringify(status).includes("runtime-only-token"), false);
-  });
-
-  it("syncs bounded Slack pages until the remote cursor is exhausted", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const blobRoot = join(root, "blobs");
-    await run([
-      "slack-install", "--database", database, "--org", "local-owner",
-      "--channel", "C123", "--id", "slack-1",
-    ]);
-    const cursors = [];
-    const synced = await run([
-      "slack-sync", "--database", database, "--blob-root", blobRoot,
-      "--installation", "slack-1", "--max-pages", "3",
-    ], {
-      env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
-      async fetch(url) {
-        const cursor = new URL(url).searchParams.get("cursor");
-        cursors.push(cursor);
-        return {
-          ok: true,
-          async json() {
-            return cursor
-              ? {
-                  ok: true,
-                  messages: [{ ts: "1723420860.000001", user: "U123", text: "Second" }],
-                  response_metadata: {},
-                }
-              : {
-                  ok: true,
-                  messages: [{ ts: "1723420800.000001", user: "U123", text: "First" }],
-                  response_metadata: { next_cursor: "cursor-2" },
-                };
-          },
-        };
-      },
-    });
-    const status = await run(["status", "--database", database, "--org", "local-owner"]);
-
-    assert.deepEqual(cursors, [null, "cursor-2"]);
-    assert.equal(synced.pages_attempted, 2);
-    assert.equal(synced.stopped_at_page_limit, false);
-    assert.deepEqual(status[0].attempts.map((attempt) => attempt.status), ["succeeded", "succeeded"]);
-  });
-
-  it("stops at the configured Slack page limit", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const blobRoot = join(root, "blobs");
-    await run([
-      "slack-install", "--database", database, "--org", "local-owner",
-      "--channel", "C123", "--id", "slack-1",
-    ]);
-    const synced = await run([
-      "slack-sync", "--database", database, "--blob-root", blobRoot,
-      "--installation", "slack-1", "--max-pages", "1",
-    ], {
-      env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
-      async fetch() {
-        return {
-          ok: true,
-          async json() {
-            return {
-              ok: true,
-              messages: [{ ts: "1723420800.000001", user: "U123", text: "First" }],
-              response_metadata: { next_cursor: "cursor-2" },
-            };
-          },
-        };
-      },
-    });
-
-    assert.equal(synced.pages_attempted, 1);
-    assert.equal(synced.stopped_at_page_limit, true);
-  });
-
   it("manages connector status and resets a committed cursor within its organization", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
     await run([
-      "slack-install", "--database", database, "--org", "local-owner",
-      "--channel", "C123", "--id", "slack-1",
+      "dsh-install", "--database", database, "--org", "local-owner",
+      "--transport", "cli", "--mailbox", "dsh-main", "--id", "dsh-1",
     ]);
-    await run([
-      "slack-sync", "--database", database, "--blob-root", blobRoot,
-      "--installation", "slack-1",
-    ], {
-      env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
-      async fetch() {
-        return {
-          ok: true,
-          async json() {
-            return {
-              ok: true,
-              messages: [{ ts: "1723420800.000001", user: "U123", text: "First" }],
-              response_metadata: { next_cursor: "cursor-2" },
-            };
-          },
-        };
-      },
-    });
+    await mkdir(join(root, "dsh-runs"), { recursive: true });
+    await writeFile(join(root, "dsh-runs", "dsh-1.jsonl"), `${JSON.stringify({
+      run_id: "run-1",
+      seq: 0,
+      task: "Hello",
+      stdout: "Hi",
+      started_at: "2026-08-21T00:00:00.000Z",
+      finished_at: "2026-08-21T00:00:01.000Z",
+    })}\n`);
+    const synced = await run([
+      "dsh-sync", "--database", database, "--blob-root", blobRoot,
+      "--installation", "dsh-1",
+    ]);
+    const streamKey = synced.runs[0].stream_key;
     const disabled = await run([
       "connector-disable", "--database", database, "--org", "local-owner",
-      "--installation", "slack-1",
+      "--installation", "dsh-1",
     ]);
     await assert.rejects(
       () => run([
-        "slack-sync", "--database", database, "--blob-root", blobRoot,
-        "--installation", "slack-1",
-      ], {
-        env: { REGENIC_SLACK_TOKEN: "runtime-only-token" },
-        async fetch() {
-          throw new Error("disabled connector must not poll Slack");
-        },
-      }),
-      /Slack installation is disabled/,
+        "dsh-sync", "--database", database, "--blob-root", blobRoot,
+        "--installation", "dsh-1",
+      ]),
+      /DSH installation is disabled/,
     );
     const enabled = await run([
       "connector-enable", "--database", database, "--org", "local-owner",
-      "--installation", "slack-1",
+      "--installation", "dsh-1",
     ]);
     const reset = await run([
       "reset-cursor", "--database", database, "--org", "local-owner",
-      "--installation", "slack-1", "--stream", "channel:C123",
+      "--installation", "dsh-1", "--stream", streamKey,
     ]);
 
+    assert.equal(typeof streamKey, "string");
     assert.equal(disabled.status, "disabled");
     assert.equal(enabled.status, "enabled");
     assert.equal(reset.cursor, undefined);
-    assert.equal(reset.cursor_version, 3);
+    assert.ok(reset.cursor_version > 1);
   });
 
   it("reports quarantine diagnostics without content bodies", async () => {
@@ -1054,20 +919,20 @@ describe("regenic-local", () => {
     const blobRoot = join(root, "blobs");
     const digestOutput = join(root, "digest.md");
     await run([
-      "slack-install", "--database", database, "--org", "local-owner",
-      "--channel", "C123", "--id", "slack-1",
+      "dsh-install", "--database", database, "--org", "local-owner",
+      "--transport", "cli", "--mailbox", "dsh-main", "--id", "dsh-1",
     ]);
     const store = new SqliteAuthorityStore(database);
     await store.acquireLease({
-      installation_id: "slack-1", stream_key: "channel:C123", lease_owner: "worker-a",
+      installation_id: "dsh-1", stream_key: "channel:C123", lease_owner: "worker-a",
       now: now(), lease_duration_ms: 30_000,
     });
     await store.beginAttempt({
-      id: "attempt-1", org_id: "local-owner", connector_installation_id: "slack-1",
+      id: "attempt-1", org_id: "local-owner", connector_installation_id: "dsh-1",
       stream_key: "channel:C123", delivery_id: "page-1", started_at: now(),
     });
     await store.settleAttempt({
-      attempt_id: "attempt-1", installation_id: "slack-1", stream_key: "channel:C123",
+      attempt_id: "attempt-1", installation_id: "dsh-1", stream_key: "channel:C123",
       lease_owner: "worker-a", finished_at: now(), accepted_count: 0, duplicate_count: 0,
       quarantined_count: 1, retryable_failure_count: 0, quarantines: [{
         id: "quarantine-1", record_external_id: "C123:bad", reason_code: "content_unavailable",
@@ -1077,7 +942,7 @@ describe("regenic-local", () => {
     store.close();
 
     const quarantines = await run([
-      "quarantines", "--database", database, "--installation", "slack-1",
+      "quarantines", "--database", database, "--installation", "dsh-1",
     ]);
     const rendered = await run([
       "render-digest", "--database", database, "--blob-root", blobRoot,
@@ -1086,7 +951,7 @@ describe("regenic-local", () => {
     const digest = await readFile(digestOutput, "utf8");
 
     assert.deepEqual(quarantines, [{
-      id: "quarantine-1", attempt_id: "attempt-1", connector_installation_id: "slack-1",
+      id: "quarantine-1", attempt_id: "attempt-1", connector_installation_id: "dsh-1",
       stream_key: "channel:C123", record_external_id: "C123:bad",
       reason_code: "content_unavailable", safe_metadata: { source_kind: "message" },
       created_at: now(),
@@ -1148,53 +1013,6 @@ describe("regenic-local", () => {
     ]);
 
     assert.equal(imported.batches[0].records[0].status, "accepted");
-    assert.deepEqual(imported.errors, []);
-  });
-
-  it("imports an explicit WhatsApp Personal Export v1 file without browser credentials", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const blobRoot = join(root, "blobs");
-    const file = join(root, "whatsapp.jsonl");
-    await writeFile(file, JSON.stringify({
-      schema_version: "1.0",
-      kind: "whatsapp_personal_message",
-      message_id: "message-1",
-      chat_id: "chat-1",
-      sender_id: "15550001",
-      direction: "incoming",
-      sent_at: "2026-08-21T00:00:00.000Z",
-      text: "Please confirm the plan.",
-    }));
-
-    const imported = await run([
-      "whatsapp-import", "--database", database, "--blob-root", blobRoot,
-      "--file", file, "--org", "local-owner", "--local-principal", "local-user",
-    ]);
-
-    assert.equal(imported.batches[0].records[0].status, "accepted");
-    assert.deepEqual(imported.errors, []);
-  });
-
-  it("imports and deduplicates an original-name Purr WA CSV", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const blobRoot = join(root, "blobs");
-    const file = join(root, "Family_15550001_c_us.csv");
-    await writeFile(file, [
-      "datetime,sender,fromMe,type,text",
-      '"21/08/2026 14:30","Alex",0,chat,"Please confirm the plan."',
-    ].join("\n"));
-    const args = [
-      "whatsapp-import", "--database", database, "--blob-root", blobRoot,
-      "--file", file, "--org", "local-owner", "--local-principal", "local-user",
-    ];
-
-    const imported = await run(args);
-    const replayed = await run(args);
-
-    assert.equal(imported.batches[0].records[0].status, "accepted");
-    assert.equal(replayed.batches[0].records[0].status, "duplicate");
     assert.deepEqual(imported.errors, []);
   });
 

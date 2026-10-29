@@ -56,8 +56,10 @@ import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
-import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon } from "./Icons";
+import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon, SearchIcon } from "./Icons";
+import { SearchPage } from "./SearchPage";
 import { FollowUpsPage } from "./FollowUpsPage";
+import { CustomerTasksPage } from "./CustomerTasksPage";
 import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
@@ -131,6 +133,7 @@ export function ConsoleApp() {
   const engineRef = useRef<PersonalEngineView | null>(null);
   const [drafts, setDrafts] = useState<CreatedConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [locatedEvent, setLocatedEvent] = useState<{ thread_id: string; event_id: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reachability, setReachability] = useState<KernelReachability>("live");
   const [creating, setCreating] = useState(false);
@@ -994,6 +997,7 @@ export function ConsoleApp() {
     setMessagesByThread({});
     setDrafts([]);
     setSelectedId(null);
+    setLocatedEvent(null);
     setOpeningId(null);
     setSeedingId(null);
     setRecipeSeed(null);
@@ -1602,7 +1606,7 @@ export function ConsoleApp() {
         <div className="titlebar-brand" title="Regenic">
           <BrandBadge />
         </div>
-        <div className="search">{t("chrome.searchSoon")}</div>
+        <button type="button" className="search" onClick={() => setNav("search")}>{t("nav.search")}</button>
         <div className="titlebar-meta">
           <EngineChip state={chip} />
           {host && host.memory.kind !== "ok" ? (
@@ -1617,6 +1621,9 @@ export function ConsoleApp() {
       </header>
       <nav className="rail" aria-label="Main">
         <div className="rail-top">
+          <RailButton label={t("nav.search")} active={nav === "search"} onClick={() => setNav("search")}>
+            <SearchIcon />
+          </RailButton>
           <RailButton
             label={t("nav.inbox")}
             active={nav === "inbox"}
@@ -1630,6 +1637,13 @@ export function ConsoleApp() {
             onClick={() => setNav("recipes")}
           >
             <RecipesIcon />
+          </RailButton>
+          <RailButton
+            label={t("nav.customerTasks")}
+            active={nav === "customer-tasks"}
+            onClick={() => setNav("customer-tasks")}
+          >
+            <FollowUpIcon />
           </RailButton>
           <RailButton
             label={t("nav.followUps")}
@@ -1677,6 +1691,7 @@ export function ConsoleApp() {
         {nav === "inbox" ? (
           <InboxWorkspace
             threads={listThreads}
+            locateEventId={locatedEvent?.thread_id === selected?.id ? locatedEvent?.event_id : undefined}
             selected={selected}
             error={error}
             pull={engine?.pull}
@@ -1704,6 +1719,7 @@ export function ConsoleApp() {
             onCreate={startConversation}
             onCommitDraft={commitDraft}
             onSelect={(id) => {
+              setLocatedEvent(null);
               const unloaded = !loadedThreadsRef.current.has(id);
               if (unloaded && (messagesRef.current[id]?.length ?? 0) === 0) {
                 setOpeningId(id);
@@ -1774,7 +1790,18 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
-        {nav === "follow-ups" ? <FollowUpsPage /> : null}
+        {nav === "search" ? <SearchPage onSettings={() => setNav("settings")} onOpenConversation={(item) => {
+          const thread = groupInboxThreads([item])[0];
+          if (!thread) { setError(t("search.noConversation")); return; }
+          selectedThreadRef.current = thread;
+          setMessagesByThread((previous) => rememberThreadMessages(previous, thread.id,
+            mergeRecentInbox(previous[thread.id] ?? [], [item])));
+          setSelectedId(thread.id);
+          setLocatedEvent({ thread_id: thread.id, event_id: item.event.id });
+          setNav("inbox");
+        }} /> : null}
+        {nav === "follow-ups" ? <FollowUpsPage onChanged={refresh} /> : null}
+        {nav === "customer-tasks" ? <CustomerTasksPage /> : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
         ) : null}

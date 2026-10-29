@@ -23,6 +23,7 @@ import {
   type ContextCandidate,
 } from "./context-candidate";
 import {
+  hashCanonicalContext,
   hashContextArtifactInputs,
   hashContextBundle,
   hashContextSnapshot,
@@ -191,6 +192,30 @@ export const ContextBudgetLedgerSchema: z.ZodType<ContextBudgetLedger> = z
     }
   });
 
+const contextFiltersSchema = z.object({
+  sources: uniqueNonEmptyStringsSchema.optional(),
+  thread_ids: uniqueNonEmptyStringsSchema.optional(),
+  actor_ids: uniqueNonEmptyStringsSchema.optional(),
+  occurred_after: timestampSchema.optional(),
+  occurred_before: timestampSchema.optional(),
+}).strict().superRefine((filters, context) => {
+  if (Object.values(filters).every((value) => value === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "At least one context filter is required" });
+  }
+  if (filters.occurred_after && filters.occurred_before &&
+    Date.parse(filters.occurred_after) > Date.parse(filters.occurred_before)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["occurred_before"],
+      message: "occurred_before cannot precede occurred_after" });
+  }
+});
+
+export const ContextSearchInputSchema = z.object({
+  query: querySchema,
+  filters: contextFiltersSchema.optional(),
+  temporal: z.object({ mode: z.literal("current") }).strict().optional(),
+  limit: positiveIntegerSchema.max(100).optional(),
+}).strict();
+
 export const ContextRequestSchema: z.ZodType<ContextRequest> = z
   .object({
     schema_version: z.literal(CONTEXT_REQUEST_SCHEMA_VERSION),
@@ -205,35 +230,7 @@ export const ContextRequestSchema: z.ZodType<ContextRequest> = z
       .array(z.object({ kind: z.enum(CONTEXT_ANCHOR_KINDS), id: nonEmptyStringSchema }).strict())
       .max(100)
       .optional(),
-    filters: z
-      .object({
-        sources: uniqueNonEmptyStringsSchema.optional(),
-        thread_ids: uniqueNonEmptyStringsSchema.optional(),
-        actor_ids: uniqueNonEmptyStringsSchema.optional(),
-        occurred_after: timestampSchema.optional(),
-        occurred_before: timestampSchema.optional(),
-      })
-      .strict()
-      .superRefine((filters, context) => {
-        if (Object.values(filters).every((value) => value === undefined)) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "At least one context filter is required",
-          });
-        }
-        if (
-          filters.occurred_after &&
-          filters.occurred_before &&
-          Date.parse(filters.occurred_after) > Date.parse(filters.occurred_before)
-        ) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["occurred_before"],
-            message: "occurred_before cannot precede occurred_after",
-          });
-        }
-      })
-      .optional(),
+    filters: contextFiltersSchema.optional(),
     temporal: z.discriminatedUnion("mode", [
       z.object({ mode: z.literal("current") }).strict(),
       z.object({ mode: z.literal("history"), valid_at: timestampSchema.optional() }).strict(),
@@ -291,6 +288,7 @@ export const ContextArtifactSchema: z.ZodType<ContextArtifact> = z
     input_refs: z.array(EvidenceReferenceSchema).max(10_000),
     input_hash: contentHashSchema,
     body_hash: contentHashSchema.optional(),
+    body_storage: z.literal("artifact").optional(),
     status: z.enum(CONTEXT_ARTIFACT_STATUSES),
     required_scope_ids: z.array(nonEmptyStringSchema).max(1_000),
     recorded_at: timestampSchema,
@@ -299,6 +297,10 @@ export const ContextArtifactSchema: z.ZodType<ContextArtifact> = z
   })
   .strict()
   .superRefine((artifact, context) => {
+    if (artifact.body_storage === "artifact" && (artifact.attrs === undefined
+      || artifact.body_hash !== hashCanonicalContext(artifact.attrs))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["body_hash"], message: "Artifact-backed body must match its manifest" });
+    }
     if (artifact.status === "accepted" && artifact.input_refs.length === 0) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["input_refs"], message: "Accepted artifacts require evidence" });
     }
@@ -402,6 +404,33 @@ const ContextSelectedReferenceSchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
+export const ContextRetrievalTraceSchema = z.object({
+  retriever_id: nonEmptyStringSchema,
+  profile: nonEmptyStringSchema,
+  mode: z.enum(["lexical", "hybrid"]),
+  generation: contentHashSchema.optional(),
+  model_revision: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
+  authorized_count: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  covered_count: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  routes: z.array(z.object({
+    event_id: nonEmptyStringSchema,
+    lexical_rank: z.number().int().positive().optional(),
+    vector_rank: z.number().int().positive().optional(),
+    vector_score: z.number().finite().min(-1).max(1).optional(),
+    chunk_ordinal: z.number().int().min(0).optional(),
+    start: z.number().int().min(0).optional(),
+    end: z.number().int().positive().optional(),
+  }).strict()),
+}).strict().superRefine((trace, context) => {
+  if (trace.covered_count > trace.authorized_count ||
+    new Set(trace.routes.map((route) => route.event_id)).size !== trace.routes.length ||
+    (trace.mode === "hybrid" && (!trace.generation || !trace.model_revision)) ||
+    trace.routes.some((route) => (route.start === undefined) !== (route.end === undefined) ||
+      (route.start !== undefined && route.end! <= route.start))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid retrieval trace" });
+  }
+});
+
 export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
   .object({
     schema_version: z.literal(CONTEXT_SNAPSHOT_SCHEMA_VERSION),
@@ -411,6 +440,7 @@ export const ContextSnapshotSchema: z.ZodType<ContextSnapshot> = z
     principal_policy_hash: contentHashSchema,
     read_epoch: nonEmptyStringSchema,
     retrieval_profile_version: nonEmptyStringSchema,
+    retrieval_trace: z.array(ContextRetrievalTraceSchema).max(100).optional(),
     assembly_profile_version: nonEmptyStringSchema,
     bundle_payload_hash: contentHashSchema,
     selected: z.array(ContextSelectedReferenceSchema).max(10_000),

@@ -39,6 +39,22 @@ import {
 import {
   CatalogCursorRow,
 } from "./sync";
+import { decodeContextArtifacts, packContextArtifact } from "../context-artifact-segments";
+
+async function decodeArtifacts(db: PgSql, orgId: string, payloads: unknown[]): Promise<ContextArtifact[]> {
+  return decodeContextArtifacts(orgId, payloads, async (hashes) => {
+    const values = new Map<string, unknown>();
+    for (let offset = 0; offset < hashes.length; offset += 300) {
+      const rows = await db.query<{ content_hash: string; payload_json: string }>(
+        `SELECT content_hash, payload_json FROM context_artifact_segments
+         WHERE org_id = $1 AND content_hash = ANY($2::text[])`,
+        [orgId, hashes.slice(offset, offset + 300)],
+      );
+      for (const row of rows) values.set(row.content_hash, row.payload_json);
+    }
+    return values;
+  });
+}
 
 interface ArtifactStateRow {
   org_id: string;
@@ -50,7 +66,19 @@ interface ArtifactStateRow {
 
 export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise<ContextArtifact> {
     requireContextValue(validateContextArtifact(artifact), "artifact");
-    const payload = canonicalContextJson(artifact);
+    const { payload, segments } = packContextArtifact(artifact);
+    await db.withTx(async (client) => {
+    const entries = [...segments].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    for (let offset = 0; offset < entries.length; offset += 300) {
+      const batch = entries.slice(offset, offset + 300);
+      await db.execute(
+        `INSERT INTO context_artifact_segments (org_id, content_hash, payload_json)
+         SELECT $1, s.content_hash, s.payload_json FROM unnest($2::text[], $3::text[]) AS s(content_hash, payload_json)
+         ON CONFLICT (org_id, content_hash) DO NOTHING`,
+        [artifact.org_id, batch.map(([hash]) => hash), batch.map(([, value]) => value)],
+        client,
+      );
+    }
     await putImmutableContextJson(db, 
       "context_artifacts",
       "org_id = $1 AND id = $2",
@@ -72,12 +100,15 @@ export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise
         payload,
         canonicalContextJson(contextArtifactPreview(artifact)),
       ],
+      client,
     );
     await db.execute(
       `INSERT INTO context_artifact_states (org_id, artifact_id, status, decided_at) VALUES ($1, $2, $3, $4) ON CONFLICT (org_id, artifact_id) DO NOTHING`,
       [artifact.org_id, artifact.id, artifact.status, artifact.recorded_at],
+      client,
     );
-    return parseContextJson<ContextArtifact>(payload);
+    });
+    return parseContextJson<ContextArtifact>(canonicalContextJson(artifact));
   }
 
 export async function getArtifact(db: PgSql, orgId: string, id: string): Promise<ContextArtifact | null> {
@@ -85,7 +116,9 @@ export async function getArtifact(db: PgSql, orgId: string, id: string): Promise
       `SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id WHERE a.org_id = $1 AND a.id = $2`,
       [orgId, id],
     );
-    return row ? { ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status } : null;
+    if (!row) return null;
+    const [artifact] = await decodeArtifacts(db, orgId, [row.payload_json]);
+    return { ...artifact, status: row.lifecycle_status };
   }
 
 export async function listArtifacts(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifact[]> {
@@ -103,7 +136,8 @@ export async function listArtifacts(db: PgSql, query: ContextArtifactQuery): Pro
       `,
       parts.params,
     );
-    return rows.map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status }));
+    const artifacts = await decodeArtifacts(db, query.org_id, rows.map((row) => row.payload_json));
+    return artifacts.map((artifact, index) => ({ ...artifact, status: rows[index].lifecycle_status }));
   }
 
 export async function listArtifactIndexes(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
@@ -148,12 +182,12 @@ export async function rebuildArtifactPreviews(client: PoolClient): Promise<void>
   for (const row of rows.rows) {
     await client.query(
       `UPDATE context_artifacts SET preview_json = $1 WHERE org_id = $2 AND id = $3`,
-      [previewJson(row.payload_json), row.org_id, row.id],
+      [await previewJson(row.payload_json, row.org_id, client), row.org_id, row.id],
     );
   }
 }
 
-function previewJson(payload: unknown): string {
+async function previewJson(payload: unknown, orgId: string, client: PoolClient): Promise<string> {
   let parsed = payload;
   if (typeof parsed === "string") {
     try {
@@ -161,6 +195,20 @@ function previewJson(payload: unknown): string {
     } catch {
       parsed = {};
     }
+  }
+  if (parsed && typeof parsed === "object" && "_shared" in parsed) {
+    [parsed] = await decodeContextArtifacts(orgId, [parsed], async (hashes) => {
+      const values = new Map<string, unknown>();
+      for (let offset = 0; offset < hashes.length; offset += 300) {
+        const rows = await client.query<{ content_hash: string; payload_json: string }>(
+          `SELECT content_hash, payload_json FROM context_artifact_segments
+           WHERE org_id = $1 AND content_hash = ANY($2::text[])`,
+          [orgId, hashes.slice(offset, offset + 300)],
+        );
+        for (const row of rows.rows) values.set(row.content_hash, row.payload_json);
+      }
+      return values;
+    });
   }
   return canonicalContextJson(contextArtifactPreview(parsed as ContextArtifact));
 }
@@ -237,7 +285,7 @@ export async function supersedeArtifact(db: PgSql, input: ContextArtifactSuperse
         client,
       );
       const artifact = artifactRow
-        ? parseContextJson<ContextArtifact>(artifactRow.payload_json)
+        ? parseContextJson<Pick<ContextArtifact, "supersedes_id">>(artifactRow.payload_json)
         : null;
       if (!current || current.status !== "accepted" || !artifact || artifact.supersedes_id !== input.artifact_id) throw new Error("Invalid Context artifact supersession");
       await db.execute(`UPDATE context_artifact_states SET status = 'superseded', decided_at = $1, superseded_by = $2 WHERE org_id = $3 AND artifact_id = $4`, [input.decided_at, input.replacement_id, input.org_id, input.artifact_id], client);
@@ -258,7 +306,7 @@ export async function supersedeProposedArtifact(db: PgSql, input: ContextArtifac
         [input.org_id, [input.artifact_id, input.replacement_id]],
         client,
       );
-      const byId = new Map(artifacts.map((row) => [row.id, parseContextJson<ContextArtifact>(row.payload_json)] as const));
+      const byId = new Map(artifacts.map((row) => [row.id, parseContextJson<Pick<ContextArtifact, "kind" | "supersedes_id">>(row.payload_json)] as const));
       const currentArtifact = byId.get(input.artifact_id);
       const replacementArtifact = byId.get(input.replacement_id);
       if (!current || current.status !== "proposed" || !currentArtifact || !replacementArtifact || currentArtifact.kind !== "daily_digest" || replacementArtifact.kind !== "daily_digest" || replacementArtifact.supersedes_id !== input.artifact_id) throw new Error("Invalid proposed daily digest supersession");
@@ -512,8 +560,8 @@ async function getContextJson<T>(db: PgSql, table: string, where: string, params
     return row ? parseContextJson<T>(row.payload_json) : null;
   }
 
-async function putImmutableContextJson(db: PgSql, table: string, where: string, lookupParams: unknown[], payload: string, label: string, insertSql: string, insertParams: unknown[]): Promise<void> {
-    await db.withTx(async (client) => {
+async function putImmutableContextJson(db: PgSql, table: string, where: string, lookupParams: unknown[], payload: string, label: string, insertSql: string, insertParams: unknown[], client?: PoolClient): Promise<void> {
+    const write = async (client: PoolClient) => {
       const current = await db.queryOne<{ payload_json: unknown }>(
         `SELECT payload_json FROM ${table} WHERE ${where}`,
         lookupParams,
@@ -526,7 +574,9 @@ async function putImmutableContextJson(db: PgSql, table: string, where: string, 
         return;
       }
       await db.execute(insertSql, insertParams, client);
-    });
+    };
+    if (client) await write(client);
+    else await db.withTx(write);
   }
 
 export function toCatalogSnapshot(db: PgSql, row: CatalogCursorRow): SyncCatalogSnapshot {

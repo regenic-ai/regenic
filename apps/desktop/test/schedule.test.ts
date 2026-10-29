@@ -5,7 +5,12 @@ import {
   parseRecipeBundle,
   stringifyRecipeBundle,
 } from "../src/renderer/src/recipe-transfer.ts";
-import { pullTriggerFromDraft, scheduleCopy } from "../src/renderer/src/schedule.ts";
+import {
+  intervalMs,
+  intervalParts,
+  pullTriggerFromDraft,
+  scheduleCopy,
+} from "../src/renderer/src/schedule.ts";
 import { translate } from "../src/shared/messages.ts";
 import type { RecipeView } from "../src/renderer/src/types.ts";
 
@@ -13,6 +18,36 @@ const zh = (
   key: Parameters<typeof translate>[1],
   vars?: Record<string, string | number>,
 ) => translate("zh", key, vars);
+
+describe("interval editing", () => {
+  it("keeps minutes through typing, rerenders, and blur at whole-hour boundaries", () => {
+    const editingUnit = intervalParts(15 * 60_000).unit;
+    let ms = 15 * 60_000;
+    for (const raw of ["1", "12", "120", "1200"]) {
+      const parts = intervalParts(ms, editingUnit);
+      assert.equal(parts.unit, "minutes");
+      ms = intervalMs(Number(raw), parts.unit);
+      const rerendered = intervalParts(ms, editingUnit);
+      assert.equal(rerendered.unit, "minutes");
+      assert.equal(rerendered.count, Number(raw));
+      const blurred = intervalMs(Number(raw), rerendered.unit);
+      assert.equal(blurred, Number(raw) * 60_000);
+      assert.equal(ms, blurred);
+    }
+    assert.deepEqual(intervalParts(120 * 60_000), { count: 2, unit: "hours" });
+  });
+
+  it("retains hours and clamps invalid or excessive input on blur", () => {
+    const editingUnit = intervalParts(2 * 3_600_000).unit;
+    for (const [raw, hours] of [["", 1], ["0", 1], ["3", 3], ["99999", 168]] as const) {
+      const ms = intervalMs(Number(raw), editingUnit);
+      const parts = intervalParts(ms, editingUnit);
+      assert.equal(parts.unit, "hours");
+      assert.equal(parts.count, hours);
+      assert.equal(intervalMs(Number(raw), parts.unit), hours * 3_600_000);
+    }
+  });
+});
 
 describe("schedule copy", () => {
   it("describes intervals, weekdays, and a daily clock", () => {

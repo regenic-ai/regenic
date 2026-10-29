@@ -1315,6 +1315,43 @@ describe("FeishuChatPollConnector", () => {
 });
 
 describe("FeishuChatEgress", () => {
+  it("uses stable distinct multipart UUIDs isolated by installation, chat, and request", async () => {
+    const keys = async (installationId, chatId, requestId) => {
+      const texts = [];
+      const messages = [];
+      const egress = new FeishuChatEgress(recordingClient([], messages, texts), {
+        installation_id: installationId, chat_id: chatId,
+      });
+      await egress.send({
+        installation_id: installationId,
+        idempotency_key: requestId,
+        content: [
+          { role: "body", media_type: "text/plain", text: "multipart" },
+          ...["a.png", "b.png"].map((name) => ({
+            role: "attachment", media_type: "image/png", source_filename: name, bytes: new Uint8Array([1]),
+          })),
+          ...["a.pdf", "b.pdf"].map((name) => ({
+            role: "attachment", media_type: "application/pdf", source_filename: name, bytes: new Uint8Array([2]),
+          })),
+        ],
+      });
+      return [...texts, ...messages].map((message) => message.uuid);
+    };
+    const first = await keys("feishu-1", "oc_1", "request-1");
+    assert.equal(first.length, 5);
+    assert.equal(new Set(first).size, 5);
+    assert.ok(first.every((uuid) => /^[a-f0-9]{32}$/.test(uuid)));
+    assert.deepEqual(await keys("feishu-1", "oc_1", "request-1"), first);
+    for (const args of [
+      ["feishu-2", "oc_1", "request-1"],
+      ["feishu-1", "oc_2", "request-1"],
+      ["feishu-1", "oc_1", "request-2"],
+    ]) {
+      assert.ok((await keys(...args)).every((uuid) => !first.includes(uuid)));
+    }
+    assert.notDeepEqual(await keys("feishu-1", "oc_1"), await keys("feishu-1", "oc_1"));
+  });
+
   it("sends the text body and returns the Feishu message_id", async () => {
     const calls = [];
     const egress = new FeishuChatEgress(

@@ -61,6 +61,96 @@ async function createRoot() {
 }
 
 describe("local ingestion persistence", () => {
+  it("upgrades rejection support without reclassifying existing attempt states or losing receipts", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    legacy.function("conversation_id", (source, externalId, fallbackId) =>
+      conversationId(source, externalId, fallbackId));
+    for (const migration of MIGRATIONS.filter((migration) => migration.version <= 51)) {
+      legacy.exec(migration.sql);
+      legacy.pragma(`user_version = ${migration.version}`);
+    }
+    const now = "2026-08-24T00:00:00.000Z";
+    const states = ["pending", "failed", "accepted", "sent"];
+    for (const status of states) {
+      legacy.prepare(`
+        INSERT INTO outbound_attempts (
+          org_id, client_request_id, thread_id, status, channel_message_ids_json,
+          recovery_hash, receipt_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("local-owner", status, "feishu:oc_1", status, '["native-id"]',
+        "a".repeat(64), JSON.stringify({ accepted: true, rpc_id: "native-id" }), now, now);
+    }
+    legacy.close();
+    const store = new SqliteAuthorityStore(path);
+    try {
+      for (const status of states) {
+        const saved = await store.getOutboundAttempt("local-owner", status);
+        assert.equal(saved.status, status);
+        assert.equal(saved.recovery_hash, "a".repeat(64));
+        assert.deepEqual(saved.receipt, { accepted: true, rpc_id: "native-id" });
+        assert.deepEqual(saved.channel_message_ids, ["native-id"]);
+        assert.equal(saved.created_at, now);
+        assert.equal(saved.updated_at, now);
+        assert.equal(await store.claimOutboundAttempt({
+          org_id: "local-owner", client_request_id: status, thread_id: "feishu:oc_1", now,
+        }), false);
+      }
+      const input = { org_id: "local-owner", client_request_id: "new-rejection", thread_id: "feishu:oc_1", now };
+      await store.putOutboundAttempt({ ...input, status: "rejected" });
+      assert.equal(await store.claimOutboundAttempt(input), true);
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+    } finally {
+      store.close();
+    }
+    const inspected = new Database(path);
+    try {
+      assert.deepEqual(inspected.pragma("foreign_key_check"), []);
+      assert.ok(inspected.prepare("SELECT name FROM sqlite_master WHERE name = 'outbound_attempts_event_idx'").get());
+      assert.equal(inspected.prepare("SELECT name FROM sqlite_master WHERE name = 'outbound_attempts_next'").get(), undefined);
+    } finally {
+      inspected.close();
+    }
+  });
+
+  it("upgrades the previous outbound schema without losing existing attempts", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    legacy.function("conversation_id", (source, externalId, fallbackId) =>
+      conversationId(source, externalId, fallbackId));
+    for (const migration of MIGRATIONS.filter((migration) => migration.version <= 48)) {
+      legacy.exec(migration.sql);
+      legacy.pragma(`user_version = ${migration.version}`);
+    }
+    legacy.prepare(`
+      INSERT INTO outbound_attempts (
+        org_id, client_request_id, thread_id, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run("local-owner", "legacy", "feishu:oc_1", "accepted",
+      "2026-08-24T00:00:00.000Z", "2026-08-24T00:00:00.000Z");
+    legacy.close();
+    const store = new SqliteAuthorityStore(path);
+    try {
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+      const attempt = await store.getOutboundAttempt("local-owner", "legacy");
+      assert.equal(attempt.status, "accepted");
+      assert.equal(attempt.recovery_hash, undefined);
+      assert.equal(attempt.receipt, undefined);
+      assert.equal(await store.claimOutboundAttempt({
+        org_id: "local-owner", client_request_id: "legacy", thread_id: "feishu:oc_1",
+        now: "2026-08-25T00:00:00.000Z",
+      }), false);
+      assert.equal(await store.claimOutboundAttempt({
+        org_id: "local-owner", client_request_id: "new", thread_id: "feishu:oc_1",
+        recovery_hash: "a".repeat(64), now: "2026-08-25T00:00:00.000Z",
+      }), true);
+    } finally {
+      store.close();
+    }
+  });
+
   it("migrates a new SQLite authority database", async () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);

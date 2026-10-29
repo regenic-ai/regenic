@@ -1,3 +1,10 @@
+export function SearchIcon() {
+  return <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+    <circle cx="7.5" cy="7.5" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    <path d="m11 11 4 4" stroke="currentColor" strokeWidth="1.4" />
+  </svg>;
+}
+
 export function InboxIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
@@ -226,4 +233,3 @@ export function SettingsIcon() {
     </svg>
   );
 }
-

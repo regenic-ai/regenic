@@ -3,6 +3,7 @@ import type {
   AuthorizedContextSourceEvent,
   AuthorizedContextRetrievalPlan,
   ContextCandidate,
+  ContextEventMaterializer,
   ContextRequest,
   ContextRetriever,
   ContextRetrievalCapabilities,
@@ -22,15 +23,23 @@ export class DeterministicEventRetriever implements ContextRetriever {
       graph: false,
       rerank: false,
       multilingual: true,
+      lazy_materialization: true,
     };
   }
 
-  async retrieve(plan: AuthorizedContextRetrievalPlan): Promise<RetrievedContextCandidate[]> {
+  async retrieve(
+    plan: AuthorizedContextRetrievalPlan,
+    materialize?: ContextEventMaterializer,
+  ): Promise<RetrievedContextCandidate[]> {
     if (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event")) {
       return [];
     }
     const retrievalTime = retrievalTimeFor(plan);
-    return eligibleEventSources(plan)
+    const eligible = eligibleEventSources(plan);
+    const sources = materialize
+      ? await materialize(eligible.map((source) => source.event.event_id))
+      : eligible;
+    return sources
       .map((source) => eventCandidateFor(source, plan.request, retrievalTime))
       .filter((candidate): candidate is RetrievedContextCandidate => candidate !== null)
       .sort((left, right) => compare(left.candidate.candidate_id, right.candidate.candidate_id));
@@ -85,14 +94,23 @@ export function eventCandidateFor(
   request: ContextRequest,
   recordedAt: string,
 ): RetrievedContextCandidate | null {
+  const material = eventCandidateMaterialFor(source, request, recordedAt);
+  if (request.query && material?.candidate.scores.lexical === 0) {
+    return null;
+  }
+  return material;
+}
+
+export function eventCandidateMaterialFor(
+  source: AuthorizedContextSourceEvent,
+  request: ContextRequest,
+  recordedAt: string,
+): RetrievedContextCandidate | null {
   const contentHash = source.event.content_hash;
   if (!contentHash) {
     return null;
   }
   const queryScore = scoreContextLexicalText(source.text, request.query);
-  if (request.query && queryScore.lexical === 0) {
-    return null;
-  }
   const estimatedTokens = source.estimated_tokens ?? estimateTokens(source.text);
   const evidence = [{
     event_id: source.event.event_id,

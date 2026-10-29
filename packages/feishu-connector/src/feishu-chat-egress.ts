@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ContentPart,
   DeliveryReceipt,
@@ -49,32 +49,37 @@ export class FeishuChatEgress implements EgressAdapter {
     }
     requireAttachmentClient(this.client, parts);
     const chatId = this.options.chat_id;
+    const messageUuid = (part: string): string => intent.idempotency_key
+      ? createHash("sha256").update(JSON.stringify([
+          intent.installation_id, chatId, intent.idempotency_key, part,
+        ])).digest("hex").slice(0, 32)
+      : randomUUID();
     const channelMessageIds: string[] = [];
     if (parts.text) {
       const message = await this.client.sendText({
         chat_id: chatId,
         text: parts.text,
-        uuid: randomUUID(),
+        uuid: messageUuid("text"),
       });
       channelMessageIds.push(message.message_id);
     }
-    for (const image of parts.images) {
+    for (const [index, image] of parts.images.entries()) {
       const uploaded = await this.client.uploadImage!(image);
       const message = await this.client.sendMessage!({
         chat_id: chatId,
         msg_type: "image",
         content: { image_key: uploaded.image_key },
-        uuid: randomUUID(),
+        uuid: messageUuid(`image:${index}`),
       });
       channelMessageIds.push(message.message_id);
     }
-    for (const file of parts.files) {
+    for (const [index, file] of parts.files.entries()) {
       const uploaded = await this.client.uploadFile!(file);
       const message = await this.client.sendMessage!({
         chat_id: chatId,
         msg_type: "file",
         content: { file_key: uploaded.file_key },
-        uuid: randomUUID(),
+        uuid: messageUuid(`file:${index}`),
       });
       channelMessageIds.push(message.message_id);
     }

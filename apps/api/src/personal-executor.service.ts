@@ -308,12 +308,16 @@ export class PersonalExecutorService {
       }
       const rows = await authority.listExecutorInstallations(orgId);
       const registry = host.get("executors");
-      registry.clear();
+      const mounted = [];
       for (const row of rows) {
         if (row.status !== "enabled") {
           continue;
         }
-        registry.register(await this.createRuntime(row));
+        mounted.push(await this.createRuntime(row));
+      }
+      registry.clear();
+      for (const executor of mounted) {
+        registry.register(executor);
       }
     } catch (error) {
       if (!this.runtime.isReady() || isClosedStore(error)) {

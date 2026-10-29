@@ -39,6 +39,27 @@ function replacement(documents, overrides = {}) {
 }
 
 describe("SQLite Context lexical index", () => {
+  it("builds and searches more than 10000 keys without truncating late authorized matches", async (t) => {
+    const dir = await root();
+    const index = new SqliteContextLexicalIndex(join(dir, "large.db"));
+    t.after(() => index.close());
+    const documents = Array.from({ length: 10005 }, (_, id) => ({
+      ...key(`event-${String(id).padStart(5, "0")}`, HASH_A),
+      text: id === 10004 ? "needle release" : "unrelated body",
+    }));
+    await index.replaceOrganization(replacement(documents));
+    await index.upsertDocuments(replacement(documents));
+    await index.replaceOrganization(replacement([
+      { ...key("hidden", HASH_B), text: "needle secret" },
+    ], { org_id: "other-org" }));
+    const result = await index.matchAuthorized({
+      org_id: "example-org", query: "needle",
+      authorized: [...documents.map(({ event_id, content_hash }) => ({ event_id, content_hash })), key("hidden", HASH_B)],
+    });
+    assert.equal(result.covered.length, 10005);
+    assert.deepEqual(result.matched, [key("event-10004", HASH_A)]);
+  });
+
   it("matches only authorized keys and treats FTS operators as literal text", async () => {
     const dir = await root();
     const index = new SqliteContextLexicalIndex(join(dir, "context.lexical.db"));

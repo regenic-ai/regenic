@@ -30,12 +30,28 @@ import {
 import {
   CatalogCursorRow,
 } from "./sync";
+import { contextArtifactDecoder, packContextArtifact } from "../context-artifact-segments";
+
+function artifactDecoder(db: Database.Database, orgId: string) {
+  const lookup = db.prepare(
+    `SELECT payload_json FROM context_artifact_segments WHERE org_id = ? AND content_hash = ?`,
+  );
+  return contextArtifactDecoder(orgId, (hash) => {
+    const row = lookup.get(orgId, hash) as { payload_json: string } | undefined;
+    return row?.payload_json;
+  });
+}
 
 export async function putArtifact(db: Database.Database, artifact: ContextArtifact): Promise<ContextArtifact> {
     requireContextValue(validateContextArtifact(artifact), "artifact");
     
-    const payload = canonicalContextJson(artifact);
+    const { payload, segments } = packContextArtifact(artifact);
     db.transaction(() => {
+    const insertSegment = db.prepare(
+      `INSERT INTO context_artifact_segments (org_id, content_hash, payload_json)
+       VALUES (?, ?, ?) ON CONFLICT (org_id, content_hash) DO NOTHING`,
+    );
+    for (const [hash, value] of segments) insertSegment.run(artifact.org_id, hash, value);
     putImmutableContextJson(db, 
       "context_artifacts",
       "org_id = ? AND id = ?",
@@ -62,16 +78,17 @@ export async function putArtifact(db: Database.Database, artifact: ContextArtifa
       `INSERT OR IGNORE INTO context_artifact_states (org_id, artifact_id, status, decided_at) VALUES (?, ?, ?, ?)`,
     ).run(artifact.org_id, artifact.id, artifact.status, artifact.recorded_at);
     })();
-    return parseContextJson<ContextArtifact>(payload);
+    return parseContextJson<ContextArtifact>(canonicalContextJson(artifact));
   }
 
 export async function getArtifact(db: Database.Database, orgId: string, id: string): Promise<ContextArtifact | null> {
-    const artifact = getContextJson<ContextArtifact>(db, 
+    const stored = getContextJson<unknown>(db,
       "context_artifacts",
       "org_id = ? AND id = ?",
       [orgId, id],
     );
-    if (!artifact) return null;
+    if (!stored) return null;
+    const artifact = artifactDecoder(db, orgId)(stored);
     const state = await getArtifactState(db, orgId, id);
     return state ? { ...artifact, status: state.status } : artifact;
   }
@@ -84,16 +101,19 @@ export async function listArtifacts(db: Database.Database, query: ContextArtifac
     const rows = db
       .prepare(
         `
-          SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
+          SELECT a.id, a.recorded_at, a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
           JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
           WHERE ${parts.clauses.join(" AND ")}
         `,
       )
-      .all(...parts.params) as Array<{ payload_json: string; lifecycle_status: ContextArtifact["status"] }>;
+      .all(...parts.params) as Array<{
+        id: string; recorded_at: string; payload_json: string; lifecycle_status: ContextArtifact["status"];
+      }>;
+    const decode = artifactDecoder(db, query.org_id);
     return rows
-      .map((row) => ({ ...parseContextJson<ContextArtifact>(row.payload_json), status: row.lifecycle_status as ContextArtifact["status"] }))
-      .sort((left, right) => compareContextArtifactOrder(left, right))
-      .slice(0, parts.limit);
+      .sort(compareContextArtifactOrder)
+      .slice(0, parts.limit)
+      .map((row) => ({ ...decode(row.payload_json), status: row.lifecycle_status }));
   }
 
 export async function listArtifactIndexes(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
@@ -137,17 +157,18 @@ export function rebuildArtifactPreviews(db: Database.Database): void {
     `UPDATE context_artifacts SET preview_json = ? WHERE org_id = ? AND id = ?`,
   );
   for (const row of rows) {
-    update.run(previewJson(row.payload_json), row.org_id, row.id);
+    update.run(previewJson(row.payload_json, (payload) => artifactDecoder(db, row.org_id)(payload)), row.org_id, row.id);
   }
 }
 
-function previewJson(payload: string): string {
+function previewJson(payload: string, decode: (payload: unknown) => ContextArtifact): string {
   let parsed: unknown = {};
   try {
     parsed = JSON.parse(payload) as unknown;
   } catch {
     parsed = {};
   }
+  if (parsed && typeof parsed === "object" && "_shared" in parsed) parsed = decode(parsed);
   return canonicalContextJson(contextArtifactPreview(parsed as ContextArtifact));
 }
 
@@ -211,7 +232,7 @@ export async function supersedeArtifact(db: Database.Database, input: ContextArt
     return db.transaction(() => {
       const current = getArtifactStateSync(db, input.org_id, input.artifact_id);
       const replacement = artifactStateForTransition(db, input.org_id, input.replacement_id);
-      const artifact = getContextJson<ContextArtifact>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
+      const artifact = getContextJson<Pick<ContextArtifact, "supersedes_id">>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
       if (!current || current.status !== "accepted" || !artifact || artifact.supersedes_id !== input.artifact_id) {
         throw new Error("Invalid Context artifact supersession");
       }
@@ -229,8 +250,8 @@ export async function supersedeProposedArtifact(db: Database.Database, input: Co
     return db.transaction(() => {
       const current = getArtifactStateSync(db, input.org_id, input.artifact_id);
       const replacement = artifactStateForTransition(db, input.org_id, input.replacement_id);
-      const currentArtifact = getContextJson<ContextArtifact>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.artifact_id]);
-      const replacementArtifact = getContextJson<ContextArtifact>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
+      const currentArtifact = getContextJson<Pick<ContextArtifact, "kind">>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.artifact_id]);
+      const replacementArtifact = getContextJson<Pick<ContextArtifact, "kind" | "supersedes_id">>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
       if (!current || current.status !== "proposed" || !currentArtifact || !replacementArtifact || currentArtifact.kind !== "daily_digest" || replacementArtifact.kind !== "daily_digest" || replacementArtifact.supersedes_id !== input.artifact_id) {
         throw new Error("Invalid proposed daily digest supersession");
       }
@@ -521,7 +542,10 @@ function requireContextValue(
   }
 }
 
-function compareContextArtifactOrder(left: ContextArtifact, right: ContextArtifact): number {
+function compareContextArtifactOrder(
+  left: Pick<ContextArtifact, "id" | "recorded_at">,
+  right: Pick<ContextArtifact, "id" | "recorded_at">,
+): number {
   return compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id);
 }
 

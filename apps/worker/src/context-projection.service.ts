@@ -12,7 +12,7 @@ const PROJECTION_TICK_MS = 2_000;
 const PROJECTION_LEASE_MS = 30_000;
 const PROJECTION_BATCH_SIZE = 5;
 const PROJECTION_HEARTBEAT_MS = 10_000;
-const PROJECTION_GENERATION = "continuous-v1";
+const PROJECTION_GENERATION = "continuous-v2";
 const MAX_RETRY_MS = 5 * 60_000;
 
 @Injectable()

@@ -42,7 +42,8 @@ export function ScheduleField({
     >,
   ) => void;
 }) {
-  const parts = intervalParts(draft.interval_ms);
+  const editingUnit = useRef<IntervalUnit | undefined>(undefined);
+  const parts = intervalParts(draft.interval_ms, editingUnit.current);
   const [countText, setCountText] = useState(String(parts.count));
   const countFocused = useRef(false);
   const summary = scheduleCopy(
@@ -131,9 +132,11 @@ export function ScheduleField({
               value={countText}
               onFocus={() => {
                 countFocused.current = true;
+                editingUnit.current = parts.unit;
               }}
               onBlur={() => {
                 countFocused.current = false;
+                editingUnit.current = undefined;
                 commitCount(countText);
               }}
               onChange={(event) => {

@@ -3,8 +3,10 @@ import type {
   Recipe,
   WorkItem,
   WorkRun,
+  WorkRunStartClaim,
   WorkDelivery,
   ExecutorInstallation,
+  SearchAnswerRecord,
 } from "@regenic/domain";
 import {
   recipeTriggerOf,
@@ -234,20 +236,24 @@ export async function listHiddenExecutorThreadIds(db: Database.Database, orgId: 
   }
 
 export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<WorkRun> {
-    
+    return writeWorkRun(db, run);
+  }
+
+function writeWorkRun(db: Database.Database, run: WorkRun): WorkRun {
     db
       .prepare(
         `
           INSERT INTO work_runs (
             id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-            agent_thread_id, status, result_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            agent_thread_id, status, start_state, result_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             recipe_id = excluded.recipe_id,
             executor_type = excluded.executor_type,
             external_run_id = excluded.external_run_id,
             agent_thread_id = excluded.agent_thread_id,
             status = excluded.status,
+            start_state = excluded.start_state,
             result_json = excluded.result_json,
             updated_at = excluded.updated_at
         `,
@@ -261,12 +267,90 @@ export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<W
         run.external_run_id ?? null,
         run.agent_thread_id ?? null,
         run.status,
+        run.start_state ?? null,
         run.result ? JSON.stringify(run.result) : null,
         run.created_at,
         run.updated_at,
       );
     return run;
   }
+
+export async function claimWorkRunStart(db: Database.Database, input: WorkRunStartClaim): Promise<boolean> {
+  const { run, max_concurrent } = input;
+  return db.transaction(() => {
+    const item = db.prepare(`
+      SELECT w.id FROM work_items w JOIN recipes r ON r.id = w.recipe_id AND r.org_id = w.org_id
+      WHERE w.org_id = ? AND w.id = ? AND w.recipe_id = ? AND w.status = 'open'
+        AND NOT EXISTS (
+          SELECT 1 FROM work_runs WHERE org_id = w.org_id AND work_item_id = w.id
+            AND status IN ('running', 'waiting_human')
+        )
+    `).get(run.org_id, run.work_item_id, run.recipe_id);
+    if (!item) return false;
+    if (max_concurrent !== undefined) {
+      const occupied = db.prepare(`
+        SELECT COUNT(*) AS count FROM work_items
+        WHERE org_id = ? AND recipe_id = ? AND status IN ('running', 'waiting_human')
+      `).get(run.org_id, run.recipe_id) as { count: number };
+      if (occupied.count >= max_concurrent) return false;
+    }
+    if (db.prepare("SELECT 1 FROM work_runs WHERE id = ?").get(run.id)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    writeWorkRun(db, run);
+    db.prepare("UPDATE work_items SET status = 'running', updated_at = ? WHERE org_id = ? AND id = ?")
+      .run(run.updated_at, run.org_id, run.work_item_id);
+    return true;
+  }).immediate();
+}
+
+export async function getSearchAnswer(
+  db: Database.Database,
+  orgId: string,
+  id: string,
+): Promise<SearchAnswerRecord | null> {
+  const row = db.prepare(
+    `SELECT * FROM search_answers WHERE org_id = ? AND id = ?`,
+  ).get(orgId, id) as SearchAnswerRow | undefined;
+  return row ? toSearchAnswer(row) : null;
+}
+
+export async function putSearchAnswer(
+  db: Database.Database,
+  record: SearchAnswerRecord,
+): Promise<SearchAnswerRecord> {
+  db.prepare(`
+    INSERT INTO search_answers (
+      id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      work_item_id = excluded.work_item_id,
+      query = excluded.query,
+      event_ids_json = excluded.event_ids_json,
+      outcome = excluded.outcome,
+      updated_at = excluded.updated_at
+  `).run(
+    record.id,
+    record.org_id,
+    record.work_item_id,
+    record.query,
+    JSON.stringify(record.event_ids),
+    record.outcome ?? null,
+    record.created_at,
+    record.updated_at,
+  );
+  return record;
+}
+
+export async function deleteSearchAnswer(
+  db: Database.Database,
+  orgId: string,
+  id: string,
+): Promise<boolean> {
+  return db.prepare(
+    "DELETE FROM search_answers WHERE org_id = ? AND id = ?",
+  ).run(orgId, id).changes > 0;
+}
 
 export async function listWorkDeliveries(db: Database.Database, orgId: string): Promise<WorkDelivery[]> {
     const rows = db
@@ -328,8 +412,7 @@ export async function getWorkDeliveryByItem(db: Database.Database, orgId: string
   }
 
 export async function putWorkDelivery(db: Database.Database, delivery: WorkDelivery): Promise<WorkDelivery> {
-    
-    db
+    const row = db
       .prepare(
         `
           INSERT INTO work_deliveries (
@@ -338,7 +421,8 @@ export async function putWorkDelivery(db: Database.Database, delivery: WorkDeliv
             payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
             created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
+          ON CONFLICT(org_id, work_item_id) DO UPDATE SET
+            id = excluded.id,
             recipe_id = excluded.recipe_id,
             kind = excluded.kind,
             unit_key = excluded.unit_key,
@@ -353,9 +437,10 @@ export async function putWorkDelivery(db: Database.Database, delivery: WorkDeliv
             idempotency_key = excluded.idempotency_key,
             channel_receipt_json = excluded.channel_receipt_json,
             updated_at = excluded.updated_at
+          RETURNING *
         `,
       )
-      .run(
+      .get(
         delivery.id,
         delivery.org_id,
         delivery.work_item_id,
@@ -374,8 +459,11 @@ export async function putWorkDelivery(db: Database.Database, delivery: WorkDeliv
         delivery.channel_receipt ? JSON.stringify(delivery.channel_receipt) : null,
         delivery.created_at,
         delivery.updated_at,
-      );
-    return delivery;
+      ) as WorkDeliveryRow | undefined;
+    if (!row) {
+      throw new Error("work delivery upsert returned no row");
+    }
+    return toWorkDelivery(row);
   }
 
 export async function listExecutorInstallations(db: Database.Database, orgId: string): Promise<ExecutorInstallation[]> {
@@ -513,7 +601,19 @@ interface WorkRunRow {
   external_run_id: string | null;
   agent_thread_id: string | null;
   status: WorkRun["status"];
+  start_state: WorkRun["start_state"] | null;
   result_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SearchAnswerRow {
+  id: string;
+  org_id: string;
+  work_item_id: string;
+  query: string;
+  event_ids_json: string;
+  outcome: SearchAnswerRecord["outcome"] | null;
   created_at: string;
   updated_at: string;
 }
@@ -589,9 +689,23 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     external_run_id: row.external_run_id ?? undefined,
     agent_thread_id: row.agent_thread_id ?? undefined,
     status: row.status,
+    start_state: row.start_state ?? undefined,
     result: row.result_json
       ? (JSON.parse(row.result_json) as WorkRun["result"])
       : undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
+  return {
+    id: row.id,
+    org_id: row.org_id,
+    work_item_id: row.work_item_id,
+    query: row.query,
+    event_ids: JSON.parse(row.event_ids_json) as string[],
+    ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

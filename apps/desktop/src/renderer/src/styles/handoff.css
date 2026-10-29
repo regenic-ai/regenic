@@ -52,7 +52,7 @@
   padding: 7px 10px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   user-select: none;
 }
 
@@ -204,7 +204,7 @@
   padding: 7px 10px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   user-select: none;
 }
 
@@ -293,7 +293,7 @@
   padding: 0;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -314,18 +314,23 @@
   gap: 1px;
   text-align: left;
   padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #121812;
+  border: 1px solid transparent;
+  border-radius: var(--radius-row);
+  background: var(--wash-6);
+}
+
+.prompt-option:hover {
+  background: var(--wash-8);
 }
 
 .prompt-option.is-on {
-  border-color: var(--g500);
-  background: var(--g900);
+  border-color: transparent;
+  background: var(--wash-8);
+  box-shadow: inset 0 0 0 1px var(--ink-40);
 }
 
 .prompt-option.is-emphasized {
-  border-color: var(--ai);
+  border-color: var(--line-12);
 }
 
 .prompt-option > span {

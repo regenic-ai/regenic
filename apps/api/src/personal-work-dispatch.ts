@@ -26,6 +26,7 @@ import {
   shouldAcceptPushRecord,
   shouldRetryFailedPush,
   workSubjectFromEvent,
+  type ExecutorContext,
   type ConnectorInstallation,
   type EventRecord,
   type InboxItem,
@@ -384,12 +385,15 @@ export class PersonalWorkDispatch {
     item: WorkItem,
     recipe: Recipe,
     evidenceText?: string,
-    mode: "auto" | "manual" = "auto",
+    mode: "auto" | "manual" | "auxiliary" = "auto",
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     const executor = host.get("executors").get(recipe.executor_type);
     if (!executor) {
       await this.noteStartFailed(item, recipe, "Unknown executor", mode);
+      if (mode !== "auto") {
+        throw new PersonalConnectorError("invalid_config", `Unknown executor: ${recipe.executor_type}`, 400);
+      }
       return undefined;
     }
     if (recipeWantsContext(recipe)) {
@@ -399,7 +403,7 @@ export class PersonalWorkDispatch {
         item.thread_id,
       );
       if (deferred) {
-        if (mode === "manual") {
+        if (mode !== "auto") {
           throw new PersonalConnectorError(
             "bootstrap_pending",
             "Thread history sync is still in progress",
@@ -410,6 +414,9 @@ export class PersonalWorkDispatch {
       }
     }
     if (this.starting.has(item.id)) {
+      if (mode !== "auto") {
+        throw new PersonalConnectorError("execution_start_conflict", "Work start is already in progress. Refresh the work item.", 409);
+      }
       return undefined;
     }
     const acquired = await this.acquireStart(recipe, item.id, mode);
@@ -432,9 +439,9 @@ export class PersonalWorkDispatch {
   private async acquireStart(
     recipe: Recipe,
     itemId: string,
-    mode: "auto" | "manual",
+    mode: "auto" | "manual" | "auxiliary",
   ): Promise<boolean> {
-    if (mode !== "auto") {
+    if (mode === "manual") {
       this.starting.set(itemId, recipe.id);
       return true;
     }
@@ -465,7 +472,7 @@ export class PersonalWorkDispatch {
     recipe: Recipe,
     executor: TaskExecutor,
     evidenceText: string | undefined,
-    mode: "auto" | "manual",
+    mode: "auto" | "manual" | "auxiliary",
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     const now = new Date().toISOString();
@@ -474,11 +481,13 @@ export class PersonalWorkDispatch {
     const thread = includeContext
       ? await this.channel.threadContextLines(item.thread_id, {
           fetchLimit: workspace ? WORK_FILE_FETCH_LIMIT : undefined,
+          anchorEventId: item.head_event_id,
         })
       : { lines: [], overflow: false };
     const composed = composeWorkConversation({
       include_context: includeContext,
       trigger_text: evidenceText,
+      current_event_id: item.head_event_id,
       head_text:
         evidenceText || !item.head_event_id
           ? undefined
@@ -486,10 +495,34 @@ export class PersonalWorkDispatch {
       thread_lines: thread.lines,
       thread_overflow: thread.overflow,
     });
+    const authority = host.get("authority");
+    const run: WorkRun & { status: "running"; start_state: "pending" } = {
+      id: `run-${randomUUID()}`,
+      org_id: item.org_id,
+      work_item_id: item.id,
+      recipe_id: recipe.id,
+      executor_type: executor.executor_type,
+      status: "running",
+      start_state: "pending",
+      created_at: now,
+      updated_at: now,
+    };
+    const claimed = await authority.claimWorkRunStart({
+      run,
+      max_concurrent: mode === "manual" ? undefined : recipe.max_concurrent,
+    });
+    if (!claimed) {
+      if (mode !== "auto") {
+        throw new PersonalConnectorError("execution_start_conflict", "Work item changed before start could be reserved. Refresh the work item.", 409);
+      }
+      return undefined;
+    }
+    const runningItem: WorkItem = { ...item, status: "running", updated_at: now };
     let handle;
     try {
       handle = await executor.start(
         {
+          run_id: run.id,
           work_item: item,
           recipe,
           evidence_text: formatWorkEvidence({
@@ -508,37 +541,157 @@ export class PersonalWorkDispatch {
               }
             : undefined,
         },
-        this.channel.contextFor(executor),
+        this.startContext(run, this.channel.contextFor(executor)),
       );
     } catch (error) {
-      await this.noteStartFailed(item, recipe, deliveryErrorMessage(error), mode);
-      if (mode === "manual") {
-        throw error;
+      const saved = await authority.getWorkRun(item.org_id, run.id);
+      const latestItem = await authority.getWorkItem(item.org_id, item.id);
+      const definite = definiteLocalStartFailure(error);
+      if (
+        definite &&
+        saved?.start_state === "pending" &&
+        !saved.external_run_id &&
+        !saved.agent_thread_id &&
+        latestItem &&
+        latestItem.status !== "skipped"
+      ) {
+        const failedAt = new Date().toISOString();
+        await authority.putWorkRun({
+          ...saved,
+          start_state: undefined,
+          status: "failed",
+          result: { summary: definite.message },
+          updated_at: failedAt,
+        });
+        await authority.putWorkItem({
+          ...latestItem,
+          status: "failed",
+          updated_at: failedAt,
+        });
+        console.error("personal work start failed", {
+          run_id: run.id,
+          error: definite.message,
+        });
+        if (mode !== "auto") {
+          throw definite;
+        }
+        return undefined;
+      }
+      console.error("personal work start could not be confirmed", {
+        run_id: run.id,
+        error,
+      });
+      if (saved && latestItem && saved.status !== "cancelled" && latestItem.status !== "skipped") {
+        if (saved.start_state === "pending") {
+          await authority.putWorkRun({
+            ...saved,
+            start_state: "uncertain",
+            status: "waiting_human",
+            result: {
+              summary: `Executor start could not be confirmed: ${deliveryErrorMessage(error)}. Check the executor before dismissing this attempt and starting a new one.`,
+            },
+            updated_at: new Date().toISOString(),
+          });
+          await authority.putWorkItem({
+            ...latestItem,
+            status: "waiting_human",
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+      if (mode !== "auto") {
+        if (saved?.start_state === "submitted") {
+          throw new PersonalConnectorError(
+            "execution_recovery_pending",
+            `Executor submission is recorded (run ${run.id}). Refresh to recover the existing execution.`,
+            503,
+          );
+        }
+        throw new PersonalConnectorError(
+          "execution_start_uncertain",
+          `Executor start could not be confirmed (run ${run.id}). Check the executor before starting another attempt.`,
+          409,
+        );
       }
       return undefined;
     }
-    const run: WorkRun = {
-      id: `run-${randomUUID()}`,
-      org_id: item.org_id,
-      work_item_id: item.id,
-      recipe_id: recipe.id,
-      executor_type: executor.executor_type,
+    const saved = await authority.getWorkRun(item.org_id, run.id);
+    if (!saved) {
+      throw new Error(`Claimed work run disappeared: ${run.id}`);
+    }
+    if (saved.status === "cancelled" || saved.start_state === undefined) {
+      if (saved.status === "running" || saved.status === "waiting_human") {
+        const latestItem = await authority.getWorkItem(item.org_id, item.id);
+        if (latestItem && isActiveWorkStatus(latestItem.status)) {
+          this.waits.attach(latestItem, saved, executor);
+        }
+      }
+      return saved;
+    }
+    const acknowledged: WorkRun = {
+      ...saved,
       external_run_id: handle.external_run_id,
-      agent_thread_id: handle.agent_thread_id,
-      status: handle.status === "completed" ? "completed" : handle.status === "failed" ? "failed" : handle.status === "waiting_human" ? "waiting_human" : "running",
-      result: handle.result,
-      created_at: now,
-      updated_at: now,
+      agent_thread_id: handle.agent_thread_id ?? saved.agent_thread_id,
+      start_state: "submitted",
+      result: handle.result ?? saved.result,
+      updated_at: new Date().toISOString(),
     };
-    await this.supervise.applyHandle(item, recipe, run, handle);
+    await authority.putWorkRun(acknowledged);
+    await this.supervise.applyHandle(runningItem, recipe, { ...acknowledged, start_state: undefined }, handle);
     const latest = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
     const latestItem = await host.get("authority").getWorkItem(item.org_id, item.id);
     if (latest && latestItem && isActiveWorkStatus(latestItem.status)) {
       this.waits.attach(latestItem, latest, executor);
     }
     return (
-      latest ?? run
+      latest ?? await authority.getWorkRun(item.org_id, run.id) ?? run
     );
+  }
+
+  private startContext(run: WorkRun, ctx: ExecutorContext): ExecutorContext {
+    const authority = this.runtime.requireHost().get("authority");
+    const current = async (): Promise<WorkRun> => {
+      const [saved, item] = await Promise.all([
+        authority.getWorkRun(run.org_id, run.id),
+        authority.getWorkItem(run.org_id, run.work_item_id),
+      ]);
+      if (
+        !saved || !item || item.status === "skipped" ||
+        saved.status === "cancelled" || saved.status === "completed" || saved.status === "failed"
+      ) {
+        throw new PersonalConnectorError("work_abandoned", "Work start is no longer active", 409);
+      }
+      return saved;
+    };
+    return {
+      ...ctx,
+      spawnSysout: async (options) => {
+        await current();
+        const thread = await ctx.spawnSysout(options);
+        const saved = await current();
+        const sysoutId = `${thread.source}:${thread.target}`;
+        await authority.putWorkRun({
+          ...saved,
+          external_run_id: sysoutId,
+          agent_thread_id: sysoutId,
+          updated_at: new Date().toISOString(),
+        });
+        return thread;
+      },
+      writeStdin: async (thread, text) => {
+        await current();
+        await ctx.writeStdin(thread, text);
+        const saved = await current();
+        const sysoutId = `${thread.source}:${thread.target}`;
+        await authority.putWorkRun({
+          ...saved,
+          external_run_id: sysoutId,
+          agent_thread_id: sysoutId,
+          start_state: "submitted",
+          updated_at: new Date().toISOString(),
+        });
+      },
+    };
   }
 
   private async hasStartCapacity(recipe: Recipe, exceptItemId: string): Promise<boolean> {
@@ -656,7 +809,7 @@ export class PersonalWorkDispatch {
     item: WorkItem,
     recipe: Recipe,
     error: string,
-    mode: "auto" | "manual",
+    mode: "auto" | "manual" | "auxiliary",
   ): Promise<void> {
     const now = new Date().toISOString();
     const host = this.runtime.requireHost();
@@ -672,6 +825,18 @@ export class PersonalWorkDispatch {
       console.error("personal work start failed", error);
     }
   }
+}
+
+function definiteLocalStartFailure(
+  error: unknown,
+): PersonalConnectorError | undefined {
+  if (
+    error instanceof PersonalConnectorError &&
+    (error.code === "unsupported_channel" || error.code === "no_sender")
+  ) {
+    return error;
+  }
+  return undefined;
 }
 
 function failedRunCount(runs: WorkRun[]): number {

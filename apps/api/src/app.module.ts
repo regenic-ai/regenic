@@ -17,6 +17,9 @@ import { PersonalApiGuard } from "./personal-api.guard";
 import { PersonalPairingService } from "./personal-pairing.service";
 import { PersonalContextController } from "./personal-context.controller";
 import { PersonalContextService } from "./personal-context.service";
+import { PersonalSearchAnswerService } from "./personal-search-answer.service";
+import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
+import { PersonalConversationContextService } from "./personal-conversation-context.service";
 import { PersonalContextProjectionService } from "./personal-context-projection.service";
 import { PersonalDailyDigestService } from "./personal-daily-digest.service";
 import { PersonalController } from "./personal.controller";
@@ -26,11 +29,12 @@ import { PersonalReplyService } from "./personal-reply.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalPluginService } from "./personal-plugin.service";
-import { PersonalWhatsAppImportService } from "./personal-whatsapp-import.service";
+import { PersonalConnectorImportService } from "./personal-connector-import.service";
 import { PersonalEventsService } from "./personal-events.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
 import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.service";
+import { PersonalCustomerService } from "./personal-customer-service";
 
 @Module({
   controllers: [
@@ -47,6 +51,10 @@ import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.se
     KernelRuntimeService,
     PersonalRuntimeService,
     PersonalContextService,
+    PersonalSearchAnswerService,
+    PersonalConversationLabelsService,
+    PersonalConversationContextService,
+    PersonalCustomerService,
     PersonalContextProjectionService,
     PersonalDailyDigestService,
     PersonalInboxService,
@@ -58,7 +66,7 @@ import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.se
     PersonalConnectorService,
     PersonalEventsService,
     PersonalApiGuard,
-    PersonalWhatsAppImportService,
+    PersonalConnectorImportService,
     PersonalPluginService,
     {
       provide: ChannelDriverRegistry,

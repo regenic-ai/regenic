@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type UIEvent } from "react";
 import {
   applyDataDirectory,
   applyKernelSettings,
@@ -7,14 +7,13 @@ import {
   fetchKernelSettings,
   fetchStore,
   fetchDispatchPolicy,
-  fetchPendingInbox,
   saveDispatchPolicy,
-  triagePendingInbox,
   pickDataDirectory,
   resolveSourceRetention,
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
 import { ContextRecordsDialog } from "./ContextRecordsDialog";
+import { SemanticSettings } from "./SemanticSettings";
 import { useLocale } from "./LocaleContext";
 import type {
   DataDirectoryAction,
@@ -22,7 +21,6 @@ import type {
   DataDirectoryView,
   KernelMode,
   Locale,
-  InboxViewItem,
   MessageDisposition,
   PersonalDispatchPolicy,
   SourceRetentionView,
@@ -103,25 +101,54 @@ export function SettingsPage({
   const [dispatchPolicy, setDispatchPolicy] = useState<PersonalDispatchPolicy | null>(null);
   const [dispatchBusy, setDispatchBusy] = useState(false);
   const [dispatchMessage, setDispatchMessage] = useState<string | null>(null);
-  const [pending, setPending] = useState<InboxViewItem[]>([]);
-  const [pendingError, setPendingError] = useState<string | null>(null);
-  const [triagingId, setTriagingId] = useState<string | null>(null);
+  const [dispatchFailed, setDispatchFailed] = useState(false);
+  const [savedDispatch, setSavedDispatch] = useState<PersonalDispatchPolicy | null>(null);
+  const [savedKernel, setSavedKernel] = useState<{ mode: KernelMode; customOrigin: string }>({
+    mode: "local", customOrigin: "http://127.0.0.1:4370",
+  });
+  const [activeSection, setActiveSection] = useState("settings-general");
+  const [pathCopied, setPathCopied] = useState(false);
+  const pageRef = useRef<HTMLDivElement | null>(null);
+
+  const dispatchDirty = Boolean(dispatchPolicy && savedDispatch &&
+    JSON.stringify(dispatchPolicy) !== JSON.stringify(savedDispatch));
+  const kernelDirty = mode !== savedKernel.mode ||
+    (mode === "custom" && (customOrigin !== savedKernel.customOrigin || customApiKey.trim() !== ""));
+
+  const trackSection = (event: UIEvent<HTMLDivElement>) => {
+    const page = event.currentTarget;
+    const top = page.getBoundingClientRect().top + 96;
+    let current = "settings-general";
+    for (const node of page.querySelectorAll<HTMLElement>(".settings-sections > [id]")) {
+      if (node.getBoundingClientRect().top <= top) current = node.id;
+    }
+    if (page.scrollTop + page.clientHeight >= page.scrollHeight - 4) {
+      current = "settings-danger";
+    }
+    setActiveSection(current);
+  };
+
+  const jumpTo = (id: string) => {
+    setActiveSection(id);
+    pageRef.current?.querySelector(`#${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const copyPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setPathCopied(true);
+      window.setTimeout(() => setPathCopied(false), 1500);
+    } catch { /* clipboard unavailable */ }
+  };
 
   useEffect(() => {
     let cancelled = false;
     void fetchDispatchPolicy()
       .then((policy) => {
-        if (!cancelled) setDispatchPolicy(policy);
+        if (!cancelled) { setDispatchPolicy(policy); setSavedDispatch(policy); }
       })
       .catch(() => {
-        if (!cancelled) setDispatchMessage(t("settings.dispatchError"));
-      });
-    void fetchPendingInbox()
-      .then((items) => {
-        if (!cancelled) setPending(items);
-      })
-      .catch(() => {
-        if (!cancelled) setPendingError(t("settings.pendingError"));
+        if (!cancelled) { setDispatchMessage(t("settings.dispatchError")); setDispatchFailed(true); }
       });
     return () => { cancelled = true; };
   }, [activeOrigin, t]);
@@ -131,37 +158,16 @@ export function SettingsPage({
     setDispatchBusy(true);
     setDispatchMessage(null);
     try {
-      setDispatchPolicy(await saveDispatchPolicy(dispatchPolicy));
+      const saved = await saveDispatchPolicy(dispatchPolicy);
+      setDispatchPolicy(saved);
+      setSavedDispatch(saved);
+      setDispatchFailed(false);
       setDispatchMessage(t("settings.dispatchSaved"));
     } catch {
+      setDispatchFailed(true);
       setDispatchMessage(t("settings.dispatchError"));
     } finally {
       setDispatchBusy(false);
-    }
-  };
-
-  const refreshPending = async () => {
-    try {
-      setPending(await fetchPendingInbox());
-      setPendingError(null);
-    } catch {
-      setPendingError(t("settings.pendingError"));
-    }
-  };
-
-  const triagePending = async (
-    eventId: string,
-    disposition: "current_work" | "outside_current_work",
-  ) => {
-    setTriagingId(eventId);
-    try {
-      await triagePendingInbox(eventId, disposition);
-      await refreshPending();
-      await onChanged();
-    } catch {
-      setPendingError(t("settings.pendingTriageError"));
-    } finally {
-      setTriagingId(null);
     }
   };
 
@@ -170,6 +176,7 @@ export function SettingsPage({
       .then((settings) => {
         setMode(settings.mode);
         setCustomOrigin(settings.customOrigin);
+        setSavedKernel({ mode: settings.mode, customOrigin: settings.customOrigin });
         setHasSavedPersonalApiKey(settings.hasSavedPersonalApiKey === true);
         setActiveOrigin(settings.activeOrigin);
         setDataDir(settings.dataDirectory);
@@ -225,6 +232,7 @@ export function SettingsPage({
       });
       setMode(settings.mode);
       setCustomOrigin(settings.customOrigin);
+      setSavedKernel({ mode: settings.mode, customOrigin: settings.customOrigin });
       setHasSavedPersonalApiKey(settings.hasSavedPersonalApiKey === true);
       setCustomApiKey("");
       setActiveOrigin(settings.activeOrigin);
@@ -281,6 +289,7 @@ export function SettingsPage({
       const settings = await applyDataDirectory({ path, action });
       setMode(settings.mode);
       setCustomOrigin(settings.customOrigin);
+      setSavedKernel({ mode: settings.mode, customOrigin: settings.customOrigin });
       setActiveOrigin(settings.activeOrigin);
       setDataDir(settings.dataDirectory);
       setSourceRetention(settings.sourceRetention ?? null);
@@ -386,449 +395,465 @@ export function SettingsPage({
   const currentStore = store ?? emptyStore;
   const canClear = storeHasData(currentStore);
 
+  const sections = [
+    ["settings-general", t("settings.language")],
+    ["settings-dispatch", t("settings.dispatch")],
+    ["settings-semantic", t("semantic.title")],
+    ["settings-kernel", t("settings.kernel")],
+    ["settings-data", t("settings.store")],
+    ["settings-danger", t("settings.danger")],
+  ] as const;
+
   return (
-    <div className="page page-wide">
+    <div className="page page-wide settings-page" ref={pageRef} onScroll={trackSection}>
       <header className="page-hero">
         <h1>{t("settings.title")}</h1>
         <p className="page-lead">{t("settings.lead")}</p>
       </header>
 
-      <section className="card">
-        <h2>{t("settings.language")}</h2>
-        <p className="muted">{t("settings.languageLead")}</p>
-        <div className="choice-list language-choices">
-          <button
-            type="button"
-            className={`choice${locale === "en" ? " active" : ""}`}
-            onClick={() => chooseLocale("en")}
-          >
-            <span className="choice-mark" />
-            <span>
-              <strong>{t("settings.english")}</strong>
-              <span className="muted">{t("settings.englishHint")}</span>
-            </span>
-          </button>
-          <button
-            type="button"
-            className={`choice${locale === "zh" ? " active" : ""}`}
-            onClick={() => chooseLocale("zh")}
-          >
-            <span className="choice-mark" />
-            <span>
-              <strong>{t("settings.chinese")}</strong>
-              <span className="muted">{t("settings.chineseHint")}</span>
-            </span>
-          </button>
-        </div>
-      </section>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label={t("settings.title")}>
+          {sections.map(([id, label]) => (
+            <button key={id} type="button" className={activeSection === id ? "active" : ""}
+              onClick={() => jumpTo(id)}>{label}</button>
+          ))}
+        </nav>
 
-      <section className="card">
-        <h2>{t("settings.dispatch")}</h2>
-        <p className="muted">{t("settings.dispatchLead")}</p>
-        {dispatchPolicy && (
-          <>
-            {([
-              ["high_hint_disposition", "settings.dispatchHigh"],
-              ["actionable_disposition", "settings.dispatchActionable"],
-              ["short_text_disposition", "settings.dispatchShort"],
-              ["default_disposition", "settings.dispatchDefault"],
-            ] as const).map(([field, label]) => (
-              <label className="field" key={field}>
-                <span>{t(label)}</span>
-                <select value={dispatchPolicy[field]}
-                  onChange={(event) => setDispatchPolicy({
-                    ...dispatchPolicy, [field]: event.target.value as MessageDisposition,
-                  })}>
-                  <option value="current_work">{t("settings.dispatchCurrent")}</option>
-                  <option value="pending">{t("settings.dispatchPending")}</option>
-                  <option value="outside_current_work">{t("settings.dispatchOutside")}</option>
-                </select>
-              </label>
-            ))}
-            <div className="install-actions">
-              <button type="button" onClick={() => void savePersonalDispatch()} disabled={dispatchBusy}>
-                {dispatchBusy ? t("settings.dispatchSaving") : t("settings.dispatchSave")}
-              </button>
+        <div className="settings-sections">
+          <section className="card" id="settings-general">
+            <div className="settings-row">
+              <div>
+                <h2>{t("settings.language")}</h2>
+                <p className="muted">{t("settings.languageLead")}</p>
+              </div>
+              <div className="segmented" role="radiogroup" aria-label={t("settings.language")}>
+                {(["zh", "en"] as const).map((value) => (
+                  <button key={value} type="button" role="radio" aria-checked={locale === value}
+                    className={locale === value ? "active" : ""} onClick={() => chooseLocale(value)}>
+                    {t(value === "zh" ? "settings.chinese" : "settings.english")}
+                  </button>
+                ))}
+              </div>
             </div>
-          </>
-        )}
-        {dispatchMessage && <p className="muted" role="status">{dispatchMessage}</p>}
-      </section>
+          </section>
 
-      <section className="card">
-        <h2>{t("settings.pending")}</h2>
-        <button type="button" onClick={() => void refreshPending()}>{t("settings.pendingRefresh")}</button>
-        {pendingError && <p className="muted" role="alert">{pendingError}</p>}
-        {!pendingError && pending.length === 0 && <p className="muted">{t("settings.pendingEmpty")}</p>}
-        {pending.map((item) => (
-          <div className="pending-review-item" key={item.event.id}>
-            <div className="kv">
-              <span>{item.conversation_label || item.title || item.channel_label}</span>
-              <strong>{item.body_text || item.event.external_id}</strong>
+          <section className="card" id="settings-dispatch">
+            <div className="card-head">
+              <h2>{t("settings.dispatch")}</h2>
+              {dispatchDirty ? <span className="chip syncing">{t("settings.unsaved")}</span> : null}
             </div>
-            <div className="install-actions">
-              <button type="button" disabled={triagingId !== null}
-                onClick={() => void triagePending(item.event.id, "current_work")}>
-                {t("settings.dispatchCurrent")}
-              </button>
-              <button type="button" disabled={triagingId !== null}
-                onClick={() => void triagePending(item.event.id, "outside_current_work")}>
-                {t("settings.dispatchOutside")}
-              </button>
+            <p className="muted">{t("settings.dispatchLead")}</p>
+            {dispatchPolicy ? (
+              <div className="dispatch-rules">
+                {([
+                  ["high_hint_disposition", "settings.dispatchHigh", "settings.dispatchHighHint"],
+                  ["actionable_disposition", "settings.dispatchActionable", "settings.dispatchActionableHint"],
+                  ["short_text_disposition", "settings.dispatchShort", "settings.dispatchShortHint"],
+                  ["default_disposition", "settings.dispatchDefault", "settings.dispatchDefaultHint"],
+                ] as const).map(([field, label, hint]) => (
+                  <div className="dispatch-rule" key={field}>
+                    <div className="dispatch-rule-text">
+                      <strong>{t(label)}</strong>
+                      <span className="muted">{t(hint)}</span>
+                    </div>
+                    <div className="segmented" role="radiogroup" aria-label={t(label)}>
+                      {([
+                        ["current_work", "settings.dispatchCurrent"],
+                        ["pending", "settings.dispatchPending"],
+                        ["outside_current_work", "settings.dispatchOutside"],
+                      ] as const).map(([value, optionLabel]) => (
+                        <button key={value} type="button" role="radio"
+                          aria-checked={dispatchPolicy[field] === value}
+                          className={dispatchPolicy[field] === value ? "active" : ""}
+                          onClick={() => setDispatchPolicy({ ...dispatchPolicy, [field]: value as MessageDisposition })}>
+                          {t(optionLabel)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="settings-footer">
+              {dispatchMessage ? <span className={dispatchFailed ? "action-error" : "action-ok"} role="status">{dispatchMessage}</span> : <span />}
+              <span className="install-actions">
+                <button type="button" className="ghost" disabled={!dispatchDirty || dispatchBusy}
+                  onClick={() => setDispatchPolicy(savedDispatch)}>{t("settings.revert")}</button>
+                <button type="button" className="primary" onClick={() => void savePersonalDispatch()}
+                  disabled={!dispatchDirty || dispatchBusy}>
+                  {dispatchBusy ? t("settings.dispatchSaving") : t("settings.dispatchSave")}
+                </button>
+              </span>
             </div>
+          </section>
+
+          <div id="settings-semantic">
+            <SemanticSettings />
           </div>
-        ))}
-      </section>
 
-      <section className="card">
-        <h2>{t("settings.kernel")}</h2>
-        <div className="kv">
-          <span>{t("settings.inUse")}</span>
-          <strong>
-            <code>{activeOrigin}</code>
-          </strong>
-        </div>
-        <div className="choice-list">
-          <button
-            type="button"
-            className={`choice${mode === "local" ? " active" : ""}`}
-            onClick={() => setMode("local")}
-          >
-            <span className="choice-mark" />
-            <span>
-              <strong>{t("settings.local")}</strong>
-              <span className="muted">{t("settings.localHint")}</span>
-            </span>
-          </button>
-          <button
-            type="button"
-            className={`choice${mode === "custom" ? " active" : ""}`}
-            onClick={() => setMode("custom")}
-          >
-            <span className="choice-mark" />
-            <span>
-              <strong>{t("settings.custom")}</strong>
-              <span className="muted">{t("settings.customHint")}</span>
-            </span>
-          </button>
-        </div>
-        {mode === "custom" ? (
-          <>
-            <label className="field">
-              <span>{t("settings.url")}</span>
-              <input
-                value={customOrigin}
-                placeholder="https://your-kernel.example"
-                onChange={(event) => setCustomOrigin(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>{t("settings.personalApiKey")}</span>
-              <input
-                type="password"
-                value={customApiKey}
-                placeholder={
-                  hasSavedPersonalApiKey
-                    ? t("settings.personalApiKeySaved")
-                    : t("settings.personalApiKeyPlaceholder")
-                }
-                autoComplete="off"
-                onChange={(event) => setCustomApiKey(event.target.value)}
-              />
-            </label>
-          </>
-        ) : null}
-        {mode === "custom" && activeOrigin !== customOrigin ? (
-          <p className="muted">
-            {t("settings.customUnused", { origin: activeOrigin })}
-          </p>
-        ) : null}
-        <div className="install-actions">
-          <button type="button" className="primary" disabled={busy} onClick={() => void apply()}>
-            {busy ? t("settings.applying") : t("settings.apply")}
-          </button>
-        </div>
-        {error ? <p className="action-error">{error}</p> : null}
-      </section>
-
-      <section className="card">
-        <h2>{t("settings.store")}</h2>
-        <p className="muted">{t("settings.storeLead")}</p>
-        <div className="kv">
-          <span>{t("settings.storeKernel")}</span>
-          <strong>
-            <code>{activeOrigin}</code>
-          </strong>
-        </div>
-        <div className="kv">
-          <span>{t("settings.dataDir")}</span>
-          <strong>
-            <code>{dataDir?.path || "—"}</code>
-          </strong>
-        </div>
-        {dataDir?.splitLayout ? (
-          <>
-            <div className="kv">
-              <span>{t("settings.dataDirDatabase")}</span>
-              <strong>
-                <code>{dataDir.database}</code>
-              </strong>
+          <section className="card" id="settings-kernel">
+            <div className="card-head">
+              <h2>{t("settings.kernel")}</h2>
+              {kernelDirty ? <span className="chip syncing">{t("settings.unsaved")}</span> : null}
             </div>
-            <div className="kv">
-              <span>{t("settings.dataDirBlobs")}</span>
-              <strong>
-                <code>{dataDir.blobRoot}</code>
-              </strong>
+            <div className="settings-current">
+              <span className="muted">{t("settings.inUse")}</span>
+              <code>{activeOrigin}</code>
             </div>
-            <p className="muted">{t("settings.dataDirSplit")}</p>
-          </>
-        ) : null}
-        <p className="muted">{t("settings.dataDirLead")}</p>
-        {dataDir?.source === "relocated" && dataDir.relocatedFrom ? (
-          <p className="muted">
-            {t("settings.dataDirFollowed", {
-              path: dataDir.path,
-              from: dataDir.relocatedFrom,
-            })}
-          </p>
-        ) : null}
-        {dataDir?.source === "repo" && dataDir.checkoutRoot ? (
-          <p className="muted">
-            {t("settings.dataDirCheckout", {
-              checkout: dataDir.checkoutRoot,
-              product: dataDir.productRoot,
-            })}
-          </p>
-        ) : null}
-        {dataDir?.envOverride ? (
-          <p className="muted">{t("settings.dataDirEnv")}</p>
-        ) : null}
-        {dataDir && !dataDir.canChange && !dataDir.envOverride ? (
-          <p className="muted">{t("settings.dataDirCustom")}</p>
-        ) : null}
-        {dataDir?.remoteWarning || dataPlan?.remoteWarning ? (
-          <p className="action-hint">{t("settings.dataDirRemote")}</p>
-        ) : null}
-        {dataPlan ? (
-          <div className="data-dir-confirm">
-            <p>
-              {dataPlan.destHasData
-                ? dataPlan.destLooksLikeStore === false
-                  ? t("settings.dataDirReasonNotStore")
-                  : t("settings.dataDirDestExists")
-                : dataPlan.sourceHasData
-                  ? t("settings.dataDirMigrateLead", { path: dataPlan.path })
-                  : t("settings.dataDirEmptyLead")}
-            </p>
-            {dataPlan.destHasData ? (
-              <p className="muted">{t("settings.dataDirReplaceLead")}</p>
-            ) : null}
-            {dataPlan.relocatedTo ? (
-              <p className="muted">
-                {t("settings.dataDirDestRelocated", { path: dataPlan.relocatedTo })}
-              </p>
-            ) : null}
-            {dataPlan.pickedPath ? (
-              <p className="muted">
-                {t("settings.dataDirNested", { path: dataPlan.path })}
-              </p>
-            ) : null}
-            <p className="muted">
-              <code>{dataPlan.path}</code>
-            </p>
-            <div className="install-actions">
+            <div className="choice-list">
               <button
                 type="button"
-                className="ghost"
-                disabled={dataBusy}
-                onClick={() => setDataPlan(null)}
+                className={`choice${mode === "local" ? " active" : ""}`}
+                onClick={() => setMode("local")}
               >
-                {t("settings.storeCancel")}
+                <span className="choice-mark" />
+                <span>
+                  <strong>{t("settings.local")}</strong>
+                  <span className="muted">{t("settings.localHint")}</span>
+                </span>
               </button>
-              {dataPlan.destHasData ? (
-                <>
-                  <button
-                    type="button"
-                    className="ghost danger"
-                    disabled={dataBusy}
-                    onClick={() => void commitDataDirectory(dataPlan.path, "replace")}
-                  >
-                    {t("settings.dataDirReplace")}
-                  </button>
-                  {dataPlan.destLooksLikeStore !== false ? (
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={dataBusy}
-                      onClick={() => void commitDataDirectory(dataPlan.path, "adopt")}
-                    >
-                      {dataBusy ? t("settings.dataDirApplying") : t("settings.dataDirAdopt")}
+              <button
+                type="button"
+                className={`choice${mode === "custom" ? " active" : ""}`}
+                onClick={() => setMode("custom")}
+              >
+                <span className="choice-mark" />
+                <span>
+                  <strong>{t("settings.custom")}</strong>
+                  <span className="muted">{t("settings.customHint")}</span>
+                </span>
+              </button>
+            </div>
+            {mode === "custom" ? (
+              <div className="settings-fields">
+                <label className="field">
+                  <span>{t("settings.url")}</span>
+                  <input
+                    value={customOrigin}
+                    placeholder="https://your-kernel.example"
+                    onChange={(event) => setCustomOrigin(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("settings.personalApiKey")}</span>
+                  <input
+                    type="password"
+                    value={customApiKey}
+                    placeholder={
+                      hasSavedPersonalApiKey
+                        ? t("settings.personalApiKeySaved")
+                        : t("settings.personalApiKeyPlaceholder")
+                    }
+                    autoComplete="off"
+                    onChange={(event) => setCustomApiKey(event.target.value)}
+                  />
+                </label>
+              </div>
+            ) : null}
+            {mode === "custom" && activeOrigin !== customOrigin ? (
+              <p className="muted">
+                {t("settings.customUnused", { origin: activeOrigin })}
+              </p>
+            ) : null}
+            <div className="settings-footer">
+              {error ? <span className="action-error">{error}</span> : <span className="muted">{t("settings.kernelApplyHint")}</span>}
+              <span className="install-actions">
+                <button type="button" className="ghost" disabled={!kernelDirty || busy} onClick={() => {
+                  setMode(savedKernel.mode); setCustomOrigin(savedKernel.customOrigin); setCustomApiKey("");
+                }}>{t("settings.revert")}</button>
+                <button type="button" className="primary" disabled={!kernelDirty || busy} onClick={() => void apply()}>
+                  {busy ? t("settings.applying") : t("settings.apply")}
+                </button>
+              </span>
+            </div>
+          </section>
+
+          <section className="card" id="settings-data">
+            <h2>{t("settings.store")}</h2>
+            <p className="muted">{t("settings.storeLead")}</p>
+            <div className="store-footprint">
+              <StoreStat
+                label={t("settings.storeConversations")}
+                value={currentStore.conversations}
+              />
+              <StoreStat label={t("settings.storeMessages")} value={currentStore.events} />
+              <StoreStat label={t("settings.storeWork")} value={currentStore.work_items} />
+              <StoreStat label={t("settings.storeBlobs")} value={currentStore.blobs} />
+              <StoreStat
+                label={t("settings.storeContext")}
+                value={contextRecordCount(currentStore)}
+                ariaLabel={t("settings.contextOpen")}
+                onClick={() => setContextOpen(true)}
+              />
+            </div>
+            {contextOpen ? (
+              <ContextRecordsDialog onClose={() => setContextOpen(false)} />
+            ) : null}
+
+            <div className="settings-path">
+              <div className="settings-path-text">
+                <span className="muted">{t("settings.dataDir")}</span>
+                <code title={dataDir?.path}>{dataDir?.path || "—"}</code>
+              </div>
+              {dataPlan ? null : (
+                <span className="install-actions">
+                  {dataDir?.path ? (
+                    <button type="button" className="ghost" onClick={() => void copyPath(dataDir.path)}>
+                      {pathCopied ? t("settings.copied") : t("settings.copyPath")}
                     </button>
                   ) : null}
-                </>
-              ) : (
-                <>
                   <button
                     type="button"
                     className="ghost"
-                    disabled={dataBusy}
-                    onClick={() => void commitDataDirectory(dataPlan.path, "empty")}
+                    disabled={!dataDir?.canChange || dataBusy}
+                    onClick={() => void chooseFolder()}
                   >
-                    {t("settings.dataDirEmpty")}
+                    {dataBusy ? t("settings.dataDirApplying") : t("settings.dataDirBrowse")}
                   </button>
-                  {dataPlan.sourceHasData ? (
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={dataBusy}
-                      onClick={() => void commitDataDirectory(dataPlan.path, "migrate")}
-                    >
-                      {dataBusy
-                        ? t("settings.dataDirApplying")
-                        : t("settings.dataDirMigrate")}
-                    </button>
-                  ) : null}
-                </>
+                </span>
               )}
             </div>
-          </div>
-        ) : (
-          <div className="install-actions">
-            <button
-              type="button"
-              className="ghost"
-              disabled={!dataDir?.canChange || dataBusy}
-              onClick={() => void chooseFolder()}
-            >
-              {dataBusy ? t("settings.dataDirApplying") : t("settings.dataDirBrowse")}
-            </button>
-          </div>
-        )}
-        {dataDone ? <p className="action-ok">{dataDone}</p> : null}
-        {dataError ? <p className="action-error">{dataError}</p> : null}
-        {sourceRetention?.canDelete ? (
-          <div className="data-dir-reclaim">
-            <p className="data-dir-reclaim-size">{sourceRetention.size}</p>
-            <p>
-              {t("settings.dataDirReclaimLead", { path: sourceRetention.path })}
-            </p>
-            {reclaimConfirming ? (
-              <>
+            <p className="muted settings-note">{t("settings.dataDirLead")}</p>
+            {dataDir?.splitLayout ? (
+              <details className="settings-details">
+                <summary>{t("settings.dataDirSplitTitle")}</summary>
+                <div className="kv">
+                  <span>{t("settings.dataDirDatabase")}</span>
+                  <strong><code>{dataDir.database}</code></strong>
+                </div>
+                <div className="kv">
+                  <span>{t("settings.dataDirBlobs")}</span>
+                  <strong><code>{dataDir.blobRoot}</code></strong>
+                </div>
+                <p className="muted">{t("settings.dataDirSplit")}</p>
+              </details>
+            ) : null}
+            {dataDir?.source === "relocated" && dataDir.relocatedFrom ? (
+              <p className="muted settings-note">
+                {t("settings.dataDirFollowed", {
+                  path: dataDir.path,
+                  from: dataDir.relocatedFrom,
+                })}
+              </p>
+            ) : null}
+            {dataDir?.source === "repo" && dataDir.checkoutRoot ? (
+              <p className="muted settings-note">
+                {t("settings.dataDirCheckout", {
+                  checkout: dataDir.checkoutRoot,
+                  product: dataDir.productRoot,
+                })}
+              </p>
+            ) : null}
+            {dataDir?.envOverride ? (
+              <p className="muted settings-note">{t("settings.dataDirEnv")}</p>
+            ) : null}
+            {dataDir && !dataDir.canChange && !dataDir.envOverride ? (
+              <p className="muted settings-note">{t("settings.dataDirCustom")}</p>
+            ) : null}
+            {dataDir?.remoteWarning || dataPlan?.remoteWarning ? (
+              <p className="action-hint">{t("settings.dataDirRemote")}</p>
+            ) : null}
+            {dataPlan ? (
+              <div className="data-dir-confirm">
+                <p>
+                  {dataPlan.destHasData
+                    ? dataPlan.destLooksLikeStore === false
+                      ? t("settings.dataDirReasonNotStore")
+                      : t("settings.dataDirDestExists")
+                    : dataPlan.sourceHasData
+                      ? t("settings.dataDirMigrateLead", { path: dataPlan.path })
+                      : t("settings.dataDirEmptyLead")}
+                </p>
+                {dataPlan.destHasData ? (
+                  <p className="muted">{t("settings.dataDirReplaceLead")}</p>
+                ) : null}
+                {dataPlan.relocatedTo ? (
+                  <p className="muted">
+                    {t("settings.dataDirDestRelocated", { path: dataPlan.relocatedTo })}
+                  </p>
+                ) : null}
+                {dataPlan.pickedPath ? (
+                  <p className="muted">
+                    {t("settings.dataDirNested", { path: dataPlan.path })}
+                  </p>
+                ) : null}
                 <p className="muted">
-                  {t("settings.dataDirReclaimConfirmLead", {
-                    size: sourceRetention.size,
-                  })}
+                  <code>{dataPlan.path}</code>
                 </p>
                 <div className="install-actions">
                   <button
                     type="button"
                     className="ghost"
-                    disabled={reclaimBusy}
-                    onClick={() => setReclaimConfirming(false)}
+                    disabled={dataBusy}
+                    onClick={() => setDataPlan(null)}
+                  >
+                    {t("settings.storeCancel")}
+                  </button>
+                  {dataPlan.destHasData ? (
+                    <>
+                      <button
+                        type="button"
+                        className="ghost danger"
+                        disabled={dataBusy}
+                        onClick={() => void commitDataDirectory(dataPlan.path, "replace")}
+                      >
+                        {t("settings.dataDirReplace")}
+                      </button>
+                      {dataPlan.destLooksLikeStore !== false ? (
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={dataBusy}
+                          onClick={() => void commitDataDirectory(dataPlan.path, "adopt")}
+                        >
+                          {dataBusy ? t("settings.dataDirApplying") : t("settings.dataDirAdopt")}
+                        </button>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={dataBusy}
+                        onClick={() => void commitDataDirectory(dataPlan.path, "empty")}
+                      >
+                        {t("settings.dataDirEmpty")}
+                      </button>
+                      {dataPlan.sourceHasData ? (
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={dataBusy}
+                          onClick={() => void commitDataDirectory(dataPlan.path, "migrate")}
+                        >
+                          {dataBusy
+                            ? t("settings.dataDirApplying")
+                            : t("settings.dataDirMigrate")}
+                        </button>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              </div>
+            ) : null}
+            {dataDone ? <p className="action-ok">{dataDone}</p> : null}
+            {dataError ? <p className="action-error">{dataError}</p> : null}
+            {sourceRetention?.canDelete ? (
+              <div className="data-dir-reclaim">
+                <p className="data-dir-reclaim-size">{sourceRetention.size}</p>
+                <p>
+                  {t("settings.dataDirReclaimLead", { path: sourceRetention.path })}
+                </p>
+                {reclaimConfirming ? (
+                  <>
+                    <p className="muted">
+                      {t("settings.dataDirReclaimConfirmLead", {
+                        size: sourceRetention.size,
+                      })}
+                    </p>
+                    <div className="install-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={reclaimBusy}
+                        onClick={() => setReclaimConfirming(false)}
+                      >
+                        {t("settings.storeCancel")}
+                      </button>
+                      <button
+                        type="button"
+                        className="primary danger"
+                        disabled={reclaimBusy}
+                        onClick={() => void resolveRetention("discard")}
+                      >
+                        {reclaimBusy
+                          ? t("settings.dataDirReclaimRemoving")
+                          : t("settings.dataDirReclaimConfirm")}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="muted">{t("settings.dataDirReclaimHint")}</p>
+                    <div className="install-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={reclaimBusy || dataBusy}
+                        onClick={() => void resolveRetention("keep")}
+                      >
+                        {t("settings.dataDirReclaimKeep")}
+                      </button>
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={reclaimBusy || dataBusy}
+                        onClick={() => {
+                          setDataDone(null);
+                          setReclaimConfirming(true);
+                        }}
+                      >
+                        {t("settings.dataDirReclaimRemove", {
+                          size: sourceRetention.size,
+                        })}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="card danger-zone" id="settings-danger">
+            <h2>{t("settings.danger")}</h2>
+            <div className="settings-row">
+              <div>
+                <strong>{t("settings.storeClear")}</strong>
+                <p className="muted">{canClear ? t("settings.storeClearHint") : t("settings.storeEmpty")}</p>
+              </div>
+              {confirming ? null : (
+                <button
+                  type="button"
+                  className="ghost danger"
+                  disabled={!canClear || storeBusy}
+                  onClick={() => {
+                    setStoreDone(null);
+                    setConfirming(true);
+                  }}
+                >
+                  {t("settings.storeClear")}
+                </button>
+              )}
+            </div>
+            {confirming ? (
+              <div className="store-confirm">
+                <p>{t("settings.storeConfirmLead")}</p>
+                <div className="install-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={storeBusy}
+                    onClick={() => setConfirming(false)}
                   >
                     {t("settings.storeCancel")}
                   </button>
                   <button
                     type="button"
                     className="primary danger"
-                    disabled={reclaimBusy}
-                    onClick={() => void resolveRetention("discard")}
+                    disabled={storeBusy}
+                    onClick={() => void clearLocalData()}
                   >
-                    {reclaimBusy
-                      ? t("settings.dataDirReclaimRemoving")
-                      : t("settings.dataDirReclaimConfirm")}
+                    {storeBusy ? t("settings.storeClearing") : t("settings.storeConfirm")}
                   </button>
                 </div>
-              </>
-            ) : (
-              <>
-                <p className="muted">{t("settings.dataDirReclaimHint")}</p>
-                <div className="install-actions">
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={reclaimBusy || dataBusy}
-                    onClick={() => void resolveRetention("keep")}
-                  >
-                    {t("settings.dataDirReclaimKeep")}
-                  </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={reclaimBusy || dataBusy}
-                    onClick={() => {
-                      setDataDone(null);
-                      setReclaimConfirming(true);
-                    }}
-                  >
-                    {t("settings.dataDirReclaimRemove", {
-                      size: sourceRetention.size,
-                    })}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        ) : null}
-        <div className="store-footprint">
-          <StoreStat
-            label={t("settings.storeConversations")}
-            value={currentStore.conversations}
-          />
-          <StoreStat label={t("settings.storeMessages")} value={currentStore.events} />
-          <StoreStat label={t("settings.storeWork")} value={currentStore.work_items} />
-          <StoreStat label={t("settings.storeBlobs")} value={currentStore.blobs} />
-          <StoreStat
-            label={t("settings.storeContext")}
-            value={contextRecordCount(currentStore)}
-            ariaLabel={t("settings.contextOpen")}
-            onClick={() => setContextOpen(true)}
-          />
+              </div>
+            ) : null}
+            {storeDone ? <p className="action-ok">{storeDone}</p> : null}
+            {storeError ? <p className="action-error">{storeError}</p> : null}
+          </section>
         </div>
-        {contextOpen ? (
-          <ContextRecordsDialog onClose={() => setContextOpen(false)} />
-        ) : null}
-        {!canClear ? <p className="muted">{t("settings.storeEmpty")}</p> : null}
-        {confirming ? (
-          <div className="store-confirm">
-            <p>{t("settings.storeConfirmLead")}</p>
-            <div className="install-actions">
-              <button
-                type="button"
-                className="ghost"
-                disabled={storeBusy}
-                onClick={() => setConfirming(false)}
-              >
-                {t("settings.storeCancel")}
-              </button>
-              <button
-                type="button"
-                className="primary danger"
-                disabled={storeBusy}
-                onClick={() => void clearLocalData()}
-              >
-                {storeBusy ? t("settings.storeClearing") : t("settings.storeConfirm")}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="install-actions">
-            <button
-              type="button"
-              className="ghost danger"
-              disabled={!canClear || storeBusy}
-              onClick={() => {
-                setStoreDone(null);
-                setConfirming(true);
-              }}
-            >
-              {t("settings.storeClear")}
-            </button>
-          </div>
-        )}
-        {storeDone ? <p className="action-ok">{storeDone}</p> : null}
-        {storeError ? <p className="action-error">{storeError}</p> : null}
-      </section>
+      </div>
     </div>
   );
 }

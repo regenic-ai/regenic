@@ -13,7 +13,9 @@
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
-    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/domain build && pnpm --filter @regenic/blob-store build && pnpm --filter @regenic/authority-store build && pnpm run build && node --test test/*.test.cjs"
+    "bench:retrieval": "pnpm --filter @regenic/context-engine... build && node test/chinese-retrieval.bench.cjs",
+    "eval:customer-service": "pnpm --filter @regenic/context-engine... build && node test/customer-service-evaluation.bench.cjs",
+    "test": "pnpm --filter @regenic/context-engine... build && node --test test/*.test.cjs"
   },
   "dependencies": {
     "@regenic/domain": "workspace:*",
@@ -22,6 +24,8 @@
   "devDependencies": {
     "@regenic/authority-store": "workspace:*",
     "@regenic/blob-store": "workspace:*",
+    "@regenic/lexical-index": "workspace:*",
+    "@regenic/vector-index": "workspace:*",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   }

@@ -75,6 +75,7 @@ const INBOX_COLUMNS = `
   d.reason_codes, d.score, d.decided_at,
   e.id, e.source, e.external_id, e.operation, e.content_hash,
   e.parent_event_id, e.thread_id, e.actor_id, e.required_scope_ids,
+  e.direction_tags, e.weight_hints, e.attrs,
   e.occurred_at, e.ingested_at
 `;
 

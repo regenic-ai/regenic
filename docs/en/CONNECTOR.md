@@ -24,7 +24,7 @@ A connector registers a `ChannelDriver` with a stable `connector_type` and a
 `installCatalog().channel_label`, then `CHANNELS`, then catalog `title`,
 then `SOURCE`. Those catalog fields are `CopyRef`s; the API view resolves
 them for `GET /v1/me/engine?locale=` or `Accept-Language`. Built-in dsh /
-slack / feishu stay in `CHANNELS` for old Events when no driver is loaded.
+feishu stay in `CHANNELS` for old Events when no driver is loaded.
 
 The ingest service is the only writer of Event, Blob, ACL, and identity rows.
 `ChannelConnector` and `EgressAdapter` do not persist those records.
@@ -173,6 +173,16 @@ does not spawn a child process by default.
   swallow per-driver failures.
 - A stdio out-of-process host is for untrusted third-party plugins, not
   this phase.
+
+Personal API orchestration has a separate, compile-time capability boundary.
+Each `PersonalConnectorService` constructs one owned `ConnectorState`; helpers
+never receive the service itself. Installation, egress, conversation creation,
+webhooks, live pulls, and due-work helpers declare only their required state
+capabilities. Installation and conversation recovery request catch-up through
+an explicit callback, not scheduler internals. Maintenance is read live rather
+than copied into a context snapshot; timers and stream locks remain private to
+the service. Shared DTOs live in `personal-connector-types.ts`, and the dependency
+boundary check rejects helper imports back into the owning service.
 
 ## Message format
 
@@ -329,23 +339,23 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 
 | Method | Description |
 | --- | --- |
-| `install` | Persist non-secret config. Slack requires `channel_id`. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
+| `install` | Persist non-secret config. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
-| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, `receipts`, `create_with_task`, and `hold_while_working`. `await_reply`: DSH / Cursor set it; Feishu / Slack omit it. `list_title`: Feishu / Slack set `conversation`; DSH / Cursor set `prompt` (first user message). `hydrate_on_open`: pull a recent page when opening a thread; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Slack / Cursor omit it. `create_with_task` / `hold_while_working`: Cursor sets them; DSH omits them. |
-| `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Local names only: Feishu uses install `chat_names`, Slack uses `channel_name`. Must not call `listAllChats` or block opening a thread. |
+| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, `receipts`, `create_with_task`, and `hold_while_working`. `await_reply`: DSH / Cursor set it; Feishu omits it. `list_title`: Feishu sets `conversation`; DSH / Cursor set `prompt` (first user message). `hydrate_on_open`: pull a recent page when opening a thread; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Cursor omit it. `create_with_task` / `hold_while_working`: Cursor sets them; DSH omits them. |
+| `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Local names only: Feishu uses install `chat_names`. Must not call `listAllChats` or block opening a thread. |
 | `listPrompts` / `answerPrompt` | Optional. Live pending decisions. DSH web mounts mux, maps `question/requested` / `approval/requested` to a channel-agnostic Prompt, and answers on `/api/respond`. `not-pending` is treated as settled. |
 | `waitThread` | Optional. Wait fd for one inferior. DSH web subscribes to mux `session/event` (`turn/start` / `turn/end`) and prompt frames. The kernel follow/polls that stream so live pages ingest, then `status()` reaps. Drivers must not write Events. Channels without wait still catch up on history poll. |
 | `readAttention` / `ackAttention` | Optional. Source overlay for *my* unread of their inbound. Feishu calls user-identity `read_status` on the latest inbound `om_`. Failure or an official “read” must not hide a thread the PC has never opened. Ack writes the local cursor first. |
 | `readReceipts` | Optional. Peer read of my outbound. Feishu calls user-identity `read_users` on `:out:om_`. Empty items stay Sent. Do not reuse this as conversation unread. |
 | `surfaceGeneration` | Optional. Live surface generation, appended to `inbox_digest` as `&s=` so a new approval is visible to desktop polling. |
-| `resolveStreams` | One `ConnectorStream` per pull unit. Slack: `channel:<id>`. Feishu: `chat:<id>` for picked chats; when `selection=all`, follow `options.threads` from the kernel (current work ∪ the open thread) plus new `chat_id`s from the latest directory page (cached about 2 minutes). Unmount streams outside that set. Must not read the inbox or call `listAllChats` on every tick. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
+| `resolveStreams` | One `ConnectorStream` per pull unit. Feishu: `chat:<id>` for picked chats; when `selection=all`, follow `options.threads` from the kernel (current work ∪ the open thread) plus new `chat_id`s from the latest directory page (cached about 2 minutes). Unmount streams outside that set. Must not read the inbox or call `listAllChats` on every tick. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
 | `createThread` | Optional. Required when `create` is true. Absent means the kernel returns 501. When `create_with_task` is set, it receives `options.text` and starts the run; otherwise it opens an empty session and the first user text is a normal send. |
 | `bindEgress` | Optional. Required when `reply` is true. Absent means the kernel returns 501. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
 | `listEgressQueue` / `ackEgressQueue` | Optional. Generic drain for an adapter that cannot write the channel in-process (a local browser extension). Exposed as `GET/POST /v1/me/connectors/:id/egress`, not a per-channel API. |
 | `locales` | Optional. Plugin-owned English (source) and Chinese tables. First-party drivers implement this so catalog keys resolve. |
-| `installCatalog` | Optional. Engine card. Absent means this driver does not appear. Slack, DSH, Feishu, and extra plugins use this same method. Copy fields are `CopyRef`s, not translated sentences. `setup_steps` are the numbered steps in the dialog; the desktop renders already-resolved strings. |
+| `installCatalog` | Optional. Engine card. Absent means this driver does not appear. DSH, Feishu, Cursor, and extra plugins use this same method. Copy fields are `CopyRef`s, not translated sentences. `setup_steps` are the numbered steps in the dialog; the desktop renders already-resolved strings. |
 | `presentInstall` | Optional. Label and detail for an installed row (`CopyRef`). |
 | `writeBackLabels` | Optional. Exact aliases for a prompt option. The kernel matches the first result line. |
 | `subjectCatalog` | Optional. Work-unit type vocabulary. The Recipes page renders `id` / `label`. The kernel only equality-matches. Omit it when the source has no type dimension. |
@@ -421,6 +431,42 @@ send(intent: SendIntent): Promise<DeliveryReceipt>
 `SendIntent.content` is `ContentPart[]` (`body` plus attachments). The
 adapter writes that envelope back to the same source and thread.
 
+Reply clients should generate one `client_request_id` per send and reuse it on
+retries. Before calling the channel, the API persists an atomic claim: only one
+caller can send a given organization/request key. If omitted, a key is generated
+and returned on success; clients that must survive response loss need to provide
+their own key in advance.
+Network errors, unconfirmed acceptance, and legacy `failed` / `pending` attempts
+return `send_uncertain` and are never automatically reclaimed for another send.
+Check the channel before sending a new request.
+An adapter may throw `SendNotAcceptedError` only when the entire send was rejected
+before any message was accepted or queued. Error codes such as `throttled` alone
+are not proof, especially after a partial multipart send. The API durably records
+these attempts as `rejected` and returns the original error (for example, 429).
+Same-key, same-thread retries atomically reclaim only this explicit state; old
+`failed` attempts remain uncertain. Drivers with an egress queue use this path for
+validation, capacity, and rate-limit rejections before enqueue. A queue rejection
+describes only that enqueue, not earlier operations in a multipart send.
+If recording the rejection fails, the API returns `send_rejection_pending` (503)
+and does not authorize an automatic resend. SQLite schema 52 / PostgreSQL schema
+53 add this state without reclassifying existing records; upgrade API and worker
+together, since older binaries cannot open the new schema.
+After confirmed acceptance, the API persists the receipt and recovery material
+containing the original body and attachments. Same-key retries then repair only
+local ingestion and message aliases, using the original content without egress.
+Initial local persistence failures return `send_recovery_pending` (503); reuse
+the original key for recovery rather than start a new send.
+Legacy `accepted` attempts without recovery material return
+`send_recovery_unavailable`; refresh the channel rather than resend.
+A crash after channel acceptance but before receipt persistence can still leave
+an uncertain attempt; this is not an end-to-end exactly-once guarantee.
+
+Supporting adapters should derive stable, distinct per-message keys from
+`SendIntent.idempotency_key`. Feishu derives UUIDs from the installation, chat,
+request key, and text/image/file position. Upstream deduplication may be
+time-bounded and other adapters may not support it; a key alone does not make
+retries safe.
+
 ## Catalog
 
 `GET /v1/me/engine` returns a catalog. The Engine page opens a dialog for
@@ -428,8 +474,8 @@ those catalog fields on Install and on Edit scope. When required
 prerequisites are not ready, the card button says Set up and still
 opens that same dialog.
 
-A driver appears there only when it implements `installCatalog()`. Slack,
-DSH, Feishu, and extra plugins use that same method. The host does not
+A driver appears there only when it implements `installCatalog()`.
+DSH, Feishu, Cursor, and extra plugins use that same method. The host does not
 keep a parallel list. `singleton: true` allows one install.
 `presentInstall` labels an installed row; without it the host uses
 `instance_label` / `instance_detail_key`, then the installation id. The
@@ -480,12 +526,11 @@ or network. Form dropdowns load from `GET /v1/me/engine/catalog-options`.
 The desktop only renders the catalog. Adding a source does not change
 the API or the desktop.
 
-Capability tables, kind maps, and setup for Slack / DSH / Feishu are in
+Capability tables, kind maps, and setup for DSH / Feishu / Cursor are in
 [Built-in drivers](CONNECTOR_DRIVERS.md).
 
 ## Out of scope
 
 - OAuth install
 - Connector marketplace
-- Slack send
 - Out-of-process / stdio plugin host

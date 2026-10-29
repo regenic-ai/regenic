@@ -145,6 +145,7 @@ describe("http executor", () => {
     });
     const handle = await executor.start(
       {
+        run_id: "run-durable-1",
         work_item: { id: "w1", thread_id: "feishu:oc_1" },
         recipe: {
           id: "r1",
@@ -158,13 +159,15 @@ describe("http executor", () => {
     assert.equal(handle.external_run_id, "ext-9");
     assert.equal(calls[0].url, "https://agent.example/exec/v1/runs");
     assert.equal(calls[0].init.method, "POST");
+    assert.equal(calls[0].init.headers["idempotency-key"], "run-durable-1");
     assert.equal(calls[0].init.headers.authorization, "Bearer secret");
     const body = JSON.parse(calls[0].init.body);
+    assert.equal(body.run_id, "run-durable-1");
     assert.equal(body.evidence_text, "ticket");
     assert.equal(body.executor_config.prompt, "go");
   });
 
-  it("treats a dead remote as a failed handle", async () => {
+  it("surfaces an unreachable remote without inventing a failed execution", async () => {
     const executor = createHttpTaskExecutor({
       executor_type: "http-1",
       label: "Remote",
@@ -173,19 +176,36 @@ describe("http executor", () => {
         throw new Error("offline");
       },
     });
-    const handle = await executor.status(
+    await assert.rejects(executor.status(
       { id: "run-1", external_run_id: "ext-1", status: "running" },
       { org_id: "o", env: {} },
-    );
-    assert.equal(handle.status, "failed");
+    ), /could not be confirmed/);
   });
+
+  for (const [label, response, message] of [
+    ["non-2xx", () => new Response("Unavailable", { status: 503 }), /HTTP 503/],
+    ["invalid JSON", () => new Response("not JSON"), /invalid JSON/],
+    ["unknown status", () => Response.json({ status: "unknown" }), /invalid run status/],
+    ["missing status", () => Response.json({ external_run_id: "ext-1" }), /invalid run status/],
+  ]) {
+    it(`rejects ${label} start responses rather than fabricating failures`, async () => {
+      const executor = createHttpTaskExecutor({
+        executor_type: "remote", label: "Remote", base_url: "https://agent.example",
+        fetch: async () => response(),
+      });
+      await assert.rejects(executor.start({
+        run_id: "run-1",
+        work_item: { id: "w1", thread_id: "feishu:oc_1" },
+        recipe: { id: "r1", executor_config: {} },
+        evidence_text: "task",
+      }, { org_id: "o", env: {} }), message);
+    });
+  }
 });
 
 describe("handleFromHttp", () => {
-  it("defaults unknown status to failed", () => {
-    const handle = handleFromHttp({ external_run_id: "x" }, "fallback");
-    assert.equal(handle.status, "failed");
-    assert.equal(handle.external_run_id, "x");
+  it("rejects a missing status instead of inventing a failed execution", () => {
+    assert.throws(() => handleFromHttp({ external_run_id: "x" }, "fallback"), /invalid run status/);
   });
 });
 

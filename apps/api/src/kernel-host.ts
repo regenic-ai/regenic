@@ -1,11 +1,17 @@
 import {
   contextProjectionCoordinatorPlugin,
+  contextEmbeddingWorkerPlugin,
+  hybridEventRetrieverPlugin,
   dailyDigestProjectionPlugin,
   acceptedThreadSummaryRetrieverPlugin,
   deterministicEventRetrieverPlugin,
   deterministicThreadSummaryProjectorPlugin,
+  indexedEventRetrieverPlugin,
   personalContextEnginePlugin,
 } from "@regenic/context-engine";
+import { sqliteContextLexicalIndexPlugin } from "@regenic/lexical-index";
+import { localEmbeddingProviderPlugin, type LocalEmbeddingConfig } from "@regenic/embedding-provider";
+import { sqliteContextVectorIndexPlugin } from "@regenic/vector-index";
 import { contextRegistriesPlugin, ingestPlugin } from "@regenic/domain";
 import {
   modelProviderPlugin,
@@ -26,6 +32,8 @@ export interface KernelHostOptions<A = unknown, B = unknown> {
   authority: KernelPluginBinding<A>;
   blobs: KernelPluginBinding<B>;
   orgId: string;
+  lexicalDatabase?: string;
+  embedding?: LocalEmbeddingConfig & { database: string };
   model?: ModelProviderPluginConfig;
 }
 
@@ -38,13 +46,31 @@ export async function createKernelHost<A, B>(
     await host.plugin(options.blobs.plugin, options.blobs.config as B);
     await host.plugin(ingestPlugin);
     await host.plugin(contextRegistriesPlugin);
-    await host.plugin(deterministicEventRetrieverPlugin);
+    if (options.lexicalDatabase !== undefined) {
+      await host.plugin(sqliteContextLexicalIndexPlugin, { path: options.lexicalDatabase });
+      if (!options.embedding) await host.plugin(indexedEventRetrieverPlugin);
+    } else {
+      if (!options.embedding) await host.plugin(deterministicEventRetrieverPlugin);
+    }
     await host.plugin(acceptedThreadSummaryRetrieverPlugin);
     await host.plugin(deterministicThreadSummaryProjectorPlugin);
-    await host.plugin(contextProjectionCoordinatorPlugin);
+    await host.plugin(contextProjectionCoordinatorPlugin, {
+      lexical_index: options.lexicalDatabase === undefined
+        ? undefined
+        : host.get("context-lexical-index"),
+    });
     await host.plugin(dailyDigestProjectionPlugin);
-    await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });
+    await host.plugin(personalContextEnginePlugin, { org_id: options.orgId, hybrid: options.embedding !== undefined });
     await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
+    if (options.embedding) {
+      await host.plugin(localEmbeddingProviderPlugin, options.embedding);
+      await host.plugin(sqliteContextVectorIndexPlugin, { path: options.embedding.database });
+      await host.plugin(hybridEventRetrieverPlugin, {
+        ...options.embedding,
+        lexical_index: options.lexicalDatabase === undefined ? undefined : host.get("context-lexical-index"),
+      });
+      await host.plugin(contextEmbeddingWorkerPlugin, { org_id: options.orgId, ...options.embedding });
+    }
     return host;
   } catch (error) {
     await host.dispose();

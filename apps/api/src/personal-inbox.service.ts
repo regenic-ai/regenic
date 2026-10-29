@@ -1106,6 +1106,11 @@ export class PersonalInboxService {
         console.error("lexical index clear leftover files", error);
       }
     }
+    try {
+      await this.runtime.clearEmbeddingProjection();
+    } catch (error) {
+      console.error("vector index clear leftover data", error);
+    }
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
     this.kernelRuntime.clearInstallationSnapshots();
     this.touchInboxDigest({ immediate: true });

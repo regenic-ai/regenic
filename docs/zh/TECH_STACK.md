@@ -19,13 +19,36 @@
 | 正文（Blob） | 本地目录 | MinIO / S3 / OSS |
 | 后台任务 | 进程内队列 | BullMQ + Redis |
 | 身份 | 本机一个用户 | OIDC / 渠道 SSO |
-| 检索 | 先 noop；需要时用 SQLite FTS | pgvector / OpenSearch（可选） |
+| 检索 | 可重建 SQLite FTS5 sidecar，未覆盖时回退已授权正文词法评分 | pgvector / OpenSearch（可选，尚未实现） |
 | 密钥 | 系统钥匙串 / 本地文件 | Vault 或云 KMS（可选） |
 | 客户端 | Electron | 桌面为主；Web 管配置；手机稍后 |
 | 运行方式 | 本机，或嵌在桌面应用里 | Docker Compose |
 
 用户可选的「远端历史」默认关闭，只是冷备份。权威数据仍在本地，
 也不是组织库。
+
+个人 SQLite API 与 CLI 装配相同的 indexed Event retriever，并把同一索引交给
+projection coordinator，路径为 `${database}.lexical.db`。FTS 未建或部分覆盖时，
+使用同一版本的正文词法评分回退。PostgreSQL API runtime 仍使用确定性正文评分，
+不装配本地 sidecar。第二批新增可选的个人文本索引：独立 `EmbeddingProvider`、
+仅回环地址推理服务与 `${database}.vector.db`，通过完整 Authority 生命周期读取
+对账独立持久化任务，不消费既有 projection outbox。默认
+`REGENIC_EMBEDDING_DRIVER=none`；显式启用的个人 API host 已接入 current-only 混合召回，
+包括 `/ask`，支持词法降级和 snapshot trace。`POST /v1/me/context/search` 不依赖 completion；
+CLI `context-search`、`context-assemble`、`context-ask` 共享可选 embedding 配置。
+generation 回填、激活、回滚、GC 和真实模型合成评测已实现。混合 v2 profile 约束已覆盖文本的
+单字弱词法准入，保留故障词法降级；默认仍关闭，合成结果不等于真实用户质量或生产性能认证。
+运行方式与限制见[设计文档第 15 节](EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影)及第 16 节。
+桌面搜索页已接入授权 current 文本检索、安全片段、证据、覆盖与降级追踪。
+设置页支持独立 Python 3.12 venv / 固定模型的下载、启停、健康检查与索引任务计数；
+默认关闭，模型存于 Electron userData，不随个人数据目录搬迁。仅管理桌面拥有的本地内核。
+`GET /v1/me/context/embedding/status` 仅返回就绪状态与各代任务聚合计数，
+`POST /v1/me/context/embedding/index` 只接受 `{}`、一次处理至多一个任务；
+二者共用 Personal API 认证边界。详见[桌面操作说明](DESKTOP.md#个人上下文搜索与本地模型)。
+另提供 `POST /v1/me/context/search/source` 复核当前授权 Event/hash 后查看原文并跳转会话；
+`POST /v1/me/context/embedding/retry` 按代限量重新排队失败/隔离任务（默认 10、最多 20）。
+诊断仅暴露固定分类，重试保留租约、围栏和成功覆盖；worker 仍在处理前复核生命周期。
+桌面操作固定最多 10 个并需确认；搜索/索引请求耗时仅含客户端网络等待，不是生产性能指标。
 
 ## 2. 组件
 
@@ -41,6 +64,7 @@
 | 托管执行 | `TaskExecutor`（公开默认 `dsh`） |
 | 上下文发布 | `ContextConsumer`（未来；仅 Evidence Bundle） |
 | 模型 | `ModelProvider` |
+| 文本 embedding | `EmbeddingProvider`（可选的个人回环 HTTP 服务） |
 | 身份 | `IdentityProvider` |
 | 权限 | 应用内 ACL（RFC 0006） |
 | 检索 | `SearchIndex` |

@@ -91,6 +91,15 @@ function thread(
 }
 
 describe("receipt copy", () => {
+  it("keeps unconfirmed executor starts distinct from retryable failures", () => {
+    assert.match(workNextStepCopy({ work: { status: "running", start_state: "pending" } }) ?? "",
+      /start is pending/i);
+    assert.match(workNextStepCopy({ work: { status: "waiting_human", start_state: "uncertain" } }) ?? "",
+      /Check its session or remote runtime/i);
+    assert.doesNotMatch(workNextStepCopy({ work: { status: "waiting_human", start_state: "uncertain" } }) ?? "",
+      /Answer below|Handle now/i);
+  });
+
   it("shows Sent/Read only on outbound when the channel can receipt", () => {
     assert.equal(
       receiptCopy(item({ id: "in-1", external_id: "om_1", text: "hi", direction: "inbound" })),

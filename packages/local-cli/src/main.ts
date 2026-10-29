@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DshFetch, DshSpawn } from "@regenic/dsh-connector";
-import type { SlackFetch } from "@regenic/slack-connector";
 import { parseOptions, type CliOutput } from "./cli-runtime";
+import { embeddingCommand } from "./commands/embedding";
 import {
   cancelAgentRunCommand,
   createAgentRun,
@@ -13,18 +13,17 @@ import {
 } from "./commands/agent-runs";
 import {
   installDsh,
-  installSlack,
   resetConnectorCursor,
   sendDsh,
   setConnectorStatus,
   showQuarantines,
   showStatus,
   syncDsh,
-  syncSlack,
 } from "./commands/connectors";
 import {
   askContext,
   assembleContext,
+  searchContext,
   diffContextSnapshots,
   evaluateContext,
   listContextSnapshotHistory,
@@ -54,7 +53,6 @@ import {
 import {
   exportJsonl,
   importFile,
-  importWhatsAppPersonal,
   renderDigest,
 } from "./commands/import-export";
 import {
@@ -107,11 +105,13 @@ import {
   projectStandardUsageCommand,
   transitionCliStandardVersion,
 } from "./commands/standards";
+import { runCustomerServiceMcp } from "./commands/customer-service-mcp";
+import { runContextSearchMcp } from "./commands/context-search-mcp";
 
 export interface LocalCliOptions {
   env?: NodeJS.ProcessEnv;
   stdout?: CliOutput;
-  fetch?: SlackFetch | DshFetch;
+  fetch?: DshFetch;
   spawn?: DshSpawn;
   now?: () => string;
   createId?: () => string;
@@ -129,11 +129,20 @@ export async function runLocalCli(
   const createId = options.createId ?? randomUUID;
 
   switch (command) {
-    case "slack-install":
-      await installSlack(commandOptions, stdout, now, createId);
+    case "context-search-mcp":
+      await runContextSearchMcp(commandOptions, env, stdout);
       return;
-    case "slack-sync":
-      await syncSlack(commandOptions, env, stdout, now, createId, options.fetch as SlackFetch | undefined);
+    case "customer-service-mcp":
+      await runCustomerServiceMcp(commandOptions, env, stdout);
+      return;
+    case "context-embedding-index":
+    case "context-embedding-status":
+    case "context-embedding-retry":
+    case "context-embedding-backfill":
+    case "context-embedding-activate":
+    case "context-embedding-rollback":
+    case "context-embedding-gc":
+      await embeddingCommand(command, commandOptions, env, stdout);
       return;
     case "dsh-install":
       await installDsh(commandOptions, stdout, now, createId);
@@ -152,9 +161,6 @@ export async function runLocalCli(
       return;
     case "import-file":
       await importFile(commandOptions, stdout, now);
-      return;
-    case "whatsapp-import":
-      await importWhatsAppPersonal(commandOptions, stdout, now);
       return;
     case "export-jsonl":
       await exportJsonl(commandOptions, stdout);
@@ -226,7 +232,10 @@ export async function runLocalCli(
       await reapplyInboxDispatchPolicy(commandOptions, stdout, now);
       return;
     case "context-assemble":
-      await assembleContext(commandOptions, stdout, createId);
+      await assembleContext(commandOptions, env, stdout, createId);
+      return;
+    case "context-search":
+      await searchContext(commandOptions, env, stdout, createId);
       return;
     case "context-snapshot":
       await showContextSnapshot(commandOptions, stdout);
@@ -413,7 +422,7 @@ export async function runLocalCli(
       await listStandardHealthCommand(commandOptions, stdout, now);
       return;
     default:
-      throw new Error("Command must be one of: slack-install, slack-sync, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, whatsapp-import, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-snapshot, context-snapshot-history, context-snapshot-diff, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health");
+      throw new Error("Command must be one of: dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-search, context-snapshot, context-snapshot-history, context-snapshot-diff, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health, context-embedding-index, context-embedding-status, context-embedding-retry, context-embedding-backfill, context-embedding-activate, context-embedding-rollback, context-embedding-gc");
   }
 }
 

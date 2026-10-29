@@ -26,6 +26,8 @@ coverage/
 .env.local
 .turbo/
 .pnpm-store/
+__pycache__/
+.venv-embedding/
 
 apps/desktop/out/
 

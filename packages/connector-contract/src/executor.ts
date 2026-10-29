@@ -62,6 +62,7 @@ export interface WorkRun {
   external_run_id?: string;
   agent_thread_id?: string;
   status: WorkRunStatus;
+  start_state?: "pending" | "submitted" | "uncertain";
   result?: ResultEnvelope;
   created_at: string;
   updated_at: string;
@@ -153,6 +154,8 @@ export interface ExecutorRecipeRef {
 }
 
 export interface ExecutorStartInput {
+  /** Durable kernel run identity, allocated before any external side effect. */
+  run_id?: string;
   work_item: ExecutorWorkRef;
   recipe: ExecutorRecipeRef;
   evidence_text: string;
@@ -276,6 +279,8 @@ function exitedFromTranscript(
 }
 
 export const WORK_EVIDENCE_OMITTED = "[Earlier messages omitted]";
+export const WORK_EVIDENCE_GAP = "[Messages omitted]";
+export const WORK_EVIDENCE_AFTER_CURRENT = "[Sent after the current message]";
 export const WORK_CONVERSATION_FILENAME = "conversation.md";
 export const WORK_AGENTS_FILENAME = "AGENTS.md";
 export const WORK_AGENTS_INLINE_LIMIT = 4_000;

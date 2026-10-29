@@ -1,6 +1,7 @@
 import type { ArrangementDecision, InboxItem } from "./arrangement";
 import type { SyncPollHint, SyncStore } from "./sync-contracts";
 import type { SyncWorkStore } from "./sync-work";
+import type { DeliveryReceipt } from "./egress";
 
 
 import type {
@@ -337,8 +338,10 @@ export interface OutboundAttemptRecord {
   client_request_id: string;
   thread_id: string;
   event_id?: string;
-  status: "pending" | "accepted" | "sent" | "failed";
+  status: "pending" | "accepted" | "sent" | "failed" | "rejected";
   channel_message_ids?: string[];
+  recovery_hash?: string;
+  receipt?: DeliveryReceipt;
   created_at: string;
   updated_at: string;
 }
@@ -348,10 +351,17 @@ export interface OutboundAttemptPut {
   client_request_id: string;
   thread_id: string;
   event_id?: string;
-  status: "pending" | "accepted" | "sent" | "failed";
+  status: OutboundAttemptRecord["status"];
   channel_message_ids?: string[];
+  recovery_hash?: string;
+  receipt?: DeliveryReceipt;
   now: string;
 }
+
+export type NewOutboundAttempt = Pick<
+  OutboundAttemptPut,
+  "org_id" | "client_request_id" | "thread_id" | "recovery_hash" | "now"
+>;
 
 export interface AuthorityStore {
   findBlob(contentHash: string): Promise<BlobRecord | null>;
@@ -368,6 +378,8 @@ export interface AuthorityStore {
     orgId: string,
     clientRequestId: string,
   ): Promise<OutboundAttemptRecord | null>;
+  /** Claim new or explicitly rejected attempts; never reclaim ambiguous sends. */
+  claimOutboundAttempt(input: NewOutboundAttempt): Promise<boolean>;
   putOutboundAttempt(input: OutboundAttemptPut): Promise<OutboundAttemptRecord>;
   getEvent(orgId: string, eventId: string): Promise<EventRecord | null>;
   listEvents(orgId: string, query?: EventListQuery): Promise<EventRecord[]>;

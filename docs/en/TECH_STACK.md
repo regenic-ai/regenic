@@ -23,13 +23,58 @@ Execution is a `TaskExecutor` on `ctx.executors`. See
 | Blob bodies | Local directory | MinIO / S3 / OSS |
 | Background jobs | In-process queue | BullMQ + Redis |
 | Identity | One local user | OIDC / channel SSO |
-| Search | noop first; SQLite FTS if needed | pgvector / OpenSearch (optional) |
+| Search | Rebuildable SQLite FTS5 sidecar with authorized-body lexical fallback | pgvector / OpenSearch (optional; not implemented) |
 | Secrets | OS keychain / local file | Vault or cloud KMS (optional) |
 | Clients | Electron | Desktop first; Web for admin; mobile later |
 | Runtime | On the machine, or embedded in the desktop app | Docker Compose |
 
 Optional remote history is off by default. It is a cold backup the user opts
 into — not the authority store, and not the org database.
+
+The personal SQLite API and CLI mount the same indexed Event retriever and
+projection-coordinator index, using `${database}.lexical.db`. Missing or partial
+FTS coverage falls back to the same versioned lexical scorer. The PostgreSQL
+API runtime still uses deterministic body scoring without a local sidecar.
+Optional personal text indexing now uses a separate `EmbeddingProvider`,
+a loopback-only reference inference service, and `${database}.vector.db`.
+Durable embedding jobs reconcile full Authority lifecycle reads independently
+of the existing projection queue. It is off by default
+(`REGENIC_EMBEDDING_DRIVER=none`). Explicitly configured personal API hosts now
+use current-only hybrid Event retrieval (also for `/ask`), with lexical degradation
+and pinned snapshot traces. `POST /v1/me/context/search` does not require completion;
+CLI `context-search`, `context-assemble`, and `context-ask` share the optional
+embedding configuration. See the
+[implementation status and local setup](../zh/EMBEDDING_RETRIEVAL_ARCHITECTURE.md#15-第二批实施独立文本向量投影).
+
+Desktop now exposes authorized current-text search, snippets, evidence, coverage,
+fallback flags and pinned snapshot metadata. Settings can install, enable, stop
+and health-check the fixed-revision local CPU model using an isolated Python 3.12
+venv and cache under Electron userData (separate from the personal database).
+Installation needs explicit download consent and several GB of disk space.
+Default remains off; lexical search needs no model. Only an owned local kernel
+can be restarted by model management; custom kernels are managed independently.
+The guarded `GET /v1/me/context/embedding/status` returns provider/vector readiness
+and aggregate per-generation job counts, never raw job inputs or model URLs.
+`POST /v1/me/context/embedding/index` accepts only `{}` and runs at most one job.
+`POST /v1/me/context/search/source` accepts only an Event/hash reference, rechecks
+current authorized evidence and returns bounded source text plus an optional inbox
+mapping. Desktop previews escaped text and can navigate/highlight the original
+message without unhiding its conversation.
+Status also returns allowlisted failure categories. The guarded
+`POST /v1/me/context/embedding/retry` accepts a retained `generation` and an integer
+`limit` (default 10, maximum 20); it requires healthy provider/vector storage and
+only requeues current-head failed/quarantined jobs, preserving leases and coverage.
+Workers revalidate Authority lifecycle before inference/publication.
+Desktop recovery uses a confirmed batch of at most 10 and ignores stale responses
+after kernel changes. Search and manual indexing display request time including
+network waiting; these are not production latency/resource metrics.
+An opt-in `test:semantic:electron` script runs the real app/API against isolated
+synthetic data and a local inference stub; it does not download model weights.
+See the [desktop runbook](../zh/DESKTOP.md#个人上下文搜索与本地模型).
+Generation backfill/activation/rollback/GC and a reproducible real-model synthetic
+evaluation are available. The v2 hybrid profile gates covered single-CJK-character-only
+lexical matches, preserves lexical fallback, and remains off by default. Small synthetic
+results are not real-user quality or production performance certification.
 
 ## 2. Components
 
@@ -45,6 +90,7 @@ into — not the authority store, and not the org database.
 | Hosted run | `TaskExecutor` (public default `dsh`) |
 | Context publication | `ContextConsumer` (future; evidence bundles only) |
 | Models | `ModelProvider` |
+| Text embeddings | `EmbeddingProvider` (optional personal loopback HTTP) |
 | Identity | `IdentityProvider` |
 | Authz | In-app ACL (RFC 0006) |
 | Search | `SearchIndex` |
