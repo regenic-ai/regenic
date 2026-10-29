@@ -839,6 +839,26 @@ trace 的授权、覆盖计数不再受一万条限制。旧 snapshot 继续保�
 生命周期闭包、惰性正文加载和扩展兼容规则见
 [上下文管理架构](CONTEXT_MANAGEMENT_ARCHITECTURE.md#23-权限先于相关性)。
 
+2026-10-29 针对 4000 条已授权消息补充了规模回归。固定 768 维、全向量覆盖、
+即时合成 query provider、SQLite Authority/Blob/lexical/vector 的同一 Windows 环境中：
+
+| 阶段 | 优化前 | 优化后 |
+| --- | ---: | ---: |
+| lexical 授权匹配 | 401.3 ms | 20.0 ms |
+| vector 授权匹配 | 447.4 ms | 132.0 ms |
+| 完整本地 search | 1928.0 ms | 936.4 ms |
+
+优化后的 lexical/vector sidecar 使用连接内 TEMP 授权键表和索引 JOIN，不再按 300 条分块
+重复执行 FTS，也不再为每个 Event 分别查询 coverage/chunks。向量余弦计算直接读取
+float32 Buffer，避免每个 768 维 chunk 创建数组。向量候选池按证据预算取 5 倍，
+最少 50、最多 1000；默认 20 条结果最多读取 100 个向量候选正文。
+10k lexical 授权匹配门槛为 500 ms，4000×768 vector 授权匹配门槛为 300 ms。
+
+相同 org、embedding generation 和查询文本的 query vector 以 SHA-256 键在进程内缓存，
+最多 128 项；不保存原始查询，失败不缓存，generation 切换自然失效。这会显著改善刷新和
+重复搜索，但第一次真实模型推理仍取决于本机 CPU/GPU、模型服务排队和冷启动，
+不应把上述即时 provider 的 936.4 ms 当作包含真实 embedding 推理的端到端承诺。
+
 参考 Python 服务现在最多接入 32 个处理线程、排队 16 个模型操作，超额 `429/503`。
 推理仍单执行，等待的 query 优先于等待的 document；不能抢占已经运行的推理，
 排队最多等待 30 秒。优先级、队列上限、超时释放、推理失败后释放均有确定性测试。

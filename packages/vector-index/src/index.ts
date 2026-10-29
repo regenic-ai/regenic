@@ -7,7 +7,6 @@ import {
   embeddingGeneration,
   validateEmbeddingVector,
   ContextVectorUnavailableError,
-  EmbeddingError,
   type ContextVectorIndex,
   type ContextVectorGenerationStore,
   type ContextVectorChunk,
@@ -22,6 +21,16 @@ interface JobRow {
   id: number; org_id: string; generation: string; source: string; external_id: string;
   event_id: string; content_hash: string | null; operation: EmbeddingJob["operation"];
   lineage_json: string; fence: number; attempts: number; status: EmbeddingJob["status"]; error_code: string | null;
+}
+
+interface AuthorizedChunkRow {
+  event_id: string;
+  content_hash: string;
+  chunk_count: number;
+  ordinal: number | null;
+  start: number | null;
+  end: number | null;
+  vector: Buffer | null;
 }
 
 export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore {
@@ -78,6 +87,10 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             org_id TEXT NOT NULL, generation TEXT NOT NULL, manifest_json TEXT NOT NULL, retired_at TEXT NOT NULL,
             PRIMARY KEY (org_id, generation)
           );
+          CREATE TEMP TABLE IF NOT EXISTS vector_authorized (
+            event_id TEXT PRIMARY KEY,
+            content_hash TEXT NOT NULL
+          ) WITHOUT ROWID;
           PRAGMA user_version = 2;
         `);
       }).immediate();
@@ -343,44 +356,111 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       seen.add(key.event_id);
     }
     return this.db.transaction(() => {
-      const covered = [];
-      const matched = [];
-      const coverageQuery = this.db.prepare(`SELECT c.chunk_count FROM coverage c JOIN source_heads h
-        ON h.org_id=c.org_id AND h.source=c.source AND h.external_id=c.external_id AND h.event_id=c.event_id
-        WHERE c.org_id=? AND c.generation=? AND c.event_id=? AND c.content_hash=?`);
-      const chunksQuery = this.db.prepare(
-        "SELECT * FROM chunks WHERE org_id=? AND generation=? AND event_id=? ORDER BY ordinal",
+      this.db.prepare("DELETE FROM vector_authorized").run();
+      const authorize = this.db.prepare(
+        "INSERT INTO vector_authorized (event_id, content_hash) VALUES (?, ?)",
       );
+      for (const key of input.authorized) {
+        authorize.run(key.event_id, key.content_hash);
+      }
+      const rows = this.db.prepare(`
+        SELECT c.event_id, c.content_hash, c.chunk_count,
+               ch.ordinal, ch.start, ch.end, ch.vector
+        FROM vector_authorized a
+        JOIN coverage c
+          ON c.event_id=a.event_id AND c.content_hash=a.content_hash
+        JOIN source_heads h
+          ON h.org_id=c.org_id AND h.source=c.source
+          AND h.external_id=c.external_id AND h.event_id=c.event_id
+        LEFT JOIN chunks ch
+          ON ch.org_id=c.org_id AND ch.generation=c.generation AND ch.event_id=c.event_id
+        WHERE c.org_id=? AND c.generation=?
+        ORDER BY c.event_id, ch.ordinal
+      `).all(
+        input.org_id,
+        input.generation,
+      ) as AuthorizedChunkRow[];
+      const covered: Array<{ event_id: string; content_hash: string }> = [];
+      const matched: Array<{
+        event_id: string;
+        content_hash: string;
+        score: number;
+        chunk_ordinal: number;
+        start: number;
+        end: number;
+      }> = [];
       const rank = (a: { score: number; event_id: string }, b: { score: number; event_id: string }) =>
         b.score - a.score || compare(a.event_id, b.event_id);
-      for (const key of input.authorized) {
-        const coverage = coverageQuery
-          .get(input.org_id, input.generation, key.event_id, key.content_hash) as { chunk_count: number } | undefined;
-        if (!coverage) continue;
-        const chunks = chunksQuery
-          .all(input.org_id, input.generation, key.event_id) as Array<{ ordinal: number; start: number; end: number; vector: Buffer }>;
-        if (chunks.length !== coverage.chunk_count || chunks.length === 0) throw new ContextVectorUnavailableError("corrupt");
+      for (let offset = 0; offset < rows.length;) {
+        const first = rows[offset];
         let best: { score: number; chunk_ordinal: number; start: number; end: number } | undefined;
-        for (const chunk of chunks) {
-          if (chunk.vector.byteLength !== generation.model.dimensions * 4) throw new ContextVectorUnavailableError("corrupt");
-          const vector = Array.from({ length: generation.model.dimensions }, (_, i) => chunk.vector.readFloatLE(i * 4));
-          try {
-            validateEmbeddingVector(vector, generation.model.dimensions);
-          } catch (error) {
-            if (error instanceof EmbeddingError) throw new ContextVectorUnavailableError("corrupt");
-            throw error;
+        let chunks = 0;
+        while (offset < rows.length && rows[offset].event_id === first.event_id) {
+          const chunk = rows[offset];
+          if (
+            chunk.content_hash !== first.content_hash
+            || chunk.chunk_count !== first.chunk_count
+            || !Number.isSafeInteger(chunk.ordinal)
+            || !Number.isSafeInteger(chunk.start)
+            || !Number.isSafeInteger(chunk.end)
+            || !Buffer.isBuffer(chunk.vector)
+          ) {
+            throw new ContextVectorUnavailableError("corrupt");
           }
-          const vectorNorm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
-          const cosine = vector.reduce((sum, value, i) => sum + value * input.query_vector[i], 0) / (queryNorm * vectorNorm);
-          const score = Number(Math.max(-1, Math.min(1, cosine)).toFixed(9));
-          if (!best || score > best.score) best = { score, chunk_ordinal: chunk.ordinal, start: chunk.start, end: chunk.end };
+          const score = cosineScore(
+            chunk.vector,
+            input.query_vector,
+            queryNorm,
+            generation.model.dimensions,
+          );
+          if (!best || score > best.score) {
+            best = {
+              score,
+              chunk_ordinal: chunk.ordinal!,
+              start: chunk.start!,
+              end: chunk.end!,
+            };
+          }
+          chunks += 1;
+          offset += 1;
         }
-        covered.push({ ...key });
-        matched.push({ ...key, ...best! });
+        if (!best || chunks !== first.chunk_count) {
+          throw new ContextVectorUnavailableError("corrupt");
+        }
+        const key = { event_id: first.event_id, content_hash: first.content_hash };
+        covered.push(key);
+        matched.push({ ...key, ...best });
         if (matched.length >= input.limit * 2) {
           matched.sort(rank);
           matched.length = input.limit;
         }
+      }
+
+      function cosineScore(
+        vector: Buffer,
+        query: number[],
+        queryNorm: number,
+        dimensions: number,
+      ): number {
+        if (vector.byteLength !== dimensions * 4) {
+          throw new ContextVectorUnavailableError("corrupt");
+        }
+        let dot = 0;
+        let squaredNorm = 0;
+        for (let index = 0; index < dimensions; index += 1) {
+          const value = vector.readFloatLE(index * 4);
+          if (!Number.isFinite(value)) {
+            throw new ContextVectorUnavailableError("corrupt");
+          }
+          dot += value * query[index];
+          squaredNorm += value * value;
+        }
+        const vectorNorm = Math.sqrt(squaredNorm);
+        if (!Number.isFinite(vectorNorm) || Math.abs(vectorNorm - 1) > 0.001) {
+          throw new ContextVectorUnavailableError("corrupt");
+        }
+        const cosine = dot / (queryNorm * vectorNorm);
+        return Number(Math.max(-1, Math.min(1, cosine)).toFixed(9));
       }
       matched.sort(rank);
       covered.sort((a, b) => compare(a.event_id, b.event_id));

@@ -2,7 +2,9 @@ const assert = require("node:assert/strict");
 const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
+const { performance } = require("node:perf_hooks");
 const { describe, it } = require("node:test");
+const Database = require("better-sqlite3");
 const { embeddingGeneration } = require("@regenic/domain");
 const { SqliteContextVectorIndex } = require("../dist");
 
@@ -43,6 +45,78 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("matches 4000 fully covered 768-dimensional authorized vectors within the scale budget", async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-vector-scale-"));
+    const path = join(root, "vectors.db");
+    const scaleModel = {
+      ...model,
+      model_id: "synthetic/scale",
+      dimensions: 768,
+    };
+    const scaleGeneration = embeddingGeneration(scaleModel, 64);
+    let index = new SqliteContextVectorIndex(path);
+    await index.registerGeneration("org", scaleGeneration);
+    index.close();
+    const database = new Database(path);
+    const contentHash = "d".repeat(64);
+    const vector = Buffer.alloc(scaleModel.dimensions * 4);
+    vector.writeFloatLE(1, 0);
+    database.transaction(() => {
+      const insertHead = database.prepare("INSERT INTO source_heads VALUES (?, ?, ?, ?, ?)");
+      const insertCoverage = database.prepare("INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const insertChunk = database.prepare("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      for (let value = 0; value < 4000; value += 1) {
+        const eventId = `event-${String(value).padStart(5, "0")}`;
+        insertHead.run("org", "synthetic", eventId, eventId, 1);
+        insertCoverage.run("org", scaleGeneration.id, eventId, contentHash, "synthetic", eventId, 1);
+        insertChunk.run("org", scaleGeneration.id, eventId, 0, 0, 2, contentHash, vector);
+      }
+    })();
+    database.close();
+    index = new SqliteContextVectorIndex(path);
+    t.after(async () => {
+      index.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    const authorized = Array.from({ length: 4000 }, (_, value) => ({
+      event_id: `event-${String(value).padStart(5, "0")}`,
+      content_hash: contentHash,
+    }));
+    const started = performance.now();
+    const result = await index.matchAuthorized({
+      org_id: "org",
+      generation: scaleGeneration.id,
+      authorized,
+      query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
+      limit: 100,
+    });
+    const elapsed = performance.now() - started;
+    assert.equal(result.covered.length, 4000);
+    assert.equal(result.matched.length, 100);
+    assert.deepEqual(
+      result.matched.slice(0, 3).map((value) => value.event_id),
+      ["event-00000", "event-00001", "event-00002"],
+    );
+    assert.ok(elapsed < 300, `authorized vector search took ${elapsed.toFixed(1)}ms`);
+    index.close();
+    const corrupt = new Database(path);
+    corrupt.prepare(
+      "DELETE FROM chunks WHERE org_id = ? AND generation = ? AND event_id = ?",
+    ).run("org", scaleGeneration.id, "event-00000");
+    corrupt.close();
+    index = new SqliteContextVectorIndex(path);
+    await assert.rejects(
+      index.matchAuthorized({
+        org_id: "org",
+        generation: scaleGeneration.id,
+        authorized: [authorized[0]],
+        query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
+        limit: 1,
+      }),
+      (error) => error.reason === "corrupt",
+    );
+  });
+
   it("searches an authorization set above 10000 and retains the global top-k, not the first k", async (t) => {
     const { index } = await fixture(t);
     await reconcile(index, [head("event-00000"), head("event-05000"), head("event-10004"), head("hidden")]);
