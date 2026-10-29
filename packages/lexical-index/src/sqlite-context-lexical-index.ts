@@ -17,7 +17,6 @@ import {
 } from "@regenic/domain";
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
-const QUERY_CHUNK_SIZE = 300;
 const MAX_DOCUMENT_CHARACTERS = 200_000;
 const MAX_DOCUMENT_TERMS = 50_000;
 const MAX_TERM_CHARACTERS = 128;
@@ -141,42 +140,44 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
       return { ...status, matched: [], covered: [] };
     }
     const expression = matchExpression(input.query);
-    const covered: ContextLexicalKey[] = [];
-    const matched: ContextLexicalKey[] = [];
-    for (let offset = 0; offset < input.authorized.length; offset += QUERY_CHUNK_SIZE) {
-      const chunk = input.authorized.slice(offset, offset + QUERY_CHUNK_SIZE);
-      const tupleSql = chunk.map(() => "(?, ?)").join(", ");
-      const tupleParams = chunk.flatMap((key) => [key.event_id, key.content_hash]);
-      covered.push(...(this.database.prepare(
+    return this.database.transaction(() => {
+      this.database.prepare("DELETE FROM context_lexical_authorized").run();
+      const authorize = this.database.prepare(
+        "INSERT INTO context_lexical_authorized (event_id, content_hash) VALUES (?, ?)",
+      );
+      for (const key of input.authorized) {
+        authorize.run(key.event_id, key.content_hash);
+      }
+      const covered = this.database.prepare(
         `
           SELECT d.event_id, d.content_hash
-          FROM context_lexical_documents d
-          JOIN context_lexical_documents_fts f ON f.rowid = d.rowid
+          FROM context_lexical_authorized a
+          JOIN context_lexical_documents d
+            ON a.event_id = d.event_id AND a.content_hash = d.content_hash
           WHERE d.org_id = ? AND d.generation = ?
-            AND (d.event_id, d.content_hash) IN (${tupleSql})
           ORDER BY d.event_id, d.content_hash
         `,
-      ).all(input.org_id, status.generation, ...tupleParams) as LexicalKeyRow[]));
-      if (expression) {
-        matched.push(...(this.database.prepare(
+      ).all(input.org_id, status.generation) as LexicalKeyRow[];
+      const matched = expression
+        ? this.database.prepare(
           `
             SELECT d.event_id, d.content_hash
-            FROM context_lexical_documents_fts
-            JOIN context_lexical_documents d
-              ON d.rowid = context_lexical_documents_fts.rowid
+            FROM context_lexical_documents_fts f
+            JOIN context_lexical_documents d ON d.rowid = f.rowid
+            JOIN context_lexical_authorized a
+              ON a.event_id = d.event_id AND a.content_hash = d.content_hash
             WHERE context_lexical_documents_fts MATCH ?
               AND d.org_id = ? AND d.generation = ?
-              AND (d.event_id, d.content_hash) IN (${tupleSql})
             ORDER BY d.event_id, d.content_hash
           `,
-        ).all(expression, input.org_id, status.generation, ...tupleParams) as LexicalKeyRow[]));
-      }
-    }
-    return {
-      ...status,
-      covered: sortedKeys(covered),
-      matched: sortedKeys(matched),
-    };
+        ).all(expression, input.org_id, status.generation) as LexicalKeyRow[]
+        : [];
+      return {
+        ...status,
+        covered: sortedKeys(covered),
+        matched: sortedKeys(matched),
+      };
+    })();
   }
 
   async clearOrganization(orgId: string): Promise<void> {
@@ -213,6 +214,12 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
 
         CREATE VIRTUAL TABLE IF NOT EXISTS context_lexical_documents_fts
           USING fts5(terms, tokenize = 'unicode61 remove_diacritics 2');
+
+        CREATE TEMP TABLE IF NOT EXISTS context_lexical_authorized (
+          event_id TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          PRIMARY KEY (event_id, content_hash)
+        ) WITHOUT ROWID;
       `);
       return true;
     } catch (error) {

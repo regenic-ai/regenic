@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   ContextVectorUnavailableError,
   EmbeddingError,
@@ -25,11 +26,15 @@ export const HYBRID_RETRIEVAL_PROFILE = {
   score_weights: { anchor: 4, exact_match: 3, lexical: 2, recency: 1, hybrid: 8 },
   vector_min_score: 0.7,
 };
-const ROUTE_LIMIT = 1000;
+const MIN_VECTOR_CANDIDATES = 50;
+const MAX_VECTOR_CANDIDATES = 1000;
+const VECTOR_CANDIDATE_MULTIPLIER = 5;
+const QUERY_VECTOR_CACHE_SIZE = 128;
 const RRF_K = 60;
 
 export class HybridEventRetriever implements ContextRetriever {
   readonly id = HYBRID_EVENT_RETRIEVER_ID;
+  private readonly queryVectors = new Map<string, Promise<number[]>>();
 
   constructor(
     private readonly lexical: ContextRetriever,
@@ -78,20 +83,20 @@ export class HybridEventRetriever implements ContextRetriever {
     if (!allowed.size) return { ...lexical, trace };
     let result: Awaited<ReturnType<ContextVectorIndex["matchAuthorized"]>>;
     let generation = this.generation;
+    const vectorLimit = vectorCandidateLimit(plan);
     try {
       generation = await this.generations?.activeGeneration(plan.request.org_id) ?? this.generation;
       assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
-      const [tokens] = await this.provider.countTokens([plan.request.query], "query");
-      if (!Number.isSafeInteger(tokens) || tokens < 1) throw new EmbeddingError("invalid_response", true);
-      if (tokens > generation.model.max_input_tokens) throw new EmbeddingError("input_too_large", false);
-      const vectors = await this.provider.embed([plan.request.query], "query");
-      if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-      validateEmbeddingVector(vectors[0], generation.model.dimensions);
+      const queryVector = await this.queryVector(
+        plan.request.org_id,
+        generation,
+        plan.request.query,
+      );
       result = await this.index.matchAuthorized({
-        org_id: plan.request.org_id, generation: generation.id, query_vector: vectors[0],
+        org_id: plan.request.org_id, generation: generation.id, query_vector: [...queryVector],
         authorized: eligible.map((source) => ({
           event_id: source.event.event_id, content_hash: source.event.content_hash!,
-        })), limit: ROUTE_LIMIT,
+        })), limit: vectorLimit,
       });
     } catch (error) {
       if (error instanceof ContextVectorUnavailableError) return fallback(`vector_index_${error.reason}`);
@@ -100,7 +105,7 @@ export class HybridEventRetriever implements ContextRetriever {
     }
     // Invalid keys or chunk bindings are a boundary failure, never a lexical fallback.
     if (!result || result.generation !== generation.id || !Array.isArray(result.covered) ||
-      !Array.isArray(result.matched) || result.matched.length > ROUTE_LIMIT) throw new ContextEngineError("invalid_candidate", "Invalid vector result");
+      !Array.isArray(result.matched) || result.matched.length > vectorLimit) throw new ContextEngineError("invalid_candidate", "Invalid vector result");
     const covered = new Set<string>();
     for (const key of result.covered) {
       const source = allowed.get(key?.event_id);
@@ -178,6 +183,64 @@ export class HybridEventRetriever implements ContextRetriever {
       trace,
     };
   }
+
+  private async queryVector(
+    orgId: string,
+    generation: EmbeddingGeneration,
+    query: string,
+  ): Promise<number[]> {
+    const key = createHash("sha256")
+      .update(orgId)
+      .update("\0")
+      .update(generation.id)
+      .update("\0")
+      .update(query)
+      .digest("hex");
+    const cached = this.queryVectors.get(key);
+    if (cached) {
+      this.queryVectors.delete(key);
+      this.queryVectors.set(key, cached);
+      return cached;
+    }
+    const pending = (async () => {
+      const [tokens] = await this.provider.countTokens([query], "query");
+      if (!Number.isSafeInteger(tokens) || tokens < 1) {
+        throw new EmbeddingError("invalid_response", true);
+      }
+      if (tokens > generation.model.max_input_tokens) {
+        throw new EmbeddingError("input_too_large", false);
+      }
+      const vectors = await this.provider.embed([query], "query");
+      if (vectors.length !== 1) {
+        throw new EmbeddingError("invalid_response", true);
+      }
+      validateEmbeddingVector(vectors[0], generation.model.dimensions);
+      return vectors[0];
+    })();
+    this.queryVectors.set(key, pending);
+    if (this.queryVectors.size > QUERY_VECTOR_CACHE_SIZE) {
+      this.queryVectors.delete(this.queryVectors.keys().next().value!);
+    }
+    try {
+      return await pending;
+    } catch (error) {
+      if (this.queryVectors.get(key) === pending) {
+        this.queryVectors.delete(key);
+      }
+      throw error;
+    }
+  }
+}
+
+function vectorCandidateLimit(plan: AuthorizedContextRetrievalPlan): number {
+  const requested = Math.max(
+    plan.request.budget.max_items,
+    plan.request.budget.max_raw_evidence,
+  );
+  return Math.min(
+    MAX_VECTOR_CANDIDATES,
+    Math.max(MIN_VECTOR_CANDIDATES, requested * VECTOR_CANDIDATE_MULTIPLIER),
+  );
 }
 
 function lexicalScore(value: RetrievedContextCandidate): number {

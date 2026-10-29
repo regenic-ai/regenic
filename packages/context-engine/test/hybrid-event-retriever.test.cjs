@@ -92,6 +92,7 @@ it("admits semantic zero-lexical evidence, deduplicates and pins replayable retr
   assert.equal(trace.routes.find((route) => route.event_id === "semantic").vector_rank, 1);
   assert.ok(validateContextSnapshot(result.snapshot).success);
   assert.deepEqual(await f.engine.assemble(request), result);
+  assert.equal(f.calls, 1);
 });
 
 it("pins one selected generation across query inference even when the active pointer switches", async () => {
@@ -126,6 +127,7 @@ it("searches beyond 10000 authorized events and validates a complete large-scope
   }, {
     async matchAuthorized(input) {
       assert.equal(input.authorized.length, 10001);
+      assert.equal(input.limit, 50);
       return {
         generation: generation.id,
         covered: input.authorized,
@@ -184,6 +186,15 @@ it("preserves lexical candidates and records explicit model/index degradation", 
     assert.equal(result.snapshot.retrieval_trace[0].mode, "lexical");
     assert.equal(result.snapshot.retrieval_trace[0].generation, undefined);
   }
+});
+
+it("does not cache failed query inference", async () => {
+  const f = fixture({ error: new EmbeddingError("timeout", true) });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await f.retriever.retrieve(f.plan);
+    assert.ok(result.degradation_flags.includes("embedding_timeout"));
+  }
+  assert.equal(f.calls, 2);
 });
 
 it("does not run query inference for browsing/history or non-Event requests", async () => {
