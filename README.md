@@ -6,34 +6,31 @@
 
 [简体中文](README.zh-CN.md) | [English](README.md)
 
-**Everything is Context. Unified Context.**
+**Your work messages, ready for your AI.**
 
-Regenic is an open-source message orchestration layer for people and agents.
+Regenic is an open-source, local-first context layer for work messages. The important conversation might be in a Feishu group, a customer chat, Slack, email, or an agent session — but the AI you use usually cannot see it. So you copy, forward, and explain the same context again.
 
-It does not replace Feishu, DSH, Cursor, or your local agent. Those tools keep writing messages where they already live. Regenic sits underneath them: it turns channel traffic into one shared context — evidence with provenance, a console that lists only what needs you now, and replies that go back to the original app.
+Regenic connects those work-message streams to the AI you already use. Its pluggable connector standard lets built-in, community, or your own connectors bring messages into one attributable context. Your AI can then find what was said, catch up on a project, surface follow-ups, or draft a customer reply grounded in the original conversation. Messages stay in their original apps; Regenic does not replace your messenger or require you to switch to a Regenic-owned AI.
 
-If an agent harness says *everything is a plugin*, Regenic says *everything is context*. Chat, agent turns, files, and digests become the same kind of record. Versioned judgment standards decide what enters the workbench. Humans and automation share one `/v1`. Accounts, tokens, and rules stay on this computer.
-
-What ships today is **one person, data on this machine**. Shared records across a team come later. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
+The connector contract is extensible, but that does **not** mean every channel is built in or available out of the box. See [connectors](docs/en/CONNECTOR.md) for the extension model and [features](#features) for current support. Today Regenic is **one person, with data authoritative on this machine**; shared team records come later. See [PRODUCT.md](docs/en/PRODUCT.md) and [MESSAGE_ORCHESTRATION.md](docs/en/MESSAGE_ORCHESTRATION.md).
 
 [Install](#installation--quick-start) · [Add Feishu or DSH](#add-feishu-or-dsh) · [Login and tokens](#login-and-tokens) · [Local CLI](#local-cli) · [Status](#status) · [Security](#security) · [Docs](#documentation) · [Contributing](#contributing)
 
-## Why context
+## Why work-message context
 
-Agents need tools. People need channels. Both already exist.
+Work happens across channels, while AI is often separated from the conversations it could help with. When you need to answer “What did we agree with this customer?”, catch up after a day of meetings, or find the message behind a project decision, the context is scattered — and you end up searching manually or pasting it into an AI chat.
 
-What is missing is a place where Feishu, a local agent session, and a file export mean the **same thing** — one message shape, one evidence trail, one inbox of work that actually needs a human or an agent right now. That place is Regenic.
-
-Context is not a dump of every chat. It is the curated, attributable record that judgment standards and personal habits use to decide what enters the console and what stays outside the current work.
+Regenic gives your existing AI a way to work with those conversations without moving the conversations themselves. It keeps source and thread context attached, and focuses the workbench on messages that may need attention instead of dumping every channel into another inbox. For example, you can use it to find a missed follow-up, summarize progress across connected conversations, or draft a support reply with the source messages in view.
 
 ## What it does
 
-- **Channels stay channels** — Feishu stays Feishu, DSH stays DSH. Regenic reads, ranks, and writes back. It does not replace them.
-- **One context, many sources** — connectors normalize traffic into Event / Blob; digests and claims keep provenance.
-- **The console lists what needs you now** — not every group chat dumped in one place.
-- **People and automation share one API** — the desktop app and scripts both use `/v1`.
+- **Connect work-message sources** — built-in connectors cover selected sources today; the connector contract also lets users and contributors add other work-message streams. Each connector's capabilities and permissions vary.
+- **Give your AI conversation context** — messages become attributable records that agents and tools can read through Regenic's API and context integrations.
+- **Help you act on work** — find a message, catch up on a project, spot a follow-up, or draft a reply grounded in the conversation.
+- **Keep the original apps in place** — Feishu stays Feishu, DSH stays DSH. Sending is available only where a connector supports it and the required permission is granted.
+- **Keep the workbench focused** — surface what may need attention, rather than copying every conversation into another firehose.
 - **Tokens stay out of the database** — environment variables or the OS keychain. The install form does not take them.
-- **One person first, then a team** — this computer is the source of truth. Shared records across people come later.
+- **Start with personal, local-first use** — one person's data is authoritative on this machine; shared team records come later.
 
 ## Personal or team
 
