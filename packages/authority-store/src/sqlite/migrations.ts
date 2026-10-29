@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 53;
+export const LATEST_SCHEMA_VERSION = 54;
 
 export const OUTBOUND_REJECTION_MIGRATION_SQL = `
   CREATE TABLE outbound_attempts_next (
@@ -1090,6 +1090,14 @@ export const MIGRATIONS = [
       );
       CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
         ON search_answers (org_id, work_item_id);
+    `,
+  },
+  {
+    version: 54,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
+      ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
+      ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
     `,
   },
 ] as const;

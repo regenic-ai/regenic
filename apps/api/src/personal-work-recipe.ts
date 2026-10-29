@@ -5,6 +5,7 @@ import {
   normalizeRecipeMaxConcurrent,
   normalizeRecipeTrigger,
   normalizeUnitKind,
+  initialPullNextRun,
   recipeMatchIsSpecific,
   recipeSpecificity,
   shouldKeepPullSchedule,
@@ -83,7 +84,7 @@ export function normalizeRecipe(
       ? {
           next_run_at: shouldKeepPullSchedule(existing, { match, trigger })
             ? existing?.next_run_at ?? now
-            : now,
+            : initialPullNextRun(trigger, now),
         }
       : {}),
     created_at: existing?.created_at ?? now,

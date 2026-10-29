@@ -11,7 +11,8 @@ import type {
 import {
   recipeTriggerOf,
   isRecipeTriggerKind,
-  isPullIntervalMs,
+  pullScheduleColumns,
+  pullScheduleFromColumns,
   isWorkDeliveryStatus,
   isWorkWriteBackState,
   type WorkItemStatus,
@@ -36,14 +37,16 @@ export async function getRecipe(db: Database.Database, orgId: string, id: string
 export async function putRecipe(db: Database.Database, recipe: Recipe): Promise<Recipe> {
     
     const trigger = recipeTriggerOf(recipe);
+    const pull = pullScheduleColumns(trigger);
     db
       .prepare(
         `
           INSERT INTO recipes (
             id, org_id, name, match_json, executor_type, executor_config_json,
             can_write_back, include_context, enabled, trigger_kind,
-            trigger_interval_ms, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
+            trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
@@ -54,6 +57,9 @@ export async function putRecipe(db: Database.Database, recipe: Recipe): Promise<
             enabled = excluded.enabled,
             trigger_kind = excluded.trigger_kind,
             trigger_interval_ms = excluded.trigger_interval_ms,
+            trigger_at_minute = excluded.trigger_at_minute,
+            trigger_weekdays = excluded.trigger_weekdays,
+            trigger_timezone = excluded.trigger_timezone,
             trigger_coalesce = excluded.trigger_coalesce,
             max_concurrent = excluded.max_concurrent,
             next_run_at = excluded.next_run_at,
@@ -71,7 +77,10 @@ export async function putRecipe(db: Database.Database, recipe: Recipe): Promise<
         recipe.include_context ? 1 : 0,
         recipe.enabled ? 1 : 0,
         trigger.kind,
-        trigger.kind === "pull" ? (trigger.interval_ms ?? null) : null,
+        pull.interval_ms,
+        pull.at_minute,
+        pull.weekdays,
+        pull.timezone,
         trigger.kind === "push" && trigger.coalesce !== false ? 1 : 0,
         recipe.max_concurrent ?? null,
         recipe.next_run_at ?? null,
@@ -538,6 +547,9 @@ interface RecipeRow {
   enabled: number;
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
+  trigger_at_minute: number | null;
+  trigger_weekdays: string | null;
+  trigger_timezone: string | null;
   trigger_coalesce: number | null;
   max_concurrent: number | null;
   next_run_at: string | null;
@@ -632,9 +644,7 @@ function toRecipe(row: RecipeRow): Recipe {
       trigger: kind
         ? {
             kind,
-            ...(kind === "pull" && isPullIntervalMs(row.trigger_interval_ms)
-              ? { interval_ms: row.trigger_interval_ms }
-              : {}),
+            ...(kind === "pull" ? pullScheduleFromColumns(row) : {}),
             ...(kind === "push" ? { coalesce: row.trigger_coalesce !== 0 } : {}),
           }
         : undefined,

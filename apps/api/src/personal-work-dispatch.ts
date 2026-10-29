@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-  advancePullNextRun,
+  advanceRecipePull,
   WORK_FILE_FETCH_LIMIT,
   composeWorkConversation,
   conversationId,
@@ -268,7 +268,7 @@ export class PersonalWorkDispatch {
       }
       await authority.putRecipe({
         ...recipe,
-        next_run_at: advancePullNextRun(fireAt, interval, nowIso),
+        next_run_at: advanceRecipePull(recipe.trigger, fireAt, nowIso),
       });
     }
   }

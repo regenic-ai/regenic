@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 54;
+export const PG_SCHEMA_VERSION = 55;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -565,6 +565,14 @@ CREATE UNIQUE INDEX search_answers_work_item_idx
   ON search_answers (org_id, work_item_id);
 `,
   },
+  {
+    version: 55,
+    sql: `
+ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
+ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
+ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -727,6 +735,9 @@ CREATE TABLE recipes (
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   trigger_kind TEXT NOT NULL DEFAULT 'push',
   trigger_interval_ms INTEGER,
+  trigger_at_minute INTEGER,
+  trigger_weekdays TEXT,
+  trigger_timezone TEXT,
   trigger_coalesce BOOLEAN NOT NULL DEFAULT TRUE,
   max_concurrent INTEGER,
   next_run_at TIMESTAMPTZ,

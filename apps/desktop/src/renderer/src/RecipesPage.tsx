@@ -17,8 +17,8 @@ import {
 import { RecipeParams } from "./RecipeParams";
 import { RecipeRow } from "./RecipeRow";
 import { RecipeRunHistory } from "./RecipeRunHistory";
+import { ScheduleField } from "./ScheduleField";
 import {
-  PULL_INTERVALS,
   applySeed,
   applyTriggerKind,
   canAutoStart,
@@ -735,20 +735,13 @@ export function RecipesPage({
 
                 {draft.trigger_kind === "pull" ? (
                   <RecipeRow label={t("recipes.interval")}>
-                    <div className="seg">
-                      {PULL_INTERVALS.map((choice) => (
-                        <button
-                          key={choice.ms}
-                          type="button"
-                          className={draft.interval_ms === choice.ms ? "active" : undefined}
-                          onClick={() =>
-                            setDraft((current) => ({ ...current, interval_ms: choice.ms }))
-                          }
-                        >
-                          {t(choice.label)}
-                        </button>
-                      ))}
-                    </div>
+                    <ScheduleField
+                      draft={draft}
+                      t={t}
+                      onChange={(patch) =>
+                        setDraft((current) => ({ ...current, ...patch }))
+                      }
+                    />
                   </RecipeRow>
                 ) : null}
 

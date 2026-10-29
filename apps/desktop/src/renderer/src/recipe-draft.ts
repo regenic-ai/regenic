@@ -1,6 +1,15 @@
 import { formatNextRunWhen, formatTime } from "./format";
 import { configFromCatalog } from "./recipe-params";
 import { previewRecipeMatch } from "./recipe-preview";
+import {
+  DEFAULT_AT_MINUTE,
+  DEFAULT_WEEKDAYS,
+  localTimeZone,
+  modeFromTrigger,
+  pullTriggerFromDraft,
+  scheduleCopy,
+  type ScheduleMode,
+} from "./schedule";
 import type { MessageKey } from "../../shared/i18n.ts";
 import type {
   ExecutorCatalogEntry,
@@ -13,12 +22,6 @@ import type {
   RecipeView,
   ThreadFacet,
 } from "./types";
-
-export const PULL_INTERVALS = [
-  { ms: 15 * 60 * 1000, label: "recipes.interval15m" as const },
-  { ms: 60 * 60 * 1000, label: "recipes.interval1h" as const },
-  { ms: 24 * 60 * 60 * 1000, label: "recipes.interval1d" as const },
-];
 
 export type RecipeScope = "tasks" | "source" | "thread";
 
@@ -110,6 +113,10 @@ export function applyTriggerKind(draft: RecipeDraft, kind: RecipeTriggerKind): R
       include_context: true,
       can_write_back: true,
       interval_ms: draft.interval_ms || 60 * 60 * 1000,
+      schedule_mode: draft.schedule_mode,
+      at_minute: draft.at_minute,
+      weekdays: draft.weekdays.length ? draft.weekdays : [...DEFAULT_WEEKDAYS],
+      timezone: draft.timezone || localTimeZone(),
     };
   }
   return { ...draft, trigger_kind: kind };
@@ -121,6 +128,10 @@ export interface RecipeDraft {
   nameTouched: boolean;
   trigger_kind: RecipeTriggerKind;
   interval_ms: number;
+  schedule_mode: ScheduleMode;
+  at_minute: number;
+  weekdays: number[];
+  timezone: string;
   coalesce: boolean;
   scope: RecipeScope;
   source: string;
@@ -144,6 +155,10 @@ export function emptyDraft(executorType = ""): RecipeDraft {
     nameTouched: false,
     trigger_kind: "push",
     interval_ms: 60 * 60 * 1000,
+    schedule_mode: "interval",
+    at_minute: DEFAULT_AT_MINUTE,
+    weekdays: [...DEFAULT_WEEKDAYS],
+    timezone: localTimeZone(),
     coalesce: true,
     scope: "thread",
     source: "",
@@ -270,6 +285,12 @@ export function draftFromRecipe(
     nameTouched: true,
     trigger_kind: recipe.trigger?.kind ?? "push",
     interval_ms: recipe.trigger?.interval_ms ?? 60 * 60 * 1000,
+    schedule_mode: modeFromTrigger(recipe.trigger),
+    at_minute: recipe.trigger?.at_minute ?? DEFAULT_AT_MINUTE,
+    weekdays: recipe.trigger?.weekdays?.length
+      ? [...recipe.trigger.weekdays]
+      : [...DEFAULT_WEEKDAYS],
+    timezone: recipe.trigger?.timezone || localTimeZone(),
     coalesce: recipe.trigger?.coalesce !== false,
     scope: recipe.match.thread_id
       ? "thread"
@@ -316,7 +337,7 @@ export function draftMatch(draft: RecipeDraft): RecipeMatch {
 
 export function draftTrigger(draft: RecipeDraft): RecipeView["trigger"] {
   if (draft.trigger_kind === "pull") {
-    return { kind: "pull", interval_ms: draft.interval_ms };
+    return pullTriggerFromDraft(draft);
   }
   if (draft.trigger_kind === "manual") {
     return { kind: "manual" };
@@ -456,11 +477,6 @@ export function conversationChoices(
     });
   }
   return options;
-}
-
-function intervalCopy(intervalMs: number | undefined, t: Translate): string {
-  const found = PULL_INTERVALS.find((item) => item.ms === intervalMs);
-  return found ? t(found.label) : t("recipes.triggerPull");
 }
 
 export function recipeCardLine(
@@ -623,7 +639,7 @@ function whenCopy(
       conversations.find((item) => item.id === recipe.match.thread_id)?.label ??
       (recipe.match.thread_id ? shortThread(recipe.match.thread_id) : t("recipes.thisConversation"));
     return t("recipes.whenPull", {
-      interval: intervalCopy(recipe.trigger?.interval_ms, t),
+      interval: scheduleCopy(recipe.trigger, t),
       thread: title,
     });
   }

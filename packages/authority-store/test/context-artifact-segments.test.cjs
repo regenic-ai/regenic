@@ -103,6 +103,11 @@ describe("shared immutable Context artifact segments", () => {
     await binding.store.putArtifact(legacy);
     const before = binding.database.prepare("SELECT payload_json FROM context_artifacts").get().payload_json;
     binding.database.exec("DROP TABLE context_artifact_segments");
+    binding.database.exec(`
+      ALTER TABLE recipes DROP COLUMN trigger_at_minute;
+      ALTER TABLE recipes DROP COLUMN trigger_weekdays;
+      ALTER TABLE recipes DROP COLUMN trigger_timezone;
+    `);
     binding.database.pragma("user_version = 50");
     const upgraded = binding.reopen();
     assert.equal(binding.database.prepare("SELECT payload_json FROM context_artifacts").get().payload_json, before);

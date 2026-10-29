@@ -366,6 +366,11 @@ export type RecipeTriggerKind = "push" | "pull" | "manual";
 export interface RecipeTrigger {
   kind: RecipeTriggerKind;
   interval_ms?: number;
+  /** Minute of day in `timezone` (0–1439). Set for a daily or weekly clock. */
+  at_minute?: number;
+  /** ISO weekdays, Monday = 1. Omit to run every day. */
+  weekdays?: number[];
+  timezone?: string;
   coalesce?: boolean;
 }
 
