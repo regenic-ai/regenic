@@ -7,6 +7,7 @@
 - [Technology stack](TECH_STACK.md)
 - [Local model service setup](LOCAL_MODEL_SERVICE.md)
 - [Customer-service Agent setup](CUSTOMER_SERVICE_AGENT.md)
+- [Customer-service evaluation gate](CUSTOMER_SERVICE_EVALUATION.md)
 - [Context Search MCP](CONTEXT_SEARCH_MCP.md)
 - [Ingestion architecture](INGESTION_ARCHITECTURE.md)
 - [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md)
