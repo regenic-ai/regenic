@@ -7,7 +7,7 @@ This document describes the connector API. Types are defined in
 `@regenic/domain`. For lease, quarantine, and cursor behavior, see
 [Ingestion](INGESTION_ARCHITECTURE.md).
 
-This page is for people who implement a connector.
+This page is for people who implement a connector. To find an existing connector, see the [connector catalog](CONNECTOR_CATALOG.md).
 
 - **简体中文:** [../zh/CONNECTOR.md](../zh/CONNECTOR.md)
 - **Related:** [Built-in drivers](CONNECTOR_DRIVERS.md) · [Message orchestration](MESSAGE_ORCHESTRATION.md) ·

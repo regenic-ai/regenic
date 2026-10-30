@@ -1,5 +1,7 @@
 # Extra connector starters
 
+For ready-made connectors (Slack, WhatsApp, Telegram, DingTalk, WeCom), see the [connector catalog](../../docs/en/CONNECTOR_CATALOG.md).
+
 Drop this folder on `REGENIC_PLUGIN_DIR`, or copy one child into `~/.regenic/plugins`.
 
 A package is a plugin when `package.json` has `regenic.plugin`, `engines.regenic`, and `contributes`. The kernel loads only the named exports.

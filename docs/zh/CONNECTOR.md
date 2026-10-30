@@ -4,7 +4,7 @@
 
 本文说明连接器 API。类型定义在 `@regenic/domain`。租约、隔离区、游标见[采集架构](INGESTION_ARCHITECTURE.md)。
 
-本页给实现连接器的人看。
+本页给实现连接器的人看。想找现成的连接器，见[连接器目录](CONNECTOR_CATALOG.md)。
 
 - **English:** [../en/CONNECTOR.md](../en/CONNECTOR.md)
 - **相关：** [内置驱动](CONNECTOR_DRIVERS.md) · [消息编排](MESSAGE_ORCHESTRATION.md) ·

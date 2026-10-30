@@ -104,7 +104,7 @@ lark-cli auth status
 
 ### 其他连接器
 
-核心仓库只内置 DSH、飞书和 Cursor 连接器。其他连接器是独立的插件包：启动应用前放进 `REGENIC_PLUGIN_DIR`（或用 `REGENIC_CHANNEL_PLUGIN` 指向单个包），它们就会出现在 **Engine** 里。Slack：[regenic-connector-slack](https://github.com/regenic-ai/regenic-connector-slack)；WhatsApp：[regenic-connector-whatsapp](https://github.com/regenic-ai/regenic-connector-whatsapp)。见[连接器驱动](CONNECTOR_DRIVERS.md)。
+核心仓库只内置 DSH、飞书和 Cursor 连接器。Slack、WhatsApp、Telegram、钉钉、企业微信等其他来源是独立的插件包：启动应用前放进 `REGENIC_PLUGIN_DIR`（或用 `REGENIC_CHANNEL_PLUGIN` 指向单个包），它们就会出现在 **Engine** 里。完整列表、能力和加载步骤见[连接器目录](CONNECTOR_CATALOG.md)。
 
 ## 登录和 token
 
