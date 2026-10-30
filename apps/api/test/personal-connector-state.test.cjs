@@ -1,14 +1,15 @@
 const assert = require("node:assert/strict");
 const { afterEach, describe, it } = require("node:test");
 const { setImmediate } = require("node:timers/promises");
+const { ChannelDriverRegistry } = require("@regenic/domain");
 const { PersonalConnectorService } = require("../dist/personal-connector.service");
 const { pullStatus, resetPullStatus } = require("../dist/personal-pull-status");
 
 function createService() {
   return new PersonalConnectorService(
-    { orgId: () => "org-one" },
+    { orgId: () => "org-one", beforeDispose() {} },
     {},
-    {},
+    new ChannelDriverRegistry(),
     {},
   );
 }

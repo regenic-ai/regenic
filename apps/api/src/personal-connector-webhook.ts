@@ -51,61 +51,63 @@ export async function ingestWebhook(
     );
   }
   try {
-    const { bindWebhook } = requireWebhookPorts(driver);
-    const connector = await bindWebhook(
-      installation,
-      asConnectorHost(host),
-      process.env,
-    );
-    const runner = new ConnectorRunner(
-      new InProcessConnectorInvoker(connector),
-      host.get("ingest"),
-      store,
-      () => new Date().toISOString(),
-      state.quota,
-    );
-    const run = await withDeadline(
-      runner.webhook({
+    return await state.drivers.runInstallation(installation, async () => {
+      const { bindWebhook } = requireWebhookPorts(driver);
+      const connector = await bindWebhook(
+        installation,
+        asConnectorHost(host),
+        process.env,
+      );
+      const runner = new ConnectorRunner(
+        new InProcessConnectorInvoker(connector),
+        host.get("ingest"),
+        store,
+        () => new Date().toISOString(),
+        state.quota,
+      );
+      const run = await withDeadline(
+        state.drivers.runInstallation(installation, () => runner.webhook({
+          installation_id: installation.id,
+          request,
+          timeout_ms: connectorPollTimeoutMs(),
+        })),
+        connectorSyncTimeoutMs(),
+        `webhook ${installation.id}`,
+      );
+      if (run.status === "unsupported_mode") {
+        throw new PersonalConnectorError(
+          "unsupported_channel",
+          "Webhook ingest is not available",
+          501,
+        );
+      }
+      if (run.status === "throttled") {
+        throw new PersonalConnectorError(
+          "throttled",
+          "Connector installation is rate limited",
+          429,
+        );
+      }
+      const accepted = run as Extract<
+        ConnectorWebhookRunResult,
+        { status: "completed" | "retryable_failure" }
+      >;
+      const summary = summarizeWebhook(accepted);
+      if (summary.accepted_count > 0) {
+        state.inbox.touchInboxDigest();
+      }
+      if (accepted.wake_thread_ids?.length) {
+        await wakeStreamsForThreads(state,
+          installation.id,
+          accepted.wake_thread_ids,
+        );
+      }
+      return {
         installation_id: installation.id,
-        request,
-        timeout_ms: connectorPollTimeoutMs(),
-      }),
-      connectorSyncTimeoutMs(),
-      `webhook ${installation.id}`,
-    );
-    if (run.status === "unsupported_mode") {
-      throw new PersonalConnectorError(
-        "unsupported_channel",
-        "Webhook ingest is not available",
-        501,
-      );
-    }
-    if (run.status === "throttled") {
-      throw new PersonalConnectorError(
-        "throttled",
-        "Connector installation is rate limited",
-        429,
-      );
-    }
-    const accepted = run as Extract<
-      ConnectorWebhookRunResult,
-      { status: "completed" | "retryable_failure" }
-    >;
-    const summary = summarizeWebhook(accepted);
-    if (summary.accepted_count > 0) {
-      state.inbox.touchInboxDigest();
-    }
-    if (accepted.wake_thread_ids?.length) {
-      await wakeStreamsForThreads(state, 
-        installation.id,
-        accepted.wake_thread_ids,
-      );
-    }
-    return {
-      installation_id: installation.id,
-      ...summary,
-      last_run_status: run.status,
-    };
+        ...summary,
+        last_run_status: run.status,
+      };
+    });
   } catch (error) {
     throw wrapDriverError(error, "sync_failed");
   }

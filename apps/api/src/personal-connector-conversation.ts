@@ -75,30 +75,32 @@ export async function openCreatedThread(state: ConnectorState, input: {
   const withTask = found.driver.capabilities(found.installation).create_with_task === true;
   const firstTask = withTask ? input.text?.trim() : undefined;
   try {
-    const thread = await requireCreateThread(found.driver)(
-      found.installation,
-      asConnectorHost(host),
-      process.env,
-      {
-        ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
-        ...(firstTask ? { text: firstTask } : {}),
-      },
-    );
-    if (withTask) {
-      void seedCreatedThread(state, found.installation, found.driver, thread, host).catch(
-        () => {
-          void state.catchUp(found.installation.id);
+    return await state.drivers.runInstallation(found.installation, async () => {
+      const thread = await requireCreateThread(found.driver)(
+        found.installation,
+        asConnectorHost(host),
+        process.env,
+        {
+          ...(input.cwd?.trim() ? { cwd: input.cwd.trim() } : {}),
+          ...(firstTask ? { text: firstTask } : {}),
         },
       );
-    } else {
-      await seedCreatedThread(state, found.installation, found.driver, thread, host);
-    }
-    return {
-      thread,
-      installation: found.installation,
-      driver: found.driver,
-      create_with_task: withTask,
-    };
+      if (withTask) {
+        void seedCreatedThread(state, found.installation, found.driver, thread, host).catch(
+          () => {
+            void state.catchUp(found.installation.id);
+          },
+        );
+      } else {
+        await seedCreatedThread(state, found.installation, found.driver, thread, host);
+      }
+      return {
+        thread,
+        installation: found.installation,
+        driver: found.driver,
+        create_with_task: withTask,
+      };
+    });
   } catch (error) {
     throw wrapDriverError(error, "send_failed");
   }
@@ -193,29 +195,31 @@ async function seedCreatedOutbound(
   text: string,
   host: Host,
 ): Promise<void> {
-  const now = new Date().toISOString();
-  const receipt = { accepted: true as const, rpc_id: randomUUID() };
-  const externalId = driver.outboundId
-    ? driver.outboundId(thread, receipt)
-    : `${thread.target}:out:${receipt.rpc_id}`;
-  const record = channelRecord({
-    channel: driver.source,
-    kind: "user",
-    direction: "outbound",
-    external_id: externalId,
-    occurred_at: now,
-    actor_id: "local-owner",
-    scope_id: thread.target,
-    text,
-  });
-  record.weight_hints = { importance: 1 };
-  await host.get("ingest").ingest({
-    schema_version: INGEST_SCHEMA_VERSION,
-    connector_id: installation.id,
-    org_id: state.runtime.orgId(),
-    delivery_id: `create:${externalId}`,
-    received_at: now,
-    records: [record],
+  return state.drivers.runInstallation(installation, async () => {
+    const now = new Date().toISOString();
+    const receipt = { accepted: true as const, rpc_id: randomUUID() };
+    const externalId = driver.outboundId
+      ? driver.outboundId(thread, receipt)
+      : `${thread.target}:out:${receipt.rpc_id}`;
+    const record = channelRecord({
+      channel: driver.source,
+      kind: "user",
+      direction: "outbound",
+      external_id: externalId,
+      occurred_at: now,
+      actor_id: "local-owner",
+      scope_id: thread.target,
+      text,
+    });
+    record.weight_hints = { importance: 1 };
+    await host.get("ingest").ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: installation.id,
+      org_id: state.runtime.orgId(),
+      delivery_id: `create:${externalId}`,
+      received_at: now,
+      records: [record],
+    });
   });
 }
 
@@ -226,19 +230,21 @@ async function seedCreatedThread(
   thread: ConversationThread,
   host: Host,
 ): Promise<void> {
-  const stream = await driver.resolveThreadStream(
-    installation,
-    thread,
-    asConnectorHost(host),
-    process.env,
-  );
-  await pollStream(
-    host,
-    host.get("authority"),
-    installation,
-    stream,
-    1,
-    undefined,
-    state.quota,
-  );
+  return state.drivers.runInstallation(installation, async () => {
+    const stream = await driver.resolveThreadStream(
+      installation,
+      thread,
+      asConnectorHost(host),
+      process.env,
+    );
+    await pollStream(
+      host,
+      host.get("authority"),
+      installation,
+      stream,
+      1,
+      undefined,
+      state.quota,
+    );
+  });
 }

@@ -68,6 +68,7 @@ import {
 import { catalogMembersFromStreams } from "./connector-sync-members";
 import { CatalogProbeCache } from "./catalog-probe-cache";
 import { PersonalConnectorError } from "./personal-errors";
+import { wrapDriverError } from "./personal-connector-poll";
 import {
   connectorCatalog,
   catalogFromDrivers,
@@ -1083,9 +1084,23 @@ export class PersonalInboxService {
   }
 
   async clearStore(): Promise<StoreClearView> {
+    return this.drivers.installationLifecycle.change(async () => {
+      try {
+        return await this.clearStoreAfterStopping();
+      } catch (error) {
+        throw wrapDriverError(error, "sync_failed");
+      }
+    });
+  }
+
+  private async clearStoreAfterStopping(): Promise<StoreClearView> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const installations = await authority.listInstallations(this.runtime.orgId());
+    const stopped = await Promise.allSettled(installations.map((installation) =>
+      this.drivers.stopInstallation(installation, host, "clear")));
+    const failure = stopped.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
     const result = await authority.clearOperationalData(
       this.runtime.orgId(),
       new Date().toISOString(),
@@ -1114,6 +1129,9 @@ export class PersonalInboxService {
     this.kernelRuntime.inboxSummary.clear(this.runtime.orgId());
     this.kernelRuntime.clearInstallationSnapshots();
     this.touchInboxDigest({ immediate: true });
+    for (const installation of installations) {
+      this.drivers.installationLifecycle.resume(installation.id);
+    }
     return result;
   }
 

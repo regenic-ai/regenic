@@ -41,6 +41,11 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   private compactFinished = false;
   private embeddingTimer: ReturnType<typeof setInterval> | undefined;
   private embeddingEnabled = false;
+  private readonly disposeHooks: Array<() => Promise<void>> = [];
+
+  beforeDispose(hook: () => Promise<void>): void {
+    this.disposeHooks.push(hook);
+  }
 
   async onModuleInit(): Promise<void> {
     const env = loadEnv();
@@ -114,6 +119,15 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    const cleanupErrors: unknown[] = [];
+    for (const hook of this.disposeHooks.splice(0)) {
+      try {
+        await hook();
+      } catch (error) {
+        console.error("connector shutdown failed", error);
+        cleanupErrors.push(error);
+      }
+    }
     if (this.embeddingTimer) {
       clearInterval(this.embeddingTimer);
       this.embeddingTimer = undefined;
@@ -132,6 +146,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       await this.host.dispose();
       this.host = null;
     }
+    if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Runtime shutdown cleanup failed");
   }
 
   isReady(): boolean {

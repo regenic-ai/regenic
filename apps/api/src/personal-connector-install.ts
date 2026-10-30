@@ -77,18 +77,24 @@ export async function updateConfig(
   }
   let nextConfig: ConnectorInstallation["config"];
   try {
+    nextConfig = driver.install({
+      id: current.id,
+      org_id: current.org_id,
+      config,
+      now: new Date().toISOString(),
+      secrets: state.installSecrets(),
+    }).config;
+  } catch (error) {
+    throw wrapDriverError(error, "invalid_config");
+  }
+  await state.drivers.stopInstallation(current, state.runtime.requireHost(), "reconfigure");
+  try {
     nextConfig = persistInstallSecrets({
       connector_type: current.connector_type,
       installation_id: current.id,
       catalog: driver.installCatalog?.({ env: process.env }),
       incoming: config,
-      stored: driver.install({
-        id: current.id,
-        org_id: current.org_id,
-        config,
-        now: new Date().toISOString(),
-        secrets: state.installSecrets(),
-      }).config,
+      stored: nextConfig,
     });
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
@@ -97,7 +103,7 @@ export async function updateConfig(
     id: current.id,
     org_id: state.runtime.orgId(),
     config: nextConfig,
-    updated_at: new Date().toISOString(),
+    updated_at: nextUpdatedAt(current),
   });
   if (!updated) {
     throw new PersonalConnectorError(
@@ -107,6 +113,7 @@ export async function updateConfig(
     );
   }
   if (updated.status === "enabled") {
+    state.drivers.installationLifecycle.resume(updated.id, updated.updated_at);
     void state.catchUp(updated.id);
   }
   return viewOf(state, store, updated);
@@ -118,6 +125,7 @@ export async function uninstall(state: ConnectorState, installationId: string): 
   if (!current || current.org_id !== state.runtime.orgId()) {
     return { id: installationId, removed: true };
   }
+  await state.drivers.stopInstallation(current, state.runtime.requireHost(), "delete");
   await store.deleteInstallation(current.id, state.runtime.orgId());
   state.kernelRuntime.clearInstallationSnapshots(current.id);
   return { id: current.id, removed: true };
@@ -130,11 +138,22 @@ export async function setStatus(
 ): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
   const current = await state.requireInstallation(store, installationId);
+  if (status === "enabled") {
+    state.drivers.installationLifecycle.assertRestartable(current.id);
+    if (current.status === "enabled" && state.drivers.get(current.connector_type)?.stopInstallation) {
+      state.drivers.installationLifecycle.resume(current.id, current.updated_at);
+      void state.catchUp(current.id);
+      return viewOf(state, store, current);
+    }
+  }
+  if (status === "disabled") {
+    await state.drivers.stopInstallation(current, state.runtime.requireHost(), "disable");
+  }
   const updated = await store.setInstallationStatus({
     id: current.id,
     org_id: state.runtime.orgId(),
     status,
-    updated_at: new Date().toISOString(),
+    updated_at: nextUpdatedAt(current),
   });
   if (!updated) {
     throw new PersonalConnectorError(
@@ -144,9 +163,14 @@ export async function setStatus(
     );
   }
   if (status === "enabled") {
+    state.drivers.installationLifecycle.resume(updated.id, updated.updated_at);
     void state.catchUp(updated.id);
   }
   return viewOf(state, store, updated);
+}
+
+function nextUpdatedAt(installation: ConnectorInstallation): string {
+  return new Date(Math.max(Date.now(), Date.parse(installation.updated_at) + 1)).toISOString();
 }
 
 function buildInstallation(
