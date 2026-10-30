@@ -27,7 +27,7 @@ Our goal is to make what you can do with a message independent of where it came 
 | Delegate work to agents | Use Recipes to select an executor for matching tasks, then start runs in the workbench, track their status, and respond to requests for human input. |
 | Integrate your own tools | External AI tools can retrieve conversations through read-only MCP; scripts and other systems can integrate through the API. |
 
-These features operate on connected, authorized data. Search answers require an available executor; sending, forwarding, and execution depend on connector and executor capabilities and permissions. See the [desktop workbench](docs/en/DESKTOP.md), [executors](docs/en/EXECUTOR.md), and [MCP](docs/en/CONTEXT_SEARCH_MCP.md).
+These features operate on connected, authorized data. Search answers require an available executor; sending, forwarding, and execution depend on connector and executor capabilities and permissions. See [executors](docs/en/EXECUTOR.md), and [MCP](docs/en/CONTEXT_SEARCH_MCP.md).
 
 ## Features
 
