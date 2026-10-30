@@ -1,6 +1,6 @@
 {
   "name": "@regenic/connector-contract",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Serializable types and pure helpers for Regenic connectors.",
   "license": "MIT",
   "repository": {
