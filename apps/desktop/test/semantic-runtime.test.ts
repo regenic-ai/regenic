@@ -73,11 +73,14 @@ test("semantic actions and search input are bounded and literal", () => {
   for (const action of ["install", "start", "stop"]) assert.equal(semanticAction(action), action);
   for (const action of [null, {}, "exec", "START"]) assert.throws(() => semanticAction(action));
   assert.deepEqual(contextSearchInput(" query ", " mail ", " literal/thread ", 20), {
-    query: "query", limit: 20, filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
+    query: "query", limit: 20, kind: "all", filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
     context: SEARCH_CONTEXT,
   });
 
-  assert.deepEqual(contextSearchInput("x", "", "", 1), { query: "x", limit: 1, context: SEARCH_CONTEXT });
+  assert.deepEqual(contextSearchInput("x", "", "", 1), { query: "x", limit: 1, kind: "all", context: SEARCH_CONTEXT });
+  for (const kind of ["all", "messages", "files"] as const) {
+    assert.equal(contextSearchInput("budget.xlsx", "", "", 10, kind).kind, kind);
+  }
   for (const [query, limit] of [["", 20], ["x".repeat(8001), 20], ["x", 21], ["x", 1.2]] as const) {
     assert.throws(() => contextSearchInput(query, "", "", limit), /search.invalid/);
   }

@@ -8,6 +8,7 @@ import {
   parseStoredContentParts,
   storedPartBytes,
   storedPartContentHash,
+  storedPartText,
   type BlobStore,
   type AuthorizedContextSourceEvent,
   type ContextAuthorityRead,
@@ -19,6 +20,7 @@ import {
   type ContextRequest,
   type ContextSourceEvent,
   type StoredContentPart,
+  type ContextSearchPart,
 } from "@regenic/domain";
 
 export class ContextTextMaterialError extends Error {}
@@ -148,9 +150,47 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
             this.strictText,
           )
         : undefined;
+      const searchParts: ContextSearchPart[] = [];
+      if (includeAttachments && bytes && source.content_media_type === CONTENT_PARTS_MEDIA_TYPE) {
+        const parts = parseStoredContentParts(bytes) ?? [];
+        const body = bodyTextFromStored(bytes, source.content_media_type);
+        let cursor = body?.length ?? 0;
+        let hasText = body !== undefined;
+        for (const [partIndex, part] of parts.entries()) {
+          if (part.role !== "attachment") continue;
+          const hash = storedPartContentHash(part);
+          const embedded = storedPartBytes(part) ??
+            (typeof part.text === "string" ? Buffer.from(part.text, "utf8") : undefined);
+          const attachmentText = isTextAttachment(part)
+            ? attachmentTextFor(part, attachmentBlobs, this.strictText)
+            : undefined;
+          const projectionStart = attachmentText === undefined ? undefined : cursor + (hasText ? 2 : 0);
+          if (attachmentText !== undefined) {
+            cursor = projectionStart! + attachmentText.length;
+            hasText = true;
+          }
+          searchParts.push({
+            part_index: partIndex,
+            media_type: part.media_type ?? "application/octet-stream",
+            ...(part.source_filename ? { filename: part.source_filename } : {}),
+            ...(hash || embedded ? { content_hash: hash ?? createHash("sha256").update(embedded!).digest("hex") } : {}),
+            ...(attachmentText === undefined ? {} : { text: attachmentText, projection_start: projectionStart }),
+          });
+        }
+      } else if (includeAttachments && bytes && source.content_media_type &&
+        (!isTextMediaType(source.content_media_type) || hasBinarySignature(bytes))) {
+        searchParts.push({ part_index: -1, media_type: source.content_media_type, content_hash: contentHash });
+      }
       return {
         ...structuredClone(source),
         ...(text === undefined ? {} : { text }),
+        ...(includeAttachments ? {
+          search_parts: searchParts,
+          search_body: bytes && source.content_media_type && !hasBinarySignature(bytes)
+            ? (source.content_media_type === CONTENT_PARTS_MEDIA_TYPE
+              ? storedPartText((parseStoredContentParts(bytes) ?? []).find((part) => part.role === "body") ?? {})
+              : bodyTextFromStored(bytes, source.content_media_type)) ?? "" : "",
+        } : {}),
       };
     });
   }
@@ -192,7 +232,7 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
       const attachments = parts.filter((part) =>
         part.role === "attachment",
       );
-      partsByEvent.set(eventId, attachments);
+      partsByEvent.set(eventId, parts);
       for (const part of attachments) {
         const hash = storedPartContentHash(part);
         if (hash) attachmentHashes.add(hash);
@@ -217,7 +257,8 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
             hasBinarySignature(bodies.get(source.event.content_hash)!))
         ? bodies.get(source.event.content_hash)
         : undefined;
-      const attachments = (partsByEvent.get(eventId) ?? []).flatMap((part) => {
+      const attachments = (partsByEvent.get(eventId) ?? []).flatMap((part, partIndex) => {
+        if (part.role !== "attachment") return [];
         const storedHash = storedPartContentHash(part);
         const bytes = storedHash ? attachmentBlobs.get(storedHash) : storedPartBytes(part);
         if (!bytes) return [];
@@ -230,6 +271,7 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
           throw new ContextTextMaterialError("Stored attachment hash mismatch");
         }
         return [{
+          part_index: partIndex,
           content_hash: contentHash,
           media_type: part.media_type ?? "application/octet-stream",
           ...(part.source_filename ? { source_filename: part.source_filename } : {}),
@@ -246,6 +288,7 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
           throw new ContextTextMaterialError("Stored attachment hash mismatch");
         }
         attachments.unshift({
+          part_index: -1,
           content_hash: source.event.content_hash,
           media_type: source.content_media_type,
           bytes: new Uint8Array(directBlob),
@@ -254,6 +297,7 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
       return {
         event_id: eventId,
         ...(event.text === undefined ? {} : { text: event.text }),
+        search_parts: event.search_parts,
         attachments,
       };
     });
@@ -271,23 +315,31 @@ function materializedText(
   const body = bodyTextFromStored(bytes, mediaType);
   const texts = body === undefined ? [] : [body];
   for (const attachment of attachments) {
-    const hash = storedPartContentHash(attachment);
-    const attachmentBytes = hash ? attachmentBlobs.get(hash)
-      : storedPartBytes(attachment) ??
-        (typeof attachment.text === "string" ? Buffer.from(attachment.text, "utf8") : undefined);
-    if (!attachmentBytes) continue;
-    if (strictText && hash && createHash("sha256").update(attachmentBytes).digest("hex") !== hash) {
-      throw new ContextTextMaterialError("Stored text attachment hash mismatch");
-    }
-    if (hasBinarySignature(attachmentBytes)) continue;
-    try {
-      texts.push(new TextDecoder("utf-8", { fatal: true }).decode(attachmentBytes));
-    } catch (error) {
-      if (error instanceof TypeError) throw new ContextTextMaterialError("Invalid UTF-8 text attachment");
-      throw error;
-    }
+    const text = attachmentTextFor(attachment, attachmentBlobs, strictText);
+    if (text !== undefined) texts.push(text);
   }
   return texts.length > 0 ? texts.join("\n\n") : undefined;
+}
+
+function attachmentTextFor(
+  attachment: StoredContentPart,
+  blobs: ReadonlyMap<string, Uint8Array>,
+  strict: boolean,
+): string | undefined {
+  const hash = storedPartContentHash(attachment);
+  const bytes = hash ? blobs.get(hash) : storedPartBytes(attachment) ??
+    (typeof attachment.text === "string" ? Buffer.from(attachment.text, "utf8") : undefined);
+  if (!bytes) return undefined;
+  if (strict && hash && createHash("sha256").update(bytes).digest("hex") !== hash) {
+    throw new ContextTextMaterialError("Stored text attachment hash mismatch");
+  }
+  if (hasBinarySignature(bytes)) return undefined;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    if (error instanceof TypeError) throw new ContextTextMaterialError("Invalid UTF-8 text attachment");
+    throw error;
+  }
 }
 
 function isTextAttachment(part: StoredContentPart): boolean {

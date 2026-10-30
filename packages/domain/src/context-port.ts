@@ -128,6 +128,8 @@ export interface ContextSourceEvent {
   required_scope_ids: string[];
   content_media_type?: string;
   text?: string;
+  search_parts?: import("./context-search").ContextSearchPart[];
+  search_body?: string;
   estimated_tokens?: number;
   direction_tags?: string[];
   weight_hints?: WeightHints;

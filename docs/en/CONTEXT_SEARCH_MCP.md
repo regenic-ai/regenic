@@ -37,6 +37,13 @@ The server accepts HTTPS or loopback HTTP. The key may be omitted only when the 
 
 ### `search_conversations`
 
+Accepts optional `kind: "all" | "messages" | "files"` (default `all`). File
+matches are in `items[].matches`, with immutable Event/hash + part identity and
+verified text ranges when available. File-only hits have no conversation window;
+do not infer a message or page match from them. Legacy unlocated semantic hits
+remain Event-level evidence. Conversation windows and continuation rules below
+apply only to returned message/Event anchors.
+
 Searches current authorized text and expands each hit into a bounded conversation window.
 
 ```json

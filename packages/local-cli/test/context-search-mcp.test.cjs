@@ -93,6 +93,7 @@ test("context search MCP exposes expanded search and continuation tools", async 
         name: "search_conversations",
         arguments: {
           query: "customer question",
+          kind: "messages",
           limit: 5,
           filters: { sources: ["fixture"] },
           context: { before: 4, after: 4, reply_depth: 8, max_messages: 40 },
@@ -151,6 +152,7 @@ test("context search MCP exposes expanded search and continuation tools", async 
     responses[1].result.tools[0].inputSchema.required,
     ["query"],
   );
+  assert.deepEqual(responses[1].result.tools[0].inputSchema.properties.kind.enum, ["all", "messages", "files"]);
   assert.equal(
     responses[2].result.structuredContent.conversations[0].messages[1].external_id,
     "customer-a:2",
@@ -169,6 +171,7 @@ test("context search MCP exposes expanded search and continuation tools", async 
   assert.equal(requests[0].apiKey, "personal-key");
   assert.deepEqual(requests[0].body, {
     query: "customer question",
+    kind: "messages",
     limit: 5,
     filters: { sources: ["fixture"] },
     context: { before: 4, after: 4, reply_depth: 8, max_messages: 40 },

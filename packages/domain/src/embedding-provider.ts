@@ -81,6 +81,7 @@ export function embeddingGeneration(
 }
 
 export interface ContextEmbeddingAttachment {
+  part_index?: number;
   content_hash: string;
   media_type: string;
   source_filename?: string;
@@ -90,6 +91,7 @@ export interface ContextEmbeddingAttachment {
 export interface ContextEmbeddingMaterial {
   event_id: string;
   text?: string;
+  search_parts?: import("./context-search").ContextSearchPart[];
   attachments: ContextEmbeddingAttachment[];
 }
 

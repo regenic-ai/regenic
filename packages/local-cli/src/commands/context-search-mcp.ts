@@ -29,9 +29,10 @@ const boundaryProperty = {
 const TOOLS = [
   tool(
     "search_conversations",
-    "Search authorized context and return bounded conversation windows with stable message IDs, reply links, completeness flags and continuation boundaries.",
+    "Search authorized messages and files. Returns bounded conversation windows plus exact file matches in items[].matches; file-only hits have no message anchor. Unlocated semantic hits remain Event-level evidence.",
     {
       query: stringProperty(),
+      kind: { type: "string", enum: ["all", "messages", "files"] },
       limit: integerProperty(1, 20),
       filters: {
         type: "object",

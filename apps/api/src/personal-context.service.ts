@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
   ModelTimeoutError,
@@ -56,6 +56,10 @@ import {
   type AgentRunStatus,
   selectContextIndexes,
   type ContextAuthorityRead,
+  CONTENT_PARTS_MEDIA_TYPE,
+  parseStoredContentParts,
+  storedPartContentHash,
+  storedPartBytes,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -122,7 +126,7 @@ export class PersonalContextService {
   }
 
   async searchExpanded(input: unknown) {
-    const body = strictBody(input, new Set(["query", "limit", "filters", "context"]));
+    const body = strictBody(input, new Set(["query", "kind", "limit", "filters", "context"]));
     const context = body.context === undefined
       ? {}
       : strictNestedBody(body.context, new Set([
@@ -143,10 +147,13 @@ export class PersonalContextService {
     }
     const search = await this.search({
       query: body.query,
+      ...(body.kind === undefined ? {} : { kind: body.kind }),
       limit,
       ...(body.filters === undefined ? {} : { filters: body.filters }),
     });
-    if (!search.items.length) {
+    const messageHits = search.items.filter((hit) => !hit.matches ||
+      hit.matches.some((match) => match.kind !== "file"));
+    if (!messageHits.length) {
       return { ...search, conversations: [], expansion: expansionSummary(0, maxMessages) };
     }
 
@@ -157,7 +164,7 @@ export class PersonalContextService {
         content_hash: string;
         rank: number;
       }>>();
-      for (const hit of search.items) {
+      for (const hit of messageHits) {
         const event = await authority.getEvent(this.runtime.orgId(), hit.event_id);
         if (!event?.thread_id || event.content_hash !== hit.content_hash) {
           throw contextChanged();
@@ -172,7 +179,7 @@ export class PersonalContextService {
       }
 
       const threadEntries = [...seedsByThread.entries()];
-      const remainingForNeighbors = maxMessages - search.items.length;
+      const remainingForNeighbors = maxMessages - messageHits.length;
       const baseExtra = Math.floor(remainingForNeighbors / threadEntries.length);
       let extraRemainder = remainingForNeighbors % threadEntries.length;
       const conversations = [];
@@ -252,17 +259,20 @@ export class PersonalContextService {
   }
 
   async searchSource(input: unknown) {
-    const body = strictBody(input, new Set(["event_id", "content_hash"]));
+    const body = strictBody(input, new Set(["event_id", "content_hash", "part_index"]));
     const eventId = requiredString(body.event_id, "event_id");
     const contentHash = requiredString(body.content_hash, "content_hash");
     if (!/^[a-f0-9]{64}$/.test(contentHash)) {
       throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid content_hash");
     }
+    const partIndex = body.part_index === undefined ? undefined
+      : boundedInteger(body.part_index, "part_index", -1, 1_000_000);
     return this.runContext(async () => {
       const result = await this.runtime.requireHost().get("context").assemble({
         schema_version: "1.0", id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
         consumer_id: "personal-search-source", purpose: "display the current authorized search source",
         allowed_uses: ["display"], temporal: { mode: "current" },
+        ...(partIndex === undefined ? {} : { search_kind: "all" as const }),
         anchors: [{ kind: "event", id: eventId }], requested_kinds: ["event"],
         budget: { profile: "personal-search-source-v1", max_tokens: 65_536, max_items: 1, max_raw_evidence: 1 },
       });
@@ -272,7 +282,34 @@ export class PersonalContextService {
       if (!item || typeof item.text !== "string") {
         throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Search source is no longer available; search again");
       }
-      return { event_id: eventId, content_hash: contentHash, text: item.text, snapshot_id: result.snapshot.id };
+      let attachment;
+      if (partIndex !== undefined) {
+        const host = this.runtime.requireHost();
+        const metadata = await host.get("authority").findBlob(contentHash);
+        const bytes = await host.get("blobs").get(contentHash);
+        if (!metadata || !bytes || createHash("sha256").update(bytes).digest("hex") !== contentHash) throw contextChanged();
+        const part = metadata.media_type === CONTENT_PARTS_MEDIA_TYPE
+          ? parseStoredContentParts(bytes)?.[partIndex] : undefined;
+        if (partIndex === -1 && metadata.media_type !== CONTENT_PARTS_MEDIA_TYPE) {
+          attachment = { part_index: -1, content_hash: contentHash, media_type: metadata.media_type };
+        } else if (part?.role === "attachment") {
+          const embedded = storedPartBytes(part) ??
+            (typeof part.text === "string" ? Buffer.from(part.text, "utf8") : undefined);
+          attachment = {
+            part_index: partIndex, media_type: part.media_type ?? "application/octet-stream",
+            ...(part.source_filename ? { filename: part.source_filename } : {}),
+            ...(storedPartContentHash(part) || embedded ? {
+              content_hash: storedPartContentHash(part) ?? createHash("sha256").update(embedded!).digest("hex"),
+            } : {}),
+          };
+        } else {
+          throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Search attachment is no longer available");
+        }
+      }
+      return {
+        event_id: eventId, content_hash: contentHash, text: item.text, snapshot_id: result.snapshot.id,
+        ...(attachment ? { attachment } : {}),
+      };
     });
   }
 

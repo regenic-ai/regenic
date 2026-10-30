@@ -23,6 +23,7 @@ export interface ContextVectorChunk {
   end: number;
   text_hash: string;
   vector: number[];
+  origin?: import("./context-search").ContextChunkOrigin;
 }
 
 export interface ContextVectorMatch extends ContextLexicalKey {
@@ -31,16 +32,30 @@ export interface ContextVectorMatch extends ContextLexicalKey {
   start: number;
   end: number;
   material_length?: number;
+  search_matches?: Array<{
+    origin: import("./context-search").ContextChunkOrigin;
+    score: number;
+    lexical: boolean;
+  }>;
 }
 
 export interface ContextVectorIndex {
+  matchAuthorizedText?(input: {
+    org_id: string;
+    generation: string;
+    authorized: Array<ContextLexicalKey & { body_length?: number }>;
+    query: string;
+    limit: number;
+  }): ReturnType<ContextVectorIndex["matchAuthorized"]>;
   registerGeneration(orgId: string, generation: EmbeddingGeneration): Promise<void>;
   matchAuthorized(input: {
     org_id: string;
     generation: string;
-    authorized: ContextLexicalKey[];
+    authorized: Array<ContextLexicalKey & { body_length?: number }>;
     query_vector: number[];
     limit: number;
+    query?: string;
+    search_kind?: import("./context-search").ContextSearchKind;
   }): Promise<{
     generation: string;
     covered: ContextLexicalKey[];

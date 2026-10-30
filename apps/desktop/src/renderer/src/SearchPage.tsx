@@ -58,6 +58,7 @@ export function SearchPage({ onSettings, onOpenConversation }: {
 }) {
   const { t, locale } = useLocale();
   const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<"all" | "messages" | "files">("all");
   const [source, setSource] = useState("");
   const [thread, setThread] = useState("");
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
@@ -97,7 +98,7 @@ export function SearchPage({ onSettings, onOpenConversation }: {
     pending.current?.abort(); pending.current = null; setBusy(false);
   }
 
-  async function search(text = query, filters = { source, thread, limit }) {
+  async function search(text = query, filters = { source, thread, limit }, searchKind = kind) {
     pending.current?.abort();
     openPending.current?.abort();
     morePending.current?.abort();
@@ -107,7 +108,7 @@ export function SearchPage({ onSettings, onOpenConversation }: {
     setOpening(null); setLoadingMore(null); setElapsed(null);
     const started = performance.now();
     try {
-      const searchInput = contextSearchInput(text, filters.source, filters.thread, filters.limit);
+      const searchInput = contextSearchInput(text, filters.source, filters.thread, filters.limit, searchKind);
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
       const next = await searchPersonalContext(searchInput, signal).catch((caught: unknown) => {
         if (caught instanceof KernelRequestError && caught.code === "context_changed" && !signal.aborted) {
@@ -131,13 +132,19 @@ export function SearchPage({ onSettings, onOpenConversation }: {
     }
   }
 
-  async function open(message: PersonalSearchMessage) {
+  async function open(
+    message: { event_id: string; content_hash: string },
+    partIndex?: number,
+  ) {
     openPending.current?.abort();
     const controller = new AbortController();
     openPending.current = controller;
     setOpening(message.event_id); setError(null);
     try {
-      const opened = await fetchSearchSource({ event_id: message.event_id, content_hash: message.content_hash }, controller.signal);
+      const opened = await fetchSearchSource({
+        event_id: message.event_id, content_hash: message.content_hash,
+        ...(partIndex === undefined ? {} : { part_index: partIndex }),
+      }, controller.signal);
       if (controller.signal.aborted) return;
       if (opened.item) onOpenConversation(opened.item);
       else setError(t("search.noConversation"));
@@ -233,6 +240,15 @@ export function SearchPage({ onSettings, onOpenConversation }: {
           </button>
         </div>
         <div className="search-toolbar">
+          <div className="search-recent" role="group" aria-label={t("search.kind")}>
+            {(["all", "messages", "files"] as const).map((value) => (
+              <button type="button" className="search-recent-chip" key={value}
+                aria-pressed={kind === value} onClick={() => {
+                  setKind(value);
+                  if (query.trim()) void search(query, { source, thread, limit }, value);
+                }}>{t(`search.kind.${value}`)}</button>
+            ))}
+          </div>
           <button type="button" className={`link search-filter-toggle${filtersOpen ? " is-open" : ""}`}
             aria-expanded={filtersOpen} onClick={() => setFiltersOpen((value) => !value)}>
             {activeFilters ? t("search.filtersActive", { count: activeFilters }) : t("search.filters")}
@@ -285,7 +301,10 @@ export function SearchPage({ onSettings, onOpenConversation }: {
               <span className={`chip ${result.generation ? "running" : ""}`}>
                 {t(result.generation ? "search.hybrid" : "search.lexical")}
               </span>
-              <span>{t("search.count", { count: result.conversations.length, hits: result.items.length })}</span>
+              <span>{t("search.resultCount", {
+                count: result.items.length,
+                files: result.items.reduce((sum, hit) => sum + (hit.matches ?? []).filter((match) => match.kind === "file").length, 0),
+              })}</span>
               {result.coverage ? (
                 <span className="muted">{t("search.coverage", {
                   covered: result.coverage.covered_count, authorized: result.coverage.authorized_count,
@@ -310,7 +329,9 @@ export function SearchPage({ onSettings, onOpenConversation }: {
               </div>
             ) : null}
             {result.truncated ? <p className="muted">{t("search.truncated")}</p> : null}
-            {!result.conversations.length ? (
+            {result.items.some((hit) => hit.matches?.some((match) => match.kind === "event"))
+              ? <p className="muted">{t("search.eventOnly")}</p> : null}
+            {!result.items.length ? (
               <div className="search-empty-state">
                 <p>{t("search.empty")}</p>
                 {activeFilters ? <button type="button" className="ghost" onClick={() => {
@@ -323,12 +344,33 @@ export function SearchPage({ onSettings, onOpenConversation }: {
                 conversations={cards} onCite={cite} />
             ) : null}
             <ol className="semantic-results">
-              {cards.map((conversation) => (
+              {result.items.map((hit) => <Fragment key={hit.event_id}>
+                {(hit.matches ?? []).filter((match) => match.kind === "file")
+                .map((file) => (
+                  <li key={`${hit.event_id}:${file.part_index}`} className="semantic-result search-file">
+                    <h3>{highlight(file.filename ?? t("search.unnamedFile"), submitted)}</h3>
+                    <p className="muted">{file.media_type} · {hit.source} · {new Date(hit.occurred_at).toLocaleString(locale)}</p>
+                    <p>{t("search.matchVia")}: {file.via.map((via) => t(`search.via.${via}`)).join(" · ")}</p>
+                    {file.snippet !== undefined ? <p>{highlight(file.snippet, submitted)}</p> : null}
+                    <p className="muted">{file.start !== undefined && file.end !== undefined
+                      ? t("search.textRange", { start: file.start, end: file.end })
+                      : t("search.noRegion")}</p>
+                    <details><summary>{t("search.fileIdentity")}</summary>
+                      <dl><dt>event</dt><dd>{hit.event_id}</dd><dt>part</dt><dd>{file.part_index}</dd>
+                        <dt>event hash</dt><dd>{hit.content_hash}</dd>
+                        {file.content_hash ? <><dt>file hash</dt><dd>{file.content_hash}</dd></> : null}</dl>
+                    </details>
+                    <button type="button" className="link" disabled={opening === hit.event_id}
+                      onClick={() => void open(hit, file.part_index)}>{t("search.openSource")}</button>
+                  </li>
+                ))}
+              {cards.filter((conversation) => conversation.anchor_event_ids[0] === hit.event_id).map((conversation) => (
                 <ConversationCard key={conversation.thread_id} conversation={conversation} query={submitted}
                   locale={locale} opening={opening} loading={loadingMore} cited={cited}
                   onOpen={(message) => void open(message)}
                   onLoad={(target, key) => void loadMore(conversation, target, key)} />
               ))}
+              </Fragment>)}
             </ol>
           </>
         ) : null}

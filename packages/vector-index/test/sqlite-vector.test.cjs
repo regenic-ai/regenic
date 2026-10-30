@@ -3,6 +3,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { performance } = require("node:perf_hooks");
+const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
 const { embeddingGeneration } = require("@regenic/domain");
@@ -45,6 +46,64 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("applies message/file vector selection before top-k rather than filling it with the other kind", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("file"), head("message")]);
+    for (const job of await claim(f.index)) {
+      const value = chunk(job.event_id === "file" ? [1, 0] : [0.8, 0.6]);
+      if (job.event_id === "file") {
+        value.origin = { part_index: 1, content_hash: hash, mode: "text", start: 0, text: "xx" };
+        value.text_hash = createHash("sha256").update("xx").digest("hex");
+      }
+      await f.index.complete({ job, owner: "owner", now: at, chunks: [value] });
+    }
+    const authorized = [
+      { event_id: "file", content_hash: hash, body_length: 0 },
+      { event_id: "message", content_hash: hash, body_length: 2 },
+    ];
+    assert.deepEqual((await query(f.index, authorized, { limit: 1, query: "other", search_kind: "messages" })).matched.map((hit) => hit.event_id), ["message"]);
+    assert.deepEqual((await query(f.index, authorized, { limit: 1, query: "other", search_kind: "files" })).matched.map((hit) => hit.event_id), ["file"]);
+  });
+
+  it("round-trips attachment provenance through fenced checkpoints and authorized completed reads", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("origin")]);
+    const [job] = await claim(f.index);
+    const text = "nebula";
+    const origin = { part_index: 3, content_hash: "c".repeat(64), mode: "text", start: 0, text };
+    const value = { ordinal: 0, start: 0, end: text.length, text_hash: createHash("sha256").update(text).digest("hex"), vector: [0, 1], origin };
+    assert.equal(await f.index.stageChunk({ job, owner: "owner", now: at, chunk: value }), true);
+    f.reopen();
+    assert.deepEqual(await f.index.loadStagedChunks(job, "owner", at), [value]);
+    assert.deepEqual((await query(f.index, [{ event_id: job.event_id, content_hash: hash }], { query: text })).matched, []);
+    assert.equal(await f.index.complete({ job, owner: "owner", now: at, chunks: [value] }), true);
+    f.reopen();
+    const result = await query(f.index, [{ event_id: job.event_id, content_hash: hash }], { query: text });
+    assert.deepEqual(result.matched[0].search_matches, [{ origin, score: 0, lexical: true }]);
+    assert.deepEqual((await query(f.index, [], { query: text })).matched, []);
+    const keyword = await f.index.matchAuthorizedText({
+      org_id: "org", generation: generation.id, authorized: [{ event_id: job.event_id, content_hash: hash }],
+      query: text, limit: 1,
+    });
+    assert.equal(keyword.matched[0].score, -1);
+    assert.deepEqual(keyword.matched[0].search_matches[0].origin, origin);
+  });
+
+  it("migrates schema v4 additively without discarding complete or staged chunks", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("complete"), head("pending")]);
+    const jobs = await claim(f.index);
+    await f.index.complete({ job: jobs[0], owner: "owner", now: at, chunks: [chunk()] });
+    await f.index.stageChunk({ job: jobs[1], owner: "owner", now: at, chunk: chunk() });
+    f.index.close();
+    const database = new Database(f.path);
+    database.exec("ALTER TABLE chunks DROP COLUMN origin_json; ALTER TABLE staged_chunks DROP COLUMN origin_json; PRAGMA user_version=4;");
+    database.close();
+    f.reopen();
+    assert.equal((await query(f.index, [{ event_id: jobs[0].event_id, content_hash: hash }])).covered.length, 1);
+    assert.deepEqual(await f.index.loadStagedChunks(jobs[1], "owner", at), [chunk()]);
+  });
+
   it("persists fenced staging across restart and publishes nothing before completion", async (t) => {
     const f = await fixture(t);
     await reconcile(f.index, [head("staged")]);
@@ -165,7 +224,7 @@ describe("SQLite vector projection and independent durable jobs", () => {
     database.transaction(() => {
       const insertHead = database.prepare("INSERT INTO source_heads VALUES (?, ?, ?, ?, ?)");
       const insertCoverage = database.prepare("INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, ?)");
-      const insertChunk = database.prepare("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      const insertChunk = database.prepare("INSERT INTO chunks (org_id,generation,event_id,ordinal,start,end,text_hash,vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
       for (let value = 0; value < 4000; value += 1) {
         const eventId = `event-${String(value).padStart(5, "0")}`;
         insertHead.run("org", "synthetic", eventId, eventId, 1);
