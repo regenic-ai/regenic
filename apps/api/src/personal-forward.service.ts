@@ -241,135 +241,141 @@ export class PersonalForwardService {
         create_with_task: false,
       };
     }
-    const targetThreadId = `${found.thread.source}:${found.thread.target}`;
-    const seedOnly = found.create_with_task && text.length > 0;
-    const content: ContentPart[] = [
-      ...(text
-        ? [{ role: "body" as const, media_type: "text/markdown", text }]
-        : []),
-      ...prepared.map(
-        (attachment): ContentPart => ({
-          role: "attachment",
-          media_type: attachment.media_type,
-          source_filename: attachment.filename,
-          bytes: attachment.bytes,
-        }),
-      ),
-    ];
-    let receipt: { accepted: true; rpc_id: string } = {
-      accepted: true,
-      rpc_id: randomUUID(),
-    };
-    const outboundId =
-      found.driver.outboundId?.bind(found.driver) ??
-      ((_thread: ConversationThread, sent: { rpc_id?: string }) =>
-        `${found.thread.target}:out:${sent.rpc_id ?? randomUUID()}`);
-    if (!seedOnly) {
-      if (!driverCanReply(found.driver, found.installation)) {
-        throw new PersonalConnectorError(
-          "no_sender",
-          "No enabled connector can send in that conversation",
-          404,
-        );
-      }
-      try {
-        const ports = requireReplyPorts(found.driver);
-        const egress = await ports.bindEgress(
-          found.installation,
-          found.thread,
-          asConnectorHost(host),
-          process.env,
-        );
-        receipt = {
+    try {
+      return await this.drivers.runInstallation(found.installation, async () => {
+        const targetThreadId = `${found.thread.source}:${found.thread.target}`;
+        const seedOnly = found.create_with_task && text.length > 0;
+        const content: ContentPart[] = [
+          ...(text
+            ? [{ role: "body" as const, media_type: "text/markdown", text }]
+            : []),
+          ...prepared.map(
+            (attachment): ContentPart => ({
+              role: "attachment",
+              media_type: attachment.media_type,
+              source_filename: attachment.filename,
+              bytes: attachment.bytes,
+            }),
+          ),
+        ];
+        let receipt: { accepted: true; rpc_id: string } = {
           accepted: true,
-          rpc_id:
-            (
-              await egress.send({
-                installation_id: found.installation.id,
-                target: { scope_id: found.thread.target },
-                content,
-              })
-            ).rpc_id ?? receipt.rpc_id,
+          rpc_id: randomUUID(),
         };
-      } catch (error) {
-        throw wrapDriverError(error, "send_failed");
-      }
-    }
+        const outboundId =
+          found.driver.outboundId?.bind(found.driver) ??
+          ((_thread: ConversationThread, sent: { rpc_id?: string }) =>
+            `${found.thread.target}:out:${sent.rpc_id ?? randomUUID()}`);
+        if (!seedOnly) {
+          if (!driverCanReply(found.driver, found.installation)) {
+            throw new PersonalConnectorError(
+              "no_sender",
+              "No enabled connector can send in that conversation",
+              404,
+            );
+          }
+          try {
+            const ports = requireReplyPorts(found.driver);
+            const egress = await ports.bindEgress(
+              found.installation,
+              found.thread,
+              asConnectorHost(host),
+              process.env,
+            );
+            receipt = {
+              accepted: true,
+              rpc_id:
+                (
+                  await egress.send({
+                    installation_id: found.installation.id,
+                    target: { scope_id: found.thread.target },
+                    content,
+                  })
+                ).rpc_id ?? receipt.rpc_id,
+            };
+          } catch (error) {
+            throw wrapDriverError(error, "send_failed");
+          }
+        }
 
-    const now = new Date().toISOString();
-    const stamp = await this.conversationStamp(targetThreadId, {
-      installationId: found.installation.id,
-      host,
-    });
-    const record = channelRecord({
-      channel: found.driver.source ?? found.thread.source,
-      kind: "user",
-      direction: "outbound",
-      external_id: outboundId(found.thread, receipt),
-      occurred_at: now,
-      actor_id: "local-owner",
-      scope_id: found.thread.target,
-      ...(stamp.scope_name ? { scope_name: stamp.scope_name } : {}),
-      ...(stamp.conversation_kind
-        ? { conversation_kind: stamp.conversation_kind }
-        : {}),
-      ...(stamp.unit_kind ? { unit_kind: stamp.unit_kind } : {}),
-      forwarded_from: packet.forwarded_from,
-      content: toReplyParts({
-        text,
-        attachments: prepared.map((attachment) => ({
-          filename: attachment.filename,
-          media_type: attachment.media_type,
-          bytes: attachment.bytes,
-        })),
-      }),
-    });
-    record.weight_hints = { importance: 1 };
-    const ingested = await host.get("ingest").ingest({
-      schema_version: INGEST_SCHEMA_VERSION,
-      connector_id: found.installation.id,
-      org_id: this.runtime.orgId(),
-      delivery_id: `forward:${randomUUID()}`,
-      received_at: now,
-      records: [record],
-    });
-    if (!ingested.valid) {
-      throw new PersonalConnectorError(
-        "send_failed",
-        "Forward was delivered but could not be stored",
-        502,
-      );
+        const now = new Date().toISOString();
+        const stamp = await this.conversationStamp(targetThreadId, {
+          installationId: found.installation.id,
+          host,
+        });
+        const record = channelRecord({
+          channel: found.driver.source ?? found.thread.source,
+          kind: "user",
+          direction: "outbound",
+          external_id: outboundId(found.thread, receipt),
+          occurred_at: now,
+          actor_id: "local-owner",
+          scope_id: found.thread.target,
+          ...(stamp.scope_name ? { scope_name: stamp.scope_name } : {}),
+          ...(stamp.conversation_kind
+            ? { conversation_kind: stamp.conversation_kind }
+            : {}),
+          ...(stamp.unit_kind ? { unit_kind: stamp.unit_kind } : {}),
+          forwarded_from: packet.forwarded_from,
+          content: toReplyParts({
+            text,
+            attachments: prepared.map((attachment) => ({
+              filename: attachment.filename,
+              media_type: attachment.media_type,
+              bytes: attachment.bytes,
+            })),
+          }),
+        });
+        record.weight_hints = { importance: 1 };
+        const ingested = await host.get("ingest").ingest({
+          schema_version: INGEST_SCHEMA_VERSION,
+          connector_id: found.installation.id,
+          org_id: this.runtime.orgId(),
+          delivery_id: `forward:${randomUUID()}`,
+          received_at: now,
+          records: [record],
+        });
+        if (!ingested.valid) {
+          throw new PersonalConnectorError(
+            "send_failed",
+            "Forward was delivered but could not be stored",
+            502,
+          );
+        }
+        await this.rememberSourceForward({
+          sourceThread: input.sourceThread,
+          targetThreadId,
+          targetSource: found.thread.source,
+          eventIds: packet.forwarded_from.event_ids,
+          fallbackConnectorId: found.installation.id,
+          host,
+          now,
+        });
+        const eventId = ingested.records[0]?.event_id;
+        const followed = this.connectors
+          .followThread(found.installation.id, found.thread)
+          .catch(() => undefined);
+        await Promise.race([followed, delay(FOLLOW_RETURN_MS)]);
+        const item = eventId ? await this.inbox.getInboxItem(eventId) : null;
+        if (!item) {
+          throw new PersonalConnectorError(
+            "send_failed",
+            "Forward was delivered but did not enter current work",
+            502,
+          );
+        }
+        return {
+          accepted: true,
+          source_thread_id: input.sourceThreadId,
+          target_thread_id: targetThreadId,
+          created: input.creating,
+          item,
+          ...(packet.truncated || taken.dropped > 0 ? { truncated: true } : {}),
+        };
+      });
+    } catch (error) {
+      throw wrapDriverError(error, "send_failed");
     }
-    await this.rememberSourceForward({
-      sourceThread: input.sourceThread,
-      targetThreadId,
-      targetSource: found.thread.source,
-      eventIds: packet.forwarded_from.event_ids,
-      fallbackConnectorId: found.installation.id,
-      host,
-      now,
-    });
-    const eventId = ingested.records[0]?.event_id;
-    const followed = this.connectors
-      .followThread(found.installation.id, found.thread)
-      .catch(() => undefined);
-    await Promise.race([followed, delay(FOLLOW_RETURN_MS)]);
-    const item = eventId ? await this.inbox.getInboxItem(eventId) : null;
-    if (!item) {
-      throw new PersonalConnectorError(
-        "send_failed",
-        "Forward was delivered but did not enter current work",
-        502,
-      );
-    }
-    return {
-      accepted: true,
-      source_thread_id: input.sourceThreadId,
-      target_thread_id: targetThreadId,
-      created: input.creating,
-      item,
-      ...(packet.truncated || taken.dropped > 0 ? { truncated: true } : {}),
-    };
   }
 
   private async loadSourceItems(

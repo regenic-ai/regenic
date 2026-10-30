@@ -37,6 +37,8 @@ export type {
   ConnectorImportParseResult,
   ConnectorStream,
   ConnectorStreamPace,
+  ConnectorStopContext,
+  ConnectorStopReason,
   ConversationThread,
   DriverCatalogField,
   DriverCatalogFieldWhen,
@@ -97,6 +99,8 @@ import {
   DEFAULT_CATALOG_PROBE_TIMEOUT_MS,
   withDeadline,
 } from "./deadline";
+import { ConnectorInstallationLifecycle } from "./connector-installation-lifecycle";
+import type { ConnectorStopReason } from "@regenic/connector-contract";
 
 
 export function normalizeListTitle(value: unknown): ListTitleMode {
@@ -203,12 +207,13 @@ export function requireWebhookPorts(driver: ChannelDriver): {
 
 export class ChannelDriverRegistry {
   private readonly drivers = new Map<string, ChannelDriver>();
+  readonly installationLifecycle = new ConnectorInstallationLifecycle();
 
   register(driver: ChannelDriver): this {
     if (this.drivers.has(driver.connector_type)) {
       return this;
     }
-    this.drivers.set(driver.connector_type, driver);
+    this.drivers.set(driver.connector_type, this.installationLifecycle.guard(driver));
     return this;
   }
 
@@ -218,6 +223,33 @@ export class ChannelDriverRegistry {
 
   list(): ChannelDriver[] {
     return [...this.drivers.values()];
+  }
+
+  runInstallation<T>(installation: ConnectorInstallation, work: () => Promise<T>): Promise<T> {
+    return this.get(installation.connector_type)?.stopInstallation
+      ? this.installationLifecycle.runInstallation(installation, work)
+      : work();
+  }
+
+  async stopInstallation(
+    installation: ConnectorInstallation,
+    host: Host | ConnectorHost,
+    reason: ConnectorStopReason,
+    timeoutMs?: number,
+  ): Promise<void> {
+    try {
+      await this.installationLifecycle.stop(
+        this.get(installation.connector_type), installation,
+        asConnectorHost(host), reason, timeoutMs,
+      );
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "deadline_exceeded") throw error;
+      throw new ChannelDriverError(
+        "sync_failed",
+        error instanceof Error ? error.message : "Connector stop failed",
+        "lifecycle_failed",
+      );
+    }
   }
 
   sourceLabel(
@@ -765,8 +797,8 @@ export class ChannelDriverRegistry {
         );
         try {
           await driver.onStoreClear(owned, drivers);
-        } catch {
-          // Connector cleanup is best-effort after the authority was cleared.
+        } catch (error) {
+          console.error("connector operational cache cleanup failed", driver.connector_type, error);
         }
       }),
     );

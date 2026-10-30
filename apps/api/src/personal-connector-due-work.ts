@@ -759,58 +759,60 @@ export async function discoverCatalogDueWork(
   if (!driver || !driverPolls(driver)) {
     return;
   }
-  const engine = new SyncEngine(store);
-  if (driver.bindSyncSource) {
-    const source = await driver.bindSyncSource(
-      installation,
-      asConnectorHost(host),
-      process.env,
-    );
-    await engine.refreshCatalog({
-      installation_id: installation.id,
-      source,
-      pages: catalogRefreshPages({ catalogTick: true }),
-      force: plane === "bootstrap",
-    });
-  } else {
-    const resolved = await driver.resolveStreams(
-      installation,
-      asConnectorHost(host),
-      process.env,
-      {
-        threads: await loadEligibleInstallationThreads(
-          host.get("authority"),
-          installation.org_id,
-          installation,
-          driver,
-          preferredThreadId(),
-        ),
-        catalog: [],
-        discover: true,
-      },
-    );
-    const fallbackMembers = catalogMembersFromStreams(installation.id, resolved);
-    if (fallbackMembers.length > 0) {
-      await store.applySyncCatalogPage({
+  return state.drivers.runInstallation(installation, async () => {
+    const engine = new SyncEngine(store);
+    if (driver.bindSyncSource) {
+      const source = await driver.bindSyncSource(
+        installation,
+        asConnectorHost(host),
+        process.env,
+      );
+      await engine.refreshCatalog({
         installation_id: installation.id,
-        members: fallbackMembers.map((member) => ({
-          stream_key: member.stream_key,
-          thread_id: member.thread_id,
-          label: member.label,
-          kind: member.kind,
-        })),
-        now: new Date().toISOString(),
-        complete: true,
+        source,
+        pages: catalogRefreshPages({ catalogTick: true }),
+        force: plane === "bootstrap",
       });
+    } else {
+      const resolved = await driver.resolveStreams(
+        installation,
+        asConnectorHost(host),
+        process.env,
+        {
+          threads: await loadEligibleInstallationThreads(
+            host.get("authority"),
+            installation.org_id,
+            installation,
+            driver,
+            preferredThreadId(),
+          ),
+          catalog: [],
+          discover: true,
+        },
+      );
+      const fallbackMembers = catalogMembersFromStreams(installation.id, resolved);
+      if (fallbackMembers.length > 0) {
+        await store.applySyncCatalogPage({
+          installation_id: installation.id,
+          members: fallbackMembers.map((member) => ({
+            stream_key: member.stream_key,
+            thread_id: member.thread_id,
+            label: member.label,
+            kind: member.kind,
+          })),
+          now: new Date().toISOString(),
+          complete: true,
+        });
+      }
     }
-  }
-  const head = await store.getSyncCatalogHead(installation.id);
-  if (head.member_count === 0) {
-    return;
-  }
-  await enqueueDueWorkFromCatalog(state, store, installation.id, "steady");
-  await enqueueDueWorkFromCatalog(state, store, installation.id, "bootstrap", {
-    reconcileBootstrap: true,
+    const head = await store.getSyncCatalogHead(installation.id);
+    if (head.member_count === 0) {
+      return;
+    }
+    await enqueueDueWorkFromCatalog(state, store, installation.id, "steady");
+    await enqueueDueWorkFromCatalog(state, store, installation.id, "bootstrap", {
+      reconcileBootstrap: true,
+    });
   });
 }
 
@@ -918,31 +920,34 @@ export async function runCatalogTick(state: ConnectorState): Promise<void> {
     ) {
       return;
     }
+    const bindSyncSource = driver.bindSyncSource.bind(driver);
     try {
-      const source = await driver.bindSyncSource(
-        installation,
-        asConnectorHost(host),
-        process.env,
-      );
-      const engine = new SyncEngine(store);
-      await engine.refreshCatalogIfStale({
-        installation_id: installation.id,
-        source,
-        pages: catalogRefreshPages({ catalogTick: true }),
-        force: false,
+      await state.drivers.runInstallation(installation, async () => {
+        const source = await bindSyncSource(
+          installation,
+          asConnectorHost(host),
+          process.env,
+        );
+        const engine = new SyncEngine(store);
+        await engine.refreshCatalogIfStale({
+          installation_id: installation.id,
+          source,
+          pages: catalogRefreshPages({ catalogTick: true }),
+          force: false,
+        });
+        await enqueueDueWorkFromCatalog(state,
+          store,
+          installation.id,
+          "steady",
+        );
+        await enqueueDueWorkFromCatalog(state,
+          store,
+          installation.id,
+          "bootstrap",
+          { reconcileBootstrap: true },
+        );
+        void refreshSyncSnapshot(state, installation.id);
       });
-      await enqueueDueWorkFromCatalog(state, 
-        store,
-        installation.id,
-        "steady",
-      );
-      await enqueueDueWorkFromCatalog(state, 
-        store,
-        installation.id,
-        "bootstrap",
-        { reconcileBootstrap: true },
-      );
-      void refreshSyncSnapshot(state, installation.id);
     } catch (error) {
       errors.push(error);
     }

@@ -353,7 +353,7 @@ export class PersonalController {
     return this.guard(async () => {
       await this.work.pauseForMaintenance();
       try {
-        await this.connectors.pauseForMaintenance();
+        await this.connectors.pauseForStoreClear();
         try {
           return await this.inbox.clearStore();
         } finally {
