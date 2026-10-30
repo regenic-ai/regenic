@@ -1,5 +1,6 @@
 # Docs
 
+- [Setup and CLI reference](SETUP_AND_CLI.md)
 - [Product](PRODUCT.md)
 - [Message orchestration](MESSAGE_ORCHESTRATION.md)
 - [Connectors](CONNECTOR.md)
