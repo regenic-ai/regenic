@@ -62,7 +62,7 @@ export interface SemanticIndexStatus {
   generations: Array<{
     id: string;
     active: boolean;
-    jobs: { pending: number; running: number; succeeded: number; failed: number; quarantined: number; superseded: number };
+    jobs: { pending: number; running: number; succeeded: number; skipped?: number; failed: number; quarantined: number; superseded: number };
     failures?: Array<{ code: string; failed: number; quarantined: number }>;
   }>;
 }

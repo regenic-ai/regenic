@@ -15,16 +15,31 @@ export interface EmbeddingModelDescriptor {
 
 export type EmbeddingMode = "document" | "query";
 
+export interface EmbeddingAttachmentInput {
+  media_type: string;
+  source_filename?: string;
+  bytes: Uint8Array;
+}
+
+export interface ProcessedEmbeddingAttachment {
+  text?: string;
+  vectors: number[][];
+}
+
 export interface EmbeddingProvider {
   readonly descriptor: EmbeddingModelDescriptor;
   countTokens(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[]>;
   embed(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[][]>;
+  processAttachment?(
+    attachment: EmbeddingAttachmentInput,
+    signal?: AbortSignal,
+  ): Promise<ProcessedEmbeddingAttachment>;
   health(): Promise<{ status: "ok" | "degraded"; error_code?: string }>;
 }
 
 export class EmbeddingError extends Error {
   constructor(
-    readonly code: "invalid_input" | "unavailable" | "timeout" | "cancelled" | "invalid_response" | "model_mismatch" | "input_too_large",
+    readonly code: "invalid_input" | "unavailable" | "timeout" | "cancelled" | "invalid_response" | "model_mismatch" | "input_too_large" | "unsupported_attachment",
     readonly retryable: boolean,
   ) {
     super(`Embedding provider: ${code}`);
@@ -35,7 +50,7 @@ export class EmbeddingError extends Error {
 export interface EmbeddingGeneration {
   id: string;
   model: EmbeddingModelDescriptor;
-  extractor_version: "stored-body-text-v1";
+  extractor_version: "stored-body-text-v1" | "stored-body-and-attachments-v2";
   chunker_version: "unicode-token-budget-v1";
   chunk_tokens: number;
   max_chunks_per_event: number;
@@ -45,20 +60,37 @@ export function embeddingGeneration(
   model: EmbeddingModelDescriptor,
   chunkTokens: number,
   maxChunksPerEvent = 128,
+  extractorVersion: EmbeddingGeneration["extractor_version"] = "stored-body-and-attachments-v2",
 ): EmbeddingGeneration {
   validateEmbeddingDescriptor(model);
+  if (!["stored-body-text-v1", "stored-body-and-attachments-v2"].includes(extractorVersion)) {
+    throw new Error("Invalid embedding extractor version");
+  }
   if (!Number.isSafeInteger(chunkTokens) || chunkTokens < 32 || chunkTokens > model.max_input_tokens ||
     !Number.isSafeInteger(maxChunksPerEvent) || maxChunksPerEvent < 1 || maxChunksPerEvent > 1024) {
     throw new Error("Invalid embedding chunk budget");
   }
   const recipe = {
     model: structuredClone(model),
-    extractor_version: "stored-body-text-v1" as const,
+    extractor_version: extractorVersion,
     chunker_version: "unicode-token-budget-v1" as const,
     chunk_tokens: chunkTokens,
     max_chunks_per_event: maxChunksPerEvent,
   };
   return { id: hashCanonicalContext(recipe), ...recipe };
+}
+
+export interface ContextEmbeddingAttachment {
+  content_hash: string;
+  media_type: string;
+  source_filename?: string;
+  bytes: Uint8Array;
+}
+
+export interface ContextEmbeddingMaterial {
+  event_id: string;
+  text?: string;
+  attachments: ContextEmbeddingAttachment[];
 }
 
 export function validateEmbeddingDescriptor(value: EmbeddingModelDescriptor): void {

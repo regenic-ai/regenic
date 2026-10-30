@@ -3,17 +3,22 @@ import {
   CONTENT_PARTS_MEDIA_TYPE,
   bodyTextFromStored,
   canonicalContextJson,
+  isTextFilename,
   isTextMediaType,
   parseStoredContentParts,
   storedPartBytes,
+  storedPartContentHash,
   type BlobStore,
   type AuthorizedContextSourceEvent,
   type ContextAuthorityRead,
+  type ContextEmbeddingMaterial,
+  type EmbeddingGeneration,
   type ContextAuthorityReader,
   type ContextEvidenceSource,
   type ContextLifecycleHead,
   type ContextRequest,
   type ContextSourceEvent,
+  type StoredContentPart,
 } from "@regenic/domain";
 
 export class ContextTextMaterialError extends Error {}
@@ -89,12 +94,41 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
   async materialize(
     events: AuthorizedContextSourceEvent[],
   ): Promise<AuthorizedContextSourceEvent[]> {
+    return this.materializeStored(events, true);
+  }
+
+  private async materializeStored(
+    events: AuthorizedContextSourceEvent[],
+    includeAttachments: boolean,
+  ): Promise<AuthorizedContextSourceEvent[]> {
     const hashes = [...new Set(events.flatMap((source) =>
       source.event.content_hash ? [source.event.content_hash] : [],
     ))];
     const bodies = await this.blobs.getMany(hashes);
     if (hashes.some((hash) => !bodies.has(hash))) {
       throw new Error("Context authority Event references a missing Blob");
+    }
+    const textAttachments = new Map<string, StoredContentPart[]>();
+    for (const source of events) {
+      const contentHash = source.event.content_hash;
+      const bytes = contentHash ? bodies.get(contentHash) : undefined;
+      if (!contentHash || !bytes || source.content_media_type !== CONTENT_PARTS_MEDIA_TYPE) continue;
+      const parts = parseStoredContentParts(bytes);
+      if (!parts) continue;
+      const attachments = includeAttachments ? parts.filter(isTextAttachment) : [];
+      if (attachments.length > 0) textAttachments.set(contentHash, attachments);
+    }
+    const attachmentHashes = [...new Set(
+      [...textAttachments.values()].flatMap((parts) =>
+        parts.flatMap((part) => {
+          const hash = storedPartContentHash(part);
+          return hash ? [hash] : [];
+        }),
+      ),
+    )];
+    const attachmentBlobs = await this.blobs.getMany(attachmentHashes);
+    if (attachmentHashes.some((hash) => !attachmentBlobs.has(hash))) {
+      throw new Error("Context authority Event references a missing text Attachment Blob");
     }
     return events.map((source) => {
       const contentHash = source.event.content_hash;
@@ -106,7 +140,13 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
         if (source.content_media_type) validateTextEncoding(bytes, source.content_media_type);
       }
       const text = bytes && source.content_media_type
-        ? bodyTextFromStored(bytes, source.content_media_type)
+        ? materializedText(
+            bytes,
+            source.content_media_type,
+            contentHash ? textAttachments.get(contentHash) ?? [] : [],
+            attachmentBlobs,
+            this.strictText,
+          )
         : undefined;
       return {
         ...structuredClone(source),
@@ -114,9 +154,159 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
       };
     });
   }
+
+  async materializeForEmbedding(
+    events: AuthorizedContextSourceEvent[],
+    extractorVersion: EmbeddingGeneration["extractor_version"] = "stored-body-and-attachments-v2",
+  ): Promise<ContextEmbeddingMaterial[]> {
+    const materialized = await this.materializeStored(
+      events, extractorVersion === "stored-body-and-attachments-v2",
+    );
+    if (extractorVersion === "stored-body-text-v1") {
+      return materialized.map((source) => ({
+        event_id: source.event.event_id,
+        ...(source.text === undefined ? {} : { text: source.text }),
+        attachments: [],
+      }));
+    }
+    const bodyHashes = [...new Set(events.flatMap((source) =>
+      source.event.content_hash ? [source.event.content_hash] : [],
+    ))];
+    const bodies = await this.blobs.getMany(bodyHashes);
+    for (const hash of bodyHashes) {
+      const bytes = bodies.get(hash);
+      if (!bytes) throw new Error("Context authority Event references a missing Blob");
+      if (this.strictText && createHash("sha256").update(bytes).digest("hex") !== hash) {
+        throw new ContextTextMaterialError("Stored content hash mismatch");
+      }
+    }
+    const attachmentHashes = new Set<string>();
+    const partsByEvent = new Map<string, StoredContentPart[]>();
+
+    for (const source of events) {
+      const eventId = source.event.event_id;
+      const contentHash = source.event.content_hash;
+      const bytes = contentHash ? bodies.get(contentHash) : undefined;
+      if (!bytes || source.content_media_type !== CONTENT_PARTS_MEDIA_TYPE) continue;
+      const parts = parseStoredContentParts(bytes) ?? [];
+      const attachments = parts.filter((part) =>
+        part.role === "attachment",
+      );
+      partsByEvent.set(eventId, attachments);
+      for (const part of attachments) {
+        const hash = storedPartContentHash(part);
+        if (hash) attachmentHashes.add(hash);
+      }
+    }
+
+    const attachmentBlobs = await this.blobs.getMany([...attachmentHashes]);
+    if ([...attachmentHashes].some((hash) => !attachmentBlobs.has(hash))) {
+      throw new Error("Context authority Event references a missing Attachment Blob");
+    }
+    const materializedById = new Map(
+      materialized.map((source) => [source.event.event_id, source]),
+    );
+
+    return events.map((source) => {
+      const eventId = source.event.event_id;
+      const event = materializedById.get(eventId);
+      if (!event) throw new Error("Embedding materialization changed the authorized Event set");
+      const directBlob = source.event.content_hash && source.content_media_type &&
+          source.content_media_type !== CONTENT_PARTS_MEDIA_TYPE &&
+          (!isTextMediaType(source.content_media_type) ||
+            hasBinarySignature(bodies.get(source.event.content_hash)!))
+        ? bodies.get(source.event.content_hash)
+        : undefined;
+      const attachments = (partsByEvent.get(eventId) ?? []).flatMap((part) => {
+        const storedHash = storedPartContentHash(part);
+        const bytes = storedHash ? attachmentBlobs.get(storedHash) : storedPartBytes(part);
+        if (!bytes) return [];
+        if (isTextAttachment(part) && !hasBinarySignature(bytes)) return [];
+        const contentHash = storedHash ?? createHash("sha256").update(bytes).digest("hex");
+        if (
+          this.strictText &&
+          createHash("sha256").update(bytes).digest("hex") !== contentHash
+        ) {
+          throw new ContextTextMaterialError("Stored attachment hash mismatch");
+        }
+        return [{
+          content_hash: contentHash,
+          media_type: part.media_type ?? "application/octet-stream",
+          ...(part.source_filename ? { source_filename: part.source_filename } : {}),
+          bytes: new Uint8Array(bytes),
+        }];
+      });
+      if (
+        directBlob && source.event.content_hash && source.content_media_type
+      ) {
+        if (
+          this.strictText &&
+          createHash("sha256").update(directBlob).digest("hex") !== source.event.content_hash
+        ) {
+          throw new ContextTextMaterialError("Stored attachment hash mismatch");
+        }
+        attachments.unshift({
+          content_hash: source.event.content_hash,
+          media_type: source.content_media_type,
+          bytes: new Uint8Array(directBlob),
+        });
+      }
+      return {
+        event_id: eventId,
+        ...(event.text === undefined ? {} : { text: event.text }),
+        attachments,
+      };
+    });
+  }
+}
+
+function materializedText(
+  bytes: Uint8Array,
+  mediaType: string,
+  attachments: StoredContentPart[],
+  attachmentBlobs: ReadonlyMap<string, Uint8Array>,
+  strictText: boolean,
+): string | undefined {
+  if (hasBinarySignature(bytes)) return undefined;
+  const body = bodyTextFromStored(bytes, mediaType);
+  const texts = body === undefined ? [] : [body];
+  for (const attachment of attachments) {
+    const hash = storedPartContentHash(attachment);
+    const attachmentBytes = hash ? attachmentBlobs.get(hash)
+      : storedPartBytes(attachment) ??
+        (typeof attachment.text === "string" ? Buffer.from(attachment.text, "utf8") : undefined);
+    if (!attachmentBytes) continue;
+    if (strictText && hash && createHash("sha256").update(attachmentBytes).digest("hex") !== hash) {
+      throw new ContextTextMaterialError("Stored text attachment hash mismatch");
+    }
+    if (hasBinarySignature(attachmentBytes)) continue;
+    try {
+      texts.push(new TextDecoder("utf-8", { fatal: true }).decode(attachmentBytes));
+    } catch (error) {
+      if (error instanceof TypeError) throw new ContextTextMaterialError("Invalid UTF-8 text attachment");
+      throw error;
+    }
+  }
+  return texts.length > 0 ? texts.join("\n\n") : undefined;
+}
+
+function isTextAttachment(part: StoredContentPart): boolean {
+  if (part.role !== "attachment") return false;
+  if (part.media_type && isTextMediaType(part.media_type)) return true;
+  return isTextFilename(part.source_filename);
+}
+
+function hasBinarySignature(bytes: Uint8Array): boolean {
+  const prefix = Buffer.from(bytes.subarray(0, 12));
+  const hex = prefix.toString("hex");
+  return /^(89504e470d0a1a0a|ffd8ff|255044462d|504b0304|504b0506|504b0708|474946383761|474946383961)/.test(hex) ||
+    prefix.subarray(4, 8).toString("ascii") === "ftyp" ||
+    (prefix.subarray(0, 4).toString("ascii") === "RIFF" &&
+      prefix.subarray(8, 12).toString("ascii") === "WEBP");
 }
 
 function validateTextEncoding(bytes: Uint8Array, mediaType: string): void {
+  if (hasBinarySignature(bytes)) return;
   if (!isTextMediaType(mediaType) && mediaType !== CONTENT_PARTS_MEDIA_TYPE) return;
   const decoder = new TextDecoder("utf-8", { fatal: true });
   try {
@@ -127,7 +317,11 @@ function validateTextEncoding(bytes: Uint8Array, mediaType: string): void {
       const body = parts.find((part) => part.role === "body") ?? parts[0];
       if (body?.media_type && isTextMediaType(body.media_type)) {
         const embedded = storedPartBytes(body);
-        if (embedded) decoder.decode(embedded);
+        if (embedded && !hasBinarySignature(embedded)) decoder.decode(embedded);
+      }
+      for (const part of parts.filter(isTextAttachment)) {
+        const embedded = storedPartBytes(part);
+        if (embedded && !hasBinarySignature(embedded)) decoder.decode(embedded);
       }
     }
   } catch (error) {
