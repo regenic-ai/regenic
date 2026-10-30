@@ -1,7 +1,7 @@
 # Docs
 
 - [Setup and CLI reference](SETUP_AND_CLI.md)
-- [Product](PRODUCT.md)
+- [Product overview](PRODUCT.md)
 - [Message orchestration](MESSAGE_ORCHESTRATION.md)
 - [Connector catalog](CONNECTOR_CATALOG.md)
 - [Build a connector](CONNECTOR.md)
