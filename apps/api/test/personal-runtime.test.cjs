@@ -25,8 +25,12 @@ it("reports empty skipped events separately from indexed coverage and attachment
       async summarizeJobs() {
         return {
           counts: { pending: 0, running: 0, succeeded: 1, skipped: 1,
-            failed: 0, quarantined: 1, superseded: 0 },
-          failures: [{ error_code: "unsupported_attachment", failed: 0, quarantined: 1 }],
+            failed: 2, quarantined: 2, superseded: 0 },
+          failures: [
+            { error_code: "unsupported_attachment", failed: 0, quarantined: 1 },
+            { error_code: "indexing_failed", failed: 1, quarantined: 0 },
+            { error_code: "legacy_failure", failed: 1, quarantined: 1 },
+          ],
         };
       },
     },
@@ -39,6 +43,8 @@ it("reports empty skipped events separately from indexed coverage and attachment
   assert.equal(status.generations[0].jobs.succeeded, 1);
   assert.equal(status.generations[0].jobs.skipped, 1);
   assert.deepEqual(status.generations[0].failures, [{
+    code: "indexing_failed", failed: 2, quarantined: 1,
+  }, {
     code: "unsupported_attachment", failed: 0, quarantined: 1,
   }]);
 });

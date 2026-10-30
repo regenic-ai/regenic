@@ -356,12 +356,12 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }>;
     const byCode = new Map<string, EmbeddingJobSummary["failures"][number]>();
     for (const row of failures) {
-      if (!row.error_code) continue;
-      const failure = byCode.get(row.error_code) ?? {
-        error_code: row.error_code, failed: 0, quarantined: 0,
+      const code = row.error_code ?? "indexing_failed";
+      const failure = byCode.get(code) ?? {
+        error_code: code, failed: 0, quarantined: 0,
       };
-      failure[row.status] = row.count;
-      byCode.set(row.error_code, failure);
+      failure[row.status] += row.count;
+      byCode.set(code, failure);
     }
     return {
       counts,

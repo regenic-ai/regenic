@@ -46,7 +46,7 @@ function query(index, authorized, extra = {}) {
 
 describe("SQLite vector projection and independent durable jobs", () => {
   it("summarizes job counts and failure categories without materializing every job", async (t) => {
-    const { index } = await fixture(t);
+    const { index, path } = await fixture(t);
     await reconcile(index, ["pending", "running", "done", "quarantined"].map((id) => head(id)));
     const claimed = await index.claim({
       org_id: "org", generation: generation.id, owner: "owner", now: at, lease_ms: 1000, limit: 3,
@@ -71,6 +71,17 @@ describe("SQLite vector projection and independent durable jobs", () => {
         { error_code: "unsupported_attachment", failed: 0, quarantined: 1 },
       ],
     });
+    const database = new Database(path);
+    try {
+      database.prepare("UPDATE jobs SET error_code=NULL WHERE status='failed'").run();
+    } finally {
+      database.close();
+    }
+    assert.deepEqual((await index.summarizeJobs("org", generation.id)).failures, [
+      { error_code: "indexing_failed", failed: 1, quarantined: 0 },
+      { error_code: "unsupported_attachment", failed: 0, quarantined: 1 },
+    ]);
+    assert.equal((await index.summarizeJobs("other-org", generation.id)).counts.succeeded, 0);
   });
 
   it("matches 4000 fully covered 768-dimensional authorized vectors within the scale budget", async (t) => {

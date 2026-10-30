@@ -170,13 +170,17 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       ...("error_code" in health ? { provider_issue: semanticIssue(health.error_code) } : {}),
       generations: await Promise.all(generations.map(async ({ manifest, active }) => {
         const summary = await host.get("context-embedding-jobs").summarizeJobs(this.orgId(), manifest.id);
+        const failures = new Map<ReturnType<typeof semanticIssue>, { code: ReturnType<typeof semanticIssue>; failed: number; quarantined: number }>();
+        for (const failure of summary.failures) {
+          const code = semanticIssue(failure.error_code);
+          const bucket = failures.get(code) ?? { code, failed: 0, quarantined: 0 };
+          bucket.failed += failure.failed;
+          bucket.quarantined += failure.quarantined;
+          failures.set(code, bucket);
+        }
         return { id: manifest.id, active,
           jobs: summary.counts,
-          failures: summary.failures.map((failure) => ({
-            code: semanticIssue(failure.error_code),
-            failed: failure.failed,
-            quarantined: failure.quarantined,
-          })),
+          failures: [...failures.values()].sort((a, b) => a.code.localeCompare(b.code)),
         };
       })),
     };
