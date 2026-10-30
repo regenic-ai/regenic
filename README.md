@@ -1,6 +1,6 @@
 # Regenic
 
-**Let your AI work across every channel your team talks in.**
+**Turn every work message into one stream that AI and automation can act on.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
@@ -8,15 +8,15 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Work conversations are scattered across Feishu, Slack, WhatsApp, and more. When you want AI to help you catch up or reply, you usually have to dig through each app and paste the history in by hand.
+Work happens in messages: group chats, DMs, tickets, approvals, and conversations with AI agents. They're spread across Feishu, Slack, WhatsApp, and other tools, each with its own format, which makes them hard to work with as a whole.
 
-Regenic fixes that. It collects work messages from all your channels on your machine and exposes them to AI tools like Cursor through MCP. Your AI can then search across channels, summarize progress, and draft replies for you.
+Regenic is a unified layer for work messages. Any source plugs in through a connector and is normalized into one message format. What happens next is up to you: search across channels, let AI summarize and draft, hand messages to an agent to execute, and reply back in the original channel.
 
-Regenic is open source and local-first. Sources plug in through connectors: use an existing plugin, or write your own against a shared standard.
+Connectors follow an open standard, so you can use an existing plugin or build one for any tool. Regenic is open source and local-first; your data stays on your machine.
 
 [Quick start](#quick-start) · [Connectors](#connectors) · [MCP setup](docs/en/CONTEXT_SEARCH_MCP.md) · [Docs](docs/en/README.md)
 
-## Use cases
+## What you can do today
 
 | Use case | Ask your AI |
 | --- | --- |
@@ -25,16 +25,26 @@ Regenic is open source and local-first. Sources plug in through connectors: use 
 | Check a customer commitment | “What did we promise this customer? Show me the original messages.” |
 | Draft a reply | “Based on our earlier conversation, draft a reply.” |
 
-Your AI only sees conversations you've connected and authorized. Results include where each message came from, so you can check the original.
+These work in AI tools like Cursor through the [Context Search MCP](docs/en/CONTEXT_SEARCH_MCP.md). Your AI only sees conversations you've connected and authorized, and results include where each message came from so you can check the original.
 
 ## Features
 
-- **One place for every channel.** Conversations from different apps are stored and searched together, so you stop switching between them.
-- **Extensible sources.** Connectors follow one standard and support file imports, webhooks, and polling. If no plugin fits, write your own.
-- **Bring your own AI.** MCP clients such as Cursor can query conversations directly; scripts and other tools can use the API.
+- **One message format.** Messages from every channel are normalized, then stored, searched, and processed the same way.
+- **Any source can plug in.** Connectors follow an open standard and support file imports, webhooks, and polling—not just chat apps, but agent sessions and tickets too.
+- **Process it your way.** Send messages to AI through MCP, to scripts and automation through the API, or to local agents like DSH and Cursor to execute.
 - **Traceable answers.** Every result carries its channel, conversation, and message IDs, so you can always go back to the source.
 - **Sending is opt-in.** Reading and sending are authorized separately, and sending also depends on the connector.
 - **Your data stays local.** Messages are stored on your machine and can be exported as Markdown or JSONL. If you use an external AI, retrieved content is sent to that provider.
+
+## Where we're headed
+
+Today's release covers the first step: getting messages in, searchable, and ready to process. The goal is an orchestration layer for work messages:
+
+- **Automatic triage.** Use personal habits and team standards to pick out the messages that actually need attention from the hundreds that arrive each day.
+- **Distill and dispatch.** Turn messages into sourced conclusions and follow-ups, and route them to the right person or agent.
+- **From individuals to teams.** Start with personal use, then extend to organizations so teams work from the same context.
+
+See the [product overview](docs/en/PRODUCT.md) and [roadmap](docs/en/ROADMAP.md).
 
 ## Quick start
 
