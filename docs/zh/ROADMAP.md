@@ -2,104 +2,98 @@
 
 [English](../en/ROADMAP.md)
 
-Regenic 按层交付：一层能独立用起来，再开下一层。
+Regenic 分层交付：一层可以独立使用，再开始下一层。顺序是**先个人（本地优先），再团队和组织**。产品定位见[产品说明](PRODUCT.md)。
 
-Regenic 编排消息。它接入已有渠道。判断标准和各人习惯决定哪些消息需要现在处理：这些消息进入控制台，其余的不进入当前工作。回复发回原渠道。交付顺序是**先个人（本地优先），后组织**。
-详见 [产品](PRODUCT.md) 与 [消息编排](MESSAGE_ORCHESTRATION.md)。
+| 阶段 | 目标 | 状态 |
+| --- | --- | --- |
+| [Phase 0](#phase-0--架构) | 数据模型与设计 RFC | 已完成 |
+| [Phase 1](#phase-1--个人消息工作台) | 个人在本机接入、查看、检索和回复消息 | 基本完成 |
+| [Phase 2](#phase-2--处理与编排) | 让消息可以被分析、分派和自动处理 | 进行中 |
+| [Phase 3](#phase-3--团队与组织) | 多人消息流合成团队共享的上下文 | 规划中 |
+| [Phase 4](#phase-4--组织工作流) | 在标准和上下文之上运行组织流程 | 规划中 |
 
-## Phase 0 — 架构（已完成）
+## Phase 0 — 架构
 
-- [x] RFC：标准数据模型 —
-  [中文](rfcs/0001-standards-data-model.md) / [EN](../en/rfcs/0001-standards-data-model.md) — **已接纳**
-- [x] RFC：上下文图谱 —
-  [中文](rfcs/0002-context-graph.md) / [EN](../en/rfcs/0002-context-graph.md) — **已接纳**
-- [x] RFC：协作对象（Proposal / Decision / Review / Handoff）—
-  [中文](rfcs/0003-collaboration-objects.md) / [EN](../en/rfcs/0003-collaboration-objects.md) — **已接纳**
-- [x] RFC：人机对称 API —
-  [中文](rfcs/0004-human-agent-api.md) / [EN](../en/rfcs/0004-human-agent-api.md) — **已接纳**
-- [x] RFC：上下文存储与生命周期（Event / Blob / Digest / GC）—
-  [中文](rfcs/0005-context-storage-lifecycle.md) / [EN](../en/rfcs/0005-context-storage-lifecycle.md) — **已接纳**
-- [x] RFC：ACL 与 Agent 身份 —
-  [中文](rfcs/0006-acl-agent-identity.md) / [EN](../en/rfcs/0006-acl-agent-identity.md) — **已接纳**
-- [x] RFC：日蒸馏（含 D0 规则路径）—
-  [中文](rfcs/0007-daily-distillation.md) / [EN](../en/rfcs/0007-daily-distillation.md) — **已接纳**
-- [x] 技术栈 — [TECH_STACK.md](TECH_STACK.md)
-- [x] 与 `regenic-book` 公开标准 schema 对齐 — [对照表](rfcs/book-schema-map.md)（#8）
-- [x] 经 Issues 评审，RFC 全部从 Draft → Accepted（0001–0007）
-- [x] 仓库脚手架（无业务语义；见仓库根目录）
+确定统一的数据模型，并与 [regenic-book](https://github.com/regenic-ai/regenic-book) 的公开标准对齐。
 
-**完成标准：** 七份 RFC 均已接纳，并与书稿公开 schema 对齐。
+- [x] 判断标准的数据模型 — [RFC 0001](rfcs/0001-standards-data-model.md)
+- [x] 上下文图谱 — [RFC 0002](rfcs/0002-context-graph.md)
+- [x] 协作对象（Proposal / Decision / Review / Handoff）— [RFC 0003](rfcs/0003-collaboration-objects.md)
+- [x] 人和 Agent 共用的 API — [RFC 0004](rfcs/0004-human-agent-api.md)
+- [x] 存储与生命周期（Event / Blob / Digest / GC）— [RFC 0005](rfcs/0005-context-storage-lifecycle.md)
+- [x] 权限与 Agent 身份 — [RFC 0006](rfcs/0006-acl-agent-identity.md)
+- [x] 每日提炼 — [RFC 0007](rfcs/0007-daily-distillation.md)
+- [x] [技术栈](TECH_STACK.md)与[书稿 schema 对照](rfcs/book-schema-map.md)
 
-相关索引：[RFC](rfcs/README.md) · [技术栈](TECH_STACK.md) ·
-[产品](PRODUCT.md) · [消息编排](MESSAGE_ORCHESTRATION.md) ·
-[从个人到组织](rfcs/personal-to-org.md)。
+## Phase 1 — 个人消息工作台
 
-## Phase 1 — 个人消息编排（当前）
+一个人可以在本机接入真实渠道，集中查看、检索和回复消息，不依赖厂商云，并能导出自己的数据。
 
-交付单人可在本机运行的编排闭环。同步和 Webhook 都算正式连接器；
-Regenic 编排消息，不生产渠道里的内容。
+- [x] 本机权威库（SQLite）和本地 Blob 存储
+- [x] 连接器宿主与开放的[连接器标准](CONNECTOR.md)，卸载后不留额外写入或授权
+- [x] 内置飞书、DSH、Cursor 连接器
+- [x] 插件连接器：Slack、WhatsApp、Telegram、钉钉、企业微信（见[连接器目录](CONNECTOR_CATALOG.md)）
+- [x] CSV / JSONL 文件导入
+- [x] 桌面工作台：按会话查看、未读、置顶、折叠、手动分拣
+- [x] 回复写回原渠道，读写分开授权
+- [x] 跨渠道转发 — [RFC 0010](rfcs/0010-cross-channel-forward.md)
+- [x] 导出为 JSONL 或 Markdown
+- [x] 远程内核：在自己的服务器上运行，桌面端安全配对
+- [ ] 可选的远端历史备份（默认关闭，由用户开启）
 
-- [x] 连接器宿主：连接器挂在内核旁；卸载后不留下额外写入或授权
-- [ ] 本机权威库（默认 SQLite）+ 本地 Blob 目录；任务用进程内队列
-- [ ] 至少一个真实渠道连接器（`ChannelConnector`，拉或推都行）
-- [x] 过滤、分层，写入 Event / Blob（形状跟 RFC 0005 对齐，范围限个人）
-- [ ] 消息控制台：当前需要处理的（优先级、「该知道」、跟进如未回复）
-- [ ] 开放导出（Markdown / JSONL）
-- [ ] 可选远端历史（默认关；用户自己开；不是组织库）
-- [ ] 个人规则 / 轻量标准钩子（为 RFC 0001 铺路）
-- [ ] 协作平台来源的协议发现与导出适配 fixture；在此之前不做厂商专用连接器（见[集成架构](CONTEXT_PLATFORM_INTEGRATION.md)）
+## Phase 2 — 处理与编排
 
-**完成标准：** 一个人能在本地接上真实渠道，走完 过滤 → 分层 → 提炼 → 调度，
-不依赖厂商云，并能导出自己的数据。
+让接入的消息可以被检索、分析，并交给合适的人或 Agent 处理。
 
-**本阶段范围外：** 大纲笔记 / 通用笔记库、组织侧权威事件合并、多租户 ACL。
+**已交付**
 
-## Phase 2 — 加深个人加工，接上标准
+- [x] 跨渠道检索：关键词和本地语义检索，带出处和上下文
+- [x] 执行器：接入 Agent 或模型，基于检索结果回答并附引用 — [执行器](EXECUTOR.md)
+- [x] Recipes：按规则把工单分派给执行器，支持定时运行和人工确认 — [RFC 0009](rfcs/0009-work-orchestration.md)
+- [x] 可替换的模型服务，支持本地模型 — [本地模型服务](LOCAL_MODEL_SERVICE.md)
+- [x] 只读 MCP，供外部 AI 检索对话 — [MCP](CONTEXT_SEARCH_MCP.md)
+- [x] 跟进：识别等待回复的事项，在工作台集中处理
+- [x] 每日摘要：有出处的提炼、覆盖缺口和异常提示
+- [x] 判断标准的版本化、缺口收集和偏差提示
+- [x] 按策略过滤的 Evidence Bundle 发布，供协作平台和 Agent 使用
+- [x] 基于证据的客服 Agent 流程 — [客服 Agent](CUSTOMER_SERVICE_AGENT.md)
 
-- [ ] 更强的个人 Digest（合适处可用 D0 类规则）
-- [ ] 个人规则/标准的修订（RFC 0001 生命周期的子集）
-- [ ] 规则写了什么、实际跟进做得怎样——漂移提示
-- [ ] 更多渠道连接器；模型调用可换（只负责提出建议）
-- [ ] 第一条发送路径（`EgressAdapter`），与接入同一渠道；
-      发送需要显式授权（蒸馏不等于 `can_send`）
-- [ ] 调度：其余不进入当前工作，没把握 → pending/defer，绑定个人标准
-- [ ] 面向协作平台和 Agent OS 消费者的、按策略过滤的 Evidence Bundle 发布
+**下一步**
 
-**完成标准：** 个人流程里已有带证据的提炼，并能修订至少一条个人规则/标准；
-不以聊天记录当系统真相源。
+- [ ] 可组合的处理流程：筛选、转换、分析、分派和结果回传
+- [ ] 主动分拣：按个人标准判断哪些消息需要现在处理，没把握时暂缓
+- [ ] 在工作台中查看和修订摘要、标准与跟进
+- [ ] 更多连接器，以及已有连接器在真实账号上的验证
 
-## Phase 3 — 组织层
+**完成标准：** 个人的日常消息可以按自己的标准被识别、提炼和分派，结论有出处，并能修订至少一条个人标准。
 
-在当事人同意的前提下，把多条个人数据流合成为组织共享的事实。
+## Phase 3 — 团队与组织
 
-- [ ] 权威 Event + 各人视角（[从个人到组织](rfcs/personal-to-org.md)）
-- [ ] 身份映射、工作范围同意、蒸馏不抬权（RFC 0006）
-- [ ] 组织 Digest / Claim / Snapshot（RFC 0002、0007）— 由组织任务重算，
-      不照搬个人标签
-- [ ] 共享 Snapshot 上的协作闭环（RFC 0003）
-- [ ] 组织级完整标准机器（RFC 0001）
+在当事人同意的前提下，把多人的消息流合成团队共享的上下文。
 
-**完成标准：** 两人接入同一条源消息 → 一条权威 Event、两条视角；
-组织 Digest 引用证据，且不扩大权限。
+- [ ] 同一条源消息只保留一个权威 Event，每人保留自己的视角 — [从个人到组织](rfcs/personal-to-org.md)
+- [ ] 身份映射、工作范围授权；汇总不扩大权限（RFC 0006）
+- [ ] 团队级摘要、结论和快照，由团队任务重新计算，不照搬个人标签（RFC 0002、0007）
+- [ ] 基于共享快照的协作与交接（RFC 0003）
+- [ ] 团队级判断标准的完整生命周期（RFC 0001）
 
-## Phase 4 — 组织管理界面
+**完成标准：** 两个人接入同一条源消息，得到一个权威 Event 和两个个人视角；团队摘要引用证据且不扩大权限。
 
-- [ ] 建在标准与上下文之上的运营流程（不是表单优先的 ERP）
-- [ ] 人机界面与 Agent 共用同一套 API（RFC 0004）
-- [ ] 企业侧适配（身份、通知、合规）放后面，不抢主线
+## Phase 4 — 组织工作流
 
-**完成标准：** bioby.ai 在 Regenic 上跑通一条真实的组织端到端流程。
+- [ ] 建立在标准和上下文之上的运营流程，而不是以表单为中心的 ERP
+- [ ] 人和 Agent 使用同一套界面与 API（RFC 0004）
+- [ ] 企业身份、通知与合规适配，放在最后
 
----
+**完成标准：** 至少一个真实团队（首个是 bioby.ai）在 Regenic 上跑通端到端的组织流程。
 
-## 范围外
+## 不在计划内
 
 - 通用 ERP 模块（人事、财务、库存）
-- 以「替代团队聊天」或「第二大脑」当主叙事
-- 引入 `regenic-internal` 私有材料
-- 没有标准与上下文约束的无界 Agent 循环
-- 个人 AI 标签不经组织加工就写成组织事实
+- 把「替代团队聊天」或「第二大脑」作为主要定位
+- 没有标准和上下文约束的无界 Agent 循环
+- 个人 AI 标签不经团队提炼就成为组织事实
 
-## 跟踪
+## 参与
 
-议题与里程碑：[github.com/regenic-ai/regenic/issues](https://github.com/regenic-ai/regenic/issues)
+议题与里程碑：[github.com/regenic-ai/regenic/issues](https://github.com/regenic-ai/regenic/issues)。设计讨论见 [RFC](rfcs/README.md)。
