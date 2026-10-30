@@ -33,6 +33,12 @@ const {
   pullUnitKey,
   isPullDue,
   advancePullNextRun,
+  advanceRecipePull,
+  initialPullNextRun,
+  isPullIntervalMs,
+  normalizeRecipeTrigger,
+  pullScheduleColumns,
+  pullScheduleFromColumns,
   shouldKeepPullSchedule,
   writeBackIdempotencyKey,
   recipeAllowsAutoStart,
@@ -343,6 +349,115 @@ describe("recipe auto-start specification", () => {
         now: "2026-08-27T12:00:00.000Z",
       }),
       false,
+    );
+  });
+
+  it("accepts a custom interval and aligns daily and weekly clocks", () => {
+    assert.equal(isPullIntervalMs(5 * 60 * 1000), true);
+    assert.equal(isPullIntervalMs(90 * 60 * 1000), true);
+    assert.equal(isPullIntervalMs(7 * 24 * 60 * 60 * 1000), true);
+    assert.equal(isPullIntervalMs(30 * 1000), false);
+    assert.equal(isPullIntervalMs(8 * 24 * 60 * 60 * 1000), false);
+
+    const custom = normalizeRecipeTrigger(
+      { kind: "pull", interval_ms: 90 * 60 * 1000 },
+      { thread_id: "chat" },
+    );
+    assert.equal(custom.interval_ms, 90 * 60 * 1000);
+    assert.equal(custom.at_minute, undefined);
+
+    const dropped = normalizeRecipeTrigger(
+      {
+        kind: "pull",
+        interval_ms: 15 * 60 * 1000,
+        at_minute: 60,
+        timezone: "Mars/Phobos",
+      },
+      { thread_id: "chat" },
+    );
+    assert.equal(dropped.interval_ms, 15 * 60 * 1000);
+    assert.equal(dropped.at_minute, undefined);
+
+    const daily = normalizeRecipeTrigger(
+      {
+        kind: "pull",
+        interval_ms: 60 * 60 * 1000,
+        at_minute: 9 * 60,
+        timezone: "Asia/Shanghai",
+      },
+      { thread_id: "chat" },
+    );
+    assert.equal(daily.at_minute, 9 * 60);
+    assert.equal(daily.timezone, "Asia/Shanghai");
+    assert.equal(daily.weekdays, undefined);
+    assert.equal(
+      initialPullNextRun(daily, "2026-08-27T00:30:00.000Z"),
+      "2026-08-27T01:00:00.000Z",
+    );
+    assert.equal(
+      initialPullNextRun(daily, "2026-08-27T01:00:00.000Z"),
+      "2026-08-27T01:00:00.000Z",
+    );
+    assert.equal(
+      advanceRecipePull(daily, "2026-08-27T01:00:00.000Z", "2026-08-27T01:00:05.000Z"),
+      "2026-08-28T01:00:00.000Z",
+    );
+
+    const weekly = normalizeRecipeTrigger(
+      {
+        kind: "pull",
+        at_minute: 9 * 60,
+        timezone: "Asia/Shanghai",
+        weekdays: [5, 1, 3],
+      },
+      { thread_id: "chat" },
+    );
+    assert.deepEqual(weekly.weekdays, [1, 3, 5]);
+    assert.equal(
+      initialPullNextRun(weekly, "2026-08-27T00:30:00.000Z"),
+      "2026-08-28T01:00:00.000Z",
+    );
+    assert.equal(
+      initialPullNextRun(
+        normalizeRecipeTrigger(
+          {
+            kind: "pull",
+            at_minute: 9 * 60,
+            timezone: "America/New_York",
+          },
+          { thread_id: "chat" },
+        ),
+        "2026-07-15T12:00:00.000Z",
+      ),
+      "2026-07-15T13:00:00.000Z",
+    );
+
+    const saved = makeRecipe("due", { thread_id: "chat" }, daily);
+    assert.equal(
+      shouldKeepPullSchedule(saved, {
+        match: { thread_id: "chat" },
+        trigger: { ...daily, at_minute: 10 * 60 },
+      }),
+      false,
+    );
+    assert.equal(
+      shouldKeepPullSchedule(saved, {
+        match: { thread_id: "chat" },
+        trigger: daily,
+      }),
+      true,
+    );
+
+    const columns = pullScheduleColumns(weekly);
+    assert.equal(columns.weekdays, "1,3,5");
+    assert.deepEqual(
+      pullScheduleFromColumns({
+        trigger_interval_ms: columns.interval_ms,
+        trigger_at_minute: columns.at_minute,
+        trigger_weekdays: columns.weekdays,
+        trigger_timezone: columns.timezone,
+      }).weekdays,
+      [1, 3, 5],
     );
   });
 });

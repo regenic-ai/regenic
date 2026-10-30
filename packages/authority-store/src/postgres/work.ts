@@ -11,7 +11,8 @@ import type {
 import {
   recipeTriggerOf,
   isRecipeTriggerKind,
-  isPullIntervalMs,
+  pullScheduleColumns,
+  pullScheduleFromColumns,
   isWorkDeliveryStatus,
   isWorkWriteBackState,
   type WorkItemStatus,
@@ -46,13 +47,15 @@ export async function getRecipe(db: PgSql, orgId: string, id: string): Promise<R
 
 export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
     const trigger = recipeTriggerOf(recipe);
+    const pull = pullScheduleColumns(trigger);
     await db.execute(
       `
         INSERT INTO recipes (
           id, org_id, name, match_json, executor_type, executor_config_json,
           can_write_back, include_context, enabled, trigger_kind,
-          trigger_interval_ms, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
+          trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
@@ -63,6 +66,9 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           enabled = EXCLUDED.enabled,
           trigger_kind = EXCLUDED.trigger_kind,
           trigger_interval_ms = EXCLUDED.trigger_interval_ms,
+          trigger_at_minute = EXCLUDED.trigger_at_minute,
+          trigger_weekdays = EXCLUDED.trigger_weekdays,
+          trigger_timezone = EXCLUDED.trigger_timezone,
           trigger_coalesce = EXCLUDED.trigger_coalesce,
           max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
@@ -79,7 +85,10 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
         recipe.include_context,
         recipe.enabled,
         trigger.kind,
-        trigger.kind === "pull" ? (trigger.interval_ms ?? null) : null,
+        pull.interval_ms,
+        pull.at_minute,
+        pull.weekdays,
+        pull.timezone,
         trigger.kind === "push" && trigger.coalesce !== false,
         recipe.max_concurrent ?? null,
         recipe.next_run_at ?? null,
@@ -411,7 +420,7 @@ export async function getWorkDeliveryByItem(db: PgSql, orgId: string, workItemId
   }
 
 export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promise<WorkDelivery> {
-    await db.execute(
+    const row = await db.queryOne<WorkDeliveryRow>(
       `
         INSERT INTO work_deliveries (
           id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
@@ -419,7 +428,8 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
           payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
           created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (org_id, work_item_id) DO UPDATE SET
+          id = EXCLUDED.id,
           recipe_id = EXCLUDED.recipe_id,
           kind = EXCLUDED.kind,
           unit_key = EXCLUDED.unit_key,
@@ -434,6 +444,7 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
           idempotency_key = EXCLUDED.idempotency_key,
           channel_receipt_json = EXCLUDED.channel_receipt_json,
           updated_at = EXCLUDED.updated_at
+        RETURNING *
       `,
       [
         delivery.id,
@@ -456,7 +467,10 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
         delivery.updated_at,
       ],
     );
-    return delivery;
+    if (!row) {
+      throw new Error("work delivery upsert returned no row");
+    }
+    return toWorkDelivery(row);
   }
 
 export async function listExecutorInstallations(db: PgSql, orgId: string): Promise<ExecutorInstallation[]> {
@@ -536,6 +550,9 @@ interface RecipeRow {
   enabled: unknown;
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
+  trigger_at_minute: number | null;
+  trigger_weekdays: string | null;
+  trigger_timezone: string | null;
   trigger_coalesce: unknown;
   max_concurrent: number | null;
   next_run_at: unknown;
@@ -630,9 +647,7 @@ function toRecipe(row: RecipeRow): Recipe {
       trigger: kind
         ? {
             kind,
-            ...(kind === "pull" && isPullIntervalMs(row.trigger_interval_ms)
-              ? { interval_ms: row.trigger_interval_ms }
-              : {}),
+            ...(kind === "pull" ? pullScheduleFromColumns(row) : {}),
             ...(kind === "push"
               ? { coalesce: row.trigger_coalesce !== false && row.trigger_coalesce !== 0 }
               : {}),

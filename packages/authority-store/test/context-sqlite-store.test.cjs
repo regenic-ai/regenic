@@ -1294,6 +1294,11 @@ describe("SQLite context artifact store", () => {
     legacy.exec("ALTER TABLE outbound_attempts DROP COLUMN recovery_hash");
     legacy.exec("ALTER TABLE outbound_attempts DROP COLUMN receipt_json");
     legacy.exec("ALTER TABLE work_runs DROP COLUMN start_state");
+    legacy.exec(`
+      ALTER TABLE recipes DROP COLUMN trigger_at_minute;
+      ALTER TABLE recipes DROP COLUMN trigger_weekdays;
+      ALTER TABLE recipes DROP COLUMN trigger_timezone;
+    `);
     // Last migration before preview_json (46) and the preview rebuild (47).
     legacy.pragma("user_version = 45");
     const payload = JSON.stringify({

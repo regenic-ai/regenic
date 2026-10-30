@@ -428,8 +428,42 @@ export type WebhookConnector = Pick<
   "source" | "source_mode" | "quota" | "verifyWebhook" | "handleWebhook"
 >;
 
+export type ConnectorStopReason =
+  | "disable"
+  | "delete"
+  | "reconfigure"
+  | "clear"
+  | "shutdown";
+
+export interface ConnectorStopContext {
+  reason: ConnectorStopReason;
+  signal: AbortSignal;
+}
+
 export interface ChannelDriver
   extends ChannelDriverCore, ChannelSourcePort, Partial<ChannelSinkPort> {
+  /**
+   * With stopInstallation, once before the first asynchronous runtime call of
+   * each activation, including re-enable. Catalog/probe/install metadata never
+   * activates an installation. Synchronous queue reads do not start resources;
+   * waitThread falls back to polling until this hook completes.
+   */
+  startInstallation?(
+    installation: ConnectorInstallation,
+    host: ConnectorHost,
+  ): Promise<void>;
+  /**
+   * Awaitably stop local collection and owned processes, not remote logout or
+   * credential deletion. Must be idempotent and reject if stopping fails.
+   * The host fences new calls before draining admitted calls and invoking this
+   * hook. Honor signal to bound cleanup; a failed stop remains fenced and can
+   * be retried. startInstallation opens a new activation after a successful stop.
+   */
+  stopInstallation?(
+    installation: ConnectorInstallation,
+    host: ConnectorHost,
+    context: ConnectorStopContext,
+  ): Promise<void>;
   /**
    * Bind the install-level webhook translator. Required when
    * `source_mode` is webhook or hybrid. The kernel ingest path calls

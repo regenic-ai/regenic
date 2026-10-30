@@ -107,40 +107,44 @@ async function callTool(
   const name = requiredString(object.name, "tool name");
   const args = asObject(object.arguments ?? {}, "tool arguments");
   const taskId = typeof args.task_id === "string" ? encodeURIComponent(args.task_id) : undefined;
-  const routes: Record<string, { method: "GET" | "POST"; path: string; omit: string[] }> = {
+  const routes: Record<string, {
+    method: "GET" | "POST";
+    path: () => string;
+    omit: string[];
+  }> = {
     create_customer_task: {
       method: "POST",
-      path: "/v1/me/context/customer-tasks",
+      path: () => "/v1/me/context/customer-tasks",
       omit: [],
     },
     search_context: {
       method: "POST",
-      path: `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/search`,
+      path: () => `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/search`,
       omit: ["task_id"],
     },
     read_context: {
       method: "POST",
-      path: `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/read`,
+      path: () => `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/read`,
       omit: ["task_id"],
     },
     update_customer_brief: {
       method: "POST",
-      path: `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/brief`,
+      path: () => `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/brief`,
       omit: ["task_id"],
     },
     query_customer_business: {
       method: "POST",
-      path: `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/query`,
+      path: () => `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/query`,
       omit: ["task_id"],
     },
     create_customer_reply_draft: {
       method: "POST",
-      path: `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/draft`,
+      path: () => `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}/draft`,
       omit: ["task_id"],
     },
     get_customer_task: {
       method: "GET",
-      path: `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}`,
+      path: () => `/v1/me/context/customer-tasks/${requiredTaskId(taskId)}`,
       omit: ["task_id"],
     },
   };
@@ -155,7 +159,7 @@ async function callTool(
     baseUrl,
     apiKey,
     method: route.method,
-    path: route.path,
+    path: route.path(),
     ...(route.method === "POST" ? { payload } : {}),
   });
 }

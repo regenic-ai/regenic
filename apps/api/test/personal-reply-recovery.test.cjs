@@ -68,7 +68,11 @@ async function harness(t) {
   };
   const service = () => new PersonalReplyService(
     runtime, inbox, { followThread: async () => {} },
-    { findForThread: () => ({ installation: { id: "feishu-1" }, driver }) },
+    {
+      findForThread: () => ({ installation: { id: "feishu-1" }, driver }),
+      runInstallation: (_installation, work) => work(),
+      list: () => [driver],
+    },
   );
   return {
     ports, sent, ingested, faults, service,

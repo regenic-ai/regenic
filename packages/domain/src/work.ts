@@ -50,12 +50,17 @@ export const RECIPE_TRIGGER_KINDS = ["push", "pull", "manual"] as const;
 
 export type RecipeTriggerKind = (typeof RECIPE_TRIGGER_KINDS)[number];
 
+export const PULL_INTERVAL_MIN_MS = 60 * 1000;
+/** Pure intervals stop at a week. Longer cadences use a clock time. */
+export const PULL_INTERVAL_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+
 export const PULL_INTERVAL_MS = {
   "15m": 15 * 60 * 1000,
   "1h": 60 * 60 * 1000,
   "1d": 24 * 60 * 60 * 1000,
 } as const;
 
+/** Common choices. Any whole minute inside the min/max range is valid. */
 export const PULL_INTERVALS_MS = [
   PULL_INTERVAL_MS["15m"],
   PULL_INTERVAL_MS["1h"],
@@ -64,8 +69,20 @@ export const PULL_INTERVALS_MS = [
 
 export interface RecipeTrigger {
   kind: RecipeTriggerKind;
-  /** Pull only. Period between occurrences. */
+  /**
+   * Pull only. Period between occurrences when no clock time is set.
+   * Whole minutes, from 1 minute through 7 days.
+   */
   interval_ms?: number;
+  /**
+   * Pull only. Minute of day in `timezone` (0–1439).
+   * With `timezone`, runs align to that clock instead of repeating `interval_ms`.
+   */
+  at_minute?: number;
+  /** Pull only. ISO weekdays, Monday = 1. Omit to run every day. */
+  weekdays?: number[];
+  /** Pull only. IANA zone for `at_minute`. */
+  timezone?: string;
   /** Push only. Default true: one follow-up on the latest head after the current run. */
   coalesce?: boolean;
 }

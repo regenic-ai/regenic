@@ -16,6 +16,7 @@ import {
   historySyncClaimLanes,
   shouldRunHistoryTick,
   steadySyncClaimLanes,
+  withDeadline,
 } from "@regenic/domain";
 import {
   nextPickedChatNames,
@@ -45,7 +46,7 @@ import type {
   CreatedConversationView,
   StartSyncRunInput,
 } from "./personal-connector-types";
-import { summarizeRuns } from "./personal-connector-poll";
+import { summarizeRuns, wrapDriverError } from "./personal-connector-poll";
 import {
   bootstrapPullIntervalMs,
   catalogPullIntervalMs,
@@ -116,6 +117,22 @@ export class PersonalConnectorService implements OnModuleDestroy {
       requireInstallation: (store, installationId) => this.requireInstallation(store, installationId),
       installSecrets: () => this.installSecrets(),
       catchUp: (installationId) => catchUp(this.state, installationId),
+    });
+    drivers.installationLifecycle.setHost(() => asConnectorHost(runtime.requireHost()));
+    runtime.beforeDispose(async () => {
+      this.maintenanceHold = true;
+      this.stopBackground();
+      this.state.focusSlot?.abort.abort();
+      drivers.installationLifecycle.close();
+      if (!runtime.isReady()) return;
+      await withDeadline((async () => {
+        const host = runtime.requireHost();
+        const installations = await host.get("authority").listInstallations(runtime.orgId());
+        const results = await Promise.allSettled(installations.map((installation) =>
+          drivers.stopInstallation(installation, host, "shutdown")));
+        const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+        if (errors.length) throw new AggregateError(errors, "Connector shutdown failed");
+      })(), 11_000, "connector shutdown");
     });
   }
 
@@ -204,6 +221,26 @@ export class PersonalConnectorService implements OnModuleDestroy {
     } catch (error) {
       this.maintenanceHold = false;
       throw error;
+    }
+  }
+
+  async pauseForStoreClear(): Promise<void> {
+    this.maintenanceHold = true;
+    this.state.focusSlot?.abort.abort();
+    try {
+      await this.drivers.installationLifecycle.change(async () => {
+        const host = this.runtime.requireHost();
+        const installations = await host.get("authority").listInstallations(this.runtime.orgId());
+        const results = await Promise.allSettled(installations.map((installation) =>
+          this.drivers.stopInstallation(installation, host, "clear")));
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
+      });
+      await this.waitForQuiet();
+      this.resetLivePullState();
+    } catch (error) {
+      this.maintenanceHold = false;
+      throw wrapDriverError(error, "sync_failed");
     }
   }
 
@@ -329,31 +366,47 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
-    return connectorInstall.install(this.connectorState(), input);
+    return this.changeInstallation(() => connectorInstall.install(this.connectorState(), input));
   }
 
   async updateConfig(
     installationId: string,
     config: Record<string, unknown>,
   ): Promise<EngineInstallationView> {
-    return connectorInstall.updateConfig(this.connectorState(), installationId, config);
+    return this.changeInstallation(() => connectorInstall.updateConfig(this.connectorState(), installationId, config));
   }
 
   async uninstall(installationId: string): Promise<{ id: string; removed: true }> {
-    return connectorInstall.uninstall(this.connectorState(), installationId);
+    return this.changeInstallation(() => connectorInstall.uninstall(this.connectorState(), installationId));
   }
 
   async setStatus(
     installationId: string,
     status: "enabled" | "disabled",
   ): Promise<EngineInstallationView> {
-    return connectorInstall.setStatus(this.connectorState(), installationId, status);
+    return this.changeInstallation(() => connectorInstall.setStatus(this.connectorState(), installationId, status));
+  }
+
+  private changeInstallation<T>(work: () => Promise<T>): Promise<T> {
+    return this.drivers.installationLifecycle.change(async () => {
+      if (this.maintenanceHold) throw storeBusyError();
+      try {
+        this.drivers.installationLifecycle.setHost(asConnectorHost(this.runtime.requireHost()));
+        return await work();
+      } catch (error) {
+        throw wrapDriverError(error, "sync_failed");
+      }
+    });
   }
 
   async revealPairingCode(
     installationId: string,
   ): Promise<{ pairing_code: string }> {
-    return connectorInstall.revealPairingCode(this.connectorState(), installationId);
+    try {
+      return await connectorInstall.revealPairingCode(this.connectorState(), installationId);
+    } catch (error) {
+      throw wrapDriverError(error, "sync_failed");
+    }
   }
 
   private async waitForQuiet(timeoutMs = 10_000): Promise<void> {
@@ -730,7 +783,13 @@ export class PersonalConnectorService implements OnModuleDestroy {
     const previous = options?.ahead
       ? Promise.resolve()
       : (this.streamLocks.get(lock) ?? Promise.resolve());
-    const current = previous.then(work, work);
+    const guarded = async () => {
+      if (!this.drivers.list().some((driver) => driver.stopInstallation)) return work();
+      const store = this.runtime.requireHost().get("authority");
+      const installation = await this.requireInstallation(store, installationId);
+      return this.drivers.runInstallation(installation, work);
+    };
+    const current = previous.then(guarded, guarded);
     const released = current.then(
       () => undefined,
       () => undefined,

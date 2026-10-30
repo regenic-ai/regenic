@@ -950,3 +950,103 @@
   transform: translateX(16px);
 }
 
+.schedule-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.schedule-every {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.schedule-every-label {
+  color: var(--muted);
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+
+.recipe-row-body .schedule-count {
+  width: 4.75rem;
+  flex: 0 0 auto;
+}
+
+.schedule-unit-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--hover);
+}
+
+.schedule-unit-seg button {
+  height: 28px;
+  min-width: 3.25rem;
+  padding: 0 10px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.schedule-unit-seg button:hover:not(.active) {
+  color: var(--text);
+}
+
+.schedule-unit-seg button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.schedule-presets,
+.schedule-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.schedule-presets button,
+.schedule-days button {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.schedule-days button {
+  min-width: 2.75rem;
+  border-radius: 6px;
+}
+
+.schedule-presets button:hover:not(.active),
+.schedule-days button:hover:not(.active) {
+  color: var(--text);
+}
+
+.schedule-presets button.active,
+.schedule-days button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.schedule-presets button:focus-visible,
+.schedule-days button:focus-visible,
+.schedule-unit-seg button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--g500) 22%, transparent);
+}
+
+.recipe-row-body .schedule-time {
+  width: 9rem;
+}
+

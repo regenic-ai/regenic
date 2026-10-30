@@ -6,7 +6,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
-    "test": "pnpm --filter @regenic/api... build && node --test --test-concurrency=1 test/personal-api*.test.cjs && node --test $(find test -maxdepth 1 -type f -name '*.test.cjs' ! -name 'personal-api*')",
+    "test": "pnpm --filter @regenic/local-cli... build && pnpm --filter @regenic/api... build && node --test --test-concurrency=1 test/personal-api*.test.cjs && node --test $(find test -maxdepth 1 -type f -name '*.test.cjs' ! -name 'personal-api*')",
+    "eval:customer-service-system": "pnpm --filter @regenic/local-cli... build && pnpm --filter @regenic/api... build && node --test --test-concurrency=1 test/customer-service-system-acceptance.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -9,6 +9,8 @@
 - [桌面设计规范](DESKTOP_DESIGN.html)
 - [本地模型服务配置](LOCAL_MODEL_SERVICE.md)
 - [客服 Agent 配置与使用](CUSTOMER_SERVICE_AGENT.md)
+- [客服场景评测门禁](CUSTOMER_SERVICE_EVALUATION.md)
+- [客服系统级验收](CUSTOMER_SERVICE_SYSTEM_ACCEPTANCE.md)
 - [对话上下文检索 MCP](CONTEXT_SEARCH_MCP.md)
 - [采集架构](INGESTION_ARCHITECTURE.md)
 - [协作平台集成架构](CONTEXT_PLATFORM_INTEGRATION.md)

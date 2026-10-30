@@ -15,3 +15,4 @@ export * from "./deterministic-daily-digest-projector";
 export * from "./daily-digest-projection-runner";
 export * from "./plugin";
 export * from "./customer-service-coordinator";
+export * from "./customer-service-evaluator";
