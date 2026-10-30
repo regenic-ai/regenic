@@ -45,6 +45,45 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("summarizes job counts and failure categories without materializing every job", async (t) => {
+    const { index, path } = await fixture(t);
+    await reconcile(index, ["pending", "running", "done", "quarantined"].map((id) => head(id)));
+    const claimed = await index.claim({
+      org_id: "org", generation: generation.id, owner: "owner", now: at, lease_ms: 1000, limit: 3,
+    });
+    assert.equal(claimed.length, 3);
+    await index.fail({
+      job: claimed[0], owner: "owner", now: at, retry_at: later,
+      error_code: "timeout", retryable: true,
+    });
+    await index.fail({
+      job: claimed[1], owner: "owner", now: at, retry_at: later,
+      error_code: "unsupported_attachment", retryable: false,
+    });
+    await index.complete({
+      job: claimed[2], owner: "owner", now: at, chunks: [chunk()],
+    });
+    assert.deepEqual(await index.summarizeJobs("org", generation.id), {
+      counts: { pending: 1, running: 0, succeeded: 1, skipped: 0,
+        failed: 1, quarantined: 1, superseded: 0 },
+      failures: [
+        { error_code: "timeout", failed: 1, quarantined: 0 },
+        { error_code: "unsupported_attachment", failed: 0, quarantined: 1 },
+      ],
+    });
+    const database = new Database(path);
+    try {
+      database.prepare("UPDATE jobs SET error_code=NULL WHERE status='failed'").run();
+    } finally {
+      database.close();
+    }
+    assert.deepEqual((await index.summarizeJobs("org", generation.id)).failures, [
+      { error_code: "indexing_failed", failed: 1, quarantined: 0 },
+      { error_code: "unsupported_attachment", failed: 0, quarantined: 1 },
+    ]);
+    assert.equal((await index.summarizeJobs("other-org", generation.id)).counts.succeeded, 0);
+  });
+
   it("matches 4000 fully covered 768-dimensional authorized vectors within the scale budget", async (t) => {
     const root = await mkdtemp(join(tmpdir(), "regenic-vector-scale-"));
     const path = join(root, "vectors.db");
