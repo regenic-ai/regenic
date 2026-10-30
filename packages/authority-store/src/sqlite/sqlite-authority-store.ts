@@ -965,6 +965,7 @@ export class SqliteAuthorityStore
       const before = this.storeFootprint(orgId);
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM search_answers WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM customer_service_tasks WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
