@@ -104,7 +104,7 @@ If `lark-cli` is not on PATH, set `REGENIC_LARK_CLI` to the command before you s
 
 ### Other connectors
 
-The core repository ships only the DSH, Feishu, and Cursor connectors. Other connectors are separate plugin packages: put them in `REGENIC_PLUGIN_DIR` (or point `REGENIC_CHANNEL_PLUGIN` at one package) before you start the app, and they appear under **Engine**. Slack: [regenic-connector-slack](https://github.com/regenic-ai/regenic-connector-slack). WhatsApp: [regenic-connector-whatsapp](https://github.com/regenic-ai/regenic-connector-whatsapp). See [Connector drivers](CONNECTOR_DRIVERS.md).
+The core repository ships only the DSH, Feishu, and Cursor connectors. Slack, WhatsApp, Telegram, DingTalk, WeCom, and other sources are separate plugin packages: put them in `REGENIC_PLUGIN_DIR` (or point `REGENIC_CHANNEL_PLUGIN` at one package) before you start the app, and they appear under **Engine**. See the [connector catalog](CONNECTOR_CATALOG.md) for the full list, capabilities, and loading steps.
 
 ## Login and tokens
 

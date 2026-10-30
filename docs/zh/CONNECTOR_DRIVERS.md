@@ -21,7 +21,7 @@
 
 其他连接器不内置，作为独立插件包发布，从 `REGENIC_PLUGIN_DIR`（默认
 `~/.regenic/plugins`）或单个 `REGENIC_CHANNEL_PLUGIN` 路径加载，使用同样的
-`regenic.plugin` 清单。
+`regenic.plugin` 清单。可用插件见[连接器目录](CONNECTOR_CATALOG.md)。
 
 ## kind 映射
 

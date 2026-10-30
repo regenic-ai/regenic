@@ -39,7 +39,7 @@ built-in drivers do not use them in this phase.
 
 Other connectors are not built in. They ship as separate plugin packages
 loaded from `REGENIC_PLUGIN_DIR` (default `~/.regenic/plugins`) or a single
-`REGENIC_CHANNEL_PLUGIN` path, with the same `regenic.plugin` manifest.
+`REGENIC_CHANNEL_PLUGIN` path, with the same `regenic.plugin` manifest. See the [connector catalog](CONNECTOR_CATALOG.md) for available plugins.
 
 ## Kind maps
 

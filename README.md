@@ -63,22 +63,24 @@ pnpm dev:desktop
 2. **Browse and search.** Open synced conversations in the workbench, or use **Search** to find information across conversations and inspect the context.
 3. **Choose how to process it.** For answers based on search results, configure an available [executor](docs/en/EXECUTOR.md) in **Engine**, then select it in Search. To query from an external AI tool instead, follow the [MCP setup guide](docs/en/CONTEXT_SEARCH_MCP.md). MCP is not required for the workbench or search.
 
-For DSH, plugin installation, Docker, and CLI commands, see the [setup and CLI reference](docs/en/SETUP_AND_CLI.md).
+For other connectors, see the [connector catalog](docs/en/CONNECTOR_CATALOG.md). For DSH, Docker, and CLI commands, see the [setup and CLI reference](docs/en/SETUP_AND_CLI.md).
 
 ## Connectors
 
-Feishu, DSH, and Cursor are built in; Slack and WhatsApp ship as separate plugins. Any other source can plug in through the same standard.
+Feishu, DSH, and Cursor are built in. Other sources ship as separate plugins built on the same open standard.
 
-| Source | Available through | Scope |
-| --- | --- | --- |
-| Feishu | Built in | Sync selected groups and DMs; send text using your authorized account |
-| DSH | Built in | Read local agent sessions, send prompts, and create sessions in supported modes |
-| Cursor | Built in | Read and run local SDK agent sessions; not IDE chat history or Cloud Agents |
-| Slack | [Separate plugin](https://github.com/regenic-ai/regenic-connector-slack) | Install separately; see the plugin's supported capabilities |
-| WhatsApp | [Separate plugin](https://github.com/regenic-ai/regenic-connector-whatsapp) | Install separately; see the plugin's setup and limitations |
-| CSV / JSONL | CLI import | Import exported messages with a field mapping |
+| Source | Available through | Connects as | Reply |
+| --- | --- | --- | --- |
+| Feishu | Built in | Your account, via `lark-cli` | Text |
+| DSH / Cursor | Built in | Local agent sessions | Prompts and tasks |
+| Slack | [Plugin](https://github.com/regenic-ai/regenic-connector-slack) | Bot (read-only), or your account (opt-in) | Text, in user mode |
+| WhatsApp | [Plugin](https://github.com/regenic-ai/regenic-connector-whatsapp) | Exports, WhatsApp Web extension, or linked device (opt-in) | Text |
+| Telegram | [Plugin](https://github.com/regenic-ai/regenic-connector-telegram) | Your account, via TDLib | Text |
+| DingTalk | [Plugin](https://github.com/regenic-ai/dingtalk-connector) | Your account, via `dws` | Text |
+| WeCom | [Plugin](https://github.com/regenic-ai/wecom-connector) | Smart bot | Markdown |
+| CSV / JSONL | CLI import | Exported files | — |
 
-**Need another source?** Start with the [connector guide](docs/en/CONNECTOR.md) and [example plugins](examples/connectors/README.md). A connector can be read-only; it does not have to implement a full chat client.
+See the [connector catalog](docs/en/CONNECTOR_CATALOG.md) for capabilities, platform requirements, risks, and how to load a plugin. To add another source, start with the [connector guide](docs/en/CONNECTOR.md) and [example plugins](examples/connectors/README.md). A connector can be read-only; it does not have to implement a full chat client.
 
 ## Current scope
 
@@ -88,7 +90,7 @@ The Context Search MCP is **read-only**: it does not approve or send messages. T
 
 ## Documentation and contributing
 
-[All docs](docs/en/README.md) · [Setup & CLI](docs/en/SETUP_AND_CLI.md) · [Connector development](docs/en/CONNECTOR.md) · [MCP](docs/en/CONTEXT_SEARCH_MCP.md) · [Architecture](docs/en/MESSAGE_ORCHESTRATION.md) · [Executors](docs/en/EXECUTOR.md)
+[All docs](docs/en/README.md) · [Setup & CLI](docs/en/SETUP_AND_CLI.md) · [Connector catalog](docs/en/CONNECTOR_CATALOG.md) · [Connector development](docs/en/CONNECTOR.md) · [MCP](docs/en/CONTEXT_SEARCH_MCP.md) · [Architecture](docs/en/MESSAGE_ORCHESTRATION.md) · [Executors](docs/en/EXECUTOR.md)
 
 Bug reports, connector contributions, and feedback are welcome in [Issues](https://github.com/regenic-ai/regenic/issues). For implementation PRs, follow the [product boundaries](docs/en/PRODUCT.md) and cite the relevant RFC.
 

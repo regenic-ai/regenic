@@ -63,22 +63,24 @@ pnpm dev:desktop
 2. **查看和搜索。** 在工作台打开已同步的会话，或进入 **Search** 跨对话搜索并查看上下文。
 3. **选择处理方式。** 如需基于搜索结果生成回答，先在 **Engine** 配置可用的[执行器](docs/zh/EXECUTOR.md)，再在 Search 中选择它；如需在外部 AI 中查询，再按 [MCP 指南](docs/zh/CONTEXT_SEARCH_MCP.md)配置客户端。MCP 不是使用工作台或搜索的前提。
 
-DSH、插件安装、Docker 和 CLI 用法见[安装与 CLI 参考](docs/zh/SETUP_AND_CLI.md)。
+其他连接器见[连接器目录](docs/zh/CONNECTOR_CATALOG.md)。DSH、Docker 和 CLI 用法见[安装与 CLI 参考](docs/zh/SETUP_AND_CLI.md)。
 
 ## 连接器
 
-目前内置飞书、DSH 和 Cursor，Slack 和 WhatsApp 以独立插件提供。其他消息来源都可以按同一标准接入。
+飞书、DSH 和 Cursor 为内置连接器。其他来源以独立插件提供，遵循同一套开放标准。
 
-| 来源 | 接入方式 | 支持范围 |
-| --- | --- | --- |
-| 飞书 | 内置 | 同步选定的群和私聊；以你的授权账号发送文字 |
-| DSH | 内置 | 读取本地 Agent 会话、发送提示词；部分模式支持新建会话 |
-| Cursor | 内置 | 读取和运行本地 SDK Agent 会话；不包含 IDE 聊天记录和 Cloud Agents |
-| Slack | [独立插件](https://github.com/regenic-ai/regenic-connector-slack) | 需单独安装，具体能力见插件说明 |
-| WhatsApp | [独立插件](https://github.com/regenic-ai/regenic-connector-whatsapp) | 需单独安装，配置与限制见插件说明 |
-| CSV / JSONL | CLI 导入 | 通过字段映射导入导出的消息记录 |
+| 来源 | 接入方式 | 接入身份 | 回复 |
+| --- | --- | --- | --- |
+| 飞书 | 内置 | 你的账号，通过 `lark-cli` | 文本 |
+| DSH / Cursor | 内置 | 本机 Agent 会话 | 提示词和任务 |
+| Slack | [插件](https://github.com/regenic-ai/regenic-connector-slack) | 机器人（只读），或你的账号（需主动开启） | 用户模式下支持文本 |
+| WhatsApp | [插件](https://github.com/regenic-ai/regenic-connector-whatsapp) | 导出文件、WhatsApp Web 扩展，或关联设备（需主动开启） | 文本 |
+| Telegram | [插件](https://github.com/regenic-ai/regenic-connector-telegram) | 你的账号，通过 TDLib | 文本 |
+| 钉钉 | [插件](https://github.com/regenic-ai/dingtalk-connector) | 你的账号，通过 `dws` | 文本 |
+| 企业微信 | [插件](https://github.com/regenic-ai/wecom-connector) | 智能机器人 | Markdown |
+| CSV / JSONL | CLI 导入 | 导出文件 | — |
 
-**想接入其他来源？** 查看[连接器开发文档](docs/zh/CONNECTOR.md)和[示例插件](examples/connectors/README.md)。连接器可以只读，不必实现一个完整的聊天客户端。
+各连接器的能力、平台要求、风险和插件加载方式，见[连接器目录](docs/zh/CONNECTOR_CATALOG.md)。接入其他来源，可以从[连接器开发文档](docs/zh/CONNECTOR.md)和[示例插件](examples/connectors/README.md)开始。连接器可以只读，不必实现完整的聊天客户端。
 
 ## 当前范围
 
@@ -88,7 +90,7 @@ Context Search MCP **只读**，不会批准或发送消息。第三方插件与
 
 ## 文档与贡献
 
-[全部文档](docs/zh/README.md) · [安装与 CLI](docs/zh/SETUP_AND_CLI.md) · [连接器开发](docs/zh/CONNECTOR.md) · [MCP](docs/zh/CONTEXT_SEARCH_MCP.md) · [架构](docs/zh/MESSAGE_ORCHESTRATION.md) · [执行器](docs/zh/EXECUTOR.md)
+[全部文档](docs/zh/README.md) · [安装与 CLI](docs/zh/SETUP_AND_CLI.md) · [连接器目录](docs/zh/CONNECTOR_CATALOG.md) · [连接器开发](docs/zh/CONNECTOR.md) · [MCP](docs/zh/CONTEXT_SEARCH_MCP.md) · [架构](docs/zh/MESSAGE_ORCHESTRATION.md) · [执行器](docs/zh/EXECUTOR.md)
 
 欢迎通过 [Issues](https://github.com/regenic-ai/regenic/issues) 反馈问题、讨论场景或贡献连接器。实现类 PR 请遵循[产品边界](docs/zh/PRODUCT.md)，并注明对应 RFC。
 
