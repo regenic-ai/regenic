@@ -28,6 +28,7 @@ function GenerationProgress({ generation, disabled, canRetry, onRetry }: {
 }) {
   const { t } = useLocale();
   const { pending, running, succeeded, failed, quarantined, superseded } = generation.jobs;
+  const skipped = generation.jobs.skipped ?? 0;
   const total = pending + running + succeeded + failed + quarantined;
   const percent = total === 0 ? 100 : Math.floor((succeeded / total) * 100);
   const needsAttention = failed + quarantined;
@@ -61,6 +62,7 @@ function GenerationProgress({ generation, disabled, canRetry, onRetry }: {
         ))}
       </dl>
       {superseded > 0 ? <p className="muted semantic-note">{t("semantic.supersededNote", { superseded })}</p> : null}
+      {skipped > 0 ? <p className="muted semantic-note">{t("semantic.skippedNote", { skipped })}</p> : null}
       {needsAttention > 0 ? (
         <div className="semantic-attention">
           <strong>{t("semantic.attentionTitle", { count: needsAttention })}</strong>

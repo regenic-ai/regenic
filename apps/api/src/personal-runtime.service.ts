@@ -168,7 +168,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       ...("error_code" in health ? { provider_issue: semanticIssue(health.error_code) } : {}),
       generations: await Promise.all(generations.map(async ({ manifest, active }) => {
         const jobs = await host.get("context-embedding-jobs").listJobs(this.orgId(), manifest.id);
-        const counts = { pending: 0, running: 0, succeeded: 0, failed: 0, quarantined: 0, superseded: 0 };
+        const counts = { pending: 0, running: 0, succeeded: 0, skipped: 0, failed: 0, quarantined: 0, superseded: 0 };
         const failures = new Map<ReturnType<typeof semanticIssue>, { code: ReturnType<typeof semanticIssue>; failed: number; quarantined: number }>();
         for (const job of jobs) counts[job.status]++;
         for (const job of jobs) {

@@ -14,6 +14,34 @@ const { embeddingGeneration } = require("@regenic/domain");
 const { EMBEDDINGGEMMA_2 } = require("@regenic/embedding-provider");
 const { SqliteContextVectorIndex } = require("@regenic/vector-index");
 
+it("reports empty skipped events separately from indexed coverage and attachment failures", async () => {
+  const services = {
+    embedding: { async health() { return { status: "ok" }; } },
+    "context-vector-status": { status: "ready" },
+    "context-vector-generations": {
+      async listGenerations() { return [{ manifest: { id: "generation" }, active: true }]; },
+    },
+    "context-embedding-jobs": {
+      async listJobs() {
+        return [
+          { status: "succeeded" }, { status: "skipped" },
+          { status: "quarantined", error_code: "unsupported_attachment" },
+        ];
+      },
+    },
+  };
+  const status = await PersonalRuntimeService.prototype.semanticStatus.call({
+    embeddingEnabled: true,
+    requireHost() { return { get(key) { return services[key]; } }; },
+    orgId() { return "org"; },
+  });
+  assert.equal(status.generations[0].jobs.succeeded, 1);
+  assert.equal(status.generations[0].jobs.skipped, 1);
+  assert.deepEqual(status.generations[0].failures, [{
+    code: "unsupported_attachment", failed: 0, quarantined: 1,
+  }]);
+});
+
 for (const enabled of [true, false]) {
   it(`clears an existing vector sidecar with embedding ${enabled ? "enabled" : "disabled"}`, async (t) => {
     const root = await mkdtemp(join(tmpdir(), "regenic-runtime-vector-clear-"));

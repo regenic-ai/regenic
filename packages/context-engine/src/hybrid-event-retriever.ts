@@ -114,6 +114,18 @@ export class HybridEventRetriever implements ContextRetriever {
       }
       covered.add(key.event_id);
     }
+    if (result.skipped !== undefined && !Array.isArray(result.skipped)) {
+      throw new ContextEngineError("invalid_candidate", "Invalid vector skip result");
+    }
+    const skipped = new Set<string>();
+    for (const key of result.skipped ?? []) {
+      const source = allowed.get(key?.event_id);
+      if (!source || key.content_hash !== source.event.content_hash ||
+        skipped.has(key.event_id) || covered.has(key.event_id)) {
+        throw new ContextEngineError("invalid_candidate", "Unauthorized or duplicate vector skip");
+      }
+      skipped.add(key.event_id);
+    }
     const seen = new Set<string>();
     for (const hit of result.matched) {
       const source = allowed.get(hit?.event_id);
@@ -133,7 +145,10 @@ export class HybridEventRetriever implements ContextRetriever {
     }
     for (const hit of result.matched) {
       const text = allowed.get(hit.event_id)!.text;
-      if (typeof text !== "string" || hit.end > text.length) {
+      // V2 spans include extracted text and visual units, bound by the stored projection.
+      const length = generation.extractor_version === "stored-body-and-attachments-v2" &&
+        hit.material_length !== undefined ? hit.material_length : text?.length;
+      if (!Number.isSafeInteger(length) || hit.end > length!) {
         throw new ContextEngineError("invalid_candidate", "Invalid authorized vector chunk binding");
       }
     }
@@ -179,7 +194,7 @@ export class HybridEventRetriever implements ContextRetriever {
     return {
       candidates: [...candidates.values()].sort((a, b) => compare(a.candidate.candidate_id, b.candidate.candidate_id)),
       degradation_flags: [...(lexical.degradation_flags ?? []),
-        ...(covered.size < allowed.size ? ["vector_index_partial"] : [])],
+        ...(covered.size + skipped.size < allowed.size ? ["vector_index_partial"] : [])],
       trace,
     };
   }

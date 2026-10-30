@@ -46,6 +46,46 @@ describe("local embedding provider", () => {
       (error) => error.code === "invalid_response");
   });
 
+  it("sends bounded binary attachments only to loopback and validates all extracted material", async () => {
+    let called = 0;
+    const subject = provider(async (url, init) => {
+      called++;
+      assert.equal(url, "http://127.0.0.1:8765/attachment");
+      const body = JSON.parse(init.body);
+      assert.equal(body.media_type, "application/pdf");
+      assert.equal(body.source_filename, "local.pdf");
+      assert.equal(Buffer.from(body.bytes_base64, "base64").toString(), "%PDF-local");
+      assert.equal(init.redirect, "error");
+      return response({ text: "extracted text", vectors: [vector()] });
+    });
+    assert.deepEqual(await subject.processAttachment({
+      media_type: "application/pdf", source_filename: "local.pdf", bytes: Buffer.from("%PDF-local"),
+    }), { text: "extracted text", vectors: [vector()] });
+    const cached = await subject.processAttachment({
+      media_type: "application/pdf", source_filename: "local.pdf", bytes: Buffer.from("%PDF-local"),
+    });
+    cached.vectors[0][0] = 0;
+    assert.equal((await subject.processAttachment({
+      media_type: "application/pdf", source_filename: "local.pdf", bytes: Buffer.from("%PDF-local"),
+    })).vectors[0][0], 1);
+    for (const bytes of [new Uint8Array(), new Uint8Array(16 * 1024 * 1024 + 1)]) {
+      await assert.rejects(subject.processAttachment({ media_type: "image/png", bytes }),
+        (error) => ["invalid_input", "input_too_large"].includes(error.code));
+    }
+    assert.equal(called, 1);
+    for (const body of [
+      { vectors: [] }, { text: "x", vectors: [[1, 0]] },
+      { text: "x".repeat(262145), vectors: [] }, { vectors: Array(129).fill(vector()) },
+    ]) {
+      await assert.rejects(provider(async () => response(body)).processAttachment({
+        media_type: "image/png", bytes: Buffer.from("local"),
+      }), (error) => ["invalid_input", "invalid_response"].includes(error.code));
+    }
+    await assert.rejects(provider(async () => new Response("private", { status: 415 })).processAttachment({
+      media_type: "application/octet-stream", bytes: Buffer.from("local"),
+    }), (error) => error.code === "unsupported_attachment" && !error.retryable);
+  });
+
   it("bounds streaming bodies and classifies HTTP errors without returning upstream text", async () => {
     for (const [status, code, retryable] of [[400, "invalid_input", false], [409, "model_mismatch", false],
       [413, "input_too_large", false], [503, "unavailable", true]]) {
@@ -58,6 +98,27 @@ describe("local embedding provider", () => {
       (error) => error.code === "invalid_response");
     const error = await provider(async () => new Response("secret", { status: 503 })).health();
     assert.deepEqual(error, { status: "degraded", error_code: "unavailable" });
+  });
+
+  it("bounds the successful attachment cache and never caches failures", async () => {
+    let calls = 0;
+    const subject = provider(async () => { calls++; return response({ vectors: [vector()] }); });
+    const attachment = (index) => ({
+      media_type: "image/png", bytes: Buffer.from(`synthetic-${index}`),
+    });
+    for (let index = 0; index < 129; index++) await subject.processAttachment(attachment(index));
+    await subject.processAttachment(attachment(128));
+    assert.equal(calls, 129);
+    await subject.processAttachment(attachment(0));
+    assert.equal(calls, 130);
+    let attempts = 0;
+    const failing = provider(async () => {
+      attempts++;
+      return attempts === 1 ? new Response("", { status: 503 }) : response({ vectors: [vector()] });
+    });
+    await assert.rejects(failing.processAttachment(attachment(0)), (error) => error.code === "unavailable");
+    await failing.processAttachment(attachment(0));
+    assert.equal(attempts, 2);
   });
 
   it("bounds inputs before network and supports timeout and cancellation through the body read", async () => {

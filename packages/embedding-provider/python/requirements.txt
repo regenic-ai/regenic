@@ -3,3 +3,6 @@ transformers==5.19.0
 torch==2.14.1
 torchvision==0.29.1
 pillow==12.3.0
+pypdfium2==4.30.0
+defusedxml==0.7.1
+av==16.0.1

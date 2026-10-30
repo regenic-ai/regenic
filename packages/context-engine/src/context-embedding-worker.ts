@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   assertEmbeddingDescriptor,
   EmbeddingError,
+  EmbeddingGenerationNotReadyError,
   type AuthorizedContextSourceEvent,
   type ContextEmbeddingRunner,
   type ContextEvidenceSource,
@@ -80,8 +81,11 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     const read = await this.source.openRead(request);
     if (read.lifecycle_complete !== true) throw new Error("Embedding requires a complete authority lifecycle view");
     await this.jobs.reconcile({
-      org_id: this.orgId, generation: generation.id, read_epoch: read.read_epoch,
-      heads: headsFor(read), now: new Date().toISOString(),
+      org_id: this.orgId,
+      generation: generation.id,
+      read_epoch: read.read_epoch,
+      heads: headsFor(read),
+      now: new Date().toISOString(),
     });
     return read;
   }
@@ -118,6 +122,26 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       }
       if (!found) break;
     }
+    if (this.generations && !this.abort.signal.aborted && reads.has(this.generation.id) &&
+      this.generation.extractor_version === "stored-body-and-attachments-v2") {
+      const entries = await this.generations.listGenerations(this.orgId);
+      const target = entries.find((entry) => entry.manifest.id === this.generation.id);
+      const active = entries.find((entry) => entry.active);
+      if (target?.previously_active === false &&
+        active?.manifest.extractor_version === "stored-body-text-v1") {
+        const jobs = await this.jobs.listJobs(this.orgId, this.generation.id);
+        if (jobs.every((job) => ["succeeded", "skipped", "superseded"].includes(job.status))) {
+          try {
+            await activateEmbeddingGeneration(
+              this.orgId, this.generation.id, this.source, this.jobs, this.generations,
+            );
+          } catch (error) {
+            if (!(error instanceof EmbeddingGenerationNotReadyError)) throw error;
+            console.warn("Embedding generation upgrade deferred", error.reason);
+          }
+        }
+      }
+    }
     return total;
   }
 
@@ -146,13 +170,69 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           continue;
         }
         const authorized: AuthorizedContextSourceEvent = { ...event, status: "current" };
-        const materialized = this.source.materialize
-          ? await this.source.materialize([authorized])
-          : [authorized];
-        const text = materialized[0]?.text;
-        if (typeof text !== "string" || !text.trim()) throw new EmbeddingError("invalid_input", false);
-        if (Buffer.byteLength(text, "utf8") > 262144) throw new EmbeddingError("input_too_large", false);
-        const chunks = await chunkEmbeddingText(text, this.provider, generation, this.abort.signal);
+        const material = this.source.materializeForEmbedding
+          ? (await this.source.materializeForEmbedding([authorized], generation.extractor_version))[0]
+          : undefined;
+        if (this.source.materializeForEmbedding &&
+          (!material || material.event_id !== job.event_id || !Array.isArray(material.attachments))) {
+          throw new EmbeddingError("invalid_response", true);
+        }
+        const textMaterial = material ? undefined : this.source.materialize
+          ? (await this.source.materialize([authorized]))[0]
+          : authorized;
+        const text = material?.text ?? textMaterial?.text;
+        if (typeof text === "string" && Buffer.byteLength(text, "utf8") > 262144) {
+          throw new EmbeddingError("input_too_large", false);
+        }
+        let chunks: ContextVectorChunk[] = [];
+        if (typeof text === "string" && text.trim()) {
+          chunks = await chunkEmbeddingText(text, this.provider, generation, this.abort.signal);
+        }
+        if (material?.attachments.length) {
+          if (!this.provider.processAttachment) throw new EmbeddingError("unavailable", true);
+          for (const attachment of material.attachments) {
+            const processed = await this.provider.processAttachment({
+              media_type: attachment.media_type,
+              ...(attachment.source_filename ? { source_filename: attachment.source_filename } : {}),
+              bytes: attachment.bytes,
+            }, this.abort.signal);
+            if (!processed.text?.trim() && processed.vectors.length === 0) {
+              throw new EmbeddingError("invalid_response", true);
+            }
+            if (processed.text?.trim()) {
+              if (Buffer.byteLength(processed.text, "utf8") > 262144) {
+                throw new EmbeddingError("input_too_large", false);
+              }
+              const extracted = await chunkEmbeddingText(processed.text, this.provider, generation, this.abort.signal);
+              const start = chunks.at(-1)?.end ?? 0;
+              const ordinal = chunks.length;
+              chunks.push(...extracted.map((chunk, index) => ({
+                ...chunk,
+                ordinal: ordinal + index,
+                start: start + chunk.start,
+                end: start + chunk.end,
+              })));
+            }
+            for (const [index, vector] of processed.vectors.entries()) {
+              const cursor = chunks.length ? chunks[chunks.length - 1].end : 0;
+              chunks.push({
+                ordinal: chunks.length,
+                start: cursor,
+                end: cursor + 1,
+                text_hash: createHash("sha256")
+                  .update(`${attachment.content_hash}:${index}`)
+                  .digest("hex"),
+                vector,
+              });
+            }
+            if (chunks.length > generation.max_chunks_per_event) {
+              throw new EmbeddingError("input_too_large", false);
+            }
+          }
+        }
+        const noContent = chunks.length === 0 && !material?.attachments.length &&
+          generation.extractor_version === "stored-body-and-attachments-v2";
+        if (chunks.length === 0 && !noContent) throw new EmbeddingError("invalid_input", false);
         read = await this.read(generation);
         await heartbeat;
         if (heartbeatFailed) throw new Error("Embedding lease renewal failed");
@@ -162,6 +242,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         }
         const completed = await this.jobs.complete({
           job, owner: this.owner, now: new Date().toISOString(), chunks,
+          ...(noContent ? { no_content: true } : {}),
         });
         if (completed) result.processed += 1;
         else result.superseded += 1;
@@ -203,6 +284,9 @@ export async function activateEmbeddingGeneration(
   generations: ContextVectorGenerationStore,
 ): Promise<void> {
   const request = embeddingMaintenanceRequest(orgId, `generation-switch:${randomUUID()}`);
+  const manifest = (await generations.listGenerations(orgId))
+    .find((entry) => entry.manifest.id === generation)?.manifest;
+  if (!manifest) throw new Error("Generation activation requires a registered generation");
   const read = await source.openRead(request);
   if (read.lifecycle_complete !== true) throw new Error("Generation activation requires a complete Authority lifecycle");
   const heads = headsFor(read);
@@ -213,14 +297,22 @@ export async function activateEmbeddingGeneration(
   const current: AuthorizedContextSourceEvent[] = read.events.filter((entry) => ids.has(entry.event.event_id))
     .map((entry) => ({ ...entry, status: "current" }));
   if (!source.materialize) throw new Error("Generation activation requires verified Authority text materialization");
-  const materialized = await source.materialize(current);
-  const required = materialized.filter((entry) => typeof entry.text === "string" && entry.text.trim())
-    .map((entry) => {
-      if (!entry.event.content_hash) throw new Error("Text Event is missing its content hash");
-      return { event_id: entry.event.event_id, content_hash: entry.event.content_hash };
-    });
+  const required = source.materializeForEmbedding
+    ? (await source.materializeForEmbedding(current, manifest.extractor_version))
+      .filter((entry) => Boolean(entry.text?.trim()) || entry.attachments.length > 0)
+      .map((entry) => {
+        const event = current.find((sourceEvent) => sourceEvent.event.event_id === entry.event_id)!;
+        if (!event.event.content_hash) throw new Error("Indexable Event is missing its content hash");
+        return { event_id: entry.event_id, content_hash: event.event.content_hash };
+      })
+    : (await source.materialize(current))
+      .filter((entry) => typeof entry.text === "string" && entry.text.trim())
+      .map((entry) => {
+        if (!entry.event.content_hash) throw new Error("Text Event is missing its content hash");
+        return { event_id: entry.event.event_id, content_hash: entry.event.content_hash };
+      });
   const latest = await source.openRead(request);
-  if (latest.read_epoch !== read.read_epoch) throw new Error("Authority changed during activation; retry after reconciliation");
+  if (latest.read_epoch !== read.read_epoch) throw new EmbeddingGenerationNotReadyError("authority_changed");
   await generations.activateGeneration({ org_id: orgId, generation, read_epoch: read.read_epoch, required });
 }
 

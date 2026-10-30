@@ -52,6 +52,9 @@ function fixture(options = {}) {
           chunk_ordinal: 0, start: 0, end: events[0].text.length, ...options.hit }],
       };
       if (options.partial) result.covered = result.covered.slice(0, 1);
+      if (options.skipped) result.skipped = [
+        { event_id: "literal", content_hash: events[1].event.content_hash },
+      ];
       if (options.duplicate) result.matched.push({ ...result.matched[0] });
       return result;
     },
@@ -93,6 +96,49 @@ it("admits semantic zero-lexical evidence, deduplicates and pins replayable retr
   assert.ok(validateContextSnapshot(result.snapshot).success);
   assert.deepEqual(await f.engine.assemble(request), result);
   assert.equal(f.calls, 1);
+});
+
+it("accepts attachment extraction spans only when bound to a verified projection length", async () => {
+  const f = fixture({ hit: { end: 10000, material_length: 10000 } });
+  const result = await f.retriever.retrieve(f.plan);
+  assert.ok(result.candidates.some((entry) => entry.candidate.resource_id === "semantic"));
+  for (const material_length of [-1, 1, NaN, 1.5]) {
+    const invalid = fixture({ hit: { end: 10000, material_length } });
+    await assert.rejects(invalid.retriever.retrieve(invalid.plan), /Invalid authorized vector chunk binding/);
+  }
+});
+
+it("does not mistake explicitly skipped empty events for missing vector coverage", async () => {
+  const f = fixture({ partial: true, skipped: true });
+  const result = await f.retriever.retrieve(f.plan);
+  assert.ok(!result.degradation_flags.includes("vector_index_partial"));
+  assert.equal(result.trace.covered_count, 1);
+});
+
+it("returns visual-only file evidence without inventing a text body", async () => {
+  const image = event("image", "");
+  delete image.text;
+  const retriever = new HybridEventRetriever(
+    new DeterministicEventRetriever(),
+    { descriptor, async countTokens() { return [5]; }, async embed() { return [[1, 0]]; } },
+    {
+      async matchAuthorized(input) {
+        return {
+          generation: generation.id, covered: input.authorized,
+          matched: [{ ...input.authorized[0], score: 0.9, chunk_ordinal: 0,
+            start: 0, end: 1, material_length: 1 }],
+        };
+      },
+    },
+    generation,
+  );
+  const result = await retriever.retrieve({
+    request, events: [image], read_epoch: "authority:1",
+    recorded_at: "2026-10-17T00:00:00.000Z", principal_policy_hash: "b".repeat(64),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].item.text, undefined);
+  assert.equal(result.candidates[0].item.content_hash, image.event.content_hash);
 });
 
 it("pins one selected generation across query inference even when the active pointer switches", async () => {

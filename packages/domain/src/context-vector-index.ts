@@ -8,6 +8,15 @@ export class ContextVectorUnavailableError extends Error {
   }
 }
 
+export class EmbeddingGenerationNotReadyError extends Error {
+  constructor(readonly reason: "authority_changed" | "backfill_incomplete") {
+    super(reason === "authority_changed"
+      ? "Authority changed during activation; retry after reconciliation at the current Authority epoch"
+      : "Generation is not fully covered; backfill or retry first");
+    this.name = "EmbeddingGenerationNotReadyError";
+  }
+}
+
 export interface ContextVectorChunk {
   ordinal: number;
   start: number;
@@ -21,6 +30,7 @@ export interface ContextVectorMatch extends ContextLexicalKey {
   chunk_ordinal: number;
   start: number;
   end: number;
+  material_length?: number;
 }
 
 export interface ContextVectorIndex {
@@ -34,6 +44,7 @@ export interface ContextVectorIndex {
   }): Promise<{
     generation: string;
     covered: ContextLexicalKey[];
+    skipped?: ContextLexicalKey[];
     matched: ContextVectorMatch[];
     reconciled_epoch?: string;
   }>;
@@ -53,6 +64,7 @@ export interface ContextVectorGenerationStore {
   listGenerations(orgId: string): Promise<Array<{
     manifest: EmbeddingGeneration;
     active: boolean;
+    previously_active?: boolean;
     reconciled_epoch?: string;
   }>>;
   activeGeneration(orgId: string): Promise<EmbeddingGeneration | undefined>;
@@ -71,7 +83,7 @@ export interface EmbeddingJob extends EmbeddingSourceHead {
   generation: string;
   fence: number;
   attempts: number;
-  status: "pending" | "running" | "succeeded" | "failed" | "quarantined" | "superseded";
+  status: "pending" | "running" | "succeeded" | "skipped" | "failed" | "quarantined" | "superseded";
   error_code?: string;
 }
 
@@ -97,6 +109,7 @@ export interface EmbeddingJobStore {
     owner: string;
     now: string;
     chunks: ContextVectorChunk[];
+    no_content?: boolean;
   }): Promise<boolean>;
   fail(input: {
     job: EmbeddingJob;

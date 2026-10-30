@@ -20,6 +20,7 @@ import type {
   ContextRetrievalTrace,
 } from "./context-snapshot";
 import type { EventRecord, JsonValue, WeightHints } from "./ingestion";
+import type { ContextEmbeddingMaterial, EmbeddingGeneration } from "./embedding-provider";
 
 export interface ContextProjectionCapabilities {
   artifact_kinds: ContextArtifactKind[];
@@ -156,6 +157,10 @@ export interface ContextEvidenceSource {
   materialize?(
     events: AuthorizedContextSourceEvent[],
   ): Promise<AuthorizedContextSourceEvent[]>;
+  materializeForEmbedding?(
+    events: AuthorizedContextSourceEvent[],
+    extractorVersion?: EmbeddingGeneration["extractor_version"],
+  ): Promise<ContextEmbeddingMaterial[]>;
 }
 
 export interface ContextAuthorityRead {
