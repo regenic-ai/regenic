@@ -1,6 +1,6 @@
 # Regenic
 
-**Connect your work messages to the AI you already use.**
+**Let your AI work across every channel your team talks in.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
@@ -8,29 +8,33 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Regenic is an open-source, local-first app that brings conversations from different work channels into your AI's context. Use pluggable connectors to add message sources, then let your AI search conversations, summarize progress, and draft replies—without copying chat logs by hand.
+Work conversations are scattered across Feishu, Slack, WhatsApp, and more. When you want AI to help you catch up or reply, you usually have to dig through each app and paste the history in by hand.
 
-Keep your chat apps. Keep your AI. Connect the two.
+Regenic fixes that. It collects work messages from all your channels on your machine and exposes them to AI tools like Cursor through MCP. Your AI can then search across channels, summarize progress, and draft replies for you.
+
+Regenic is open source and local-first. Sources plug in through connectors: use an existing plugin, or write your own against a shared standard.
 
 [Quick start](#quick-start) · [Connectors](#connectors) · [MCP setup](docs/en/CONTEXT_SEARCH_MCP.md) · [Docs](docs/en/README.md)
 
-## What you can do
+## Use cases
 
-| Task | Ask your AI |
+| Use case | Ask your AI |
 | --- | --- |
-| Catch up on a project | “Summarize the latest updates across these conversations.” |
-| Find the original agreement | “What did we promise this customer? Show me the messages.” |
-| Draft a reply | “Use the conversation so far to draft a response.” |
+| Search across channels | “Who mentioned the contract payment date last week?” |
+| Catch up on a project | “Summarize this week's updates on the project from every group chat.” |
+| Check a customer commitment | “What did we promise this customer? Show me the original messages.” |
+| Draft a reply | “Based on our earlier conversation, draft a reply.” |
 
-These workflows use messages you have connected and authorized. Regenic provides the context; your AI does the reasoning.
+Your AI only sees conversations you've connected and authorized. Results include where each message came from, so you can check the original.
 
-## Why Regenic
+## Features
 
-- **Add your own sources.** A shared connector contract supports imports, webhooks, and polling. Use an existing plugin or build one for your workflow.
-- **Use your existing AI.** MCP clients such as Cursor can search and read conversation context. Scripts and other tools can use the API.
-- **Keep the evidence.** Retrieved messages include their source, thread, and identifiers so answers can point back to the conversation.
-- **Stay in control.** Review messages in the desktop workbench. Reading and sending have separate permissions; sending also requires connector support.
-- **Local-first.** Your device is the source of truth, with Markdown and JSONL exports. Connecting an external AI may send retrieved content to its provider.
+- **One place for every channel.** Conversations from different apps are stored and searched together, so you stop switching between them.
+- **Extensible sources.** Connectors follow one standard and support file imports, webhooks, and polling. If no plugin fits, write your own.
+- **Bring your own AI.** MCP clients such as Cursor can query conversations directly; scripts and other tools can use the API.
+- **Traceable answers.** Every result carries its channel, conversation, and message IDs, so you can always go back to the source.
+- **Sending is opt-in.** Reading and sending are authorized separately, and sending also depends on the connector.
+- **Your data stays local.** Messages are stored on your machine and can be exported as Markdown or JSONL. If you use an external AI, retrieved content is sent to that provider.
 
 ## Quick start
 
@@ -51,7 +55,7 @@ For DSH, plugin installation, Docker, and CLI commands, see the [setup and CLI r
 
 ## Connectors
 
-The connector standard is open to new sources; built-in support is intentionally small.
+Feishu, DSH, and Cursor are built in; Slack and WhatsApp ship as separate plugins. Any other source can plug in through the same standard.
 
 | Source | Available through | Scope |
 | --- | --- | --- |
@@ -66,7 +70,7 @@ The connector standard is open to new sources; built-in support is intentionally
 
 ## Current scope
 
-Regenic currently supports **individual use**. Shared team records are planned, not available today. Source coverage, sync behavior, and sending depend on each connector and the permissions you grant.
+Regenic is currently for **individual use**; team sharing is on the roadmap. What you can read, how it syncs, and whether you can send all depend on the connector and the permissions you grant.
 
 The Context Search MCP is **read-only**: it does not approve or send messages. Third-party plugins run in the kernel process, so install only plugins you trust. See the [roadmap](docs/en/ROADMAP.md) and [security notes](docs/en/SETUP_AND_CLI.md#security).
 
