@@ -108,6 +108,8 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
         if (!isHumanIdle() || !this.host) return;
         if (this.host.get("context-vector-status").status !== "ready") return;
         void this.host.get("context-embedding-worker").runOnce({
+          max_jobs: 100,
+          time_budget_ms: 30_000,
           pause_if: () => !isHumanIdle(),
         }).then((result) => {
           if (result.failed) console.warn("embedding jobs failed", result.failed);
@@ -167,19 +169,15 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       configured: true, healthy: health.status === "ok", vector_status: vector.status,
       ...("error_code" in health ? { provider_issue: semanticIssue(health.error_code) } : {}),
       generations: await Promise.all(generations.map(async ({ manifest, active }) => {
-        const jobs = await host.get("context-embedding-jobs").listJobs(this.orgId(), manifest.id);
-        const counts = { pending: 0, running: 0, succeeded: 0, skipped: 0, failed: 0, quarantined: 0, superseded: 0 };
-        const failures = new Map<ReturnType<typeof semanticIssue>, { code: ReturnType<typeof semanticIssue>; failed: number; quarantined: number }>();
-        for (const job of jobs) counts[job.status]++;
-        for (const job of jobs) {
-          if (job.status !== "failed" && job.status !== "quarantined") continue;
-          const code = semanticIssue(job.error_code);
-          const bucket = failures.get(code) ?? { code, failed: 0, quarantined: 0 };
-          bucket[job.status]++;
-          failures.set(code, bucket);
-        }
-        return { id: manifest.id, active, jobs: counts,
-          failures: [...failures.values()].sort((a, b) => a.code.localeCompare(b.code)) };
+        const summary = await host.get("context-embedding-jobs").summarizeJobs(this.orgId(), manifest.id);
+        return { id: manifest.id, active,
+          jobs: summary.counts,
+          failures: summary.failures.map((failure) => ({
+            code: semanticIssue(failure.error_code),
+            failed: failure.failed,
+            quarantined: failure.quarantined,
+          })),
+        };
       })),
     };
   }

@@ -87,6 +87,11 @@ export interface EmbeddingJob extends EmbeddingSourceHead {
   error_code?: string;
 }
 
+export interface EmbeddingJobSummary {
+  counts: Record<EmbeddingJob["status"], number>;
+  failures: Array<{ error_code: string; failed: number; quarantined: number }>;
+}
+
 export interface EmbeddingJobStore {
   reconcile(input: {
     org_id: string;
@@ -120,6 +125,7 @@ export interface EmbeddingJobStore {
     retryable: boolean;
   }): Promise<boolean>;
   listJobs(orgId: string, generation: string): Promise<EmbeddingJob[]>;
+  summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary>;
   retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean>;
   retryFailed(orgId: string, generation: string, limit: number): Promise<number>;
 }

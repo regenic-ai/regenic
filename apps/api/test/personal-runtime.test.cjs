@@ -22,11 +22,12 @@ it("reports empty skipped events separately from indexed coverage and attachment
       async listGenerations() { return [{ manifest: { id: "generation" }, active: true }]; },
     },
     "context-embedding-jobs": {
-      async listJobs() {
-        return [
-          { status: "succeeded" }, { status: "skipped" },
-          { status: "quarantined", error_code: "unsupported_attachment" },
-        ];
+      async summarizeJobs() {
+        return {
+          counts: { pending: 0, running: 0, succeeded: 1, skipped: 1,
+            failed: 0, quarantined: 1, superseded: 0 },
+          failures: [{ error_code: "unsupported_attachment", failed: 0, quarantined: 1 }],
+        };
       },
     },
   };

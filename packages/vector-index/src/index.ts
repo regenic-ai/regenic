@@ -13,6 +13,7 @@ import {
   type ContextVectorChunk,
   type EmbeddingGeneration,
   type EmbeddingJob,
+  type EmbeddingJobSummary,
   type EmbeddingJobStore,
 } from "@regenic/domain";
 
@@ -334,6 +335,38 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     required(orgId); required(generation);
     return (this.db.prepare("SELECT * FROM jobs WHERE org_id=? AND generation=? ORDER BY id")
       .all(orgId, generation) as JobRow[]).map(jobFromRow);
+  }
+
+  async summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary> {
+    required(orgId); required(generation);
+    const counts: EmbeddingJobSummary["counts"] = {
+      pending: 0, running: 0, succeeded: 0, skipped: 0,
+      failed: 0, quarantined: 0, superseded: 0,
+    };
+    const statuses = this.db.prepare(`SELECT status,COUNT(*) AS count FROM jobs
+      WHERE org_id=? AND generation=? GROUP BY status`).all(orgId, generation) as Array<{
+      status: EmbeddingJob["status"]; count: number;
+    }>;
+    for (const row of statuses) counts[row.status] = row.count;
+
+    const failures = this.db.prepare(`SELECT error_code,status,COUNT(*) AS count FROM jobs
+      WHERE org_id=? AND generation=? AND status IN ('failed','quarantined')
+      GROUP BY error_code,status`).all(orgId, generation) as Array<{
+      error_code: string | null; status: "failed" | "quarantined"; count: number;
+    }>;
+    const byCode = new Map<string, EmbeddingJobSummary["failures"][number]>();
+    for (const row of failures) {
+      if (!row.error_code) continue;
+      const failure = byCode.get(row.error_code) ?? {
+        error_code: row.error_code, failed: 0, quarantined: 0,
+      };
+      failure[row.status] = row.count;
+      byCode.set(row.error_code, failure);
+    }
+    return {
+      counts,
+      failures: [...byCode.values()].sort((a, b) => a.error_code.localeCompare(b.error_code)),
+    };
   }
 
   async retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean> {
