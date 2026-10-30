@@ -132,7 +132,8 @@ export class SemanticRuntime {
       await this.run(this.python(), ["-m", "pip", "install", "--disable-pip-version-check", "-r",
         join(this.options.assets, "requirements.txt")], "semantic.installFailed", 30 * 60_000);
       this.stage = "downloading";
-      await this.run(this.python(), ["-B", join(this.options.assets, "serve.py"), "--download-only", "--device", "cpu"],
+      await this.run(this.python(), ["-B", join(this.options.assets, "serve.py"), "--download-only",
+        "--device", "cpu", "--precision", "bfloat16"],
         "semantic.downloadFailed", 60 * 60_000);
       writeFileSync(join(this.options.root, "installed.json"), JSON.stringify({ revision: REVISION, fingerprint: this.fingerprint() }));
       this.stage = "stopped";
@@ -162,7 +163,8 @@ export class SemanticRuntime {
       await this.stopChild();
       this.stage = "starting";
       const port = await freePort();
-      const child = this.launch(this.python(), ["-B", join(this.options.assets, "serve.py"), "--port", String(port), "--device", "cpu"],
+      const child = this.launch(this.python(), ["-B", join(this.options.assets, "serve.py"), "--port", String(port),
+        "--device", "cpu", "--precision", "bfloat16"],
         { env: { ...this.environment(), HF_HUB_OFFLINE: "1" }, stdio: "ignore", windowsHide: true });
       this.child = child;
       let exited = false;
