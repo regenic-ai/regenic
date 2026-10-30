@@ -1,5 +1,6 @@
 # 文档
 
+- [安装与 CLI 参考](SETUP_AND_CLI.md)
 - [产品](PRODUCT.md)
 - [消息编排](MESSAGE_ORCHESTRATION.md)
 - [连接器](CONNECTOR.md)
