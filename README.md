@@ -1,6 +1,6 @@
 # Regenic
 
-**Turn every work message into one stream that AI and automation can act on.**
+**Bring work messages together. Search, organize, and process them your way.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
@@ -8,40 +8,42 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-Work happens in messages: group chats, DMs, tickets, approvals, and conversations with AI agents. They're spread across Feishu, Slack, WhatsApp, and other tools, each with its own format, which makes them hard to work with as a whole.
+Project discussions, customer feedback, and agent transcripts often live in different tools. They belong to the same work, but are hard to review, analyze, or act on together.
 
-Regenic is a unified layer for work messages. Any source plugs in through a connector and is normalized into one message format. What happens next is up to you: search across channels, let AI summarize and draft, hand messages to an agent to execute, and reply back in the original channel.
+We're building an open-source platform for work messages. Pluggable connectors bring messages from different channels into one place to browse and search, with executors, APIs, and MCP providing ways to process them further. Finding information across conversations, analyzing customer feedback, and handing a task to an agent are different uses of the same foundation—not the limits of the product.
 
-Connectors follow an open standard, so you can use an existing plugin or build one for any tool. Regenic is open source and local-first; your data stays on your machine.
+Our goal is to make what you can do with a message independent of where it came from. Extend the sources, bring your own processing logic, and build workflows around your work. Regenic starts with a local-first personal workbench and is growing toward broader message orchestration and team collaboration.
 
 [Quick start](#quick-start) · [Connectors](#connectors) · [MCP setup](docs/en/CONTEXT_SEARCH_MCP.md) · [Docs](docs/en/README.md)
 
 ## What you can do today
 
-| Use case | Ask your AI |
+| Task | How it works today |
 | --- | --- |
-| Search across channels | “Who mentioned the contract payment date last week?” |
-| Catch up on a project | “Summarize this week's updates on the project from every group chat.” |
-| Check a customer commitment | “What did we promise this customer? Show me the original messages.” |
-| Draft a reply | “Based on our earlier conversation, draft a reply.” |
+| Work through messages | Browse connected conversations in the workbench and reply where sending is supported and authorized. |
+| Find information across channels | Use Search to find conversations from different sources, expand surrounding context, and open the original messages. No MCP setup required. |
+| Analyze related conversations | Choose an installed executor in Search to answer from retrieved conversations—for example, to summarize project updates or check commitments—with citations. |
+| Move context between channels | Forward selected messages or a conversation to another send-capable conversation, editing the content before sending. |
+| Delegate work to agents | Use Recipes to select an executor for matching tasks, then start runs in the workbench, track their status, and respond to requests for human input. |
+| Integrate your own tools | External AI tools can retrieve conversations through read-only MCP; scripts and other systems can integrate through the API. |
 
-These work in AI tools like Cursor through the [Context Search MCP](docs/en/CONTEXT_SEARCH_MCP.md). Your AI only sees conversations you've connected and authorized, and results include where each message came from so you can check the original.
+These features operate on connected, authorized data. Search answers require an available executor; sending, forwarding, and execution depend on connector and executor capabilities and permissions. See the [desktop workbench](docs/en/DESKTOP.md), [executors](docs/en/EXECUTOR.md), and [MCP](docs/en/CONTEXT_SEARCH_MCP.md).
 
 ## Features
 
 - **One message format.** Messages from every channel are normalized, then stored, searched, and processed the same way.
-- **Any source can plug in.** Connectors follow an open standard and support file imports, webhooks, and polling—not just chat apps, but agent sessions and tickets too.
-- **Process it your way.** Send messages to AI through MCP, to scripts and automation through the API, or to local agents like DSH and Cursor to execute.
+- **Extensible sources.** Connectors follow an open standard and support file imports, webhooks, and polling. Install an existing plugin or build a connector for another source.
+- **Extensible processing.** Search, reply, and forward in the workbench, use executors to process search results and tasks, or integrate your own tools through the API and MCP.
 - **Traceable answers.** Every result carries its channel, conversation, and message IDs, so you can always go back to the source.
 - **Sending is opt-in.** Reading and sending are authorized separately, and sending also depends on the connector.
 - **Your data stays local.** Messages are stored on your machine and can be exported as Markdown or JSONL. If you use an external AI, retrieved content is sent to that provider.
 
 ## Where we're headed
 
-Today's release covers the first step: getting messages in, searchable, and ready to process. The goal is an orchestration layer for work messages:
+Today's release provides message ingestion, a workbench, search, executors, and integration interfaces—not a complete autonomous workflow system. We're working toward connecting these capabilities into customizable workflows:
 
-- **Automatic triage.** Use personal habits and team standards to pick out the messages that actually need attention from the hundreds that arrive each day.
-- **Distill and dispatch.** Turn messages into sourced conclusions and follow-ups, and route them to the right person or agent.
+- **Broader orchestration.** Combine filtering, transformation, analysis, routing, and delivery to suit the work—not just search and Q&A.
+- **Proactive triage and follow-through.** Use personal habits and team standards to identify what needs attention, distill sourced conclusions and follow-ups, and route work to the right person or agent.
 - **From individuals to teams.** Start with personal use, then extend to organizations so teams work from the same context.
 
 See the [product overview](docs/en/PRODUCT.md) and [roadmap](docs/en/ROADMAP.md).
@@ -58,8 +60,8 @@ pnpm dev:desktop
 ```
 
 1. **Connect a source.** For Feishu, [install and sign in to `lark-cli`](docs/en/SETUP_AND_CLI.md#feishu), then open **Engine → Feishu → Install** and choose conversations.
-2. **Connect your AI.** Follow the [MCP setup guide](docs/en/CONTEXT_SEARCH_MCP.md) to let your MCP client search and read those conversations.
-3. **Ask about your work.** Try “Summarize the latest project updates and cite the messages.”
+2. **Browse and search.** Open synced conversations in the workbench, or use **Search** to find information across conversations and inspect the context.
+3. **Choose how to process it.** For answers based on search results, configure an available [executor](docs/en/EXECUTOR.md) in **Engine**, then select it in Search. To query from an external AI tool instead, follow the [MCP setup guide](docs/en/CONTEXT_SEARCH_MCP.md). MCP is not required for the workbench or search.
 
 For DSH, plugin installation, Docker, and CLI commands, see the [setup and CLI reference](docs/en/SETUP_AND_CLI.md).
 
